@@ -81,7 +81,10 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'tenant_mismatch', detail: `${expected} != ${tenant}` };
     }
 
-    if (decl.hostOnly && !isOwnerPrincipal(principal) && principal.kind !== 'agent') {
+    // host-only excludes *remote tenants*, not autonomous local principals: the
+    // scheduler runs on the host. Denying it here would have hidden the queueing
+    // rule below behind a wrong refusal.
+    if (decl.hostOnly && principal.kind === 'member') {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 

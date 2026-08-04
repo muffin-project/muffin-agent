@@ -47,8 +47,8 @@ export class JsonlExporter implements SpanExporter {
     const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
     const removed: string[] = [];
     for (const file of readdirSync(this.dir)) {
-      const match = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(file);
-      if (match && match[1] < cutoff) {
+      const day = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(file)?.[1];
+      if (day !== undefined && day < cutoff) {
         rmSync(join(this.dir, file));
         removed.push(file);
       }
