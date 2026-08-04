@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { parseArgs } from 'node:util';
+import { formatReport, runDoctor } from './doctor.js';
+import { runInit } from './init.js';
+import { seal, verify } from '../core/rot/verify.js';
+import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
+
+/**
+ * Entry point.
+ *
+ * stdout carries the answer, stderr carries everything else, and the exit code
+ * means something — this thing has to be scriptable before it is conversational.
+ */
+
+const USAGE = `muffin — personal agent runtime
+
+  muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
+              [--base-url URL] [--model NAME] [--api-key KEY]
+  muffin doctor [--json] [--online]
+  muffin rot verify | reseal
+  muffin secret set NAME
+
+Exit codes: 0 ok · 1 warnings · 2 blocking error · 78 bad configuration
+`;
+
+function main(argv: string[]): number {
+  const [command, ...rest] = argv;
+  switch (command) {
+    case 'init':
+      return cmdInit(rest);
+    case 'doctor':
+      return cmdDoctor(rest);
+    case 'rot':
+      return cmdRot(rest);
+    case 'secret':
+      return cmdSecret(rest);
+    case undefined:
+    case '--help':
+    case '-h':
+      process.stdout.write(USAGE);
+      return 0;
+    default:
+      process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
+      return 78;
+  }
+}
+
+function cmdInit(argv: string[]): number {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      hardened: { type: 'boolean' },
+      force: { type: 'boolean' },
+      provider: { type: 'string' },
+      'base-url': { type: 'string' },
+      model: { type: 'string' },
+      'api-key': { type: 'string' },
+    },
+    allowPositionals: false,
+  });
+
+  const provider = values.provider as ProviderKind | undefined;
+  if (provider && provider !== 'anthropic' && provider !== 'openai-compat') {
+    process.stderr.write(`--provider must be anthropic or openai-compat\n`);
+    return 78;
+  }
+
+  const steps = runInit({
+    ...(values.hardened ? { hardened: true } : {}),
+    ...(values.force ? { force: true } : {}),
+    ...(provider ? { provider } : {}),
+    ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}),
+    ...(values.model ? { mainModel: values.model } : {}),
+    ...(values['api-key'] ? { apiKey: values['api-key'] } : {}),
+  });
+
+  for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
+  const incomplete = steps.filter((s) => !s.done);
+  if (incomplete.length > 0) {
+    process.stderr.write(`\nRun \`muffin init\` again once resolved — it picks up where it left off.\n`);
+    return 1;
+  }
+  process.stderr.write(`\nNext: muffin doctor\n`);
+  return 0;
+}
+
+function cmdDoctor(argv: string[]): number {
+  const { values } = parseArgs({
+    args: argv,
+    options: { json: { type: 'boolean' }, online: { type: 'boolean' } },
+    allowPositionals: false,
+  });
+  const report = runDoctor(paths().home, values.online ? { online: true } : {});
+  process.stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : `${formatReport(report)}\n`);
+  return report.exitCode;
+}
+
+function cmdRot(argv: string[]): number {
+  const [sub] = argv;
+  let mode: 'hardened' | 'single-user' = 'single-user';
+  try {
+    mode = loadConfig().rot.mode;
+  } catch (error) {
+    process.stderr.write(`${(error as ConfigError).message}\n`);
+    return 78;
+  }
+
+  if (sub === 'verify') {
+    const outcome = verify(paths().home, mode);
+    if (outcome.ok) {
+      process.stdout.write(`root of trust intact: ${outcome.fileCount} files, mode ${outcome.mode}\n`);
+      return 0;
+    }
+    process.stderr.write(
+      `root of trust diverged (${outcome.reason}):\n` +
+        outcome.diverged.map((f) => `  ${f}\n`).join('') +
+        `→ ${outcome.remedy}\n`,
+    );
+    return outcome.action === 'refuse' ? 2 : 1;
+  }
+
+  if (sub === 'reseal') {
+    const manifest = seal(paths().home, '1', new Date());
+    process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
+    return 0;
+  }
+
+  process.stderr.write(`usage: muffin rot verify | reseal\n`);
+  return 78;
+}
+
+function cmdSecret(argv: string[]): number {
+  const [sub, name] = argv;
+  if (sub !== 'set' || !name) {
+    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
+    return 78;
+  }
+  // Read from stdin, never from argv: a key in a shell argument is a key in the
+  // shell history and in every `ps` on the machine.
+  let value = '';
+  try {
+    value = readFileSync(0, 'utf8').trim();
+  } catch {
+    /* empty stdin falls through to the check below */
+  }
+  if (!value) {
+    process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
+    return 78;
+  }
+  writeSecret(name, value);
+  process.stdout.write(`stored ${name} (0600), ${value.length} chars\n`);
+  return 0;
+}
+
+process.exitCode = main(process.argv.slice(2));

@@ -1,0 +1,7 @@
+{
+  "_comment": "Permission matrix. Part of the Root of Trust: the agent loop cannot change this at runtime.",
+  "schemaVersion": 1,
+  "defaultMaxTaint": { "low": 3, "medium": 1, "high": 1 },
+  "neverAtRuntime": ["rot.write"],
+  "forbiddenForSystem": ["outward.send", "config.ratchet"]
+}

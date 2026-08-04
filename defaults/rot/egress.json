@@ -1,0 +1,5 @@
+{
+  "_comment": "Allow-only egress for sandboxed execution. No domain is granted by default.",
+  "schemaVersion": 1,
+  "allow": []
+}

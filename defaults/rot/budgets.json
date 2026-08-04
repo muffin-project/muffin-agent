@@ -1,0 +1,7 @@
+{
+  "_comment": "Spend caps and quiet hours. Dimensional, not sacred — but the agent cannot raise them itself.",
+  "schemaVersion": 1,
+  "monthlyUsd": 80,
+  "perTenantDailyUsd": 2,
+  "quietHours": { "from": "23:00", "to": "08:00", "timezone": "Europe/Rome" }
+}
