@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { runInit } from './init.js';
 import { seal, verify } from '../core/rot/verify.js';
+import { formatSpan, readSpans } from './trace.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
 /**
@@ -20,6 +21,8 @@ const USAGE = `muffin — personal agent runtime
   muffin doctor [--json] [--online]
   muffin rot verify | reseal
   muffin secret set NAME
+  muffin trace tail [-n N] [--errors] [--json]
+  muffin trace grep PATTERN [-n N] [--json]
 
 Exit codes: 0 ok · 1 warnings · 2 blocking error · 78 bad configuration
 `;
@@ -35,6 +38,8 @@ function main(argv: string[]): number {
       return cmdRot(rest);
     case 'secret':
       return cmdSecret(rest);
+    case 'trace':
+      return cmdTrace(rest);
     case undefined:
     case '--help':
     case '-h':
@@ -150,6 +155,48 @@ function cmdSecret(argv: string[]): number {
   }
   writeSecret(name, value);
   process.stdout.write(`stored ${name} (0600), ${value.length} chars\n`);
+  return 0;
+}
+
+function cmdTrace(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub !== 'tail' && sub !== 'grep') {
+    process.stderr.write(`usage: muffin trace tail [-n N] [--errors] | muffin trace grep PATTERN\n`);
+    return 78;
+  }
+  const { values, positionals } = parseArgs({
+    args: rest,
+    options: {
+      n: { type: 'string', short: 'n' },
+      errors: { type: 'boolean' },
+      json: { type: 'boolean' },
+      trace: { type: 'string' },
+    },
+    allowPositionals: true,
+  });
+
+  const pattern = sub === 'grep' ? positionals[0] : undefined;
+  if (sub === 'grep' && !pattern) {
+    process.stderr.write(`usage: muffin trace grep PATTERN\n`);
+    return 78;
+  }
+
+  const spans = readSpans(paths().home, {
+    limit: Number(values.n ?? 40),
+    ...(pattern ? { pattern } : {}),
+    ...(values.trace ? { traceId: values.trace } : {}),
+    ...(values.errors ? { errorsOnly: true } : {}),
+  });
+
+  if (spans.length === 0) {
+    process.stderr.write(`no spans matched\n`);
+    return 1;
+  }
+  process.stdout.write(
+    values.json
+      ? `${spans.map((s) => JSON.stringify(s)).join('\n')}\n`
+      : `${spans.map(formatSpan).join('\n')}\n`,
+  );
   return 0;
 }
 
