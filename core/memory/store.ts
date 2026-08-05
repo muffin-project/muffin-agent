@@ -306,6 +306,33 @@ export class MemoryStore {
 
   // ---- provenance -----------------------------------------------------------
 
+  /**
+   * Where a recalled chunk came from and how much it is worth.
+   *
+   * The vector index stores text and a source id, not a tier — so without this
+   * the fusion had nothing to read and used a constant, which turned every
+   * semantic hit into owner-grade evidence regardless of who wrote it.
+   */
+  provenanceOf(
+    tenantId: string,
+    kind: 'episode' | 'fact',
+    sourceId: number,
+  ): { trustTier: TrustTier; createdAt: string } | null {
+    const row =
+      kind === 'episode'
+        ? (this.db
+            .prepare(
+              `SELECT trust_tier AS trustTier, created_at AS createdAt FROM episodes WHERE tenant_id = ? AND id = ?`,
+            )
+            .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined)
+        : (this.db
+            .prepare(
+              `SELECT trust_tier AS trustTier, recorded_at AS createdAt FROM facts WHERE tenant_id = ? AND id = ?`,
+            )
+            .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined);
+    return row ?? null;
+  }
+
   /** One fact by id, tenant-scoped. The entry point of `muffin memory why`. */
   factById(tenantId: string, id: number): Fact | null {
     const row = this.db

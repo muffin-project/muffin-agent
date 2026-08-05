@@ -27,7 +27,30 @@ import {
  * instead of helping it.
  */
 
-export type ToolHandler = (args: unknown) => Promise<ToolOutcome> | ToolOutcome;
+/**
+ * What a handler is allowed to know about the turn it is running in.
+ *
+ * This exists because it was missing, and its absence was a cross-tenant leak
+ * waiting for the second connector: the memory tool was registered with the
+ * tenant baked in at wiring time, so a group member calling it would have been
+ * served the owner's memory. A handler cannot read the tenant of the turn if
+ * nobody hands it one — the comment claiming it did was aspirational.
+ */
+export type ToolContext = {
+  tenant: string;
+  principal: Principal;
+};
+
+export type SpendEntry = {
+  tenant: string;
+  capability: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+};
+
+export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
 
 export type ToolOutcome = {
   content: string;
@@ -51,6 +74,11 @@ export type LoopDeps = {
   tracer: Tracer;
   sessions: SessionStore;
   budgetExhausted: () => boolean;
+  /**
+   * Bills a model call and returns what it cost. Absent in tests; absent in
+   * production means the caps are decorative, which is why `doctor` reports it.
+   */
+  recordSpend?: ((entry: SpendEntry) => number) | undefined;
   /** Stable identity and persona, cached as a prefix. */
   systemPrompt: string;
   /**
@@ -146,6 +174,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   });
 
   const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  let spentUsd = 0;
   const cap = iterationCap(deps.profile);
   let recoveriesLeft = deps.profile.recovery.length;
   let iterations = 0;
@@ -194,6 +223,24 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       usage.inputTokens += result.usage.inputTokens;
       usage.outputTokens += result.usage.outputTokens;
       usage.cacheReadTokens += result.usage.cacheReadTokens;
+
+      // Billed here, on every call, before anything else can go wrong with the
+      // iteration. The engine, its caps and its tests all existed before this
+      // line did, and without it `exhausted()` answered false for ever.
+      const usd = deps.recordSpend?.({
+        tenant: input.tenant,
+        capability: 'llm.chat',
+        model: result.model,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+      });
+      if (usd !== undefined) {
+        spentUsd += usd;
+        // The budget is an input to the kernel, so a decision cached before the
+        // cap was reached must not survive it.
+        snapshot.invalidate();
+      }
       chatSpan.setAttributes({
         [ATTR.responseModel]: result.model,
         [ATTR.usageInputTokens]: result.usage.inputTokens,
@@ -330,6 +377,21 @@ async function runTool(
       isError: true,
     };
   }
+  // `draft` means "do it, but reversibly, and tell the owner". There is no undo
+  // journal yet, so the honest reading is `ask`: executing it as an allow was
+  // the kernel emitting a verdict nobody implemented, which is worse than
+  // refusing — the caller had already decided the write was reversible.
+  if (decision.effect === 'draft') {
+    span.end({ status: 'error', error: 'draft_unavailable' });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content:
+        `"${tool.capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
+        `Non eseguito: dillo all'owner invece di riprovare.`,
+      isError: true,
+    };
+  }
   if (decision.effect === 'ask') {
     // M1 has no approval channel yet; the honest answer is that it did not run.
     span.end({ status: 'error', error: 'ask_unavailable' });
@@ -342,7 +404,7 @@ async function runTool(
   }
 
   try {
-    const outcome = await tool.handler(args);
+    const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });
     if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);
     deps.sessions.append(input.session, {
       role: 'tool',
@@ -401,6 +463,7 @@ function makeSnapshot(decide: Decide, principal: Principal, tenant: TenantId): P
         cache.clear(); // decisions taken at a lower taint no longer apply
       }
     },
+    invalidate: () => cache.clear(),
     check(capability, resource, args) {
       const key = `${capability}:${resource.kind}:${'value' in resource ? resource.value : ''}:${taint}`;
       const cached = cache.get(key);

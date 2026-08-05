@@ -185,4 +185,70 @@ describe('agent loop', () => {
     const roles = store.read(session).map((m) => m.role);
     expect(roles).toEqual(['user', 'tool', 'assistant']);
   });
+
+  it('bills every model call — the caps are decorative if nobody records', async () => {
+    // The budget engine, its two caps and its five tests all existed while
+    // `record()` had no caller in production: `exhausted()` answered false for
+    // ever and `/spend` would have said $0.00 after a night of looping.
+    const billed: { model: string; tenant: string }[] = [];
+    const { deps: d, store } = deps([callTool('demo_read'), answer('fatto')], {
+      recordSpend: (entry) => {
+        billed.push({ model: entry.model, tenant: entry.tenant });
+        return 0.01;
+      },
+    });
+    await runTurn(d, input(store));
+    // Two model calls in this turn, two billing records, both with the tenant.
+    expect(billed).toHaveLength(2);
+    expect(billed.every((b) => b.tenant === 'host')).toBe(true);
+  });
+
+  it('does not let a cached allow outlive the budget that permitted it', async () => {
+    // The taint invalidates the decision cache for itself; the budget is the
+    // other input the kernel reads, and it can run out mid-turn.
+    let exhausted = false;
+    const { deps: d, store, calls } = deps(
+      [callTool('demo_read'), callTool('demo_read'), callTool('demo_read'), answer('fine')],
+      {
+        budgetExhausted: () => exhausted,
+        recordSpend: () => {
+          exhausted = true; // the first call empties the budget
+          return 99;
+        },
+      },
+    );
+    await runTurn(d, input(store));
+    // One tool ran before the budget went; nothing after it, despite the same
+    // capability and the same arguments hitting the cache.
+    expect(calls.length).toBeLessThanOrEqual(1);
+  });
+
+  it('refuses a draft instead of executing it as an allow', async () => {
+    // `fs.write` is medium risk and undoable, so the kernel answers `draft`.
+    // The loop had no branch for it and fell through to the handler: the write
+    // happened immediately, with no undo journal and no window.
+    const undoable: CapabilityDecl[] = [
+      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', resourceKind: 'none', policyArgs: [], hostOnly: true },
+    ];
+    const ran: string[] = [];
+    const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
+      decide: createDecide({
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        budgetExhausted: () => false,
+        hardened: false,
+      }),
+      tools: [
+        {
+          capability: 'demo.draft',
+          spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+          handler: () => {
+            ran.push('demo_draft');
+            return { content: 'scritto davvero' };
+          },
+        },
+      ],
+    });
+    await runTurn(d, input(store));
+    expect(ran).toEqual([]);
+  });
 });

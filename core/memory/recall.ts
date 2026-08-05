@@ -102,14 +102,23 @@ export async function recall(
   if (deps.vectors) {
     try {
       const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);
-      if (vectorHits.length > 0) strategies.push('vector');
+      // Always, not only when there were hits: "the semantic half was starved"
+      // and "the semantic half ran and found nothing" are different facts, and
+      // a caller reading `strategies` cannot otherwise tell them apart.
+      strategies.push('vector');
       vectorHits.forEach((hit, rank) => {
+        // The tier comes from the source row, never from the fact that a vector
+        // matched. Hardcoding zero here laundered every semantically-recalled
+        // chunk into owner-grade evidence — and paraphrase is precisely what
+        // reaches the model through this half rather than through full text, so
+        // the anti-poisoning defence was open on its most likely path.
+        const provenance = deps.store.provenanceOf(tenantId, hit.kind, hit.sourceId);
         fuse(`${hit.kind}:${hit.sourceId}`, {
           kind: hit.kind,
           id: hit.sourceId,
           text: hit.text,
-          trustTier: 0,
-          source: 'indice semantico',
+          trustTier: provenance?.trustTier ?? 3,
+          source: provenance ? describeTier(provenance.trustTier, provenance.createdAt) : 'fonte ignota',
           score: 0,
         }, rank);
       });

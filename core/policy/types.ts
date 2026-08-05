@@ -40,6 +40,7 @@ export type DenyCode =
   | 'tenant_mismatch'
   | 'budget_exhausted'
   | 'rot_violation'
+  | 'safe_mode'
   | 'resource_denied'
   | 'principal_forbidden';
 
@@ -96,5 +97,12 @@ export interface PermissionSnapshot {
   readonly tenant: TenantId;
   currentTaint(): TrustTier;
   raiseTaint(tier: TrustTier): void;
+  /**
+   * Throws away memoised decisions. The taint does this for itself; the budget
+   * is the other input the kernel reads and it can change mid-turn, in which
+   * case a cached `allow` from before the cap was reached would outlive the
+   * condition that produced it.
+   */
+  invalidate(): void;
   check(capability: CapabilityId, resource: Resource, args: Readonly<Record<string, unknown>>): Decision;
 }

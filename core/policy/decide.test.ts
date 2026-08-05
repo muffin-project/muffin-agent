@@ -33,6 +33,25 @@ const req = (p: Principal, tenant: string, capability: CapabilityId, taint: 0 | 
 });
 
 describe('policy kernel', () => {
+  it('denies everything above low risk in safe mode', () => {
+    // The CLI has always told the user this happens. Until the flag reached the
+    // kernel, it did not — the only place in the system where the code asserted
+    // a guarantee it was not providing.
+    const degraded = createDecide({
+      capabilities: new Map(decls.map((d) => [d.id, d])),
+      budgetExhausted: () => false,
+      hardened: false,
+      safeMode: true,
+    });
+    const owner: Principal = { kind: 'owner', connector: 'cli' };
+    expect(degraded({ principal: owner, tenant: 'host', capability: 'fs.write', resource: { kind: 'none' }, args: {}, taint: 0 }))
+      .toMatchObject({ effect: 'deny', code: 'safe_mode' });
+    // Reading still works: a degraded agent that cannot answer at all is one
+    // you turn off, and then the divergence goes uninvestigated.
+    expect(degraded({ principal: owner, tenant: 'host', capability: 'memory.read', resource: { kind: 'tenant', value: 'host' }, args: {}, taint: 0 }))
+      .toMatchObject({ effect: 'allow' });
+  });
+
   it('refuses a capability that was never declared', () => {
     expect(kernel()(req(owner, 'host', 'tool.invented', 0))).toMatchObject({
       effect: 'deny',

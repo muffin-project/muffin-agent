@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,10 +11,20 @@ function scoped(): { scope: FsScope; root: string; outside: string } {
   mkdirSync(root, { recursive: true });
   mkdirSync(outside, { recursive: true });
   mkdirSync(join(root, 'rot'), { recursive: true });
+  mkdirSync(join(root, 'secrets'), { recursive: true });
   writeFileSync(join(root, 'nota.md'), 'ciao\n');
   writeFileSync(join(root, 'rot', 'identity.md'), '# identità\n');
+  writeFileSync(join(root, 'secrets', 'provider_api_key'), 'sk-VERA-CHIAVE\n');
   writeFileSync(join(outside, 'segreto.txt'), 'non mi devi leggere\n');
-  return { scope: { root, denyWrite: [join(root, 'rot')] }, root, outside };
+  return {
+    scope: {
+      root,
+      denyWrite: [join(root, 'rot'), join(root, 'secrets')],
+      denyRead: [join(root, 'secrets')],
+    },
+    root,
+    outside,
+  };
 }
 
 describe('filesystem primitives', () => {
@@ -55,6 +65,57 @@ describe('filesystem primitives', () => {
     const { scope } = scoped();
     expect(() => fsRead(scope, '.')).toThrow(/use fs_list/);
     expect(() => fsList(scope, 'nota.md')).toThrow(/use fs_read/);
+  });
+
+  it('never hands over a secret, whatever the working directory is', () => {
+    // The default working directory is $HOME and ~/.muffin lives inside it, so
+    // this is the ordinary case rather than a contrived one. `fs_read` used to
+    // skip the deny-list entirely: it only ran for writes.
+    const { scope } = scoped();
+    expect(() => fsRead(scope, 'secrets/provider_api_key')).toThrow(/read denied/);
+    // The identity is not a secret: it is already in the system prompt, so
+    // denying it would cost something and protect nothing.
+    expect(fsRead(scope, 'rot/identity.md')).toContain('identità');
+  });
+
+  it('does not write through a dangling symlink — the first write is the escape', () => {
+    // `existsSync` follows the link, so a link whose target does not exist yet
+    // reads as "nothing here", the check judges the link's own path, and the
+    // write lands outside. From the second write on the file exists and the
+    // check works, which is why this survives casual testing.
+    const { scope, root, outside } = scoped();
+    symlinkSync(join(outside, 'ancora-non-esiste.txt'), join(root, 'innocuo.txt'));
+    expect(() => fsWrite(scope, 'innocuo.txt', 'ESCAPED')).toThrow(PathDenied);
+    expect(existsSync(join(outside, 'ancora-non-esiste.txt'))).toBe(false);
+  });
+
+  it('does not write through a dangling symlink into the root of trust', () => {
+    const { scope, root } = scoped();
+    symlinkSync(join(root, 'rot', 'policy.json'), join(root, 'p.json'));
+    expect(() => fsWrite(scope, 'p.json', '{"tutto":"permesso"}')).toThrow(PathDenied);
+    expect(existsSync(join(root, 'rot', 'policy.json'))).toBe(false);
+  });
+
+  it('does not write through a hard link into the root of trust', () => {
+    // A hard link has its own realpath, so no amount of resolving reveals that
+    // it is a second name for a protected file.
+    const { scope, root } = scoped();
+    linkSync(join(root, 'rot', 'identity.md'), join(root, 'copia.md'));
+    expect(() => fsWrite(scope, 'copia.md', 'RISCRITTA')).toThrow(/hard link/);
+    expect(readFileSync(join(root, 'rot', 'identity.md'), 'utf8')).toContain('identità');
+  });
+
+  it('is not fooled by the case of a deny path where the filesystem is not', () => {
+    const { scope, root } = scoped();
+    if (!existsSync(join(root, 'ROT'))) return; // case-sensitive volume: nothing to bypass
+    expect(() => fsWrite(scope, 'ROT/identity.md', 'CASE BYPASS')).toThrow(PathDenied);
+    expect(readFileSync(join(root, 'rot', 'identity.md'), 'utf8')).toContain('identità');
+  });
+
+  it('refuses a file too large to put in a context window', () => {
+    const { scope, root } = scoped();
+    writeFileSync(join(root, 'enorme.txt'), 'x'.repeat(3 * 1024 * 1024));
+    expect(() => fsRead(scope, 'enorme.txt')).toThrow(/read limit/);
   });
 
   it('resolves a plain relative path to the real scope root', () => {

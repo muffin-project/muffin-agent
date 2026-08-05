@@ -42,6 +42,13 @@ export type PolicyContext = {
    * shell can never be a silent allow. See docs/adr/0003 (revision).
    */
   hardened: boolean;
+  /**
+   * The root of trust diverged and we are running degraded. Everything above
+   * low risk is refused until the owner reseals — which is what the CLI has
+   * always told the user, and until now was the only claim in this system that
+   * the code did not back.
+   */
+  safeMode?: boolean;
 };
 
 function isOwnerPrincipal(p: Principal): boolean {
@@ -65,6 +72,17 @@ export function createDecide(ctx: PolicyContext): Decide {
     const decl = ctx.capabilities.get(capability);
     if (!decl) {
       return { effect: 'deny', code: 'no_capability', detail: `undeclared capability: ${capability}` };
+    }
+
+    // Before anything else that could allow: a diverged root of trust means the
+    // rules themselves are in question, so this is not the moment to apply them
+    // generously.
+    if (ctx.safeMode === true && decl.risk !== 'low') {
+      return {
+        effect: 'deny',
+        code: 'safe_mode',
+        detail: `root of trust diverged: "${capability}" is ${decl.risk} risk — \`muffin rot verify\``,
+      };
     }
 
     if (NEVER_AT_RUNTIME.has(capability)) {

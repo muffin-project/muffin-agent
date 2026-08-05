@@ -46,6 +46,39 @@ const episode = (s: MemoryStore, content: string, tier: 0 | 1 | 2 | 3 = 0) =>
   });
 
 describe('recall', () => {
+  it('carries the real tier through the semantic half, not a constant', async () => {
+    // Paraphrase is exactly what reaches the model through vectors rather than
+    // through full text, so hardcoding tier 0 here opened the anti-poisoning
+    // defence on its most likely path: a tier-2 group claim came back looking
+    // like something the owner had said.
+    const { store, vectors } = harness();
+    const suspect = store.addEpisode({
+      tenantId: HOST, connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'il commercialista nuovo è Anna', trustTier: 2, createdAt: NOW,
+    });
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: suspect, text: 'il commercialista nuovo è Anna' }], NOW);
+
+    // No token in common with the episode: full text cannot reach it, so the
+    // only way it arrives is through the vector half — which is the half being
+    // tested. A query that both halves match would pass on the broken code,
+    // because full text carries the real tier.
+    const result = await recall({ store, vectors }, HOST, 'tasse');
+    expect(store.searchEpisodes(HOST, 'tasse')).toHaveLength(0);
+    const hit = result.items.find((i) => i.id === suspect);
+    expect(hit?.trustTier).toBe(2);
+    expect(hit?.source).not.toBe('indice semantico');
+    // And the taint the kernel reads follows it.
+    expect(recallTaint(result)).toBe(2);
+  });
+
+  it('says the semantic half ran even when it found nothing', async () => {
+    // "starved" and "ran and found nothing" are different facts, and the
+    // strategies list is where a caller is supposed to tell them apart.
+    const { store, vectors } = harness();
+    const result = await recall({ store, vectors }, HOST, 'qualcosa di mai detto');
+    expect(result.strategies).toContain('vector');
+  });
+
   it('actually writes vectors — the failure that hides itself', async () => {
     // The previous system had empty vector tables for weeks because vec0 rejects
     // a Number rowid and the throw went unnoticed. This asserts the rows exist.

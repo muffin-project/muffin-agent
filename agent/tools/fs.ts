@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 
@@ -21,6 +21,14 @@ export type FsScope = {
   root: string;
   /** Never writable, whatever the scope says. Comes from the root of trust. */
   denyWrite: readonly string[];
+  /**
+   * Never readable either. Deliberately narrower than `denyWrite`: the agent
+   * already has its own identity in its system prompt, so denying it a read of
+   * `identity.md` buys nothing. The key does not work that way — a tool that
+   * can read it has already won every later argument about exfiltration, and
+   * the default working directory is `$HOME`, which contains `~/.muffin`.
+   */
+  denyRead?: readonly string[];
 };
 
 export const fsCapabilities: CapabilityDecl[] = [
@@ -102,7 +110,16 @@ function realpathDeepest(target: string): string {
   const missing: string[] = [];
   let current = target;
   for (;;) {
-    if (existsSync(current)) return join(realpathSync(current), ...missing.reverse());
+    // `lstat`, not `existsSync`: the latter follows the link, so a symlink whose
+    // target does not exist yet reads as "missing", the loop walks past it, and
+    // the check ends up judging the link's own path — while the write follows
+    // the link and lands wherever it points. The first write is the one that
+    // escapes; from the second on the file exists and the check works, which is
+    // exactly the shape of a bug that survives testing.
+    if (lstatSync(current, { throwIfNoEntry: false }) !== undefined) {
+      const resolved = isSymlink(current) ? realpathSync(dirname(current)) + sep + basename(current) : realpathSync(current);
+      return join(resolved, ...missing.reverse());
+    }
     const parent = dirname(current);
     if (parent === current) return target; // reached the root without finding anything
     missing.push(current.slice(parent.length + 1));
@@ -110,10 +127,24 @@ function realpathDeepest(target: string): string {
   }
 }
 
+function isSymlink(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true;
+}
+
 /**
- * Resolves before deciding. `../` and symlinks are the two ways a path that
- * looks contained stops being contained, so the check happens on the resolved
- * real path, never on the string the model wrote.
+ * Case-insensitive on darwin, where `ROT/` and `rot/` are the same directory
+ * and a string comparison says otherwise. Comparing lowercased is coarse — it
+ * over-matches on a case-sensitive volume — but over-denying a write is the
+ * side to be wrong on.
+ */
+const CASE_BLIND = process.platform === 'darwin' || process.platform === 'win32';
+const norm = (p: string): string => (CASE_BLIND ? p.toLowerCase() : p);
+
+/**
+ * Resolves before deciding. `../`, symlinks, hard links and the case of a
+ * filename are the four ways a path that looks contained stops being contained,
+ * so the check happens on the resolved real path, never on the string the model
+ * wrote.
  */
 export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {
   const base = realpathSync(resolve(scope.root));
@@ -124,25 +155,55 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
     throw new PathDenied(`outside the working directory: ${requested}`);
   }
 
-  if (forWrite) {
-    for (const denied of scope.denyWrite) {
-      // Both sides go through realpath or the comparison silently stops matching
-      // the moment either contains a symlink — on macOS /var alone is enough.
-      const deniedAbs = realpathDeepest(resolve(denied));
-      if (target === deniedAbs || target.startsWith(deniedAbs + sep)) {
-        throw new PathDenied(`write denied by the root of trust: ${requested}`);
-      }
+  // A symlink is never written through, wherever it points. Resolving it would
+  // work for the paths we can enumerate; refusing it works for the ones we
+  // cannot, and a tool has no legitimate need to write through a link.
+  if (forWrite && isSymlink(target)) {
+    throw new PathDenied(`won't write through a symlink: ${requested}`);
+  }
+
+  // Writes check the full deny-list; reads check the narrower one. Both sides go
+  // through realpath or the comparison silently stops matching the moment either
+  // contains a symlink — on macOS /var alone is enough — and both are compared
+  // case-blind where the filesystem is.
+  const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);
+  const t = norm(target);
+  for (const path of denied) {
+    const deniedAbs = norm(realpathDeepest(resolve(path)));
+    if (t === deniedAbs || t.startsWith(deniedAbs + sep)) {
+      throw new PathDenied(`${forWrite ? 'write' : 'read'} denied by the root of trust: ${requested}`);
     }
   }
+
+  // A hard link has its own realpath, so no amount of resolving reveals that it
+  // is a second name for a file inside the deny-list. Refusing to write to any
+  // multiply-linked file is blunt and cheap: legitimate files in a working
+  // directory have one name.
+  if (forWrite) {
+    const existing = lstatSync(target, { throwIfNoEntry: false });
+    if (existing?.isFile() && existing.nlink > 1) {
+      throw new PathDenied(`won't write to a hard link (${existing.nlink} names): ${requested}`);
+    }
+  }
+
   return target;
 }
 
 export function fsRead(scope: FsScope, path: string): string {
   const full = resolveInScope(scope, path, false);
   if (!existsSync(full)) throw new PathDenied(`no such file: ${path}`);
-  if (statSync(full).isDirectory()) throw new PathDenied(`${path} is a directory — use fs_list`);
+  const stat = statSync(full);
+  if (stat.isDirectory()) throw new PathDenied(`${path} is a directory — use fs_list`);
+  // A model that asks for a 2 GB file gets a refusal rather than the process
+  // getting an out-of-memory kill and the turn dying without a trace.
+  if (stat.size > MAX_READ_BYTES) {
+    throw new PathDenied(`${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+  }
   return readFileSync(full, 'utf8');
 }
+
+/** Large enough for any source file or note, small enough not to blow the context. */
+const MAX_READ_BYTES = 2 * 1024 * 1024;
 
 export function fsList(scope: FsScope, path: string): string {
   const full = resolveInScope(scope, path, false);

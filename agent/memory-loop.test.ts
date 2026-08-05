@@ -69,7 +69,9 @@ function harness(script: ChatResult[]) {
     {
       capability: memoryCapability.id,
       spec: memorySearchSpec,
-      handler: (args) => searchMemory(recallDeps, 'host', args),
+      // Wired exactly as production wires it. A harness that hardcodes the
+      // tenant tests the harness, and the previous version of this file did.
+      handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
     },
     {
       capability: 'demo.write',
@@ -178,10 +180,17 @@ describe('memory wired into the loop', () => {
   });
 
   it('does not let a group member reach another tenant memory', async () => {
+    // The member has to actually call the tool. The previous version of this
+    // test scripted a plain answer, so the tool was never invoked and the
+    // assertion could not fail — while production had the tenant hardcoded to
+    // 'host' and would have handed the secret over.
     const member: Principal = {
       kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
     };
-    const h = harness([answer('ok')]);
+    const h = harness([
+      callTool('memory_search', { query: 'codice del deposito' }),
+      answer('non trovo niente'),
+    ]);
     h.store.addEpisode({
       tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
       kind: 'message', content: 'il codice del deposito è ZK-4417', trustTier: 0,
@@ -190,5 +199,23 @@ describe('memory wired into the loop', () => {
 
     await runTurn(h.deps, turn(h, 'qual è il codice del deposito?', member));
     expect(h.provider.seen.join('\n')).not.toContain('ZK-4417');
+  });
+
+  it('still reaches its own tenant memory — the fix must not deafen the tool', async () => {
+    const member: Principal = {
+      kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
+    };
+    const h = harness([
+      callTool('memory_search', { query: 'ritrovo' }),
+      answer('ecco'),
+    ]);
+    h.store.addEpisode({
+      tenantId: 'group:telegram:9', connector: 'telegram', threadKey: 't', role: 'user',
+      kind: 'message', content: 'il ritrovo è alle otto al porto', trustTier: 2,
+      createdAt: '2026-08-01T10:00:00Z',
+    });
+
+    await runTurn(h.deps, turn(h, 'dove ci vediamo?', member));
+    expect(h.provider.seen.join('\n')).toContain('porto');
   });
 });

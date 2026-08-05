@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
+import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, type Config } from '../core/config/config.js';
 import { createDecide } from '../core/policy/decide.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
@@ -103,7 +104,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   // Writes are scoped to the working directory, and the root of trust is never
   // writable from a tool whatever the scope says.
-  const scope: FsScope = { root: cwd, denyWrite: [p.rot, p.secrets, p.config] };
+  const scope: FsScope = { root: cwd, denyWrite: [p.rot, p.secrets, p.config], denyRead: [p.secrets] };
   const tools: RegisteredTool[] = [
     {
       capability: 'fs.read',
@@ -126,7 +127,9 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     {
       capability: memoryCapability.id,
       spec: memorySearchSpec,
-      handler: async (args) => searchMemory(recallDeps, 'host', args),
+      // The tenant comes from the turn, never from this line. Baking it in here
+      // is how a group member ends up reading the owner's memory.
+      handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
     },
   ];
 
@@ -135,8 +138,16 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   );
   const decide = createDecide({
     capabilities,
+    // Both caps, not just the monthly one. The per-tenant daily cap is the one
+    // that exists for a group talking to itself, and it was declared, tested
+    // and never consulted.
     budgetExhausted: () => budget.exhausted(),
     hardened: config.rot.mode === 'hardened',
+    // Safe mode was computed at boot and never reached the kernel, while the
+    // CLI told the user "capabilities above low risk are denied". That was the
+    // only place in the system where the code asserted a guarantee it did not
+    // provide.
+    safeMode: safeMode !== null,
   });
 
   return {
@@ -154,6 +165,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       tracer,
       sessions: new SessionStore(home),
       budgetExhausted: () => budget.exhausted(),
+      recordSpend: (entry) => {
+        const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+        budget.record({ ...entry, usd });
+        return usd;
+      },
       systemPrompt: buildSystemPrompt(home, safeMode !== null),
       memory: { store: memoryStore, recall: recallDeps },
     },
