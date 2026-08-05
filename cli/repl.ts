@@ -1,0 +1,125 @@
+import { createInterface } from 'node:readline/promises';
+import { buildRuntime, type Runtime } from '../agent/runtime.js';
+import { runTurn } from '../agent/loop.js';
+import { paths } from '../core/config/config.js';
+
+/**
+ * The REPL.
+ *
+ * One session per launch, so the conversation is continuous by default and
+ * `/new` is the explicit way to forget. Ctrl+C cancels the turn in progress —
+ * pressing it again within two seconds exits — because the common case is
+ * "stop, that is not what I meant", not "kill the process".
+ */
+
+const HELP = `/new     inizia una sessione nuova
+/session mostra l'id della sessione
+/spend   quanto hai speso questo mese
+/exit    esci (o Ctrl+D)`;
+
+export async function runRepl(home = paths().home): Promise<number> {
+  let runtime: Runtime;
+  try {
+    runtime = buildRuntime(home);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (runtime.safeMode) {
+    process.stderr.write(
+      `! safe mode: root of trust diverged (${runtime.safeMode.reason}) — capability sopra il rischio basso negate\n`,
+    );
+  }
+  process.stderr.write(
+    `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
+      `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
+  );
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let session = runtime.deps.sessions.open();
+  let controller: AbortController | null = null;
+  let lastInterrupt = 0;
+
+  rl.on('SIGINT', () => {
+    const now = Date.now();
+    if (controller) {
+      controller.abort();
+      process.stderr.write(`\n^C turno annullato\n`);
+      lastInterrupt = now;
+      return;
+    }
+    // Nothing running: a second Ctrl+C in quick succession means leave.
+    if (now - lastInterrupt < 2000) {
+      rl.close();
+      return;
+    }
+    lastInterrupt = now;
+    process.stderr.write(`\n(di nuovo Ctrl+C per uscire)\n`);
+    rl.prompt();
+  });
+
+  try {
+    for (;;) {
+      const line = (await rl.question('› ')).trim();
+      if (line === '') continue;
+
+      if (line.startsWith('/')) {
+        if (line === '/exit') break;
+        if (line === '/help') {
+          process.stderr.write(`${HELP}\n`);
+          continue;
+        }
+        if (line === '/new') {
+          session = runtime.deps.sessions.open();
+          process.stderr.write(`sessione nuova: ${session.id}\n`);
+          continue;
+        }
+        if (line === '/session') {
+          process.stderr.write(`${session.id}\n`);
+          continue;
+        }
+        if (line === '/spend') {
+          const s = runtime.budget.status();
+          process.stderr.write(
+            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n`,
+          );
+          continue;
+        }
+        process.stderr.write(`comando sconosciuto. ${HELP}\n`);
+        continue;
+      }
+
+      controller = new AbortController();
+      try {
+        const result = await runTurn(runtime.deps, {
+          principal: { kind: 'owner', connector: 'cli' },
+          tenant: 'host',
+          surface: 'cli',
+          session,
+          text: line,
+          signal: controller.signal,
+        });
+        process.stdout.write(`\n${result.text}\n\n`);
+        if (result.stopped !== 'answered') {
+          process.stderr.write(`(${result.stopped} dopo ${result.iterations} passaggi)\n`);
+        }
+      } catch (error) {
+        process.stderr.write(`errore: ${error instanceof Error ? error.message : String(error)}\n`);
+      } finally {
+        controller = null;
+      }
+    }
+  } catch (error) {
+    // readline throws on close(); that is the normal way out of the loop.
+    if (!(error instanceof Error && /closed/i.test(error.message))) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  } finally {
+    rl.close();
+    runtime.close();
+  }
+
+  process.stderr.write(`\nciao.\n`);
+  return 0;
+}

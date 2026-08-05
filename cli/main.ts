@@ -5,6 +5,8 @@ import { formatReport, runDoctor } from './doctor.js';
 import { runInit } from './init.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
+import { runHeadless } from './run.js';
+import { runRepl } from './repl.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
 /**
@@ -16,6 +18,8 @@ import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '
 
 const USAGE = `muffin — personal agent runtime
 
+  muffin                                 open the REPL
+  muffin run "<goal>" [--json] [--session ID] [--timeout S]
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
               [--base-url URL] [--model NAME] [--api-key KEY]
   muffin doctor [--json] [--online]
@@ -27,9 +31,13 @@ const USAGE = `muffin — personal agent runtime
 Exit codes: 0 ok · 1 warnings · 2 blocking error · 78 bad configuration
 `;
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
+    case 'run':
+      return cmdRun(rest);
+    case 'repl':
+      return runRepl();
     case 'init':
       return cmdInit(rest);
     case 'doctor':
@@ -41,6 +49,8 @@ function main(argv: string[]): number {
     case 'trace':
       return cmdTrace(rest);
     case undefined:
+      // Bare `muffin` opens the REPL: the terminal is the primary surface.
+      return runRepl();
     case '--help':
     case '-h':
       process.stdout.write(USAGE);
@@ -200,4 +210,27 @@ function cmdTrace(argv: string[]): number {
   return 0;
 }
 
-process.exitCode = main(process.argv.slice(2));
+async function cmdRun(argv: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: {
+      json: { type: 'boolean' },
+      session: { type: 'string' },
+      timeout: { type: 'string' },
+    },
+    allowPositionals: true,
+  });
+  const goal = positionals.join(' ').trim();
+  if (goal === '') {
+    process.stderr.write(`usage: muffin run "<goal>"\n`);
+    return 78;
+  }
+  return runHeadless({
+    goal,
+    ...(values.json ? { json: true } : {}),
+    ...(values.session ? { sessionId: values.session } : {}),
+    ...(values.timeout ? { timeoutSeconds: Number(values.timeout) } : {}),
+  });
+}
+
+process.exitCode = await main(process.argv.slice(2));
