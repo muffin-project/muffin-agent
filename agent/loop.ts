@@ -1,0 +1,355 @@
+import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
+import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
+import type { SpanHandle, Tracer } from '../core/tracing/types.js';
+import { ATTR } from '../core/tracing/types.js';
+import { iterationCap, type Profile } from './profiles/profile.js';
+import {
+  ProviderError,
+  type ChatCall,
+  type ContentBlock,
+  type Message,
+  type Provider,
+  type ToolSpec,
+} from './providers/types.js';
+
+/**
+ * The agent loop.
+ *
+ * One engine for every surface — CLI today, chat connectors in M4 — because the
+ * alternative is two loops that drift, and the one that gets less use is the one
+ * that breaks silently.
+ *
+ * Shape: a deterministic pre-loop, then tool calls until the model produces a
+ * final answer. Nothing here classifies intent or routes between models: those
+ * are the two pieces of scaffolding that most often end up fighting the model
+ * instead of helping it.
+ */
+
+export type ToolHandler = (args: unknown) => Promise<ToolOutcome> | ToolOutcome;
+
+export type ToolOutcome = {
+  content: string;
+  isError?: boolean;
+  /** Tier of whatever this result dragged in. Web and third-party tools are 3. */
+  tier?: TrustTier;
+};
+
+export type RegisteredTool = {
+  spec: ToolSpec;
+  capability: string;
+  handler: ToolHandler;
+};
+
+export type LoopDeps = {
+  provider: Provider;
+  profile: Profile;
+  model: string;
+  tools: RegisteredTool[];
+  decide: Decide;
+  tracer: Tracer;
+  sessions: SessionStore;
+  budgetExhausted: () => boolean;
+  /** Stable identity and persona, cached as a prefix. */
+  systemPrompt: string;
+  now?: () => Date;
+};
+
+export type TurnInput = {
+  principal: Principal;
+  tenant: TenantId;
+  surface: string;
+  session: SessionRef;
+  text: string;
+  signal?: AbortSignal;
+};
+
+export type TurnResult = {
+  text: string;
+  iterations: number;
+  traceId: string;
+  stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error';
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+};
+
+export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
+  const now = deps.now ?? (() => new Date());
+  const turn = deps.tracer.start('muffin.turn', {
+    [ATTR.principalKind]: input.principal.kind,
+    [ATTR.tenant]: input.tenant,
+    [ATTR.surface]: input.surface,
+    [ATTR.requestModel]: deps.model,
+  });
+
+  // ---- Pre-loop: deterministic, no model call. ------------------------------
+  // Permissions and taint are resolved before anything is generated, so a
+  // decision never depends on what the model just said.
+  const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant);
+  // Slot for memory recall. Empty until M2 — the shape is here so adding it
+  // later is filling a function, not changing a signature.
+  const recalled: ContentBlock[] = [];
+
+  const exposed = deps.tools.slice(0, deps.profile.maxToolsExposed);
+  const messages: Message[] = buildContext(deps, input, recalled);
+
+  deps.sessions.append(input.session, {
+    role: 'user',
+    content: input.text,
+    surface: input.surface,
+    createdAt: now().toISOString(),
+    traceId: turn.traceId,
+  });
+
+  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  const cap = iterationCap(deps.profile);
+  let recoveriesLeft = deps.profile.recovery.length;
+  let iterations = 0;
+
+  try {
+    while (iterations < cap) {
+      if (deps.budgetExhausted()) {
+        return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
+      }
+      if (input.signal?.aborted) {
+        return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+      }
+      iterations += 1;
+
+      const call: ChatCall = {
+        model: deps.model,
+        system: [{ type: 'text', text: deps.systemPrompt, cache: 'stable' }],
+        messages,
+        ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
+        maxOutputTokens: 4096,
+        temperature: 0,
+        stream: false,
+        ...(input.signal ? { signal: input.signal } : {}),
+      };
+
+      const chatSpan = deps.tracer.start(
+        'muffin.chat_call',
+        { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: iterations },
+        turn,
+      );
+
+      let result;
+      try {
+        result = await deps.provider.chat(call);
+      } catch (error) {
+        chatSpan.end({ error });
+        // The recovery cascade lives in the profile, not here: a weak model
+        // needs more attempts than a strong one, and that is data.
+        if (error instanceof ProviderError && error.retryable && recoveriesLeft > 0) {
+          recoveriesLeft -= 1;
+          continue;
+        }
+        throw error;
+      }
+
+      usage.inputTokens += result.usage.inputTokens;
+      usage.outputTokens += result.usage.outputTokens;
+      usage.cacheReadTokens += result.usage.cacheReadTokens;
+      chatSpan.setAttributes({
+        [ATTR.responseModel]: result.model,
+        [ATTR.usageInputTokens]: result.usage.inputTokens,
+        [ATTR.usageOutputTokens]: result.usage.outputTokens,
+        [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,
+        [ATTR.stopReason]: result.stopReason,
+      });
+      chatSpan.end();
+
+      // Nothing at all: nudge rather than presenting silence as an answer.
+      if (!result.text && result.toolCalls.length === 0) {
+        if (recoveriesLeft > 0 && deps.profile.recovery.includes('nudge')) {
+          recoveriesLeft -= 1;
+          messages.push({
+            role: 'user',
+            content: [{ type: 'text', text: 'Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.' }],
+          });
+          continue;
+        }
+        return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', iterations, usage);
+      }
+
+      if (result.toolCalls.length === 0) {
+        const text = result.text ?? '';
+        deps.sessions.append(input.session, {
+          role: 'assistant',
+          content: text,
+          surface: input.surface,
+          createdAt: now().toISOString(),
+          traceId: turn.traceId,
+        });
+        return finish(turn, 'answered', text, iterations, usage);
+      }
+
+      // Model's turn goes into the transcript before the results, so a crash
+      // between the two leaves a record that explains itself.
+      messages.push({
+        role: 'assistant',
+        content: [
+          ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
+          ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
+        ],
+      });
+
+      const results: ContentBlock[] = [];
+      for (const call_ of result.toolCalls) {
+        results.push(await runTool(deps, snapshot, turn, call_, input));
+      }
+      messages.push({ role: 'user', content: results });
+    }
+
+    return finish(
+      turn,
+      'cap',
+      `Mi sono fermato dopo ${cap} passaggi senza chiudere. Dimmi come restringere il compito.`,
+      iterations,
+      usage,
+    );
+  } catch (error) {
+    turn.end({ error });
+    throw error;
+  }
+
+  function finish(
+    span: SpanHandle,
+    stopped: TurnResult['stopped'],
+    text: string,
+    iters: number,
+    used: TurnResult['usage'],
+  ): TurnResult {
+    span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
+    span.end({ status: stopped === 'error' ? 'error' : 'ok' });
+    return { text, iterations: iters, traceId: span.traceId, stopped, usage: used };
+  }
+}
+
+async function runTool(
+  deps: LoopDeps,
+  snapshot: PermissionSnapshot,
+  parent: SpanHandle,
+  call: { id: string; name: string; args: unknown },
+  input: TurnInput,
+): Promise<ContentBlock> {
+  const span = deps.tracer.start('muffin.tool_call', { [ATTR.toolName]: call.name, [ATTR.toolCallId]: call.id }, parent);
+  const tool = deps.tools.find((t) => t.spec.name === call.name);
+
+  if (!tool) {
+    // Not an exception: the model gets told, and gets to correct itself.
+    span.end({ status: 'error', error: `unknown tool ${call.name}` });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Tool "${call.name}" non esiste. Disponibili: ${deps.tools.map((t) => t.spec.name).join(', ')}.`,
+      isError: true,
+    };
+  }
+
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const resource =
+    typeof args['path'] === 'string'
+      ? ({ kind: 'path', value: args['path'] } as const)
+      : ({ kind: 'none' } as const);
+
+  const decisionSpan = deps.tracer.start(
+    'muffin.policy_decision',
+    { [ATTR.capability]: tool.capability, [ATTR.taint]: snapshot.currentTaint() },
+    span,
+  );
+  const decision = snapshot.check(tool.capability, resource, args);
+  decisionSpan.setAttributes({
+    [ATTR.policyEffect]: decision.effect,
+    ...(decision.effect === 'deny' ? { [ATTR.policyDenyCode]: decision.code } : {}),
+  });
+  decisionSpan.end();
+
+  if (decision.effect === 'deny') {
+    span.end({ status: 'error', error: decision.code });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
+      isError: true,
+    };
+  }
+  if (decision.effect === 'ask') {
+    // M1 has no approval channel yet; the honest answer is that it did not run.
+    span.end({ status: 'error', error: 'ask_unavailable' });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Serve l'approvazione dell'owner per "${tool.capability}", e in questa superficie non posso chiederla. Non eseguito.`,
+      isError: true,
+    };
+  }
+
+  try {
+    const outcome = await tool.handler(args);
+    if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);
+    deps.sessions.append(input.session, {
+      role: 'tool',
+      content: outcome.content,
+      toolCallId: call.id,
+      toolName: call.name,
+      surface: input.surface,
+      createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+      traceId: parent.traceId,
+    } satisfies SessionMessage);
+    span.end({ status: outcome.isError ? 'error' : 'ok' });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: outcome.content,
+      ...(outcome.isError ? { isError: true } : {}),
+    };
+  } catch (error) {
+    // A failing tool is information for the model, not a crash for the turn.
+    const detail = error instanceof Error ? error.message : String(error);
+    span.end({ status: 'error', error: detail });
+    return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
+  }
+}
+
+/**
+ * Context assembly, outermost-stable first: identity, then tool definitions,
+ * then recalled memory, then the message. Variable content never precedes
+ * stable content, or the cache prefix is invalidated on every turn.
+ */
+function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]): Message[] {
+  const history = deps.sessions.read(input.session);
+  const messages: Message[] = history
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: [{ type: 'text' as const, text: m.content }],
+    }));
+  if (recalled.length > 0) messages.push({ role: 'user', content: recalled });
+  messages.push({ role: 'user', content: [{ type: 'text', text: input.text }] });
+  return messages;
+}
+
+function makeSnapshot(decide: Decide, principal: Principal, tenant: TenantId): PermissionSnapshot {
+  // Taint starts from who is speaking; in M1 nothing else can raise it yet
+  // except a tool that says so. From M2 the recall raises it too.
+  let taint: TrustTier = principal.kind === 'member' ? 2 : 0;
+  const cache = new Map<string, ReturnType<Decide>>();
+  return {
+    principal,
+    tenant,
+    currentTaint: () => taint,
+    raiseTaint(tier) {
+      if (tier > taint) {
+        taint = tier;
+        cache.clear(); // decisions taken at a lower taint no longer apply
+      }
+    },
+    check(capability, resource, args) {
+      const key = `${capability}:${resource.kind}:${'value' in resource ? resource.value : ''}:${taint}`;
+      const cached = cache.get(key);
+      if (cached) return cached;
+      const decision = decide({ principal, tenant, capability, resource, args, taint });
+      cache.set(key, decision);
+      return decision;
+    },
+  };
+}

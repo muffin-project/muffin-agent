@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "frontier",
+  "match": ["*claude-sonnet-5*", "*claude-opus-5*", "*claude-fable-5*", "gpt-5*"],
+  "maxToolsExposed": 24,
+  "maxToolCallsPerTurn": 30,
+  "thinking": "allowed",
+  "recovery": ["nudge", "retryOnce"],
+  "notes": "No crutches beyond a nudge and one retry. If this profile ever needs more, the loop has a bug — do not paper over it here."
+}
