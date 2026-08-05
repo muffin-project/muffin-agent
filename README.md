@@ -20,9 +20,9 @@ provider adapters, per-model profiles, CLI) are done. M2 — memory: episodes, a
 bi-temporal graph carrying provenance, hybrid recall with reranking — passes its
 acceptance scenario end to end, with every turn in a separate process and every
 question in a fresh session, so recall is the only path from the question to the
-answer.
+answer. The document vault is still missing from it.
 
-Next: the Telegram connector, then host primitives.
+Next: the vault, then the Telegram connector, then host primitives.
 
 ```
 muffin                      open the REPL
