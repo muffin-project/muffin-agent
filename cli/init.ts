@@ -53,6 +53,11 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const installed = installRotDefaults(p.rot, options.force ?? false);
   step('root of trust', installed.length > 0 ? `installed ${installed.length} files` : 'already present');
 
+  // voice.md lives outside the root of trust on purpose: it is the part that
+  // learns, and the ratchet may rewrite it. identity.md is the part that does not.
+  const voiceInstalled = installFile('voice.md', join(home, 'voice.md'), options.force ?? false);
+  step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
+
   const apiKey = options.apiKey ?? process.env['MUFFIN_API_KEY'];
   if (apiKey) {
     writeSecret('provider_api_key', apiKey, home);
@@ -105,6 +110,13 @@ function defaultModels(options: InitOptions): { main: string; light: string } {
     main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),
     light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),
   };
+}
+
+/** Never overwrites a personalised file: a second `init` must not undo your edits. */
+function installFile(name: string, dest: string, force: boolean): boolean {
+  if (!force && existsSync(dest)) return false;
+  copyFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', name), dest);
+  return true;
 }
 
 /** Copies the shipped defaults without ever overwriting a personalised file. */

@@ -26,6 +26,7 @@ const { values } = parseArgs({
     source: { type: 'string' },
     proactive: { type: 'boolean' },
     top: { type: 'string' },
+    'max-share': { type: 'string' },
   },
 });
 
@@ -37,14 +38,29 @@ if (!values.source) {
 const db = new DatabaseCtor(values.source, { readonly: true, fileMustExist: true });
 const top = Number(values.top ?? 15);
 
-const rows = db
-  .prepare(
-    `SELECT content, COALESCE(proactive,0) AS proactive
-     FROM raw_messages
-     WHERE role = 'assistant' AND content IS NOT NULL AND trim(content) <> ''
-       AND (:onlyProactive = 0 OR COALESCE(proactive,0) = 1)`,
-  )
-  .all({ onlyProactive: values.proactive ? 1 : 0 }) as { content: string; proactive: number }[];
+/** Reads whichever schema is in front of it: this one, or the previous system's. */
+const hasEpisodesRole =
+  db
+    .prepare(`SELECT count(*) AS n FROM pragma_table_info('episodes') WHERE name = 'role'`)
+    .get() as { n: number };
+
+const rows = (
+  hasEpisodesRole.n > 0
+    ? db
+        .prepare(
+          `SELECT content, 0 AS proactive FROM episodes
+           WHERE role = 'agent' AND content IS NOT NULL AND trim(content) <> ''`,
+        )
+        .all()
+    : db
+        .prepare(
+          `SELECT content, COALESCE(proactive,0) AS proactive
+           FROM raw_messages
+           WHERE role = 'assistant' AND content IS NOT NULL AND trim(content) <> ''
+             AND (:onlyProactive = 0 OR COALESCE(proactive,0) = 1)`,
+        )
+        .all({ onlyProactive: values.proactive ? 1 : 0 })
+) as { content: string; proactive: number }[];
 
 if (rows.length === 0) {
   process.stderr.write('nessun messaggio trovato\n');
@@ -114,14 +130,22 @@ say('## Emoji');
 say('');
 say(`in **${Math.round((messagesWithEmoji / texts.length) * 100)}%** dei messaggi`);
 say('');
+const maxShare = Number(values['max-share'] ?? 15);
 const emojiRanked = [...emojiCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, top);
+const overThreshold: string[] = [];
 for (const [emoji, n] of emojiRanked) {
   const share = Math.round((n / texts.length) * 100);
-  // A single glyph appearing in a large share of messages is a tic, not a habit.
-  const flag = share >= 15 ? '  ← in troppi messaggi: tic o voce?' : '';
-  say(`${String(n).padStart(5)}  ${emoji}  (${share}% dei messaggi)${flag}`);
+  // Past the threshold it stopped being emotional punctuation and became a
+  // signature — and a fixed signature stops meaning anything.
+  const over = share > maxShare;
+  if (over) overThreshold.push(`${emoji} ${share}%`);
+  say(`${String(n).padStart(5)}  ${emoji}  (${share}%)${over ? `  ← oltre il ${maxShare}%: firma, non punteggiatura` : ''}`);
 }
 say('');
+if (overThreshold.length > 0) {
+  say(`**Deriva**: ${overThreshold.join(', ')} — \`voice.md\` dice che nessuna emoji supera il ${maxShare}%.`);
+  say('');
+}
 
 // --- formatting --------------------------------------------------------------
 const has = (re: RegExp) => texts.filter((t) => re.test(t)).length;
@@ -203,3 +227,7 @@ say(`${String(Math.round((countWord(/\b(scusa|mi dispiace|perdona)\b/i) / texts.
 say('');
 
 db.close();
+
+// Exit code so this can gate a release instead of being read by eye — which is
+// exactly what did not happen last time.
+process.exitCode = overThreshold.length > 0 ? 1 : 0;
