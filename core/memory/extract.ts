@@ -57,7 +57,18 @@ REGOLE, in ordine di importanza:
 4. Predicati in inglese, snake_case, al presente: lives_in, works_for, interest,
    prefers, owns, knows, asked_to, claims, plans_to, dislikes.
 
-5. Se non c'è niente di sostanziale, restituisci una lista vuota. Un elenco di
+5. IL PREDICATO PORTA LA RELAZIONE, non una sua generalizzazione. Se il testo
+   nomina il ruolo, il ruolo È il predicato.
+   "Marco è il mio commercialista"
+   → subject "owner", predicate "accountant", object "Marco"          SÌ
+   → "owner works_with Marco" + "Marco role commercialista"           NO
+   Il secondo sembra più ricco ed è più povero: sposta l'informazione che
+   distingue Marco da chiunque altro fuori dal predicato, e un domani
+   "ho cambiato commercialista" non somiglierà più a niente.
+   Discriminante: se il predicato generico regge anche per una persona
+   completamente diversa, non è il predicato giusto.
+
+6. Se non c'è niente di sostanziale, restituisci una lista vuota. Un elenco di
    fatti banali è peggio di nessun fatto.
 
 Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence"}]}`;

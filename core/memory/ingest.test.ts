@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ChatResult, Provider } from '../../agent/providers/types.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { EmbedderUnavailable, type Embedder } from './embed.js';
 import { ingestPending } from './ingest.js';
@@ -16,7 +16,7 @@ class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
   private i = 0;
   constructor(private readonly replies: string[]) {}
-  async chat(): Promise<ChatResult> {
+  async chat(_request?: ChatCall): Promise<ChatResult> {
     const text = this.replies[this.i++] ?? '{"facts":[]}';
     return {
       text,
@@ -172,6 +172,58 @@ describe('memory ingestion', () => {
     expect(report.errors.join(' ')).toContain('recall resta testuale');
     // The work is not lost: the backlog is still there for the next run.
     expect(vectors.indexBacklog(HOST).length).toBeGreaterThan(0);
+  });
+
+  it('shows the judge the sentences, not just the two values', async () => {
+    // Without them the judge is comparing "Marco" with "Lucia" and nothing
+    // else. Measured on the real light model: 0/4 useful verdicts before,
+    // 4/4 after — "ho cambiato commercialista" is the whole signal.
+    const seen: string[] = [];
+    class Capturing extends Scripted {
+      override async chat(request?: ChatCall): Promise<ChatResult> {
+        for (const m of request?.messages ?? []) {
+          for (const c of m.content) if (c.type === 'text') seen.push(c.text);
+        }
+        return super.chat(request);
+      }
+    }
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-ev-'));
+    const deps = {
+      store,
+      provider: new Capturing([
+        facts(fact('owner', 'accountant', 'Marco')),
+        facts(fact('owner', 'accountant', 'Lucia')),
+        JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: 0.95 }),
+      ]),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+    episode(store, 'Marco è il mio commercialista');
+    episode(store, 'ho cambiato commercialista: ora è Lucia');
+    await ingestPending(deps, HOST);
+
+    const judgePrompt = seen.find((t) => t.startsWith('Soggetto:'));
+    expect(judgePrompt).toBeDefined();
+    expect(judgePrompt).toContain('ho cambiato commercialista');
+    expect(judgePrompt).toContain('Marco è il mio commercialista');
+    // Delimited as observed data, the same way the extractor does it.
+    expect(judgePrompt).toContain('<<<FRASE');
+  });
+
+  it('reports a judge that could not answer instead of passing it off as coexist', async () => {
+    const { store, deps } = harness([
+      facts(fact('owner', 'accountant', 'Marco')),
+      facts(fact('owner', 'accountant', 'Lucia')),
+      'non è JSON e non lo sarà mai',
+    ]);
+    episode(store, 'Marco è il mio commercialista');
+    episode(store, 'ora è Lucia');
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.superseded).toBe(0);
+    expect(report.errors.join(' ')).toContain('giudice non disponibile');
   });
 
   it('keeps both values when the judge says two things can be true at once', async () => {

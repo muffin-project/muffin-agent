@@ -160,7 +160,7 @@ async function reconcile(
   tenantId: string,
   subjectId: number,
   fact: { subject: string; predicate: string; object: string; validFrom: string | null; confidence: number },
-  episode: { id: number; trustTier: 0 | 1 | 2 | 3 },
+  episode: { id: number; trustTier: 0 | 1 | 2 | 3; content: string | null },
   now: Date,
   parent: SpanHandle,
   report: IngestReport,
@@ -220,6 +220,10 @@ async function reconcile(
       predicate: fact.predicate,
       existing: candidate,
       incoming: { object: fact.object, validFrom: fact.validFrom },
+      evidence: {
+        existing: deps.store.episodeById(tenantId, candidate.episodeId)?.content ?? undefined,
+        incoming: episode.content ?? undefined,
+      },
     });
     judgeSpan.setAttributes({ 'muffin.memory.verdict': verdict.verdict, 'muffin.memory.judge_confidence': verdict.confidence });
     judgeSpan.end();
@@ -231,6 +235,16 @@ async function reconcile(
   }
 
   const newId = insert();
+
+  // A judge that could not answer at all reads as `coexist` with zero
+  // confidence. The outcome is the safe one, but it is not a decision, and
+  // letting it look like one is how "the memory just accumulates" becomes
+  // something nobody can explain months later.
+  if (verdict.confidence === 0 && verdict.downgraded) {
+    report.errors.push(
+      `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori`,
+    );
+  }
 
   switch (verdict.verdict) {
     case 'supersede':
