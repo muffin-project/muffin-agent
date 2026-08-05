@@ -31,6 +31,8 @@ export type IngestReport = {
   episodes: number;
   factsAdded: number;
   superseded: number;
+  /** Stored and searchable, deliberately not mined. */
+  skippedAgentOutput: number;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
   errors: string[];
 };
@@ -51,6 +53,7 @@ export async function ingestPending(
     episodes: 0,
     factsAdded: 0,
     superseded: 0,
+    skippedAgentOutput: 0,
     needsReview: [],
     errors: [],
   };
@@ -58,9 +61,25 @@ export async function ingestPending(
   try {
     const pending = deps.store.pendingEpisodes(tenantId, EXTRACTION_VERSION, limit);
     const processed: number[] = [];
+    // Marked as done without extraction: they must not come back as pending on
+    // every run, but nothing was mined from them.
+    const processedNonExtractable: number[] = [];
 
     for (const episode of pending) {
       if (!episode.content) continue;
+
+      // The agent's own words are evidence of what was said, never a source of
+      // facts about the world. Mining them means the system manufactures its own
+      // proof: Muffin infers "sembri sotto pressione", the inference becomes a
+      // fact about the owner, and next week it recalls it as something it knows.
+      // In the corpus being migrated, agent output is 68% of the text — this is
+      // not a corner case, it is most of it.
+      if (episode.role === 'agent') {
+        processedNonExtractable.push(episode.id);
+        report.skippedAgentOutput += 1;
+        continue;
+      }
+
       report.episodes += 1;
 
       const extraction = await extractFacts(deps.provider, deps.model, {
@@ -91,12 +110,13 @@ export async function ingestPending(
       processed.push(episode.id);
     }
 
-    deps.store.markExtracted(processed, EXTRACTION_VERSION);
+    deps.store.markExtracted([...processed, ...processedNonExtractable], EXTRACTION_VERSION);
     span.setAttributes({
       'muffin.memory.episodes': report.episodes,
       'muffin.memory.facts_added': report.factsAdded,
       'muffin.memory.superseded': report.superseded,
       'muffin.memory.needs_review': report.needsReview.length,
+      'muffin.memory.skipped_agent': report.skippedAgentOutput,
     });
     span.end();
     return report;

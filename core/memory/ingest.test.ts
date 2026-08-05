@@ -183,3 +183,40 @@ describe('memory ingestion', () => {
     expect(report.factsAdded).toBe(1);
   });
 });
+
+describe('what the agent said is evidence, not proof', () => {
+  it('stores its own replies but never mines facts from them', async () => {
+    // 68% of the corpus being migrated is Muffin talking. Mining it means the
+    // system turns its own inferences into facts about the owner, then recalls
+    // them as things it knows.
+    const { store, deps } = harness([facts(fact('Giusto', 'mood', 'sotto pressione per il lancio'))]);
+    store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent',
+      kind: 'message', content: 'mi sembri sotto pressione per il lancio',
+      trustTier: 0, createdAt: '2026-08-04T11:00:00Z',
+    });
+
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.skippedAgentOutput).toBe(1);
+    expect(report.factsAdded).toBe(0);
+    expect(store.findEntity(HOST, 'Giusto')).toBeNull();
+    // Still searchable: "cosa mi avevi detto" has to keep working.
+    expect(store.searchEpisodes(HOST, 'pressione').length).toBe(1);
+    // And it does not come back as pending on every future run.
+    expect(store.pendingEpisodes(HOST, 1)).toHaveLength(0);
+  });
+
+  it('still mines what the owner said in the same batch', async () => {
+    const { store, deps } = harness([facts(fact('Giusto', 'works_on', 'il lancio di maggio'))]);
+    store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent',
+      kind: 'message', content: 'come va il lancio?', trustTier: 0, createdAt: '2026-08-04T11:00:00Z',
+    });
+    episode(store, 'sto lavorando al lancio di maggio');
+
+    const report = await ingestPending(deps, HOST);
+    expect(report.skippedAgentOutput).toBe(1);
+    expect(report.factsAdded).toBe(1);
+  });
+});
