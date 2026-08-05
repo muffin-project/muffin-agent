@@ -37,10 +37,16 @@ CREATE TABLE IF NOT EXISTS episodes (
   media_meta    TEXT,
   trust_tier    INTEGER NOT NULL CHECK (trust_tier BETWEEN 0 AND 3),
   created_at    TEXT    NOT NULL,
-  extraction_v  INTEGER NOT NULL DEFAULT 0
+  extraction_v  INTEGER NOT NULL DEFAULT 0,
+  -- Evidence is append-only, so nothing here is ever deleted. But a file in the
+  -- vault can be edited and a message can be withdrawn, and the old text should
+  -- stop coming back in recall while remaining on record. This is that line: it
+  -- retires an episode without pretending it never existed.
+  superseded_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_tenant_time ON episodes(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_episodes_pending ON episodes(extraction_v, tenant_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_vault ON episodes(tenant_id, vault_path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
   content,

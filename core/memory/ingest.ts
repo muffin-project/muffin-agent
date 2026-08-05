@@ -41,6 +41,8 @@ export type IngestReport = {
   superseded: number;
   /** Stored and searchable, deliberately not mined. */
   skippedAgentOutput: number;
+  /** Same, for vault documents: recall yes, beliefs no. */
+  skippedDocuments: number;
   /** Chunks embedded this run. Zero with an embedder present is worth noticing. */
   indexed: number;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
@@ -64,6 +66,7 @@ export async function ingestPending(
     factsAdded: 0,
     superseded: 0,
     skippedAgentOutput: 0,
+    skippedDocuments: 0,
     indexed: 0,
     needsReview: [],
     errors: [],
@@ -88,6 +91,17 @@ export async function ingestPending(
       if (episode.role === 'agent') {
         processedNonExtractable.push(episode.id);
         report.skippedAgentOutput += 1;
+        continue;
+      }
+
+      // Documents are indexed for recall and never mined. A downloaded paper is
+      // full of confident claims, and none of them is a belief about the owner's
+      // life; the cheapest way to guarantee that is for a document to never
+      // reach extraction at all. Something in a note that should become a belief
+      // arrives the normal way — the owner says it, with a speaker attached.
+      if (episode.kind === 'document') {
+        processedNonExtractable.push(episode.id);
+        report.skippedDocuments += 1;
         continue;
       }
 

@@ -182,7 +182,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
       rounds += 1;
       // Nothing left to do, or the caller asked for a bounded run.
-      if (report.episodes === 0 && report.skippedAgentOutput === 0) break;
+      if (report.episodes === 0 && report.skippedAgentOutput === 0 && report.skippedDocuments === 0) break;
       if (rounds * 25 >= limit) break;
     }
     process.stdout.write(

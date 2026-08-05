@@ -107,12 +107,39 @@ export class VectorIndex {
    * Agent output is included. It is never mined for facts, but "cosa mi hai
    * detto ieri" is a real question and the answer is evidence like any other.
    */
+  /**
+   * Drops the vectors for one source. Legal because this table is derived: the
+   * episode itself is never deleted, only its place in an index that can be
+   * rebuilt from scratch at any time.
+   */
+  forget(tenantId: string, kind: ChunkSource, sourceIds: number[]): number {
+    if (sourceIds.length === 0) return 0;
+    const select = this.db.prepare(
+      `SELECT id FROM chunks WHERE tenant_id = ? AND source_kind = ? AND source_id = ?`,
+    );
+    const dropVector = this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
+    const dropChunk = this.db.prepare(`DELETE FROM chunks WHERE id = ?`);
+    let removed = 0;
+    const tx = this.db.transaction((ids: number[]) => {
+      for (const sourceId of ids) {
+        for (const row of select.all(tenantId, kind, sourceId) as { id: number }[]) {
+          dropVector.run(BigInt(row.id));
+          dropChunk.run(row.id);
+          removed += 1;
+        }
+      }
+    });
+    tx(sourceIds);
+    return removed;
+  }
+
   indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
     return this.db
       .prepare(
         `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
            FROM episodes e
           WHERE e.tenant_id = :tenant AND e.content IS NOT NULL AND trim(e.content) <> ''
+            AND e.superseded_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM chunks c
                              WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
                                AND c.source_id = e.id AND c.embedding_v = :ev)

@@ -66,10 +66,21 @@ export type Fact = {
 export class MemoryStore {
   constructor(private readonly db: Database.Database) {
     db.exec(MEMORY_SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+    // so a new column in the schema above would never reach an existing
+    // database. Columns added after the first release go here as well as there.
+    this.ensureColumn('episodes', 'superseded_at', 'superseded_at TEXT');
     const seed = db.prepare(
       `INSERT OR IGNORE INTO functional_predicates (predicate, declared_at) VALUES (?, datetime('now'))`,
     );
     for (const p of DEFAULT_FUNCTIONAL_PREDICATES) seed.run(p);
+  }
+
+  private ensureColumn(table: string, column: string, ddl: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!columns.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
   }
 
   // ---- evidence -------------------------------------------------------------
@@ -232,7 +243,7 @@ export class MemoryStore {
         `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier
          FROM episodes_fts f
          JOIN episodes e ON e.id = f.rowid
-         WHERE episodes_fts MATCH ? AND e.tenant_id = ?
+         WHERE episodes_fts MATCH ? AND e.tenant_id = ? AND e.superseded_at IS NULL
          ORDER BY rank LIMIT ?`,
       )
       .all(cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR '), tenantId, limit) as {
@@ -251,6 +262,46 @@ export class MemoryStore {
          ORDER BY length(name) LIMIT ?`,
       )
       .all(tenantId, `%${name.trim()}%`, limit) as { id: number; name: string; kind: string }[];
+  }
+
+  // ---- vault ----------------------------------------------------------------
+
+  /** Live episodes for one vault file, in chunk order. */
+  episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT id, media_meta AS mediaMeta FROM episodes
+         WHERE tenant_id = ? AND vault_path = ? AND superseded_at IS NULL ORDER BY id`,
+      )
+      .all(tenantId, vaultPath) as { id: number; mediaMeta: string | null }[];
+  }
+
+  /** Every vault path that still has live evidence behind it. */
+  vaultPaths(tenantId: string): { vaultPath: string; chunks: number; trustTier: TrustTier }[] {
+    return this.db
+      .prepare(
+        `SELECT vault_path AS vaultPath, count(*) AS chunks, min(trust_tier) AS trustTier
+         FROM episodes
+         WHERE tenant_id = ? AND vault_path IS NOT NULL AND superseded_at IS NULL
+         GROUP BY vault_path ORDER BY vault_path`,
+      )
+      .all(tenantId) as { vaultPath: string; chunks: number; trustTier: TrustTier }[];
+  }
+
+  /**
+   * Retires evidence without deleting it. Used when a vault file changes: the
+   * old text stops being recalled but stays answerable for "what did that note
+   * say in May".
+   */
+  supersedeEpisodes(episodeIds: number[], at: string): void {
+    if (episodeIds.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE episodes SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL`,
+    );
+    const tx = this.db.transaction((ids: number[]) => {
+      for (const id of ids) stmt.run(at, id);
+    });
+    tx(episodeIds);
   }
 
   // ---- provenance -----------------------------------------------------------

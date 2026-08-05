@@ -149,7 +149,7 @@ let round = 0;
 let totals = { episodes: 0, facts: 0, superseded: 0, skipped: 0, review: 0, errors: 0 };
 for (;;) {
   const report = await ingestPending({ store, provider, model, tracer }, TENANT, 25);
-  if (report.episodes === 0 && report.skippedAgentOutput === 0) break;
+  if (report.episodes === 0 && report.skippedAgentOutput === 0 && report.skippedDocuments === 0) break;
   round += 1;
   totals = {
     episodes: totals.episodes + report.episodes,

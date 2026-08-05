@@ -15,6 +15,8 @@ import {
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
+import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
+import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
 /**
@@ -33,6 +35,7 @@ const USAGE = `muffin — personal agent runtime
   muffin doctor [--json] [--online]
   muffin rot verify | reseal
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
+  muffin vault reindex | add <file> | ls | check
   muffin secret set NAME
   muffin trace tail [-n N] [--errors] [--json]
   muffin trace grep PATTERN [-n N] [--json]
@@ -55,6 +58,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdRot(rest);
     case 'memory':
       return cmdMemory(rest);
+    case 'vault':
+      return cmdVault(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -201,6 +206,37 @@ async function cmdMemory(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(MEMORY_USAGE);
+  return 78;
+}
+
+async function cmdVault(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+  const { values, positionals } = parseArgs({
+    args: rest,
+    options: { tier: { type: 'string' } },
+    allowPositionals: true,
+  });
+
+  const tier = Number(values.tier ?? 0);
+  if (!Number.isInteger(tier) || tier < 0 || tier > 3) {
+    process.stderr.write(`--tier deve essere 0, 1, 2 o 3\n`);
+    return 78;
+  }
+
+  if (sub === 'reindex') return cmdVaultReindex(home, tier as TrustTier);
+  if (sub === 'ls') return cmdVaultLs(home);
+  if (sub === 'check') return cmdVaultCheck(home);
+  if (sub === 'add') {
+    const file = positionals[0];
+    if (!file) {
+      process.stderr.write(`usage: muffin vault add <file> [--tier N]\n`);
+      return 78;
+    }
+    return cmdVaultAdd(home, file, tier as TrustTier);
+  }
+
+  process.stderr.write(VAULT_USAGE);
   return 78;
 }
 
