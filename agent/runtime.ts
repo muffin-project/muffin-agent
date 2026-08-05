@@ -14,6 +14,12 @@ import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from './tools/fs.js';
+import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
+import { OllamaEmbedder } from '../core/memory/embed.js';
+import { LlmReranker } from '../core/memory/rerank.js';
+import { MemoryStore } from '../core/memory/store.js';
+import { VectorIndex } from '../core/memory/vectors.js';
+import type { RecallDeps } from '../core/memory/recall.js';
 
 /**
  * Assembly.
@@ -34,6 +40,7 @@ export type Runtime = {
    * agent quietly costs $80 a month.
    */
   light: { provider: Provider; model: string };
+  memory: { store: MemoryStore; recall: RecallDeps };
   budget: BudgetEngine;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
@@ -78,6 +85,22 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   const profile = selectProfile(config.models.main, loadProfiles());
 
+  // Memory. The vector half is optional and its absence is reported rather than
+  // hidden: an embedder that is not running turns semantic recall into keyword
+  // search, and the difference has to be visible in `doctor` and in the traces.
+  const memoryStore = new MemoryStore(db);
+  let vectors: VectorIndex | undefined;
+  try {
+    vectors = new VectorIndex(db, new OllamaEmbedder());
+  } catch {
+    vectors = undefined;
+  }
+  const recallDeps: RecallDeps = {
+    store: memoryStore,
+    vectors,
+    reranker: new LlmReranker(provider, config.models.light),
+  };
+
   // Writes are scoped to the working directory, and the root of trust is never
   // writable from a tool whatever the scope says.
   const scope: FsScope = { root: cwd, denyWrite: [p.rot, p.secrets, p.config] };
@@ -100,9 +123,16 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         return { content: fsWrite(scope, String(a.path), String(a.content ?? '')) };
       },
     },
+    {
+      capability: memoryCapability.id,
+      spec: memorySearchSpec,
+      handler: async (args) => searchMemory(recallDeps, 'host', args),
+    },
   ];
 
-  const capabilities = new Map<string, CapabilityDecl>(fsCapabilities.map((c) => [c.id, c]));
+  const capabilities = new Map<string, CapabilityDecl>(
+    [...fsCapabilities, memoryCapability].map((c) => [c.id, c]),
+  );
   const decide = createDecide({
     capabilities,
     budgetExhausted: () => budget.exhausted(),
@@ -114,6 +144,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     budget,
     safeMode,
     light: { provider, model: config.models.light },
+    memory: { store: memoryStore, recall: recallDeps },
     deps: {
       provider,
       profile,
@@ -124,6 +155,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       sessions: new SessionStore(home),
       budgetExhausted: () => budget.exhausted(),
       systemPrompt: buildSystemPrompt(home, safeMode !== null),
+      memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => db.close(),
   };

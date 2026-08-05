@@ -1,3 +1,5 @@
+import { recall, recallTaint, renderForPrompt, type RecallDeps } from '../core/memory/recall.js';
+import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
@@ -51,6 +53,12 @@ export type LoopDeps = {
   budgetExhausted: () => boolean;
   /** Stable identity and persona, cached as a prefix. */
   systemPrompt: string;
+  /**
+   * Absent in tests and before M2 is configured. When present the turn both
+   * remembers what was said and recalls what is relevant — and inherits the
+   * taint of whatever it recalled.
+   */
+  memory?: { store: MemoryStore; recall: RecallDeps } | undefined;
   now?: () => Date;
 };
 
@@ -84,9 +92,47 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   // Permissions and taint are resolved before anything is generated, so a
   // decision never depends on what the model just said.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant);
-  // Slot for memory recall. Empty until M2 — the shape is here so adding it
-  // later is filling a function, not changing a signature.
+
+  // Evidence first: what was said is recorded before anything is generated, so
+  // a crash mid-turn cannot lose the input that caused it.
+  if (deps.memory) {
+    deps.memory.store.addEpisode({
+      tenantId: input.tenant,
+      connector: input.surface,
+      threadKey: input.session.id,
+      role: 'user',
+      kind: 'message',
+      content: input.text,
+      trustTier: input.principal.kind === 'member' ? 2 : 0,
+      createdAt: now().toISOString(),
+    });
+  }
+
+  // Recall is deterministic and happens before the model sees anything. Its
+  // taint is folded into the snapshot here, which is what closes the
+  // remember-then-act path: a fact a stranger planted months ago raises the
+  // taint of this turn exactly as if they had just spoken.
   const recalled: ContentBlock[] = [];
+  if (deps.memory) {
+    const recallSpan = deps.tracer.start('muffin.tool_call', { [ATTR.operationName]: 'memory.recall' }, turn);
+    try {
+      const result = await recall(deps.memory.recall, input.tenant, input.text);
+      const inherited = recallTaint(result);
+      snapshot.raiseTaint(inherited);
+      recallSpan.setAttributes({
+        'muffin.memory.items': result.items.length,
+        'muffin.memory.strategies': result.strategies.join(','),
+        [ATTR.taint]: inherited,
+      });
+      const rendered = renderForPrompt(result);
+      if (rendered !== '') recalled.push({ type: 'text', text: rendered });
+      recallSpan.end();
+    } catch (error) {
+      // Recall is an improvement, not a precondition: a turn without memory is
+      // worse, a turn that refuses to start is broken.
+      recallSpan.end({ error });
+    }
+  }
 
   const exposed = deps.tools.slice(0, deps.profile.maxToolsExposed);
   const messages: Message[] = buildContext(deps, input, recalled);
@@ -179,6 +225,18 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
           createdAt: now().toISOString(),
           traceId: turn.traceId,
         });
+        if (deps.memory) {
+          deps.memory.store.addEpisode({
+            tenantId: input.tenant,
+            connector: input.surface,
+            threadKey: input.session.id,
+            role: 'agent',
+            kind: 'message',
+            content: text,
+            trustTier: 0,
+            createdAt: now().toISOString(),
+          });
+        }
         return finish(turn, 'answered', text, iterations, usage);
       }
 
