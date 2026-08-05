@@ -11,7 +11,9 @@ Renamed at cutover.
 
 `docs/THESIS.md` — what this is betting on, and what the bet commits the design
 to. `docs/DESIGN-PRINCIPLES.md` — how decisions get made, so the owner and a
-contributor reach the same answer.
+contributor reach the same answer. `docs/lessons.md` — what has broken, with the
+numbers, because in this kind of system the characteristic failure is damage
+that reports success.
 
 ## Status
 
@@ -20,9 +22,11 @@ provider adapters, per-model profiles, CLI) are done. M2 — memory: episodes, a
 bi-temporal graph carrying provenance, hybrid recall with reranking — passes its
 acceptance scenario end to end, with every turn in a separate process and every
 question in a fresh session, so recall is the only path from the question to the
-answer. The document vault is still missing from it.
+answer. The vault indexes documents structurally, carries their context into
+every chunk, and has a check that compares the directory against the index
+rather than trusting the hash that maintains it.
 
-Next: the vault, then the Telegram connector, then host primitives.
+Next: the Telegram connector, then host primitives.
 
 ```
 muffin                      open the REPL
