@@ -21,7 +21,7 @@ const USAGE = `muffin — personal agent runtime
   muffin                                 open the REPL
   muffin run "<goal>" [--json] [--session ID] [--timeout S]
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NAME] [--api-key KEY]
+              [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
   muffin doctor [--json] [--online]
   muffin rot verify | reseal
   muffin secret set NAME
@@ -70,6 +70,7 @@ function cmdInit(argv: string[]): number {
       provider: { type: 'string' },
       'base-url': { type: 'string' },
       model: { type: 'string' },
+      'light-model': { type: 'string' },
       'api-key': { type: 'string' },
     },
     allowPositionals: false,
@@ -87,6 +88,7 @@ function cmdInit(argv: string[]): number {
     ...(provider ? { provider } : {}),
     ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}),
     ...(values.model ? { mainModel: values.model } : {}),
+    ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
     ...(values['api-key'] ? { apiKey: values['api-key'] } : {}),
   });
 

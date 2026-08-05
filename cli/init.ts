@@ -69,10 +69,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
       ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
       apiKeyRef: 'secret://provider_api_key',
     },
-    models: {
-      main: options.mainModel ?? 'claude-sonnet-5',
-      light: options.lightModel ?? 'claude-haiku-4-5-20251001',
-    },
+    models: defaultModels(options),
     rot: { mode: options.hardened ? 'hardened' : 'single-user' },
   };
   saveConfig(config, home);
@@ -91,6 +88,23 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   step('sealed', `${manifest.files.length} files hashed, anchor written`);
 
   return steps;
+}
+
+/**
+ * Two lanes from the first run, never one.
+ *
+ * A single-model install is how extraction, judging and consolidation end up on
+ * a frontier model: each call is small, none of them look expensive, and the
+ * bill arrives at the end of the month. The ids differ by provider — through an
+ * OpenAI-compatible gateway they carry a vendor prefix, against Anthropic
+ * directly they do not.
+ */
+function defaultModels(options: InitOptions): { main: string; light: string } {
+  const compat = (options.provider ?? 'anthropic') === 'openai-compat';
+  return {
+    main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),
+    light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),
+  };
 }
 
 /** Copies the shipped defaults without ever overwriting a personalised file. */

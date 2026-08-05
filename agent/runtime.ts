@@ -9,6 +9,7 @@ import { verify } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { LoopDeps, RegisteredTool } from './loop.js';
+import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
@@ -26,6 +27,13 @@ import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } fr
 export type Runtime = {
   deps: LoopDeps;
   config: Config;
+  /**
+   * The light lane. Extraction, the contradiction judge and consolidation all
+   * run here: they are classification and rewriting, not frontier work, and
+   * paying Sonnet prices to turn a sentence into a triple is how a personal
+   * agent quietly costs $80 a month.
+   */
+  light: { provider: Provider; model: string };
   budget: BudgetEngine;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
@@ -58,7 +66,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   db.pragma('busy_timeout = 5000');
   const budget = new BudgetEngine(db, config.budget);
 
-  const provider =
+  // One connection, two lanes: the endpoint is the same, the model id is not.
+  const provider: Provider =
     config.provider.kind === 'anthropic'
       ? new AnthropicProvider(readSecret(config.provider.apiKeyRef, home), config.provider.baseUrl)
       : new OpenAICompatProvider(
@@ -104,6 +113,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     config,
     budget,
     safeMode,
+    light: { provider, model: config.models.light },
     deps: {
       provider,
       profile,
