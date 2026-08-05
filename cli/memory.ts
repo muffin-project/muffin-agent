@@ -24,6 +24,7 @@ const TENANT = 'host';
 export const MEMORY_USAGE = `usage:
   muffin memory why <fact-id>          l'episodio da cui viene un fatto
   muffin memory search "<query>" [-n N] [--history]
+  muffin memory extract [--limit N]    lancia estrazione + indicizzazione (M5 lo schedula)
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
 `;
@@ -137,6 +138,59 @@ export async function cmdMemorySearch(
     process.stdout.write(`${lines.join('\n\n')}\n`);
     process.stderr.write(`\n${result.items.length} risultati · strategie: ${result.strategies.join(', ')}\n`);
     return 0;
+  } finally {
+    runtime.close();
+  }
+}
+
+/**
+ * Runs the ingestion job by hand.
+ *
+ * M5 schedules this; until then it needs a trigger, and having one is not a
+ * stopgap — the scheduler will call exactly this function, so whatever the eval
+ * exercises here is the code that runs at 3am.
+ */
+export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {
+  const { buildRuntime } = await import('../agent/runtime.js');
+  const { ingestPending } = await import('../core/memory/ingest.js');
+  const runtime = buildRuntime(home);
+  try {
+    let rounds = 0;
+    const total = { episodes: 0, facts: 0, superseded: 0, skipped: 0, indexed: 0, review: 0, errors: 0 };
+    for (;;) {
+      const report = await ingestPending(
+        {
+          store: runtime.memory.store,
+          provider: runtime.light.provider,
+          model: runtime.light.model,
+          tracer: runtime.deps.tracer,
+          vectors: runtime.memory.recall.vectors,
+        },
+        TENANT,
+        Math.min(limit, 25),
+      );
+      total.episodes += report.episodes;
+      total.facts += report.factsAdded;
+      total.superseded += report.superseded;
+      total.skipped += report.skippedAgentOutput;
+      total.indexed += report.indexed;
+      total.review += report.needsReview.length;
+      total.errors += report.errors.length;
+      for (const r of report.needsReview) {
+        process.stderr.write(`  ? ${r.subject} ${r.predicate}: "${r.existing}" vs "${r.incoming}" — ${r.why}\n`);
+      }
+      for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
+      rounds += 1;
+      // Nothing left to do, or the caller asked for a bounded run.
+      if (report.episodes === 0 && report.skippedAgentOutput === 0) break;
+      if (rounds * 25 >= limit) break;
+    }
+    process.stdout.write(
+      `${total.episodes} episodi estratti · ${total.facts} fatti · ${total.superseded} ritirati · ` +
+        `${total.skipped} dell'agente tenuti come evidenza · ${total.indexed} chunk indicizzati` +
+        `${total.review > 0 ? ` · ${total.review} da rivedere` : ''}\n`,
+    );
+    return total.errors > 0 ? 1 : 0;
   } finally {
     runtime.close();
   }

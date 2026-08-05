@@ -1,5 +1,6 @@
 import type { Provider } from '../../agent/providers/types.js';
 import type { SpanHandle, Tracer } from '../tracing/types.js';
+import type { VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
 import { judgeContradiction, type JudgeOutcome } from './judge.js';
@@ -23,6 +24,13 @@ export type IngestDeps = {
   /** The light lane: extraction is the archetypal small-model job. */
   model: string;
   tracer: Tracer;
+  /**
+   * Absent when no embedder is configured. Present, it means this job is also
+   * what keeps the semantic half of recall alive — nothing else feeds it, and
+   * an index nobody fills degrades recall to keyword search without ever
+   * raising an error.
+   */
+  vectors?: VectorIndex | undefined;
   now?: () => Date;
 };
 
@@ -33,6 +41,8 @@ export type IngestReport = {
   superseded: number;
   /** Stored and searchable, deliberately not mined. */
   skippedAgentOutput: number;
+  /** Chunks embedded this run. Zero with an embedder present is worth noticing. */
+  indexed: number;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
   errors: string[];
 };
@@ -54,6 +64,7 @@ export async function ingestPending(
     factsAdded: 0,
     superseded: 0,
     skippedAgentOutput: 0,
+    indexed: 0,
     needsReview: [],
     errors: [],
   };
@@ -111,12 +122,30 @@ export async function ingestPending(
     }
 
     deps.store.markExtracted([...processed, ...processedNonExtractable], EXTRACTION_VERSION);
+
+    // After marking, and separately: the backlog is idempotent, so an embedder
+    // that is down costs a retry next run instead of losing the extraction that
+    // already succeeded.
+    if (deps.vectors) {
+      try {
+        const backlog = deps.vectors.indexBacklog(tenantId);
+        if (backlog.length > 0) {
+          report.indexed = await deps.vectors.index(tenantId, backlog, now().toISOString());
+        }
+      } catch (error) {
+        report.errors.push(
+          `indice vettoriale: ${error instanceof Error ? error.message : String(error)} — il recall resta testuale`,
+        );
+      }
+    }
+
     span.setAttributes({
       'muffin.memory.episodes': report.episodes,
       'muffin.memory.facts_added': report.factsAdded,
       'muffin.memory.superseded': report.superseded,
       'muffin.memory.needs_review': report.needsReview.length,
       'muffin.memory.skipped_agent': report.skippedAgentOutput,
+      'muffin.memory.indexed': report.indexed,
     });
     span.end();
     return report;
@@ -159,14 +188,24 @@ async function reconcile(
       recordedAt: now.toISOString(),
     });
 
-  // Nothing to contradict, or a predicate that is a set by design: no judge, no
-  // cost, no chance of a wrong retirement.
-  if (existing.length === 0 || !deps.store.isFunctional(fact.predicate)) {
-    // A set-valued predicate still gets judged when the values look mutually
-    // exclusive — but only the functional ones can end in a supersede below.
+  // Nothing to contradict: no judge, no cost.
+  if (existing.length === 0) {
     insert();
     return 'added';
   }
+
+  // Everything else is judged, functional or not. Restricting the judge to the
+  // four functional predicates was the same mistake as a closed vocabulary by
+  // another name: "il mio commercialista ora è Lucia" would have accumulated
+  // beside Marco forever, because `accountant` is not on a list somebody wrote
+  // in advance. The list of predicates a person changes their mind about is the
+  // list of predicates, and no enum is going to contain it.
+  //
+  // What protects beliefs is not the gate, it is the judge's own bias: its
+  // default is `coexist`, and SUPERSEDE_THRESHOLD turns an unsure supersede into
+  // a review. `isFunctional` now means what it says — predicates where two
+  // current values are an error by definition, enforced by the invariant, not
+  // the only predicates allowed to change.
 
   const candidate = existing[0]!;
   let verdict: JudgeOutcome;

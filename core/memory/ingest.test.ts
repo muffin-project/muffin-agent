@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ChatResult, Provider } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
+import { EmbedderUnavailable, type Embedder } from './embed.js';
 import { ingestPending } from './ingest.js';
 import { SUPERSEDE_THRESHOLD } from './judge.js';
 import { MemoryStore } from './store.js';
+import { VectorIndex } from './vectors.js';
 
 /** Replays scripted model answers so the pipeline is tested, not the model. */
 class Scripted implements Provider {
@@ -23,6 +25,23 @@ class Scripted implements Provider {
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
       model: 'test',
     };
+  }
+}
+
+/** Enough of an embedder to write real rows; the vectors themselves do not matter here. */
+class CountingEmbedder implements Embedder {
+  readonly id = 'counting:v1';
+  readonly dimensions = 8;
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    return texts.map((t) => Float32Array.from({ length: 8 }, (_, i) => ((t.charCodeAt(i) || 0) % 7) / 7));
+  }
+}
+
+class BrokenEmbedder implements Embedder {
+  readonly id = 'broken:v1';
+  readonly dimensions = 8;
+  async embed(): Promise<Float32Array[]> {
+    throw new EmbedderUnavailable(this.id, 'connessione rifiutata');
   }
 }
 
@@ -97,21 +116,112 @@ describe('memory ingestion', () => {
     expect(store.activeFacts(HOST, tizio)[0]?.trustTier).toBe(2);
   });
 
-  it('keeps both values for a set-valued predicate without calling the judge', async () => {
+  it('fills the vector index, including the agent output it refuses to mine', async () => {
+    // Nothing else feeds the index. Before this was wired, `VectorIndex.index`
+    // was called only from tests: the semantic half of recall was dead in the
+    // live path and no test noticed, because every test built its own index.
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const vectors = new VectorIndex(db, new CountingEmbedder());
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-vec-'));
+    const deps = {
+      store,
+      provider: new Scripted([facts(fact('Giusto', 'accountant', 'Marco'))]),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      vectors,
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+
+    episode(store, 'Marco è il mio commercialista');
+    store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent',
+      kind: 'message', content: 'segnato, Marco', trustTier: 0, createdAt: '2026-08-04T11:01:00Z',
+    });
+
+    const report = await ingestPending(deps, HOST);
+    expect(report.skippedAgentOutput).toBe(1);
+    // Two episodes and one fact: the agent's line is searchable, just not mined.
+    expect(report.indexed).toBe(3);
+    expect(vectors.indexedCount()).toBe(3);
+    // And it is idempotent: a second run has nothing left to do.
+    expect(vectors.indexBacklog(HOST)).toHaveLength(0);
+  });
+
+  it('keeps the extraction when the embedder is down, and says the recall degraded', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const vectors = new VectorIndex(db, new BrokenEmbedder());
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-broken-'));
+    episode(store, 'Marco è il mio commercialista');
+
+    const report = await ingestPending(
+      {
+        store,
+        provider: new Scripted([facts(fact('Giusto', 'accountant', 'Marco'))]),
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        vectors,
+        now: () => new Date('2026-08-04T12:00:00Z'),
+      },
+      HOST,
+    );
+
+    expect(report.factsAdded).toBe(1);
+    expect(report.indexed).toBe(0);
+    expect(report.errors.join(' ')).toContain('recall resta testuale');
+    // The work is not lost: the backlog is still there for the next run.
+    expect(vectors.indexBacklog(HOST).length).toBeGreaterThan(0);
+  });
+
+  it('keeps both values when the judge says two things can be true at once', async () => {
     const { store, deps } = harness([
       facts(fact('Giusto', 'interest', 'fotografia')),
       facts(fact('Giusto', 'interest', 'vela')),
+      JSON.stringify({
+        reasoning: 'due interessi non si escludono',
+        verdict: 'coexist',
+        confidence: 0.95,
+      }),
     ]);
     episode(store, 'mi piace la fotografia');
     episode(store, 'mi piace anche la vela');
-    await ingestPending(deps, HOST);
+    const report = await ingestPending(deps, HOST);
 
     const me = store.findEntity(HOST, 'Giusto')!;
     // The old system's regression: the second interest must not retire the first.
+    expect(report.superseded).toBe(0);
     expect(store.activeFacts(HOST, me, 'interest').map((f) => f.objectValue).sort()).toEqual([
       'fotografia',
       'vela',
     ]);
+  });
+
+  it('retires a set-valued predicate too, when the judge is sure it was a change', async () => {
+    // `accountant` is on nobody's list of functional predicates, and it is
+    // exactly the kind of thing a person changes. Gating supersede on a
+    // hardcoded list meant Marco and Lucia both stayed current forever.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'accountant', 'Marco')),
+      facts(fact('Giusto', 'accountant', 'Lucia')),
+      JSON.stringify({
+        reasoning: '"ho cambiato commercialista" dice che il precedente non lo è più',
+        verdict: 'supersede',
+        confidence: 0.92,
+      }),
+    ]);
+    episode(store, 'Marco è il mio commercialista');
+    episode(store, 'ho cambiato commercialista, ora è Lucia');
+    const report = await ingestPending(deps, HOST);
+
+    const me = store.findEntity(HOST, 'Giusto')!;
+    expect(store.isFunctional('accountant')).toBe(false);
+    expect(report.superseded).toBe(1);
+    expect(store.activeFacts(HOST, me, 'accountant').map((f) => f.objectValue)).toEqual(['Lucia']);
+    // And May stays answerable: the retired belief is on record with its successor.
+    const history = store.factHistory(HOST, me, 'accountant');
+    expect(history).toHaveLength(2);
+    expect(history[0]?.supersededBy).toBe(history[1]?.id);
   });
 
   it('retires a functional predicate when the judge is confident', async () => {

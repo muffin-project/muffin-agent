@@ -9,6 +9,7 @@ import { runHeadless } from './run.js';
 import { runRepl } from './repl.js';
 import {
   cmdMemoryCheck,
+  cmdMemoryExtract,
   cmdMemorySearch,
   cmdMemoryStats,
   cmdMemoryWhy,
@@ -31,7 +32,7 @@ const USAGE = `muffin — personal agent runtime
               [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
   muffin doctor [--json] [--online]
   muffin rot verify | reseal
-  muffin memory why <fact-id> | search "<query>" | stats | check
+  muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin secret set NAME
   muffin trace tail [-n N] [--errors] [--json]
   muffin trace grep PATTERN [-n N] [--json]
@@ -171,6 +172,11 @@ async function cmdMemory(argv: string[]): Promise<number> {
   }
 
   if (sub === 'stats') return cmdMemoryStats(home);
+
+  if (sub === 'extract') {
+    const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });
+    return cmdMemoryExtract(home, Number(values.limit ?? 200));
+  }
 
   if (sub === 'check') {
     const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });

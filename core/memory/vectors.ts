@@ -96,6 +96,45 @@ export class VectorIndex {
     }[];
   }
 
+  /**
+   * Everything with no vector yet for the *current* embedder.
+   *
+   * Derived and rebuildable is only true if something can rebuild it: this is
+   * that something. It is idempotent, so a failed embedding run costs a retry
+   * rather than a permanently unsearchable episode, and changing embedder makes
+   * the whole corpus pending again instead of silently mixing dimensions.
+   *
+   * Agent output is included. It is never mined for facts, but "cosa mi hai
+   * detto ieri" is a real question and the answer is evidence like any other.
+   */
+  indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
+    return this.db
+      .prepare(
+        `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
+           FROM episodes e
+          WHERE e.tenant_id = :tenant AND e.content IS NOT NULL AND trim(e.content) <> ''
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
+                               AND c.source_id = e.id AND c.embedding_v = :ev)
+         UNION ALL
+         SELECT 'fact' AS kind, f.id AS sourceId,
+                s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
+           FROM facts f
+           JOIN entities s ON s.id = f.subject_id
+           LEFT JOIN entities o ON o.id = f.object_id
+          WHERE f.tenant_id = :tenant AND f.expired_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
+                               AND c.source_id = f.id AND c.embedding_v = :ev)
+         LIMIT :limit`,
+      )
+      .all({ tenant: tenantId, ev: this.embedder.id, limit }) as {
+      kind: ChunkSource;
+      sourceId: number;
+      text: string;
+    }[];
+  }
+
   /** A health check can assert this is not zero — the failure that hides itself. */
   indexedCount(tenantId?: string): number {
     const row = tenantId
