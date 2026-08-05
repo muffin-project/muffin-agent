@@ -7,6 +7,13 @@ import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
 import { runRepl } from './repl.js';
+import {
+  cmdMemoryCheck,
+  cmdMemorySearch,
+  cmdMemoryStats,
+  cmdMemoryWhy,
+  MEMORY_USAGE,
+} from './memory.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
 /**
@@ -24,6 +31,7 @@ const USAGE = `muffin — personal agent runtime
               [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
   muffin doctor [--json] [--online]
   muffin rot verify | reseal
+  muffin memory why <fact-id> | search "<query>" | stats | check
   muffin secret set NAME
   muffin trace tail [-n N] [--errors] [--json]
   muffin trace grep PATTERN [-n N] [--json]
@@ -44,6 +52,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdDoctor(rest);
     case 'rot':
       return cmdRot(rest);
+    case 'memory':
+      return cmdMemory(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -144,6 +154,47 @@ function cmdRot(argv: string[]): number {
   }
 
   process.stderr.write(`usage: muffin rot verify | reseal\n`);
+  return 78;
+}
+
+async function cmdMemory(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+
+  if (sub === 'why') {
+    const id = Number(rest[0]);
+    if (!Number.isInteger(id) || id <= 0) {
+      process.stderr.write(`usage: muffin memory why <fact-id>\n`);
+      return 78;
+    }
+    return cmdMemoryWhy(home, id);
+  }
+
+  if (sub === 'stats') return cmdMemoryStats(home);
+
+  if (sub === 'check') {
+    const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });
+    return cmdMemoryCheck(home, values.json === true);
+  }
+
+  if (sub === 'search') {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: { n: { type: 'string', short: 'n' }, history: { type: 'boolean' } },
+      allowPositionals: true,
+    });
+    const query = positionals.join(' ').trim();
+    if (query === '') {
+      process.stderr.write(`usage: muffin memory search "<query>"\n`);
+      return 78;
+    }
+    return cmdMemorySearch(home, query, {
+      ...(values.n ? { limit: Number(values.n) } : {}),
+      ...(values.history ? { history: true } : {}),
+    });
+  }
+
+  process.stderr.write(MEMORY_USAGE);
   return 78;
 }
 

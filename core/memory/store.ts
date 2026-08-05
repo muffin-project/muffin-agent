@@ -59,6 +59,8 @@ export type Fact = {
   episodeId: number;
   trustTier: TrustTier;
   confidence: number;
+  /** The fact that replaced this one, if any. Recall shows it; `why` follows it. */
+  supersededBy: number | null;
 };
 
 export class MemoryStore {
@@ -192,7 +194,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence
+                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
@@ -211,7 +213,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence
+                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
@@ -250,4 +252,117 @@ export class MemoryStore {
       )
       .all(tenantId, `%${name.trim()}%`, limit) as { id: number; name: string; kind: string }[];
   }
+
+  // ---- provenance -----------------------------------------------------------
+
+  /** One fact by id, tenant-scoped. The entry point of `muffin memory why`. */
+  factById(tenantId: string, id: number): Fact | null {
+    const row = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.id = ?`,
+      )
+      .get(tenantId, id) as Fact | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * The episode a fact came from. This is the whole answer to "why do you think
+   * that": not a rationalisation generated after the fact, but the sentence that
+   * was actually said, with its time and its tier.
+   */
+  episodeById(tenantId: string, id: number): Episode | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, tenant_id AS tenantId, connector, thread_key AS threadKey, actor_id AS actorId,
+                role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
+                created_at AS createdAt, extraction_v AS extractionV
+         FROM episodes WHERE tenant_id = ? AND id = ?`,
+      )
+      .get(tenantId, id) as (Episode & { actorId: number | null; vaultPath: string | null }) | undefined;
+    if (!row) return null;
+    // The optional columns come back NULL from SQLite; the type says absent.
+    const { actorId, vaultPath, ...rest } = row;
+    return {
+      ...rest,
+      ...(actorId === null ? {} : { actorId }),
+      ...(vaultPath === null ? {} : { vaultPath }),
+    };
+  }
+
+  /** Which facts a given episode produced — the other direction of provenance. */
+  factsFromEpisode(tenantId: string, episodeId: number): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.episode_id = ?
+         ORDER BY f.id`,
+      )
+      .all(tenantId, episodeId) as Fact[];
+  }
+
+  stats(tenantId: string): MemoryStats {
+    const one = <T>(sql: string, ...params: unknown[]): T =>
+      (this.db.prepare(sql).get(...params) as { v: T }).v;
+    return {
+      episodes: one<number>(`SELECT count(*) AS v FROM episodes WHERE tenant_id = ?`, tenantId),
+      pending: one<number>(
+        `SELECT count(*) AS v FROM episodes WHERE tenant_id = ? AND extraction_v = 0 AND role = 'user'`,
+        tenantId,
+      ),
+      entities: one<number>(
+        `SELECT count(*) AS v FROM entities WHERE tenant_id = ? AND expired_at IS NULL`,
+        tenantId,
+      ),
+      activeFacts: one<number>(
+        `SELECT count(*) AS v FROM facts WHERE tenant_id = ? AND expired_at IS NULL`,
+        tenantId,
+      ),
+      retiredFacts: one<number>(
+        `SELECT count(*) AS v FROM facts WHERE tenant_id = ? AND expired_at IS NOT NULL`,
+        tenantId,
+      ),
+      predicates: one<number>(
+        `SELECT count(DISTINCT predicate) AS v FROM facts WHERE tenant_id = ?`,
+        tenantId,
+      ),
+      topPredicates: this.db
+        .prepare(
+          `SELECT predicate, count(*) AS n FROM facts
+           WHERE tenant_id = ? AND expired_at IS NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10`,
+        )
+        .all(tenantId) as { predicate: string; n: number }[],
+      span: this.db
+        .prepare(
+          `SELECT min(created_at) AS from_, max(created_at) AS to_ FROM episodes WHERE tenant_id = ?`,
+        )
+        .get(tenantId) as { from_: string | null; to_: string | null },
+    };
+  }
 }
+
+export type MemoryStats = {
+  episodes: number;
+  /** Owner messages not yet through extraction. */
+  pending: number;
+  entities: number;
+  activeFacts: number;
+  retiredFacts: number;
+  predicates: number;
+  topPredicates: { predicate: string; n: number }[];
+  span: { from_: string | null; to_: string | null };
+};
