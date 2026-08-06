@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -150,6 +150,67 @@ describe('vault', () => {
     rmSync(join(f.root, 'a.md'));
     rmSync(join(f.root, 'b.md'));
     expect(f.vault.audit(HOST).orphaned).toEqual(['a.md']);
+  });
+
+  it('never indexes a dotfile, and says it did not', async () => {
+    // The previous rule skipped hidden *directories* only, so a `.env` became
+    // episodes, entered full-text search, and was sent to the embedder.
+    const f = fixture();
+    write(f.root, '.env', 'OPENAI_API_KEY=sk-live-VERA\nDB_PASSWORD=hunter2\n');
+    write(f.root, 'id_rsa', '-----BEGIN OPENSSH PRIVATE KEY-----\n');
+    write(f.root, 'nota.md', '# Nota\n\ntesto legittimo\n');
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.scanned).toBe(1);
+    expect(f.store.searchEpisodes(HOST, 'sk')).toHaveLength(0);
+    expect(report.skipped.map((s) => s.path).sort()).toEqual(['.env', 'id_rsa']);
+  });
+
+  it('does not index a secret hiding behind an innocent symlink name', async () => {
+    // The filter runs on the resolved path, so what the link is *called* here
+    // buys the attacker nothing.
+    const f = fixture();
+    mkdirSync(join(f.root, '..', 'altrove', '.ssh'), { recursive: true });
+    writeFileSync(join(f.root, '..', 'altrove', '.ssh', 'id_ed25519'), 'CHIAVE PRIVATA\n');
+    symlinkSync(join(f.root, '..', 'altrove', '.ssh'), join(f.root, 'appunti'));
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.scanned).toBe(0);
+    expect(f.store.searchEpisodes(HOST, 'CHIAVE')).toHaveLength(0);
+    expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('nascosto');
+  });
+
+  it('follows a symlinked note — the ordinary setup, not an edge case', async () => {
+    // A vault whose notes live elsewhere and are linked in is how people use
+    // this. `Dirent.isFile()` is false for a link, so the previous version
+    // dropped them without a word — and `audit()` shared the blind spot,
+    // reporting "aligned" over a vault it could not see.
+    const f = fixture();
+    mkdirSync(join(f.root, '..', 'obsidian'), { recursive: true });
+    writeFileSync(join(f.root, '..', 'obsidian', 'diario.md'), '# Diario\n\nil ritrovo è al porto\n');
+    symlinkSync(join(f.root, '..', 'obsidian', 'diario.md'), join(f.root, 'diario.md'));
+
+    const report = await f.vault.reindex(HOST, { now: NOW });
+    expect(report.scanned).toBe(1);
+    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(1);
+    // And the audit agrees with the reindex, because both enumerate the same way.
+    expect(f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [] });
+  });
+
+  it('does not launder the tier when a file is renamed', async () => {
+    // Trust followed the path, so `mv` was a laundering operation: the new path
+    // was unknown, the default applied, and a downloaded paper became something
+    // the owner had said.
+    const f = fixture();
+    write(f.root, 'import/paper.md', '# Paper\n\nafferma cose\n');
+    await f.vault.reindex(HOST, { defaultTier: 3, now: NOW });
+
+    renameSync(join(f.root, 'import', 'paper.md'), join(f.root, 'paper-v2.md'));
+    await f.vault.reindex(HOST, { defaultTier: 0, now: NOW });
+
+    const rows = f.store.episodesForVaultPath(HOST, 'paper-v2.md');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(f.store.episodeById(HOST, rows[0]!.id)?.trustTier).toBe(3);
   });
 
   it('ignores the directories that are never content', async () => {

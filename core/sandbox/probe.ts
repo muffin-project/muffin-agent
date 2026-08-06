@@ -41,22 +41,51 @@ export function probeSandbox(): SandboxProbe {
   };
 }
 
+/**
+ * A `(deny default)` profile, and then a read that must fail.
+ *
+ * The first version of this ran `(allow default)` and reported "a real
+ * containment ran and held" if the process started. It proved that
+ * `sandbox-exec` exists — which is the question nobody asked, and precisely the
+ * mistake the Linux branch was written to avoid. The Linux branch got it right
+ * and the branch that runs on the developer's own machine did not.
+ */
+const DENY_ALL = '(version 1)(deny default)(allow process-fork)(allow sysctl-read)';
+
 function probeSeatbelt(): SandboxProbe {
+  // A file that certainly exists and that a contained process must not read.
+  // `/etc/hosts` is world-readable, so success here means the sandbox is off.
+  const forbidden = '/etc/hosts';
+  let contained: boolean;
   try {
-    execFileSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], {
+    execFileSync('/usr/bin/sandbox-exec', ['-p', DENY_ALL, '/bin/cat', forbidden], {
       timeout: PROBE_TIMEOUT_MS,
-      stdio: 'ignore',
+      stdio: 'pipe',
     });
-    return { available: true, mechanism: 'seatbelt' };
+    contained = false; // the read succeeded: nothing was contained
   } catch (error) {
-    return {
-      available: false,
-      mechanism: 'seatbelt',
-      reason: 'probe_failed',
-      detail: message(error),
-      remedy: 'sandbox-exec is part of macOS; if this fails the platform is not as expected',
-    };
+    const detail = message(error);
+    if (/ENOENT|not found/i.test(detail)) {
+      return {
+        available: false,
+        mechanism: 'seatbelt',
+        reason: 'binary_missing',
+        detail,
+        remedy: 'sandbox-exec is part of macOS; if it is missing the platform is not as expected',
+      };
+    }
+    // The expected outcome: the profile refused the read, so the process died.
+    contained = true;
   }
+
+  if (contained) return { available: true, mechanism: 'seatbelt' };
+  return {
+    available: false,
+    mechanism: 'seatbelt',
+    reason: 'probe_failed',
+    detail: `a deny-all profile still let a process read ${forbidden}: the sandbox is not containing anything`,
+    remedy: 'check whether sandbox-exec is being intercepted or the profile is being ignored',
+  };
 }
 
 function probeBubblewrap(): SandboxProbe {

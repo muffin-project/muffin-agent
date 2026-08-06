@@ -1,4 +1,5 @@
 import type { Provider } from '../../agent/providers/types.js';
+import { fence } from './spotlight.js';
 import type { RecallItem } from './recall.js';
 
 /**
@@ -72,7 +73,9 @@ export class LlmReranker implements Reranker {
                 type: 'text',
                 // The candidates are data, and some of them came from strangers.
                 // Delimited so a fragment cannot rewrite the ranking instruction.
-                text: `Domanda: ${query}\n\nRestituisci i migliori ${topK}.\n\n<<<FRAMMENTI\n${listing}\nFRAMMENTI>>>`,
+                text:
+                  `Domanda: ${query}\n\nRestituisci i migliori ${topK}.\n\n` +
+                  fence('FRAMMENTI', listing).block,
               },
             ],
           },

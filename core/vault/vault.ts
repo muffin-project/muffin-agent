@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type { MemoryStore } from '../memory/store.js';
 import type { VectorIndex } from '../memory/vectors.js';
@@ -35,10 +35,43 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.obsidian', '.trash', '__pycache__']);
 
+/**
+ * Names that are never notes, whatever directory they are sitting in.
+ *
+ * This list exists because the previous rule skipped hidden *directories* and
+ * not hidden files, so a `.env` dropped in the vault became episodes, went into
+ * full-text search, was sent to the embedder, and would have been recalled into
+ * a prompt. Dotfiles are excluded wholesale — a note whose name starts with a
+ * dot is not a use case worth the exposure — and these are the ones that do not
+ * start with a dot.
+ */
+const NEVER_CONTENT = new Set([
+  'id_rsa', 'id_ed25519', 'id_ecdsa', 'credentials', 'credentials.json',
+  'secrets.json', 'service-account.json', 'keyfile.json', 'authorized_keys',
+]);
+
+/**
+ * Applied to the **resolved** path, not the name in the directory listing: a
+ * symlink called `appunti` pointing at `~/.ssh` would otherwise walk straight
+ * past a filter that only looks at what it is called here.
+ */
+export function skipReason(relPath: string, realPath: string): string | null {
+  const segments = [...relPath.split('/'), ...realPath.split(sep)];
+  for (const segment of segments) {
+    if (segment.startsWith('.') && segment !== '.' && segment !== '..') {
+      return 'nascosto: i dotfile non sono note e a volte sono chiavi';
+    }
+    if (NEVER_CONTENT.has(segment.toLowerCase())) return 'nome che non è mai contenuto';
+  }
+  return null;
+}
+
 export type VaultFile = {
   /** Relative to the vault root, with forward slashes: it goes in the database. */
   path: string;
   bytes: number;
+  /** Set when the entry was reached through a symlink, so a report can say so. */
+  linkedTo?: string;
 };
 
 export type VaultReport = {
@@ -65,9 +98,26 @@ export class Vault {
     private readonly root: string,
   ) {}
 
-  /** Every readable file under the vault root, relative paths, sorted. */
-  list(): VaultFile[] {
-    const out: VaultFile[] = [];
+  /**
+   * Every file under the vault root that could be content, plus the ones that
+   * could not and why.
+   *
+   * **Symlinks are followed.** A vault whose notes live somewhere else and are
+   * linked in is the ordinary setup, not an edge case, and the previous version
+   * dropped them silently: `Dirent.isFile()` is false for a link, so a linked
+   * note was invisible — and `audit()` built its "disk" side from this same
+   * function, which meant the two sides that exist to disagree shared a blind
+   * spot. Following them means the filter has to run on the resolved path, which
+   * it does.
+   *
+   * `audit()` and `reindex()` both go through here on purpose: one enumeration,
+   * so they cannot drift.
+   */
+  list(): { files: VaultFile[]; skipped: { path: string; why: string }[] } {
+    const files: VaultFile[] = [];
+    const skipped: { path: string; why: string }[] = [];
+    const visited = new Set<string>();
+
     const walk = (dir: string): void => {
       let entries;
       try {
@@ -76,17 +126,45 @@ export class Vault {
         return; // an unreadable directory is not an error worth aborting a scan for
       }
       for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (entry.name.startsWith('.') && entry.isDirectory()) continue;
         if (SKIP_DIRS.has(entry.name)) continue;
         const full = join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) {
-          out.push({ path: relative(this.root, full).split(sep).join('/'), bytes: statSync(full).size });
+        const rel = relative(this.root, full).split(sep).join('/');
+
+        let real: string;
+        let stat;
+        try {
+          real = realpathSync(full);
+          stat = statSync(full); // follows the link, which is the point
+        } catch {
+          skipped.push({ path: rel, why: 'link rotto o file illeggibile' });
+          continue;
+        }
+
+        const reason = skipReason(rel, real);
+        if (reason !== null) {
+          skipped.push({ path: rel, why: reason });
+          continue;
+        }
+
+        // A link back into the tree, or a cycle, would otherwise walk for ever.
+        if (visited.has(real)) {
+          skipped.push({ path: rel, why: `già indicizzato come altro percorso` });
+          continue;
+        }
+        visited.add(real);
+
+        if (stat.isDirectory()) walk(full);
+        else if (stat.isFile()) {
+          files.push({
+            path: rel,
+            bytes: stat.size,
+            ...(real !== full ? { linkedTo: real } : {}),
+          });
         }
       }
     };
     walk(this.root);
-    return out;
+    return { files, skipped };
   }
 
   /**
@@ -103,11 +181,12 @@ export class Vault {
       scanned: 0, added: 0, updated: 0, unchanged: 0, removed: 0, chunks: 0, indexed: 0, skipped: [],
     };
 
-    const onDisk = this.list();
+    const scan = this.list();
+    report.skipped.push(...scan.skipped);
     const seen = new Set<string>();
     const retired: number[] = [];
 
-    for (const file of onDisk) {
+    for (const file of scan.files) {
       report.scanned += 1;
       seen.add(file.path);
 
@@ -137,10 +216,14 @@ export class Vault {
         continue;
       }
 
-      // Trust never rises on reindex. A tier-3 import stays tier 3 forever,
-      // whatever the caller passes today — otherwise re-running this command
-      // would be a laundering operation.
-      const inheritedTier = existing.length > 0 ? metaOf(existing[0]!.mediaMeta).tier : undefined;
+      // Trust never rises on reindex, and it follows the **content** rather than
+      // the path: inheriting by `vault_path` meant renaming a tier-3 import
+      // laundered it to the caller's default, because the new path was unknown.
+      // The bytes are the same bytes whatever they are called.
+      const inheritedTier =
+        (existing.length > 0 ? metaOf(existing[0]!.mediaMeta).tier : undefined) ??
+        this.store.maxTierForContent(tenantId, hash) ??
+        undefined;
       const tier = (inheritedTier ?? defaultTier) as TrustTier;
 
       if (existing.length > 0) {
@@ -223,7 +306,10 @@ export class Vault {
     const orphaned: string[] = [];
     const onDisk = new Map<string, string>();
 
-    for (const file of this.list()) {
+    // The same enumeration `reindex` uses, including the symlink handling and
+    // the filter. Two sides of a comparison that disagree about what exists are
+    // not a comparison.
+    for (const file of this.list().files) {
       if (file.bytes > MAX_FILE_BYTES) continue;
       const text = readText(join(this.root, file.path));
       // Unreadable files are skipped by reindex too, so their absence from the

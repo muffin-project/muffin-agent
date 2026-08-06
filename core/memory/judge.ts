@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fence } from './spotlight.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { Fact } from './store.js';
 
@@ -174,7 +175,7 @@ export async function judgeContradiction(
 function quote(text?: string): string {
   if (!text || text.trim() === '') return '';
   const clipped = text.length > 600 ? `${text.slice(0, 600)}…` : text;
-  return `  <<<FRASE\n  ${clipped.replace(/\n/g, '\n  ')}\n  FRASE>>>\n`;
+  return `${fence('FRASE', clipped).block}\n`;
 }
 
 function safeJson(text: string): unknown {

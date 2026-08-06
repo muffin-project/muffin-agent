@@ -16,6 +16,18 @@ export interface Embedder {
   embed(texts: string[]): Promise<Float32Array[]>;
 }
 
+/**
+ * Node's `fetch` has no default timeout, and this call sits on the pre-loop path
+ * of every turn: an embedder that hangs — Ollama loading a model, a machine in
+ * swap — hangs the turn with no output and no trace. The previous system lost
+ * its entire private intake to exactly this, a `fetch` with no timeout on the
+ * message path, and the symptom was "it stopped letting me write to it".
+ *
+ * Generous rather than tight: a cold model load is slow but legitimate, and the
+ * failure this guards against is unbounded, not slow.
+ */
+const EMBED_TIMEOUT_MS = 30_000;
+
 export class EmbedderUnavailable extends Error {
   constructor(
     readonly embedderId: string,
@@ -46,6 +58,7 @@ export class OllamaEmbedder implements Embedder {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ model: this.model, prompt: text }),
+          signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
         });
       } catch (error) {
         throw new EmbedderUnavailable(this.id, error instanceof Error ? error.message : String(error));
@@ -87,6 +100,7 @@ export class OpenAICompatEmbedder implements Embedder {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify({ model: this.model, input: texts }),
+        signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });
     } catch (error) {
       throw new EmbedderUnavailable(this.id, error instanceof Error ? error.message : String(error));

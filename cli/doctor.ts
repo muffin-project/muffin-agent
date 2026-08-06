@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { verify } from '../core/rot/verify.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
@@ -90,8 +91,46 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     const tables = db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type='table'`).get() as {
       n: number;
     };
-    db.close();
     ok('database', `${p.db}, ${tables.n} tables`);
+
+    // The semantic half of recall, checked rather than assumed. Three separate
+    // defences against the vector index being silently empty were written into
+    // this repository and none of them was ever *consulted* — which is the same
+    // failure they were written to prevent, one layer out.
+    const chunks = countOrNull(db, 'chunks');
+    if (chunks === null) {
+      warn(
+        'vector index',
+        'no chunks table yet: recall is full-text only until something is indexed',
+        'run `muffin memory extract` or `muffin vault reindex`',
+      );
+    } else {
+      let vectors: number | null = null;
+      try {
+        sqliteVec.load(db);
+        vectors = countOrNull(db, 'chunks_vec');
+      } catch {
+        vectors = null;
+      }
+      if (vectors === null) {
+        fail(
+          'vector index',
+          `${chunks} chunks stored and the vector table could not be read: recall has silently lost half of itself`,
+          'reinstall sqlite-vec (a native binary mismatch after `npm ci` does this)',
+        );
+      } else if (vectors !== chunks) {
+        fail(
+          'vector index',
+          `${chunks} chunks but ${vectors} vectors: the index is out of sync`,
+          'run `muffin memory extract` to drain the backlog',
+        );
+      } else if (chunks === 0) {
+        warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
+      } else {
+        ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+      }
+    }
+    db.close();
   } catch (error) {
     fail('database', String(error), 'run `muffin init` to create it');
   }
@@ -109,12 +148,13 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     );
   }
 
-  try {
-    const free = statSync(p.home);
+  // Was `statSync(p.home)` with the result assigned and voided — the remains of
+  // a disk-space check that was never written, which made the failure branch
+  // unreachable and the check a decoration.
+  if (existsSync(p.traces)) {
     ok('traces', `${p.traces}, retention ${config.traces.retentionDays} days`);
-    void free;
-  } catch {
-    warn('traces', 'trace directory not readable', 'check permissions on the home directory');
+  } else {
+    warn('traces', `${p.traces} does not exist yet`, 'it is created on the first turn');
   }
 
   return report(checks);
@@ -136,4 +176,13 @@ export function formatReport(report: DoctorReport): string {
     return c.remedy ? `${head}\n  → ${c.remedy}` : head;
   });
   return lines.join('\n');
+}
+
+/** `null` means the table is not there, which is a different fact from "zero rows". */
+function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
+  try {
+    return (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+  } catch {
+    return null;
+  }
 }

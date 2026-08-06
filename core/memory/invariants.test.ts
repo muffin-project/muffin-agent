@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { checkInvariants, formatViolations, PREDICATE_VOCABULARY_THRESHOLD } from './invariants.js';
+import { checkInvariants, formatCheck, PREDICATE_VOCABULARY_THRESHOLD } from './invariants.js';
 import { MemoryStore } from './store.js';
 
 /**
@@ -51,16 +51,16 @@ function addFact(
 }
 
 function ids(f: ReturnType<typeof fixture>): string[] {
-  return checkInvariants(f.db).map((v) => v.id);
+  return checkInvariants(f.db).violations.map((v) => v.id);
 }
 
 describe('graph invariants', () => {
   it('says nothing on a clean graph', () => {
     const f = fixture();
     addFact(f);
-    expect(checkInvariants(f.db)).toEqual([]);
-    expect(formatViolations([], 1)).toContain('rispettati');
-    expect(formatViolations([], 0)).toContain('vuoto');
+    expect(checkInvariants(f.db).violations).toEqual([]);
+    expect(formatCheck({ violations: [], skipped: [] }, 1)).toContain('rispettati');
+    expect(formatCheck({ violations: [], skipped: [] }, 0)).toContain('vuoto');
   });
 
   it('catches an active fact that already has a successor', () => {
@@ -142,7 +142,7 @@ describe('graph invariants', () => {
     for (let i = 0; i <= PREDICATE_VOCABULARY_THRESHOLD; i += 1) {
       addFact(f, { predicate: `predicato_${i}`, value: 'x' });
     }
-    const violations = checkInvariants(f.db);
+    const { violations } = checkInvariants(f.db);
     const vocab = violations.find((v) => v.id === 'predicate_vocabulary');
     expect(vocab?.severity).toBe('warning');
     expect(violations.filter((v) => v.severity === 'error')).toEqual([]);
@@ -153,6 +153,12 @@ describe('graph invariants', () => {
     // check that screams on a fresh install is a health check people disable.
     const f = fixture();
     addFact(f);
-    expect(checkInvariants(f.db)).toEqual([]);
+    const result = checkInvariants(f.db);
+    expect(result.violations).toEqual([]);
+    // But it does say so out loud. A check that did not run is not a check that
+    // passed, and folding the two together is how a report said "all invariants
+    // respected" while the vector half of recall was dead.
+    expect(result.skipped.map((s) => s.id)).toContain('vector_desync');
+    expect(formatCheck(result, 1)).toContain('NON verificato');
   });
 });

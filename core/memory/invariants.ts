@@ -139,21 +139,42 @@ export type CheckOptions = {
   sampleSize?: number;
 };
 
-export function checkInvariants(db: Database.Database, options: CheckOptions = {}): Violation[] {
+export type CheckResult = {
+  violations: Violation[];
+  /**
+   * Checks that could not run, and why.
+   *
+   * These used to `continue` in silence, which produced the worst possible
+   * output: `vector_desync` is the invariant written for the incident where
+   * every vector table sat empty for weeks, and it is skipped in exactly the
+   * configuration where that incident happens — no `chunks_vec` table, or a
+   * caller that opened the database without the extension. The report then said
+   * "all invariants respected" and exited zero. A check that did not run is not
+   * a check that passed.
+   */
+  skipped: { id: string; why: string }[];
+};
+
+export function checkInvariants(db: Database.Database, options: CheckOptions = {}): CheckResult {
   const sampleSize = options.sampleSize ?? 5;
   const violations: Violation[] = [];
+  const skipped: { id: string; why: string }[] = [];
 
   for (const check of CHECKS) {
     let rows: { label: string }[];
     try {
       rows = db.prepare(check.sql).all(check.params ?? {}) as { label: string }[];
     } catch (error) {
-      // A missing table is not a violation — `chunks_vec` only exists once an
-      // embedder has run — and neither is a missing extension, which is a
-      // caller that opened the database without sqlite-vec. Anything else is a
-      // broken check and must be loud rather than silently passing.
       const message = error instanceof Error ? error.message : String(error);
-      if (/no such table|no such module/.test(message)) continue;
+      if (/no such table/.test(message)) {
+        skipped.push({ id: check.id, why: 'tabella assente: nulla da controllare ancora' });
+        continue;
+      }
+      if (/no such module/.test(message)) {
+        skipped.push({ id: check.id, why: 'estensione sqlite-vec non caricata da chi ha aperto il db' });
+        continue;
+      }
+      // Anything else is a broken check, and a broken check must be loud.
       throw error;
     }
     if (rows.length === 0) continue;
@@ -166,20 +187,32 @@ export function checkInvariants(db: Database.Database, options: CheckOptions = {
     });
   }
 
-  return violations;
+  return { violations, skipped };
 }
 
 /** Human-readable report. Empty graph and clean graph read differently on purpose. */
-export function formatViolations(violations: Violation[], factCount: number): string {
-  if (violations.length === 0) {
-    return factCount === 0
-      ? 'grafo vuoto — nessun invariante da violare (ancora)'
-      : `${factCount} fatti, tutti gli invarianti rispettati`;
+export function formatCheck(result: CheckResult, factCount: number): string {
+  const parts: string[] = [];
+
+  if (result.violations.length === 0) {
+    parts.push(
+      factCount === 0
+        ? 'grafo vuoto — nessun invariante da violare (ancora)'
+        : `${factCount} fatti, ${CHECKS.length - result.skipped.length}/${CHECKS.length} invarianti verificati e rispettati`,
+    );
+  } else {
+    parts.push(
+      result.violations
+        .map((v) => {
+          const head = `${v.severity === 'error' ? '✗' : '!'} ${v.id} (${v.count})\n  ${v.what}`;
+          return `${head}\n${v.sample.map((s) => `    ${s}`).join('\n')}`;
+        })
+        .join('\n\n'),
+    );
   }
-  return violations
-    .map((v) => {
-      const head = `${v.severity === 'error' ? '✗' : '!'} ${v.id} (${v.count})\n  ${v.what}`;
-      return `${head}\n${v.sample.map((s) => `    ${s}`).join('\n')}`;
-    })
-    .join('\n\n');
+
+  // Never folded into the "all respected" line: the whole point is that these
+  // are not results.
+  for (const s of result.skipped) parts.push(`? ${s.id} NON verificato — ${s.why}`);
+  return parts.join('\n');
 }

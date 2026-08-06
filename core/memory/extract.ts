@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fence } from './spotlight.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { TrustTier } from '../policy/types.js';
 
@@ -105,7 +106,7 @@ export async function extractFacts(
             text:
               `Chi parla: ${input.speakerName}\n` +
               `Affidabilità della fonte: tier ${input.trustTier} (0 = owner, 3 = web)\n\n` +
-              `<<<TESTO_OSSERVATO\n${input.content}\nTESTO_OSSERVATO>>>`,
+              fence('TESTO_OSSERVATO', input.content).block,
           },
         ],
       },

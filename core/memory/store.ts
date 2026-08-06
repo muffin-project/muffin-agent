@@ -289,6 +289,25 @@ export class MemoryStore {
   }
 
   /**
+   * The least-trusted tier ever recorded for this exact content, anywhere.
+   *
+   * Trust follows the bytes, not the filename. Inheriting by path meant a `mv`
+   * laundered a tier-3 import into owner-grade evidence: the new path was
+   * unknown, so the default applied. Superseded rows count — a tier that was
+   * once true of this content stays true of it — and the maximum is taken
+   * because a lower number means more trusted.
+   */
+  maxTierForContent(tenantId: string, hash: string): TrustTier | null {
+    const row = this.db
+      .prepare(
+        `SELECT max(trust_tier) AS tier FROM episodes
+         WHERE tenant_id = ? AND json_extract(media_meta, '$.hash') = ?`,
+      )
+      .get(tenantId, hash) as { tier: TrustTier | null };
+    return row.tier;
+  }
+
+  /**
    * Retires evidence without deleting it. Used when a vault file changes: the
    * old text stops being recalled but stays answerable for "what did that note
    * say in May".

@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { paths } from '../core/config/config.js';
-import { checkInvariants, formatViolations } from '../core/memory/invariants.js';
+import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { recall } from '../core/memory/recall.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
 import type { TrustTier } from '../core/policy/types.js';
@@ -226,16 +226,18 @@ export function cmdMemoryStats(home: string): number {
 export function cmdMemoryCheck(home: string, json: boolean): number {
   const { db, store } = openStore(home);
   try {
-    const violations = checkInvariants(db);
+    const result = checkInvariants(db);
     if (json) {
-      process.stdout.write(`${JSON.stringify(violations, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatViolations(violations, store.stats(TENANT).activeFacts)}\n`);
+      process.stdout.write(`${formatCheck(result, store.stats(TENANT).activeFacts)}\n`);
     }
-    // Errors are exit 2 because they mean the data is wrong now; warnings are 1
-    // because they mean someone should look, not that anything is broken.
-    if (violations.some((v) => v.severity === 'error')) return 2;
-    return violations.length > 0 ? 1 : 0;
+    // Errors are exit 2 because they mean the data is wrong now. Warnings and
+    // unrun checks are both 1: "someone should look". A check that could not run
+    // must never contribute to a zero — that is how the report said everything
+    // was fine while the vector half of recall was dead.
+    if (result.violations.some((v) => v.severity === 'error')) return 2;
+    return result.violations.length > 0 || result.skipped.length > 0 ? 1 : 0;
   } finally {
     db.close();
   }
