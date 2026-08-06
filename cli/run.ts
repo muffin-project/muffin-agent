@@ -88,6 +88,17 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
       return 4;
     case 'cap':
       return 5;
+    case 'ask':
+      // The one exit code a script can act on: nothing was done, and a person
+      // has to decide. Headless has no channel by design — inventing consent on
+      // behalf of an absent owner is the failure mode this whole layer exists to
+      // prevent.
+      process.stderr.write(
+        `serve approvazione: ${result.pending?.capability ?? '?'}` +
+          `${result.pending?.resource ? ` su ${result.pending.resource}` : ''}` +
+          ` — rilancia in \`muffin\` interattivo per decidere\n`,
+      );
+      return 3;
     case 'aborted':
       process.stderr.write(`interrotto dopo ${options.timeoutSeconds}s\n`);
       return 1;

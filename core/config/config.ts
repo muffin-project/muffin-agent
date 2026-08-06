@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { z } from 'zod';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -12,25 +13,38 @@ export const CONFIG_SCHEMA_VERSION = 1;
 
 export type ProviderKind = 'anthropic' | 'openai-compat';
 
-export type Config = {
-  schemaVersion: number;
-  provider: {
+/**
+ * The schema is the type, not a copy of it.
+ *
+ * Parsing was a cast — `JSON.parse(...) as Config` — which meant a config missing
+ * `budget` produced `caps.monthlyUsd === undefined`, and `0 >= undefined` is
+ * `false`, so the spend cap silently did not exist. A hand-edited file is the
+ * normal case for this project (the owner is expected to edit it), so a wrong
+ * field has to fail at load with a sentence about which field, not months later
+ * as an absence of behaviour.
+ */
+export const ConfigSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  provider: z.object({
     /** Explicit, never inferred from the URL: a wrong guess fails at the first call. */
-    kind: ProviderKind;
-    baseUrl?: string;
+    kind: z.enum(['anthropic', 'openai-compat']),
+    baseUrl: z.string().url().optional(),
     /** `secret://name` — resolved through the secret store, never inlined here. */
-    apiKeyRef: string;
-  };
-  models: { main: string; light: string; deep?: string };
-  budget: { monthlyUsd: number; perTenantDailyUsd: number };
-  rot: { mode: 'hardened' | 'single-user' };
-  traces: { retentionDays: number };
-  surfaces: {
+    apiKeyRef: z.string().min(1),
+  }),
+  models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
+  // Non-negative rather than positive: zero is a legitimate cap, meaning stop.
+  budget: z.object({ monthlyUsd: z.number().nonnegative(), perTenantDailyUsd: z.number().nonnegative() }),
+  rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),
+  traces: z.object({ retentionDays: z.number().int().positive() }),
+  surfaces: z.object({
     /** Where Muffin speaks when nobody asked. Deliberately not the CLI by default. */
-    default: string;
-    enabled: string[];
-  };
-};
+    default: z.string().min(1),
+    enabled: z.array(z.string().min(1)).min(1),
+  }),
+});
+
+export type Config = z.infer<typeof ConfigSchema>;
 
 export const DEFAULT_CONFIG: Omit<Config, 'provider' | 'models'> = {
   schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -60,14 +74,35 @@ export function loadConfig(home = muffinHome()): Config {
   if (!existsSync(file)) {
     throw new ConfigError(`no config at ${file}`, 'run `muffin init` first');
   }
-  const parsed = JSON.parse(readFileSync(file, 'utf8')) as Config;
-  if (parsed.schemaVersion !== CONFIG_SCHEMA_VERSION) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
     throw new ConfigError(
-      `config schemaVersion ${parsed.schemaVersion}, this build understands ${CONFIG_SCHEMA_VERSION}`,
+      `${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      'fix the syntax, or move it aside and run `muffin init`',
+    );
+  }
+
+  // Version first: a file from a future build will fail validation for reasons
+  // that have nothing to do with the real problem.
+  const version = (raw as { schemaVersion?: unknown }).schemaVersion;
+  if (version !== CONFIG_SCHEMA_VERSION) {
+    throw new ConfigError(
+      `config schemaVersion ${String(version)}, this build understands ${CONFIG_SCHEMA_VERSION}`,
       'upgrade muffin, or migrate the file by hand',
     );
   }
-  return parsed;
+
+  const validated = ConfigSchema.safeParse(raw);
+  if (!validated.success) {
+    // Names the field. "config non valida" sends someone reading the schema.
+    const issues = validated.error.issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; ');
+    throw new ConfigError(`${file} is invalid — ${issues}`, 'fix those fields, or re-run `muffin init --force`');
+  }
+  return validated.data;
 }
 
 export function saveConfig(config: Config, home = muffinHome()): void {

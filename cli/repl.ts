@@ -37,6 +37,20 @@ export async function runRepl(home = paths().home): Promise<number> {
   );
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  // The terminal is the surface that *can* ask, so here the kernel's `ask`
+  // verdict becomes a question instead of a refusal. The wording is the kernel's
+  // own — a paraphrase is a chance to make the request sound smaller than it is —
+  // and anything that is not an explicit yes is a no.
+  runtime.deps.approve = async (request) => {
+    process.stderr.write(`\n⚠ ${request.prompt}\n`);
+    if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
+    const answer = (await rl.question(`   approvi "${request.capability}"? [s/N] `)).trim().toLowerCase();
+    const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
+    process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
+    return allowed ? 'allow' : 'deny';
+  };
+
   let session = runtime.deps.sessions.open();
   let controller: AbortController | null = null;
   let lastInterrupt = 0;

@@ -307,6 +307,79 @@ describe('agent loop', () => {
     expect(result.text).toContain('giuro');
   });
 
+  it('stops with a question rather than inventing a refusal, when nobody can be asked', async () => {
+    // `ask` was one of four kernel verdicts and no surface could carry it: the
+    // loop turned it into a tool error claiming it could not ask, which is a
+    // failure the tool never had. Headless now exits on it, so a script can act.
+    const asking: CapabilityDecl[] = [
+      { id: 'demo.ask', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: true },
+    ];
+    const ran: string[] = [];
+    const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
+      decide: createDecide({
+        capabilities: new Map(asking.map((c) => [c.id, c])),
+        budgetExhausted: () => false,
+        hardened: false, // single-user: high risk is ask, never a silent allow
+      }),
+      tools: [
+        {
+          capability: 'demo.ask',
+          spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+          handler: () => {
+            ran.push('demo_ask');
+            return { content: 'fatto' };
+          },
+        },
+      ],
+    });
+    const result = await runTurn(d, input(store));
+    expect(result.stopped).toBe('ask');
+    expect(result.pending?.capability).toBe('demo.ask');
+    expect(ran).toEqual([]);
+  });
+
+  it('runs the tool when the surface can ask and the owner says yes', async () => {
+    const asking: CapabilityDecl[] = [
+      { id: 'demo.ask', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: true },
+    ];
+    const asked: string[] = [];
+    const ran: string[] = [];
+    const make = (verdict: 'allow' | 'deny') =>
+      deps([callTool('demo_ask'), answer('ok')], {
+        approve: async (req) => {
+          asked.push(req.capability);
+          return verdict;
+        },
+        decide: createDecide({
+          capabilities: new Map(asking.map((c) => [c.id, c])),
+          budgetExhausted: () => false,
+          hardened: false,
+        }),
+        tools: [
+          {
+            capability: 'demo.ask',
+            spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+            handler: () => {
+              ran.push('demo_ask');
+              return { content: 'fatto' };
+            },
+          },
+        ],
+      });
+
+    const yes = make('allow');
+    await runTurn(yes.deps, input(yes.store));
+    expect(asked).toEqual(['demo.ask']);
+    expect(ran).toEqual(['demo_ask']);
+
+    // And a no is a no: the tool does not run, and the model is told not to push.
+    ran.length = 0;
+    const no = make('deny');
+    const denied = await runTurn(no.deps, input(no.store));
+    expect(ran).toEqual([]);
+    expect(denied.stopped).toBe('answered');
+  });
+
   it('refuses a draft instead of executing it as an allow', async () => {
     // `fs.write` is medium risk and undoable, so the kernel answers `draft`.
     // The loop had no branch for it and fell through to the handler: the write

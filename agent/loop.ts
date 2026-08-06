@@ -58,6 +58,36 @@ const TOOL_RESULT_BUDGET_CHARS = 60_000;
  */
 const MAX_HISTORY_TURNS = 40;
 
+/**
+ * How a surface asks the owner.
+ *
+ * The kernel can answer `ask`, and until now no surface could carry the
+ * question: the loop turned every `ask` into a tool error saying it could not be
+ * asked here. That made one of the four verdicts unreachable, which means the
+ * matrix said things the runtime could not do.
+ *
+ * A surface that cannot ask does not get a placeholder that guesses. It gets no
+ * approver, and the turn stops with `stopped: 'ask'` carrying what was wanted —
+ * so a script exits 3 and a person can decide, instead of an agent quietly
+ * doing nothing and reporting an error it invented.
+ */
+export type ApprovalRequest = {
+  capability: string;
+  /** The kernel's own wording, not a paraphrase. */
+  prompt: string;
+  resource?: string | undefined;
+};
+
+export type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
+
+/** Thrown by a tool call that needs an approval this surface cannot obtain. */
+class ApprovalRequired extends Error {
+  constructor(readonly request: ApprovalRequest) {
+    super(`approvazione richiesta per ${request.capability}`);
+    this.name = 'ApprovalRequired';
+  }
+}
+
 export type SpendEntry = {
   tenant: string;
   capability: string;
@@ -101,6 +131,11 @@ export type LoopDeps = {
   sessions: SessionStore;
   budgetExhausted: () => boolean;
   /**
+   * Asks the owner. Absent on a surface that cannot: the turn then stops with
+   * `stopped: 'ask'` rather than pretending the tool failed.
+   */
+  approve?: Approver | undefined;
+  /**
    * Bills a model call and returns what it cost. Absent in tests; absent in
    * production means the caps are decorative, which is why `doctor` reports it.
    */
@@ -129,8 +164,10 @@ export type TurnResult = {
   text: string;
   iterations: number;
   traceId: string;
-  stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error';
+  stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  /** Present when `stopped` is 'ask': what the turn wanted permission for. */
+  pending?: ApprovalRequest;
 };
 
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
@@ -378,7 +415,22 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
         if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
-        results.push(await runTool(deps, snapshot, turn, call_, input));
+        try {
+          results.push(await runTool(deps, snapshot, turn, call_, input));
+        } catch (error) {
+          if (error instanceof ApprovalRequired) {
+            turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
+            const stop = finish(
+              turn,
+              'ask',
+              `Serve la tua approvazione per "${error.request.capability}"${error.request.resource ? ` su ${error.request.resource}` : ''}. Su questa superficie non posso chiederla.`,
+              iterations,
+              usage,
+            );
+            return { ...stop, pending: error.request };
+          }
+          throw error;
+        }
       }
       messages.push({ role: 'user', content: results });
     }
@@ -472,14 +524,28 @@ async function runTool(
     };
   }
   if (decision.effect === 'ask') {
-    // M1 has no approval channel yet; the honest answer is that it did not run.
-    span.end({ status: 'error', error: 'ask_unavailable' });
-    return {
-      type: 'tool_result',
-      toolCallId: call.id,
-      content: `Serve l'approvazione dell'owner per "${tool.capability}", e in questa superficie non posso chiederla. Non eseguito.`,
-      isError: true,
+    const request: ApprovalRequest = {
+      capability: tool.capability,
+      prompt: decision.ask.prompt,
+      ...(resource.kind === 'path' ? { resource: resource.value } : {}),
     };
+    if (!deps.approve) {
+      // No channel on this surface: the turn stops and says what it wanted,
+      // rather than the tool reporting a failure it did not have.
+      span.end({ status: 'error', error: 'ask_unavailable' });
+      throw new ApprovalRequired(request);
+    }
+    const answer = await deps.approve(request);
+    span.setAttributes({ 'muffin.policy.approval': answer });
+    if (answer === 'deny') {
+      span.end({ status: 'error', error: 'ask_denied' });
+      return {
+        type: 'tool_result',
+        toolCallId: call.id,
+        content: `L'owner ha rifiutato "${tool.capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
+        isError: true,
+      };
+    }
   }
 
   try {
