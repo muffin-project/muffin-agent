@@ -4,6 +4,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
+import { checkCompletion, completionNudge } from './completion.js';
 import { compactToolResults } from './context/compact.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
 import {
@@ -202,6 +203,8 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   let spentUsd = 0;
   const cap = iterationCap(deps.profile);
   let recoveriesLeft = deps.profile.recovery.length;
+  let toolCallsMade = 0;
+  let nudgedForCompletion = false;
   let iterations = 0;
 
   try {
@@ -304,6 +307,31 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
       if (result.toolCalls.length === 0) {
         const text = result.text ?? '';
+
+        // The completion gate: did the answer describe a call this turn never
+        // made? Deterministic, tool-aware, and it only fires when *nothing* was
+        // called — a denied or failed call is still a call, so a model saying
+        // "non ho potuto usare fs_write" after a real refusal is out of scope.
+        const completion = checkCompletion({
+          text,
+          available: exposed.map((t) => t.spec.name),
+          toolCallsMade,
+        });
+        if (!completion.ok) {
+          turn.setAttributes({ 'muffin.completion.named_uncalled': completion.named.join(',') });
+          if (nudgedForCompletion === false) {
+            // One attempt, with the specific tools named. Vague feedback gets a
+            // vague retry, and this is measured as the highest-value check in the
+            // design — but it is a nudge, never a rewrite of what the agent said.
+            nudgedForCompletion = true;
+            messages.push({ role: 'user', content: [{ type: 'text', text: completionNudge(completion.named) }] });
+            continue;
+          }
+          // It stands. Recorded rather than corrected: silently editing the
+          // answer would be a second dishonesty stacked on the first.
+          turn.setAttributes({ 'muffin.completion.unresolved': true });
+        }
+
         deps.sessions.append(input.session, {
           role: 'assistant',
           content: text,
@@ -337,6 +365,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       });
 
       const results: ContentBlock[] = [];
+      toolCallsMade += result.toolCalls.length;
       for (const call_ of result.toolCalls) {
         results.push(await runTool(deps, snapshot, turn, call_, input));
       }

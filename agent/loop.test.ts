@@ -283,6 +283,30 @@ describe('agent loop', () => {
     expect(tool.every((m) => m.content === big)).toBe(true);
   });
 
+  it('nudges once when the answer narrates a call it never made', async () => {
+    const { deps: d, store, calls } = deps([
+      answer('[Eseguo `demo_write`] Fatto, ho scritto il file.'),
+      callTool('demo_write'),
+      answer('scritto per davvero'),
+    ]);
+    const result = await runTurn(d, input(store));
+    // The nudge got a real call out of it instead of a story about one.
+    expect(calls).toContain('demo_write');
+    expect(result.text).toBe('scritto per davvero');
+  });
+
+  it('lets the answer stand after one nudge rather than editing it', async () => {
+    // Rewriting what the agent said would be a second dishonesty on top of the
+    // first. The turn records the fact and returns the model's own words.
+    const { deps: d, store } = deps([
+      answer('[Eseguo `demo_write`] fatto'),
+      answer('[Eseguo `demo_write`] fatto davvero, giuro'),
+    ]);
+    const result = await runTurn(d, input(store));
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toContain('giuro');
+  });
+
   it('refuses a draft instead of executing it as an allow', async () => {
     // `fs.write` is medium risk and undoable, so the kernel answers `draft`.
     // The loop had no branch for it and fell through to the handler: the write
