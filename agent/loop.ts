@@ -4,6 +4,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
+import { compactToolResults } from './context/compact.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
 import {
   ProviderError,
@@ -41,6 +42,21 @@ export type ToolContext = {
   principal: Principal;
 };
 
+/**
+ * Clearable tool-result payload kept per turn, in characters (~4 per token, so
+ * roughly 15k tokens). Hardcoded rather than configured: it is a property of how
+ * much of a window is worth spending on results the model has already used, not
+ * a preference, and a value in the environment is one that differs between the
+ * laptop and the server and is discovered wrong months later.
+ */
+const TOOL_RESULT_BUDGET_CHARS = 60_000;
+
+/**
+ * Prior messages of the session replayed verbatim. Beyond this, recall is the
+ * mechanism for reaching further back — that is what it is for.
+ */
+const MAX_HISTORY_TURNS = 40;
+
 export type SpendEntry = {
   tenant: string;
   capability: string;
@@ -63,6 +79,15 @@ export type RegisteredTool = {
   spec: ToolSpec;
   capability: string;
   handler: ToolHandler;
+  /**
+   * This tool's output must survive context compaction.
+   *
+   * Set it for tools whose result *is* the grounding rather than something the
+   * model can fetch again on a whim — recalled memory being the case that
+   * matters. Declared next to the tool, like its capability, so adding a tool
+   * means answering the question rather than discovering the answer later.
+   */
+  keepResult?: boolean;
 };
 
 export type LoopDeps = {
@@ -189,10 +214,24 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       }
       iterations += 1;
 
+      // Old tool payloads are cleared before the request, not after: what goes
+      // out is smaller, what is on record is whole. Nothing is removed, so every
+      // `tool_use` keeps its `tool_result` and the request stays well-formed.
+      const compacted = compactToolResults(messages, {
+        budgetChars: TOOL_RESULT_BUDGET_CHARS,
+        keep: (name) => deps.tools.find((t) => t.spec.name === name)?.keepResult === true,
+      });
+      if (compacted.clearedCount > 0) {
+        turn.setAttributes({
+          'muffin.context.cleared_results': compacted.clearedCount,
+          'muffin.context.cleared_chars': compacted.clearedChars,
+        });
+      }
+
       const call: ChatCall = {
         model: deps.model,
         system: [{ type: 'text', text: deps.systemPrompt, cache: 'stable' }],
-        messages,
+        messages: compacted.messages,
         ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
         maxOutputTokens: 4096,
         temperature: 0,
@@ -437,12 +476,37 @@ async function runTool(
  */
 function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]): Message[] {
   const history = deps.sessions.read(input.session);
-  const messages: Message[] = history
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
+  const spoken = history.filter((m) => m.role === 'user' || m.role === 'assistant');
+
+  // A REPL session used all afternoon would otherwise grow until the provider
+  // refuses the request — and then refuse it again on every following turn,
+  // because the next turn reads the same oversized history. The session was
+  // permanently dead and the only cure was guessing `/new`.
+  //
+  // The cut is at the front and it is announced, so the model knows there is a
+  // before rather than believing the conversation started here. Recall is what
+  // brings back the parts that mattered, which is the whole reason it exists.
+  const kept = spoken.slice(-MAX_HISTORY_TURNS);
+  const dropped = spoken.length - kept.length;
+
+  const messages: Message[] = [];
+  if (dropped > 0) {
+    messages.push({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `[${dropped} messaggi precedenti di questa sessione non sono nel contesto. Se ti serve qualcosa di prima, cercalo in memoria invece di indovinare.]`,
+        },
+      ],
+    });
+  }
+  for (const m of kept) {
+    messages.push({
       role: m.role as 'user' | 'assistant',
       content: [{ type: 'text' as const, text: m.content }],
-    }));
+    });
+  }
   if (recalled.length > 0) messages.push({ role: 'user', content: recalled });
   messages.push({ role: 'user', content: [{ type: 'text', text: input.text }] });
   return messages;

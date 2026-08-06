@@ -130,6 +130,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // The tenant comes from the turn, never from this line. Baking it in here
       // is how a group member ends up reading the owner's memory.
       handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      // Recalled memory is the grounding of the turn, not a payload the model
+      // can re-fetch on a whim: clearing it to save context deletes the reason
+      // the answer was anchored to anything.
+      keepResult: true,
     },
   ];
 

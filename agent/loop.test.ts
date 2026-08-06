@@ -9,14 +9,14 @@ import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE, type Profile } from './profiles/profile.js';
-import { ProviderError, type ChatResult, type Provider } from './providers/types.js';
+import { ProviderError, type ChatCall, type ChatResult, type Provider } from './providers/types.js';
 
 /** A provider that replays a script, so the loop is tested and not the model. */
 class ScriptedProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   calls = 0;
   constructor(private readonly script: (ChatResult | ProviderError)[]) {}
-  async chat(): Promise<ChatResult> {
+  async chat(_request?: ChatCall): Promise<ChatResult> {
     const next = this.script[this.calls++] ?? answer('fine script');
     if (next instanceof ProviderError) throw next;
     return next;
@@ -221,6 +221,66 @@ describe('agent loop', () => {
     // One tool ran before the budget went; nothing after it, despite the same
     // capability and the same arguments hitting the cache.
     expect(calls.length).toBeLessThanOrEqual(1);
+  });
+
+  it('clears old tool payloads out of the request but not out of the record', async () => {
+    // Measured elsewhere at -48% peak context with no behaviour lost. The part
+    // that has to hold here: every tool_use keeps its tool_result, or the
+    // provider refuses the whole request.
+    const seen: string[] = [];
+    class Capturing extends ScriptedProvider {
+      override async chat(request?: ChatCall): Promise<ChatResult> {
+        for (const m of request?.messages ?? []) {
+          for (const b of m.content) if (b.type === 'tool_result') seen.push(b.content);
+        }
+        return super.chat(request);
+      }
+    }
+    const home = mkdtempSync(join(tmpdir(), 'muffin-compact-'));
+    const store = new SessionStore(home);
+    const provider = new Capturing([
+      callTool('demo_read'),
+      callTool('demo_read'),
+      callTool('demo_read'),
+      answer('finito'),
+    ]);
+    const big = 'x'.repeat(40_000);
+    const d: LoopDeps = {
+      provider,
+      profile: CONSERVATIVE,
+      model: 'test',
+      tools: [
+        {
+          capability: 'demo.read',
+          spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
+          handler: () => ({ content: big }),
+        },
+      ],
+      decide: createDecide({
+        capabilities: new Map(decls.map((x) => [x.id, x])),
+        budgetExhausted: () => false,
+        hardened: false,
+      }),
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      sessions: store,
+      budgetExhausted: () => false,
+      systemPrompt: 'test',
+    };
+    const session = store.open('compact');
+    await runTurn(d, {
+      principal: { kind: 'owner', connector: 'cli' } as Principal,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'leggi tre volte',
+    });
+
+    // Three payloads of 40k would be 120k characters; the budget is 60k.
+    expect(seen.some((s) => s.includes('rimosso dal contesto'))).toBe(true);
+    // And the transcript still has the real thing: what we sent is not what we
+    // recorded.
+    const tool = store.read(session).filter((m) => m.role === 'tool');
+    expect(tool.every((m) => m.content === big)).toBe(true);
   });
 
   it('refuses a draft instead of executing it as an allow', async () => {
