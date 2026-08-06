@@ -270,7 +270,7 @@ export class Vault {
     }
 
     if (retired.length > 0) {
-      this.store.supersedeEpisodes(retired, now);
+      this.store.supersedeEpisodes(tenantId, retired, now);
       // The vectors are derived, so dropping them is not deletion of evidence —
       // and leaving them would keep retired text winning searches.
       options.vectors?.forget(tenantId, 'episode', retired);

@@ -211,7 +211,19 @@ export function fsList(scope: FsScope, path: string): string {
   if (!statSync(full).isDirectory()) throw new PathDenied(`${path} is a file — use fs_read`);
   return readdirSync(full)
     .sort()
-    .map((entry) => (statSync(join(full, entry)).isDirectory() ? `${entry}/` : entry))
+    .map((entry) => {
+      // `statSync` follows links, so one broken symlink in a directory used to
+      // throw ENOENT and take the whole listing with it — a real state in any
+      // dotfile repo or `node_modules/.bin`.
+      const stat = lstatSync(join(full, entry), { throwIfNoEntry: false });
+      if (stat === undefined) return `${entry} (illeggibile)`;
+      if (stat.isSymbolicLink()) {
+        const target = statSync(join(full, entry), { throwIfNoEntry: false });
+        if (target === undefined) return `${entry} (link rotto)`;
+        return target.isDirectory() ? `${entry}/ →` : `${entry} →`;
+      }
+      return stat.isDirectory() ? `${entry}/` : entry;
+    })
     .join('\n');
 }
 

@@ -71,6 +71,70 @@ describe('recall', () => {
     expect(recallTaint(result)).toBe(2);
   });
 
+  it('cannot be starved out of its own recall by a busier tenant', async () => {
+    // With the tenant filter applied *after* the kNN, a tenant holding more
+    // chunks near the query displaced the others out of the k window entirely:
+    // the owner's semantic recall returned nothing and reported no error. No
+    // attacker needed — a talkative group is enough. The partition key moves the
+    // filter inside the index, so `k` means "k of this tenant's chunks".
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const vectors = new VectorIndex(db, new FakeEmbedder());
+    const GROUP = 'group:telegram:9';
+
+    // Two hundred group chunks sitting exactly on the query vector.
+    const noisy = Array.from({ length: 200 }, (_, i) => {
+      const id = store.addEpisode({
+        tenantId: GROUP, connector: 'telegram', threadKey: 'g', role: 'user',
+        kind: 'message', content: `commercialista fiscale tasse ${i}`, trustTier: 2, createdAt: NOW,
+      });
+      return { kind: 'episode' as const, sourceId: id, text: `commercialista fiscale tasse ${i}` };
+    });
+    await vectors.index(GROUP, noisy, NOW);
+
+    // And three of the owner's, further away.
+    const mine = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 'c', role: 'user',
+      kind: 'message', content: 'il contabile si chiama Marco', trustTier: 0, createdAt: NOW,
+    });
+    await vectors.index(HOST, [{ kind: 'episode', sourceId: mine, text: 'il contabile si chiama Marco' }], NOW);
+
+    const hits = await vectors.search(HOST, 'commercialista fiscale tasse', 8);
+    expect(hits.map((h) => h.sourceId)).toEqual([mine]);
+  });
+
+  it('migrates an unpartitioned index without re-embedding anything', async () => {
+    // "Derived" is not a licence to make the owner pay for an embedding run to
+    // fix a schema decision of ours: the vectors are read out and re-inserted.
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const first = new VectorIndex(db, new FakeEmbedder());
+    const id = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 'c', role: 'user',
+      kind: 'message', content: 'il commercialista si chiama Marco', trustTier: 0, createdAt: NOW,
+    });
+    await first.index(HOST, [{ kind: 'episode', sourceId: id, text: 'il commercialista si chiama Marco' }], NOW);
+
+    // Rebuild the old shape by hand, keeping the same rowid and vector.
+    const saved = db.prepare(`SELECT rowid, embedding FROM chunks_vec`).all() as {
+      rowid: number; embedding: Buffer;
+    }[];
+    expect(saved).toHaveLength(1);
+    // Drop before create: vec0's shadow tables are only removed while the main
+    // table still carries their name.
+    db.exec(`DROP TABLE chunks_vec`);
+    db.exec(`CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[16])`);
+    db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(BigInt(saved[0]!.rowid), saved[0]!.embedding);
+
+    // Constructing the index migrates it.
+    const migrated = new VectorIndex(db, new FakeEmbedder());
+    expect(db.prepare(`PRAGMA table_info(chunks_vec)`).all().map((c) => (c as { name: string }).name)).toContain('tenant_id');
+    expect(migrated.indexedCount()).toBe(1);
+    expect(migrated.indexBacklog(HOST)).toHaveLength(0); // nothing to re-embed
+    const hits = await migrated.search(HOST, 'commercialista', 4);
+    expect(hits.map((h) => h.sourceId)).toEqual([id]);
+  });
+
   it('says the semantic half ran even when it found nothing', async () => {
     // "starved" and "ran and found nothing" are different facts, and the
     // strategies list is where a caller is supposed to tell them apart.
@@ -133,7 +197,7 @@ describe('recall', () => {
     const base = { tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW };
     const marco = store.addFact({ ...base, objectValue: 'Marco' });
     const lucia = store.addFact({ ...base, objectValue: 'Lucia' });
-    store.supersede(marco, lucia, NOW);
+    store.supersede(HOST, marco, lucia, NOW);
 
     const result = await recall({ store, vectors }, HOST, 'Giusto commercialista');
     const accountants = result.items.filter((i) => i.kind === 'fact' && /accountant/.test(i.text));

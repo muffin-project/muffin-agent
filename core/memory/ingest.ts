@@ -135,7 +135,7 @@ export async function ingestPending(
       processed.push(episode.id);
     }
 
-    deps.store.markExtracted([...processed, ...processedNonExtractable], EXTRACTION_VERSION);
+    deps.store.markExtracted(tenantId, [...processed, ...processedNonExtractable], EXTRACTION_VERSION);
 
     // After marking, and separately: the backlog is idempotent, so an embedder
     // that is down costs a retry next run instead of losing the extraction that
@@ -262,11 +262,12 @@ async function reconcile(
 
   switch (verdict.verdict) {
     case 'supersede':
-      deps.store.supersede(candidate.id, newId, now.toISOString());
+      deps.store.supersede(tenantId, candidate.id, newId, now.toISOString());
       report.superseded += 1;
       break;
     case 'temporal_scope':
       deps.store.supersede(
+        tenantId,
         candidate.id,
         newId,
         now.toISOString(),

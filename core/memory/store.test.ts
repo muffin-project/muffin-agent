@@ -70,7 +70,7 @@ describe('memory store', () => {
 
     const marco = s.addFact({ ...base, predicate: 'accountant', objectValue: 'Marco', episodeId: ep1, recordedAt: now });
     const lucia = s.addFact({ ...base, predicate: 'accountant', objectValue: 'Lucia', episodeId: ep2, recordedAt: '2026-07-01T10:00:00Z' });
-    s.supersede(marco, lucia, '2026-07-01T10:00:00Z');
+    s.supersede(HOST, marco, lucia, '2026-07-01T10:00:00Z');
 
     expect(s.activeFacts(HOST, me, 'accountant').map((f) => f.objectValue)).toEqual(['Lucia']);
     // "chi era il mio commercialista a maggio" is still answerable.
@@ -115,7 +115,7 @@ describe('memory store', () => {
     const a = episode(s, HOST, 'primo');
     const b = episode(s, HOST, 'secondo');
     expect(s.pendingEpisodes(HOST, 1).map((e) => e.id)).toEqual([a, b]);
-    s.markExtracted([a], 1);
+    s.markExtracted(HOST, [a], 1);
     expect(s.pendingEpisodes(HOST, 1).map((e) => e.id)).toEqual([b]);
     // Bumping the pipeline version makes everything pending again: that is how
     // a re-extraction is a job rather than a migration.

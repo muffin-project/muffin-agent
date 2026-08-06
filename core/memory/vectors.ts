@@ -41,7 +41,66 @@ export class VectorIndex {
     db.exec(CHUNKS_SCHEMA);
     // The dimension is baked into the table, so a change of embedder means a
     // new version and a re-index — never a silent mix of incompatible vectors.
-    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[${this.dimensions}])`);
+    //
+    // `tenant_id` is a **partition key**, which is the whole point: it moves the
+    // tenant filter inside the index. Before this the search took k nearest
+    // neighbours globally and filtered afterwards, so a tenant with more chunks
+    // near the query pushed the others out of the k window entirely — and the
+    // owner's semantic recall returned nothing while reporting no error. It did
+    // not need an attacker, only a talkative group.
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+         tenant_id TEXT PARTITION KEY,
+         embedding float[${this.dimensions}]
+       )`,
+    );
+    this.migrateUnpartitioned();
+  }
+
+  /**
+   * Moves an unpartitioned `chunks_vec` to the partitioned shape.
+   *
+   * The vectors are read back out and re-inserted rather than recomputed: this
+   * table is derived, but "derived" is not a licence to make the owner pay for
+   * an embedding run to fix a schema decision of ours. Migrations preserve data.
+   */
+  private migrateUnpartitioned(): void {
+    const columns = this.db.prepare(`PRAGMA table_info(chunks_vec)`).all() as { name: string }[];
+    if (columns.some((c) => c.name === 'tenant_id')) return;
+
+    const rows = this.db.prepare(`SELECT rowid, embedding FROM chunks_vec`).all() as {
+      rowid: number;
+      embedding: Buffer;
+    }[];
+    const tenantOf = this.db.prepare(`SELECT tenant_id AS t FROM chunks WHERE id = ?`);
+
+    // Drop, then create — verified, and not the obvious order. `ALTER TABLE
+    // ... RENAME` on a vec0 table renames *only* the main table and leaves its
+    // shadow tables (`chunks_vec_info`, `_chunks`, `_rowids`, …) under the old
+    // name; creating the new table then collides with them, and dropping the
+    // renamed one fails outright with "SQL logic error". `DROP` while the name
+    // still matches its shadows removes all of them cleanly. The vectors are
+    // already in hand at this point, so there is nothing to lose in between.
+    const tx = this.db.transaction(() => {
+      this.db.exec(`DROP TABLE chunks_vec`);
+      this.db.exec(
+        `CREATE VIRTUAL TABLE chunks_vec USING vec0(
+           tenant_id TEXT PARTITION KEY,
+           embedding float[${this.dimensions}]
+         )`,
+      );
+      const insert = this.db.prepare(
+        `INSERT INTO chunks_vec(rowid, tenant_id, embedding) VALUES (:id, :tenant, :emb)`,
+      );
+      for (const row of rows) {
+        const owner = tenantOf.get(row.rowid) as { t: string } | undefined;
+        // A vector whose chunk is gone has nothing to belong to; the backlog
+        // will rebuild anything genuinely missing.
+        if (!owner) continue;
+        insert.run({ id: BigInt(row.rowid), tenant: owner.t, emb: row.embedding });
+      }
+    });
+    tx();
   }
 
   async index(
@@ -58,20 +117,37 @@ export class VectorIndex {
       `INSERT INTO chunks (tenant_id, source_kind, source_id, text, embedding_v, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    const insertVector = this.db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (:id, :emb)`);
+    const insertVector = this.db.prepare(
+      `INSERT INTO chunks_vec(rowid, tenant_id, embedding) VALUES (:id, :tenant, :emb)`,
+    );
 
     const tx = this.db.transaction(() => {
       for (const [i, entry] of fresh.entries()) {
         const info = insertChunk.run(tenantId, entry.kind, entry.sourceId, entry.text, this.embedder.id, now);
         // BigInt, not Number: vec0 rejects the latter outright.
-        insertVector.run({ id: BigInt(info.lastInsertRowid), emb: toVectorBlob(vectors[i]!) });
+        insertVector.run({
+          id: BigInt(info.lastInsertRowid),
+          tenant: tenantId,
+          emb: toVectorBlob(vectors[i]!),
+        });
       }
     });
     tx();
     return fresh.length;
   }
 
-  /** k-nearest neighbours, then filtered to the tenant. Never across tenants. */
+  /**
+   * k-nearest neighbours **within the tenant's partition**.
+   *
+   * The filter is a condition on the partition key, so `k` now means "k of this
+   * tenant's chunks" rather than "k overall, some of which may be this
+   * tenant's". That difference is the whole fix: with a post-filter, a tenant
+   * holding more chunks near the query displaced the others out of the k window
+   * and their semantic recall silently returned nothing.
+   *
+   * `k = limit * 2` rather than `* 4`: the window no longer has to be padded
+   * against losses to other tenants, because there are none.
+   */
   async search(
     tenantId: string,
     query: string,
@@ -84,10 +160,10 @@ export class VectorIndex {
         `SELECT c.id AS chunkId, c.source_kind AS kind, c.source_id AS sourceId, c.text, v.distance
          FROM chunks_vec v
          JOIN chunks c ON c.id = v.rowid
-         WHERE v.embedding MATCH :emb AND k = :k AND c.tenant_id = :tenant
+         WHERE v.embedding MATCH :emb AND k = :k AND v.tenant_id = :tenant
          ORDER BY v.distance`,
       )
-      .all({ emb: toVectorBlob(vector), k: limit * 4, tenant: tenantId }) as {
+      .all({ emb: toVectorBlob(vector), k: limit * 2, tenant: tenantId }) as {
       chunkId: number;
       kind: ChunkSource;
       sourceId: number;

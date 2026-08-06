@@ -115,11 +115,17 @@ export class MemoryStore {
       .all(tenantId, extractionV, limit) as Episode[];
   }
 
-  markExtracted(episodeIds: number[], extractionV: number): void {
+  /**
+   * The tenant is required even though the ids came from a tenant-scoped read.
+   * Isolation held here by convention, and convention is what the next caller
+   * does not know about — three write paths in this class filtered on the id
+   * alone while the class docstring promised every statement filtered on tenant.
+   */
+  markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {
     if (episodeIds.length === 0) return;
-    const stmt = this.db.prepare(`UPDATE episodes SET extraction_v = ? WHERE id = ?`);
+    const stmt = this.db.prepare(`UPDATE episodes SET extraction_v = ? WHERE id = ? AND tenant_id = ?`);
     const tx = this.db.transaction((ids: number[]) => {
-      for (const id of ids) stmt.run(extractionV, id);
+      for (const id of ids) stmt.run(extractionV, id, tenantId);
     });
     tx(episodeIds);
   }
@@ -188,13 +194,13 @@ export class MemoryStore {
    * believing it. Nothing is deleted, so "what did I think in May" stays
    * answerable.
    */
-  supersede(oldFactId: number, newFactId: number, at: string, validTo?: string): void {
+  supersede(tenantId: string, oldFactId: number, newFactId: number, at: string, validTo?: string): void {
     this.db
       .prepare(
         `UPDATE facts SET expired_at = ?, superseded_by = ?, valid_to = COALESCE(valid_to, ?)
-         WHERE id = ? AND expired_at IS NULL`,
+         WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
       )
-      .run(at, newFactId, validTo ?? at, oldFactId);
+      .run(at, newFactId, validTo ?? at, oldFactId, tenantId);
   }
 
   /** Current beliefs about a subject+predicate. A set unless declared functional. */
@@ -312,13 +318,13 @@ export class MemoryStore {
    * old text stops being recalled but stays answerable for "what did that note
    * say in May".
    */
-  supersedeEpisodes(episodeIds: number[], at: string): void {
+  supersedeEpisodes(tenantId: string, episodeIds: number[], at: string): void {
     if (episodeIds.length === 0) return;
     const stmt = this.db.prepare(
-      `UPDATE episodes SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL`,
+      `UPDATE episodes SET superseded_at = ? WHERE id = ? AND tenant_id = ? AND superseded_at IS NULL`,
     );
     const tx = this.db.transaction((ids: number[]) => {
-      for (const id of ids) stmt.run(at, id);
+      for (const id of ids) stmt.run(at, id, tenantId);
     });
     tx(episodeIds);
   }

@@ -257,6 +257,12 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         // needs more attempts than a strong one, and that is data.
         if (error instanceof ProviderError && error.retryable && recoveriesLeft > 0) {
           recoveriesLeft -= 1;
+          // Backoff, because the retryable case is mostly 429 and hammering a
+          // rate limit four times in a row is how a soft limit becomes a hard
+          // one. Exponential with jitter: the jitter matters when several turns
+          // are throttled at once and would otherwise retry in lockstep.
+          const attempt = deps.profile.recovery.length - recoveriesLeft;
+          await sleep(retryDelayMs(attempt), input.signal);
           continue;
         }
         throw error;
@@ -367,6 +373,11 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       const results: ContentBlock[] = [];
       toolCallsMade += result.toolCalls.length;
       for (const call_ of result.toolCalls) {
+        // Checked between tools, not only before the next model call: a Ctrl+C
+        // during a run of tool calls used to do nothing visible until the batch
+        // finished, which for a slow batch is indistinguishable from being
+        // ignored.
+        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
         results.push(await runTool(deps, snapshot, turn, call_, input));
       }
       messages.push({ role: 'user', content: results });
@@ -566,4 +577,28 @@ function makeSnapshot(decide: Decide, principal: Principal, tenant: TenantId): P
       return decision;
     },
   };
+}
+
+/**
+ * Exponential backoff with full jitter. `attempt` is 1-based.
+ *
+ * Full jitter rather than a fixed multiple: when several turns are throttled at
+ * the same moment, a deterministic delay makes them retry in lockstep and the
+ * limit trips again on the same tick.
+ */
+function retryDelayMs(attempt: number): number {
+  const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
+  return Math.floor(Math.random() * ceiling);
+}
+
+/** Sleeps, unless the turn is abandoned first. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted === true) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
 }
