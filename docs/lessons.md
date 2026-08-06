@@ -122,6 +122,34 @@ uses this exact failure as its negative example. The discriminator given to the
 model: if the generic predicate would hold equally well for a completely
 different person, it is the wrong predicate.
 
+## Writing the defence is not connecting it **(this build)**
+
+An adversarial audit of this repository found the same thing four times, and it
+was not a bug type — it was a habit.
+
+The budget engine had a schema, two caps, five passing tests and a kernel branch
+waiting on it. Nothing called `record()`, because nothing converted tokens to
+dollars, so `exhausted()` answered `false` for ever and `/spend` would have
+reported $0.00 after a night of unattended looping. Safe mode was computed at
+boot and never handed to the policy kernel — while the CLI printed *"capabilities
+above low risk are denied"*, which was the only place in the system where the
+code asserted a guarantee it did not provide. The `vector_desync` invariant,
+written specifically for the incident above, skipped in silence when its table or
+extension was missing — which is exactly the configuration where that incident
+happens — and the report then said "all invariants respected" and exited zero.
+And the macOS sandbox probe ran an `(allow default)` profile: it proved
+`sandbox-exec` starts, then printed *"a real containment ran and held"*.
+
+Every one of those was written *because of* a lesson on this page. The file was
+cited more often than it was executed.
+
+**What it changed.** Four defences now have the thing they were missing: a caller,
+a parameter, a report of what it could not check, and a profile that denies. The
+general rule that came out of it is cheap to apply and would have caught all
+four: when you add a guard, write the test that fails **without its wiring**, not
+the test that proves the guard's logic. The logic was never wrong. It was never
+reached.
+
 ## A prerequisite check has to execute the thing, as the user that will run it
 
 Sandboxed execution was enabled in production on 11 June 2026. The check that
