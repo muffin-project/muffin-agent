@@ -16,6 +16,7 @@ import {
   MEMORY_USAGE,
 } from './memory.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
+import { cmdTelegramRun, cmdTelegramStatus, TELEGRAM_USAGE } from './telegram.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
@@ -36,6 +37,7 @@ const USAGE = `muffin — personal agent runtime
   muffin rot verify | reseal
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin vault reindex | add <file> | ls | check
+  muffin telegram run | status
   muffin secret set NAME
   muffin trace tail [-n N] [--errors] [--json]
   muffin trace grep PATTERN [-n N] [--json]
@@ -60,6 +62,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMemory(rest);
     case 'vault':
       return cmdVault(rest);
+    case 'telegram':
+      return cmdTelegram(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -237,6 +241,15 @@ async function cmdVault(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(VAULT_USAGE);
+  return 78;
+}
+
+async function cmdTelegram(argv: string[]): Promise<number> {
+  const [sub] = argv;
+  const home = paths().home;
+  if (sub === 'run') return cmdTelegramRun(home);
+  if (sub === 'status') return cmdTelegramStatus(home);
+  process.stderr.write(TELEGRAM_USAGE);
   return 78;
 }
 
