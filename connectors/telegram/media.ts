@@ -151,9 +151,12 @@ export class MediaTooLarge extends Error {
  * the transport does not need a library: the one thing a wrapper is usually kept
  * around for is four lines.
  *
- * The caller is responsible for the path being one the owner meant to send — the
- * policy kernel decides that, not this function, which would otherwise be a
- * second place where authorisation lives.
+ * **Its production caller does not exist yet, on purpose.** Sending a file is an
+ * outward action, and outward actions arrive with the outward module and its
+ * approval path — not as a CLI verb bolted on to give this function something to
+ * call it (that verb existed for a day and taught the lesson). Until then the
+ * test exercises the composition. This is a deferred wiring recorded as a
+ * decision, which is different from a forgotten one.
  */
 export async function sendDocument(
   api: TelegramApi,

@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline/promises';
 import { buildRuntime, type Runtime } from '../agent/runtime.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
+import { connectSurfaces } from './surface.js';
 
 /**
  * The REPL.
@@ -31,8 +32,16 @@ export async function runRepl(home = paths().home): Promise<number> {
       `! safe mode: root of trust diverged (${runtime.safeMode.reason}) — capability sopra il rischio basso negate\n`,
     );
   }
+
+  // `muffin` starts the agent, and the agent is on every surface it was given —
+  // in this same process (ADR-0022), for as long as this process lives. Not a
+  // subcommand you also have to remember to run: a message from the phone works
+  // because Muffin is running, which is what "running" should mean.
+  const surfaces = connectSurfaces(runtime, home);
+
   process.stderr.write(
     `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
+      surfaces.lines.map((l) => `${l}\n`).join('') +
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 
@@ -131,6 +140,9 @@ export async function runRepl(home = paths().home): Promise<number> {
     }
   } finally {
     rl.close();
+    // Surfaces first, then the runtime: the connector must stop polling before
+    // the database under it goes away.
+    surfaces.stop();
     runtime.close();
   }
 

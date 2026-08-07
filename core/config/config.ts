@@ -41,6 +41,12 @@ export const ConfigSchema = z.object({
     /** Where Muffin speaks when nobody asked. Deliberately not the CLI by default. */
     default: z.string().min(1),
     enabled: z.array(z.string().min(1)).min(1),
+    /**
+     * Per-surface settings. The owner chat id lives here and not in an env var:
+     * it is configuration, it survives a reboot, and `muffin surface enable`
+     * writes it once instead of every shell needing to export it.
+     */
+    telegram: z.object({ ownerChatId: z.number().int() }).optional(),
   }),
 });
 

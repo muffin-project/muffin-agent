@@ -16,7 +16,7 @@ import {
   MEMORY_USAGE,
 } from './memory.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdTelegramRun, cmdTelegramSend, cmdTelegramStatus, TELEGRAM_USAGE } from './telegram.js';
+import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
@@ -29,20 +29,24 @@ import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '
 
 const USAGE = `muffin — personal agent runtime
 
-  muffin                                 open the REPL
-  muffin run "<goal>" [--json] [--session ID] [--timeout S]
+  muffin                        start the agent: REPL + every enabled surface
+  muffin run "<goal>"           one goal, headless, meaningful exit code
+                                [--json] [--session ID] [--timeout S]
+
+operator commands:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
               [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
-  muffin doctor [--json] [--online]
+  muffin doctor [--json]
+  muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin secret set NAME        (value on stdin)
   muffin rot verify | reseal
+
+inspection:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin vault reindex | add <file> | ls | check
-  muffin telegram run | status | send <file>
-  muffin secret set NAME
-  muffin trace tail [-n N] [--errors] [--json]
-  muffin trace grep PATTERN [-n N] [--json]
+  muffin trace tail [-n N] [--errors] | grep PATTERN
 
-Exit codes: 0 ok · 1 warnings · 2 blocking error · 78 bad configuration
+Exit codes: 0 ok · 1 warnings · 2 blocking error · 3 needs approval · 78 bad configuration
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -62,8 +66,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMemory(rest);
     case 'vault':
       return cmdVault(rest);
-    case 'telegram':
-      return cmdTelegram(rest);
+    case 'surface':
+      return cmdSurface(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -244,25 +248,16 @@ async function cmdVault(argv: string[]): Promise<number> {
   return 78;
 }
 
-async function cmdTelegram(argv: string[]): Promise<number> {
-  const [sub] = argv;
+async function cmdSurface(argv: string[]): Promise<number> {
+  const [sub, id, ...rest] = argv;
   const home = paths().home;
-  if (sub === 'run') return cmdTelegramRun(home);
-  if (sub === 'status') return cmdTelegramStatus(home);
-  if (sub === 'send') {
-    const { values, positionals } = parseArgs({
-      args: argv.slice(1),
-      options: { caption: { type: 'string' } },
-      allowPositionals: true,
-    });
-    const file = positionals[0];
-    if (!file) {
-      process.stderr.write(`usage: muffin telegram send <file> [--caption "..."]\n`);
-      return 78;
-    }
-    return cmdTelegramSend(home, file, values.caption);
+  if (sub === 'list' || sub === undefined) return cmdSurfaceList(home);
+  if (sub === 'enable' && id) {
+    const { values } = parseArgs({ args: rest, options: { owner: { type: 'string' } } });
+    return cmdSurfaceEnable(home, id, values.owner);
   }
-  process.stderr.write(TELEGRAM_USAGE);
+  if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
+  process.stderr.write(SURFACE_USAGE);
   return 78;
 }
 
