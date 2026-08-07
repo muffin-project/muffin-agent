@@ -88,6 +88,29 @@ export class TelegramApi {
     throw new TelegramError(response.status, body.description, retryAfter);
   }
 
+  /**
+   * A multipart call, for the methods that carry bytes.
+   *
+   * Separate from `call` rather than a branch inside it: the body is a
+   * `FormData`, the content-type is set by the runtime and must *not* be
+   * supplied by hand (the boundary parameter goes with it), and there is no JSON
+   * to serialise. Two small functions beat one with a mode flag.
+   *
+   * No retry. A failed upload should be retried by whoever knows what the file
+   * was, and re-sending several megabytes on a guess is not a decision this
+   * layer gets to make.
+   */
+  async upload<T>(method: string, body: FormData): Promise<T> {
+    const response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
+      method: 'POST',
+      body,
+      signal: AbortSignal.timeout(120_000),
+    });
+    const payload = (await response.json()) as { ok: true; result: T } | { ok: false; description: string };
+    if (!payload.ok) throw new TelegramError(response.status, payload.description);
+    return payload.result;
+  }
+
   /** Who we are. Called once at startup, so a bad token fails at boot and not mid-conversation. */
   getMe(): Promise<User> {
     return this.call<User>('getMe');

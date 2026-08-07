@@ -2,7 +2,9 @@ import type { Message, Update } from '@grammyjs/types';
 import { runTurn, type LoopDeps } from '../../agent/loop.js';
 import type { Principal } from '../../core/policy/types.js';
 import type { SessionStore } from '../../core/session/store.js';
+import type { TrustTier } from '../../core/policy/types.js';
 import { TelegramApi, TelegramError } from './api.js';
+import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForTelegram } from './render.js';
 import { UpdateInbox } from './updates.js';
@@ -39,6 +41,12 @@ export type ConnectorDeps = {
   sessions: SessionStore;
   inbox: UpdateInbox;
   api: TelegramApi;
+  /**
+   * Where attachments land. Absent means the connector still answers, and says
+   * plainly that it cannot keep files — a degradation the owner can see rather
+   * than a silent one.
+   */
+  vault?: { root: string; reindex: (defaultTier: TrustTier) => Promise<{ skipped: { path: string; why: string }[] }> };
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -52,6 +60,7 @@ type Incoming = {
   isPrivate: boolean;
   fromOwner: boolean;
   messageId: number;
+  attachment?: MediaSpec;
 };
 
 /**
@@ -66,18 +75,23 @@ export function parseUpdate(update: Update, ownerChatId: number): Incoming | nul
   const message: Message | undefined = update.message ?? update.edited_message;
   if (!message || typeof message.chat?.id !== 'number') return null;
 
+  const attachment = attachmentOf(message);
   const text = message.text ?? message.caption;
-  if (typeof text !== 'string' || text.trim() === '') return null;
+
+  // A file with no caption is still a message: "here, keep this" is a complete
+  // thought. Requiring text would have made a photo silently disappear.
+  if ((typeof text !== 'string' || text.trim() === '') && attachment === null) return null;
 
   return {
     updateId: update.update_id,
     chatId: message.chat.id,
-    text,
+    text: typeof text === 'string' ? text : '',
     isPrivate: message.chat.type === 'private',
     // Identity is the chat id, not the display name: a name is chosen by whoever
     // holds the account.
     fromOwner: message.chat.id === ownerChatId,
     messageId: message.message_id,
+    ...(attachment ? { attachment } : {}),
   };
 }
 
@@ -190,6 +204,14 @@ export class TelegramConnector {
     });
 
     try {
+      // The file lands and is indexed **before** the turn runs, so the agent
+      // finds it in memory rather than being told about a path it cannot read.
+      // A failed download does not fail the turn: the message still deserves an
+      // answer, and an honest one says the file did not arrive.
+      const arrival = incoming.attachment
+        ? await this.ingest(incoming, incoming.attachment, principal.kind === 'owner' ? 0 : 2)
+        : null;
+
       const result = await runTurn(this.deps.loop, {
         principal,
         tenant,
@@ -197,7 +219,7 @@ export class TelegramConnector {
         // One session per chat, so a conversation continues where it left off
         // and two chats never share one.
         session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
-        text: incoming.text,
+        text: arrival ? `${arrival}\n\n${incoming.text}`.trim() : incoming.text,
       });
 
       const parts = renderForTelegram(result.text);
@@ -213,6 +235,42 @@ export class TelegramConnector {
       }
     } finally {
       await presence.stop();
+    }
+  }
+
+  /**
+   * Downloads an attachment into the vault and indexes it.
+   *
+   * Returns the line prepended to the turn's text — the agent is told a file
+   * arrived and what it is called, in the same message, rather than having to
+   * infer it from a memory hit. Failure is reported the same way: the turn still
+   * runs, and the agent knows it does not have the file. Saying "ricevuto" about
+   * something that is not there is the failure this project keeps naming.
+   *
+   * The tier is the sender's: a document from a group member is tier-2 evidence
+   * and stays tier-2 through reindexing, which the vault enforces by content
+   * hash rather than by path.
+   */
+  private async ingest(incoming: Incoming, spec: MediaSpec, tier: TrustTier): Promise<string> {
+    if (!this.deps.vault) return `[allegato ricevuto ma il vault non è configurato: ${spec.originalName}]`;
+    try {
+      const saved = await downloadToVault(
+        this.deps.api,
+        this.deps.vault.root,
+        spec,
+        incoming.updateId,
+        this.now(),
+      );
+      const report = await this.deps.vault.reindex(tier);
+      const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
+      if (skipped) {
+        return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;
+      }
+      return `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]`;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      (this.deps.log ?? (() => {}))(`telegram: allegato non scaricato — ${why}`);
+      return `[allegato NON ricevuto: ${why}. Dillo, non fingere di averlo.]`;
     }
   }
 

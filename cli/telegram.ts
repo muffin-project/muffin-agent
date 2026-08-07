@@ -1,8 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { paths, readSecret, ConfigError } from '../core/config/config.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector } from '../connectors/telegram/connector.js';
+import { sendDocument } from '../connectors/telegram/media.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
+import { Vault } from '../core/vault/vault.js';
 
 /**
  * `muffin telegram` — the connector as a process you start, watch and stop.
@@ -17,6 +21,7 @@ import { UpdateInbox } from '../connectors/telegram/updates.js';
 export const TELEGRAM_USAGE = `usage:
   muffin telegram run          avvia il connector (long polling, Ctrl+C per fermare)
   muffin telegram status       cosa c'è in coda e cosa è fallito
+  muffin telegram send <file> [--caption "..."]
 `;
 
 const OWNER_ENV = 'MUFFIN_TELEGRAM_OWNER_CHAT';
@@ -53,11 +58,23 @@ export async function cmdTelegramRun(home: string): Promise<number> {
   const inbox = new UpdateInbox(new DatabaseCtor(paths(home).db));
   const controller = new AbortController();
 
+  const vaultRoot = paths(home).vault;
+  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+  const vault = new Vault(runtime.memory.store, vaultRoot);
+
   const connector = new TelegramConnector({
     loop: runtime.deps,
     sessions: runtime.deps.sessions,
     inbox,
     api,
+    vault: {
+      root: vaultRoot,
+      // The tier travels from the sender: a file from a group member is tier-2
+      // evidence, and stays tier-2 through every later reindex because the vault
+      // keys trust on content rather than on the path.
+      reindex: (defaultTier) =>
+        vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
+    },
     config: { token, ownerChatId },
     log: (line) => process.stderr.write(`${line}\n`),
   });
@@ -83,6 +100,54 @@ export async function cmdTelegramRun(home: string): Promise<number> {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
     runtime.close();
+  }
+}
+
+/**
+ * Sends a file to the owner's chat.
+ *
+ * Deliberately a command the owner runs, not a tool the model calls. Sending is
+ * an outward action, and outward actions are the one class this project gates
+ * behind a human — the agent gets that capability when the outward module exists
+ * with its approval path, not as a side effect of the transport being able to.
+ *
+ * It also exercises the multipart path, which is the one part of "no library"
+ * that a wrapper is usually kept around for.
+ */
+export async function cmdTelegramSend(home: string, file: string, caption?: string): Promise<number> {
+  const full = resolve(file);
+  if (!existsSync(full) || !statSync(full).isFile()) {
+    process.stderr.write(`non è un file: ${file}\n`);
+    return 78;
+  }
+  const bytes = statSync(full).size;
+  if (bytes > 50 * 1024 * 1024) {
+    process.stderr.write(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di 50MB in upload\n`);
+    return 78;
+  }
+
+  let token: string;
+  try {
+    token = readSecret('secret://telegram_token', home);
+  } catch (error) {
+    process.stderr.write(`${(error as ConfigError).message}\n`);
+    return 78;
+  }
+  const ownerChatId = Number(process.env[OWNER_ENV]);
+  if (!Number.isInteger(ownerChatId) || ownerChatId === 0) {
+    process.stderr.write(`serve ${OWNER_ENV}\n`);
+    return 78;
+  }
+
+  try {
+    await sendDocument(new TelegramApi(token), ownerChatId, full, {
+      ...(caption ? { caption } : {}),
+    });
+    process.stdout.write(`inviato ${basename(full)} (${Math.round(bytes / 1024)}KB)\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
   }
 }
 

@@ -16,7 +16,7 @@ import {
   MEMORY_USAGE,
 } from './memory.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdTelegramRun, cmdTelegramStatus, TELEGRAM_USAGE } from './telegram.js';
+import { cmdTelegramRun, cmdTelegramSend, cmdTelegramStatus, TELEGRAM_USAGE } from './telegram.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
@@ -37,7 +37,7 @@ const USAGE = `muffin — personal agent runtime
   muffin rot verify | reseal
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin vault reindex | add <file> | ls | check
-  muffin telegram run | status
+  muffin telegram run | status | send <file>
   muffin secret set NAME
   muffin trace tail [-n N] [--errors] [--json]
   muffin trace grep PATTERN [-n N] [--json]
@@ -249,6 +249,19 @@ async function cmdTelegram(argv: string[]): Promise<number> {
   const home = paths().home;
   if (sub === 'run') return cmdTelegramRun(home);
   if (sub === 'status') return cmdTelegramStatus(home);
+  if (sub === 'send') {
+    const { values, positionals } = parseArgs({
+      args: argv.slice(1),
+      options: { caption: { type: 'string' } },
+      allowPositionals: true,
+    });
+    const file = positionals[0];
+    if (!file) {
+      process.stderr.write(`usage: muffin telegram send <file> [--caption "..."]\n`);
+      return 78;
+    }
+    return cmdTelegramSend(home, file, values.caption);
+  }
   process.stderr.write(TELEGRAM_USAGE);
   return 78;
 }
