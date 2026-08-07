@@ -29,7 +29,7 @@ import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '
 
 const USAGE = `muffin — personal agent runtime
 
-  muffin                        start the agent: REPL + every enabled surface
+  muffin (or: muffin repl)      start the agent: REPL + every enabled surface
   muffin run "<goal>"           one goal, headless, meaningful exit code
                                 [--json] [--session ID] [--timeout S]
 
@@ -79,6 +79,16 @@ async function main(argv: string[]): Promise<number> {
     case '-h':
       process.stdout.write(USAGE);
       return 0;
+    case '--version':
+    case '-v': {
+      // GNU baseline: every CLI answers --version, and ours did not — found by
+      // checking the checklist instead of assuming (docs/PRACTICES.md §3).
+      const pkg = JSON.parse(
+        readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+      ) as { version: string };
+      process.stdout.write(`muffin ${pkg.version}\n`);
+      return 0;
+    }
     default:
       process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
       return 78;
