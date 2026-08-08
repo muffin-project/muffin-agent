@@ -17,6 +17,7 @@ import {
 } from './memory.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
+import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
@@ -38,6 +39,7 @@ operator commands:
               [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
   muffin doctor [--json]
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
   muffin secret set NAME        (value on stdin)
   muffin rot verify | reseal
 
@@ -68,6 +70,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdVault(rest);
     case 'surface':
       return cmdSurface(rest);
+    case 'mcp':
+      return cmdMcp(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -255,6 +259,36 @@ async function cmdVault(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(VAULT_USAGE);
+  return 78;
+}
+
+async function cmdMcp(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+  if (sub === 'list' || sub === undefined) {
+    return cmdMcpList(home, rest.includes('--verify'));
+  }
+  if (sub === 'remove' && rest[0]) return cmdMcpRemove(home, rest[0]);
+  if (sub === 'add' && rest[0]) {
+    const name = rest[0];
+    // Everything after `--` is the server's own command line, untouched — its
+    // flags are not ours to parse. Before it: only repeatable --env K=V.
+    const sep = rest.indexOf('--');
+    const flags = sep === -1 ? rest.slice(1) : rest.slice(1, sep);
+    const commandLine = sep === -1 ? [] : rest.slice(sep + 1);
+    const env: Record<string, string> = {};
+    for (let i = 0; i < flags.length; i++) {
+      if (flags[i] !== '--env' || !flags[i + 1]?.includes('=')) {
+        process.stderr.write(MCP_USAGE);
+        return 78;
+      }
+      const eq = flags[i + 1]!.indexOf('=');
+      env[flags[i + 1]!.slice(0, eq)] = flags[i + 1]!.slice(eq + 1);
+      i++;
+    }
+    return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env);
+  }
+  process.stderr.write(MCP_USAGE);
   return 78;
 }
 
