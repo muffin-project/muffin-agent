@@ -16,6 +16,8 @@ import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from './tools/fs.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
+import { makeShellTool, shellCapability } from './tools/shell.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -137,8 +139,20 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     },
   ];
 
+  // The hands of M3. The shell tool is registered only when the probe proved a
+  // real containment on this host: absent sandbox → absent tool, declared in
+  // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1 is
+  // strict mode, the ask-gated escape hatch arrives as its own capability).
+  const executor = new SandboxExecutor({
+    denyWrite: [p.rot, p.secrets, p.config],
+    denyRead: [p.secrets],
+  });
+  if (executor.status().available) {
+    tools.push(makeShellTool(executor, { root: cwd }));
+  }
+
   const capabilities = new Map<string, CapabilityDecl>(
-    [...fsCapabilities, memoryCapability].map((c) => [c.id, c]),
+    [...fsCapabilities, memoryCapability, shellCapability].map((c) => [c.id, c]),
   );
   const decide = createDecide({
     capabilities,
@@ -177,7 +191,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       systemPrompt: buildSystemPrompt(home, safeMode !== null),
       memory: { store: memoryStore, recall: recallDeps },
     },
-    close: () => db.close(),
+    close: () => {
+      // Proxy teardown is async and best-effort; srt also registers its own
+      // exit hook. The DB close stays synchronous and unconditional.
+      void executor.close().catch(() => {});
+      db.close();
+    },
   };
 }
 
