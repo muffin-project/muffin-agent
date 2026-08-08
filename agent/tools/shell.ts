@@ -6,6 +6,7 @@ import {
   annotateSandboxFailures,
   EXEC_DEFAULT_TIMEOUT_MS,
   EXEC_MAX_TIMEOUT_MS,
+  type ExecResult,
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
@@ -109,18 +110,25 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
         ...(parsed.data.timeout_ms !== undefined ? { timeoutMs: parsed.data.timeout_ms } : {}),
       });
 
-      const stderr = annotateSandboxFailures(parsed.data.command, result.stderr);
-      const header = result.timedOut
-        ? `killed at ${result.durationMs}ms: the command did not complete — nothing after this ran`
-        : `exit ${result.code ?? '?'} · ${result.durationMs}ms`;
-      const parts = [header];
-      if (result.stdout.length > 0) parts.push(result.stdout);
-      if (stderr.length > 0) parts.push(`--- stderr ---\n${stderr}`);
-
-      return {
-        content: parts.join('\n'),
-        ...(result.code !== 0 || result.timedOut ? { isError: true } : {}),
-      };
+      return formatExecOutcome(parsed.data.command, result);
     },
+  };
+}
+
+/** Shared by every tool that runs contained commands (shell, dev). */
+export function formatExecOutcome(
+  command: string,
+  result: ExecResult,
+): { content: string; isError?: true } {
+  const stderr = annotateSandboxFailures(command, result.stderr);
+  const header = result.timedOut
+    ? `killed at ${result.durationMs}ms: the command did not complete — nothing after this ran`
+    : `exit ${result.code ?? '?'} · ${result.durationMs}ms`;
+  const parts = [header];
+  if (result.stdout.length > 0) parts.push(result.stdout);
+  if (stderr.length > 0) parts.push(`--- stderr ---\n${stderr}`);
+  return {
+    content: parts.join('\n'),
+    ...(result.code !== 0 || result.timedOut ? { isError: true as const } : {}),
   };
 }
