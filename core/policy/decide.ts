@@ -49,6 +49,13 @@ export type PolicyContext = {
    * the code did not back.
    */
   safeMode?: boolean;
+  /**
+   * The egress allowlist from `rot/egress.json`, as a predicate. Optional in
+   * the type so tests can build a minimal context — but ABSENT means nothing
+   * is allowed, not everything: a runtime that forgets to wire it gets a
+   * kernel that asks for every URL, which is the failure mode you notice.
+   */
+  egressAllowed?: (host: string) => boolean;
 };
 
 function isOwnerPrincipal(p: Principal): boolean {
@@ -123,6 +130,30 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'budget_exhausted' };
     }
 
+    // Egress: a URL-holding capability answers to the allowlist in the root of
+    // trust (03 §3, riga egress). On the list → the declared risk class speaks.
+    // Off the list → the owner in a clean context gets asked, everyone and
+    // everything else is refused: a tainted turn must not be able to *nominate*
+    // the exfiltration endpoint, which is exactly what ask-then-approve would
+    // let a poisoned context do at 2am.
+    if (decl.resourceKind === 'url' && resource.kind === 'url') {
+      const host = hostOf(resource.value);
+      if (host === null) {
+        return { effect: 'deny', code: 'resource_denied', detail: `unparseable url` };
+      }
+      const allowed = ctx.egressAllowed?.(host) ?? false;
+      if (!allowed) {
+        if (isOwnerPrincipal(principal) && taint <= 1) {
+          return ask(`egress fuori allowlist: ${host}`);
+        }
+        return {
+          effect: 'deny',
+          code: 'resource_denied',
+          detail: `${host} is not in the egress allowlist (taint ${taint})`,
+        };
+      }
+    }
+
     // Autonomous principals never auto-approve what a human would be asked for:
     // the job queues and waits instead. Fail-safe is the mandated direction.
     if (principal.kind === 'system' || principal.kind === 'agent') {
@@ -148,4 +179,15 @@ export function createDecide(ctx: PolicyContext): Decide {
 
 function describe(resource: DecisionRequest['resource']): string {
   return resource.kind === 'none' ? '(no resource)' : `${resource.kind}:${resource.value}`;
+}
+
+/** Pure: URL parsing only, no I/O. `null` for anything that is not http(s). */
+function hostOf(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.hostname;
+  } catch {
+    return null;
+  }
 }

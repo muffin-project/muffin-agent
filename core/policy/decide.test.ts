@@ -6,6 +6,7 @@ const decls: CapabilityDecl[] = [
   { id: 'memory.read', risk: 'low', reversible: 'yes', resourceKind: 'tenant', policyArgs: [], hostOnly: false },
   { id: 'fs.write', risk: 'medium', reversible: 'undoable', resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
   { id: 'sys.shell', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
+  { id: 'sys.http', risk: 'medium', reversible: 'yes', maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
   { id: 'outward.send', risk: 'high', reversible: 'no', resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
   { id: 'rot.write', risk: 'high', reversible: 'no', resourceKind: 'path', policyArgs: [], hostOnly: true },
 ];
@@ -115,5 +116,64 @@ describe('policy kernel', () => {
     });
     // Reading memory is free and stays available, so the agent can still explain itself.
     expect(broke(req(owner, 'host', 'memory.read', 0))).toMatchObject({ effect: 'allow' });
+  });
+});
+
+describe('egress branch — the allowlist in the root of trust speaks for URLs', () => {
+  const urlReq = (p: Principal, tenant: string, url: string, taint: 0 | 1 | 2 | 3) => ({
+    principal: p,
+    tenant,
+    capability: 'sys.http' as CapabilityId,
+    resource: { kind: 'url', value: url } as const,
+    args: { url },
+    taint,
+  });
+  const withList = () => kernel({ egressAllowed: (host) => host === 'api.example.com' });
+
+  it('on the list, owner, clean context: the declared risk class speaks (medium → allow)', () => {
+    expect(withList()(urlReq(owner, 'host', 'https://api.example.com/v1', 0))).toMatchObject({
+      effect: 'allow',
+    });
+  });
+
+  it('off the list, owner, clean context: ask — never a silent allow', () => {
+    const d = withList()(urlReq(owner, 'host', 'https://elsewhere.net/x', 0));
+    expect(d.effect).toBe('ask');
+    if (d.effect === 'ask') expect(d.ask.prompt).toContain('elsewhere.net');
+  });
+
+  it('off the list in a tainted turn: deny — a poisoned context cannot nominate the endpoint', () => {
+    expect(withList()(urlReq(owner, 'host', 'https://exfil.attacker.net/', 2))).toMatchObject({
+      effect: 'deny',
+      code: 'resource_denied',
+    });
+  });
+
+  it('a group member reads the public allowlist and nothing else', () => {
+    const list = withList();
+    expect(list(urlReq(member, 'group:telegram:42', 'https://api.example.com/', 2))).toMatchObject({
+      effect: 'allow',
+    });
+    expect(list(urlReq(member, 'group:telegram:42', 'https://elsewhere.net/', 2))).toMatchObject({
+      effect: 'deny',
+      code: 'resource_denied',
+    });
+  });
+
+  it('a runtime that forgets to wire the allowlist gets ask-for-everything, not allow', () => {
+    // kernel() has no egressAllowed: absent must mean "nothing is allowed".
+    const d = kernel()(urlReq(owner, 'host', 'https://api.example.com/v1', 0));
+    expect(d.effect).toBe('ask');
+  });
+
+  it('an unparseable or non-http url is refused outright', () => {
+    expect(withList()(urlReq(owner, 'host', 'file:///etc/passwd', 0))).toMatchObject({
+      effect: 'deny',
+      code: 'resource_denied',
+    });
+    expect(withList()(urlReq(owner, 'host', 'not a url', 0))).toMatchObject({
+      effect: 'deny',
+      code: 'resource_denied',
+    });
   });
 });

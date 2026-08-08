@@ -18,6 +18,9 @@ import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } fr
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
+import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
+import { httpCapability, makeHttpTool } from './tools/http.js';
+import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -151,8 +154,27 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     tools.push(makeShellTool(executor, { root: cwd }));
   }
 
+  // Process inspection/management is a host operation, not sandboxed execution:
+  // it acts on the host's own process table, so it does not depend on the
+  // sandbox probe the way shell does. The kernel is the whole containment here
+  // — list is capped at taint 1, kill is high-risk (ask in single-user).
+  tools.push(...makeProcessTools());
+
+  // Egress. A home installed before egress.json existed gets the empty policy,
+  // not a bricked boot — which is fail-closed the visible way: the kernel then
+  // answers `ask` for every URL, and the first fetch tells the owner why.
+  let egress: EgressPolicy;
+  try {
+    egress = loadEgress(home);
+  } catch {
+    egress = { allow: [] };
+  }
+  tools.push(makeHttpTool(egress));
+
   const capabilities = new Map<string, CapabilityDecl>(
-    [...fsCapabilities, memoryCapability, shellCapability].map((c) => [c.id, c]),
+    [...fsCapabilities, memoryCapability, shellCapability, httpCapability, ...processCapabilities].map(
+      (c) => [c.id, c],
+    ),
   );
   const decide = createDecide({
     capabilities,
@@ -161,6 +183,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // and never consulted.
     budgetExhausted: () => budget.exhausted(),
     hardened: config.rot.mode === 'hardened',
+    egressAllowed: (host) => hostAllowed(host, egress),
     // Safe mode was computed at boot and never reached the kernel, while the
     // CLI told the user "capabilities above low risk are denied". That was the
     // only place in the system where the code asserted a guarantee it did not

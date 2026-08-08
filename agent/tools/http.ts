@@ -1,0 +1,174 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { z } from 'zod';
+import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { ToolSpec } from '../providers/types.js';
+import { hostAllowed, isForbiddenAddress, type EgressPolicy } from '../../core/net/egress.js';
+import { fence } from '../../core/memory/spotlight.js';
+import type { RegisteredTool } from '../loop.js';
+
+/**
+ * sys.http — read-only egress, hop by hop.
+ *
+ * The kernel gates the FIRST url against the allowlist (decide.ts, egress
+ * branch); this tool re-applies the same predicate to every redirect target,
+ * because a 302 is a way for an allowlisted host to nominate a different one —
+ * and the model never gets to approve that mid-flight. Each hop's hostname is
+ * also resolved before connecting and every address must be public: the
+ * allowlist says which *names* the owner trusts, the address check says no
+ * name, trusted or not, is allowed to point into the house (SSRF floor —
+ * loopback, RFC1918, link-local metadata, and their v6 relatives).
+ *
+ * Declared limit, not silent: the check is resolve-then-connect, so a DNS
+ * answer that changes between the two (rebinding) is out of scope for v1 —
+ * same posture as the field, compensated by the allowlist being small.
+ *
+ * GET only. The taint-2/3 row of the matrix reads "solo read-only su allowlist
+ * pubblica": a body-carrying verb is an exfiltration channel and arrives, if
+ * ever, with its own capability — not as a parameter here.
+ */
+export const httpCapability: CapabilityDecl = {
+  id: 'sys.http',
+  risk: 'medium',
+  reversible: 'yes',
+  maxTaint: 3,
+  resourceKind: 'url',
+  policyArgs: ['url'],
+  hostOnly: false,
+  timeoutMs: 20_000,
+};
+
+export const httpSpec: ToolSpec = {
+  name: 'http_get',
+  description:
+    'Fetch a URL with GET. Only hosts on the egress allowlist are reachable without asking; ' +
+    'redirects are re-checked against the same list and stop the request if they leave it. ' +
+    'The body is returned as untrusted text (fenced, tier 3), truncated with a marker when long.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'http(s) URL to fetch' },
+    },
+    required: ['url'],
+  },
+};
+
+const httpArgs = z.object({ url: z.string().min(1) });
+
+const MAX_REDIRECTS = 5;
+const MAX_BODY_CHARS = 50_000;
+const FETCH_TIMEOUT_MS = 15_000;
+
+/** Injectable for tests: the logic under test is ours, not undici's. */
+export type HttpDeps = {
+  fetchFn?: typeof fetch;
+  lookupFn?: (hostname: string) => Promise<Array<{ address: string }>>;
+};
+
+export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): RegisteredTool {
+  const fetchFn = deps.fetchFn ?? fetch;
+  const lookupFn = deps.lookupFn ?? ((hostname: string) => dnsLookup(hostname, { all: true }));
+
+  return {
+    capability: httpCapability.id,
+    spec: httpSpec,
+    handler: async (args) => {
+      const parsed = httpArgs.safeParse(args);
+      if (!parsed.success) {
+        return { content: 'invalid arguments: url is required', isError: true };
+      }
+
+      let current: URL;
+      try {
+        current = new URL(parsed.data.url);
+      } catch {
+        return { content: `not a URL: ${parsed.data.url}`, isError: true };
+      }
+
+      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        if (current.protocol !== 'http:' && current.protocol !== 'https:') {
+          return { content: `scheme not allowed: ${current.protocol}`, isError: true };
+        }
+        // Redirect hops answer to the same allowlist as the first URL. The
+        // kernel approved hop 0; nobody approved where a 302 points.
+        if (hop > 0 && !hostAllowed(current.hostname, policy)) {
+          return {
+            content: `redirect left the allowlist at hop ${hop}: ${current.hostname} — stopped before connecting`,
+            isError: true,
+          };
+        }
+        const veto = await addressVeto(current.hostname, lookupFn);
+        if (veto !== null) {
+          return { content: veto, isError: true };
+        }
+
+        let response: Response;
+        try {
+          response = await fetchFn(current, {
+            method: 'GET',
+            redirect: 'manual',
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            headers: { 'user-agent': 'muffin/0.2 (+personal-agent)' },
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          return { content: `fetch failed for ${current.hostname}: ${detail}`, isError: true };
+        }
+
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          if (!location) {
+            return { content: `redirect ${response.status} without a location`, isError: true };
+          }
+          try {
+            current = new URL(location, current);
+          } catch {
+            return { content: `redirect to an unparseable location: ${location}`, isError: true };
+          }
+          continue;
+        }
+
+        const body = clipBody(await response.text());
+        const fenced = fence('web', body, `GET ${current.href} → ${response.status}`);
+        return {
+          content: `${response.status} ${response.headers.get('content-type') ?? ''}\n${fenced.block}`,
+          ...(response.ok ? {} : { isError: true }),
+          tier: 3,
+        };
+      }
+      return { content: `stopped after ${MAX_REDIRECTS} redirects`, isError: true };
+    },
+  };
+}
+
+/** Every resolved address must be public — one private answer vetoes the hop. */
+async function addressVeto(
+  hostname: string,
+  lookupFn: NonNullable<HttpDeps['lookupFn']>,
+): Promise<string | null> {
+  // A literal IP skips DNS but not the check.
+  const literal = hostname.replace(/^\[|\]$/g, '');
+  if (/^[\d.]+$/.test(literal) || literal.includes(':')) {
+    return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;
+  }
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookupFn(hostname);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `dns failed for ${hostname}: ${detail}`;
+  }
+  if (addresses.length === 0) return `dns returned no addresses for ${hostname}`;
+  for (const { address } of addresses) {
+    if (isForbiddenAddress(address)) {
+      return `${hostname} resolves to a non-routable address (${address}) — refused`;
+    }
+  }
+  return null;
+}
+
+function clipBody(text: string): string {
+  if (text.length <= MAX_BODY_CHARS) return text;
+  const head = text.slice(0, 40_000);
+  const tail = text.slice(-10_000);
+  return `${head}\n…[risposta troncata: ~${text.length - 50_000} caratteri omessi]…\n${tail}`;
+}
