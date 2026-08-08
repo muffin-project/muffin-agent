@@ -23,6 +23,8 @@ import { httpCapability, makeHttpTool } from './tools/http.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
+import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
+import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -52,6 +54,11 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
+  /**
+   * Boot-visible notes a surface should print before the first turn — today,
+   * skills that failed to load and why. Empty means nothing was skipped.
+   */
+  bootLines: string[];
   /**
    * Late registration for tools that arrive asynchronously (MCP servers).
    * Registers the capability too: a tool the kernel does not know is a tool
@@ -170,6 +177,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // — list is capped at taint 1, kill is high-risk (ask in single-user).
   tools.push(...makeProcessTools());
 
+  // Skills: metadata always in context, bodies on demand through their own
+  // door. A skill that failed to parse is a boot-visible problem line, never a
+  // silently half-loaded one.
+  const skillScan = discoverSkills(home);
+  tools.push(makeSkillTool(skillScan.skills));
+
   // Egress. A home installed before egress.json existed gets the empty policy,
   // not a bricked boot — which is fail-closed the visible way: the kernel then
   // answers `ask` for every URL, and the first fetch tells the owner why.
@@ -182,9 +195,14 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   tools.push(makeHttpTool(egress));
 
   const capabilities = new Map<string, CapabilityDecl>(
-    [...fsCapabilities, memoryCapability, shellCapability, httpCapability, ...processCapabilities].map(
-      (c) => [c.id, c],
-    ),
+    [
+      ...fsCapabilities,
+      memoryCapability,
+      shellCapability,
+      httpCapability,
+      ...processCapabilities,
+      skillCapability,
+    ].map((c) => [c.id, c]),
   );
   const decide = createDecide({
     capabilities,
@@ -207,6 +225,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     config,
     budget,
     safeMode,
+    bootLines: skillScan.problems.map((p) => `! ${p}`),
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);
@@ -230,7 +249,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         budget.record({ ...entry, usd });
         return usd;
       },
-      systemPrompt: buildSystemPrompt(home, safeMode !== null),
+      systemPrompt: buildSystemPrompt(home, safeMode !== null, skillsPromptSection(skillScan.skills)),
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
@@ -267,10 +286,11 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
  * prompt the agent cannot rewrite about itself, which is the whole point of
  * keeping it there rather than in config.
  */
-function buildSystemPrompt(home: string, safeMode: boolean): string {
+function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''): string {
   const identityPath = join(paths(home).rot, 'identity.md');
   const identity = existsSync(identityPath) ? readFileSync(identityPath, 'utf8').trim() : '';
   const parts = [identity];
+  if (skillsSection.length > 0) parts.push(skillsSection);
   parts.push(
     [
       '## Come lavori',

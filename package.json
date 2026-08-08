@@ -15,6 +15,7 @@
     "@grammyjs/types": "^4.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^9.6.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.5",
     "typescript": "^5.7.0",
@@ -25,6 +26,7 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "@modelcontextprotocol/client": "2.0.0",
     "better-sqlite3": "^12.11.1",
+    "js-yaml": "^5.2.3",
     "openai": "^7.4.0",
     "sqlite-vec": "^0.1.9",
     "zod": "^4.4.3"

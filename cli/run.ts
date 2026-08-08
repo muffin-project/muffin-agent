@@ -40,6 +40,7 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
     );
   }
 
+  for (const line of runtime.bootLines) process.stderr.write(`${line}\n`);
   // Same MCP surface as the REPL: headless work has the same hands, and a
   // suspended server is reported on stderr where the script's operator looks.
   try {

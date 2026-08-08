@@ -52,6 +52,7 @@ export async function runRepl(home = paths().home): Promise<number> {
     `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
+      runtime.bootLines.map((l) => `${l}\n`).join('') +
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 
