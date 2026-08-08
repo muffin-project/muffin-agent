@@ -12,17 +12,22 @@ import {
 import type { RegisteredTool } from '../loop.js';
 
 /**
- * sys.shell — the first hand of M3.
+ * shell_run — the one contained command tool.
+ *
+ * Muffin is not a coding agent: it reads code (fs_read) and runs scripts, and
+ * this is where scripts run — inside the sandbox, writes confined to the
+ * project working directory and a scratch TMPDIR, no network. The containment
+ * is general, not a special "dev" surface: there is one way to run a command
+ * and it is guarded once (owner decision, 2026-08-09 — see ADR-0027).
  *
  * Declared `high` risk: in hardened mode the kernel allows it for the owner at
  * taint 0, in single-user mode it is ALWAYS an ask — that is threat model §g
  * falling out of decide()'s high branch, not a special case written here.
  *
- * v1 is strict by construction: there is no unsandboxed retry path. When the
- * sandbox blocks a command, the model explains what was blocked and the owner
- * runs it in their own terminal if they want it run. The escape hatch inside
- * the permission flow (ADR-0018) arrives with an explicit always-ask
- * capability, not as a parameter that softens this one.
+ * v1 is strict by construction: no unsandboxed retry path. When the sandbox
+ * blocks a command, the model explains what was blocked and the owner runs it
+ * themselves; the escape hatch (ADR-0018) arrives as its own always-ask
+ * capability, not a parameter that softens this one.
  */
 export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
@@ -48,7 +53,7 @@ export const shellSpec: ToolSpec = {
       command: { type: 'string', description: 'The command line to execute' },
       cwd: {
         type: 'string',
-        description: 'Working directory, relative to the workspace root. Default: the root.',
+        description: 'Working directory, relative to the project root. Default: the root.',
       },
       timeout_ms: {
         type: 'number',
@@ -63,16 +68,11 @@ export const shellSpec: ToolSpec = {
 const shellArgs = z.object({
   command: z.string().min(1, 'command must not be empty'),
   cwd: z.string().optional(),
-  timeout_ms: z
-    .number()
-    .int()
-    .min(1_000)
-    .max(EXEC_MAX_TIMEOUT_MS)
-    .optional(),
+  timeout_ms: z.number().int().min(1_000).max(EXEC_MAX_TIMEOUT_MS).optional(),
 });
 
 export type ShellScope = {
-  /** Absolute. The workspace this session may write into. */
+  /** Absolute. The project directory this session may write into. */
   root: string;
 };
 
@@ -93,14 +93,14 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
         };
       }
 
-      // cwd stays inside the workspace. This bounds where the process *starts*,
+      // cwd stays inside the project. This bounds where the process *starts*,
       // not what it can write — writes are the sandbox's job — but a cwd outside
       // the root would also anchor srt's profile generation somewhere we did not
       // mean (upstream #432 made that mistake load-bearing).
       const cwd = resolve(scope.root, parsed.data.cwd ?? '.');
       const escape = relative(scope.root, cwd);
-      if (escape === '..' || escape.startsWith(`..`) || isAbsolute(escape)) {
-        return { content: `cwd escapes the workspace: ${parsed.data.cwd}`, isError: true };
+      if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
+        return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true };
       }
 
       const result = await executor.run({
@@ -115,7 +115,7 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
   };
 }
 
-/** Shared by every tool that runs contained commands (shell, dev). */
+/** Turn a contained run into a model-facing result: header, stdout, annotated stderr. */
 export function formatExecOutcome(
   command: string,
   result: ExecResult,

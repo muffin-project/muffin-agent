@@ -73,8 +73,6 @@ export const paths = (home = muffinHome()) => ({
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),
   secrets: join(home, 'secrets'),
-  /** Dedicated clones the dev capability works in — never the owner's tree. */
-  dev: join(home, 'dev'),
 });
 
 export function loadConfig(home = muffinHome()): Config {

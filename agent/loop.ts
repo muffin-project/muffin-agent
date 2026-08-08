@@ -482,6 +482,7 @@ async function runTool(
   }
 
   const args = (call.args ?? {}) as Record<string, unknown>;
+  const capability = tool.capability;
   const resource =
     typeof args['path'] === 'string'
       ? ({ kind: 'path', value: args['path'] } as const)
@@ -489,10 +490,10 @@ async function runTool(
 
   const decisionSpan = deps.tracer.start(
     'muffin.policy_decision',
-    { [ATTR.capability]: tool.capability, [ATTR.taint]: snapshot.currentTaint() },
+    { [ATTR.capability]: capability, [ATTR.taint]: snapshot.currentTaint() },
     span,
   );
-  const decision = snapshot.check(tool.capability, resource, args);
+  const decision = snapshot.check(capability, resource, args);
   decisionSpan.setAttributes({
     [ATTR.policyEffect]: decision.effect,
     ...(decision.effect === 'deny' ? { [ATTR.policyDenyCode]: decision.code } : {}),
@@ -518,14 +519,14 @@ async function runTool(
       type: 'tool_result',
       toolCallId: call.id,
       content:
-        `"${tool.capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
+        `"${capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
         `Non eseguito: dillo all'owner invece di riprovare.`,
       isError: true,
     };
   }
   if (decision.effect === 'ask') {
     const request: ApprovalRequest = {
-      capability: tool.capability,
+      capability,
       prompt: decision.ask.prompt,
       ...(resource.kind === 'path' ? { resource: resource.value } : {}),
     };
@@ -542,7 +543,7 @@ async function runTool(
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: `L'owner ha rifiutato "${tool.capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
+        content: `L'owner ha rifiutato "${capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
         isError: true,
       };
     }

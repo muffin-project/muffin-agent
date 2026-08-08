@@ -25,7 +25,6 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
-import { makeDevTools, devCapability } from './tools/dev.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -170,9 +169,6 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   });
   if (executor.status().available) {
     tools.push(makeShellTool(executor, { root: cwd }));
-    // The dev capability shares the same containment: no sandbox, no shell and
-    // no dev. "Muffin builds Muffin" is not exempt from its own guarantees.
-    tools.push(...makeDevTools(executor, home));
   }
 
   // Process inspection/management is a host operation, not sandboxed execution:
@@ -206,7 +202,6 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
-      devCapability,
     ].map((c) => [c.id, c]),
   );
   const decide = createDecide({
