@@ -18,6 +18,7 @@ import {
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
+import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 
@@ -46,6 +47,7 @@ operator commands:
 inspection:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin vault reindex | add <file> | ls | check
+  muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<goal>" | remove <id>
   muffin trace tail [-n N] [--errors] | grep PATTERN
 
 Exit codes: 0 ok · 1 warnings · 2 blocking error · 3 needs approval · 78 bad configuration
@@ -72,6 +74,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdSurface(rest);
     case 'mcp':
       return cmdMcp(rest);
+    case 'jobs':
+      return cmdJobs(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -259,6 +263,16 @@ async function cmdVault(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(VAULT_USAGE);
+  return 78;
+}
+
+function cmdJobs(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+  if (sub === 'list' || sub === undefined) return cmdJobsList(home);
+  if (sub === 'add') return cmdJobsAdd(home, rest);
+  if (sub === 'remove' && rest[0]) return cmdJobsRemove(home, rest[0]);
+  process.stderr.write(JOBS_USAGE);
   return 78;
 }
 
