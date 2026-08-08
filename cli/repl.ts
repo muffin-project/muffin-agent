@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import { buildRuntime, type Runtime } from '../agent/runtime.js';
+import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
 import { connectSurfaces } from './surface.js';
@@ -39,9 +39,19 @@ export async function runRepl(home = paths().home): Promise<number> {
   // because Muffin is running, which is what "running" should mean.
   const surfaces = connectSurfaces(runtime, home);
 
+  // Allowlisted MCP servers, verified against their pins. A suspension is
+  // boot-visible, not buried: the owner reads why before the first turn.
+  let mcpLines: string[] = [];
+  try {
+    mcpLines = await attachMcp(runtime, home);
+  } catch (error) {
+    mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
+  }
+
   process.stderr.write(
     `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
+      mcpLines.map((l) => `${l}\n`).join('') +
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 

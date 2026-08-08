@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { buildRuntime } from '../agent/runtime.js';
+import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { runTurn, type TurnResult } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
 
@@ -38,6 +38,14 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
       `! safe mode: root of trust diverged (${runtime.safeMode.reason}: ${runtime.safeMode.diverged.join(', ')})\n` +
         `  capabilities above low risk are denied — \`muffin rot verify\` for detail\n`,
     );
+  }
+
+  // Same MCP surface as the REPL: headless work has the same hands, and a
+  // suspended server is reported on stderr where the script's operator looks.
+  try {
+    for (const line of await attachMcp(runtime, home)) process.stderr.write(`${line}\n`);
+  } catch (error) {
+    process.stderr.write(`mcp: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 
   // A headless turn gets its own thread unless asked to continue one: a script

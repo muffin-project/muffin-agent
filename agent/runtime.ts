@@ -21,6 +21,8 @@ import { makeShellTool, shellCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { httpCapability, makeHttpTool } from './tools/http.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
+import { loadMcpRegistry } from '../core/mcp/registry.js';
+import { buildMcpTools } from './tools/mcp.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -50,6 +52,14 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
+  /**
+   * Late registration for tools that arrive asynchronously (MCP servers).
+   * Registers the capability too: a tool the kernel does not know is a tool
+   * the loop cannot ever be allowed to call.
+   */
+  register(tool: RegisteredTool, decl: CapabilityDecl): void;
+  /** Awaited by close(); attachments park their teardown here. */
+  onClose(hook: () => Promise<void>): void;
   close(): void;
 };
 
@@ -191,10 +201,19 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     safeMode: safeMode !== null,
   });
 
+  const closeHooks: Array<() => Promise<void>> = [];
+
   return {
     config,
     budget,
     safeMode,
+    register: (tool, decl) => {
+      capabilities.set(decl.id, decl);
+      tools.push(tool);
+    },
+    onClose: (hook) => {
+      closeHooks.push(hook);
+    },
     light: { provider, model: config.models.light },
     memory: { store: memoryStore, recall: recallDeps },
     deps: {
@@ -215,12 +234,32 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
-      // Proxy teardown is async and best-effort; srt also registers its own
-      // exit hook. The DB close stays synchronous and unconditional.
+      // Async teardown is best-effort (srt registers its own exit hook, MCP
+      // children die with the pipe); the DB close stays synchronous and
+      // unconditional.
+      for (const hook of closeHooks) void hook().catch(() => {});
       void executor.close().catch(() => {});
       db.close();
     },
   };
+}
+
+/**
+ * Connect the allowlisted MCP servers and register their verified tools.
+ * Separate from buildRuntime on purpose: connecting spawns processes and is
+ * async, and a runtime for `muffin memory why` has no reason to pay it.
+ * Returns the report lines for the surface to print.
+ */
+export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {
+  const registry = loadMcpRegistry(home);
+  if (Object.keys(registry.servers).length === 0) return [];
+  const attachment = await buildMcpTools(registry);
+  for (const decl of attachment.capabilities) {
+    const tool = attachment.tools.filter((t) => t.capability === decl.id);
+    for (const t of tool) runtime.register(t, decl);
+  }
+  runtime.onClose(() => attachment.close());
+  return attachment.report;
 }
 
 /**
