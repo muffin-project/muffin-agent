@@ -26,6 +26,7 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "@modelcontextprotocol/client": "2.0.0",
     "better-sqlite3": "^12.11.1",
+    "cron-parser": "^5.7.0",
     "js-yaml": "^5.2.3",
     "openai": "^7.4.0",
     "sqlite-vec": "^0.1.9",
