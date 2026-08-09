@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { runInit } from './init.js';
@@ -21,6 +21,8 @@ import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
+import { promptLine, promptSecret } from './prompt.js';
+import { inferProvider, isOpenRouterKey, keyHint, OPENROUTER_BASE_URL } from './onboarding.js';
 
 /**
  * Entry point.
@@ -98,9 +100,13 @@ async function main(argv: string[]): Promise<number> {
       return cmdSecret(rest);
     case 'trace':
       return cmdTrace(rest);
-    case undefined:
-      // Bare `muffin` opens the REPL: the terminal is the primary surface.
+    case undefined: {
+      // Bare `muffin` opens the REPL — but on a first run there is no config to
+      // open it with. Detect that and route into setup instead of failing with a
+      // stack trace the user cannot act on.
+      if (!existsSync(paths().config)) return firstRun();
       return runRepl();
+    }
     case '--help':
     case '-h':
       process.stdout.write(USAGE);
@@ -117,7 +123,7 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-function cmdInit(argv: string[]): number {
+async function cmdInit(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -132,20 +138,36 @@ function cmdInit(argv: string[]): number {
     allowPositionals: false,
   });
 
-  const provider = values.provider as ProviderKind | undefined;
-  if (provider && provider !== 'anthropic' && provider !== 'openai-compat') {
+  const providerFlag = values.provider as ProviderKind | undefined;
+  if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {
     process.stderr.write(`--provider must be anthropic or openai-compat\n`);
     return 78;
   }
+
+  // Acquire the key: flag > env > an interactive prompt on a terminal. A missing
+  // key is not fatal — runInit records the step as incomplete and the user can
+  // re-run — but on a TTY we ask rather than fail, which is the whole point of a
+  // first run (the init.ts docstring promised this; it was never implemented).
+  let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
+  if (!apiKey && process.stdin.isTTY) {
+    process.stderr.write(keyHint(providerFlag, values['base-url']));
+    apiKey = await promptSecret('API key (hidden — paste, or Enter to skip): ');
+  }
+
+  // Infer the provider from the key when the user did not pin one, and default an
+  // OpenRouter key to its gateway URL. An explicit flag always wins over both.
+  const provider = providerFlag ?? inferProvider(apiKey);
+  const baseUrl =
+    values['base-url'] ?? (isOpenRouterKey(apiKey) && !providerFlag ? OPENROUTER_BASE_URL : undefined);
 
   const steps = runInit({
     ...(values.hardened ? { hardened: true } : {}),
     ...(values.force ? { force: true } : {}),
     ...(provider ? { provider } : {}),
-    ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     ...(values.model ? { mainModel: values.model } : {}),
     ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
-    ...(values['api-key'] ? { apiKey: values['api-key'] } : {}),
+    ...(apiKey ? { apiKey } : {}),
   });
 
   for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
@@ -156,6 +178,27 @@ function cmdInit(argv: string[]): number {
   }
   process.stderr.write(`\nNext: muffin doctor\n`);
   return 0;
+}
+
+/**
+ * A bare `muffin` with no config is someone's first run. Ask before doing
+ * anything (Hermes' pattern — not a silent launch, not a bare error), and off a
+ * terminal print the one command to run instead of hanging on a pipe.
+ */
+async function firstRun(): Promise<number> {
+  const answer = await promptLine("Muffin isn't set up on this machine yet. Set it up now? [Y/n] ");
+  if (answer === undefined) {
+    process.stderr.write('Muffin is not configured. Run:\n  muffin init\n');
+    return 78;
+  }
+  if (answer !== '' && !/^y(es)?$/i.test(answer)) {
+    process.stderr.write('Run `muffin init` when ready.\n');
+    return 0;
+  }
+  const code = await cmdInit([]);
+  if (code !== 0) return code; // init already said what is missing
+  process.stderr.write('\nStarting Muffin.\n');
+  return runRepl();
 }
 
 function cmdDoctor(argv: string[]): number {

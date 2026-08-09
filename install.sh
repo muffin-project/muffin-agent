@@ -74,7 +74,20 @@ case ":$PATH:" in
     say "  echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.profile"
     ;;
 esac
+# 6. offer to set up now — but only on a real terminal (Goose/Hermes chain the
+#    wizard the same way). Off a TTY, just print the next steps.
+if [ -t 0 ]; then
+  printf 'set up muffin now? [Y/n] ' >&2
+  read -r reply || reply=""
+  case "$reply" in
+    '' | y | Y | yes | YES)
+      say ""
+      "$BINDIR/$CMD" init
+      exit $?
+      ;;
+  esac
+fi
 say ""
-say "done. next:"
-say "  $CMD init     set up ~/.muffin (needs your OpenRouter key: MUFFIN_API_KEY)"
+say "next:"
+say "  $CMD init     set up ~/.muffin (it will prompt for your API key)"
 say "  $CMD          open the agent"
