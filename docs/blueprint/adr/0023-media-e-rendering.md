@@ -1,0 +1,34 @@
+# ADR-0023 — Media: doppio binario in ingresso, immagine-più-testo in uscita
+
+**Contesto.** L'owner vuole due cose: che Muffin sappia gestire audio, immagini, video e file, e che risponda **senza essere verboso** — grafici, tabelle, rich text, con fallback a immagini generate da SVG, o file presi dal vault. La ricerca B3 (9 sistemi ispezionati dal codice/doc, librerie Node verificate sul registry, limiti dei connector dalle API primarie) porta tre fatti che decidono il design, più un contro-argomento che va rispettato invece che aggirato.
+
+## Ingresso: facciamo entrambe le cose che nessuno fa entrambe
+
+L'evidenza mostra una **scelta binaria** in tutti e nove i sistemi: o si fa *captioning/OCR a testo permanente* (Khoj, Mem0, Supermemory — l'immagine diventa testo indicizzabile e l'originale conta poco), o si fa *pass-through nativo al modello vision* (Letta, Hermes, OpenClaw — l'immagine resta immagine, niente di persistente). Nessuno fa entrambe.
+
+**Decisione: entrambe, perché servono a due cose diverse e nel nostro caso costano poco.**
+- **Nel turno**: l'immagine passa nativa al modello. B2 ha verificato che l'incumbent (`gemma-4-26b-a4b`) è **già multimodale su immagine e video sullo stesso endpoint già cablato** — è capacità già pagata, non un modello in più.
+- **Per la memoria**: alla stessa ingestione si estrae una descrizione testuale (e OCR se c'è testo nell'immagine) che diventa il contenuto indicizzabile dell'episodio. Senza, una foto è un buco nero nel recall: tra sei mesi "quella foto dei voli" non si trova, ed è esattamente il fallimento che l'owner ha già vissuto.
+- L'originale resta nel vault, l'episodio porta `vault_path` + `media_meta` (già nello schema, 02 §2.1). Pattern Paperless-ngx per l'integrità: hash sull'originale, e nessuna ri-elaborazione se l'estrazione è già disponibile.
+
+**Per modalità**: **immagini** → pass-through + descrizione/OCR. **Audio** → trascrizione (servizio a sé, locale dove c'è Metal/GPU, API altrove — ADR-0007/06 §2-ter); il testo trascritto è l'episodio, l'audio resta nel vault. **PDF e documenti** → estrazione testo + chunking; niente illusioni di layout-aware in Node (non esiste: l'unica cosa seria è Python). **Video** → **fuori dalla v1, dichiarato**: nessuno dei nove sistemi lo tratta da prima classe, e il wrapper Node di riferimento per i frame (`fluent-ffmpeg`) è archiviato dal maggio 2025 col maintainer che dice di invocare ffmpeg direttamente. Se e quando servirà: audio estratto e trascritto, frame solo su richiesta esplicita, ffmpeg via `execa`.
+
+**Vincolo di ingestione da non scoprire dopo**: su Telegram, `getFile` scarica al massimo **20 MB**. Un video o un PDF grande mandato in chat *non è scaricabile* senza self-hosting della Bot API. Va detto all'utente quando succede, non fallito in silenzio.
+
+## Uscita: immagine **e** testo, mai immagine **al posto** del testo
+
+Il contro-argomento è solido e viene dalla fonte primaria: **WCAG 1.4.5** dice che se la tecnologia può renderlo come testo, l'informazione va come testo, non come immagine — perché il testo dentro un'immagine non si può ingrandire, ricolorare, cercare o copiare. Un report numerico non rientra nelle eccezioni previste. Vale anche per un utente senza disabilità: i numeri di un grafico che non puoi incollare da nessuna parte sono numeri a metà.
+
+**Regola**: la resa ricca è un **livello aggiuntivo di leggibilità, mai un sostituto del contenuto**. In concreto, per una risposta con dati: immagine (grafico/tabella renderizzata) + una didascalia breve con il punto + **i dati stessi come file allegato** (CSV/Markdown dal vault) quando sono più di una manciata di numeri. Questo usa la tua stessa idea dei file dal vault, e risolve il "non verboso" senza rendere il contenuto inerte: la chat resta leggibile, i dati restano dati.
+
+**Pipeline tecnica** (chiude il "libreria leggera SVG→PNG" lasciato aperto da ADR-0016): **`satori` → `@resvg/resvg-js`**, la stessa combinazione che usa `@vercel/og` in produzione. Nessun browser, nessuna rete. Per grafici: **Vega-Lite → SVG → resvg-js** — è l'unica libreria di charting che produce SVG **senza dipendenze native** fino all'ultimo passaggio. Plotly è escluso: entrambi i suoi percorsi ufficiali richiedono o l'API cloud o un Chrome installato.
+
+**Limiti da rispettare nel codice, non da scoprire**: satori supporta solo flexbox (niente CSS Grid), legge TTF/OTF/WOFF ma **non WOFF2** (cioè non si scarica un font da Google Fonts e via), e le emoji vanno fornite come immagini via callback — il che, di riflesso, aggira il limite di resvg-js sui color-font. I font vengono impacchettati nel repo, non presi dalla rete (coerente col render offline di 03 §3-ter).
+
+**La scala di degradazione è per surface** (ADR-0021), con un'asimmetria verificata da tenere presente: Telegram e Discord accettano l'upload binario nella stessa chiamata del messaggio; **Slack pretende che l'immagine sia già hostata a un URL pubblico**. Un renderer "genera e invia" pensato per Telegram non si porta su Slack senza un passo di hosting — quando arriverà Slack, quello è il lavoro, non il rendering.
+
+**Alternative scartate.** *Solo pass-through nativo* (il polo Letta/Hermes): più semplice, ma le immagini restano invisibili al recall — inaccettabile per un sistema il cui differenziale è la memoria. *Solo captioning* (il polo Khoj/Mem0): perde la ricchezza del modello nel turno corrente, quando la domanda è "cosa c'è in questa foto?". *Chart.js via node-canvas*: API più ricca ma dipendenza nativa (Cairo) fin da subito, dove Vega-Lite non ne ha nessuna fino al PNG. *Sostituire il testo con le immagini* per non essere verbosi: viola WCAG 1.4.5 e rende i dati inutilizzabili — la verbosità si combatte con la sintesi, non nascondendo il contenuto in un PNG.
+
+**Conseguenze.** Più facile: le foto entrano in memoria e si ritrovano; le risposte con dati diventano leggibili a colpo d'occhio senza perdere i dati; il rendering non porta né browser né rete. Più difficile: ogni immagine costa una passata di vision all'ingestione (asincrona, fuori dal path di risposta — ADR-0022); i template di rendering vanno scritti in un sottoinsieme di CSS ristretto; i font vanno impacchettati.
+
+**Reversibilità.** Alta su tutto. Il rasterizzatore è dietro un'interfaccia (`render(blocchi) → PNG`): cambiarlo è cambiare un'implementazione. La descrizione delle immagini è un campo dell'episodio: si può rigenerare con un modello migliore rieseguendo la pipeline su `extraction_v` (02 §3), come qualunque altro derivato. Il video è fuori scope in modo pulito: aggiungerlo è aggiungere un ingestore, non cambiare il modello dati. Segnale che la parte in uscita era sbagliata: se l'owner si ritrova a chiedere "mandamelo come testo" più spesso di quanto guardi le immagini, la scala di degradazione ha il default invertito.
