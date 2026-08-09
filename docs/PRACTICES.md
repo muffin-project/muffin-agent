@@ -149,6 +149,13 @@ Three moments, three different mechanisms, deliberately:
 - **End of a slice — commit.** A commit is the only form of state that survives
   everything. The block says where we are; the commit says what is true.
 
+One rule about what goes *in* the block: **do not cite a local commit hash for
+work that is still in flight.** A stacked PR gets rebased the moment anything
+below it changes, and every hash in the handoff becomes a pointer nobody can
+`git show` — in the one document whose whole job is to still be true after you
+have forgotten. Link the PR instead; it survives the rebase. A hash is fine once
+it is on `main`.
+
 The honest summary: re-grounding is deterministic, flushing is not. Knowing
 which half is which is the point.
 
