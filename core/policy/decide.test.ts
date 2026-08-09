@@ -34,6 +34,24 @@ const req = (p: Principal, tenant: string, capability: CapabilityId, taint: 0 | 
 });
 
 describe('policy kernel', () => {
+  it("lets a declaration's maxTaint both narrow and widen the class default", () => {
+    // Pinning the real semantics, because a comment here asserted the opposite
+    // ("may narrow it, never widen it") while a shipped declaration widened:
+    // sys.http is medium, whose default ceiling is 1, and declares 3 on
+    // purpose — read-only on an allowlist is what the threat model permits at
+    // taint 2/3. Without this test the next reader has to choose between
+    // believing the prose and believing the code.
+    const decide = kernel({ egressAllowed: () => true });
+
+    // Widened: medium default is 1, sys.http declares 3.
+    expect(decide(req(owner, 'host', 'sys.http', 3)).effect).not.toBe('deny');
+    // Narrowed: fs.write is medium and declares nothing, so 1 is the ceiling.
+    expect(decide(req(owner, 'host', 'fs.write', 2))).toMatchObject({
+      effect: 'deny',
+      code: 'taint_exceeded',
+    });
+  });
+
   it('denies everything above low risk in safe mode', () => {
     // The CLI has always told the user this happens. Until the flag reached the
     // kernel, it did not — the only place in the system where the code asserted
