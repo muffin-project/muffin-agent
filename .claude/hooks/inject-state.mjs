@@ -34,8 +34,24 @@ import { readFileSync } from 'node:fs';
  */
 const STATE = new URL('../../docs/blueprint/STATE.md', import.meta.url);
 
-/** The documented cap on hook context. Truncating loudly beats being dropped. */
+/**
+ * The documented cap on hook output. Past it, Claude Code replaces the whole
+ * string with a preview and a file path — which turns the handoff back into a
+ * pointer to STATE.md, the exact failure this hook exists to close.
+ *
+ * The cap applies to what is EMITTED, not to the block: the preamble below is
+ * part of the string that gets measured. Capping the block alone left a ~125
+ * character window (block 9,876-10,000) where the output silently exceeded the
+ * limit with no truncation marker — verified by sweeping a crafted STATE.md
+ * through this script.
+ */
 const MAX = 10_000;
+
+const PREAMBLE =
+  'Handoff da docs/blueprint/STATE.md (iniettato automaticamente, ' +
+  'sopravvive al compact). È la fonte autoritativa sullo stato:\n\n';
+
+const CUT_MARKER = '\n\n[…blocco troncato: leggi docs/blueprint/STATE.md]';
 
 let text;
 try {
@@ -52,18 +68,18 @@ if (start === -1) process.exit(0);
 const rule = text.indexOf('\n---', start);
 let block = (rule === -1 ? text.slice(start) : text.slice(start, rule)).trim();
 
-if (block.length > MAX) {
-  // Say it was cut. A silently truncated handoff reads as a complete one.
-  block = `${block.slice(0, MAX - 200)}\n\n[…blocco troncato: leggi docs/blueprint/STATE.md]`;
+// Measured against the emitted string. Say it was cut: a silently truncated
+// handoff reads as a complete one.
+const budget = MAX - PREAMBLE.length;
+if (block.length > budget) {
+  block = block.slice(0, budget - CUT_MARKER.length) + CUT_MARKER;
 }
 
 process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext:
-        `Handoff da docs/blueprint/STATE.md (iniettato automaticamente, ` +
-        `sopravvive al compact). È la fonte autoritativa sullo stato:\n\n${block}`,
+      additionalContext: PREAMBLE + block,
     },
   }),
 );

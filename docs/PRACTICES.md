@@ -128,20 +128,24 @@ disagree, the file wins.
 Three moments, three different mechanisms, deliberately:
 
 - **Session start — mechanised, not remembered.** `.claude/hooks/inject-state.mjs`
-  injects the block on every SessionStart, *including after a compact*. Claude
-  Code re-reads the project-root `CLAUDE.md` from disk after compaction but only
-  that file; STATE.md is nested behind a pointer, so it is precisely what does
-  not come back on its own. This is practice §6 applied to the rule "read
-  STATE.md first", which as prose was skipped often enough to cost whole
-  sessions.
-- **Before a compact — a practice, because it cannot be a hook.** A `PreCompact`
-  hook can run a command and can block compaction; it cannot inject context and
-  cannot ask the model to write a file (verified against the hooks reference —
-  `PreCompact` is absent from the list of events whose `additionalContext`
-  reaches the model, and supports neither `prompt` nor `agent` hooks). So the
-  flush is discipline, not machinery, and this document says so rather than
-  implying a guarantee the mechanism does not provide. When context is running
-  short: update the START HERE block *first*, then let the compact happen.
+  injects the block on every SessionStart, *including after a compact*. The
+  premise is documented rather than assumed: *"Project-root CLAUDE.md survives
+  compaction: after `/compact`, Claude re-reads it from disk and re-injects it
+  into the session. Nested CLAUDE.md files in subdirectories and rules with
+  `paths:` frontmatter are not re-injected automatically"* — Claude Code docs,
+  Memory, "Instructions seem lost after /compact". STATE.md is nested behind a
+  pointer, so it is exactly what does not come back on its own. This is practice
+  §6 applied to the rule "read STATE.md first", which as prose was skipped often
+  enough to cost whole sessions.
+- **Before a compact — a practice, because the *model* cannot be made to do it.**
+  A `PreCompact` hook can run a command and can block compaction; it cannot
+  inject context, because `PreCompact` is absent from the documented list of
+  events whose `additionalContext` reaches the model. So it cannot ask the model
+  to write anything. It *could* persist a snapshot itself from a shell command —
+  "cannot be mechanised at all" would be too strong. What is true is narrower and
+  is the part that matters: the judgement about what the live state *is* has no
+  mechanism. When context is running short: update the START HERE block *first*,
+  then let the compact happen.
 - **End of a slice — commit.** A commit is the only form of state that survives
   everything. The block says where we are; the commit says what is true.
 
