@@ -190,6 +190,53 @@ describe('recall', () => {
     expect(result.items.some((i) => i.kind === 'fact' && i.text.includes('commercialista'))).toBe(true);
   });
 
+  it('keeps the one charged fact when routine ones would have filled the cut', async () => {
+    // The wiring test for "intensity beats frequency". Graph expansion keeps
+    // only the first six facts of a matched entity: with seven, the charged one
+    // is the oldest, so under the previous recency-only ordering it was exactly
+    // the fact that fell off. Verified to fail on ORDER BY recorded_at alone.
+    const { store, vectors } = harness();
+    const anna = store.upsertEntity(HOST, 'Anna', 'person', NOW);
+    const ep = episode(store, 'note su Anna');
+    const base = {
+      tenantId: HOST, subjectId: anna, episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    store.addFact({
+      ...base, predicate: 'diagnosis', objectValue: 'ha avuto un infarto',
+      importance: 2, recordedAt: '2026-03-01T10:00:00Z',
+    });
+    for (let i = 0; i < 6; i++) {
+      store.addFact({
+        ...base, predicate: `routine_${i}`, objectValue: `dettaglio ${i}`,
+        recordedAt: `2026-08-0${i + 1}T10:00:00Z`,
+      });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'chi è Anna?');
+    const facts = result.items.filter((i) => i.kind === 'fact');
+    expect(facts.map((f) => f.text).join(' ')).toContain('infarto');
+  });
+
+  it('marks an inferred fact as inferred, and says nothing extra about a stated one', async () => {
+    // The producer of `inferred` is the observing spine (MVP #5) and is not
+    // built yet; the path it will feed is wired and proved from the store side
+    // now, so it cannot arrive to find the rendering silently dropping it.
+    const { store } = harness(false);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note');
+    const base = { tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW };
+    store.addFact({ ...base, predicate: 'lives_in', objectValue: 'Cagliari' });
+    store.addFact({ ...base, predicate: 'mood', objectValue: 'sotto pressione', origin: 'inferred' });
+
+    const rendered = renderForPrompt(await recall({ store }, HOST, 'Giusto'));
+    expect(rendered).toMatch(/sotto pressione/);
+    expect(rendered).toMatch(/dedotto/);
+    // The stated fact carries no origin label: a mark on every line is a mark
+    // nobody reads.
+    expect(/Cagliari[^\n]*dedotto/.test(rendered)).toBe(false);
+  });
+
   it('does not surface a retired belief as if it were current', async () => {
     const { store, vectors } = harness();
     const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);

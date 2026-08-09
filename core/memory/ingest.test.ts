@@ -82,10 +82,42 @@ const fact = (subject: string, predicate: string, object: string, extra: Record<
   subjectKind: 'person',
   validFrom: null,
   confidence: 0.9,
+  // The unremarkable default, so a test that says nothing about importance gets
+  // the routine level rather than accidentally asserting a charged one.
+  matters: false,
+  charged: false,
   ...extra,
 });
 
 describe('memory ingestion', () => {
+  it('carries the two forced-choice answers all the way into the row', async () => {
+    // The wiring test: importance is decided at extraction and has to survive
+    // the whole pipeline. Both answers yes → charged; matters alone → notable;
+    // neither → routine. Asserted in the stored row, not in the report, because
+    // the row is what recall will read months from now.
+    const { store, deps } = harness([
+      facts(
+        fact('Giusto', 'diagnosis', 'infarto a marzo', { matters: true, charged: true }),
+        fact('Giusto', 'accountant', 'Marco', { matters: true, charged: false }),
+        fact('Giusto', 'ate', 'una piadina', { matters: false, charged: false }),
+      ),
+    ]);
+    episode(store, 'a marzo ho avuto un infarto; il commercialista è Marco; oggi ho mangiato una piadina');
+    await ingestPending(deps, HOST);
+
+    const me = store.findEntity(HOST, 'Giusto')!;
+    const by = (p: string) => store.activeFacts(HOST, me, p)[0]!;
+    expect(by('diagnosis').importance).toBe(2);
+    expect(by('accountant').importance).toBe(1);
+    expect(by('ate').importance).toBe(0);
+    // Intensity is not evidence: the charged fact is no more trusted, and no
+    // more confident, than the routine one it sits beside.
+    expect(by('diagnosis').trustTier).toBe(by('ate').trustTier);
+    expect(by('diagnosis').confidence).toBe(by('ate').confidence);
+    // Nothing this pipeline produces is an inference.
+    expect(by('diagnosis').origin).toBe('said');
+  });
+
   it('extracts facts and marks the episode done', async () => {
     const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari'))]);
     episode(store, 'abito a Cagliari');

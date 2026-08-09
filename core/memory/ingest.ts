@@ -173,7 +173,14 @@ async function reconcile(
   deps: IngestDeps,
   tenantId: string,
   subjectId: number,
-  fact: { subject: string; predicate: string; object: string; validFrom: string | null; confidence: number },
+  fact: {
+    subject: string;
+    predicate: string;
+    object: string;
+    validFrom: string | null;
+    confidence: number;
+    importance: number;
+  },
   episode: { id: number; trustTier: 0 | 1 | 2 | 3; content: string | null },
   now: Date,
   parent: SpanHandle,
@@ -198,6 +205,15 @@ async function reconcile(
       // Provenance travels: a fact can never be more trusted than where it came from.
       trustTier: episode.trustTier,
       confidence: fact.confidence,
+      // Everything this pipeline produces is `said` by construction: rule 2 of
+      // the extraction prompt forbids inference, so a fact reaching here is
+      // always something someone actually stated. The `inferred` producer is
+      // the observing spine (MVP #5) — declared deferred, not forgotten, and
+      // the hedging path it will feed is already tested from the store side.
+      origin: 'said',
+      // Never derived from confidence, and never allowed to raise it: intensity
+      // changes how accurate a memory feels, not how accurate it is.
+      importance: fact.importance,
       extractionV: EXTRACTION_VERSION,
       recordedAt: now.toISOString(),
     });
@@ -221,7 +237,13 @@ async function reconcile(
   // current values are an error by definition, enforced by the invariant, not
   // the only predicates allowed to change.
 
-  const candidate = existing[0]!;
+  // The most recently recorded belief, chosen here rather than inherited from
+  // the store's sort order. `activeFacts` now orders by importance first (so
+  // that recall's six-fact cut keeps the charged ones), and the judge wants a
+  // different thing entirely: the belief this one might be replacing, which is
+  // the latest. Leaving it as `existing[0]` would have silently made "the most
+  // important fact" the supersede candidate the day that ORDER BY changed.
+  const candidate = [...existing].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]!;
   let verdict: JudgeOutcome;
   const judgeSpan = deps.tracer.start(
     'muffin.chat_call',
