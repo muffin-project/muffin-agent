@@ -25,6 +25,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { JobStore } from '../core/scheduler/jobs.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -52,6 +53,8 @@ export type Runtime = {
   light: { provider: Provider; model: string };
   memory: { store: MemoryStore; recall: RecallDeps };
   budget: BudgetEngine;
+  /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
+  jobs: JobStore;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
   /**
@@ -95,6 +98,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   const budget = new BudgetEngine(db, config.budget);
+  const jobs = new JobStore(db);
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
@@ -224,6 +228,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   return {
     config,
     budget,
+    jobs,
     safeMode,
     bootLines: skillScan.problems.map((p) => `! ${p}`),
     register: (tool, decl) => {

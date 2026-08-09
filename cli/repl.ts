@@ -1,5 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
+import { Scheduler, type Deliver, type ForegroundGate } from '../core/scheduler/scheduler.js';
+import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
 import { connectSurfaces } from './surface.js';
@@ -93,6 +95,34 @@ export async function runRepl(home = paths().home): Promise<number> {
     rl.prompt();
   });
 
+  // The scheduler runs in this same process (ADR-0022): a tick finds what is
+  // due and runs it as system:scheduler. Foreground wins — while an interactive
+  // turn holds the lane (`controller` set), a tick defers, and a job already
+  // running gets that turn's abort signal to yield.
+  const foreground: ForegroundGate = {
+    isActive: () => controller !== null,
+    signal: () => controller?.signal,
+  };
+  const deliver: Deliver = async (channel, text) => {
+    if (channel === 'cli') {
+      process.stdout.write(`\n⏰ ${text}\n`);
+      rl.prompt();
+      return;
+    }
+    // A remote surface is reached through its connector's send — the M4 connect,
+    // proven on a running bot. Until that is wired, a scheduled message for a
+    // remote channel surfaces here rather than vanishing.
+    process.stderr.write(`\n⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
+    rl.prompt();
+  };
+  const scheduler = new Scheduler(runtime.jobs, makeJobRunner(runtime.deps), deliver, foreground, (e) => {
+    if (e.kind === 'delivery_failed') {
+      process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+    }
+  });
+  const ticker = setInterval(() => scheduler.tick(), 30_000);
+  ticker.unref(); // the timer must not, by itself, keep the process alive
+
   try {
     for (;;) {
       const line = (await rl.question('› ')).trim();
@@ -150,6 +180,7 @@ export async function runRepl(home = paths().home): Promise<number> {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     }
   } finally {
+    clearInterval(ticker);
     rl.close();
     // Surfaces first, then the runtime: the connector must stop polling before
     // the database under it goes away.
