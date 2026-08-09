@@ -63,7 +63,7 @@ valore stesso dell'assistente.
 | `04-learn-from-absence.md` | Imparare dall'assenza/silenzio — §5 + `dream_phase_i.ts` I.6 | ✅ portato (esemplare) |
 | `03-observing-spine.md` | La spina osservante — Forma A/B, awareness-loop, decider 4-gate, P-I | ✅ portato |
 | `00-cognitive-bases.md` | `COGNITIVE_BASES.md` — antipattern→principio→mossa (8 sezioni) | ⏳ |
-| `01-understanding.md` | `UNDERSTANDING.md` — le 6+1 dimensioni, formula di retrieval | ⏳ |
+| `01-understanding.md` | `UNDERSTANDING.md` — le 6+1 dimensioni; **la formula somma-pesata è superata**, le dimensioni no | ✅ portato |
 | `02-references.md` | Bibliografia annotata (~25 paper) — ri-verificare gli arXiv | ⏳ |
 | `05-person-model.md` | living_profile / counterpoint / self-narrative / affect / patterns | ⏳ |
 | `06-graveyard.md` | Esperimenti morti col LORO razionale (NON ri-aggiungere) | ⏳ |
