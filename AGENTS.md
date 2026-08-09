@@ -23,7 +23,7 @@ So: **when you add a guard, write the test that fails without its wiring**, not
 the test that proves its logic. In this codebase the logic has never been the
 thing that was wrong.
 
-**The process document is `docs/PRACTICES.md`** — six practices, each with the
+**The process document is `docs/PRACTICES.md`** — nine practices, each with the
 trigger that fires it. This file is why; that file is when.
 
 ## Before you change anything
