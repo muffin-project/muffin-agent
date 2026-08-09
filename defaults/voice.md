@@ -1,4 +1,4 @@
-# voice.md
+# Voce
 
 Regole di forma: come scrivo, come uso le emoji, cosa non faccio.
 Il carattere — come mi comporto quando è difficile — vive in `identity.md`.
