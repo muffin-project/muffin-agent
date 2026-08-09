@@ -15,6 +15,8 @@
 4. ⏳ una capability agente — web-search → fs-write (deep-research = questi + una skill).
 5. ⏳ spina osservante primo-taglio — cancello a 2 stadi + segnale-assenza.
 
+**Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
+
 **File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
 - `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
 - `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
