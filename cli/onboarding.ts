@@ -8,6 +8,11 @@ export function isOpenRouterKey(key: string | undefined): boolean {
   return key?.startsWith('sk-or-') ?? false;
 }
 
+/** Telegram bot tokens are `<digits>:<~35 url-safe chars>` — a shape people paste by mistake. */
+export function looksLikeTelegramToken(key: string | undefined): boolean {
+  return /^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(key ?? '');
+}
+
 /**
  * Infer the provider from the shape of the key, so the first run does not ask a
  * question it can answer by looking: an OpenRouter key means the openai-compat

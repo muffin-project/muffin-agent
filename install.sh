@@ -21,6 +21,27 @@ cd "$ROOT"
 say() { printf '%s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+BIN="$ROOT/dist/cli/main.js"
+
+# Uninstall: remove only the launcher symlinks that point at THIS build (never a
+# foreign muffin). Data under ~/.muffin is left alone — remove it with
+# `muffin uninstall` first if you want it gone too.
+if [ "${1:-}" = "--uninstall" ]; then
+  removed=0
+  for dir in "${MUFFIN_BINDIR:-$HOME/.local/bin}" /opt/homebrew/bin /usr/local/bin; do
+    for name in muffin muffin-agent; do
+      link="$dir/$name"
+      if [ -L "$link" ] && [ "$(readlink "$link")" = "$BIN" ]; then
+        rm -f "$link" && { say "removed $link"; removed=1; }
+      fi
+    done
+  done
+  [ "$removed" = 0 ] && say "no muffin launcher pointing at this build was found"
+  say "if you used 'npm link' for dev, also run: npm rm -g muffin-agent"
+  say "to remove your data (config, keys, memory): muffin uninstall"
+  exit 0
+fi
+
 # 1. preflight: Node >= 22 (the runtime targets it; engines enforces it too)
 command -v node >/dev/null 2>&1 || die "Node.js not found — install Node >= 22 first."
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
@@ -29,7 +50,6 @@ NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0
 # 2. build the bin — code plus the non-TS assets init/profiles read at runtime.
 #    `npm install` runs the `prepare` script, which compiles; the explicit
 #    compile is a belt-and-suspenders in case prepare was disabled.
-BIN="$ROOT/dist/cli/main.js"
 say "building muffin…"
 npm install
 [ -f "$BIN" ] || npm run compile

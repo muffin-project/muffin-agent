@@ -58,7 +58,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const voiceInstalled = installFile('voice.md', join(home, 'voice.md'), options.force ?? false);
   step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
 
-  const apiKey = options.apiKey ?? process.env['MUFFIN_API_KEY'];
+  // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
+  // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading
+  // the env here too would silently resurrect a key cmdInit deliberately dropped.
+  const apiKey = options.apiKey;
   if (apiKey) {
     writeSecret('provider_api_key', apiKey, home);
     step('api key', 'stored 0600 in secrets/provider_api_key');

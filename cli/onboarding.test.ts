@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferProvider, isOpenRouterKey, keyHint, OPENROUTER_BASE_URL } from './onboarding.js';
+import { inferProvider, isOpenRouterKey, keyHint, looksLikeTelegramToken, OPENROUTER_BASE_URL } from './onboarding.js';
 
 describe('provider inference from key shape', () => {
   it('reads an OpenRouter key as the openai-compat gateway', () => {
@@ -15,6 +15,18 @@ describe('provider inference from key shape', () => {
   it('does not guess an unknown prefix, leaving the default to the caller', () => {
     expect(inferProvider('xoxb-not-a-model-key')).toBeUndefined();
     expect(inferProvider(undefined)).toBeUndefined();
+  });
+});
+
+describe('telegram bot token detection', () => {
+  it('flags a telegram bot token shape (the real mistake that hit onboarding)', () => {
+    expect(looksLikeTelegramToken('8712345678:AAExampleBotTokenLooksLikeThis_abcdef')).toBe(true);
+  });
+
+  it('does not flag real model keys or empties', () => {
+    expect(looksLikeTelegramToken('sk-or-v1-abc')).toBe(false);
+    expect(looksLikeTelegramToken('sk-ant-api03-xyz')).toBe(false);
+    expect(looksLikeTelegramToken(undefined)).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { runInit } from './init.js';
@@ -22,7 +22,7 @@ import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
-import { inferProvider, isOpenRouterKey, keyHint, OPENROUTER_BASE_URL } from './onboarding.js';
+import { inferProvider, isOpenRouterKey, keyHint, looksLikeTelegramToken, OPENROUTER_BASE_URL } from './onboarding.js';
 
 /**
  * Entry point.
@@ -45,6 +45,7 @@ operator commands:
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
   muffin secret set NAME        (value on stdin)
   muffin rot verify | reseal
+  muffin uninstall [--yes]      remove ~/.muffin (config, keys, memory)
 
 inspection:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
@@ -86,6 +87,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdDoctor(rest);
     case 'rot':
       return cmdRot(rest);
+    case 'uninstall':
+      return cmdUninstall(rest);
     case 'memory':
       return cmdMemory(rest);
     case 'vault':
@@ -156,6 +159,23 @@ async function cmdInit(argv: string[]): Promise<number> {
 
   // Infer the provider from the key when the user did not pin one, and default an
   // OpenRouter key to its gateway URL. An explicit flag always wins over both.
+  // Catch the mistake before it becomes a confusing 401 at the first message.
+  if (apiKey && !providerFlag) {
+    if (looksLikeTelegramToken(apiKey)) {
+      process.stderr.write(
+        `! that looks like a Telegram bot token, not a model API key — not storing it.\n` +
+          `  The model key is an OpenRouter (sk-or-…) or Anthropic (sk-ant-…) key: https://openrouter.ai/keys\n` +
+          `  A bot token goes elsewhere: muffin secret set telegram_token\n`,
+      );
+      apiKey = undefined;
+    } else if (inferProvider(apiKey) === undefined) {
+      process.stderr.write(
+        `! that key isn't sk-or- or sk-ant-, so the provider defaults to anthropic.\n` +
+          `  If that is wrong, re-run with a valid key or --provider.\n`,
+      );
+    }
+  }
+
   const provider = providerFlag ?? inferProvider(apiKey);
   const baseUrl =
     values['base-url'] ?? (isOpenRouterKey(apiKey) && !providerFlag ? OPENROUTER_BASE_URL : undefined);
@@ -199,6 +219,31 @@ async function firstRun(): Promise<number> {
   if (code !== 0) return code; // init already said what is missing
   process.stderr.write('\nStarting Muffin.\n');
   return runRepl();
+}
+
+async function cmdUninstall(argv: string[]): Promise<number> {
+  const { values } = parseArgs({ args: argv, options: { yes: { type: 'boolean' } }, allowPositionals: false });
+  const home = paths().home;
+  if (!existsSync(home)) {
+    process.stderr.write(`Nothing to remove: ${home} does not exist.\n`);
+    return 0;
+  }
+  // Deleting keys and memory is not something a pipe should trigger by accident.
+  if (!values.yes) {
+    const answer = await promptLine(`Delete ${home} and everything in it — config, keys, memory? [y/N] `);
+    if (answer === undefined) {
+      process.stderr.write(`Refusing to delete without confirmation on a pipe. Re-run with --yes.\n`);
+      return 78;
+    }
+    if (!/^y(es)?$/i.test(answer)) {
+      process.stderr.write(`Cancelled.\n`);
+      return 0;
+    }
+  }
+  rmSync(home, { recursive: true, force: true });
+  process.stderr.write(`Removed ${home}.\n`);
+  process.stderr.write(`The muffin command itself is still installed; to remove it too: ./install.sh --uninstall\n`);
+  return 0;
 }
 
 function cmdDoctor(argv: string[]): number {
