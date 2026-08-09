@@ -186,8 +186,9 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
   // Evidence first: what was said is recorded before anything is generated, so
   // a crash mid-turn cannot lose the input that caused it.
+  let currentEpisodeId: number | undefined;
   if (deps.memory) {
-    deps.memory.store.addEpisode({
+    currentEpisodeId = deps.memory.store.addEpisode({
       tenantId: input.tenant,
       connector: input.surface,
       threadKey: input.session.id,
@@ -207,7 +208,12 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   if (deps.memory) {
     const recallSpan = deps.tracer.start('muffin.tool_call', { [ATTR.operationName]: 'memory.recall' }, turn);
     try {
-      const result = await recall(deps.memory.recall, input.tenant, input.text);
+      const result = await recall(
+        deps.memory.recall,
+        input.tenant,
+        input.text,
+        currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {},
+      );
       const inherited = recallTaint(result);
       snapshot.raiseTaint(inherited);
       recallSpan.setAttributes({
@@ -614,8 +620,15 @@ function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]
       content: [{ type: 'text' as const, text: m.content }],
     });
   }
-  if (recalled.length > 0) messages.push({ role: 'user', content: recalled });
-  messages.push({ role: 'user', content: [{ type: 'text', text: input.text }] });
+  // Recalled memory rides in the same turn as the message it is context for, not
+  // as a separate user turn the model might answer. It is already fenced and
+  // framed as low-authority context (renderForPrompt); here it simply precedes
+  // the actual words.
+  messages.push({
+    role: 'user',
+    content:
+      recalled.length > 0 ? [...recalled, { type: 'text', text: input.text }] : [{ type: 'text', text: input.text }],
+  });
   return messages;
 }
 

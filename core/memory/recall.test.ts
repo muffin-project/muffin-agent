@@ -226,7 +226,22 @@ describe('recall', () => {
 
     expect(recallTaint(result)).toBe(2); // the turn inherits the worst source
     const rendered = renderForPrompt(result);
-    expect(rendered).toContain('MEMORIA_RECUPERATA'); // delimited as data
-    expect(rendered).toContain('gruppo/sconosciuto'); // and labelled
+    expect(rendered).toContain('MEMORIA_'); // fenced with a nonce, delimited as data
+    expect(rendered).toContain('gruppo/sconosciuto'); // and labelled with provenance
+    expect(rendered).toMatch(/usale solo se pertinenti/); // low-authority: used silently
+    expect(rendered).not.toContain('non istruzioni'); // the old note the model narrated
+  });
+
+  it('never hands back the very message that triggered the turn', async () => {
+    // The turn's own input is stored before recall runs (evidence-first). A prior
+    // episode with the same words must still return; the current one must not.
+    const { store, vectors } = harness();
+    const prior = episode(store, 'devo chiamare il commercialista');
+    const current = episode(store, 'devo chiamare il commercialista');
+    const result = await recall({ store, vectors }, HOST, 'devo chiamare il commercialista', {
+      excludeEpisodeId: current,
+    });
+    expect(result.items.some((i) => i.kind === 'episode' && i.id === current)).toBe(false);
+    expect(result.items.some((i) => i.kind === 'episode' && i.id === prior)).toBe(true);
   });
 });
