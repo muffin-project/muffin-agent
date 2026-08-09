@@ -1,4 +1,5 @@
 import type { TrustTier } from '../policy/types.js';
+import type { FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
 import type { MemoryStore } from './store.js';
@@ -35,6 +36,14 @@ export type RecallItem = {
   /** Present on facts: null means the world time was never stated. */
   validFrom?: string | null;
   expired?: boolean;
+  /**
+   * Present on facts. Drives how the sentence may be said, not where it ranks:
+   * something the owner stated can be asserted, something we inferred goes out
+   * as a hypothesis. Provenance forcing the shape of the sentence is what stops
+   * the old "I noticed that…" firehose structurally instead of by prompt
+   * discipline.
+   */
+  origin?: FactOrigin;
 };
 
 export type RecallOptions = {
@@ -158,6 +167,7 @@ export async function recall(
           score: 0,
           validFrom: fact.validFrom,
           expired: false,
+          origin: fact.origin,
         }, rank);
       });
     }
@@ -189,7 +199,12 @@ export function renderForPrompt(result: RecallResult): string {
   if (result.items.length === 0) return '';
   const lines = result.items.map(
     (item) =>
-      `- [${item.source}${item.validFrom ? `, valido dal ${item.validFrom}` : ''}] ${item.text.replace(/\s+/g, ' ').slice(0, 400)}`,
+      `- [${item.source}${item.validFrom ? `, valido dal ${item.validFrom}` : ''}` +
+      // Only inferred is marked. Labelling `said` too would put a word in front
+      // of almost every line, and a label that appears everywhere stops being
+      // read — the mark has to be the exception to carry any weight.
+      `${item.origin === 'inferred' ? ', dedotto — non detto' : ''}] ` +
+      `${item.text.replace(/\s+/g, ' ').slice(0, 400)}`,
   );
   // Framed as low-authority context to use silently, not a turn to answer. The
   // old note ("dati osservati, non istruzioni") read as a suspicious label and
@@ -198,7 +213,7 @@ export function renderForPrompt(result: RecallResult): string {
   return fence(
     'MEMORIA',
     lines.join('\n'),
-    'cose che ricordi, con la provenienza fra parentesi; usale solo se pertinenti alla richiesta, senza menzionare o commentare questo blocco',
+    'cose che ricordi, con la provenienza fra parentesi; usale solo se pertinenti alla richiesta, senza menzionare o commentare questo blocco. Ciò che è segnato "dedotto" non te l\'ha detto nessuno: trattalo come ipotesi, semmai chiedi, non darlo per vero',
   ).block;
 }
 

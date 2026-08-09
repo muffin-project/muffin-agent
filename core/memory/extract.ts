@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { fence } from './spotlight.js';
+import { IMPORTANCE_CHARGED, IMPORTANCE_NOTABLE, IMPORTANCE_ROUTINE } from './schema.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { TrustTier } from '../policy/types.js';
 
@@ -30,13 +31,38 @@ const ExtractedFact = z.object({
   /** ISO date, only when the text states it. Null is the honest default. */
   validFrom: z.string().nullable(),
   confidence: z.number().min(0).max(1),
+  /**
+   * Importance arrives as two yes/no answers and is derived below, never as a
+   * rating the model picks off a scale. The reason is measured: ordinal LLM
+   * ratings compress toward the middle and under-predict the top of the range,
+   * and the top of the range is exactly where "one charged event" lives — so a
+   * 1-10 poignancy score would systematically flatten the only signal we want.
+   * A forced choice has no middle to collapse into.
+   */
+  matters: z.boolean(),
+  charged: z.boolean(),
 });
 
 const ExtractionResponse = z.object({
   facts: z.array(ExtractedFact).max(20),
 });
 
-export type ExtractedFact = z.infer<typeof ExtractedFact>;
+export type ExtractedFact = z.infer<typeof ExtractedFact> & { importance: number };
+
+/**
+ * Two booleans into three levels. Kept as a named function, not inlined, so the
+ * mapping is one auditable place: the raw answers stay in the model's output
+ * and this is the only thing that turns them into a stored number, which is
+ * what makes the rule revisable later without re-reading every call site.
+ *
+ * `charged` alone does not reach level 2 — a dense one-off nobody would mind
+ * forgetting is a story, not a memory worth protecting.
+ */
+export function deriveImportance(f: { matters: boolean; charged: boolean }): number {
+  if (f.matters && f.charged) return IMPORTANCE_CHARGED;
+  if (f.matters) return IMPORTANCE_NOTABLE;
+  return IMPORTANCE_ROUTINE;
+}
 
 const SYSTEM = `Estrai fatti dichiarativi dal testo che ti viene dato.
 
@@ -72,7 +98,17 @@ REGOLE, in ordine di importanza:
 6. Se non c'è niente di sostanziale, restituisci una lista vuota. Un elenco di
    fatti banali è peggio di nessun fatto.
 
-Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence"}]}`;
+7. IMPORTANZA — due sì/no, non un voto. Non è quanto spesso una cosa compare:
+   un evento singolo ma carico vale più di mille di routine.
+   - "matters": all'owner dispiacerebbe se lo dimenticassi? (un impegno, una
+     persona che conta, una scadenza, una preferenza forte → sì; il meteo di
+     ieri, un dettaglio di passaggio → no)
+   - "charged": è un evento singolo e denso — una rottura, una diagnosi, una
+     nascita, un trasloco, un cambio di lavoro — invece di un fatto stabile o
+     ricorrente? (di solito no: rispondi sì solo quando è davvero quello)
+   Nel dubbio, "false". Sono l'eccezione, non l'etichetta di default.
+
+Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence","matters","charged"}]}`;
 
 export type ExtractionInput = {
   content: string;
@@ -128,7 +164,7 @@ export async function extractFacts(
 
   return {
     facts: validated.data.facts
-      .map((f) => ({ ...f, predicate: canonicalPredicate(f.predicate) }))
+      .map((f) => ({ ...f, predicate: canonicalPredicate(f.predicate), importance: deriveImportance(f) }))
       // A "fact" the extractor is not sure about is noise that will outlive the
       // conversation it came from.
       .filter((f) => f.confidence >= 0.4),

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA } from './schema.js';
+import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA, type FactOrigin } from './schema.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -40,6 +40,10 @@ export type FactInput = {
   speakerId?: number;
   trustTier: TrustTier;
   confidence: number;
+  /** Defaults to `said`: the only path that existed before inference did. */
+  origin?: FactOrigin;
+  /** 0 routine · 1 notable · 2 charged. Defaults to routine. */
+  importance?: number;
   extractionV: number;
   recordedAt: string;
 };
@@ -59,6 +63,10 @@ export type Fact = {
   episodeId: number;
   trustTier: TrustTier;
   confidence: number;
+  /** Said, inferred or imported — how we got here, not who said it. */
+  origin: FactOrigin;
+  /** 0 routine · 1 notable · 2 charged. Never evidence: see schema.ts. */
+  importance: number;
   /** The fact that replaced this one, if any. Recall shows it; `why` follows it. */
   supersededBy: number | null;
 };
@@ -70,6 +78,21 @@ export class MemoryStore {
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
     this.ensureColumn('episodes', 'superseded_at', 'superseded_at TEXT');
+    // Both carry a non-null default so the existing rows migrate in place: an
+    // ALTER that adds NOT NULL without one is rejected outright. `said` is the
+    // honest backfill rather than a convenient one — extraction has never been
+    // allowed to infer (extract.ts rule 2), so every fact recorded before this
+    // column existed did come from something someone actually said.
+    this.ensureColumn(
+      'facts',
+      'origin',
+      `origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,
+    );
+    this.ensureColumn(
+      'facts',
+      'importance',
+      'importance INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2)',
+    );
     const seed = db.prepare(
       `INSERT OR IGNORE INTO functional_predicates (predicate, declared_at) VALUES (?, datetime('now'))`,
     );
@@ -171,10 +194,10 @@ export class MemoryStore {
       .prepare(
         `INSERT INTO facts (tenant_id, subject_id, predicate, object_id, object_value,
                             valid_from, valid_to, recorded_at, episode_id, speaker_id,
-                            trust_tier, confidence, extraction_v)
+                            trust_tier, confidence, origin, importance, extraction_v)
          VALUES (@tenantId, @subjectId, @predicate, @objectId, @objectValue,
                  @validFrom, @validTo, @recordedAt, @episodeId, @speakerId,
-                 @trustTier, @confidence, @extractionV)`,
+                 @trustTier, @confidence, @origin, @importance, @extractionV)`,
       )
       .run({
         ...input,
@@ -184,6 +207,8 @@ export class MemoryStore {
         validFrom: input.validFrom ?? null,
         validTo: input.validTo ?? null,
         speakerId: input.speakerId ?? null,
+        origin: input.origin ?? 'said',
+        importance: input.importance ?? 0,
       });
     return Number(info.lastInsertRowid);
   }
@@ -203,7 +228,32 @@ export class MemoryStore {
       .run(at, newFactId, validTo ?? at, oldFactId, tenantId);
   }
 
-  /** Current beliefs about a subject+predicate. A set unless declared functional. */
+  /**
+   * Current beliefs about a subject+predicate. A set unless declared functional.
+   *
+   * Ordered by importance first, recency second — and that ordering is the
+   * whole of "importance weighs on recall". Recall's graph expansion keeps only
+   * the first six facts of a matched entity, so this ORDER BY decides which six
+   * survive; ordering by recency alone meant a charged fact from March lost its
+   * place to six routine ones from last week, which is exactly the
+   * intensity-loses-to-frequency failure the field is supposed to prevent.
+   *
+   * It deliberately does **not** reach the fusion. RRF at k=60 separates
+   * adjacent ranks by 0.000264 while agreement between two rankers is worth
+   * 0.016393 — 62 times more. Any importance boost big enough to reorder
+   * anything is within reach of erasing the cross-ranker consensus that is the
+   * only thing RRF actually measures, and the failure is invisible: the output
+   * still looks like a ranked list, it is just sorted by importance with
+   * retrieval as the tie-break. No production hybrid-search system puts a
+   * per-item prior inside the fusion; they all put it inside a ranker or in a
+   * stage after. Ordering *within* the expanded set is the version of this that
+   * cannot leak into the fusion at all.
+   *
+   * Evidence, stated honestly: importance-at-retention has one 2026 ablation
+   * behind it; importance-as-a-ranking-term has none, anywhere — the founding
+   * formula everyone copies (Park et al.) never ablated its own importance
+   * term. See `docs/blueprint/research/memory-salience-and-fusion.md`.
+   */
   activeFacts(tenantId: string, subjectId: number, predicate?: string): Fact[] {
     return this.db
       .prepare(
@@ -211,13 +261,14 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
          WHERE f.tenant_id = ? AND f.subject_id = ? AND f.expired_at IS NULL
            AND (? IS NULL OR f.predicate = ?)
-         ORDER BY f.recorded_at DESC`,
+         ORDER BY f.importance DESC, f.recorded_at DESC`,
       )
       .all(tenantId, subjectId, predicate ?? null, predicate ?? null) as Fact[];
   }
@@ -230,7 +281,8 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
@@ -366,7 +418,8 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
@@ -408,7 +461,8 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.superseded_by AS supersededBy
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
          LEFT JOIN entities o ON o.id = f.object_id
