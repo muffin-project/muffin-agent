@@ -4,12 +4,20 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "muffin": "./dist/cli/main.js"
+  },
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "vitest run"
+    "compile": "tsc -p tsconfig.build.json && rm -rf dist/defaults && cp -R defaults dist/defaults && cp agent/profiles/*.json dist/agent/profiles/",
+    "test": "vitest run",
+    "prepare": "npm run compile"
   },
   "devDependencies": {
     "@grammyjs/types": "^4.0.0",

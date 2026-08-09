@@ -53,6 +53,24 @@ inspection:
 Exit codes: 0 ok · 1 warnings · 2 blocking error · 3 needs approval · 78 bad configuration
 `;
 
+/**
+ * package.json sits one level above `cli/` in source but two levels above once
+ * compiled to `dist/cli/`. Walk up until we find it so `--version` answers the
+ * same whether run via tsx or the built `muffin` bin.
+ */
+function readOwnVersion(): string {
+  let dir = new URL('./', import.meta.url);
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')) as { version: string };
+      return pkg.version;
+    } catch {
+      dir = new URL('../', dir);
+    }
+  }
+  return '0.0.0';
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
@@ -89,12 +107,8 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     case '--version':
     case '-v': {
-      // GNU baseline: every CLI answers --version, and ours did not — found by
-      // checking the checklist instead of assuming (docs/PRACTICES.md §3).
-      const pkg = JSON.parse(
-        readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-      ) as { version: string };
-      process.stdout.write(`muffin ${pkg.version}\n`);
+      // GNU baseline: every CLI answers --version (docs/PRACTICES.md §3).
+      process.stdout.write(`muffin ${readOwnVersion()}\n`);
       return 0;
     }
     default:
