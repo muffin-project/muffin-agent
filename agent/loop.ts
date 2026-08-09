@@ -489,10 +489,20 @@ async function runTool(
 
   const args = (call.args ?? {}) as Record<string, unknown>;
   const capability = tool.capability;
+  // The kernel decides on a *resource*, so anything it is supposed to gate has
+  // to be lifted out of the args here. `url` was missing, and the consequence
+  // was not a weaker check but no check at all: the egress branch in decide.ts
+  // fires on `resource.kind === 'url'`, every tool call arrived as `none`, and
+  // `http_get` skips the allowlist on its first hop precisely because it
+  // believes the kernel already ruled on it. Both halves were correct and each
+  // was waiting for the other, so an empty allowlist permitted every public
+  // host — verified against the assembled runtime before this line existed.
   const resource =
     typeof args['path'] === 'string'
       ? ({ kind: 'path', value: args['path'] } as const)
-      : ({ kind: 'none' } as const);
+      : typeof args['url'] === 'string'
+        ? ({ kind: 'url', value: args['url'] } as const)
+        : ({ kind: 'none' } as const);
 
   const decisionSpan = deps.tracer.start(
     'muffin.policy_decision',
