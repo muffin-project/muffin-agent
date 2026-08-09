@@ -39,8 +39,14 @@ const ExtractedFact = z.object({
    * 1-10 poignancy score would systematically flatten the only signal we want.
    * A forced choice has no middle to collapse into.
    */
-  matters: z.boolean(),
-  charged: z.boolean(),
+  // Defaulted, not required. A model that omits one of these used to fail the
+  // whole response — and a failed extraction is deliberately not marked
+  // processed, so the episode came back on every run for ever, producing
+  // nothing. One missing boolean discarded all twenty facts beside it. The
+  // prompt already says "nel dubbio, false"; the schema now agrees with it
+  // instead of treating absence as grounds to throw the evidence away.
+  matters: z.boolean().default(false),
+  charged: z.boolean().default(false),
 });
 
 const ExtractionResponse = z.object({

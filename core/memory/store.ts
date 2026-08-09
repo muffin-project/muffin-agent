@@ -231,28 +231,26 @@ export class MemoryStore {
   /**
    * Current beliefs about a subject+predicate. A set unless declared functional.
    *
-   * Ordered by importance first, recency second — and that ordering is the
-   * whole of "importance weighs on recall". Recall's graph expansion keeps only
-   * the first six facts of a matched entity, so this ORDER BY decides which six
-   * survive; ordering by recency alone meant a charged fact from March lost its
-   * place to six routine ones from last week, which is exactly the
-   * intensity-loses-to-frequency failure the field is supposed to prevent.
+   * Ordered by recency, and **only** by recency. Importance is deliberately not
+   * in this ORDER BY, and the reason is a defect this method used to have.
    *
-   * It deliberately does **not** reach the fusion. RRF at k=60 separates
-   * adjacent ranks by 0.000264 while agreement between two rankers is worth
-   * 0.016393 — 62 times more. Any importance boost big enough to reorder
-   * anything is within reach of erasing the cross-ranker consensus that is the
-   * only thing RRF actually measures, and the failure is invisible: the output
-   * still looks like a ranked list, it is just sorted by importance with
-   * retrieval as the tie-break. No production hybrid-search system puts a
-   * per-item prior inside the fusion; they all put it inside a ranker or in a
-   * stage after. Ordering *within* the expanded set is the version of this that
-   * cannot leak into the fusion at all.
+   * It was `ORDER BY importance DESC, recorded_at DESC`, on the theory that the
+   * ordering only decided which facts survive recall's six-fact cut. That was
+   * wrong twice. Recall passes each fact's *position in this list* to the fusion
+   * as its rank, and RRF turns rank into score — so importance was setting the
+   * RRF contribution directly, worth 0.001242, which is 73% of the threshold at
+   * which our own research says the fused ranking silently becomes
+   * "sorted by importance". The guarantee written here said the opposite of what
+   * the code did. And because `charged` is defined at extraction as a singular
+   * past event, importance-first also evicted current-state facts: a 2024
+   * separation kept its slot while `works_at` was cut, permanently, for every
+   * query.
    *
-   * Evidence, stated honestly: importance-at-retention has one 2026 ablation
-   * behind it; importance-as-a-ranking-term has none, anywhere — the founding
-   * formula everyone copies (Park et al.) never ablated its own importance
-   * term. See `docs/blueprint/research/memory-salience-and-fusion.md`.
+   * Importance now acts where it belongs — on **membership**, bounded, in
+   * `recall.ts` — never on rank. That is the shape the research and the
+   * cognitive corpus independently arrived at: *l'importanza protegge, non
+   * spinge*. See `docs/blueprint/research/memory-salience-and-fusion.md` and
+   * `knowledge/01-understanding.md`.
    */
   activeFacts(tenantId: string, subjectId: number, predicate?: string): Fact[] {
     return this.db
@@ -268,7 +266,7 @@ export class MemoryStore {
          LEFT JOIN entities o ON o.id = f.object_id
          WHERE f.tenant_id = ? AND f.subject_id = ? AND f.expired_at IS NULL
            AND (? IS NULL OR f.predicate = ?)
-         ORDER BY f.importance DESC, f.recorded_at DESC`,
+         ORDER BY f.recorded_at DESC`,
       )
       .all(tenantId, subjectId, predicate ?? null, predicate ?? null) as Fact[];
   }
@@ -394,7 +392,7 @@ export class MemoryStore {
     tenantId: string,
     kind: 'episode' | 'fact',
     sourceId: number,
-  ): { trustTier: TrustTier; createdAt: string } | null {
+  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin } | null {
     const row =
       kind === 'episode'
         ? (this.db
@@ -402,11 +400,19 @@ export class MemoryStore {
               `SELECT trust_tier AS trustTier, created_at AS createdAt FROM episodes WHERE tenant_id = ? AND id = ?`,
             )
             .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined)
-        : (this.db
+        : // `origin` comes back here for the same reason `trust_tier` does: the
+          // vector index stores text and a source id, so the semantic half of
+          // recall has nothing else to read it from. Without it an inferred
+          // fact retrieved by paraphrase arrived unmarked and was asserted as
+          // something the owner had said — the identical shape as the tier bug
+          // this method was written to fix.
+          (this.db
             .prepare(
-              `SELECT trust_tier AS trustTier, recorded_at AS createdAt FROM facts WHERE tenant_id = ? AND id = ?`,
+              `SELECT trust_tier AS trustTier, recorded_at AS createdAt, origin FROM facts WHERE tenant_id = ? AND id = ?`,
             )
-            .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined);
+            .get(tenantId, sourceId) as
+            | { trustTier: TrustTier; createdAt: string; origin: FactOrigin }
+            | undefined);
     return row ?? null;
   }
 

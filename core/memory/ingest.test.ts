@@ -118,6 +118,31 @@ describe('memory ingestion', () => {
     expect(by('diagnosis').origin).toBe('said');
   });
 
+  it('judges against the most recent belief, not the most important one', async () => {
+    // The contradiction candidate must be what this fact might be replacing —
+    // the latest. It used to be `existing[0]`, which was safe only while
+    // activeFacts happened to order by recency; the moment importance entered
+    // that ORDER BY, the judge started comparing against the most *charged*
+    // belief instead. A revert to `existing[0]` is invisible without this.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'accountant', 'Lucia')),
+      JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: 0.95 }),
+    ]);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', '2026-05-01T10:00:00Z');
+    const ep = episode(store, 'vecchia nota');
+    const base = { tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+    // The charged one is OLDER; the plain one is the current belief.
+    store.addFact({ ...base, objectValue: 'Marco', importance: 2, recordedAt: '2026-05-01T10:00:00Z' });
+    const current = store.addFact({ ...base, objectValue: 'Anna', recordedAt: '2026-07-01T10:00:00Z' });
+
+    episode(store, 'ho cambiato commercialista: ora è Lucia');
+    await ingestPending(deps, HOST);
+
+    // Anna was the latest, so Anna is what got superseded.
+    const anna = store.factById(HOST, current)!;
+    expect(anna.expiredAt).not.toBeNull();
+  });
+
   it('extracts facts and marks the episode done', async () => {
     const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari'))]);
     episode(store, 'abito a Cagliari');

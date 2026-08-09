@@ -2,7 +2,7 @@ import type { TrustTier } from '../policy/types.js';
 import type { FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
-import type { MemoryStore } from './store.js';
+import type { Fact, MemoryStore } from './store.js';
 import type { VectorIndex } from './vectors.js';
 
 /**
@@ -80,6 +80,79 @@ export type RecallResult = {
 /** RRF constant. 60 is the value from the original paper and the field default. */
 const K = 60;
 
+/** How many of an entity's facts the graph expansion carries. */
+const EXPANSION_SLOTS = 6;
+
+/**
+ * At most one of those slots may be taken by importance rather than recency.
+ * One, not two, because the displacement has to be bounded and visible: this is
+ * the whole budget importance gets to spend on retrieval.
+ */
+const PROTECTED_SLOTS = 1;
+
+/**
+ * Which of an entity's facts reach the fusion, and in what order.
+ *
+ * Two separate decisions, and keeping them separate is the entire point:
+ *
+ *   membership — recency, plus at most one slot reserved for the most
+ *                important fact that recency would have cut
+ *   order      — recency, always
+ *
+ * The order matters because recall hands each fact's position here to `fuse` as
+ * its RRF rank. An earlier version ordered by importance and claimed that
+ * "ordering within the expanded set cannot leak into the fusion"; it leaked
+ * directly, because the ordering *was* the rank. Moving a fact from last slot
+ * to first is worth 0.001242 in RRF space — 4.7 adjacent-rank gaps, and 73% of
+ * the point at which our own research says the fused list has silently become
+ * "sorted by importance, tie-broken by relevance".
+ *
+ * So importance buys a seat, never a better seat. That is what the evidence
+ * supports: the measured ablations are all on *retention* — what survives — and
+ * there is no ablation anywhere for importance as a ranking term.
+ *
+ * The bound also fixes the second failure of ordering by importance. `charged`
+ * is defined at extraction as a singular past event, so an importance-first
+ * list systematically evicts current state: asked where someone works, the cut
+ * kept a 2024 separation and dropped `works_at`. With one reserved slot the
+ * charged fact still survives and five recency slots still describe now.
+ */
+export function selectForExpansion(facts: Fact[]): Fact[] {
+  if (facts.length <= EXPANSION_SLOTS) return facts;
+
+  const byRecency = facts.slice(0, EXPANSION_SLOTS);
+  const cut = facts.slice(EXPANSION_SLOTS);
+
+  // The best candidate among what recency threw away — and only if it is more
+  // important than the least important fact already in, otherwise the swap
+  // would trade a fact for a worse one.
+  const rescued = cut
+    .filter((f) => f.importance > 0)
+    .sort((a, b) => b.importance - a.importance || b.recordedAt.localeCompare(a.recordedAt))
+    .slice(0, PROTECTED_SLOTS);
+  if (rescued.length === 0) return byRecency;
+
+  // Least important, and among equals the oldest. The `<`-only reduce that was
+  // here kept the first element on a tie — and the list is recency-ordered, so
+  // "the first element" is the most recent fact. It evicted the newest thing it
+  // knew to make room, which is the opposite of the intent and survived the
+  // first round of tests because every fact in the fixture had importance 0.
+  const weakest = byRecency.reduce(
+    (min, f) =>
+      f.importance < min.importance ||
+      (f.importance === min.importance && f.recordedAt < min.recordedAt)
+        ? f
+        : min,
+    byRecency[0]!,
+  );
+  const promoted = rescued.filter((f) => f.importance > weakest.importance);
+  if (promoted.length === 0) return byRecency;
+
+  const kept = byRecency.filter((f) => f.id !== weakest.id).concat(promoted);
+  // Re-sorted by recency: membership was the only thing importance decided.
+  return kept.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
+}
+
 /** Re-exported so callers can reason about when reranking will actually fire. */
 export { RERANK_MIN_CANDIDATES } from './rerank.js';
 import { RERANK_MIN_CANDIDATES } from './rerank.js';
@@ -137,6 +210,11 @@ export async function recall(
           trustTier: provenance?.trustTier ?? 3,
           source: provenance ? describeTier(provenance.trustTier, provenance.createdAt) : 'fonte ignota',
           score: 0,
+          // Paraphrase is precisely what reaches the model through this half
+          // rather than through full text, so an unmarked inference is most
+          // likely to arrive here — and this half runs first, so the object it
+          // inserts is the one the fusion keeps.
+          ...(provenance?.origin ? { origin: provenance.origin } : {}),
         }, rank);
       });
     } catch (error) {
@@ -157,7 +235,7 @@ export async function recall(
       seenEntities.add(entity.id);
       const facts = deps.store.activeFacts(tenantId, entity.id);
       if (facts.length > 0 && !strategies.includes('graph')) strategies.push('graph');
-      facts.slice(0, 6).forEach((fact, rank) => {
+      selectForExpansion(facts).forEach((fact, rank) => {
         fuse(`fact:${fact.id}`, {
           kind: 'fact',
           id: fact.id,
