@@ -33,6 +33,19 @@ export const ConfigSchema = z.object({
     apiKeyRef: z.string().min(1),
   }),
   models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
+  /**
+   * Absent means no web search, and the tool is simply not registered — the
+   * same posture as the shell without a working sandbox. A capability that
+   * costs the owner money per call does not get switched on by a default.
+   */
+  search: z
+    .object({
+      provider: z.literal('tavily'),
+      /** `secret://name`, like the model key. Never the key itself. */
+      apiKeyRef: z.string().min(1),
+      maxResults: z.number().int().min(1).max(20).optional(),
+    })
+    .optional(),
   // Non-negative rather than positive: zero is a legitimate cap, meaning stop.
   budget: z.object({ monthlyUsd: z.number().nonnegative(), perTenantDailyUsd: z.number().nonnegative() }),
   rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),

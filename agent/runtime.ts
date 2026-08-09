@@ -20,6 +20,7 @@ import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { httpCapability, makeHttpTool } from './tools/http.js';
+import { makeSearchTool, searchCapability, tavilyBackend } from './tools/search.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
@@ -198,6 +199,32 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   }
   tools.push(makeHttpTool(egress));
 
+  // Search is registered only when it is configured, so an unconfigured install
+  // has no `web_search` in its tool list rather than one that fails at the first
+  // call. The key is read here and never leaves this closure — the same handling
+  // the model key gets.
+  let searchOn = false;
+  const searchNotes: string[] = [];
+  if (config.search) {
+    const backend = tavilyBackend({
+      apiKey: readSecret(config.search.apiKeyRef, home),
+      ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
+    });
+    // The endpoint is a constant, so it gets checked once here rather than on
+    // every call — but it does get checked. Skipping it because "the model
+    // cannot choose the host anyway" is how egress.json stops describing where
+    // this process actually talks.
+    const endpointHost = new URL(backend.endpoint).hostname;
+    if (hostAllowed(endpointHost, egress)) {
+      tools.push(makeSearchTool(backend));
+      searchOn = true;
+    } else {
+      searchNotes.push(
+        `! web_search spento: ${endpointHost} non è in rot/egress.json — aggiungilo e rifai \`muffin rot reseal\``,
+      );
+    }
+  }
+
   const capabilities = new Map<string, CapabilityDecl>(
     [
       ...fsCapabilities,
@@ -206,6 +233,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
+      // Declared only when the tool exists. A capability the kernel knows about
+      // but nothing can invoke is the harmless direction; the dangerous one is a
+      // tool the kernel has never heard of, and registering them together is
+      // what keeps them from drifting apart.
+      ...(searchOn ? [searchCapability] : []),
     ].map((c) => [c.id, c]),
   );
   const decide = createDecide({
@@ -230,7 +262,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     budget,
     jobs,
     safeMode,
-    bootLines: skillScan.problems.map((p) => `! ${p}`),
+    bootLines: [...skillScan.problems.map((p) => `! ${p}`), ...searchNotes],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);
