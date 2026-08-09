@@ -1,5 +1,5 @@
 {
-  "name": "@muffin-ai/core",
+  "name": "muffin-agent",
   "version": "0.0.0",
   "private": true,
   "type": "module",
