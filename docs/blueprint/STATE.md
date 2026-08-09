@@ -6,12 +6,12 @@
 
 **Il codice** vive in **`~/dev/muffin-agent`** (repo separato, pushato **PRIVATO**: github.com/GiustoPiedimonte/muffin-agent).
 
-**⚠️ CONSOLIDAMENTO IN CORSO (2026-08-09, direttiva owner).** Si porta **TUTTO** in `muffin-agent` — design, blueprint, research, knowledge, questo STATE, workflow/come-si-lavora — così è un **repo unico** (codice + design + ricerca + stato) e un contributor open-source ha tutto clonando `muffin-agent`. Dopo la consolidazione **la fonte autoritativa è `muffin-agent/docs/`**; questo vecchio repo resta solo il **vecchio muffin (produzione)** fino al cutover. → dopo il merge, aggiornare *quello* STATE, non questo.
+**✅ CONSOLIDATO (2026-08-09, `e034853`, ADR-0031).** Design/blueprint/research/knowledge/STATE/workflow sono TUTTI qui in `muffin-agent` — repo unico (anche per l'open-source: un `git clone` e hai tutto). **Questo file è la fonte autoritativa** (`muffin-agent/docs/blueprint/STATE.md`): edita QUI. Il vecchio repo `~/dev/Muffin` è solo il **vecchio muffin (produzione)** fino al cutover — mai scrivere lì.
 
 **La lista forzata verso "usabile ogni giorno"** (è ciò che *rende* usabile, non una scelta):
 1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag (`muffin-agent@20554dd`).
 2. ⏳ **memoria-che-ti-conosce** — `importance` (≠ frequenza) + `source_kind` (detto/inferito) sui fatti + peso nel recall. Migrazione: `schema.ts` + `store.ts` (tipi + INSERT + **4 SELECT**) + `extract.ts` (zod+prompt) + `ingest.ts` (mapping) + `recall.ts` (boost) + test.
-3. ⏳ persona cablata — tier voce: `voice.md` oggi è **prosa morta** (non entra in `buildSystemPrompt`, `agent/runtime.ts:294`).
+3. ⏳ **persona + prompt d'onboarding** (pura-muffin, load-bearing per "sa di muffin") — (a) cablare il **tier voce** (`voice.md` oggi è prosa morta, non entra in `buildSystemPrompt` `agent/runtime.ts:294`); (b) scrivere il **contenuto**: chi è muffin · come si **presenta al primo incontro** · cosa sa fare (onesto, cresce con le capability — "Niente finto") · come apre il **conoscersi** (onboarding-che-impara → `knowledge/03-observing-spine.md`). È **il carattere** = collaborativo (io bozzo, l'owner plasma; esempi canonici, non overfit). Senza questo "sa di mockup" → **NON è l'MVP**.
 4. ⏳ una capability agente — web-search → fs-write (deep-research = questi + una skill).
 5. ⏳ spina osservante primo-taglio — cancello a 2 stadi + segnale-assenza.
 
