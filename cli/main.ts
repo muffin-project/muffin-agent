@@ -74,7 +74,27 @@ function readOwnVersion(): string {
   return '0.0.0';
 }
 
+/**
+ * Load a .env from the working directory if present — a development convenience
+ * so the model key survives a `muffin uninstall` and onboarding can be re-run
+ * without re-pasting. Real environment variables win (verified against Node 22:
+ * loadEnvFile does not override an already-set value); a missing file is a
+ * no-op, so production — which ships no .env — is untouched. Node 22 native, no
+ * dotenv dependency.
+ */
+function loadDotenvIfPresent(): void {
+  const envPath = `${process.cwd()}/.env`;
+  if (!existsSync(envPath)) return;
+  const load = (process as unknown as { loadEnvFile?: (path: string) => void }).loadEnvFile;
+  try {
+    load?.(envPath);
+  } catch {
+    // A malformed .env must not stop the CLI from starting.
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
+  loadDotenvIfPresent();
   const [command, ...rest] = argv;
   switch (command) {
     case 'run':
