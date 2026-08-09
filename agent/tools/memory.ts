@@ -69,7 +69,12 @@ export async function searchMemory(
 
   const lines = result.items.map(
     (item) =>
-      `- [${item.source}${item.validFrom ? `, valido dal ${item.validFrom}` : ''}] ` +
+      `- [${item.source}${item.validFrom ? `, valido dal ${item.validFrom}` : ''}` +
+      // The same mark the turn's own recall applies. This path is the one the
+      // model reaches for deliberately, so dropping it here would mean an
+      // inference is hedged when it arrives on its own and asserted when the
+      // model went looking for it — the wrong way round.
+      `${item.origin === 'inferred' ? ', dedotto — non detto' : ''}] ` +
       item.text.replace(/\s+/g, ' ').slice(0, 400),
   );
 

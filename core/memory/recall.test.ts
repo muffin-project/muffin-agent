@@ -218,6 +218,96 @@ describe('recall', () => {
     expect(facts.map((f) => f.text).join(' ')).toContain('infarto');
   });
 
+  it('lets importance buy a seat, never a better seat', async () => {
+    // The guarantee that was false: importance must not reach the fusion. It
+    // used to, because the graph expansion passed each fact's importance-ordered
+    // position to `fuse` as its RRF rank — worth 0.001242, which is 73% of the
+    // point at which the fused list has silently become "sorted by importance".
+    //
+    // Membership may change; order may not. Same seven facts, same query, one
+    // fact's importance flipped: the charged fact must appear, and every fact
+    // that appears in both runs must keep its relative order.
+    const build = async (importance: number) => {
+      const { store, vectors } = harness();
+      const anna = store.upsertEntity(HOST, 'Anna', 'person', NOW);
+      const ep = episode(store, 'note su Anna');
+      const base = { tenantId: HOST, subjectId: anna, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+      store.addFact({ ...base, predicate: 'diagnosis', objectValue: 'infarto', importance, recordedAt: '2026-03-01T10:00:00Z' });
+      for (let i = 0; i < 6; i++) {
+        store.addFact({ ...base, predicate: `routine_${i}`, objectValue: `d${i}`, recordedAt: `2026-08-0${i + 1}T10:00:00Z` });
+      }
+      const result = await recall({ store, vectors }, HOST, 'chi è Anna?');
+      return result.items.filter((i) => i.kind === 'fact').map((f) => f.text);
+    };
+
+    const charged = await build(2);
+    const routine = await build(0);
+
+    // Membership: importance rescued it from the cut.
+    expect(charged.join(' ')).toContain('infarto');
+    expect(routine.join(' ')).not.toContain('infarto');
+    // Order: the facts present in both runs appear in the same relative order.
+    const common = charged.filter((t) => routine.includes(t));
+    expect(common).toEqual(routine.filter((t) => charged.includes(t)));
+  });
+
+  it('does not evict what is true now to make room for what was charged then', async () => {
+    // `charged` is defined at extraction as a singular past event, so ordering
+    // by importance systematically dropped current state: asked where someone
+    // works, the cut kept a 2024 separation and lost `works_at` — for every
+    // query, permanently. One reserved slot bounds the damage to one fact.
+    const { store, vectors } = harness();
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'note su Marco');
+    const base = { tenantId: HOST, subjectId: marco, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+    store.addFact({ ...base, predicate: 'separation', objectValue: 'si è separato', importance: 2, recordedAt: '2024-02-01T10:00:00Z' });
+    store.addFact({ ...base, predicate: 'moved', objectValue: 'ha traslocato', importance: 2, recordedAt: '2024-05-01T10:00:00Z' });
+    for (const [i, p] of ['works_at', 'coffee', 'gym', 'car', 'diet', 'phone'].entries()) {
+      store.addFact({ ...base, predicate: p, objectValue: `v${i}`, recordedAt: `2026-08-0${i + 1}T10:00:00Z` });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'dove lavora Marco adesso?');
+    const facts = result.items.filter((i) => i.kind === 'fact').map((f) => f.text);
+    const old2024 = facts.filter((t) => /separation|moved/.test(t));
+    const current = facts.filter((t) => /works_at|coffee|gym|car|diet|phone/.test(t));
+
+    // The bound, which is the actual guarantee — not the survival of any one
+    // fact. Something has to give when eight facts want six slots; what must
+    // not happen is what importance-first ordering did, which was to seat BOTH
+    // 2024 events and evict two current ones. At most one slot is spent on
+    // importance, so at least five still describe now.
+    expect(old2024.length).toBeLessThanOrEqual(1);
+    expect(current.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('marks an inferred fact even when it arrives through the semantic half', async () => {
+    // The previous version of this test ran with the vector half OFF, so it
+    // proved the mark on the one path that could not lose it. Paraphrase is
+    // exactly how an inference is most likely to be retrieved, and that half
+    // reads provenance from the store rather than from the row — which is where
+    // the tier used to be hardcoded to 0 for the same reason.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note');
+    const base = { tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW };
+    const factId = store.addFact({ ...base, predicate: 'mood', objectValue: 'sotto pressione', origin: 'inferred' });
+
+    // Indexed the way ingest indexes it, so the semantic half can find it.
+    await vectors!.index(HOST, [{ kind: 'fact', sourceId: factId, text: 'Giusto mood sotto pressione' }], NOW);
+
+    // Lowercase, and no entity name: `extractCandidateNames` only picks up
+    // capitalised words, so the graph half finds nothing and cannot supply the
+    // origin. Whatever mark survives came through the semantic half alone.
+    const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente');
+    expect(result.strategies).toContain('vector');
+    expect(result.strategies).not.toContain('graph');
+    const rendered = renderForPrompt(result);
+    // Line-scoped on purpose. The fence's own instruction to the model contains
+    // the word "dedotto", so asserting it anywhere in the block matches the
+    // boilerplate and passes even when the mark is gone — which it did.
+    expect(rendered).toMatch(/dedotto — non detto\][^\n]*sotto pressione/);
+  });
+
   it('marks an inferred fact as inferred, and says nothing extra about a stated one', async () => {
     // The producer of `inferred` is the observing spine (MVP #5) and is not
     // built yet; the path it will feed is wired and proved from the store side
@@ -230,8 +320,7 @@ describe('recall', () => {
     store.addFact({ ...base, predicate: 'mood', objectValue: 'sotto pressione', origin: 'inferred' });
 
     const rendered = renderForPrompt(await recall({ store }, HOST, 'Giusto'));
-    expect(rendered).toMatch(/sotto pressione/);
-    expect(rendered).toMatch(/dedotto/);
+    expect(rendered).toMatch(/dedotto — non detto\][^\n]*sotto pressione/);
     // The stated fact carries no origin label: a mark on every line is a mark
     // nobody reads.
     expect(/Cagliari[^\n]*dedotto/.test(rendered)).toBe(false);
