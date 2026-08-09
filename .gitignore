@@ -2,3 +2,17 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# Secrets & local env (hardened before first publish)
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+secrets/
+.muffin/
