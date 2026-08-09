@@ -293,10 +293,14 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
  */
 function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''): string {
   const p = paths(home);
-  // Three files, in order of who gets the last word. The shared character
-  // first, the owner's constraints on top of it — identity.md ships empty on
-  // purpose, so reading it after persona.md is what makes it an overlay rather
-  // than a competitor — then the voice, then anything operational.
+  // Three files: the shared character, the owner's constraints, the voice.
+  //
+  // The order is deliberate and the ordering is tested. What is NOT claimed is
+  // that later text *wins* a conflict — there is no precedence mechanism here,
+  // only string order, and by the same "later wins" reasoning the voice and the
+  // operational block would outrank identity too. The honest statement is that
+  // identity is read in a position where a model is likely to treat it as
+  // refining what came before; whether it does is unmeasured.
   const persona = authored(p.persona);
   const identity = authored(join(p.rot, 'identity.md'));
   // The voice was written, shipped and then read by nobody: `buildSystemPrompt`
@@ -342,20 +346,47 @@ function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''):
  */
 function authored(path: string): string {
   if (!existsSync(path)) return '';
-  const withoutComments = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  let text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
 
-  const lines = withoutComments.split('\n');
+  // An unterminated `<!--` matches nothing, and the whole owner-facing block
+  // sails through into the prompt — the exact pre-existing defect, restored by
+  // deleting one `-->`. Cutting from the opener is the fail-safe direction:
+  // losing authored text is recoverable, shipping scaffolding as identity is
+  // what this function exists to stop. (Nested comments leave a stray `-->`,
+  // handled by the same cut.)
+  const orphan = text.indexOf('<!--');
+  if (orphan !== -1) text = text.slice(0, orphan);
+
+  const lines = text.split('\n');
   const kept: string[] = [];
+  let fenced = false;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const heading = /^(#{2,6})\s/.exec(line);
+    if (/^\s*```/.test(line)) fenced = !fenced;
+
+    const heading = !fenced && /^(#{2,6})\s/.exec(line);
     if (heading) {
-      // Look ahead to the next heading of any level: if everything between is
-      // blank, this section was never filled in.
+      const level = heading[1]!.length;
+      // A heading is unfilled only when it has neither direct content nor a
+      // subsection. Stopping at the next heading of *any* level deleted a
+      // parent whose content lived under `###` — and `identity.md` ships
+      // exactly such a heading, so an owner who answered it in subsections
+      // would have lost the question. A `#` opening a line inside a code fence
+      // is not a heading either, which is why the fence is tracked.
       let j = i + 1;
       let empty = true;
-      for (; j < lines.length && !/^#{1,6}\s/.test(lines[j]!); j++) {
-        if (lines[j]!.trim() !== '') empty = false;
+      let innerFence = fenced;
+      for (; j < lines.length; j++) {
+        const ahead = lines[j]!;
+        if (/^\s*```/.test(ahead)) innerFence = !innerFence;
+        const aheadHeading = !innerFence && /^(#{1,6})\s/.exec(ahead);
+        if (aheadHeading) {
+          // A deeper heading is content: the section was answered below.
+          if (aheadHeading[1]!.length > level) empty = false;
+          break;
+        }
+        if (ahead.trim() !== '') empty = false;
       }
       if (empty) {
         i = j - 1;

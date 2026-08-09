@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -109,11 +109,55 @@ describe('persona in the system prompt', () => {
     expect(prompt).toContain('## Chi sei');
   });
 
-  it('survives a home where the voice file was deleted', () => {
-    // Degrading is allowed; crashing at boot because a non-RoT file is missing
-    // is not. identity.md is the one under the root of trust, not this.
+  it('survives a home where the persona files are actually gone', () => {
+    // This used to write an EMPTY file, which takes the readFileSync path and
+    // never reaches the existsSync guard — so the test's name, comment and
+    // assertion all described a case it did not construct. Removing that guard
+    // left the whole suite green. It is the one line every pre-existing install
+    // depends on: they have no persona.md, and without it boot throws ENOENT.
     const home = bootHome();
-    writeFileSync(paths(home).voice, '');
+    rmSync(paths(home).voice);
+    rmSync(paths(home).persona);
+    expect(existsSync(paths(home).voice)).toBe(false);
     expect(() => buildRuntime(home, workspace)).not.toThrow();
+  });
+
+  it("ships no personal name to an install that is not the author's", () => {
+    // The voice file was written for one owner and named him three times. It
+    // was inert while nothing read it; wiring it into the prompt shipped his
+    // private register to every install — PRACTICES §9, violated by the change
+    // that routes the file rather than by the file.
+    const home = bootHome();
+    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    expect(prompt).not.toMatch(/Giusto/);
+  });
+
+  it('keeps a heading whose answer lives in its subsections', () => {
+    // "Unfilled" meant "nothing before the next heading of any level", so a
+    // parent answered in `###` subsections was deleted and its children
+    // orphaned. identity.md ships such a heading.
+    const home = bootHome();
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(
+      identity,
+      readFileSync(identity, 'utf8').replace(
+        '## Come ti comporti quando è difficile\n',
+        '## Come ti comporti quando è difficile\n\n### Quando non sai\n\nLo dici.\n',
+      ),
+    );
+    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    expect(prompt).toContain('## Come ti comporti quando è difficile');
+    expect(prompt).toContain('Lo dici.');
+  });
+
+  it('drops the whole block rather than leak it when a comment is unterminated', () => {
+    // One missing `-->` and the regex matches nothing, putting the owner-facing
+    // scaffolding back into the identity — the precise defect this function
+    // exists to prevent, one character away.
+    const home = bootHome();
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(identity, readFileSync(identity, 'utf8').replace('-->', ''));
+    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    expect(prompt).not.toContain('Questo file è tuo');
   });
 });
