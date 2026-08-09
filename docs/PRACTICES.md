@@ -117,6 +117,78 @@ A `PreToolUse` hook guarding `npm install` against unknown packages is the
 worked example: new dependencies are rare here, so the friction is near zero
 and the slopsquatting window closes structurally.
 
+## 7. The state lives in STATE.md, and it is written before it is needed
+
+**Trigger: a session starts · a compact is near · a slice of work ends.**
+
+`docs/blueprint/STATE.md` is the handoff. Its START HERE block is the answer to
+"where are we", and it is authoritative — if this file and your recollection
+disagree, the file wins.
+
+Three moments, three different mechanisms, deliberately:
+
+- **Session start — mechanised, not remembered.** `.claude/hooks/inject-state.mjs`
+  injects the block on every SessionStart, *including after a compact*. Claude
+  Code re-reads the project-root `CLAUDE.md` from disk after compaction but only
+  that file; STATE.md is nested behind a pointer, so it is precisely what does
+  not come back on its own. This is practice §6 applied to the rule "read
+  STATE.md first", which as prose was skipped often enough to cost whole
+  sessions.
+- **Before a compact — a practice, because it cannot be a hook.** A `PreCompact`
+  hook can run a command and can block compaction; it cannot inject context and
+  cannot ask the model to write a file (verified against the hooks reference —
+  `PreCompact` is absent from the list of events whose `additionalContext`
+  reaches the model, and supports neither `prompt` nor `agent` hooks). So the
+  flush is discipline, not machinery, and this document says so rather than
+  implying a guarantee the mechanism does not provide. When context is running
+  short: update the START HERE block *first*, then let the compact happen.
+- **End of a slice — commit.** A commit is the only form of state that survives
+  everything. The block says where we are; the commit says what is true.
+
+The honest summary: re-grounding is deterministic, flushing is not. Knowing
+which half is which is the point.
+
+## 8. Converge before you research
+
+**Trigger: about to dispatch research, or about to open more than one line of
+enquiry at once.**
+
+Lock the scope first — the question, and what an answer would change. Broad
+research against an unlocked scope produces a survey nobody can act on, and the
+cost lands twice: the reading, and the re-deciding it invites.
+
+The shape that works here: state the decision the research is *for*, name what
+would flip it, and ask for evidence quality per claim (measured · reported ·
+folklore). The salience research (`research/memory-salience-and-fusion.md`) is
+the worked example — it was commissioned to decide one field's type and one
+ranking question, and it came back saying the field's own tradition rests on an
+unablated hyperparameter. That is only a usable answer because the question was
+narrow enough to be falsified.
+
+## 9. Pure-muffin and your-muffin are separate things
+
+**Trigger: about to add anything that encodes a person — a voice line, a
+threshold, a fact, an example, a default.**
+
+Two categories, and the boundary is what ships:
+
+- **Pure muffin** — what every install gets: the character, the prompts, the
+  primitives, the floors. Open-source, reviewable, the same for everyone.
+- **Your muffin** — what is learned at runtime about one owner: facts,
+  thresholds that adapted, the person-model. Lives only in `~/.muffin/`, never
+  in the repo, never in a fixture.
+
+Getting this backwards has two distinct failure modes and both are bad: a
+personal detail baked into the repo ships someone's life to every contributor;
+a piece of the character left to runtime learning means a fresh install has no
+character at all and reads as a mockup.
+
+The related rail: **a real harness, not slop.** A principle becomes a property
+of a primitive that already exists — a column, a ranking term, a gate — with its
+own test. It does not become a module bolted on beside the thing it describes.
+That rule is stated at the top of `docs/blueprint/knowledge/README.md`, and it
+is why the cognitive corpus is a design input rather than a folder of adapters.
+
 ---
 
 *Sources: Anthropic engineering (hooks vs advisory, verbatim), arXiv:2605.17062
