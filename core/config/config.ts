@@ -69,6 +69,14 @@ export const paths = (home = muffinHome()) => ({
   config: join(home, 'config.json'),
   db: join(home, 'muffin.db'),
   rot: join(home, 'rot'),
+  // Outside the root of trust on purpose: the voice is the part that learns,
+  // so the agent may propose changes to it through the ratchet. `identity.md`
+  // lives under rot/ and stays fixed. One entry here rather than the same
+  // join() written out at each call site.
+  voice: join(home, 'voice.md'),
+  // Pure muffin — the character every install shares. `identity.md` under rot/
+  // is the owner's overlay on top of it and is read after, so it wins.
+  persona: join(home, 'persona.md'),
   vault: join(home, 'vault'),
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),

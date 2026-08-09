@@ -292,9 +292,21 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
  * keeping it there rather than in config.
  */
 function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''): string {
-  const identityPath = join(paths(home).rot, 'identity.md');
-  const identity = existsSync(identityPath) ? readFileSync(identityPath, 'utf8').trim() : '';
-  const parts = [identity];
+  const p = paths(home);
+  // Three files, in order of who gets the last word. The shared character
+  // first, the owner's constraints on top of it — identity.md ships empty on
+  // purpose, so reading it after persona.md is what makes it an overlay rather
+  // than a competitor — then the voice, then anything operational.
+  const persona = authored(p.persona);
+  const identity = authored(join(p.rot, 'identity.md'));
+  // The voice was written, shipped and then read by nobody: `buildSystemPrompt`
+  // never opened it, so every rule in it — the emoji thresholds, "no corporate
+  // language", "no simulated actions" — was prose with no way to reach a turn.
+  // It goes after identity and before everything operational, which is both the
+  // cache-stable order the comparable harnesses use and the order of authority:
+  // who it is, then how it speaks, then what it is doing right now.
+  const voice = authored(p.voice);
+  const parts = [persona, identity, voice];
   if (skillsSection.length > 0) parts.push(skillsSection);
   parts.push(
     [
@@ -310,4 +322,48 @@ function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''):
     );
   }
   return parts.filter((s) => s.length > 0).join('\n\n');
+}
+
+/**
+ * The authored part of a persona file: what the owner wrote, without the
+ * scaffolding that told them how to write it.
+ *
+ * Both files ship as templates whose HTML comments address the owner —
+ * "Questo file è tuo. Scrivilo com'è", "le righe qui sotto sono un punto di
+ * partenza". Injected verbatim, as they were, those instructions became part of
+ * the identity: on a fresh install the agent was handed a page explaining how a
+ * human should fill in its character, and nothing else. Comments are stripped
+ * here rather than removed from the files, because in the file they are the
+ * thing that makes it writable.
+ *
+ * Headings left empty are dropped for the same reason. An untouched template
+ * would otherwise contribute three bare titles with nothing under them, which
+ * reads to a model as a section it is expected to have opinions about.
+ */
+function authored(path: string): string {
+  if (!existsSync(path)) return '';
+  const withoutComments = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+
+  const lines = withoutComments.split('\n');
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const heading = /^(#{2,6})\s/.exec(line);
+    if (heading) {
+      // Look ahead to the next heading of any level: if everything between is
+      // blank, this section was never filled in.
+      let j = i + 1;
+      let empty = true;
+      for (; j < lines.length && !/^#{1,6}\s/.test(lines[j]!); j++) {
+        if (lines[j]!.trim() !== '') empty = false;
+      }
+      if (empty) {
+        i = j - 1;
+        continue;
+      }
+    }
+    kept.push(line);
+  }
+
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
