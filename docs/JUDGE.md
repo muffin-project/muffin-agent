@@ -74,6 +74,57 @@ sembra ovvia che non ce la si fa.
 **Si può togliere qualcosa?**
 - Cosa si cancella senza perdere niente? La semplificazione è un reperto valido.
 
+## Il ciclo, e come finisce
+
+Una review non è un evento, è uno **stato** di una slice. Il difetto che questo
+paragrafo esiste per chiudere: cinque review, cinque giri di correzioni, **zero
+slice chiuse** — perché ADJUST non aveva un seguito obbligato e "corretto"
+sembrava progresso. In letteratura ha un nome: la tassonomia MAST (1.642 tracce
+annotate a mano) la chiama *"unaware of termination conditions"*.
+
+```
+needs_review → in_review → verdetto
+    MERGE / REJECT / BLOCKED  → terminale, si chiude
+    ADJUST / SPLIT            → si corregge → needs_review (giro +1)
+```
+
+Tre regole, e nessuna è opinione:
+
+1. **Solo MERGE, REJECT e BLOCKED chiudono.** ADJUST vuol dire che ci sarà un
+   altro giro, non che il lavoro è finito.
+2. **Tetto a 3 giri**, poi si escala all'owner invece di continuare. Il numero
+   converge in tutte le fonti — Self-Refine si ferma a 4, l'esempio ciclico di
+   LangGraph a 3, Google ADK affianca `max_iterations` a un segnale di uscita
+   anticipata — e il rendimento crolla dopo il secondo o terzo giro.
+3. **Ogni giro va a un judge NUOVO, a contesto pulito.** Questa è la regola
+   contro-intuitiva ed è misurata: review a contesto separato **F1 28,6%**;
+   self-review nella stessa sessione **24,6%** (p=0,008); self-review
+   *ripetuta* nella stessa sessione **21,7%** (p<0,001). Rivedere due volte
+   nella stessa sessione **peggiora** — il beneficio viene dalla separazione,
+   non dalla ripetizione, e un giudice si affeziona ai propri reperti
+   precedenti (self-preference bias). Quindi mai `SendMessage` a un judge che ha
+   già giudicato questa slice: se ne lancia un altro, e gli si racconta cosa il
+   precedente aveva trovato.
+
+*(Fonti: MAST arXiv:2503.13657 · cross-context review arXiv:2603.12123 —
+studio singolo, piccolo, non replicato: sospetto ma non definitivo · Self-Refine
+arXiv:2303.17651 · Anthropic "Building Effective Agents", che chiama questo
+schema **Evaluator-Optimizer** e non usa mai la parola "grafo".)*
+
+## Un verdetto senza vie d'uscita vale meno della metà
+
+**Misurato, con ablation** (arXiv:2607.14167, luglio 2026): sotto un tetto di
+quattro chiamate, un feedback che contiene *posizione* + *valore osservato* +
+**alternative ammissibili** porta la riparazione da 14/50 a 36/50 (**+44pp**;
++42pp su un secondo modello). E l'ablation isola l'ingrediente attivo:
+**posizione e valore da soli fanno poco — sono le alternative a fare il
+lavoro.** Il formato non conta (prosa e JSON pari).
+
+Quindi ogni reperto **defect** porta, oltre allo scenario di fallimento, almeno
+una **via d'uscita ammissibile** — non "va sistemato", ma *"o si fa A, o si fa
+B, e B costa questo"*. Non è cortesia verso chi corregge: è la parte del
+feedback che è stata misurata come quella che funziona.
+
 ## Le etichette
 
 Esattamente una, e va scelta senza ammorbidire.
