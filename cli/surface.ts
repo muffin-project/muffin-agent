@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
@@ -99,37 +100,39 @@ export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: str
 
   const config = loadConfig(home);
   let ownerChatId = config.surfaces.telegram?.ownerChatId;
+  let ownerUserId = config.surfaces.telegram?.ownerUserId;
 
   if (ownerFlag !== undefined) {
     const parsed = Number(ownerFlag);
     if (!Number.isInteger(parsed) || parsed === 0) {
-      process.stderr.write(`--owner deve essere una chat id numerica\n`);
+      // A *user* id now, not a chat id: the escape hatch for someone who
+      // already knows theirs and does not want the round trip.
+      process.stderr.write(`--owner deve essere una user id numerica\n`);
       return 78;
     }
-    ownerChatId = parsed;
+    ownerUserId = parsed;
+    ownerChatId = parsed; // in a private chat the two coincide
   }
 
-  if (ownerChatId === undefined) {
-    // The bot may already have been messaged: one poll, without stealing the
-    // updates from the inbox — they are accepted into it, where the running
-    // surface will answer them.
-    const inbox = new UpdateInbox(new DatabaseCtor(paths(home).db));
-    const updates = await api.getUpdates(inbox.nextOffset());
-    if (updates.length > 0) inbox.accept(updates, new Date().toISOString());
-
-    const privateChats = privateChatsSeen(home);
-    if (privateChats.length === 1) {
-      ownerChatId = privateChats[0]!;
-      process.stderr.write(`una sola chat privata vista: ${ownerChatId} — la uso come owner\n`);
-    } else if (privateChats.length > 1) {
-      process.stderr.write(`più chat private viste: ${privateChats.join(', ')}\n`);
-      process.stderr.write(`  → rilancia con --owner <chat-id>\n`);
-      return 78;
-    } else {
-      process.stderr.write(`@${me.username ?? me.id} è raggiungibile ma nessuno gli ha ancora scritto.\n`);
-      process.stderr.write(`  → mandagli un messaggio dal tuo account, poi rilancia questo comando\n`);
-      return 1;
-    }
+  /**
+   * Pairing, not election.
+   *
+   * This used to make the owner whoever had messaged the bot first — and the
+   * bot's username is discoverable, so you only had to arrive before the owner
+   * did. A code printed here and echoed to the bot binds "whoever holds this
+   * machine" to "whoever holds that account", which is a claim nothing else in
+   * the system can make. Ten minutes, one use, five wrong guesses and it burns.
+   */
+  let pairing = config.surfaces.telegram?.pairing;
+  if (ownerUserId === undefined) {
+    const code = generatePairingCode();
+    pairing = startPairing(code, new Date());
+    // The one secret in this system deliberately shown to a human: the file
+    // gets the digest, the plaintext exists only on this screen.
+    process.stderr.write(`\n  @${me.username ?? me.id} è raggiungibile.\n\n`);
+    process.stderr.write(`  Mandagli questo codice dal tuo account, entro 10 minuti:\n\n`);
+    process.stderr.write(`      ${code}\n\n`);
+    process.stderr.write(`  Fino ad allora nessuno è l'owner — chi scrive è uno sconosciuto.\n\n`);
   }
 
   const next = {
@@ -139,7 +142,13 @@ export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: str
       enabled: config.surfaces.enabled.includes('telegram')
         ? config.surfaces.enabled
         : [...config.surfaces.enabled, 'telegram'],
-      telegram: { ownerChatId },
+      // All three, or the code printed above would be generated and thrown
+      // away — the message on screen promising a pairing that nothing stored.
+      telegram: {
+        ...(ownerUserId === undefined ? {} : { ownerUserId }),
+        ...(ownerChatId === undefined ? {} : { ownerChatId }),
+        ...(pairing === undefined ? {} : { pairing }),
+      },
     },
   };
   saveConfig(next, home);
@@ -182,8 +191,13 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
       const token = readSecret('secret://telegram_token', home);
-      const ownerChatId = runtime.config.surfaces.telegram?.ownerChatId;
-      if (ownerChatId === undefined) {
+      const tg = runtime.config.surfaces.telegram;
+      const ownerUserId = tg?.ownerUserId;
+      const ownerChatId = tg?.ownerChatId;
+      // Unpaired but with a code outstanding is a legitimate running state: the
+      // surface has to be up to receive the code. What it must not do is treat
+      // anyone as the owner while it waits.
+      if (ownerUserId === undefined && tg?.pairing === undefined) {
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
         const api = new TelegramApi(token);
@@ -202,7 +216,32 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
             reindex: (defaultTier) =>
               vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
           },
-          config: { token, ownerChatId },
+          config: {
+            token,
+            ...(ownerUserId === undefined ? {} : { ownerUserId }),
+            ...(ownerChatId === undefined ? {} : { ownerChatId }),
+            ...(tg?.pairing === undefined ? {} : { pairing: tg.pairing }),
+          },
+          // The pairing outcome has to reach disk, or the bind lasts until the
+          // process exits and the owner has to do it again every restart.
+          savePairing: (next) => {
+            const current = loadConfig(home);
+            saveConfig(
+              {
+                ...current,
+                surfaces: {
+                  ...current.surfaces,
+                  telegram: {
+                    ...current.surfaces.telegram,
+                    ...(next.ownerUserId === undefined ? {} : { ownerUserId: next.ownerUserId }),
+                    ...(next.ownerChatId === undefined ? {} : { ownerChatId: next.ownerChatId }),
+                    ...(next.pairing === null ? { pairing: undefined } : { pairing: next.pairing }),
+                  },
+                },
+              },
+              home,
+            );
+          },
           log: (line) => process.stderr.write(`\r${line}\n`),
         });
 
@@ -213,7 +252,11 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
           process.stderr.write(`\rtelegram: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
         });
         stops.push(() => connector.stop());
-        lines.push(`telegram: connessa (owner ${ownerChatId})`);
+        lines.push(
+          ownerUserId === undefined
+            ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
+            : `telegram: connessa (owner ${ownerUserId})`,
+        );
       }
     } catch (error) {
       lines.push(`telegram: abilitata ma non parte — ${(error as ConfigError).message}`);
@@ -232,24 +275,6 @@ function hasSecret(ref: string, home: string): boolean {
   }
 }
 
-function privateChatsSeen(home: string): number[] {
-  const db = new DatabaseCtor(paths(home).db, { readonly: true });
-  try {
-    return (
-      db
-        .prepare(
-          `SELECT DISTINCT json_extract(payload, '$.message.chat.id') AS id
-           FROM telegram_updates
-           WHERE json_extract(payload, '$.message.chat.type') = 'private' AND id IS NOT NULL`,
-        )
-        .all() as { id: number }[]
-    ).map((r) => r.id);
-  } catch {
-    return [];
-  } finally {
-    db.close();
-  }
-}
 
 function inboxStats(home: string): { pending: number; failed: number } | null {
   const db = new DatabaseCtor(paths(home).db, { readonly: true });
