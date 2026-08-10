@@ -102,6 +102,25 @@ successiva, e col tempo diventa questo documento.
 - **Non committare, non pushare, non mergiare, non approvare su GitHub.**
 - Non creare worktree git (una review si è piantata così). Muta in loco con una
   copia di backup e ripristina.
-- **Non lasciare HEAD su un altro ramo**: una review l'ha fatto e il commit
-  successivo è atterrato nella PR sbagliata. Torna sul ramo di lavoro e verifica
-  che `git status` sia pulito.
+- **Mai `git checkout`.** Il judge gira nello **stesso albero di lavoro**
+  dell'orchestratore: spostare HEAD glielo sposta sotto i piedi, e due volte il
+  commit successivo è atterrato nella PR sbagliata. Non serve comunque — si legge
+  qualunque ramo senza muoversi:
+
+  ```
+  git diff base..slice              # il cambiamento
+  git show slice:percorso/file.ts   # un file com'è su quel ramo
+  git log base..slice               # i commit della slice
+  ```
+
+  Per eseguire test e mutazioni si usa l'albero com'è: la slice sotto review è
+  già dentro il ramo di lavoro, perché lo stack è impilato.
+
+  Nota su perché questa riga è una regola e non un guard: il guard esiste
+  (`.claude/hooks/guard-review-branch.mjs`) e **non protegge da questo**. Vive nel
+  repo, quindi un checkout di un ramo più vecchio lo fa sparire insieme alla sua
+  riga in `settings.json` — assente esattamente dove servirebbe. È il difetto di
+  casa commesso dal meccanismo costruito per prevenirlo, e la cura è togliere la
+  causa invece di sorvegliarla.
+- Ogni file temporaneo che crei per sondare (probe, fixture) va **rimosso** prima
+  di chiudere. `git status --porcelain` vuoto, e dillo nel report.

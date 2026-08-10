@@ -20,6 +20,19 @@
  * Practice §6, second rung to fourth in one step — justified because the cost of
  * the mistake is invisible (a correct commit, on the wrong branch) and the cost
  * of the guard is a variable on the rare intentional case.
+ *
+ * **What this guard does NOT protect against, stated because it caught me the
+ * hour after I wrote it.** It lives in the repo, on a branch. Check out an older
+ * branch and the file disappears along with its line in `settings.json` — so it
+ * is absent in exactly the configuration it exists for. It caught nothing the
+ * second time; I noticed by reading the branch name.
+ *
+ * That is this repository's own characteristic defect, committed by the
+ * mechanism built to prevent it, and it is not fixable from inside a
+ * branch-local file. The real cure is removing the cause: review agents share
+ * this working tree and must never `git checkout` at all (docs/JUDGE.md). This
+ * guard stays for the orchestrator's own slips on the current branch, which is
+ * a smaller promise than it first appeared to make.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
