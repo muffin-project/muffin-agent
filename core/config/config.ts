@@ -59,7 +59,26 @@ export const ConfigSchema = z.object({
      * it is configuration, it survives a reboot, and `muffin surface enable`
      * writes it once instead of every shell needing to export it.
      */
-    telegram: z.object({ ownerChatId: z.number().int() }).optional(),
+    telegram: z
+      .object({
+        /**
+         * Who the owner *is*. Absent means unpaired, and unpaired means nobody
+         * is the owner — which is the fail-closed direction and the whole point
+         * of replacing "whoever messaged first".
+         */
+        ownerUserId: z.number().int().optional(),
+        /** Where to deliver. A room, which is a different question from who. */
+        ownerChatId: z.number().int().optional(),
+        /** The outstanding pairing code, hashed. Cleared the moment it matches. */
+        pairing: z
+          .object({
+            hash: z.string().min(1),
+            expiresAt: z.string().min(1),
+            attempts: z.number().int().nonnegative(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
 });
 

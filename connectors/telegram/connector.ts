@@ -1,6 +1,7 @@
 import type { Message, Update } from '@grammyjs/types';
 import { runTurn, type LoopDeps } from '../../agent/loop.js';
 import type { Principal } from '../../core/policy/types.js';
+import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { TelegramApi, TelegramError } from './api.js';
@@ -32,12 +33,33 @@ import { UpdateInbox } from './updates.js';
 
 export type TelegramConfig = {
   token: string;
-  /** The only chat that speaks as the owner. Everything else is a stranger. */
-  ownerChatId: number;
+  /**
+   * Who the owner is. **Absent means nobody is** — no message can arrive as the
+   * owner until a pairing code proves it. That is the fail-closed replacement
+   * for "whoever wrote first", which was not an attack so much as a race.
+   */
+  ownerUserId?: number | undefined;
+  /** Where to deliver. A room; who is a different question. */
+  ownerChatId?: number | undefined;
+  /** The outstanding pairing code, hashed. Absent once it has matched. */
+  pairing?: PendingPairing | undefined;
 };
 
 export type ConnectorDeps = {
   loop: LoopDeps;
+  /**
+   * Persists the outcome of a pairing attempt. Injected rather than reached for
+   * so the connector stays testable without a config file, and so the write is
+   * one named place instead of scattered through the drain loop.
+   *
+   * Absent means pairing is disabled — the surface simply never becomes owned,
+   * which is the safe direction.
+   */
+  savePairing?: ((next: {
+    ownerUserId?: number;
+    ownerChatId?: number;
+    pairing: PendingPairing | null;
+  }) => void) | undefined;
   sessions: SessionStore;
   inbox: UpdateInbox;
   api: TelegramApi;
@@ -73,7 +95,7 @@ type Incoming = {
  * one place where being wrong means a crash in a long-running process. So every
  * field is checked, and anything unrecognised is skipped rather than guessed at.
  */
-export function parseUpdate(update: Update, ownerChatId: number): Incoming | null {
+export function parseUpdate(update: Update, ownerUserId: number | undefined): Incoming | null {
   const message: Message | undefined = update.message ?? update.edited_message;
   if (!message || typeof message.chat?.id !== 'number') return null;
 
@@ -102,7 +124,13 @@ export function parseUpdate(update: Update, ownerChatId: number): Incoming | nul
     // group is a member of that group's tenant, or group content lands in host
     // memory. `from` is absent on channel posts and anonymous admins, and `?? 0`
     // never equals a real id, so those are not the owner either.
-    fromOwner: message.chat.type === 'private' && message.from?.id === ownerChatId,
+    // `ownerUserId === undefined` is the unpaired state, and `?? 0` never
+    // equals it, so an unpaired bot has no owner at all rather than a default
+    // one.
+    fromOwner:
+      ownerUserId !== undefined &&
+      message.chat.type === 'private' &&
+      message.from?.id === ownerUserId,
     messageId: message.message_id,
     ...(attachment ? { attachment } : {}),
   };
@@ -190,7 +218,7 @@ export class TelegramConnector {
   private async drain(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
       const update = JSON.parse(stored.payload) as Update;
-      const incoming = parseUpdate(update, this.deps.config.ownerChatId);
+      const incoming = parseUpdate(update, this.deps.config.ownerUserId);
 
       if (!incoming) {
         // Nothing to do with it, and saying so is better than leaving it pending
@@ -212,7 +240,55 @@ export class TelegramConnector {
     }
   }
 
+  /**
+   * The pairing gate.
+   *
+   * Runs before a message is treated as conversation, and only while unpaired.
+   * Returns true when the message was consumed by pairing — matched or not —
+   * so the drain loop stops rather than handing a code to the model.
+   *
+   * A code arrives as an ordinary private message, so this must not answer with
+   * a turn: an unpaired stranger typing anything gets the normal member path,
+   * but the one who types the right eight characters becomes the owner and
+   * nothing else does.
+   */
+  private async tryPair(incoming: Incoming): Promise<boolean> {
+    const { ownerUserId, pairing } = this.deps.config;
+    if (ownerUserId !== undefined || !pairing || !this.deps.savePairing) return false;
+    if (!incoming.isPrivate || incoming.fromId === 0) return false;
+
+    const { outcome, next } = checkPairing(pairing, incoming.text, new Date(this.now()));
+    const say = (text: string) => this.deps.api.sendMessage(incoming.chatId, text);
+
+    if (outcome.status === 'matched') {
+      // Persisted before the reply: if the send fails, the pairing still
+      // happened, and the alternative — confirming something we did not store —
+      // is the worse of the two.
+      this.deps.savePairing({
+        ownerUserId: incoming.fromId,
+        ownerChatId: incoming.chatId,
+        pairing: null,
+      });
+      this.deps.config.ownerUserId = incoming.fromId;
+      this.deps.config.ownerChatId = incoming.chatId;
+      this.deps.config.pairing = undefined;
+      await say('Sei tu. Da adesso questa è la nostra chat.');
+      return true;
+    }
+
+    // Anything else only counts as an attempt if it looked like a code; a
+    // stranger saying "ciao" must not burn the owner's tries.
+    if (!/^[\s0-9A-Za-z-]{8,12}$/.test(incoming.text.trim())) return false;
+
+    this.deps.savePairing({ pairing: next });
+    this.deps.config.pairing = next ?? undefined;
+    if (outcome.status === 'wrong') await say(`Non è quello. Tentativi rimasti: ${outcome.remaining}.`);
+    else await say('Quel codice non vale più. Rigenerane uno dalla CLI.');
+    return true;
+  }
+
   private async handle(incoming: Incoming): Promise<void> {
+    if (await this.tryPair(incoming)) return;
     const { principal, tenant } = principalFor(incoming);
     const presence = await startPresence(this.deps.api, incoming.chatId, {
       isPrivate: incoming.isPrivate,
