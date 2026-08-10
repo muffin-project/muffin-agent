@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -12,7 +14,15 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["core/**/*.ts", "agent/**/*.ts", "cli/**/*.ts", "**/*.test.ts"]
+  "include": [
+    "core/**/*.ts",
+    "agent/**/*.ts",
+    "cli/**/*.ts",
+    "**/*.test.ts",
+    ".claude/hooks/**/*.ts"
+  ]
 }
