@@ -44,10 +44,25 @@ try {
   process.exit(0);
 }
 
-// `git commit` only. Amend and cherry-pick are deliberate acts on a named
-// commit; rebase moves branches around by design.
-if (!/\bgit\s+(-[^\s]+\s+)*commit\b/.test(command)) process.exit(0);
-if (/\bcherry-pick\b|--amend\b/.test(command)) process.exit(0);
+/**
+ * Quoted text is payload, not syntax.
+ *
+ * The exemption test used to run against the whole command, so
+ * `git commit -m "document the --amend flag"` disarmed the guard — in a
+ * repository whose commit messages are prose about git practice, which is the
+ * one place that sentence is likely to be written. Quoted segments are removed
+ * before anything is matched.
+ */
+const bare = command.replace(/'[^']*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+
+// `git commit` only, and git's own flags may carry values: `git -C <path>` and
+// `git -c k=v` used to slip past a pattern that consumed flags but not their
+// arguments, which meant the two forms most likely to appear in a script were
+// exactly the two that were never checked.
+if (!/\bgit(?:\s+-\S+(?:\s+\S+)?)*\s+commit\b/.test(bare)) process.exit(0);
+// Amend and cherry-pick name a commit deliberately; rebase moves branches by
+// design. Tested on the quote-stripped form, so a message cannot claim them.
+if (/\bcherry-pick\b|--amend\b/.test(bare)) process.exit(0);
 if (/\bMUFFIN_PR_OK=1\b/.test(command) || process.env['MUFFIN_PR_OK'] === '1') process.exit(0);
 
 let branch = '';
