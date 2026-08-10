@@ -17,7 +17,7 @@ import { makeSearchTool, searchCapability, tavilyBackend, type SearchBackend } f
  * does not quietly narrow the rest of the turn.
  */
 
-const ctx = { tenant: 'host', principal: { kind: 'owner' as const, connector: 'cli' } };
+const ctx = { tenant: 'host', principal: { kind: 'owner' as const, connector: 'cli', externalId: 'local' } };
 const call = (tool: ReturnType<typeof makeSearchTool>, args: unknown) =>
   tool.handler(args as Record<string, unknown>, ctx as never);
 
@@ -129,7 +129,7 @@ describe('web_search', () => {
     const before = buildRuntime(home, workspace);
     expect(before.deps.tools.map((t) => t.spec.name)).not.toContain('web_search');
     expect(before.deps.decide({
-      principal: { kind: 'owner', connector: 'cli' },
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       capability: 'sys.search',
       resource: { kind: 'none' },
@@ -160,7 +160,7 @@ describe('web_search', () => {
     const after = buildRuntime(home, workspace);
     expect(after.deps.tools.map((t) => t.spec.name)).toContain('web_search');
     expect(after.deps.decide({
-      principal: { kind: 'owner', connector: 'cli' },
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       capability: 'sys.search',
       resource: { kind: 'none' },

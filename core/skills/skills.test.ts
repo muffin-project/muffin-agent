@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSkillTool } from '../../agent/tools/skill.js';
 import { discoverSkills, parseSkill, skillsPromptSection } from './skills.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli' } } as const;
+const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
 
 function homeWithSkill(name: string, content: string): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-skills-'));
