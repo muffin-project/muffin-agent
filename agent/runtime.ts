@@ -278,6 +278,9 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       model: config.models.main,
       tools,
       decide,
+      // The declarations, so the loop derives the policy resource from
+      // resourceKind/policyArgs instead of guessing at argument names.
+      capabilities,
       tracer,
       sessions: new SessionStore(home),
       budgetExhausted: () => budget.exhausted(),

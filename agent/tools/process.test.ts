@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { makeProcessTools, processCapabilities } from './process.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli' } } as const;
+const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
 
 const FAKE_PS = ['  PID USER   COMM', '    1 root   /sbin/launchd', '  512 giusto node', '  777 giusto redis-server'].join('\n');
 
@@ -132,7 +132,7 @@ describe('process_kill argument boundary', () => {
 describe('process capabilities through the kernel', () => {
   const caps = new Map(processCapabilities.map((c) => [c.id, c]));
   const base = { capabilities: caps, budgetExhausted: () => false };
-  const owner = { kind: 'owner', connector: 'cli' } as const;
+  const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
 
   it('list is denied once the context is tainted to 2', () => {
     const decide = createDecide({ ...base, hardened: true });

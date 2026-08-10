@@ -101,7 +101,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
           'Quando hai finito, rispondi e basta.',
       },
       {
-        principal: { kind: 'owner', connector: 'cli' },
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
         tenant: 'host',
         surface: 'cli',
         session: sessions.open(scenario.id),

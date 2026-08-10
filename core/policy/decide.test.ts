@@ -20,7 +20,7 @@ function kernel(overrides: Partial<PolicyContext> = {}) {
   });
 }
 
-const owner: Principal = { kind: 'owner', connector: 'cli' };
+const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 const member: Principal = { kind: 'member', connector: 'telegram', tenantId: 'group:telegram:42', externalId: 'u1' };
 const scheduler: Principal = { kind: 'system', source: 'scheduler' };
 
@@ -43,8 +43,17 @@ describe('policy kernel', () => {
     // believing the prose and believing the code.
     const decide = kernel({ egressAllowed: () => true });
 
-    // Widened: medium default is 1, sys.http declares 3.
-    expect(decide(req(owner, 'host', 'sys.http', 3)).effect).not.toBe('deny');
+    // Widened: medium default is 1, sys.http declares 3. Asked with a real url
+    // resource, because a url capability handed anything else is now refused
+    // outright — the gate no longer depends on its caller to supply the
+    // precondition.
+    expect(
+      decide({
+        principal: owner, tenant: 'host', capability: 'sys.http',
+        resource: { kind: 'url', value: 'https://api.example.com/v1' },
+        args: {}, taint: 3,
+      }).effect,
+    ).not.toBe('deny');
     // Narrowed: fs.write is medium and declares nothing, so 1 is the ceiling.
     expect(decide(req(owner, 'host', 'fs.write', 2))).toMatchObject({
       effect: 'deny',
@@ -62,7 +71,7 @@ describe('policy kernel', () => {
       hardened: false,
       safeMode: true,
     });
-    const owner: Principal = { kind: 'owner', connector: 'cli' };
+    const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
     expect(degraded({ principal: owner, tenant: 'host', capability: 'fs.write', resource: { kind: 'none' }, args: {}, taint: 0 }))
       .toMatchObject({ effect: 'deny', code: 'safe_mode' });
     // Reading still works: a degraded agent that cannot answer at all is one

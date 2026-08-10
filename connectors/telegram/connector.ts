@@ -59,6 +59,8 @@ type Incoming = {
   text: string;
   isPrivate: boolean;
   fromOwner: boolean;
+  /** Who sent it. The person, never the room. */
+  fromId: number;
   messageId: number;
   attachment?: MediaSpec;
 };
@@ -87,9 +89,20 @@ export function parseUpdate(update: Update, ownerChatId: number): Incoming | nul
     chatId: message.chat.id,
     text: typeof text === 'string' ? text : '',
     isPrivate: message.chat.type === 'private',
-    // Identity is the chat id, not the display name: a name is chosen by whoever
-    // holds the account.
-    fromOwner: message.chat.id === ownerChatId,
+    fromId: message.from?.id ?? 0,
+    // The *person*, and only in a one-to-one chat.
+    //
+    // This compared `message.chat.id` — the conversation — so anyone speaking
+    // in a chat whose id matched arrived as the owner. In a private chat the
+    // two coincide, and that accident was carrying the entire check. The
+    // comment that used to sit here had already reasoned that a display name is
+    // chosen by whoever holds the account, and then compared the room.
+    //
+    // The `isPrivate` half is not belt-and-braces: the owner speaking in a
+    // group is a member of that group's tenant, or group content lands in host
+    // memory. `from` is absent on channel posts and anonymous admins, and `?? 0`
+    // never equals a real id, so those are not the owner either.
+    fromOwner: message.chat.type === 'private' && message.from?.id === ownerChatId,
     messageId: message.message_id,
     ...(attachment ? { attachment } : {}),
   };
@@ -106,7 +119,10 @@ export function parseUpdate(update: Update, ownerChatId: number): Incoming | nul
  */
 export function principalFor(incoming: Incoming): { principal: Principal; tenant: string } {
   if (incoming.fromOwner) {
-    return { principal: { kind: 'owner', connector: 'telegram' }, tenant: 'host' };
+    return {
+      principal: { kind: 'owner', connector: 'telegram', externalId: String(incoming.fromId) },
+      tenant: 'host',
+    };
   }
   const tenant = `group:telegram:${incoming.chatId}`;
   return {
@@ -114,7 +130,7 @@ export function principalFor(incoming: Incoming): { principal: Principal; tenant
       kind: 'member',
       connector: 'telegram',
       tenantId: tenant,
-      externalId: String(incoming.chatId),
+      externalId: String(incoming.fromId || incoming.chatId),
     },
     tenant,
   };

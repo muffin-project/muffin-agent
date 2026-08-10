@@ -63,7 +63,7 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
   let result: TurnResult;
   try {
     result = await runTurn(runtime.deps, {
-      principal: { kind: 'owner', connector: 'cli' },
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       surface: 'cli',
       session,

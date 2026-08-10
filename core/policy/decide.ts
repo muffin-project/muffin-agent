@@ -156,7 +156,29 @@ export function createDecide(ctx: PolicyContext): Decide {
     // everything else is refused: a tainted turn must not be able to *nominate*
     // the exfiltration endpoint, which is exactly what ask-then-approve would
     // let a poisoned context do at 2am.
-    if (decl.resourceKind === 'url' && resource.kind === 'url') {
+    if (decl.resourceKind === 'url') {
+      // Fail closed when the caller did not hand us the URL it declared.
+      //
+      // This branch used to be `resourceKind === 'url' && resource.kind ===
+      // 'url'`, so a caller that produced anything else skipped the allowlist
+      // entirely and fell through to the risk class — which for a medium,
+      // reversible capability is `allow`. That is not hypothetical: the loop
+      // derived the resource from argument *names*, checking `path` before
+      // `url`, so `http_get({url, path:'x'})` produced a path resource and
+      // fetched an off-allowlist host for a taint-2 group member. Measured:
+      // deny without the extra key, allow with it.
+      //
+      // A gate whose precondition is supplied by its caller is not a gate. Now
+      // a caller that forgets produces a refusal, loudly, instead of an
+      // unguarded allow — and the next URL-holding capability (`outward.send`,
+      // declared with `policyArgs: ['to']`) cannot ship with a silent no-op.
+      if (resource.kind !== 'url') {
+        return {
+          effect: 'deny',
+          code: 'resource_denied',
+          detail: `${capability} declares a url resource but received ${resource.kind} — refusing rather than skipping the allowlist`,
+        };
+      }
       const host = hostOf(resource.value);
       if (host === null) {
         return { effect: 'deny', code: 'resource_denied', detail: `unparseable url` };

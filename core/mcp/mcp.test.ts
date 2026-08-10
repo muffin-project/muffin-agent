@@ -162,7 +162,7 @@ describe('against a real stdio server', () => {
       expect(tool.spec.description).toMatch(/<<<mcpdesc_[0-9a-f]+/);
       const out = await tool.handler({ message: 'x' }, {
         tenant: 'host',
-        principal: { kind: 'owner', connector: 'cli' },
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       });
       expect(out.tier).toBe(3);
       expect(out.content).toMatch(/<<<mcp_[0-9a-f]+/);
@@ -183,7 +183,7 @@ describe('mcp capability through the kernel', () => {
 
   it('a tainted turn cannot reach a third-party server at all', () => {
     const d = decide({
-      principal: { kind: 'owner', connector: 'cli' },
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       capability: 'mcp.echo',
       resource: { kind: 'none' },
