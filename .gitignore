@@ -16,3 +16,10 @@ id_rsa
 id_rsa.*
 secrets/
 .muffin/
+
+# Scratch files a review agent leaves in the shared working tree. It runs in
+# THIS tree, so anything it writes is visible to `git add -A` — which swept one
+# into a commit and turned the suite red. Ignored by name so a concurrent probe
+# cannot be committed by accident.
+zz-*
+*.probe.ts
