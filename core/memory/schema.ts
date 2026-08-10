@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS facts (
   speaker_id    INTEGER REFERENCES identities(id),
   trust_tier    INTEGER NOT NULL CHECK (trust_tier BETWEEN 0 AND 3),
   confidence    REAL    NOT NULL,
+  -- How we came to believe it, which is a different axis from who said it.
+  -- A verbatim web quote is (tier 3, said); an inference of ours about the
+  -- owner is (tier 0, inferred). Collapsing the two into one number destroys
+  -- both. Named "origin" and not "source_kind" on purpose: chunks.source_kind
+  -- already exists two files away and means which *table* a chunk came from.
+  origin        TEXT    NOT NULL DEFAULT 'said'
+                CHECK (origin IN ('said','inferred','imported')),
+  -- Intensity, never frequency: one charged event outranks a thousand routine
+  -- ones. Ordinal and short by design — LLM raters compress toward the middle
+  -- and systematically under-predict the top of a range, which is precisely
+  -- where the charged event lives, so a continuous score would be false
+  -- precision. Assigned by forced choice at extraction, not by a 1-10 rating.
+  importance    INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2),
   extraction_v  INTEGER NOT NULL,
   superseded_by INTEGER REFERENCES facts(id),
   CHECK ((object_id IS NULL) <> (object_value IS NULL))
@@ -147,6 +160,37 @@ export const DEFAULT_FUNCTIONAL_PREDICATES = [
   'legal_name',
   'tax_id',
 ] as const;
+
+/**
+ * How a belief was arrived at. Orthogonal to `trust_tier`, which says who the
+ * source was — this says how we got from the source to the belief.
+ *
+ * `imported` exists from the start because the CHECK is enforced by SQLite and
+ * SQLite cannot alter a CHECK without rebuilding the table: the cost of the
+ * third value now is one word, and later it is a migration.
+ *
+ * The behaviour that makes the field worth its column: a `said` fact may be
+ * asserted, an `inferred` one is carried as a hypothesis and hedged. That is
+ * the structural antidote to the old system's vague "I noticed…" firehose —
+ * the shape of the sentence is forced by provenance, not by prompt discipline.
+ */
+export const FACT_ORIGINS = ['said', 'inferred', 'imported'] as const;
+export type FactOrigin = (typeof FACT_ORIGINS)[number];
+
+/**
+ * Intensity, in three steps. Not a scale to be averaged: the levels are
+ * decided by two yes/no questions at extraction (see `extract.ts`), because a
+ * forced choice cannot pile up in the middle the way a rating does.
+ *
+ * The hard rule that goes with it: **importance never feeds `confidence` or
+ * `trust_tier`.** Emotional intensity raises how accurate a memory *feels*
+ * without raising how accurate it *is* (Talarico & Rubin 2003) — so treating a
+ * charged fact as a better-evidenced one would be the same error the "trust
+ * never rises" invariant already exists to prevent.
+ */
+export const IMPORTANCE_ROUTINE = 0;
+export const IMPORTANCE_NOTABLE = 1;
+export const IMPORTANCE_CHARGED = 2;
 
 /** Bumped when the extraction pipeline changes in a way that warrants a replay. */
 export const EXTRACTION_VERSION = 1;

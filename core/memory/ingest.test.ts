@@ -82,10 +82,67 @@ const fact = (subject: string, predicate: string, object: string, extra: Record<
   subjectKind: 'person',
   validFrom: null,
   confidence: 0.9,
+  // The unremarkable default, so a test that says nothing about importance gets
+  // the routine level rather than accidentally asserting a charged one.
+  matters: false,
+  charged: false,
   ...extra,
 });
 
 describe('memory ingestion', () => {
+  it('carries the two forced-choice answers all the way into the row', async () => {
+    // The wiring test: importance is decided at extraction and has to survive
+    // the whole pipeline. Both answers yes → charged; matters alone → notable;
+    // neither → routine. Asserted in the stored row, not in the report, because
+    // the row is what recall will read months from now.
+    const { store, deps } = harness([
+      facts(
+        fact('Giusto', 'diagnosis', 'infarto a marzo', { matters: true, charged: true }),
+        fact('Giusto', 'accountant', 'Marco', { matters: true, charged: false }),
+        fact('Giusto', 'ate', 'una piadina', { matters: false, charged: false }),
+      ),
+    ]);
+    episode(store, 'a marzo ho avuto un infarto; il commercialista è Marco; oggi ho mangiato una piadina');
+    await ingestPending(deps, HOST);
+
+    const me = store.findEntity(HOST, 'Giusto')!;
+    const by = (p: string) => store.activeFacts(HOST, me, p)[0]!;
+    expect(by('diagnosis').importance).toBe(2);
+    expect(by('accountant').importance).toBe(1);
+    expect(by('ate').importance).toBe(0);
+    // Intensity is not evidence: the charged fact is no more trusted, and no
+    // more confident, than the routine one it sits beside.
+    expect(by('diagnosis').trustTier).toBe(by('ate').trustTier);
+    expect(by('diagnosis').confidence).toBe(by('ate').confidence);
+    // Nothing this pipeline produces is an inference.
+    expect(by('diagnosis').origin).toBe('said');
+  });
+
+  it('judges against the most recent belief, not the most important one', async () => {
+    // The contradiction candidate must be what this fact might be replacing —
+    // the latest. It used to be `existing[0]`, which was safe only while
+    // activeFacts happened to order by recency; the moment importance entered
+    // that ORDER BY, the judge started comparing against the most *charged*
+    // belief instead. A revert to `existing[0]` is invisible without this.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'accountant', 'Lucia')),
+      JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: 0.95 }),
+    ]);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', '2026-05-01T10:00:00Z');
+    const ep = episode(store, 'vecchia nota');
+    const base = { tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+    // The charged one is OLDER; the plain one is the current belief.
+    store.addFact({ ...base, objectValue: 'Marco', importance: 2, recordedAt: '2026-05-01T10:00:00Z' });
+    const current = store.addFact({ ...base, objectValue: 'Anna', recordedAt: '2026-07-01T10:00:00Z' });
+
+    episode(store, 'ho cambiato commercialista: ora è Lucia');
+    await ingestPending(deps, HOST);
+
+    // Anna was the latest, so Anna is what got superseded.
+    const anna = store.factById(HOST, current)!;
+    expect(anna.expiredAt).not.toBeNull();
+  });
+
   it('extracts facts and marks the episode done', async () => {
     const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari'))]);
     episode(store, 'abito a Cagliari');

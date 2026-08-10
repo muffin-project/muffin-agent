@@ -3,6 +3,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { paths } from '../core/config/config.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { recall } from '../core/memory/recall.js';
+import type { FactOrigin } from '../core/memory/schema.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
 import type { TrustTier } from '../core/policy/types.js';
 
@@ -49,6 +50,16 @@ function tierName(tier: TrustTier): string {
   return `tier ${tier} · ${TIER_LABEL[tier]}`;
 }
 
+/** Said, inferred or imported — deliberately not folded into the tier label. */
+function originName(origin: FactOrigin): string {
+  return origin === 'said' ? 'detto' : origin === 'inferred' ? 'dedotto' : 'importato';
+}
+
+/** Spelled out rather than shown as 0/1/2: a bare integer invites averaging. */
+function importanceName(importance: number): string {
+  return importance >= 2 ? 'carico' : importance === 1 ? 'conta' : 'routine';
+}
+
 function factLine(f: Fact): string {
   const object = f.objectName ?? f.objectValue ?? '?';
   const state = f.expiredAt ? `ritirato il ${f.expiredAt.slice(0, 10)}` : 'attivo';
@@ -70,7 +81,12 @@ export function cmdMemoryWhy(home: string, factId: number): number {
     const episode = store.episodeById(TENANT, fact.episodeId);
 
     const out: string[] = [factLine(fact)];
-    out.push(`  fiducia ${fact.confidence.toFixed(2)} · ${tierName(fact.trustTier)}`);
+    // `why` is the one place the two axes must not blur into each other: the
+    // tier says who it came from, the origin says how we got from them to this.
+    out.push(
+      `  fiducia ${fact.confidence.toFixed(2)} · ${tierName(fact.trustTier)} · ` +
+        `${originName(fact.origin)} · ${importanceName(fact.importance)}`,
+    );
     out.push(`  imparato il ${fact.recordedAt.slice(0, 16).replace('T', ' ')}`);
 
     if (fact.supersededBy !== null) {
