@@ -23,6 +23,52 @@ function episode(s: MemoryStore, tenant: string, content: string, tier: 0 | 1 | 
 }
 
 describe('memory store', () => {
+  it('migrates a database that predates origin and importance, without losing its rows', () => {
+    // The real migration path, not a simulation of it: an existing `facts`
+    // table means CREATE TABLE IF NOT EXISTS does nothing, so the two columns
+    // can only arrive through ensureColumn. A row written before they existed
+    // has to come back as `said`/routine — the honest backfill, because
+    // extraction has never been permitted to infer.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`
+      CREATE TABLE facts (
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, subject_id INTEGER NOT NULL,
+        predicate TEXT NOT NULL, object_id INTEGER, object_value TEXT,
+        valid_from TEXT, valid_to TEXT, recorded_at TEXT NOT NULL, expired_at TEXT,
+        episode_id INTEGER NOT NULL, speaker_id INTEGER,
+        trust_tier INTEGER NOT NULL, confidence REAL NOT NULL,
+        extraction_v INTEGER NOT NULL, superseded_by INTEGER)`);
+    db.prepare(
+      `INSERT INTO facts (id, tenant_id, subject_id, predicate, object_value, recorded_at,
+                          episode_id, trust_tier, confidence, extraction_v)
+       VALUES (1, 'host', 1, 'accountant', 'Marco', '2026-05-01T10:00:00Z', 1, 0, 0.9, 1)`,
+    ).run();
+
+    const s = new MemoryStore(db);
+    db.prepare(`INSERT INTO entities (id, tenant_id, kind, name, recorded_at)
+                VALUES (1, 'host', 'person', 'Giusto', '2026-05-01T10:00:00Z')`).run();
+
+    const migrated = s.factById(HOST, 1)!;
+    expect(migrated.objectValue).toBe('Marco');
+    expect(migrated.origin).toBe('said');
+    expect(migrated.importance).toBe(0);
+  });
+
+  it('refuses an origin or an importance the schema does not allow', () => {
+    // The enum is enforced by SQLite, not only by zod at the boundary: a writer
+    // that skips the parse still cannot invent a third kind of provenance.
+    const s = store();
+    const me = s.upsertEntity(HOST, 'Giusto', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, HOST, 'nota');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'x', objectValue: 'y',
+      episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
+    };
+    expect(() => s.addFact({ ...base, origin: 'gossip' as never })).toThrow(/CHECK/);
+    expect(() => s.addFact({ ...base, importance: 9 })).toThrow(/CHECK/);
+  });
+
   it('keeps tenants apart even when the names are identical', () => {
     // Two people called Marco, one the owner's accountant, one a stranger in a
     // group. Merging them is the failure that never announces itself.
