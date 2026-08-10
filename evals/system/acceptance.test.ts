@@ -68,7 +68,7 @@ describe('M3 acceptance — through the production runtime', () => {
     // And the same capability for the owner in single-user mode is an ask, never
     // a silent allow (threat model §g), proven through the same kernel.
     const owner = decide({
-      principal: { kind: 'owner', connector: 'cli' },
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       capability: 'sys.shell',
       resource: { kind: 'none' },
@@ -85,7 +85,7 @@ describe('M3 acceptance — through the production runtime', () => {
     const decide = runtime.deps.decide;
     for (const tool of runtime.deps.tools) {
       const d = decide({
-        principal: { kind: 'owner', connector: 'cli' },
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
         tenant: 'host',
         capability: tool.capability,
         resource: { kind: 'none' },
@@ -172,7 +172,7 @@ describe('M3 acceptance — through the production runtime', () => {
     const escape = join(home, 'ESCAPED.txt');
     const out = await shell!.handler(
       { command: `echo pwned > '${escape}'` },
-      { tenant: 'host', principal: { kind: 'owner', connector: 'cli' } },
+      { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } },
     );
     expect(out.isError).toBe(true);
     expect(existsSync(escape)).toBe(false);

@@ -15,6 +15,59 @@ were found while writing the current system, not inherited.
 
 ---
 
+## Two correct halves, each waiting for the other, is a gate that never closes **(this build)**
+
+The egress allowlist is the rule that says which hosts this process may reach.
+It was written, tested, documented and reachable by nothing.
+
+`decide.ts` gates URLs on `resource.kind === 'url'`. Its unit tests construct
+exactly that resource, call the kernel directly, and go green — the branch works.
+`loop.ts` built the resource it passes from `args['path']` alone, with no `url`
+case, so every tool call in production arrived as `{kind:'none'}` and the branch
+was never entered once. And `http_get` does not check the allowlist on its first
+hop **on purpose**, with a comment explaining that the kernel already ruled on
+it. Each half was correct. Each was relying on the other. The observable
+behaviour was an empty allowlist permitting every public host.
+
+Measured against the assembled runtime, empty allowlist, same capability, same
+principal, same URL:
+
+| how `decide` was called | verdict |
+|---|---|
+| with `{kind:'url', value}` — as the kernel's own tests call it | `ask` |
+| with `{kind:'none'}` — as `loop.ts` actually called it | **`allow`** |
+
+The sharp end: a group member's turn carries taint 2, and the egress branch is
+what turns that into a refusal rather than a question. Without the branch, a
+tainted turn could fetch an arbitrary host — the exfiltration path the threat
+model exists to close, open for the life of the feature.
+
+*Found 9 August 2026 while declaring a second URL-holding capability; fixed in
+`bb392dc`.*
+
+**What this system does instead:** the loop derives the resource from the
+capability's own declaration — `resourceKind` says what kind of thing it acts on,
+`policyArgs` says which argument holds it — and the kernel refuses outright when a
+capability declaring a url is handed anything else.
+
+The first attempt at this fix was weaker and worth recording, because it failed
+in the same family: it lifted `url` into the resource *beside* `path`, checking
+`path` first. `http_get({url, path:'x'})` then produced a path resource, skipped
+the egress branch and fetched an off-allowlist host for a group member. The
+sharper statement of the lesson is the one that version was missing: **a gate
+whose precondition is supplied by its caller is not a gate.**
+
+The regression test runs a **turn** rather than calling `decide` —
+because calling `decide` is precisely what hid this. The test asserts on whether
+the tool body executed, and it fails on the previous commit with the URL sitting
+in the recorded array.
+
+**The generalisation, which is the reason this entry exists:** a unit test that
+constructs the input the mechanism wants is not evidence that anything ever
+constructs it. Practice §5 already says to test the wiring — this is the case
+where *both* sides had wiring tests and the join between them had none. When two
+components each defer to the other, the test has to span the join.
+
 ## A constraint that is not true in the domain executes the wrong update in silence
 
 The previous schema treated every predicate as single-valued: one current belief

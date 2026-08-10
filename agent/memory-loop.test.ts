@@ -102,7 +102,7 @@ function harness(script: ChatResult[]) {
   return { deps, store, provider, writes, sessions: deps.sessions };
 }
 
-const owner: Principal = { kind: 'owner', connector: 'cli' };
+const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 
 const turn = (h: ReturnType<typeof harness>, text: string, principal: Principal = owner) => ({
   principal,
