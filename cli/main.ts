@@ -19,6 +19,7 @@ import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } 
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import { cmdObserve } from './observe.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
@@ -51,6 +52,8 @@ inspection:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
   muffin vault reindex | add <file> | ls | check
   muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<goal>" | remove <id>
+  muffin observe [--send]       what has gone quiet, and what the proactivity
+                                gate would do with it. Sends only with --send.
   muffin trace tail [-n N] [--errors] | grep PATTERN
 
 Exit codes: 0 ok · 1 warnings · 2 blocking error · 3 needs approval · 78 bad configuration
@@ -119,6 +122,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMcp(rest);
     case 'jobs':
       return cmdJobs(rest);
+    case 'observe':
+      return cmdObserve(paths().home, rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
