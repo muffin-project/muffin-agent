@@ -280,6 +280,34 @@ reasoning amplified tool hallucination rather than reducing it.
 
 ---
 
+## The same class, one day later, in the piece written to be careful **(this build)**
+
+The proactivity gate decides whether Muffin may speak first. Every rail on it is
+threat model, not taste: only the owner's own evidence may arm it, never in quiet
+hours, never over budget. It has a pure decision function, unit tests, and an ADR
+arguing the posture (`0028`). It had **zero callers** — found by grepping for its
+own name while starting the slice that needed it, one day after the egress
+allowlist above was found the same way.
+
+What makes it worth a second entry rather than a line in the first: the egress
+hole could be told as an accident of two people working on two halves. This one
+had a single author and the most deliberate paper trail in the repository. The
+care went into the mechanism and none of it into the question *who calls this*.
+So the class is not "watch out when splitting work". It is:
+
+> **Something with an ADR, a pure function and a test file looks finished from
+> every angle except the only one that matters.**
+
+The nearest thing to a cure we have found is procedural and now written into
+`docs/JUDGE.md` as the rule above all the others: **don't review the diff, review
+the guarantee** — start at a production entry point and try to *reach* the
+mechanism, and if you cannot draw the path, the guarantee is unproven however
+good the code is. Both of these would have been caught by one grep, on day one,
+by anyone who thought to ask.
+
+*Found 10 August 2026 while building the absence detector that needed it; the
+gate reached production in the same slice.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The
