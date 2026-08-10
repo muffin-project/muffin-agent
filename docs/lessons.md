@@ -45,8 +45,19 @@ model exists to close, open for the life of the feature.
 *Found 9 August 2026 while declaring a second URL-holding capability; fixed in
 `bb392dc`.*
 
-**What this system does instead:** the loop lifts `url` into the resource beside
-`path`, and the regression test runs a **turn** rather than calling `decide` —
+**What this system does instead:** the loop derives the resource from the
+capability's own declaration — `resourceKind` says what kind of thing it acts on,
+`policyArgs` says which argument holds it — and the kernel refuses outright when a
+capability declaring a url is handed anything else.
+
+The first attempt at this fix was weaker and worth recording, because it failed
+in the same family: it lifted `url` into the resource *beside* `path`, checking
+`path` first. `http_get({url, path:'x'})` then produced a path resource, skipped
+the egress branch and fetched an off-allowlist host for a group member. The
+sharper statement of the lesson is the one that version was missing: **a gate
+whose precondition is supplied by its caller is not a gate.**
+
+The regression test runs a **turn** rather than calling `decide` —
 because calling `decide` is precisely what hid this. The test asserts on whether
 the tool body executed, and it fails on the previous commit with the URL sitting
 in the recorded array.
