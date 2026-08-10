@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Absence } from '../core/memory/absence.js';
+import { formatP, type Absence } from '../core/memory/absence.js';
 import type { ComposeAbsence } from '../core/scheduler/observe.js';
 import { runTurn, type LoopDeps } from './loop.js';
 
@@ -30,7 +30,7 @@ export function absenceGoal(a: Absence): string {
     `- di cosa si tratta: "${a.name}" (${a.kind})`,
     `- il suo ritmo: ${a.occasions} occasioni distinte in ${a.spanDays} giorni`,
     `- da quanto tace: ${a.gapDays} giorni`,
-    `- probabilità di un silenzio così lungo, dato quel ritmo: ${a.p.toFixed(4)}`,
+    `- probabilità di un silenzio così lungo, dato quel ritmo: ${formatP(a.p)}`,
     ``,
     `Vincoli, non di stile:`,
     `- È un'inferenza tua. Esce come domanda o ipotesi, mai come affermazione su di lui.`,
@@ -61,9 +61,9 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
     // own evidence (`ingest.ts` has the rule written down, and this is exactly
     // it).
     //
-    // Stage 2 does not need it: the goal closes with "quello che ti serve è
-    // tutto qui sopra", and the trace of what was said lives in the fire log,
-    // which is durable and carries the numbers that justified it.
+    // Stage 2 does not need it either: the goal closes with "quello che ti serve
+    // è tutto qui sopra". What the nudge *said* is recorded below instead, on
+    // the agent side only — see there for why that direction is safe.
     const result = await runTurn({ ...deps, memory: undefined }, {
       principal: { kind: 'system', source: 'scheduler' },
       tenant: 'host',
@@ -78,6 +78,30 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
     if (result.stopped !== 'answered' || result.text.trim() === '') {
       throw new ComposeError(`stage 2 non ha prodotto un messaggio (${result.stopped})`);
     }
-    return result.text.trim();
+    const text = result.text.trim();
+
+    // Only the agent side goes back in, and the asymmetry is the whole point.
+    // The input episode is what closed the loop — a goal we wrote, naming the
+    // entity, recorded as the owner's own tier-0 word and then mined into
+    // `facts`. The *reply* cannot do that: `ingest.ts` skips `role: 'agent'` at
+    // extraction, so it can never become a fact and can never move the
+    // `last_seen` this detector counts from.
+    //
+    // Recorded because without it nothing holds what was said. The fire log
+    // holds the anchor and the arithmetic, not the sentence, and the session
+    // file is one randomly-named jsonl no command surfaces — so when remote
+    // delivery lands and the owner replies to a nudge, recall would have
+    // nothing to ground the answer on.
+    deps.memory?.store.addEpisode({
+      tenantId: 'host',
+      connector: channel,
+      threadKey: session.id,
+      role: 'agent',
+      kind: 'message',
+      content: text,
+      trustTier: 0,
+      createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+    });
+    return text;
   };
 }

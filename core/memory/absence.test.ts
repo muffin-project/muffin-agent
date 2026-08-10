@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import type { Database } from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { MemoryStore } from './store.js';
-import { ABSENCE_DEFAULTS, absenceAnchor, detectAbsences, overdueProbability } from './absence.js';
+import { ABSENCE_DEFAULTS, absenceAnchor, detectAbsences, formatP, overdueProbability } from './absence.js';
 
 /**
  * The absence detector, tested on the things that can turn it into a firehose.
@@ -104,6 +104,20 @@ describe('overdueProbability', () => {
   });
 });
 
+describe('formatP', () => {
+  it('does not blank out the evidence exactly where it is strongest', () => {
+    // Eleven occasions and a gap five times the span: p ≈ 1.6e-8, which
+    // `toFixed(4)` prints as `0.0000` — on the owner's screen and inside the
+    // prompt, in the line whose only job is to show the arithmetic that
+    // justified speaking. The strongest case read as the weakest.
+    expect(formatP(overdueProbability(50, 10, 10))).not.toBe('0.0000');
+    expect(formatP(1.6e-8)).toBe('1.6e-8');
+    // Above the cut it stays the fixed form the rest of the output uses.
+    expect(formatP(0.0041)).toBe('0.0041');
+    expect(formatP(0.05)).toBe('0.0500');
+  });
+});
+
 describe('threshold calibration', () => {
   /**
    * The only eval that counts on this piece, and it needs no model to run:
@@ -189,8 +203,17 @@ describe('threshold calibration', () => {
     // with history. The upper bound is worth as much as the lower one: it says
     // the degradation is a factor of two, not an order of magnitude.
     for (const r of bursty) expect(r).toBeGreaterThan(1.5 * ABSENCE_DEFAULTS.alpha);
-    for (const r of bursty) expect(r).toBeLessThan(0.15);
+    for (const r of bursty) expect(r).toBeLessThan(2.2 * ABSENCE_DEFAULTS.alpha);
     expect(bursty[2]!).toBeLessThan(bursty[0]!);
+
+    // And "a factor of two" is a property of σ=1.5, not of heavy tails: at σ=2
+    // it is 0.155 · 0.134 · 0.090, up to 3.1×. Asserted so the sensitivity lives
+    // in the suite rather than in a sentence — the bound above would otherwise
+    // read as if any burstiness cost the same.
+    const heavier = [2, 5, 20].map((n) => rateFor(n, (r) => boxMuller(r, 2.0)));
+    for (let i = 0; i < 3; i++) expect(heavier[i]!).toBeGreaterThan(bursty[i]!);
+    expect(heavier[0]!).toBeGreaterThan(3 * ABSENCE_DEFAULTS.alpha);
+    expect(heavier[0]!).toBeLessThan(4 * ABSENCE_DEFAULTS.alpha);
 
     // Mean of four exponentials = regular rhythm. 0.0006 · 0.0011 · 0.0018.
     const regular = [2, 5, 20].map((n) =>
@@ -286,9 +309,15 @@ describe('detectAbsences', () => {
     expect(names(detectAbsences(h.db, HOST, now(630)))).toEqual(['palestra']);
   });
 
-  it('counts object-side mentions too', () => {
+  it('counts object-side mentions too, expired ones included', () => {
     const h = harness();
     for (const d of [600, 602, 604, 606, 608, 610]) mention(h, 'Marco', d, { asObject: true });
+    expect(names(detectAbsences(h.db, HOST, now(630)))).toContain('Marco');
+
+    // The same guarantee on the other arm of the UNION. It was only held on the
+    // subject side, so adding `expired_at IS NULL` to this one alone kept the
+    // suite green — a guarantee proven on half a query is proven on none.
+    h.db.prepare(`UPDATE facts SET expired_at = ?`).run(at(611));
     expect(names(detectAbsences(h.db, HOST, now(630)))).toContain('Marco');
   });
 

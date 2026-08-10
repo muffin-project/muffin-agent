@@ -48,8 +48,13 @@ import type Database from 'better-sqlite3';
  * heavy tail, and it is measured in the same file: with strongly lognormal
  * intervals (σ=1.5) the real rate is **0.083-0.105**, that is 1.7× to 2.1× the
  * promised one. In the other direction, on a regular rhythm, it drops to 0.001:
- * the detector stays quiet about things a human would call gone. So alpha is an
- * honest ceiling only up to a factor of two, and it should be read that way.
+ * the detector stays quiet about things a human would call gone.
+ *
+ * So alpha is an honest ceiling only up to a factor of two **at σ=1.5, and the
+ * factor grows with the tail**: at σ=2 it is 0.090-0.155, up to 3.1×. The
+ * condition belongs in this sentence and not only in the two above it, because
+ * this is the sentence that gets quoted — the same failure as the index result
+ * further down, where a number without its condition was irreproducible.
  *
  * **The constant depends on the prior, and that has to be said**: the one above
  * is the Jeffreys prior for an exponential rate, p(λ) ∝ 1/λ, i.e. an improper
@@ -289,6 +294,19 @@ function coalesce(sorted: number[], windowMs: number): number[] {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/**
+ * `p` for a human, on screen and inside the prompt.
+ *
+ * `toFixed(4)` alone prints `0.0000` exactly where the evidence is strongest —
+ * eleven occasions and a gap five times the span is p ≈ 1.6e-8 — in the line
+ * whose entire job is to show the arithmetic that justified speaking. Shared by
+ * both readers so they cannot drift: what the owner sees and what the model is
+ * told have to be the same number.
+ */
+export function formatP(p: number): string {
+  return p < 1e-4 ? p.toExponential(1) : p.toFixed(4);
 }
 
 /**

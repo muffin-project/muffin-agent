@@ -152,7 +152,44 @@ describe('makeAbsenceComposer', () => {
 
     await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
 
-    expect(db.prepare('SELECT role, content FROM episodes').all()).toEqual([]);
+    // Nothing on the owner's side. The asymmetry is the fix: what comes back is
+    // the agent's own sentence, and `ingest.ts` skips `role: 'agent'` at
+    // extraction, so it can never become a fact and never move the `last_seen`
+    // the detector counts from.
+    const rows = db.prepare('SELECT role, content FROM episodes').all() as { role: string; content: string }[];
+    expect(rows.map((r) => r.role)).toEqual(['agent']);
+    expect(rows[0]!.content).not.toContain('Scrivi un solo messaggio');
+  });
+
+  it('records what it said, because nothing else does', async () => {
+    // The fire log holds the anchor and the arithmetic, never the sentence, and
+    // the session jsonl is a randomly-named file no command surfaces. Without
+    // this row, an owner replying to a nudge would be answered by a Muffin with
+    // no record of having sent one.
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const h = harness([reply('quando hai visto la tesi?')], { memory: { store, recall: { store } } });
+
+    await makeAbsenceComposer(h.deps, 'telegram')(ABSENCE);
+
+    const row = db.prepare('SELECT content, connector, trust_tier AS tier FROM episodes').get() as {
+      content: string;
+      connector: string;
+      tier: number;
+    };
+    expect(row.content).toBe('quando hai visto la tesi?');
+    expect(row.connector).toBe('telegram');
+    expect(row.tier).toBe(0);
+  });
+
+  it('a reply made of whitespace is nothing sent, not an empty nudge', async () => {
+    // `stopped` is 'answered' for a whitespace-only reply — the loop treats only
+    // falsy text as nothing — so without the trim check the caller would deliver
+    // a blank message and burn the anchor for it. The anchor carries `lastSeen`,
+    // which does not move while the entity stays silent, so that occasion would
+    // be spent for good.
+    const h = harness([reply('   \n  ')]);
+    await expect(makeAbsenceComposer(h.deps, 'cli')(ABSENCE)).rejects.toThrow(/stage 2/);
   });
 
 
