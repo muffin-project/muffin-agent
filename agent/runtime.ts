@@ -206,22 +206,39 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   let searchOn = false;
   const searchNotes: string[] = [];
   if (config.search) {
-    const backend = tavilyBackend({
-      apiKey: readSecret(config.search.apiKeyRef, home),
-      ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
-    });
+    // The key is read inside the try for the same reason the endpoint check is
+    // below it: a half-configured search must switch search off, not refuse to
+    // boot. Editing config.json and running `muffin secret set` are two steps,
+    // and between them every command that builds a runtime used to die —
+    // `muffin`, `muffin run`, `muffin memory why`. The sibling misconfiguration
+    // three lines down already degrades to a boot line; this one did not.
+    let backend;
+    try {
+      backend = tavilyBackend({
+        apiKey: readSecret(config.search.apiKeyRef, home),
+        ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
+      });
+    } catch (error) {
+      searchNotes.push(
+        `! web_search spento: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      backend = undefined;
+    }
+
     // The endpoint is a constant, so it gets checked once here rather than on
     // every call — but it does get checked. Skipping it because "the model
     // cannot choose the host anyway" is how egress.json stops describing where
     // this process actually talks.
-    const endpointHost = new URL(backend.endpoint).hostname;
-    if (hostAllowed(endpointHost, egress)) {
-      tools.push(makeSearchTool(backend));
-      searchOn = true;
-    } else {
-      searchNotes.push(
-        `! web_search spento: ${endpointHost} non è in rot/egress.json — aggiungilo e rifai \`muffin rot reseal\``,
-      );
+    if (backend) {
+      const endpointHost = new URL(backend.endpoint).hostname;
+      if (hostAllowed(endpointHost, egress)) {
+        tools.push(makeSearchTool(backend));
+        searchOn = true;
+      } else {
+        searchNotes.push(
+          `! web_search spento: ${endpointHost} non è in rot/egress.json — aggiungilo e rifai \`muffin rot reseal\``,
+        );
+      }
     }
   }
 

@@ -193,6 +193,27 @@ describe('egress branch — the allowlist in the root of trust speaks for URLs',
     expect(d.effect).toBe('ask');
   });
 
+  it('refuses a url capability that was handed no url at all', () => {
+    // The fail-closed half. A gate whose precondition is supplied by its caller
+    // is not a gate: before this branch existed, a loop that produced anything
+    // other than a url resource skipped the allowlist entirely and fell through
+    // to the risk class, which for medium/reversible is `allow`. That is how a
+    // junk `path` argument fetched an off-allowlist host for a group member.
+    // Asserted on the *reason*, not just the effect, and that is the whole
+    // point: without this branch the request is still denied — `hostOf` throws
+    // on a missing value and falls into the unparseable-url path — so the
+    // outcome alone cannot tell the two apart. What the branch buys is that a
+    // caller which forgot to supply the declared resource is told exactly that,
+    // instead of being sent to look at a URL that was never the problem.
+    for (const resource of [{ kind: 'none' } as const, { kind: 'path', value: '/tmp/x' } as const]) {
+      const d = withList()({
+        principal: owner, tenant: 'host', capability: 'sys.http', resource, args: {}, taint: 0,
+      });
+      expect(d).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+      expect(d.effect === 'deny' && d.detail).toMatch(/declares a url resource but received/);
+    }
+  });
+
   it('an unparseable or non-http url is refused outright', () => {
     expect(withList()(urlReq(owner, 'host', 'file:///etc/passwd', 0))).toMatchObject({
       effect: 'deny',
