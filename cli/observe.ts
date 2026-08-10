@@ -1,14 +1,15 @@
 import DatabaseCtor from 'better-sqlite3';
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import type { LoopDeps } from '../agent/loop.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { ConfigError, loadConfig, paths } from '../core/config/config.js';
-import { detectAbsences } from '../core/memory/absence.js';
+import { detectAbsences, formatP } from '../core/memory/absence.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { FireLog } from '../core/scheduler/firelog.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
 import { observe, recordFired, type Observation } from '../core/scheduler/observe.js';
 import { decideProactive, type QuietHours } from '../core/scheduler/proactivity.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
@@ -71,114 +72,6 @@ const BudgetsFile = z.object({
 /** A window, never an empty one: an unreadable file is not a licence to speak at 3am. */
 const FALLBACK_QUIET: QuietHours = { from: '23:00', to: '08:00', timezone: 'UTC' };
 
-/** Where the `--send` lock lives. Exported so the code and its test share one path. */
-export const sendLockPath = (home: string): string => join(paths(home).home, 'observe.lock');
-
-/** Taken, or refused with the reason and what to do about it (like `ConfigError`). */
-type SendLock = { release: () => void } | { held: string; remedy: string };
-
-/**
- * One `--send` at a time, on this machine.
- *
- * `observe()` reads `fires.has(anchor)`, `recordFired` writes after delivery,
- * and nothing spans the two — so two runs started together both see an unfired
- * anchor and both deliver. Measured: two messages, one row, exit 0 twice.
- * `INSERT OR IGNORE` protects the row, not the owner, and a duplicate nudge is
- * exactly the repetition this slice exists to prevent.
- *
- * What it covers and what it does not: it serialises `--send` on this machine.
- * It is **not** a distributed lock — two hosts on the same home over a network
- * share do not see each other — and it does **not** make check-then-deliver
- * atomic against anything that writes the fire log without going through this
- * command. Plain `muffin observe` never takes it: showing what is pending is
- * the command's main use and must work while a send is running.
- */
-function acquireSendLock(home: string): SendLock {
-  const file = sendLockPath(home);
-  // Two attempts: the second exists only to retry after clearing a stale lock,
-  // and if someone else took it meanwhile this must lose rather than insist.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      // 'wx' is O_CREAT|O_EXCL: creation is atomic in the kernel, so two
-      // processes starting together cannot both win.
-      const fd = openSync(file, 'wx');
-      try {
-        writeSync(fd, `${process.pid}\n`);
-      } finally {
-        closeSync(fd);
-      }
-      return {
-        release: () => {
-          try {
-            unlinkSync(file);
-          } catch {
-            // Already gone: the lock did its job either way, and failing to
-            // release must not turn a delivered message into an error.
-          }
-        },
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const holder = lockHolder(file);
-      if (holder === 'gone') continue; // released while we were reading it
-      if (holder === 'unknown') {
-        // No pid to check liveness against, so we cannot prove it is stale.
-        // Refusing leaves the owner a file to delete; deleting it blindly would
-        // make the lock a suggestion.
-        return {
-          held: `${file} esiste ma non dice quale processo lo tiene`,
-          remedy: 'se nessun invio è in corso, rimuovi quel file e riprova',
-        };
-      }
-      if (isAlive(holder)) {
-        return {
-          held: `un altro \`muffin observe --send\` è in corso (pid ${holder})`,
-          remedy: 'aspetta che finisca e riprova',
-        };
-      }
-      try {
-        unlinkSync(file);
-      } catch {
-        // Someone else cleared the same stale lock; the retry settles it.
-      }
-    }
-  }
-  return {
-    held: `${file} preso da un altro processo mentre lo liberavamo`,
-    remedy: 'riprova fra un momento',
-  };
-}
-
-function lockHolder(file: string): number | 'gone' | 'unknown' {
-  let raw: string;
-  try {
-    raw = readFileSync(file, 'utf8');
-  } catch {
-    return 'gone';
-  }
-  const pid = Number.parseInt(raw.trim(), 10);
-  return Number.isInteger(pid) && pid > 0 ? pid : 'unknown';
-}
-
-/**
- * Signal 0 sends nothing: it only asks whether that process still exists.
- *
- * The known limit of every pid file: after a wrap, that number can belong to
- * someone else's process and a dead lock reads as live. The failure is a
- * refusal the owner can see and clear, not a second message — which is the
- * direction this is allowed to fail in.
- */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means it exists and belongs to another user — alive, and not ours
-    // to take. Only ESRCH is proof that the holder is gone.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 function ownerQuietHours(home: string): { quiet: QuietHours; note: string | null } {
   const file = join(paths(home).rot, 'budgets.json');
   if (!existsSync(file)) return { quiet: FALLBACK_QUIET, note: `${file} assente` };
@@ -191,20 +84,34 @@ function ownerQuietHours(home: string): { quiet: QuietHours; note: string | null
   }
 }
 
+/**
+ * Delivery, and the reason it throws rather than shrugging.
+ *
+ * Remote delivery is the M4 connect and is not wired. Printing the message and
+ * returning normally made the caller record the fire — and the rule this slice
+ * runs on is that only a message that *reached* the owner burns the anchor.
+ * That anchor carries `lastSeen`, which does not move while the entity stays
+ * silent, so the occasion would have been spent forever on a message nobody
+ * received. The precondition is not exotic: `surfaces.default`'s own docstring
+ * says it is deliberately not the CLI.
+ *
+ * The text is printed first regardless. Losing the message entirely would be a
+ * worse bug than the one this fixes, and `sendAllowed` turns the throw into
+ * "non inviato", exit 1, anchor left open for the next run.
+ */
 const printDeliver: Deliver = async (channel, text) => {
   if (channel === 'cli') {
     process.stdout.write(`\n${text}\n`);
     return;
   }
-  // Same honest gap as the scheduler's: remote delivery is the M4 connect, and
-  // until it lands the message surfaces here instead of vanishing.
   process.stderr.write(`\n[${channel}: consegna remota da cablare]\n${text}\n`);
+  throw new Error(`consegna su "${channel}" non è cablata — il messaggio è qui sopra, non è stato inviato`);
 };
 
 /** The numbers, always: a nudge whose evidence is invisible is the old firehose. */
 function evidence(obs: Observation): string {
   const a = obs.absence;
-  return `${a.occasions} occasioni · arco ${a.spanDays}g · silenzio ${a.gapDays}g · p ${a.p.toFixed(4)}`;
+  return `${a.occasions} occasioni · arco ${a.spanDays}g · silenzio ${a.gapDays}g · p ${formatP(a.p)}`;
 }
 
 function verdict(obs: Observation, fires: FireLog, sent: Map<string, string>): string {
@@ -241,22 +148,11 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     throw error;
   }
 
-  // Scoped to --send, and taken before the database is opened so a refusal
-  // costs nothing. 75 is EX_TEMPFAIL: this run did not fail, it lost a race and
-  // the same command will work in a moment — and 78 (EX_CONFIG) above is the
-  // reason sysexits is the vocabulary here rather than a bare 1.
-  let releaseLock: (() => void) | null = null;
-  if (values.send) {
-    const lock = acquireSendLock(home);
-    if ('held' in lock) {
-      process.stderr.write(`${lock.held}\n→ ${lock.remedy}\n`);
-      return 75;
-    }
-    releaseLock = lock.release;
-  }
-
   const db = new DatabaseCtor(paths(home).db);
+  // Set before any lock is taken: the lock is a write transaction, and without
+  // this a run that loses the race fails instantly instead of waiting its turn.
   db.pragma('busy_timeout = 5000');
+  let releaseLock: (() => void) | null = null;
   try {
     // Both constructors create their own tables. A home that has never run a
     // turn has no memory schema, and no home has ever had a fires table.
@@ -265,6 +161,19 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     const budget = new BudgetEngine(db, config.budget);
 
     const now = over.now ?? new Date();
+
+    // Scoped to --send: showing what is pending is this command's main use and
+    // must work while a send is running. 75 is EX_TEMPFAIL — this run did not
+    // fail, it lost a race and the same command will work in a moment; 78
+    // (EX_CONFIG) above is why sysexits is the vocabulary here, not a bare 1.
+    if (values.send) {
+      const lock = new SendLock(db).acquire(now);
+      if ('held' in lock) {
+        process.stderr.write(`${lock.held}\n→ ${lock.remedy}\n`);
+        return 75;
+      }
+      releaseLock = lock.release;
+    }
     const { quiet, note } = ownerQuietHours(home);
     if (note) process.stderr.write(`! quiet hours dal default (${note})\n`);
     const channel = config.surfaces.default;
@@ -302,8 +211,11 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     }
     return failures > 0 ? 1 : 0;
   } finally {
-    db.close();
+    // Release before the close, not after: the lock is a row in this database,
+    // so a release on a closed handle throws — and it throws from a `finally`,
+    // which would replace whatever the command was actually returning.
     releaseLock?.();
+    db.close();
   }
 }
 
