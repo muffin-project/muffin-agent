@@ -27,7 +27,11 @@ Due rail, entrambi in codice:
 **Perché è comunque un oggetto diverso.** Non per intenzione, per struttura — e ognuna di queste è una riga di codice, non una promessa:
 
 1. **Ha un'ancora e un conto.** Non "un pattern": *quell'*entità, con occasioni, arco storico, giorni di silenzio e la probabilità che li rende anomali (`core/memory/absence.ts`). L'evidenza è ispezionabile e il conto si può rifare. L'opzione C produceva osservazioni non falsificabili.
-2. **Non è a cadenza, è a soglia.** Non esce niente perché è passata una settimana: esce quando il silenzio è improbabile *rispetto al ritmo di quella cosa lì*. Su una vita normale la maggior parte dei giorni non produce nulla.
+2. **Non è a cadenza, è a soglia.** Non esce niente perché è passata una settimana: esce quando il silenzio è improbabile *rispetto al ritmo di quella cosa lì*.
+
+   **Ma "quindi la maggior parte dei giorni non produce nulla" è una frase, non una misura, e la review l'ha smontata.** Alpha limita il tasso *per entità*: con abbastanza entità il tasso *per owner* satura. Sotto l'ipotesi nulla del detector stesso: 50 entità → almeno un candidato nel 91,8% dei giri; 200 entità → nel 100%. Una soglia applicata a abbastanza cose **è** una cadenza. Il tetto a tre non lo impedisce: ordina i falsi allarmi per quanto sono estremi e consegna i tre peggiori.
+
+   Il numero vero non è misurabile oggi: `muffin observe` sulla memoria reale dell'owner (2026-08-10) dà **zero candidati su 0 entità e 0 fatti** — la memoria è vuota perché l'agente non è ancora stato usato, che è il Gate 1 in una riga. Lo strumento per la misura esiste ed è a costo zero (nessun modello, nessuna consegna, nessuna ancora bruciata): **la ratifica di questo emendamento dovrebbe aspettare quel numero**, non questa argomentazione.
 3. **È tarata su un tasso di falsi allarmi dichiarato** (alpha 0,05), non su una costante ereditata. La ricerca ha mostrato che la regola del vecchio Muffin (media × 3) era un test al 16% proprio dove veniva usata — cioè il vecchio firehose era anche *statisticamente* più rumoroso di quanto sembrasse.
 4. **Esce come domanda, mai come asserzione.** L'osservazione è `inferred` per costruzione, e la disciplina di provenienza la obbliga alla forma ipotetica (`knowledge/03-observing-spine.md`).
 5. **Tetto basso e dedup sull'ancora**: lo stesso silenzio non si ripete. La ripetizione era metà del difetto del vecchio.

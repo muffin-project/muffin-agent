@@ -50,7 +50,20 @@ export class ComposeError extends Error {
 export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbsence {
   return async (absence: Absence): Promise<string> => {
     const session = deps.sessions.open(`observe-${absence.entityId}-${randomBytes(3).toString('hex')}`);
-    const result = await runTurn(deps, {
+    // Senza memoria, e non è un'ottimizzazione: `runTurn` registra il proprio
+    // input come episodio `role: 'user'`, tier 0 — cioè come se avesse parlato
+    // l'owner. Qui l'input è un goal che abbiamo scritto noi e che **nomina
+    // l'entità**. Da lì il giro si chiude da solo: recall lo ripesca senza
+    // filtro di ruolo, il vector index lo indicizza, e `memory extract` lo mina
+    // in `facts` con `origin: 'said'` — la tabella esatta da cui
+    // `detectAbsences` conta le menzioni. Il messaggio sull'assenza di X
+    // finirebbe per *essere* una menzione di X, e il sistema si fabbricherebbe
+    // la prova (`ingest.ts` ha la regola scritta, ed è proprio questa).
+    //
+    // Lo Stadio-2 non ne ha bisogno: il goal si chiude con "quello che ti serve
+    // è tutto qui sopra", e la traccia di ciò che è stato detto vive nel fire
+    // log, che è durevole e porta i numeri che l'hanno giustificato.
+    const result = await runTurn({ ...deps, memory: undefined }, {
       principal: { kind: 'system', source: 'scheduler' },
       tenant: 'host',
       surface: channel,

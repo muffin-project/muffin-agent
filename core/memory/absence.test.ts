@@ -154,6 +154,49 @@ describe('calibrazione della soglia', () => {
     expect(inherited[1]!).toBeGreaterThan(inherited[2]!);
     expect(inherited[2]!).toBeGreaterThan(rates[2]!);
   });
+
+  it('e smette di essere esatta quando gli intervalli non sono esponenziali', () => {
+    /**
+     * Il limite strutturale della prova sopra: la sua ipotesi nulla **è** il
+     * modello, quindi non può vedere la misspecificazione. Gli intervalli fra
+     * eventi umani sono il caso da manuale di coda pesante — raffiche e lunghi
+     * vuoti — e questo è il punto di lavoro vero, non quello promesso.
+     *
+     * Misurato qui invece che ignorato: con intervalli lognormali forti la
+     * soglia costa il doppio di quello che dice. Nell'altra direzione, su un
+     * ritmo regolare, il detector è molto più prudente di alpha — tace su cose
+     * che un umano chiamerebbe sparite.
+     */
+    const boxMuller = (rnd: () => number, sigma: number): number => {
+      const u1 = Math.max(rnd(), 1e-12);
+      const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * rnd());
+      return Math.exp(sigma * z - (sigma * sigma) / 2); // media 1, come l'esponenziale
+    };
+    const rateFor = (n: number, draw: (r: () => number) => number): number => {
+      const rnd = lcg(20260810 + n);
+      let hit = 0;
+      for (let i = 0; i < 20_000; i++) {
+        let span = 0;
+        for (let k = 0; k < n; k++) span += draw(rnd);
+        if (overdueProbability(draw(rnd), span, n) < ABSENCE_DEFAULTS.alpha) hit++;
+      }
+      return hit / 20_000;
+    };
+
+    const bursty = [2, 5, 20].map((n) => rateFor(n, (r) => boxMuller(r, 1.5)));
+    // 0,105 · 0,106 · 0,083 — da 1,7× a 2,1× la promessa, e il divario si
+    // stringe con la storia. Il limite superiore vale quanto quello inferiore:
+    // dice che il degrado è un fattore due, non un ordine di grandezza.
+    for (const r of bursty) expect(r).toBeGreaterThan(1.5 * ABSENCE_DEFAULTS.alpha);
+    for (const r of bursty) expect(r).toBeLessThan(0.15);
+    expect(bursty[2]!).toBeLessThan(bursty[0]!);
+
+    // Media di quattro esponenziali = ritmo regolare. 0,0006 · 0,0011 · 0,0018.
+    const regular = [2, 5, 20].map((n) =>
+      rateFor(n, (r) => (-Math.log(1 - r()) - Math.log(1 - r()) - Math.log(1 - r()) - Math.log(1 - r())) / 4),
+    );
+    for (const r of regular) expect(r).toBeLessThan(0.01);
+  });
 });
 
 describe('detectAbsences', () => {
