@@ -20,6 +20,7 @@ import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { httpCapability, makeHttpTool } from './tools/http.js';
+import { makeSearchTool, searchCapability, tavilyBackend } from './tools/search.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
@@ -198,6 +199,49 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   }
   tools.push(makeHttpTool(egress));
 
+  // Search is registered only when it is configured, so an unconfigured install
+  // has no `web_search` in its tool list rather than one that fails at the first
+  // call. The key is read here and never leaves this closure — the same handling
+  // the model key gets.
+  let searchOn = false;
+  const searchNotes: string[] = [];
+  if (config.search) {
+    // The key is read inside the try for the same reason the endpoint check is
+    // below it: a half-configured search must switch search off, not refuse to
+    // boot. Editing config.json and running `muffin secret set` are two steps,
+    // and between them every command that builds a runtime used to die —
+    // `muffin`, `muffin run`, `muffin memory why`. The sibling misconfiguration
+    // three lines down already degrades to a boot line; this one did not.
+    let backend;
+    try {
+      backend = tavilyBackend({
+        apiKey: readSecret(config.search.apiKeyRef, home),
+        ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
+      });
+    } catch (error) {
+      searchNotes.push(
+        `! web_search spento: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      backend = undefined;
+    }
+
+    // The endpoint is a constant, so it gets checked once here rather than on
+    // every call — but it does get checked. Skipping it because "the model
+    // cannot choose the host anyway" is how egress.json stops describing where
+    // this process actually talks.
+    if (backend) {
+      const endpointHost = new URL(backend.endpoint).hostname;
+      if (hostAllowed(endpointHost, egress)) {
+        tools.push(makeSearchTool(backend));
+        searchOn = true;
+      } else {
+        searchNotes.push(
+          `! web_search spento: ${endpointHost} non è in rot/egress.json — aggiungilo e rifai \`muffin rot reseal\``,
+        );
+      }
+    }
+  }
+
   const capabilities = new Map<string, CapabilityDecl>(
     [
       ...fsCapabilities,
@@ -206,6 +250,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
+      // Declared only when the tool exists. A capability the kernel knows about
+      // but nothing can invoke is the harmless direction; the dangerous one is a
+      // tool the kernel has never heard of, and registering them together is
+      // what keeps them from drifting apart.
+      ...(searchOn ? [searchCapability] : []),
     ].map((c) => [c.id, c]),
   );
   const decide = createDecide({
@@ -230,7 +279,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     budget,
     jobs,
     safeMode,
-    bootLines: skillScan.problems.map((p) => `! ${p}`),
+    bootLines: [...skillScan.problems.map((p) => `! ${p}`), ...searchNotes],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);
@@ -246,6 +295,9 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       model: config.models.main,
       tools,
       decide,
+      // The declarations, so the loop derives the policy resource from
+      // resourceKind/policyArgs instead of guessing at argument names.
+      capabilities,
       tracer,
       sessions: new SessionStore(home),
       budgetExhausted: () => budget.exhausted(),

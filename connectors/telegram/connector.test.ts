@@ -10,8 +10,19 @@ import { parseUpdate, principalFor } from './connector.js';
 
 const OWNER = 12345;
 
+// `from` is part of the fixture now, because identity moved from the room to
+// the person: a message with no sender is nobody's, and used to be the owner's.
 const update = (over: Record<string, unknown>): Update =>
-  ({ update_id: 1, message: { message_id: 9, date: 0, chat: { id: OWNER, type: 'private' }, ...over } }) as Update;
+  ({
+    update_id: 1,
+    message: {
+      message_id: 9,
+      date: 0,
+      chat: { id: OWNER, type: 'private' },
+      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      ...over,
+    },
+  }) as Update;
 
 describe('reading a telegram update', () => {
   it('reads a plain private message', () => {
@@ -43,7 +54,7 @@ describe('who is speaking', () => {
   it('gives the owner the host tenant', () => {
     const parsed = parseUpdate(update({ text: 'ciao' }), OWNER)!;
     expect(principalFor(parsed)).toEqual({
-      principal: { kind: 'owner', connector: 'telegram' },
+      principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
       tenant: 'host',
     });
   });

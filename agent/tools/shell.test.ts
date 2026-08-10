@@ -5,7 +5,7 @@ import { createDecide } from '../../core/policy/decide.js';
 import type { ExecResult } from '../../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './shell.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli' } } as const;
+const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
 
 function fakeExec(result?: Partial<ExecResult>) {
   const calls: unknown[] = [];

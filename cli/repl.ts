@@ -157,7 +157,7 @@ export async function runRepl(home = paths().home): Promise<number> {
       controller = new AbortController();
       try {
         const result = await runTurn(runtime.deps, {
-          principal: { kind: 'owner', connector: 'cli' },
+          principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
           tenant: 'host',
           surface: 'cli',
           session,

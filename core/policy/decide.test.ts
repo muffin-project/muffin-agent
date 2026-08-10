@@ -20,7 +20,7 @@ function kernel(overrides: Partial<PolicyContext> = {}) {
   });
 }
 
-const owner: Principal = { kind: 'owner', connector: 'cli' };
+const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 const member: Principal = { kind: 'member', connector: 'telegram', tenantId: 'group:telegram:42', externalId: 'u1' };
 const scheduler: Principal = { kind: 'system', source: 'scheduler' };
 
@@ -34,6 +34,33 @@ const req = (p: Principal, tenant: string, capability: CapabilityId, taint: 0 | 
 });
 
 describe('policy kernel', () => {
+  it("lets a declaration's maxTaint both narrow and widen the class default", () => {
+    // Pinning the real semantics, because a comment here asserted the opposite
+    // ("may narrow it, never widen it") while a shipped declaration widened:
+    // sys.http is medium, whose default ceiling is 1, and declares 3 on
+    // purpose — read-only on an allowlist is what the threat model permits at
+    // taint 2/3. Without this test the next reader has to choose between
+    // believing the prose and believing the code.
+    const decide = kernel({ egressAllowed: () => true });
+
+    // Widened: medium default is 1, sys.http declares 3. Asked with a real url
+    // resource, because a url capability handed anything else is now refused
+    // outright — the gate no longer depends on its caller to supply the
+    // precondition.
+    expect(
+      decide({
+        principal: owner, tenant: 'host', capability: 'sys.http',
+        resource: { kind: 'url', value: 'https://api.example.com/v1' },
+        args: {}, taint: 3,
+      }).effect,
+    ).not.toBe('deny');
+    // Narrowed: fs.write is medium and declares nothing, so 1 is the ceiling.
+    expect(decide(req(owner, 'host', 'fs.write', 2))).toMatchObject({
+      effect: 'deny',
+      code: 'taint_exceeded',
+    });
+  });
+
   it('denies everything above low risk in safe mode', () => {
     // The CLI has always told the user this happens. Until the flag reached the
     // kernel, it did not — the only place in the system where the code asserted
@@ -44,7 +71,7 @@ describe('policy kernel', () => {
       hardened: false,
       safeMode: true,
     });
-    const owner: Principal = { kind: 'owner', connector: 'cli' };
+    const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
     expect(degraded({ principal: owner, tenant: 'host', capability: 'fs.write', resource: { kind: 'none' }, args: {}, taint: 0 }))
       .toMatchObject({ effect: 'deny', code: 'safe_mode' });
     // Reading still works: a degraded agent that cannot answer at all is one
@@ -164,6 +191,27 @@ describe('egress branch — the allowlist in the root of trust speaks for URLs',
     // kernel() has no egressAllowed: absent must mean "nothing is allowed".
     const d = kernel()(urlReq(owner, 'host', 'https://api.example.com/v1', 0));
     expect(d.effect).toBe('ask');
+  });
+
+  it('refuses a url capability that was handed no url at all', () => {
+    // The fail-closed half. A gate whose precondition is supplied by its caller
+    // is not a gate: before this branch existed, a loop that produced anything
+    // other than a url resource skipped the allowlist entirely and fell through
+    // to the risk class, which for medium/reversible is `allow`. That is how a
+    // junk `path` argument fetched an off-allowlist host for a group member.
+    // Asserted on the *reason*, not just the effect, and that is the whole
+    // point: without this branch the request is still denied — `hostOf` throws
+    // on a missing value and falls into the unparseable-url path — so the
+    // outcome alone cannot tell the two apart. What the branch buys is that a
+    // caller which forgot to supply the declared resource is told exactly that,
+    // instead of being sent to look at a URL that was never the problem.
+    for (const resource of [{ kind: 'none' } as const, { kind: 'path', value: '/tmp/x' } as const]) {
+      const d = withList()({
+        principal: owner, tenant: 'host', capability: 'sys.http', resource, args: {}, taint: 0,
+      });
+      expect(d).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+      expect(d.effect === 'deny' && d.detail).toMatch(/declares a url resource but received/);
+    }
   });
 
   it('an unparseable or non-http url is refused outright', () => {

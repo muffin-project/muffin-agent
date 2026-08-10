@@ -17,7 +17,27 @@ import type {
  * for the runtime. See docs/adr/0013.
  */
 
-/** Default ceiling on context taint, by risk class. A decl may narrow it, never widen it. */
+/**
+ * Default ceiling on context taint, by risk class, used when a declaration does
+ * not state one.
+ *
+ * A declaration's own `maxTaint` is authoritative in **both** directions — it
+ * may narrow the default and it may widen it. This comment used to claim the
+ * opposite ("may narrow it, never widen it"), which was never true of the code
+ * below and was already contradicted by a shipped declaration: `sys.http` is
+ * medium risk, whose default ceiling is 1, and deliberately declares 3.
+ *
+ * That declaration is the correct one, which is why the comment moved rather
+ * than the code. The threat model's taint-2/3 row reads "solo read-only su
+ * allowlist pubblica": having read a web page, the agent may read another one.
+ * What the ceiling exists to stop is a tainted context reaching a capability
+ * that *acts* — and those declare a low ceiling explicitly (`sys.process` and
+ * the skill reader both pin 1).
+ *
+ * Widening is therefore a deliberate, reviewable act per capability, not an
+ * accident the type system prevents. Keep it that way: a declaration that
+ * widens without a comment saying why is the thing to catch in review.
+ */
 const DEFAULT_MAX_TAINT: Record<RiskClass, TrustTier> = {
   low: 3,
   medium: 1,
@@ -136,7 +156,29 @@ export function createDecide(ctx: PolicyContext): Decide {
     // everything else is refused: a tainted turn must not be able to *nominate*
     // the exfiltration endpoint, which is exactly what ask-then-approve would
     // let a poisoned context do at 2am.
-    if (decl.resourceKind === 'url' && resource.kind === 'url') {
+    if (decl.resourceKind === 'url') {
+      // Fail closed when the caller did not hand us the URL it declared.
+      //
+      // This branch used to be `resourceKind === 'url' && resource.kind ===
+      // 'url'`, so a caller that produced anything else skipped the allowlist
+      // entirely and fell through to the risk class — which for a medium,
+      // reversible capability is `allow`. That is not hypothetical: the loop
+      // derived the resource from argument *names*, checking `path` before
+      // `url`, so `http_get({url, path:'x'})` produced a path resource and
+      // fetched an off-allowlist host for a taint-2 group member. Measured:
+      // deny without the extra key, allow with it.
+      //
+      // A gate whose precondition is supplied by its caller is not a gate. Now
+      // a caller that forgets produces a refusal, loudly, instead of an
+      // unguarded allow — and the next URL-holding capability (`outward.send`,
+      // declared with `policyArgs: ['to']`) cannot ship with a silent no-op.
+      if (resource.kind !== 'url') {
+        return {
+          effect: 'deny',
+          code: 'resource_denied',
+          detail: `${capability} declares a url resource but received ${resource.kind} — refusing rather than skipping the allowlist`,
+        };
+      }
       const host = hostOf(resource.value);
       if (host === null) {
         return { effect: 'deny', code: 'resource_denied', detail: `unparseable url` };

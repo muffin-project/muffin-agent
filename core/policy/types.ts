@@ -9,7 +9,16 @@
 
 /** Who is acting. Never inferred from message content — resolved before the loop. */
 export type Principal =
-  | { kind: 'owner'; connector: ConnectorId }
+  /**
+   * `externalId` is not optional, deliberately. It used to be absent, and the
+   * Telegram connector filled the gap by comparing the *chat* id — the room —
+   * so anyone speaking in a chat that carried the owner's id arrived as the
+   * owner. A type that permits an anonymous owner is a type that invites the
+   * check to be made out of whatever is nearby. On the CLI the value is
+   * `'local'`: authentication there is having a shell on the machine, and
+   * saying so is better than leaving the field off.
+   */
+  | { kind: 'owner'; connector: ConnectorId; externalId: string }
   | { kind: 'member'; connector: ConnectorId; tenantId: TenantId; externalId: string }
   | { kind: 'system'; source: 'scheduler' | 'consolidation' | 'ratchet' }
   | { kind: 'agent'; role: 'dev' };

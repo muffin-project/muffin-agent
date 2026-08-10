@@ -98,7 +98,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   return { deps: base, store, home, calls };
 }
 
-const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli' }) => ({
+const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' }) => ({
   principal,
   tenant: principal.kind === 'member' ? principal.tenantId : 'host',
   surface: 'cli',
@@ -268,7 +268,7 @@ describe('agent loop', () => {
     };
     const session = store.open('compact');
     await runTurn(d, {
-      principal: { kind: 'owner', connector: 'cli' } as Principal,
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' } as Principal,
       tenant: 'host',
       surface: 'cli',
       session,

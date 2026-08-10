@@ -1,6 +1,7 @@
 import { recall, recallTaint, renderForPrompt, type RecallDeps } from '../core/memory/recall.js';
 import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
+import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
@@ -148,6 +149,14 @@ export type LoopDeps = {
    * taint of whatever it recalled.
    */
   memory?: { store: MemoryStore; recall: RecallDeps } | undefined;
+  /**
+   * The capability declarations, so the resource handed to the kernel comes
+   * from `resourceKind`/`policyArgs` instead of a hardcoded argument name.
+   * Optional only so existing tests can build a minimal deps object — and the
+   * kernel refuses a url capability whose resource never arrived, so a runtime
+   * that forgets to pass this degrades to refusals, not to unguarded allows.
+   */
+  capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
   now?: () => Date;
 };
 
@@ -489,10 +498,15 @@ async function runTool(
 
   const args = (call.args ?? {}) as Record<string, unknown>;
   const capability = tool.capability;
-  const resource =
-    typeof args['path'] === 'string'
-      ? ({ kind: 'path', value: args['path'] } as const)
-      : ({ kind: 'none' } as const);
+  // The kernel decides on a *resource*, so anything it is supposed to gate has
+  // to be lifted out of the args here. `url` was missing, and the consequence
+  // was not a weaker check but no check at all: the egress branch in decide.ts
+  // fires on `resource.kind === 'url'`, every tool call arrived as `none`, and
+  // `http_get` skips the allowlist on its first hop precisely because it
+  // believes the kernel already ruled on it. Both halves were correct and each
+  // was waiting for the other, so an empty allowlist permitted every public
+  // host — verified against the assembled runtime before this line existed.
+  const resource = resourceFor(deps.capabilities?.get(capability), args);
 
   const decisionSpan = deps.tracer.start(
     'muffin.policy_decision',
@@ -580,6 +594,39 @@ async function runTool(
     span.end({ status: 'error', error: detail });
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
   }
+}
+
+/**
+ * The resource the kernel will decide on, taken from the capability's own
+ * declaration rather than guessed from argument names.
+ *
+ * The guess was a second, divergent copy of something the declarations already
+ * carried: `resourceKind` says what kind of thing this capability acts on and
+ * `policyArgs` says which argument holds it. Both were documented as *the*
+ * mechanism and read by nobody, while the loop hardcoded `path` then `url` —
+ * and two places doing one job had already diverged. `outward.send` declares
+ * `policyArgs: ['to']`, which the hardcoded chain would never have read, so the
+ * highest-risk capability in the matrix was going to arrive with a gate that
+ * silently did not fire.
+ *
+ * Only `url` and `path` are lifted. A `tenant` resource is not in the args —
+ * it is the turn's tenant — and inventing one here would change what the kernel
+ * decides for every memory read.
+ */
+function resourceFor(
+  decl: CapabilityDecl | undefined,
+  args: Record<string, unknown>,
+): DecisionRequest['resource'] {
+  if (!decl || (decl.resourceKind !== 'url' && decl.resourceKind !== 'path')) {
+    return { kind: 'none' };
+  }
+  for (const name of decl.policyArgs) {
+    const value = args[name];
+    if (typeof value === 'string') return { kind: decl.resourceKind, value };
+  }
+  // Declared but absent. Returning `none` is deliberate: for a url capability
+  // the kernel now refuses on exactly this, which is the visible failure.
+  return { kind: 'none' };
 }
 
 /**
