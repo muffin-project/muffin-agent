@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { formatP, type Absence } from '../core/memory/absence.js';
-import type { ComposeAbsence } from '../core/scheduler/observe.js';
+import type { ComposeAbsence, Composed } from '../core/scheduler/observe.js';
 import { runTurn, type LoopDeps } from './loop.js';
 
 /**
@@ -48,7 +48,7 @@ export class ComposeError extends Error {
 }
 
 export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbsence {
-  return async (absence: Absence): Promise<string> => {
+  return async (absence: Absence): Promise<Composed> => {
     const session = deps.sessions.open(`observe-${absence.entityId}-${randomBytes(3).toString('hex')}`);
     // No memory, and this is not an optimisation: `runTurn` records its own
     // input as a `role: 'user'` episode, tier 0 — that is, as if the owner had
@@ -80,6 +80,14 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
     }
     const text = result.text.trim();
 
+    // Handed back rather than run here, and the difference is measurable: an
+    // episode written at compose time survives a delivery that throws — which
+    // this slice made the *designed* outcome on an unwired channel — so memory
+    // accumulates one message per failed run that the owner never received, and
+    // recall would ground a later answer on a nudge that was never sent. The
+    // caller runs this next to `recordFired`, after the delivery, so one rule
+    // governs both: only what reached the owner is written down.
+    //
     // Only the agent side goes back in, and the asymmetry is the whole point.
     // The input episode is what closed the loop — a goal we wrote, naming the
     // entity, recorded as the owner's own tier-0 word and then mined into
@@ -92,16 +100,18 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
     // file is one randomly-named jsonl no command surfaces — so when remote
     // delivery lands and the owner replies to a nudge, recall would have
     // nothing to ground the answer on.
-    deps.memory?.store.addEpisode({
-      tenantId: 'host',
-      connector: channel,
-      threadKey: session.id,
-      role: 'agent',
-      kind: 'message',
-      content: text,
-      trustTier: 0,
-      createdAt: (deps.now ?? (() => new Date()))().toISOString(),
-    });
-    return text;
+    const record = (): void => {
+      deps.memory?.store.addEpisode({
+        tenantId: 'host',
+        connector: channel,
+        threadKey: session.id,
+        role: 'agent',
+        kind: 'message',
+        content: text,
+        trustTier: 0,
+        createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+      });
+    };
+    return { text, record };
   };
 }

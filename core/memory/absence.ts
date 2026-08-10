@@ -165,15 +165,6 @@ export type AbsenceOptions = {
   minOccasions?: number;
   /** Mentions within this distance of each other are the same occasion. */
   coalesceMinutes?: number;
-  /**
-   * How many it returns at most, most anomalous first. It is a **burst
-   * limiter, not a rate limit**: it bounds how many you see in one run, not how
-   * many you see in a week, and nothing bounds how often the runs happen. Three
-   * is a design assumption, not a citable number — the research found that the
-   * "3-5 a day" figure in circulation has no primary source
-   * (`research/proattivita-quando-parlare.md` §4).
-   */
-  limit?: number;
 };
 
 export const ABSENCE_DEFAULTS: Required<AbsenceOptions> = {
@@ -181,7 +172,6 @@ export const ABSENCE_DEFAULTS: Required<AbsenceOptions> = {
   minGapDays: 7,
   minOccasions: 3,
   coalesceMinutes: 60,
-  limit: 3,
 };
 
 const DAY_MS = 86_400_000;
@@ -274,9 +264,16 @@ export function detectAbsences(
     });
   }
 
-  // Most anomalous first: if the ceiling cuts, it cuts the least strange ones.
+  // Most anomalous first, and **uncapped**. The per-run ceiling used to live
+  // here, and applying it before the gate's dedup starved the feature: `p`
+  // shrinks as a silence lengthens, so entities that already fired kept ranking
+  // first forever, filled every slot, and were then dropped as already-said.
+  // After three nudges nothing new surfaced again — while the command printed
+  // three lines and exit 0, which is this repo's canonical way of looking
+  // healthy. The ceiling is a proactivity rail (P-I), not a property of memory,
+  // so it lives next to the gate now, in `scheduler/observe.ts`.
   found.sort((a, b) => a.p - b.p || b.gapDays - a.gapDays);
-  return found.slice(0, o.limit);
+  return found;
 }
 
 /** Sorted timestamps → occasions: the first of each burst. */

@@ -351,7 +351,7 @@ describe('detectAbsences', () => {
     expect(detectAbsences(h.db, HOST, now(790), { minOccasions: 2 })).toEqual([]);
   });
 
-  it('when the ceiling cuts, it cuts the least strange', () => {
+  it('returns everything above threshold, most anomalous first, and caps nothing', () => {
     const h = harness();
     // Four real silences, anomaly decreasing along with the number of
     // occasions: more history ⇒ smaller p at the same gap/span ratio.
@@ -365,13 +365,15 @@ describe('detectAbsences', () => {
 
     const found = detectAbsences(h.db, HOST, now(660));
 
-    expect(found).toHaveLength(ABSENCE_DEFAULTS.limit);
+    // Four, not three. The per-run ceiling used to be applied here, and applying
+    // it before the gate's dedup starved the feature: the entities that already
+    // fired keep ranking first — `p` only shrinks as a silence lengthens — so
+    // they filled every slot and were then dropped as already-said. The ceiling
+    // is a proactivity rail and now lives in `scheduler/observe.ts`; the order
+    // stays here, because it is what makes the ceiling cut the least strange.
+    expect(found).toHaveLength(4);
     expect([...found].sort((x, y) => x.p - y.p)).toEqual(found);
-    // The fourth exists and it is the one dropped: the ceiling is not a random
-    // filter.
-    const uncapped = detectAbsences(h.db, HOST, now(660), { limit: 10 });
-    expect(uncapped).toHaveLength(4);
-    expect(names(found)).not.toContain(names(uncapped)[3]);
+    expect(names(found)[3]).toBe('d');
   });
 
   it('reports the numbers that justify the question', () => {

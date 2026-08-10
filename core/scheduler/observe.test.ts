@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { absenceAnchor, type Absence } from '../memory/absence.js';
+import { absenceAnchor, overdueProbability, type Absence } from '../memory/absence.js';
 import { FireLog } from './firelog.js';
 import { decideProactive, type ProactiveTrigger, type QuietHours } from './proactivity.js';
 import { observe, recordFired, type ObserveDeps } from './observe.js';
@@ -127,6 +127,39 @@ describe('observe', () => {
     const rows = [absence({ entityId: 1, name: 'a', p: 0.001 }), absence({ entityId: 2, name: 'b', p: 0.02 })];
     expect(observe(deps({ absences: () => rows })).map((o) => o.absence.name)).toEqual(['a', 'b']);
   });
+
+  it('the ceiling counts decisions, so what was already said cannot crowd out what was not', () => {
+    /**
+     * The starvation this exists to stop. `p` only shrinks as a silence
+     * lengthens, so the entities that already fired keep ranking first forever.
+     * With the ceiling applied before the dedup — where it used to be, in the
+     * detector — those three filled every slot and were then dropped as
+     * already-said, and after three nudges nothing new ever surfaced again. The
+     * command printed three lines and exit 0, which is what made it invisible.
+     */
+    const fires = new FireLog(new DatabaseCtor(':memory:'));
+    const rows = [1, 2, 3, 4, 5, 6].map((i) =>
+      // Ranked as the detector ranks them: the oldest silences are the strongest.
+      absence({ entityId: i, name: `e${i}`, p: 0.001 * i }),
+    );
+    for (const a of rows.slice(0, 3)) {
+      fires.record({ anchor: absenceAnchor(a), kind: 'gone_quiet', decidedAt: NOON, effect: 'allow', reason: 'x' });
+    }
+
+    const out = observe(deps({ absences: () => rows, fires }));
+
+    expect(out.filter((o) => o.decision.effect === 'skip').map((o) => o.absence.name)).toEqual(['e1', 'e2', 'e3']);
+    // Three fresh ones still got through — the whole point.
+    expect(out.filter((o) => o.decision.effect === 'allow').map((o) => o.absence.name)).toEqual(['e4', 'e5', 'e6']);
+  });
+
+  it('the ceiling still bounds what reaches the owner', () => {
+    // The other half: moving the cap must not remove it. Four fresh silences,
+    // three decided, the least strange dropped.
+    const rows = [1, 2, 3, 4].map((i) => absence({ entityId: i, name: `e${i}`, p: 0.001 * i }));
+    const out = observe(deps({ absences: () => rows }));
+    expect(out.map((o) => o.absence.name)).toEqual(['e1', 'e2', 'e3']);
+  });
 });
 
 describe('recordFired', () => {
@@ -140,5 +173,18 @@ describe('recordFired', () => {
     expect(row?.effect).toBe('allow');
     expect(row?.reason).toContain('0.004');
     expect(row?.decidedAt.toISOString()).toBe(NOON.toISOString());
+  });
+
+  it('keeps the strongest evidence readable in the row that has to justify it later', () => {
+    // `formatP` was added for the two paths the owner sees and missed this one —
+    // the durable row whose own docstring says it must justify the nudge months
+    // later without re-running the detector. Eleven occasions and a long silence
+    // is p ≈ 1e-8, which `toFixed(4)` renders as `0.0000`: the strongest case
+    // reading as the weakest, permanently.
+    const fires = new FireLog(new DatabaseCtor(':memory:'));
+    const a = absence({ p: overdueProbability(500, 100, 10), occasions: 11, gapDays: 500 });
+    recordFired(fires, { absence: a, anchor: absenceAnchor(a), decision: { effect: 'allow' } }, NOON);
+
+    expect(fires.get(absenceAnchor(a))?.reason).not.toContain('0.0000');
   });
 });

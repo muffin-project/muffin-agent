@@ -138,6 +138,18 @@ function holdLock(home: string, pid: number): void {
   }
 }
 
+/** What Muffin is on record as having said — agent-side episodes only. */
+function agentEpisodes(home: string): string[] {
+  const db = new DatabaseCtor(paths(home).db);
+  try {
+    return (
+      db.prepare(`SELECT content FROM episodes WHERE role = 'agent'`).all() as { content: string }[]
+    ).map((r) => r.content);
+  } finally {
+    db.close();
+  }
+}
+
 /** Who holds it now, straight from the row — never inferred from behaviour. */
 function lockHolder(home: string): number | null {
   const db = new DatabaseCtor(paths(home).db);
@@ -359,6 +371,10 @@ describe('muffin observe --send · delivery that did not happen', () => {
       expect(err.join('')).toContain('da quanto non tocchi la tesi?');
       // And the run says which one did not go out, next to its evidence.
       expect(out.join('')).toContain('non inviato');
+      // Nothing in memory either. Composing is not saying: an episode written at
+      // compose time would claim Muffin said this, once per failed run, and
+      // recall would later ground an answer on a nudge nobody received.
+      expect(agentEpisodes(home)).toEqual([]);
     } finally {
       rt.close();
     }
@@ -376,6 +392,8 @@ describe('muffin observe --send · delivery that did not happen', () => {
       expect(code).toBe(0);
       expect(out.join('')).toContain('da quanto non tocchi la tesi?');
       expect(firedAnchors(home)).toHaveLength(1);
+      // Delivered, so it is written down — the same rule, the other direction.
+      expect(agentEpisodes(home)).toEqual(['da quanto non tocchi la tesi?']);
     } finally {
       rt.close();
     }
