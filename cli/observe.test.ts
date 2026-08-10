@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,10 +8,11 @@ import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, paths, saveConfig, type Config } from '../core/config/config.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { FireLog } from '../core/scheduler/firelog.js';
+import { SendLock } from '../core/scheduler/sendlock.js';
 import type { LoopDeps } from '../agent/loop.js';
 import type { ChatResult, Provider } from '../agent/providers/types.js';
 import { runInit } from './init.js';
-import { cmdObserve, sendLockPath } from './observe.js';
+import { cmdObserve } from './observe.js';
 
 /**
  * `muffin observe`, end to end on a real home.
@@ -125,6 +126,26 @@ function patchConfig(home: string, patch: (c: Config) => Config): void {
 function scriptedRuntime(home: string, script: string[]): { deps: LoopDeps; close: () => void } {
   const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-observe-ws-')));
   return { deps: { ...runtime.deps, provider: new Scripted(script) }, close: runtime.close };
+}
+
+/** Puts `pid` in the send lock, as a run of that pid would have. */
+function holdLock(home: string, pid: number): void {
+  const db = new DatabaseCtor(paths(home).db);
+  try {
+    new SendLock(db).acquire(NOW, pid);
+  } finally {
+    db.close();
+  }
+}
+
+/** Who holds it now, straight from the row — never inferred from behaviour. */
+function lockHolder(home: string): number | null {
+  const db = new DatabaseCtor(paths(home).db);
+  try {
+    return new SendLock(db).holder();
+  } finally {
+    db.close();
+  }
 }
 
 /** A pid that is really gone — a stale lock the test only *believes* is stale proves nothing. */
@@ -314,6 +335,53 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
   });
 });
 
+describe('muffin observe --send · delivery that did not happen', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('an unwired channel does not burn the anchor for a message nobody got', async () => {
+    // No `deliver` injected — every other test in this file passes one, which is
+    // why the real `printDeliver` was reached by nothing and could return
+    // normally after writing "consegna remota da cablare" to stderr. The caller
+    // then recorded the fire, and the anchor carries `lastSeen`, which does not
+    // move while the entity stays silent: that occasion was spent forever on a
+    // message that never left the machine.
+    const home = homeWithSilence();
+    patchConfig(home, (c) => ({ ...c, surfaces: { ...c.surfaces, default: 'telegram' } }));
+    const rt = scriptedRuntime(home, ['da quanto non tocchi la tesi?']);
+    const { out, err } = capture();
+    try {
+      const code = await cmdObserve(home, ['--send'], { now: NOW, deps: rt.deps });
+
+      expect(code).toBe(1);
+      expect(firedAnchors(home)).toEqual([]);
+      // The text still reaches the screen: losing the message would be worse
+      // than the bug being fixed.
+      expect(err.join('')).toContain('da quanto non tocchi la tesi?');
+      // And the run says which one did not go out, next to its evidence.
+      expect(out.join('')).toContain('non inviato');
+    } finally {
+      rt.close();
+    }
+  });
+
+  it('delivers on the cli channel, where delivery is real', async () => {
+    // The other half: the throw must be about the channel being unwired, not a
+    // blanket refusal that would make `--send` useless everywhere.
+    const home = homeWithSilence();
+    const rt = scriptedRuntime(home, ['da quanto non tocchi la tesi?']);
+    const { out } = capture();
+    try {
+      const code = await cmdObserve(home, ['--send'], { now: NOW, deps: rt.deps });
+
+      expect(code).toBe(0);
+      expect(out.join('')).toContain('da quanto non tocchi la tesi?');
+      expect(firedAnchors(home)).toHaveLength(1);
+    } finally {
+      rt.close();
+    }
+  });
+});
+
 /**
  * Where the quiet hours come from, and what stands in when they are unreadable.
  *
@@ -327,13 +395,30 @@ describe('muffin observe · quiet hours come from the RoT', () => {
 
   const broken: [string, (home: string) => void, string][] = [
     ['missing', (home) => rmSync(budgetsFile(home)), 'assente'],
+    // The two arms are separate rows on purpose. A single `{from:'11pm',
+    // to:'8am'}` fixture fails on *either* regex, so dropping one of them alone
+    // left the suite green — and it is `from` that carries the claim the
+    // docstring makes: no crash, just `inQuietHours` answering false at 23:30
+    // Rome where "23:00" answers true. The night quietly opening was the one
+    // case nothing held.
     [
-      'with invalid quiet hours',
+      'with an invalid quiet-hours start',
       (home) =>
         // The owner's hand, not a random byte: "11pm" is how a time gets written
-        // when nobody said the format is HH:MM. Without the regex it reaches
-        // `nextTimeOfDay` as NaN and the run dies inside cron-parser.
-        writeFileSync(budgetsFile(home), JSON.stringify({ quietHours: { from: '11pm', to: '8am', timezone: 'Europe/Rome' } })),
+        // when nobody said the format is HH:MM.
+        writeFileSync(
+          budgetsFile(home),
+          JSON.stringify({ quietHours: { from: '11pm', to: '08:00', timezone: 'Europe/Rome' } }),
+        ),
+      'quietHours non valide',
+    ],
+    [
+      'with an invalid quiet-hours end',
+      (home) =>
+        writeFileSync(
+          budgetsFile(home),
+          JSON.stringify({ quietHours: { from: '23:00', to: '8am', timezone: 'Europe/Rome' } }),
+        ),
       'quietHours non valide',
     ],
     ['unreadable', (home) => writeFileSync(budgetsFile(home), '{ "quietHours": '), 'illeggibile'],
@@ -415,9 +500,11 @@ describe('muffin observe --send · one at a time', () => {
       // Loud, not a silent no-op: the run that lost has to be distinguishable
       // from the run that had nothing to say.
       expect(codes).toEqual([0, 75]);
-      expect(err.join('')).toContain('in corso');
+      // Names the holder rather than saying "busy": both runs are this process,
+      // so an assertion on the word alone would also pass on the wrong branch.
+      expect(err.join('')).toContain(`pid ${process.pid}`);
       // Released even on the refusal path, or the next run inherits the block.
-      expect(existsSync(sendLockPath(home))).toBe(false);
+      expect(lockHolder(home)).toBeNull();
     } finally {
       rt.close();
     }
@@ -426,7 +513,7 @@ describe('muffin observe --send · one at a time', () => {
   it('a lock held by a living process refuses by name and delivers nothing', async () => {
     const home = homeWithSilence();
     // This process is the most honestly live pid available to the test.
-    writeFileSync(sendLockPath(home), `${process.pid}\n`);
+    holdLock(home, process.pid);
     const rt = scriptedRuntime(home, ['non doveva uscire']);
     const { err } = capture();
     const delivered: string[] = [];
@@ -440,8 +527,8 @@ describe('muffin observe --send · one at a time', () => {
       expect(firedAnchors(home)).toEqual([]);
       expect(code).not.toBe(0);
       expect(err.join('')).toContain(String(process.pid));
-      // A live lock is never deleted: the process holding it still needs it.
-      expect(existsSync(sendLockPath(home))).toBe(true);
+      // A live holder is never cleared: the process holding it still needs it.
+      expect(lockHolder(home)).toBe(process.pid);
     } finally {
       rt.close();
     }
@@ -449,7 +536,7 @@ describe('muffin observe --send · one at a time', () => {
 
   it('a stale lock is taken over, and the send goes through', async () => {
     const home = homeWithSilence();
-    writeFileSync(sendLockPath(home), `${deadPid()}\n`);
+    holdLock(home, deadPid());
     const rt = scriptedRuntime(home, ['da quanto non tocchi la tesi?']);
     capture();
     const delivered: string[] = [];
@@ -462,7 +549,7 @@ describe('muffin observe --send · one at a time', () => {
       expect(code).toBe(0);
       expect(delivered).toEqual(['da quanto non tocchi la tesi?']);
       expect(firedAnchors(home)).toHaveLength(1);
-      expect(existsSync(sendLockPath(home))).toBe(false);
+      expect(lockHolder(home)).toBeNull();
     } finally {
       rt.close();
     }
@@ -470,7 +557,7 @@ describe('muffin observe --send · one at a time', () => {
 
   it('plain `muffin observe` still works while a send holds the lock', async () => {
     const home = homeWithSilence();
-    writeFileSync(sendLockPath(home), `${process.pid}\n`);
+    holdLock(home, process.pid);
     const { out } = capture();
 
     // Showing what is pending is the command's main use: it must never be the
@@ -479,6 +566,6 @@ describe('muffin observe --send · one at a time', () => {
 
     expect(code).toBe(0);
     expect(out.join('')).toContain('la tesi');
-    expect(existsSync(sendLockPath(home))).toBe(true);
+    expect(lockHolder(home)).toBe(process.pid);
   });
 });
