@@ -35,10 +35,20 @@ import type Database from 'better-sqlite3';
  * lungo quando la storia è più magra. Un solo intervallo osservato chiede un gap
  * 19× prima di parlare, senza che nessuna costante glielo imponga.
  *
- * E la promessa è **esatta, non asintotica**: con V = gap/(gap+S) ~ Beta(1,n) si
- * ha p = (1-V)^n, quindi P(p < alpha) = alpha per *ogni* n. Simulato su entità
- * vive (`absence.test.ts` §calibrazione): 0,047 · 0,051 · 0,053 a n = 2, 5, 20 —
- * mentre la regola ×3, sullo stesso campione, dà 0,154 · 0,099 · 0,063.
+ * E la promessa è **esatta, non asintotica** — *sotto l'ipotesi del modello*: con
+ * V = gap/(gap+S) ~ Beta(1,n) si ha p = (1-V)^n, quindi P(p < alpha) = alpha per
+ * *ogni* n. Simulato su entità vive (`absence.test.ts` §calibrazione): 0,047 ·
+ * 0,051 · 0,053 a n = 2, 5, 20 — mentre la regola ×3, sullo stesso campione, dà
+ * 0,154 · 0,099 · 0,063.
+ *
+ * **Dove l'ipotesi non regge, e quanto costa.** Quella prova ha un limite
+ * strutturale: la sua ipotesi nulla *è* il modello, quindi non può vedere la
+ * misspecificazione. Gli intervalli fra eventi umani sono il caso da manuale di
+ * coda pesante, ed è misurato nello stesso file: con intervalli lognormali forti
+ * (σ=1,5) il tasso reale è **0,083-0,105**, cioè da 1,7× a 2,1× quello promesso.
+ * Nell'altra direzione, su un ritmo regolare, scende a 0,001: il detector tace
+ * su cose che un umano chiamerebbe sparite. Quindi alpha è un tetto onesto solo
+ * a meno di un fattore due, e va letto così.
  *
  * **La costante dipende dalla prior, e va detto**: quella sopra è la prior di
  * Jeffreys per un tasso esponenziale, p(λ) ∝ 1/λ, cioè Gamma(0,0) impropria. Con
@@ -76,17 +86,22 @@ import type Database from 'better-sqlite3';
  *
  * La query legge **tutti** i fatti del tenant: serve la storia intera per avere
  * il ritmo, e non c'è indice che eviti una scansione di ciò che va scansionato
- * comunque. Su questa macchina, in memoria: 25k fatti → 18 ms, 100k → 86 ms,
- * 400k → 532 ms (mediana di cinque). Leggermente superlineare per il b-tree
- * temporaneo dell'ORDER BY. È un percorso **schedulato**, non di turno: nessuno
- * aspetta mezzo secondo mentre parla.
+ * comunque. Su questa macchina, in memoria, 500 entità e un terzo delle
+ * menzioni da oggetto: 25k fatti → 18 ms, 100k → 86 ms, 400k → 532 ms (mediana
+ * di cinque). Leggermente superlineare per il b-tree temporaneo dell'ORDER BY. È
+ * un percorso **schedulato**, non di turno: nessuno aspetta mezzo secondo mentre
+ * parla. Una seconda misura indipendente ha dato la stessa forma a ~1,6× la
+ * magnitudine, quindi contano i rapporti, non i millisecondi.
  *
  * Un indice su `facts(tenant_id, object_id)` sembra la mossa ovvia per il ramo
- * da oggetto ed è stato **misurato e scartato**: SQLite lo sceglie e il piano
- * peggiora — 103 ms contro 88 ms a 100k, perché su una scansione dell'intero
- * tenant un indice secondario aggiunge indirezione senza togliere righe. Scritto
- * qui perché è esattamente il tipo di ottimizzazione che al prossimo giro
- * qualcuno riproporrà per intuizione.
+ * da oggetto ed è stato **misurato e scartato** — ma la condizione va detta,
+ * perché senza è irriproducibile. **Con `sqlite_stat1` assente** (nessuno qui
+ * lancia `ANALYZE`) il piano peggiora: 103 ms contro 88 ms a 100k, perché su una
+ * scansione dell'intero tenant un indice secondario aggiunge indirezione senza
+ * togliere righe. **Dopo un `ANALYZE` il segno si inverte** e l'indice diventa
+ * neutro o marginalmente meglio. Quindi: oggi non serve, e chi lo ripropone deve
+ * prima dire se il suo database ha le statistiche — altrimenti misurerà il
+ * contrario e non saprà quale delle due letture è sbagliata.
  */
 
 /** Un'entità che ha smesso di comparire, col conto che lo dice. */
@@ -112,10 +127,17 @@ export type Absence = {
 
 export type AbsenceOptions = {
   /**
-   * Tasso di falsi allarmi accettato. 0,05 è la convenzione, e qui ha un prezzo
-   * leggibile: su cento entità con abbastanza storia, circa cinque risulteranno
-   * silenti per caso. Il cap sotto è ciò che tiene quel numero lontano
-   * dall'owner.
+   * Tasso di falsi allarmi accettato, **per entità**. 0,05 è la convenzione, e
+   * qui ha un prezzo leggibile: su cento entità con abbastanza storia, circa
+   * cinque risulteranno silenti per caso — e su duecento, dieci.
+   *
+   * Detto per intero, perché la versione precedente di questa riga diceva che il
+   * tetto sotto "tiene quel numero lontano dall'owner" e **non è vero**: il tetto
+   * ordina i falsi allarmi per quanto sono estremi e consegna i tre peggiori.
+   * Alpha limita il tasso per entità; il tetto limita la raffica per giro; **il
+   * tasso per owner non lo limita niente**, perché non esiste ancora un cap per
+   * finestra né il decay-on-ignore che P-I richiede. È l'unico pezzo di P-I che
+   * questa slice non porta, e sta scritto qui invece che implicito.
    */
   alpha?: number;
   /**
@@ -134,9 +156,12 @@ export type AbsenceOptions = {
   /** Menzioni entro questa distanza sono la stessa occasione. */
   coalesceMinutes?: number;
   /**
-   * Quante ne torna, al massimo, dalla più anomala. Il tetto è P-I: la ricerca
-   * sulla proattività prematura dice che la soglia va alta e il rubinetto
-   * stretto, non che il detector deve essere timido.
+   * Quante ne torna, al massimo, dalla più anomala. È un **limitatore di
+   * raffica, non un rate-limit**: bounda quante ne vedi in un giro, non quante
+   * ne vedi in una settimana, e nessuno bounda la frequenza dei giri. Tre è
+   * un'assunzione di design, non un numero citabile — la ricerca ha trovato che
+   * il "3-5 al giorno" che circola non ha una fonte primaria
+   * (`research/proattivita-quando-parlare.md` §4).
    */
   limit?: number;
 };

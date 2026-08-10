@@ -1,8 +1,10 @@
+import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Absence } from '../core/memory/absence.js';
+import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import type { CapabilityDecl, DecisionRequest, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
@@ -131,6 +133,29 @@ describe('absenceGoal', () => {
 });
 
 describe('makeAbsenceComposer', () => {
+  it('non scrive il proprio prompt nella memoria da cui lo Stadio-1 legge', async () => {
+    // Il ciclo che questo test chiude: `runTurn` registra l'input come episodio
+    // `role: 'user'`, tier 0 — cioè come se avesse parlato l'owner. Il testo è
+    // il goal generato da noi, che *nomina l'entità*. Da lì: recall lo ripesca
+    // senza filtro di ruolo, il vector index lo indicizza, e `memory extract`
+    // lo mina in `facts` con `origin: 'said'` — la tabella esatta che
+    // `detectAbsences` legge. Risultato: il nudge sull'assenza di X registra
+    // una menzione di X, e il sistema si fabbrica la prova da sé (la regola sta
+    // scritta in `ingest.ts`, ed è proprio questa).
+    //
+    // Lo Stadio-2 non ha bisogno di memoria: il goal dice "quello che ti serve
+    // è tutto qui sopra". Quindi il turno gira senza, e la traccia di ciò che è
+    // stato detto vive nel fire log, che è durevole e la giustifica coi numeri.
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const h = harness([reply('quando hai visto la tesi?')], { memory: { store, recall: { store } } });
+
+    await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
+
+    expect(db.prepare('SELECT role, content FROM episodes').all()).toEqual([]);
+  });
+
+
   it('runs stage 2 as the scheduler principal, on a session of its own, and returns the message', async () => {
     const h = harness([toolCall('demo_read'), reply('quando hai visto la tesi l\'ultima volta?')]);
     const text = await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
