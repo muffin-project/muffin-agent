@@ -133,19 +133,19 @@ describe('absenceGoal', () => {
 });
 
 describe('makeAbsenceComposer', () => {
-  it('non scrive il proprio prompt nella memoria da cui lo Stadio-1 legge', async () => {
-    // Il ciclo che questo test chiude: `runTurn` registra l'input come episodio
-    // `role: 'user'`, tier 0 — cioè come se avesse parlato l'owner. Il testo è
-    // il goal generato da noi, che *nomina l'entità*. Da lì: recall lo ripesca
-    // senza filtro di ruolo, il vector index lo indicizza, e `memory extract`
-    // lo mina in `facts` con `origin: 'said'` — la tabella esatta che
-    // `detectAbsences` legge. Risultato: il nudge sull'assenza di X registra
-    // una menzione di X, e il sistema si fabbrica la prova da sé (la regola sta
-    // scritta in `ingest.ts`, ed è proprio questa).
+  it('does not write its own prompt into the memory Stage-1 reads', async () => {
+    // The loop this test closes: `runTurn` records its input as a `role: 'user'`
+    // episode, tier 0 — as if the owner had spoken. The text is a goal we
+    // generated, and it *names the entity*. From there: recall fishes it back
+    // out with no role filter, the vector index indexes it, and `memory extract`
+    // mines it into `facts` with `origin: 'said'` — the exact table
+    // `detectAbsences` reads. Result: the nudge about X's absence records a
+    // mention of X, and the system manufactures its own evidence (`ingest.ts`
+    // has the rule written down, and this is exactly it).
     //
-    // Lo Stadio-2 non ha bisogno di memoria: il goal dice "quello che ti serve
-    // è tutto qui sopra". Quindi il turno gira senza, e la traccia di ciò che è
-    // stato detto vive nel fire log, che è durevole e la giustifica coi numeri.
+    // Stage 2 needs no memory: the goal says everything it needs is above. So
+    // the turn runs without one, and the trace of what was said lives in the
+    // fire log, which is durable and justifies it with the numbers.
     const db = new DatabaseCtor(':memory:');
     const store = new MemoryStore(db);
     const h = harness([reply('quando hai visto la tesi?')], { memory: { store, recall: { store } } });
