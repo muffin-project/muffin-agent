@@ -20,6 +20,16 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-new-dep.mjs\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}/.claude/hooks/guard-review-branch.mjs\"",
+            "shell": "bash"
+          }
+        ]
       }
     ]
   }
