@@ -55,8 +55,15 @@ export function runInit(options: InitOptions = {}): InitStep[] {
 
   // voice.md lives outside the root of trust on purpose: it is the part that
   // learns, and the ratchet may rewrite it. identity.md is the part that does not.
-  const voiceInstalled = installFile('voice.md', join(home, 'voice.md'), options.force ?? false);
+  const voiceInstalled = installFile('voice.md', p.voice, options.force ?? false);
   step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
+
+  // Pure muffin: the same character for every install, which is what stops a
+  // fresh one from having none at all. identity.md ships empty by design — it
+  // is the owner's — so without this file a first run had three bullet points
+  // and a set of formatting rules standing in for a personality.
+  const personaInstalled = installFile('persona.md', p.persona, options.force ?? false);
+  step('persona', personaInstalled ? 'installed persona.md (uguale per tutti)' : 'already present');
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
   // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading
