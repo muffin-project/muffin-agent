@@ -7,7 +7,6 @@ import { paths } from '../core/config/config.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
 import { runTurn, type LoopDeps } from './loop.js';
-import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
 
