@@ -35,6 +35,11 @@ import type Database from 'better-sqlite3';
  * lungo quando la storia è più magra. Un solo intervallo osservato chiede un gap
  * 19× prima di parlare, senza che nessuna costante glielo imponga.
  *
+ * E la promessa è **esatta, non asintotica**: con V = gap/(gap+S) ~ Beta(1,n) si
+ * ha p = (1-V)^n, quindi P(p < alpha) = alpha per *ogni* n. Simulato su entità
+ * vive (`absence.test.ts` §calibrazione): 0,047 · 0,051 · 0,053 a n = 2, 5, 20 —
+ * mentre la regola ×3, sullo stesso campione, dà 0,154 · 0,099 · 0,063.
+ *
  * **La costante dipende dalla prior, e va detto**: quella sopra è la prior di
  * Jeffreys per un tasso esponenziale, p(λ) ∝ 1/λ, cioè Gamma(0,0) impropria. Con
  * una prior propria il "19×" cambia. La coniugazione e l'identità
