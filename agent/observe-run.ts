@@ -50,19 +50,20 @@ export class ComposeError extends Error {
 export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbsence {
   return async (absence: Absence): Promise<string> => {
     const session = deps.sessions.open(`observe-${absence.entityId}-${randomBytes(3).toString('hex')}`);
-    // Senza memoria, e non è un'ottimizzazione: `runTurn` registra il proprio
-    // input come episodio `role: 'user'`, tier 0 — cioè come se avesse parlato
-    // l'owner. Qui l'input è un goal che abbiamo scritto noi e che **nomina
-    // l'entità**. Da lì il giro si chiude da solo: recall lo ripesca senza
-    // filtro di ruolo, il vector index lo indicizza, e `memory extract` lo mina
-    // in `facts` con `origin: 'said'` — la tabella esatta da cui
-    // `detectAbsences` conta le menzioni. Il messaggio sull'assenza di X
-    // finirebbe per *essere* una menzione di X, e il sistema si fabbricherebbe
-    // la prova (`ingest.ts` ha la regola scritta, ed è proprio questa).
+    // No memory, and this is not an optimisation: `runTurn` records its own
+    // input as a `role: 'user'` episode, tier 0 — that is, as if the owner had
+    // spoken. Here the input is a goal we wrote ourselves and one that **names
+    // the entity**. From there the loop closes on its own: recall fishes it
+    // back out with no role filter, the vector index indexes it, and `memory
+    // extract` mines it into `facts` with `origin: 'said'` — the exact table
+    // `detectAbsences` counts mentions from. The message about X's absence
+    // would end up *being* a mention of X, and the system would manufacture its
+    // own evidence (`ingest.ts` has the rule written down, and this is exactly
+    // it).
     //
-    // Lo Stadio-2 non ne ha bisogno: il goal si chiude con "quello che ti serve
-    // è tutto qui sopra", e la traccia di ciò che è stato detto vive nel fire
-    // log, che è durevole e porta i numeri che l'hanno giustificato.
+    // Stage 2 does not need it: the goal closes with "quello che ti serve è
+    // tutto qui sopra", and the trace of what was said lives in the fire log,
+    // which is durable and carries the numbers that justified it.
     const result = await runTurn({ ...deps, memory: undefined }, {
       principal: { kind: 'system', source: 'scheduler' },
       tenant: 'host',

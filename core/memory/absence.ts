@@ -1,166 +1,171 @@
 import type Database from 'better-sqlite3';
 
 /**
- * Chi è diventato silenzioso — il segnale di Stadio-1 che nasce da *ciò che non
- * è successo*.
+ * Who has gone quiet — the Stage-1 signal born of *what did not happen*.
  *
- * Il principio è cognitivo prima che tecnico (`knowledge/04-learn-from-absence.md`):
- * un tema centrale che sparisce è un evento narrativo, e la sorpresa di ciò che
- * manca è prediction-error quanto quella di ciò che arriva. La regola che rende
- * il principio misurabile: **il silenzio significativo è il delta rispetto al
- * pattern storico**, non il valore assoluto di `last_seen`. Un'entità nominata
- * ogni sei mesi non è silente a tre; una nominata ogni due giorni lo è a dieci.
+ * The principle is cognitive before it is technical
+ * (`knowledge/04-learn-from-absence.md`): a central theme that disappears is a
+ * narrative event, and the surprise of what is missing is prediction-error just
+ * as much as the surprise of what arrives. The rule that makes the principle
+ * measurable: **meaningful silence is the delta against the historical
+ * pattern**, not the absolute value of `last_seen`. An entity named every six
+ * months is not silent at three; one named every two days is silent at ten.
  *
- * ## Perché non la regola "media × 3"
+ * ## Why not the "mean × 3" rule
  *
- * Il vecchio Muffin usava due costanti: almeno 3 menzioni, e silenzio > media × 3.
- * Sembrano una soglia al 5%: se gli intervalli fra menzioni sono esponenziali,
- * P(gap > k·media) = e^-k, ed e^-3 = 0,0498. Ma quel conto vale **solo se la
- * media è nota**, e qui è stimata su una manciata di intervalli.
+ * The old Muffin used two constants: at least 3 mentions, and silence >
+ * mean × 3. They look like a 5% threshold: if the intervals between mentions
+ * are exponential, P(gap > k·mean) = e^-k, and e^-3 = 0.0498. But that
+ * arithmetic holds **only if the mean is known**, and here it is estimated from
+ * a handful of intervals.
  *
- * Con la media stimata, la distribuzione predittiva giusta è la Gamma-Esponenziale
- * coniugata: posterior Gamma(n, S) su λ, e coda predittiva di Lomax
+ * With the mean estimated, the right predictive distribution is the conjugate
+ * Gamma-Exponential: posterior Gamma(n, S) over λ, and a Lomax predictive tail
  *
  *      P(T > gap) = (1 + gap/S)^(-n)
  *
- * dove **n = numero di intervalli osservati** e **S = la loro somma**, che è
- * semplicemente `ultima_menzione − prima_menzione`. La media non compare: si
- * cancella. Con la storia più corta che accettiamo (3 occasioni → n=2), la regola
- * ×3 dà p = 0,16 — **un falso allarme ogni sei entità**, non ogni venti. La forma
- * ×3 è la coda giusta nel limite di n grande e mente esattamente dove il vecchio
- * detector viveva, sul minimo di menzioni.
+ * where **n = the number of observed intervals** and **S = their sum**, which
+ * is simply `last_mention − first_mention`. The mean does not appear: it
+ * cancels. With the shortest history we accept (3 occasions → n=2), the ×3 rule
+ * gives p = 0.16 — **one false alarm every six entities**, not every twenty.
+ * The ×3 form is the right tail in the limit of large n, and it lies exactly
+ * where the old detector lived, at the minimum number of mentions.
  *
- * Quindi la soglia qui è **p**, non k: una manopola sola che *significa* qualcosa
- * (il tasso di falsi allarmi che accetti), e che da sola pretende un silenzio più
- * lungo quando la storia è più magra. Un solo intervallo osservato chiede un gap
- * 19× prima di parlare, senza che nessuna costante glielo imponga.
+ * So the threshold here is **p**, not k: a single knob that *means* something
+ * (the false-alarm rate you accept), and that on its own demands a longer
+ * silence when the history is thinner. One observed interval asks for a 19× gap
+ * before it will speak, without any constant imposing that on it.
  *
- * E la promessa è **esatta, non asintotica** — *sotto l'ipotesi del modello*: con
- * V = gap/(gap+S) ~ Beta(1,n) si ha p = (1-V)^n, quindi P(p < alpha) = alpha per
- * *ogni* n. Simulato su entità vive (`absence.test.ts` §calibrazione): 0,047 ·
- * 0,051 · 0,053 a n = 2, 5, 20 — mentre la regola ×3, sullo stesso campione, dà
- * 0,154 · 0,099 · 0,063.
+ * And the promise is **exact, not asymptotic** — *under the model's
+ * assumption*: with V = gap/(gap+S) ~ Beta(1,n) you get p = (1-V)^n, hence
+ * P(p < alpha) = alpha for *every* n. Simulated on live entities
+ * (`absence.test.ts` §calibration): 0.047 · 0.051 · 0.053 at n = 2, 5, 20 —
+ * while the ×3 rule, on the same sample, gives 0.154 · 0.099 · 0.063.
  *
- * **Dove l'ipotesi non regge, e quanto costa.** Quella prova ha un limite
- * strutturale: la sua ipotesi nulla *è* il modello, quindi non può vedere la
- * misspecificazione. Gli intervalli fra eventi umani sono il caso da manuale di
- * coda pesante, ed è misurato nello stesso file: con intervalli lognormali forti
- * (σ=1,5) il tasso reale è **0,083-0,105**, cioè da 1,7× a 2,1× quello promesso.
- * Nell'altra direzione, su un ritmo regolare, scende a 0,001: il detector tace
- * su cose che un umano chiamerebbe sparite. Quindi alpha è un tetto onesto solo
- * a meno di un fattore due, e va letto così.
+ * **Where the assumption does not hold, and what it costs.** That proof has a
+ * structural limit: its null hypothesis *is* the model, so it cannot see
+ * misspecification. Intervals between human events are the textbook case of a
+ * heavy tail, and it is measured in the same file: with strongly lognormal
+ * intervals (σ=1.5) the real rate is **0.083-0.105**, that is 1.7× to 2.1× the
+ * promised one. In the other direction, on a regular rhythm, it drops to 0.001:
+ * the detector stays quiet about things a human would call gone. So alpha is an
+ * honest ceiling only up to a factor of two, and it should be read that way.
  *
- * **La costante dipende dalla prior, e va detto**: quella sopra è la prior di
- * Jeffreys per un tasso esponenziale, p(λ) ∝ 1/λ, cioè Gamma(0,0) impropria. Con
- * una prior propria il "19×" cambia. La coniugazione e l'identità
- * Gamma-mistura-di-esponenziali = Lomax sono standard e verificate su fonti
- * terze; questa forma chiusa specifica l'abbiamo derivata, non copiata, ed è per
- * questo che `overdueProbability` è esportata e provata su numeri a mano.
+ * **The constant depends on the prior, and that has to be said**: the one above
+ * is the Jeffreys prior for an exponential rate, p(λ) ∝ 1/λ, i.e. an improper
+ * Gamma(0,0). With a proper prior the "19×" changes. The conjugacy and the
+ * Gamma-mixture-of-exponentials = Lomax identity are standard and verified
+ * against third-party sources; this specific closed form we derived rather than
+ * copied, and that is why `overdueProbability` is exported and tested against
+ * numbers worked out by hand.
  *
- * **Non esiste prior art da cui calibrare.** La ricerca (2026-08-10, in
- * `research/proattivita-quando-parlare.md`) non ha trovato letteratura che tratti
- * "un tema smette di comparire" come segnale di memoria o retrieval: nessun
- * benchmark contro cui misurare questa soglia. Da qui la postura conservativa —
- * alpha stretta, pavimento assoluto, tetto basso — che è una scelta obbligata
- * dall'assenza di misura, non timidezza.
+ * **There is no prior art to calibrate against.** The research (2026-08-10, in
+ * `research/proattivita-quando-parlare.md`) found no literature treating "a
+ * theme stops appearing" as a memory or retrieval signal: no benchmark against
+ * which to measure this threshold. Hence the conservative posture — tight
+ * alpha, absolute floor, low ceiling — which is a choice forced by the absence
+ * of a measurement, not timidity.
  *
- * ## Cosa conta come menzione
+ * ## What counts as a mention
  *
- * Un'occasione in cui l'owner ha *portato su* quell'entità, non un fatto vero su
- * di essa. Da qui tre scelte che sembrano dettagli e non lo sono:
+ * An occasion on which the owner *brought that entity up*, not a true fact
+ * about it. From which three choices that look like details and are not:
  *
- *  - **Anche i fatti scaduti contano.** Averne parlato è attenzione, e resta
- *    attenzione anche se poi la credenza è stata superata. Filtrare su
- *    `expired_at IS NULL` misurerebbe cosa credi adesso, non quando te ne sei
- *    occupato.
- *  - **Solo evidenza tier ≤ 1.** È il rail #1 del gate applicato alla *fonte*:
- *    un gruppo che nomina X venti volte non può creare, per assenza successiva,
- *    un nudge nel canale privato dell'owner (threat model §b).
- *  - **Le menzioni ravvicinate collassano in una.** Un messaggio produce cinque
- *    fatti sulla stessa entità nello stesso istante: senza coalescenza gli
- *    intervalli valgono zero, S → 0 e *qualunque* gap risulta infinitamente
- *    improbabile. Sarebbe un firehose costruito per sbaglio dentro l'antidoto al
- *    firehose. La finestra collassa la raffica nell'occasione che è.
+ *  - **Expired facts count too.** Having talked about it is attention, and it
+ *    stays attention even if the belief was later superseded. Filtering on
+ *    `expired_at IS NULL` would measure what you believe now, not when you were
+ *    busy with it.
+ *  - **Tier ≤ 1 evidence only.** It is the gate's rail #1 applied to the
+ *    *source*: a group that names X twenty times cannot create, through its
+ *    later absence, a nudge in the owner's private channel (threat model §b).
+ *  - **Mentions close together collapse into one.** One message produces five
+ *    facts about the same entity in the same instant: without coalescing, the
+ *    intervals are zero, S → 0 and *any* gap comes out infinitely improbable.
+ *    It would be a firehose built by mistake inside the antidote to the
+ *    firehose. The window collapses the burst into the one occasion it is.
  *
- * ## Il costo, misurato
+ * ## The cost, measured
  *
- * La query legge **tutti** i fatti del tenant: serve la storia intera per avere
- * il ritmo, e non c'è indice che eviti una scansione di ciò che va scansionato
- * comunque. Su questa macchina, in memoria, 500 entità e un terzo delle
- * menzioni da oggetto: 25k fatti → 18 ms, 100k → 86 ms, 400k → 532 ms (mediana
- * di cinque). Leggermente superlineare per il b-tree temporaneo dell'ORDER BY. È
- * un percorso **schedulato**, non di turno: nessuno aspetta mezzo secondo mentre
- * parla. Una seconda misura indipendente ha dato la stessa forma a ~1,6× la
- * magnitudine, quindi contano i rapporti, non i millisecondi.
+ * The query reads **every** fact in the tenant: the whole history is what gives
+ * the rhythm, and no index avoids a scan of what has to be scanned anyway. On
+ * this machine, in memory, 500 entities and a third of the mentions from the
+ * object side: 25k facts → 18 ms, 100k → 86 ms, 400k → 532 ms (median of
+ * five). Slightly superlinear because of the ORDER BY's temporary b-tree. It is
+ * a **scheduled** path, not a turn path: nobody waits half a second while they
+ * are talking. A second independent measurement gave the same shape at ~1.6×
+ * the magnitude, so it is the ratios that count, not the milliseconds.
  *
- * Un indice su `facts(tenant_id, object_id)` sembra la mossa ovvia per il ramo
- * da oggetto ed è stato **misurato e scartato** — ma la condizione va detta,
- * perché senza è irriproducibile. **Con `sqlite_stat1` assente** (nessuno qui
- * lancia `ANALYZE`) il piano peggiora: 103 ms contro 88 ms a 100k, perché su una
- * scansione dell'intero tenant un indice secondario aggiunge indirezione senza
- * togliere righe. **Dopo un `ANALYZE` il segno si inverte** e l'indice diventa
- * neutro o marginalmente meglio. Quindi: oggi non serve, e chi lo ripropone deve
- * prima dire se il suo database ha le statistiche — altrimenti misurerà il
- * contrario e non saprà quale delle due letture è sbagliata.
+ * An index on `facts(tenant_id, object_id)` looks like the obvious move for the
+ * object-side branch and was **measured and dropped** — but the condition has
+ * to be stated, because without it the result is irreproducible. **With
+ * `sqlite_stat1` absent** (nobody here runs `ANALYZE`) the plan gets worse:
+ * 103 ms against 88 ms at 100k, because on a scan of the whole tenant a
+ * secondary index adds indirection without removing rows. **After an `ANALYZE`
+ * the sign flips** and the index becomes neutral or marginally better. So: not
+ * needed today, and whoever proposes it again has to say first whether their
+ * database has the statistics — otherwise they will measure the opposite and
+ * not know which of the two readings is wrong.
  */
 
-/** Un'entità che ha smesso di comparire, col conto che lo dice. */
+/** An entity that stopped appearing, with the arithmetic that says so. */
 export type Absence = {
   entityId: number;
   name: string;
   kind: string;
-  /** Occasioni distinte in cui è comparsa (raffiche già collassate). */
+  /** Distinct occasions on which it appeared (bursts already collapsed). */
   occasions: number;
-  /** Prima e ultima occasione, ISO. */
+  /** First and last occasion, ISO. */
   firstSeen: string;
   lastSeen: string;
-  /** Giorni fra la prima e l'ultima occasione: la somma degli intervalli. */
+  /** Days between the first and last occasion: the sum of the intervals. */
   spanDays: number;
-  /** Giorni di silenzio adesso. */
+  /** Days of silence right now. */
   gapDays: number;
   /**
-   * P(un silenzio almeno così lungo | il tuo pattern) sotto la predittiva.
-   * Più è piccolo, più è anomalo. È il numero su cui si taglia.
+   * P(a silence at least this long | your pattern) under the predictive.
+   * The smaller it is, the more anomalous. It is the number the cut is on.
    */
   p: number;
 };
 
 export type AbsenceOptions = {
   /**
-   * Tasso di falsi allarmi accettato, **per entità**. 0,05 è la convenzione, e
-   * qui ha un prezzo leggibile: su cento entità con abbastanza storia, circa
-   * cinque risulteranno silenti per caso — e su duecento, dieci.
+   * The accepted false-alarm rate, **per entity**. 0.05 is the convention, and
+   * here it has a readable price: out of a hundred entities with enough
+   * history, about five will come out silent by chance — and out of two
+   * hundred, ten.
    *
-   * Detto per intero, perché la versione precedente di questa riga diceva che il
-   * tetto sotto "tiene quel numero lontano dall'owner" e **non è vero**: il tetto
-   * ordina i falsi allarmi per quanto sono estremi e consegna i tre peggiori.
-   * Alpha limita il tasso per entità; il tetto limita la raffica per giro; **il
-   * tasso per owner non lo limita niente**, perché non esiste ancora un cap per
-   * finestra né il decay-on-ignore che P-I richiede. È l'unico pezzo di P-I che
-   * questa slice non porta, e sta scritto qui invece che implicito.
+   * Said in full, because the previous version of this line claimed the ceiling
+   * below "keeps that number away from the owner" and **it is not true**: the
+   * ceiling sorts the false alarms by how extreme they are and hands over the
+   * worst three. Alpha bounds the per-entity rate; the ceiling bounds the burst
+   * per run; **nothing at all bounds the per-owner rate**, because there is
+   * still no per-window cap and no decay-on-ignore, which P-I requires. It is
+   * the one piece of P-I this slice does not carry, and it is written here
+   * instead of being implicit.
    */
   alpha?: number;
   /**
-   * Silenzio minimo assoluto, in giorni. Non è statistica: è postura. Un'entità
-   * nominata ogni ora è "in ritardo" dopo mezza giornata e non c'è niente da
-   * chiedere. Nessuna soglia statistica può esprimerlo, perché il conto è
-   * corretto — è la domanda a non valere la pena.
+   * The absolute minimum silence, in days. Not statistics: posture. An entity
+   * named every hour is "overdue" after half a day and there is nothing to ask.
+   * No statistical threshold can express that, because the arithmetic is right
+   * — it is the question that is not worth asking.
    */
   minGapDays?: number;
   /**
-   * Occasioni minime. Due intervalli sono il minimo per cui la parola "pattern"
-   * significa qualcosa in italiano; la formula regge anche con uno, ma nessuno
-   * chiamerebbe pattern due menzioni.
+   * The minimum number of occasions. Two intervals are the least for which the
+   * word "pattern" means anything in plain English; the formula holds with one
+   * as well, but nobody would call two mentions a pattern.
    */
   minOccasions?: number;
-  /** Menzioni entro questa distanza sono la stessa occasione. */
+  /** Mentions within this distance of each other are the same occasion. */
   coalesceMinutes?: number;
   /**
-   * Quante ne torna, al massimo, dalla più anomala. È un **limitatore di
-   * raffica, non un rate-limit**: bounda quante ne vedi in un giro, non quante
-   * ne vedi in una settimana, e nessuno bounda la frequenza dei giri. Tre è
-   * un'assunzione di design, non un numero citabile — la ricerca ha trovato che
-   * il "3-5 al giorno" che circola non ha una fonte primaria
+   * How many it returns at most, most anomalous first. It is a **burst
+   * limiter, not a rate limit**: it bounds how many you see in one run, not how
+   * many you see in a week, and nothing bounds how often the runs happen. Three
+   * is a design assumption, not a citable number — the research found that the
+   * "3-5 a day" figure in circulation has no primary source
    * (`research/proattivita-quando-parlare.md` §4).
    */
   limit?: number;
@@ -177,17 +182,17 @@ export const ABSENCE_DEFAULTS: Required<AbsenceOptions> = {
 const DAY_MS = 86_400_000;
 
 /**
- * La coda predittiva. Esportata perché è la sola affermazione di questo file che
- * si possa sbagliare in silenzio: un test che la controlla contro numeri
- * calcolati a mano vale più di dieci che controllano il giro attorno.
+ * The predictive tail. Exported because it is the one claim in this file that
+ * can be wrong in silence: a single test checking it against numbers worked out
+ * by hand is worth ten that check the machinery around it.
  *
- * `n` intervalli, somma `span`, gap `gap` (stesse unità). Ritorna P(T > gap).
+ * `n` intervals, sum `span`, gap `gap` (same units). Returns P(T > gap).
  */
 export function overdueProbability(gap: number, span: number, n: number): number {
   if (n <= 0) return 1;
-  // Un arco nullo con più occasioni vuol dire che la coalescenza non ha
-  // collassato una raffica: nessun tempo è passato fra menzioni distinte. Non
-  // c'è pattern da violare, e restituire 0 farebbe scattare tutto.
+  // A zero span with more than one occasion means coalescing did not collapse a
+  // burst: no time passed between distinct mentions. There is no pattern to
+  // violate, and returning 0 would make everything fire.
   if (span <= 0) return 1;
   return Math.pow(1 + gap / span, -n);
 }
@@ -195,8 +200,9 @@ export function overdueProbability(gap: number, span: number, n: number): number
 type MentionRow = { entityId: number; name: string; kind: string; at: string };
 
 /**
- * Legge le menzioni e ne ricava i silenzi. Sincrona e senza modello: è lo
- * Stadio-1 per intero — un LLM decide *cosa* dire, mai *se* c'è qualcosa.
+ * Reads the mentions and derives the silences from them. Synchronous and
+ * model-free: this is Stage 1 in full — an LLM decides *what* to say, never
+ * *whether* there is anything.
  */
 export function detectAbsences(
   db: Database.Database,
@@ -206,10 +212,10 @@ export function detectAbsences(
 ): Absence[] {
   const o = { ...ABSENCE_DEFAULTS, ...options };
 
-  // Un'entità è "menzionata" tanto da soggetto quanto da oggetto: "ho visto
-  // Marco" e "il libro di Marco" sono entrambi occasioni in cui Marco è passato.
-  // UNION ALL e non UNION: un fatto che la nomina due volte è comunque una riga
-  // per lato, e la coalescenza le fonde subito dopo.
+  // An entity is "mentioned" from the subject side as much as from the object
+  // side: "I saw Marco" and "Marco's book" are both occasions on which Marco
+  // came up. UNION ALL and not UNION: a fact that names it twice is still one
+  // row per side, and coalescing merges them right afterwards.
   const rows = db
     .prepare(
       `SELECT e.id AS entityId, e.name, e.kind, f.recorded_at AS at
@@ -232,8 +238,8 @@ export function detectAbsences(
 
   const found: Absence[] = [];
   for (const [entityId, mentions] of byEntity) {
-    // UNION ALL non garantisce l'ordine dentro il gruppo su tutti i motori: si
-    // ordina qui, dove costa niente e non dipende dal piano di query.
+    // UNION ALL does not guarantee the order inside the group on every engine:
+    // sort here, where it costs nothing and does not depend on the query plan.
     const times = mentions
       .map((m) => Date.parse(m.at))
       .filter((t) => Number.isFinite(t))
@@ -263,19 +269,19 @@ export function detectAbsences(
     });
   }
 
-  // Dalla più anomala: se il tetto taglia, taglia le meno strane.
+  // Most anomalous first: if the ceiling cuts, it cuts the least strange ones.
   found.sort((a, b) => a.p - b.p || b.gapDays - a.gapDays);
   return found.slice(0, o.limit);
 }
 
-/** Timestamp ordinati → occasioni: la prima di ogni raffica. */
+/** Sorted timestamps → occasions: the first of each burst. */
 function coalesce(sorted: number[], windowMs: number): number[] {
   const out: number[] = [];
   for (const t of sorted) {
     const prev = out[out.length - 1];
-    // Rispetto all'inizio della raffica, non all'ultimo elemento: altrimenti
-    // dieci messaggi a 59 minuti l'uno dall'altro diventano una sola occasione
-    // lunga dieci ore.
+    // Against the start of the burst, not the last element: otherwise ten
+    // messages 59 minutes apart from one another become a single occasion ten
+    // hours long.
     if (prev === undefined || t - prev > windowMs) out.push(t);
   }
   return out;
@@ -286,9 +292,10 @@ function round1(n: number): number {
 }
 
 /**
- * L'ancora per il dedup del gate. Contiene `lastSeen`: lo stesso silenzio non
- * si ripete, ma se ne parli di nuovo e poi taci di nuovo, quello è un silenzio
- * nuovo e può parlare. È la differenza fra ricordare e insistere.
+ * The anchor for the gate's dedup. It carries `lastSeen`: the same silence does
+ * not repeat, but if you talk about it again and then go quiet again, that is a
+ * new silence and it may speak. It is the difference between remembering and
+ * insisting.
  */
 export function absenceAnchor(a: Absence): string {
   return `absence:${a.entityId}:${a.lastSeen}`;
