@@ -28,10 +28,11 @@ import type { TrustTier } from '../policy/types.js';
  * `kind` is a **closed set of concrete, actionable signals** — a free-form
  * "I noticed a pattern" is not representable here. You cannot arm the gate
  * without a real anchor (a commitment, a deadline, a fact that became
- * actionable). The firehose is unbuildable, not merely discouraged. The
- * content rule that follows from it — lead with the concrete thing, cite the
- * evidence, one clear point, never a speculative analysis — belongs to the
- * message the signal-detector writes; this type keeps the *shape* honest.
+ * actionable, a silence measured against that thing's own rhythm). The firehose
+ * is unbuildable, not merely discouraged. The content rule that follows from it
+ * — lead with the concrete thing, cite the evidence, one clear point, never a
+ * speculative analysis — belongs to the message the signal-detector writes;
+ * this type keeps the *shape* honest.
  */
 
 /**
@@ -44,7 +45,23 @@ export type ProactiveKind =
   | 'commitment_due' // an obligation the owner recorded, its time approaching
   | 'deadline_near' // a dated fact whose deadline is close
   | 'fact_actionable' // a tier ≤1 fact that just became something to act on
-  | 'consolidation'; // internal: unconsolidated episodes crossed the threshold
+  | 'consolidation' // internal: unconsolidated episodes crossed the threshold
+  /**
+   * An entity whose silence broke its own measured rhythm (`memory/absence.ts`).
+   *
+   * This one sits against ADR-0028, which rejected the "specchio proattivo a
+   * cadenza" — periodically surfacing patterns about the owner — as exactly the
+   * old firehose, on the owner's direct experience of it. The claim that this is
+   * a different object is structural, not a promise to behave: it fires on one
+   * named entity from a computed tail probability, carries the numbers that
+   * produced it, is capped at three per run and deduped by an anchor that embeds
+   * `lastSeen`, where the rejected option was free-form, unanchored, and on a
+   * clock. Delivery is opt-in per run (`muffin observe --send`) because that
+   * argument is still an argument: the owner has not seen one yet.
+   * What would refute it is ADR-0028's own reversibility signal — the owner
+   * dismissing these — measured as a dismissal rate, not guessed at.
+   */
+  | 'gone_quiet';
 
 export type ProactiveTrigger = {
   /** Provenance of the evidence that armed this. Only ≤ 1 (owner's own) may. */

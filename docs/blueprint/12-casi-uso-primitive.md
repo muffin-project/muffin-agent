@@ -52,6 +52,20 @@ fare latch.** Tre pezzi, e nessuno richiede un LLM che gira a vuoto:
    "Un nudge che si toglie dal prompt quando consegnato" è esattamente questo, e
    la proprietà che serve si chiama idempotenza.
 
+   **Questo pezzo è costruito** (2026-08-10, slice della spina osservante):
+   `core/scheduler/firelog.ts` è il latch. Righe mai cancellate, chiave sull'ancora,
+   e l'ancora porta dentro *quale* istanza dell'evento — così ciò che si spegne è
+   quella occasione lì, non la cosa in generale. Il trigger a predicato **riusa
+   questo**, non ne costruisce un secondo: due registri di "già fatto" divergono,
+   ed è la domanda che il judge fa per prima.
+
+   Due cose imparate cablandolo, che valgono qui identiche. **Un rinvio non è uno
+   sparo**: registrare un `defer` trasforma una notte in quiet-hours in un
+   silenzio permanente su quella cosa — si segna solo ciò che è davvero uscito.
+   E **controlla-poi-consegna non è atomico**: due comandi lanciati insieme
+   consegnavano due volte contro un registro solo, misurato. La cura è un lock
+   sul percorso che consegna, non sul percorso che mostra.
+
 **La forma concreta**: il job store ha già `cron`. Gli si aggiunge un `trigger`
 che è `cron` **oppure** `event`, dove `event` è un **insieme chiuso** di
 predicati — stessa disciplina di ADR-0028, che ha reso il firehose

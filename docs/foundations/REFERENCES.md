@@ -90,13 +90,15 @@ I PDF dei paper vivono nel project knowledge (non in questo repo), così chiunqu
 
 **Dove è citato**: atteso in `pillars/memory/layers/01_identity.md §counterpoint extension`.
 
-### Pare-Bench — Premature Proactive Proposals on Mid-Size Models
+### Pare-Bench — Tempismo delle proposte proattive
 
-**Citation**: [Vendor TBD] (2026). *Pare-Bench: Proactive Agent Research Environment Benchmark*. arXiv:2604.00842 (April 2026).
+**Citation**: Nathani, Zhang, Saxon, Wang et al. (2026). *Proactive Agent Research Environment: Simulating Active Users to Evaluate Proactive Assistants*. arXiv:2604.00842 (1 aprile 2026).
 
-**Cosa dice**: Benchmark sistematico per proattività di agenti LLM. Reports che Gemma fa proposte premature **74.7% delle volte** sul benchmark; Claude (12.8%) e Qwen (26.5%) sono migliori. Gap esecutivo: Qwen ha 18.5% success rate vs 63.7% acceptance rate — il bottleneck è execution, non goal inference.
+**Cosa dice** *(rettificato 2026-08-10 sul testo primario — la voce precedente aveva modello e numeri sbagliati)*: 143 task, app modellate come macchine a stati. La metrica non è "proposte premature": è la quota di proposte che innescano un **gather context**, cioè l'utente aveva bisogno di altre informazioni prima di poter agire — il proxy del paper per il tempismo sbagliato. **Gemma 3 4B Instruct 74,7% ±2,6%**, **Claude 17,8%**, **GPT-5 23,4%**; delle proposte di Gemma solo il **16,0%** è accettato direttamente.
 
-**Perché ci interessa**: dato cruciale per la calibrazione del Decider in Muffin. Su Gemma 4 31B IT, "trust the model" su proattività significa vivere in 74.7% di rumore. Informa la scelta di gate meccanici esterni (cooldown, salience floor, DND) intorno al Decider — non "soglie hardcoded che decidono al posto del modello", ma sistema nervoso autonomo che il modello non scavalca.
+*(La voce diceva "Gemma 4 31B IT", Claude 12,8%, Qwen 26,5%, e chiamava la metrica "proposte premature". Tenuto qui invece che cancellato: una citazione sbagliata che è stata usata per decidere è un fatto sul progetto.)*
+
+**Perché ci interessa**: il divario di tempismo fra un modello piccolo e uno di frontiera è di circa quattro volte, ma **17,8% resta un errore su sei col modello buono** — cioè il gate meccanico fuori dal modello si giustifica anche assumendo il modello migliore, non solo come pezza sui piccoli. È il fondamento empirico dello Stadio-1 deterministico in `core/scheduler/proactivity.ts` e `core/memory/absence.ts`.
 
 **Dove è citato**: atteso in `design/DESIGN.md §decider mechanical gates`, `pillars/planning/README.md`.
 

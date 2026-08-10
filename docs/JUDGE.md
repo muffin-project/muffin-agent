@@ -71,6 +71,14 @@ sembra ovvia che non ce la si fa.
 - Il fallimento è visibile o silenzioso? Il silenzioso è quello che ci costa.
 - È reversibile? Se non lo è, poteva esserlo?
 
+**Cosa si fanno due regole a vicenda?**
+- Quali due regole di questa slice si toccano? Cosa succede allo **stato dopo N
+  esecuzioni**, non dopo una?
+- È il difetto di casa, tre volte su tre: l'allowlist egress (due metà corrette),
+  `decideProactive` (corretto e raggiunto da niente), il tetto dell'assenza
+  applicato prima del dedup (due regole corrette che insieme spegnevano la
+  feature dopo tre usi, in silenzio). **Nessuno dei tre era visibile in un diff.**
+
 **Si può togliere qualcosa?**
 - Cosa si cancella senza perdere niente? La semplificazione è un reperto valido.
 
