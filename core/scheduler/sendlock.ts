@@ -35,11 +35,33 @@ import type Database from 'better-sqlite3';
  * ## What it still does not cover
  *
  * Nothing outside this database: another process writing the fire log directly
- * is not serialised by anything here. And liveness is a pid, so after a pid wrap
- * a dead holder can read as alive — the failure is then a refusal the owner can
- * see and clear, never a second message, which is the direction this is allowed
- * to fail in.
+ * is not serialised by anything here.
+ *
+ * And one guarantee this file depends on without owning: a run that loses the
+ * race must **wait** for the writer ahead of it rather than throwing
+ * SQLITE_BUSY out of `acquire`. That comes from better-sqlite3, which sets
+ * `busy_timeout = 5000` on every connection unless a caller passes `timeout: 0`
+ * (measured, both ways). Setting the pragma here again was written and removed:
+ * it changed nothing, and the test asserting it was asserting the driver.
+ * `sendlock.test.ts` guards the inherited default instead, which is the thing
+ * that could actually stop being true.
+ *
+ * Liveness is a pid, and a bare pid is weaker than it looks — it takes ordinary
+ * reuse after a hard kill, not a 2³² wrap, for a dead holder to read as alive,
+ * and that happens in hours on a busy machine. Left there it would wedge the
+ * command permanently while telling the owner to wait for a send that ended
+ * days ago. So `taken_at` is the backstop: a lock older than an hour is stale
+ * whatever its pid says. A proactive send is one model call, so an hour is
+ * generous by two orders of magnitude, and it collapses the whole liveness
+ * question into a clause the row already has the data for.
  */
+
+/**
+ * How long a claim can stand before it is stale regardless of its pid. Not a
+ * timeout on the send: the send is a single model call. It is the horizon after
+ * which "that pid is alive" stops being evidence that *this* lock is held.
+ */
+export const STALE_AFTER_MS = 60 * 60 * 1000;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS send_lock (
@@ -81,9 +103,11 @@ export class SendLock {
    */
   acquire(now: Date, pid: number = process.pid): LockOutcome {
     const claim = this.db.transaction((self: number, at: string): number | null => {
-      const row = this.db.prepare(`SELECT pid FROM send_lock WHERE id = 1`).get() as
-        | { pid: number | null }
+      const row = this.db.prepare(`SELECT pid, taken_at AS takenAt FROM send_lock WHERE id = 1`).get() as
+        | { pid: number | null; takenAt: string | null }
         | undefined;
+      const takenAt = row?.takenAt ? Date.parse(row.takenAt) : NaN;
+      const stale = Number.isFinite(takenAt) && Date.parse(at) - takenAt > STALE_AFTER_MS;
       // A live holder is a holder, including when it is this pid. The tempting
       // exemption — "a crashed earlier run of our own pid must not lock us out"
       // — was written and removed: it cannot happen (a crashed process is not
@@ -91,7 +115,7 @@ export class SendLock {
       // which is exactly what a scheduler calling this in-process would do. The
       // case it was meant to cover, a pid reused after a wrap, is the documented
       // failure direction: a refusal the owner can see, never a second message.
-      if (row?.pid != null && this.alive(row.pid)) return row.pid;
+      if (row?.pid != null && !stale && this.alive(row.pid)) return row.pid;
       this.db
         .prepare(
           `INSERT INTO send_lock (id, pid, taken_at) VALUES (1, ?, ?)

@@ -92,8 +92,11 @@ function ownerQuietHours(home: string): { quiet: QuietHours; note: string | null
  * runs on is that only a message that *reached* the owner burns the anchor.
  * That anchor carries `lastSeen`, which does not move while the entity stays
  * silent, so the occasion would have been spent forever on a message nobody
- * received. The precondition is not exotic: `surfaces.default`'s own docstring
- * says it is deliberately not the CLI.
+ * received. The precondition is not exotic — it is any home that has run
+ * `muffin surface enable`, which is the point of the slice. (`surfaces.default`
+ * documents itself as deliberately not the CLI while `DEFAULT_CONFIG` ships
+ * `'cli'`; that contradiction is real and is not this file's to settle, so the
+ * argument here rests on the configured case instead of on the docstring.)
  *
  * The text is printed first regardless. Losing the message entirely would be a
  * worse bug than the one this fixes, and `sendAllowed` turns the throw into
@@ -149,8 +152,10 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
   }
 
   const db = new DatabaseCtor(paths(home).db);
-  // Set before any lock is taken: the lock is a write transaction, and without
-  // this a run that loses the race fails instantly instead of waiting its turn.
+  // House pattern (`cli/jobs.ts`, `agent/runtime.ts`): every caller sets it. It
+  // is belt-and-braces rather than load-bearing — better-sqlite3 already applies
+  // 5000ms to every connection, measured — and removing it is caught by nothing,
+  // which is the honest reason it stays rather than a claim that it is needed.
   db.pragma('busy_timeout = 5000');
   let releaseLock: (() => void) | null = null;
   try {
@@ -255,7 +260,12 @@ async function sendAllowed(
   try {
     for (const obs of allowed) {
       try {
-        await deliver(channel, await compose(obs.absence));
+        const composed = await compose(obs.absence);
+        await deliver(channel, composed.text);
+        // Both records happen here, after the delivery, and in this order: the
+        // episode is what Muffin said, the fire is that it said it. A throw from
+        // `deliver` must leave neither behind.
+        composed.record();
         recordFired(fires, obs, now);
         sent.set(obs.anchor, 'inviato');
       } catch (error) {

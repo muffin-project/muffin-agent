@@ -150,12 +150,19 @@ describe('makeAbsenceComposer', () => {
     const store = new MemoryStore(db);
     const h = harness([reply('quando hai visto la tesi?')], { memory: { store, recall: { store } } });
 
-    await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
+    const composed = await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
 
-    // Nothing on the owner's side. The asymmetry is the fix: what comes back is
-    // the agent's own sentence, and `ingest.ts` skips `role: 'agent'` at
-    // extraction, so it can never become a fact and never move the `last_seen`
-    // the detector counts from.
+    // Composing writes nothing at all: saying is not composing, and a delivery
+    // that throws — the designed outcome on an unwired channel — must leave no
+    // trace of a message the owner never got.
+    expect(db.prepare('SELECT role FROM episodes').all()).toEqual([]);
+
+    composed.record();
+
+    // And once it is recorded, nothing on the owner's side. The asymmetry is the
+    // fix: what comes back is the agent's own sentence, and `ingest.ts` skips
+    // `role: 'agent'` at extraction, so it can never become a fact and never
+    // move the `last_seen` the detector counts from.
     const rows = db.prepare('SELECT role, content FROM episodes').all() as { role: string; content: string }[];
     expect(rows.map((r) => r.role)).toEqual(['agent']);
     expect(rows[0]!.content).not.toContain('Scrivi un solo messaggio');
@@ -170,7 +177,7 @@ describe('makeAbsenceComposer', () => {
     const store = new MemoryStore(db);
     const h = harness([reply('quando hai visto la tesi?')], { memory: { store, recall: { store } } });
 
-    await makeAbsenceComposer(h.deps, 'telegram')(ABSENCE);
+    (await makeAbsenceComposer(h.deps, 'telegram')(ABSENCE)).record();
 
     const row = db.prepare('SELECT content, connector, trust_tier AS tier FROM episodes').get() as {
       content: string;
@@ -195,7 +202,7 @@ describe('makeAbsenceComposer', () => {
 
   it('runs stage 2 as the scheduler principal, on a session of its own, and returns the message', async () => {
     const h = harness([toolCall('demo_read'), reply('quando hai visto la tesi l\'ultima volta?')]);
-    const text = await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
+    const { text } = await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
 
     expect(text).toBe('quando hai visto la tesi l\'ultima volta?');
     // The kernel must see system:scheduler, not the owner: a proactive turn does
