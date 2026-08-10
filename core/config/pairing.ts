@@ -33,19 +33,12 @@ import { sha256 } from '../rot/verify.js';
  * your shoulder, or off your screen, inside the ten minutes. That is the same
  * exposure every pairing code has, and it is why the window is short.
  *
- * **Caller deferred, and declared rather than forgotten.** Nothing calls this
- * yet. Wiring it is three edits in one slice — `config.ts` makes `ownerChatId`
- * optional and adds `ownerUserId` plus the pending `pairing`; `cli/surface.ts`
- * prints a code instead of electing the first private chat it has seen; the
- * connector, while unpaired, tests each private message against the pending
- * code and on a match binds `from.id` and clears it.
- *
- * It is committed unwired on purpose and with this paragraph attached, because
- * this repository's characteristic defect is a mechanism that is written,
- * tested and reached by nothing — and the only version of that which is
- * acceptable is the one that says so out loud. Until the wiring lands, the hole
- * it closes is still open: `cli/surface.ts` still elects the first private chat
- * it sees, which is exactly the thing this exists to replace.
+ * **Wired.** `cli/surface.ts` prints a code instead of electing the first
+ * private chat it has seen; `TelegramConnector.tryPair` tests each private
+ * message against the pending code while unpaired and, on a match, binds
+ * `from.id` and persists it. Driven end to end in
+ * `connectors/telegram/pairing-flow.test.ts` — through `drain()`, not through a
+ * reimplementation of its order.
  */
 
 /** Ten minutes: long enough to reach for a phone, short enough not to linger. */
