@@ -66,6 +66,22 @@ import type Database from 'better-sqlite3';
  *    intervalli valgono zero, S → 0 e *qualunque* gap risulta infinitamente
  *    improbabile. Sarebbe un firehose costruito per sbaglio dentro l'antidoto al
  *    firehose. La finestra collassa la raffica nell'occasione che è.
+ *
+ * ## Il costo, misurato
+ *
+ * La query legge **tutti** i fatti del tenant: serve la storia intera per avere
+ * il ritmo, e non c'è indice che eviti una scansione di ciò che va scansionato
+ * comunque. Su questa macchina, in memoria: 25k fatti → 18 ms, 100k → 86 ms,
+ * 400k → 532 ms (mediana di cinque). Leggermente superlineare per il b-tree
+ * temporaneo dell'ORDER BY. È un percorso **schedulato**, non di turno: nessuno
+ * aspetta mezzo secondo mentre parla.
+ *
+ * Un indice su `facts(tenant_id, object_id)` sembra la mossa ovvia per il ramo
+ * da oggetto ed è stato **misurato e scartato**: SQLite lo sceglie e il piano
+ * peggiora — 103 ms contro 88 ms a 100k, perché su una scansione dell'intero
+ * tenant un indice secondario aggiunge indirezione senza togliere righe. Scritto
+ * qui perché è esattamente il tipo di ottimizzazione che al prossimo giro
+ * qualcuno riproporrà per intuizione.
  */
 
 /** Un'entità che ha smesso di comparire, col conto che lo dice. */
