@@ -117,6 +117,89 @@ A `PreToolUse` hook guarding `npm install` against unknown packages is the
 worked example: new dependencies are rare here, so the friction is near zero
 and the slopsquatting window closes structurally.
 
+## 7. The state lives in STATE.md, and it is written before it is needed
+
+**Trigger: a session starts · a compact is near · a slice of work ends.**
+
+`docs/blueprint/STATE.md` is the handoff. Its START HERE block is the answer to
+"where are we", and it is authoritative — if this file and your recollection
+disagree, the file wins.
+
+Three moments, three different mechanisms, deliberately:
+
+- **Session start — mechanised, not remembered.** `.claude/hooks/inject-state.mjs`
+  injects the block on every SessionStart, *including after a compact*. The
+  premise is documented rather than assumed: *"Project-root CLAUDE.md survives
+  compaction: after `/compact`, Claude re-reads it from disk and re-injects it
+  into the session. Nested CLAUDE.md files in subdirectories and rules with
+  `paths:` frontmatter are not re-injected automatically"* — Claude Code docs,
+  Memory, "Instructions seem lost after /compact". STATE.md is nested behind a
+  pointer, so it is exactly what does not come back on its own. This is practice
+  §6 applied to the rule "read STATE.md first", which as prose was skipped often
+  enough to cost whole sessions.
+- **Before a compact — a practice, because the *model* cannot be made to do it.**
+  A `PreCompact` hook can run a command and can block compaction; it cannot
+  inject context, because `PreCompact` is absent from the documented list of
+  events whose `additionalContext` reaches the model. So it cannot ask the model
+  to write anything. It *could* persist a snapshot itself from a shell command —
+  "cannot be mechanised at all" would be too strong. What is true is narrower and
+  is the part that matters: the judgement about what the live state *is* has no
+  mechanism. When context is running short: update the START HERE block *first*,
+  then let the compact happen.
+- **End of a slice — commit.** A commit is the only form of state that survives
+  everything. The block says where we are; the commit says what is true.
+
+One rule about what goes *in* the block: **do not cite a local commit hash for
+work that is still in flight.** A stacked PR gets rebased the moment anything
+below it changes, and every hash in the handoff becomes a pointer nobody can
+`git show` — in the one document whose whole job is to still be true after you
+have forgotten. Link the PR instead; it survives the rebase. A hash is fine once
+it is on `main`.
+
+The honest summary: re-grounding is deterministic, flushing is not. Knowing
+which half is which is the point.
+
+## 8. Converge before you research
+
+**Trigger: about to dispatch research, or about to open more than one line of
+enquiry at once.**
+
+Lock the scope first — the question, and what an answer would change. Broad
+research against an unlocked scope produces a survey nobody can act on, and the
+cost lands twice: the reading, and the re-deciding it invites.
+
+The shape that works here: state the decision the research is *for*, name what
+would flip it, and ask for evidence quality per claim (measured · reported ·
+folklore). The salience research (`research/memory-salience-and-fusion.md`) is
+the worked example — it was commissioned to decide one field's type and one
+ranking question, and it came back saying the field's own tradition rests on an
+unablated hyperparameter. That is only a usable answer because the question was
+narrow enough to be falsified.
+
+## 9. Pure-muffin and your-muffin are separate things
+
+**Trigger: about to add anything that encodes a person — a voice line, a
+threshold, a fact, an example, a default.**
+
+Two categories, and the boundary is what ships:
+
+- **Pure muffin** — what every install gets: the character, the prompts, the
+  primitives, the floors. Open-source, reviewable, the same for everyone.
+- **Your muffin** — what is learned at runtime about one owner: facts,
+  thresholds that adapted, the person-model. Lives only in `~/.muffin/`, never
+  in the repo, never in a fixture.
+
+Getting this backwards has two distinct failure modes and both are bad: a
+personal detail baked into the repo ships someone's life to every contributor;
+a piece of the character left to runtime learning means a fresh install has no
+character at all and reads as a mockup.
+
+The related rail: **a real harness, not slop.** A principle becomes a property
+of a primitive that already exists — a column, a ranking term, a gate — with its
+own test. It does not become a module bolted on beside the thing it describes.
+That rule is stated at the top of `docs/blueprint/knowledge/README.md`, and it
+is why the cognitive corpus is a design input rather than a folder of adapters.
+
 ---
 
 *Sources: Anthropic engineering (hooks vs advisory, verbatim), arXiv:2605.17062

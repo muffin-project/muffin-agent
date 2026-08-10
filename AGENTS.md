@@ -23,8 +23,11 @@ So: **when you add a guard, write the test that fails without its wiring**, not
 the test that proves its logic. In this codebase the logic has never been the
 thing that was wrong.
 
-**The process document is `docs/PRACTICES.md`** — six practices, each with the
-trigger that fires it. This file is why; that file is when.
+**The process document is `docs/PRACTICES.md`** — nine practices, each with the
+trigger that fires it. This file is why; that file is when. **`docs/JUDGE.md`**
+is what a review asks: the standing questions, the verdict labels, and the rule
+that a reviewer reaches the guarantee from production rather than reading the
+diff — because the defect above was in neither diff.
 
 ## Before you change anything
 
