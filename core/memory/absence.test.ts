@@ -104,6 +104,58 @@ describe('overdueProbability', () => {
   });
 });
 
+describe('calibrazione della soglia', () => {
+  /**
+   * L'unica eval che conta su questo pezzo, e non serve un modello per farla:
+   * si generano entità **vive** — intervalli esponenziali, e un silenzio attuale
+   * pescato dalla stessa legge — e si conta quante volte il detector grida
+   * all'assenza. Se `alpha` significa quello che dice, la risposta è alpha.
+   *
+   * Non è un'approssimazione: con V = gap/(gap+S) ~ Beta(1,n) si ha
+   * p = (1-V)^n, quindi P(p < alpha) = alpha esattamente, per ogni n. La
+   * simulazione serve a verificare che il *codice* faccia il conto che l'algebra
+   * dice, che è una cosa diversa.
+   *
+   * Seed fisso: è un calcolo deterministico, non un test che ogni tanto passa.
+   */
+  const lcg = (seed: number): (() => number) => {
+    let s = seed >>> 0;
+    return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+  };
+
+  it('il tasso di falsi allarmi è alpha, e non dipende da quanta storia c\'è', () => {
+    const N = 20_000;
+    const rates: number[] = [];
+    const inherited: number[] = [];
+    for (const n of [2, 5, 20]) {
+      const rnd = lcg(20260810 + n);
+      let byP = 0;
+      let byK = 0;
+      for (let i = 0; i < N; i++) {
+        let span = 0;
+        for (let k = 0; k < n; k++) span += -Math.log(1 - rnd());
+        const gap = -Math.log(1 - rnd());
+        if (overdueProbability(gap, span, n) < 0.05) byP++;
+        // La regola ereditata, sullo stesso identico campione.
+        if (gap > 3 * (span / n)) byK++;
+      }
+      rates.push(byP / N);
+      inherited.push(byK / N);
+    }
+
+    // 0,0473 · 0,0508 · 0,0527 — la manopola mantiene la promessa a ogni n.
+    for (const r of rates) expect(r).toBeGreaterThan(0.04);
+    for (const r of rates) expect(r).toBeLessThan(0.06);
+
+    // 0,1538 · 0,0992 · 0,0629 — la regola "media × 3" sbaglia di tre volte
+    // dove veniva usata, e ci arriva solo con una storia che nessuno ha.
+    expect(inherited[0]!).toBeGreaterThan(3 * ABSENCE_DEFAULTS.alpha);
+    expect(inherited[0]!).toBeGreaterThan(inherited[1]!);
+    expect(inherited[1]!).toBeGreaterThan(inherited[2]!);
+    expect(inherited[2]!).toBeGreaterThan(rates[2]!);
+  });
+});
+
 describe('detectAbsences', () => {
   it('misura il delta dal ritmo, non i giorni: stesso now, due verdetti opposti', () => {
     const h = harness();
