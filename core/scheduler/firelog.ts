@@ -19,6 +19,11 @@ import type { ProactiveDecision, ProactiveKind } from './proactivity.js';
  * cleaned up is an anchor that speaks twice.
  */
 
+// No index on `decided_at`: nothing in this slice queries by time — every read
+// goes through the `anchor` primary key. The per-window rate limit that would
+// use it is deliberately not being built here (inventing another unmeasured
+// constant is what the research note warns against), so an index today is a
+// write cost with no reader. It comes back with its query, not before.
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS proactive_fires (
   anchor     TEXT PRIMARY KEY,
@@ -27,7 +32,6 @@ CREATE TABLE IF NOT EXISTS proactive_fires (
   effect     TEXT NOT NULL,
   reason     TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_fires_decided ON proactive_fires(decided_at);
 `;
 
 export type Fire = {
@@ -35,6 +39,12 @@ export type Fire = {
   anchor: string;
   kind: ProactiveKind;
   decidedAt: Date;
+  /**
+   * Three values in the type, one in the table: `recordFired` is the only
+   * writer and it always records `'allow'`, because a `defer` has to stay
+   * re-decidable (`observe.ts`). Said here so a later reader does not query
+   * this table for deferred decisions — they are not in it, and never were.
+   */
   effect: ProactiveDecision['effect'];
   /** Short, and the evidence rather than prose: what made this worth saying. */
   reason: string;

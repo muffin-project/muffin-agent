@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
@@ -45,8 +45,20 @@ export type ObserveOverrides = {
 /**
  * Quiet hours are a rail, so they are read from the root of trust and not from
  * config.json — which is outside the seal and therefore not a place a rail can
- * live. Parsed rather than cast (PRACTICES §4): a hand-edited `"23"` would
- * otherwise become NaN minutes and quietly open the night.
+ * live. Parsed rather than cast (PRACTICES §4), and the regex is the part that
+ * does the work. Measured on `proactivity.ts`, on the two ways a hand-edit goes
+ * wrong:
+ *
+ *  - `from: "11pm"` — no crash, and at 23:30 Rome `inQuietHours` answers false
+ *    where `"23:00"` answers true. That is the night quietly opening: an hour
+ *    the owner declared closed, with nothing said about it anywhere.
+ *  - `to: "8am"` — `decideProactive` computes the end of the window before it
+ *    checks anything, so the run dies inside cron-parser with
+ *    "Invalid characters, got value: NaN" instead of deferring.
+ *
+ * The old version of this comment cited `"23"` as the NaN case; it is not one.
+ * `"23"` parses as 23:00 (`m ?? 0`) and behaves identically to `"23:00"` —
+ * which is its own small lie, but not the one being guarded here.
  */
 const BudgetsFile = z.object({
   quietHours: z.object({
@@ -58,6 +70,114 @@ const BudgetsFile = z.object({
 
 /** A window, never an empty one: an unreadable file is not a licence to speak at 3am. */
 const FALLBACK_QUIET: QuietHours = { from: '23:00', to: '08:00', timezone: 'UTC' };
+
+/** Where the `--send` lock lives. Exported so the code and its test share one path. */
+export const sendLockPath = (home: string): string => join(paths(home).home, 'observe.lock');
+
+/** Taken, or refused with the reason and what to do about it (like `ConfigError`). */
+type SendLock = { release: () => void } | { held: string; remedy: string };
+
+/**
+ * One `--send` at a time, on this machine.
+ *
+ * `observe()` reads `fires.has(anchor)`, `recordFired` writes after delivery,
+ * and nothing spans the two — so two runs started together both see an unfired
+ * anchor and both deliver. Measured: two messages, one row, exit 0 twice.
+ * `INSERT OR IGNORE` protects the row, not the owner, and a duplicate nudge is
+ * exactly the repetition this slice exists to prevent.
+ *
+ * What it covers and what it does not: it serialises `--send` on this machine.
+ * It is **not** a distributed lock — two hosts on the same home over a network
+ * share do not see each other — and it does **not** make check-then-deliver
+ * atomic against anything that writes the fire log without going through this
+ * command. Plain `muffin observe` never takes it: showing what is pending is
+ * the command's main use and must work while a send is running.
+ */
+function acquireSendLock(home: string): SendLock {
+  const file = sendLockPath(home);
+  // Two attempts: the second exists only to retry after clearing a stale lock,
+  // and if someone else took it meanwhile this must lose rather than insist.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // 'wx' is O_CREAT|O_EXCL: creation is atomic in the kernel, so two
+      // processes starting together cannot both win.
+      const fd = openSync(file, 'wx');
+      try {
+        writeSync(fd, `${process.pid}\n`);
+      } finally {
+        closeSync(fd);
+      }
+      return {
+        release: () => {
+          try {
+            unlinkSync(file);
+          } catch {
+            // Already gone: the lock did its job either way, and failing to
+            // release must not turn a delivered message into an error.
+          }
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const holder = lockHolder(file);
+      if (holder === 'gone') continue; // released while we were reading it
+      if (holder === 'unknown') {
+        // No pid to check liveness against, so we cannot prove it is stale.
+        // Refusing leaves the owner a file to delete; deleting it blindly would
+        // make the lock a suggestion.
+        return {
+          held: `${file} esiste ma non dice quale processo lo tiene`,
+          remedy: 'se nessun invio è in corso, rimuovi quel file e riprova',
+        };
+      }
+      if (isAlive(holder)) {
+        return {
+          held: `un altro \`muffin observe --send\` è in corso (pid ${holder})`,
+          remedy: 'aspetta che finisca e riprova',
+        };
+      }
+      try {
+        unlinkSync(file);
+      } catch {
+        // Someone else cleared the same stale lock; the retry settles it.
+      }
+    }
+  }
+  return {
+    held: `${file} preso da un altro processo mentre lo liberavamo`,
+    remedy: 'riprova fra un momento',
+  };
+}
+
+function lockHolder(file: string): number | 'gone' | 'unknown' {
+  let raw: string;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch {
+    return 'gone';
+  }
+  const pid = Number.parseInt(raw.trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : 'unknown';
+}
+
+/**
+ * Signal 0 sends nothing: it only asks whether that process still exists.
+ *
+ * The known limit of every pid file: after a wrap, that number can belong to
+ * someone else's process and a dead lock reads as live. The failure is a
+ * refusal the owner can see and clear, not a second message — which is the
+ * direction this is allowed to fail in.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists and belongs to another user — alive, and not ours
+    // to take. Only ESRCH is proof that the holder is gone.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 function ownerQuietHours(home: string): { quiet: QuietHours; note: string | null } {
   const file = join(paths(home).rot, 'budgets.json');
@@ -121,6 +241,20 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     throw error;
   }
 
+  // Scoped to --send, and taken before the database is opened so a refusal
+  // costs nothing. 75 is EX_TEMPFAIL: this run did not fail, it lost a race and
+  // the same command will work in a moment — and 78 (EX_CONFIG) above is the
+  // reason sysexits is the vocabulary here rather than a bare 1.
+  let releaseLock: (() => void) | null = null;
+  if (values.send) {
+    const lock = acquireSendLock(home);
+    if ('held' in lock) {
+      process.stderr.write(`${lock.held}\n→ ${lock.remedy}\n`);
+      return 75;
+    }
+    releaseLock = lock.release;
+  }
+
   const db = new DatabaseCtor(paths(home).db);
   db.pragma('busy_timeout = 5000');
   try {
@@ -169,6 +303,7 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     return failures > 0 ? 1 : 0;
   } finally {
     db.close();
+    releaseLock?.();
   }
 }
 
