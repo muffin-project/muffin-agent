@@ -72,8 +72,12 @@ Nessuno è un "modulo cognitivo": sono **proprietà di 4-5 primitive**.
   sugli *inferiti* — un'inferenza esce come **domanda/ipotesi**, non asserzione.
   È l'antidoto strutturale al vecchio firehose.
 - **Postura anti-firehose**: P-I (information-surfacing rate-limit + decay-on-ignore)
-  + cap per finestra + quiet-hours + budget. Grounding empirico: Pare-Bench misura
-  ~74,7% di proposte premature su Gemma → la soglia va alta, non a intuito.
+  + cap per finestra + quiet-hours + budget. Grounding empirico *(rettificato
+  2026-08-10 sul testo primario)*: Pare-Bench misura la quota di proposte che
+  innescano un **gather context** — l'utente non poteva ancora agire — e vale
+  74,7% su Gemma 3 4B, ma **17,8% su Claude e 23,4% su GPT-5**. Il gate meccanico
+  si giustifica anche col modello buono: uno su sei sbaglia il momento. La soglia
+  va alta, non a intuito.
 - **La tensione della THESIS**: uno specchio che punto io dove dico io non mostra
   veri punti ciechi. Serve **segnale esterno indipendente** (calendar/github/news)
   che muffin non filtra direttamente — non solo ciò che gli racconti.
@@ -93,4 +97,9 @@ importanza ≠ frequenza · **primitive, non moduli a lato**.
 `docs/pillars/planning/README.md` · `src/decider.ts` · `docs/foundations/PRINCIPLES.md §P-I`
 · `context/HEARTBEAT.md` · `src/memory/{memory_affect_signature,circadian}.ts` ·
 `docs/foundations/{UNDERSTANDING,VISION,THESIS}.md` · blueprint `adr/0028-postura-di-proattivita.md`
-· Pare-Bench (2026, arXiv:2604.00842, da `REFERENCES.md`).
+· Pare-Bench (2026, arXiv:2604.00842, da `REFERENCES.md`)
+· `research/proattivita-quando-parlare.md` (sweep 2026-08-10: il cancello a due
+stadi ha un precedente misurato in arXiv:2605.30152 — ma là lo Stadio-1 è un
+modello *appreso*, il nostro è deterministico, e la divergenza è deliberata;
+l'assenza-come-segnale non ha invece prior art trovata, quindi nessun benchmark
+su cui tarare) · lo Stadio-1 dell'assenza è costruito: `core/memory/absence.ts`.
