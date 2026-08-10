@@ -208,3 +208,39 @@ and USENIX '25 (hallucination rates), clig.dev + GNU Coding Standards +
 (assertions), Alexis King (parse don't validate), Beck/Hunt-Thomas
 (spike/tracer bullet). Full research reports in the blueprint repo under
 `.claude/agent-memory/research-scout/`.*
+
+## 10. A subagent that dies still wrote down what it found
+
+A review that ends in `API Error` looks like a total loss and is not. The
+transcript is written **as the agent works**, not at the end, and it survives the
+process:
+
+```
+jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' \
+  ~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl
+```
+
+Filtering to the agent's own text keeps it small — in the case that produced this
+rule, **1.1 KB of narration inside 627 KB of transcript**, so it costs nothing to
+read. That narration held three findings nobody else had, two of them defects
+that a full second review then confirmed. An hour of work was written off as
+gone while it was sitting on disk.
+
+So: when a subagent dies, read its transcript before re-running it, and tell the
+replacement what the first one already found.
+
+## 11. Ask what two rules do to each other, not what each one does
+
+The review loop is good at "is this line right" and blind to "do these two rules
+compose". That blindness is not incidental — it is this repository's signature
+failure, three times over: the egress allowlist (two correct halves, each waiting
+for the other), `decideProactive` (correct, and reached by nothing), and the
+absence ceiling applied before the dedup (two correct rules that together made
+the feature stop working after three uses, silently).
+
+None of the three was visible in a diff. Each needed the question *what does the
+state look like after N runs?*
+
+`docs/JUDGE.md` carries this as a standing question now. It is not a new kind of
+rigour — it is the same "review the guarantee, not the diff" rule applied to a
+guarantee that no single file states.
