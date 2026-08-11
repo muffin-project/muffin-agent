@@ -129,7 +129,10 @@ chiave *"non ho trovato un modo pulito di farlo col solo cron"*. E il loro unico
 meccanismo interno (`cron/suggestions.py`, fonte `usage`) ha **zero chiamanti in
 produzione** — il nostro difetto di casa, nel loro repo, non ancora trovato da loro.
 **Contro-posizione seria da registrare in ADR-0028**: Hermes rifiuta le quiet
-hours nel control-plane *come dottrina* (#17459). Risposta nostra, misurata:
+hours nel control-plane *come dottrina* (#17459, aperta, 2026-04-29; le due PR
+che riportavano quella forma — #4711, #7402 — sono chiuse senza merge; l'issue
+più votata sulla proattività è #9645, aperta, 8 👍. Tutti verificati live il
+2026-08-11). Risposta nostra, misurata:
 Pare-Bench 17,8% di momento sbagliato sul modello migliore — uno su sei è troppo
 per un rail che puoi rendere deterministico.
 **Adopt**: un "no" sopravvive a un "sì" (i respinti tenuti per sempre, solo per
