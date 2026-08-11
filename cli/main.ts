@@ -19,6 +19,13 @@ import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } 
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import {
+  cmdGatewayInstall,
+  cmdGatewayRun,
+  cmdGatewayStatus,
+  cmdGatewayStop,
+  GATEWAY_USAGE,
+} from './gateway.js';
 import { cmdObserve } from './observe.js';
 import type { TrustTier } from '../core/policy/types.js';
 import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
@@ -43,6 +50,10 @@ operator commands:
               [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
   muffin doctor [--json]
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin gateway status | stop | install [--write]
+                                il processo che tiene vivi i job quando non hai
+                                nessuna finestra aperta. \`muffin init\` propone
+                                di installarlo; \`run\` lo lancia il supervisore.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
   muffin secret set NAME        (value on stdin)
   muffin rot verify | reseal
@@ -122,6 +133,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMcp(rest);
     case 'jobs':
       return cmdJobs(rest);
+    case 'gateway':
+      return cmdGateway(rest);
     case 'observe':
       return cmdObserve(paths().home, rest);
     case 'secret':
@@ -221,8 +234,44 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stderr.write(`\nRun \`muffin init\` again once resolved — it picks up where it left off.\n`);
     return 1;
   }
+
+  await offerGateway();
   process.stderr.write(`\nNext: muffin doctor\n`);
   return 0;
+}
+
+/**
+ * The one question that decides whether Muffin is a process or a command.
+ *
+ * ADR-0035 says to print the unit rather than enable it silently, and that is
+ * right about consent and wrong about ergonomics: a manual step at the end of a
+ * setup is a step nobody takes — owner, verbatim, about exactly these commands:
+ * *"non lancerò mai quei comandi a mano."* A gateway nobody installs leaves the
+ * scheduler where it was, which is the defect this whole slice exists to close.
+ *
+ * So it is asked here, once, inside a setup the owner is already sitting
+ * through — still their explicit act, just at the moment they are present. Off
+ * a TTY it prints the command instead and installs nothing: `promptLine`
+ * returns undefined on a pipe, which is the same rule `cmdInit` uses for the
+ * API key and `install.sh` uses for the wizard. An installer that wrote a
+ * service unit into a scripted run would be doing exactly what the ADR forbids.
+ */
+async function offerGateway(): Promise<void> {
+  const answer = await promptLine(
+    '\nInstallo il gateway, così i job girano anche a finestra chiusa? [Y/n] ',
+  );
+  if (answer === undefined) {
+    process.stderr.write(`\nPer far girare i job senza una finestra aperta:\n  muffin gateway install --write\n`);
+    return;
+  }
+  if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
+    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install\n`);
+    return;
+  }
+  // `--write` and not the enable: writing the file is what the owner just
+  // agreed to, and loading it into the supervisor stays their command. The
+  // difference matters — one is a file in their home, the other is a service.
+  cmdGatewayInstall(paths().home, ['--write']);
 }
 
 /**
@@ -390,6 +439,17 @@ async function cmdVault(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(VAULT_USAGE);
+  return 78;
+}
+
+async function cmdGateway(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+  if (sub === 'run') return cmdGatewayRun(home);
+  if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
+  if (sub === 'stop') return cmdGatewayStop(home);
+  if (sub === 'install') return cmdGatewayInstall(home, rest);
+  process.stderr.write(GATEWAY_USAGE);
   return 78;
 }
 

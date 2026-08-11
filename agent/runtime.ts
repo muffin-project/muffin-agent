@@ -56,6 +56,16 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
+  /**
+   * That same connection, for the coordination a runtime cannot express through
+   * one of its stores — today the gateway lock (ADR-0035), which the REPL reads
+   * to decide whether it may start a ticker.
+   *
+   * Exposed rather than letting callers open a second handle, which is what
+   * `connectSurfaces` does and what ADR-0035 warns against by name: *"moltiplica
+   * le connessioni al DB e le corse"*. One process, one connection.
+   */
+  db: DatabaseCtor.Database;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
   /**
@@ -299,6 +309,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     config,
     budget,
     jobs,
+    db,
     safeMode,
     bootLines: [
       ...skillScan.problems.map((p) => `! ${p}`),

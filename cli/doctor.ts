@@ -6,6 +6,7 @@ import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
+import { readGateway } from '../core/gateway/lock.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
 
 /**
@@ -179,6 +180,23 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
       } else {
         ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
       }
+    }
+    // Is anything running? Same shape of invisible fact as the cache dialect
+    // and the policy source above: with the scheduler moved out of the REPL
+    // (ADR-0035) a home with no gateway schedules *nothing*, and nothing in the
+    // agent's output says so — the jobs are still listed, they simply never
+    // fire. Constraint 5 of that ADR is "visibile e ammazzabile", and this is
+    // the visible half.
+    const gateway = readGateway(db);
+    if (gateway) {
+      const since = gateway.since.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}`);
+    } else {
+      warn(
+        'gateway',
+        'nessun processo attivo: i job schedulati girano solo mentre una sessione `muffin` è aperta',
+        'run `muffin gateway install` (o `muffin init`, che te lo propone)',
+      );
     }
     db.close();
   } catch (error) {

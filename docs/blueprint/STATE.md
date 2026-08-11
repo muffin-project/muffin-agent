@@ -78,6 +78,20 @@ usabile**. Cinque cose, tutte verificate sul codice:
    va scritto nel prompt** — va reso vero. Serve un processo che vive senza il
    terminale, più `heartbeat`/`queue`/`steer`/`undo`. Non i 95: la loro
    cromatura è il "TROPPE cose" che l'owner rifiuta.
+   ✅ **Il processo c'è** (`slice/gateway`, 2026-08-11, 655 test): `muffin
+   gateway run` possiede lo scheduler (il `setInterval` è uscito da
+   `cli/repl.ts`), `status`/`stop`/`install` e `doctor` lo vedono, SIGTERM e
+   SIGUSR1 drenano entro un budget, `sd_notify` (READY/WATCHDOG/STATUS) è no-op
+   senza `NOTIFY_SOCKET`. **Provato eseguendolo**: job creato → gateway avviato
+   senza REPL → fire a 24 s → `stop` che drena. Due scheduler non girano mai
+   (rivendicazione durevole in `gateway_lock`, letta dal REPL che cede il ticker
+   e lo dice); l'orizzonte è un **battito**, non un'ora, e un `kill -9` non
+   incastra il comando. **Resta**: `queue`/`steer`/`heartbeat`/`undo` (vogliono
+   il protocollo sul socket, non costruito), il trigger a soglia del punto 1 qui
+   sotto, la consegna remota. Dettaglio in `04-roadmap.md` §M5-bis punto 0.
+   *(Chiude anche il "da verificare prima del deploy VPS" in fondo a questo file:
+   sotto systemd stdin è `/dev/null` e il REPL uscirebbe subito — il gateway non
+   ha readline, quindi la modalità di servizio che mancava adesso esiste.)*
 1. **Il consolidamento non parte mai.** `ingestPending` ha un solo chiamante,
    `muffin memory extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
    La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
