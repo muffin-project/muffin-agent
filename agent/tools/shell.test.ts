@@ -2,6 +2,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
+import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { ExecResult } from '../../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './shell.js';
 
@@ -34,7 +35,7 @@ function fakeExec(result?: Partial<ExecResult>) {
  */
 describe('sys.shell through the kernel', () => {
   const caps = new Map([[shellCapability.id, shellCapability]]);
-  const base = { capabilities: caps, budgetExhausted: () => false };
+  const base = { capabilities: caps, matrix: POLICY_FLOOR, budgetExhausted: () => false };
   const req = {
     tenant: 'host',
     capability: shellCapability.id,

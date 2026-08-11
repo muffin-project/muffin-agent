@@ -4,6 +4,8 @@ import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { verify } from '../core/rot/verify.js';
+import { checkRotReaders } from '../core/rot/readers.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
 
 /**
@@ -72,6 +74,44 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
   } else {
     warn('root of trust', `${rot.reason}: ${rot.diverged.join(', ')} — safe mode`, rot.remedy);
   }
+  // Where the permission matrix came from. Same shape of invisible fact as the
+  // cache dialect above: the sealed file and the compiled fallback behave
+  // identically on a default install, so nothing in the agent's output tells
+  // the owner which one answered — and the difference is whether their edits to
+  // `rot/policy.json` mean anything.
+  const matrix = loadPolicyMatrix(home);
+  const taint = matrix.defaultMaxTaint;
+  if (matrix.source === 'sealed') {
+    ok(
+      'policy matrix',
+      `rot/policy.json — taint max low ${taint.low} / medium ${taint.medium} / high ${taint.high}, ${matrix.neverAtRuntime.size} mai a runtime, ${matrix.forbiddenForSystem.size} vietate agli autonomi`,
+    );
+  } else {
+    warn(
+      'policy matrix',
+      `fallback ai valori compilati (${matrix.note}) — le modifiche a rot/policy.json non hanno effetto`,
+      'ripristina il file dai default del repo e rifai `muffin rot reseal`',
+    );
+  }
+
+  // The RoT-readers invariant, run where an owner will see it. An invariant
+  // nothing executes is the defect examining itself — and this one exists
+  // precisely because a sealed file went unread for months without a single
+  // check going red.
+  const readers = checkRotReaders(home);
+  if (readers.skipped.length > 0) {
+    warn('rot readers', readers.skipped.map((s) => `NON verificato — ${s.why}`).join('; '), 'run `muffin rot reseal`');
+  } else if (readers.violations.length === 0) {
+    ok('rot readers', `${readers.fileCount} file sigillati, ognuno con un lettore dichiarato`);
+  } else {
+    const worst = readers.violations.some((v) => v.severity === 'error') ? fail : warn;
+    worst(
+      'rot readers',
+      readers.violations.map((v) => `${v.id}: ${v.sample.join(', ')}`).join(' · '),
+      'un file dentro il sigillo che nessuno legge sembra vincolante e non lo è: dagli un lettore, oppure toglilo da rot/ e rifai `muffin rot reseal`',
+    );
+  }
+
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
