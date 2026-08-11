@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatResult, Provider } from '../../agent/providers/types.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import type { RecallItem } from './recall.js';
 import { LlmReranker, RERANK_MIN_CANDIDATES } from './rerank.js';
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
   calls = 0;
+  readonly seen: ChatCall[] = [];
   constructor(private readonly reply: string | Error) {}
-  async chat(): Promise<ChatResult> {
+  async chat(request?: ChatCall): Promise<ChatResult> {
+    if (request) this.seen.push(request);
     this.calls += 1;
     if (this.reply instanceof Error) throw this.reply;
     return {
@@ -43,6 +45,14 @@ describe('reranking', () => {
     const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
     expect(provider.calls).toBe(1);
     expect(reranked.map((i) => i.id)).toEqual([14, 3, 7]);
+    // Honesty about what this pin defends: the marker is correct by
+    // construction, and TODAY it is a no-op — this prefix is ~190 tokens and
+    // the light lane's model (Haiku) ignores cache_control below a 4096-token
+    // minimum. No write happens, no price changes either way. The pin exists so
+    // the marker survives refactors and starts working the day the prefix
+    // grows past the floor — not because it saves money now. Whoever sees a
+    // "cache miss" here later: it is a length problem, not a bug.
+    expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
   });
 
   it('keeps the RRF order when the reranker breaks', async () => {
