@@ -65,13 +65,16 @@ export type PolicyMatrix = {
  * ADR-0013's monotone confinement applied where it means something: the file
  * may add prohibitions, it may not remove them.
  *
- * `defaultMaxTaint` is not clamped, and that is deliberate rather than
- * overlooked. It is a *default* — consulted only for declarations that omit
- * `maxTaint` — and a declaration already overrides it in **both** directions on
- * purpose (`sys.http` is medium risk and declares 3; see the comment on
- * `PolicyContext.matrix`). Clamping the default while the declaration layer
- * roams free would be a guarantee only one of the two halves honours, which is
- * the shape of defect this repo keeps paying for.
+ * `defaultMaxTaint` **is** clamped downward — the file lowers, never raises.
+ * The first version of this file argued the opposite (a declaration overrides
+ * the default in both directions anyway, so why constrain the file), and a
+ * judge measured what that bought: `{"medium":3}` in a resealed policy.json
+ * turned `mcp.*` from "a tainted turn cannot reach a third-party server at
+ * all" into a silent `allow`, because that capability — like `fs.write` and
+ * `sys.shell` — inherits the class default rather than pinning its own. The
+ * declaration layer and the file are not the same trust domain: one is a
+ * reviewed commit, the other is a write plus a reseal. So the file is a
+ * tightening knob only, exactly like the deny lists below.
  *
  * Refusing to boot instead of falling back was the other option and is worse: a
  * home installed before `policy.json` existed would be bricked by an upgrade,
@@ -126,12 +129,29 @@ export function loadPolicyMatrix(home: string): PolicyMatrix {
   return merge(parsed.data);
 }
 
+/** The stricter of the two, always — the file's only direction is down. */
+function tighter(fromFile: TrustTier | undefined, floor: TrustTier): TrustTier {
+  return fromFile !== undefined && fromFile < floor ? fromFile : floor;
+}
+
 function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
   return {
+    // Clamped DOWNWARD, symmetric with the union below: the file may lower a
+    // ceiling, never raise one. The first version left it unclamped, reasoning
+    // that declarations already override in both directions — true, and a
+    // different trust domain: a declaration change is a repo commit under
+    // review, a policy.json change is a file write plus `muffin rot reseal`.
+    // Measured on a real home before this line existed: `{"defaultMaxTaint":
+    // {"medium":3}}` took `mcp.*` from "a tainted turn cannot reach a
+    // third-party server at all" to a silent allow at taint 3, because
+    // `mcpCapabilityFor`, `fs.write` and `sys.shell` all inherit the class
+    // default instead of pinning one. Widening belongs in the declaration
+    // layer, where it is reviewed; ADR-0013's monotone confinement is the rule
+    // this restores.
     defaultMaxTaint: {
-      low: file.defaultMaxTaint?.low ?? POLICY_FLOOR.defaultMaxTaint.low,
-      medium: file.defaultMaxTaint?.medium ?? POLICY_FLOOR.defaultMaxTaint.medium,
-      high: file.defaultMaxTaint?.high ?? POLICY_FLOOR.defaultMaxTaint.high,
+      low: tighter(file.defaultMaxTaint?.low, POLICY_FLOOR.defaultMaxTaint.low),
+      medium: tighter(file.defaultMaxTaint?.medium, POLICY_FLOOR.defaultMaxTaint.medium),
+      high: tighter(file.defaultMaxTaint?.high, POLICY_FLOOR.defaultMaxTaint.high),
     },
     // Union, never assignment. Drop the spread of the floor and an owner — or
     // anything that can write one line into a resealed file — deletes the
