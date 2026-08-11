@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
+import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
@@ -113,6 +114,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     model: 'test-model',
     tools,
     decide: createDecide({
+      matrix: POLICY_FLOOR,
       capabilities: new Map(decls.map((d) => [d.id, d])),
       budgetExhausted: () => false,
       hardened: true,
@@ -374,6 +376,7 @@ describe('agent loop', () => {
         },
       ],
       decide: createDecide({
+        matrix: POLICY_FLOOR,
         capabilities: new Map(decls.map((x) => [x.id, x])),
         budgetExhausted: () => false,
         hardened: false,
@@ -434,6 +437,7 @@ describe('agent loop', () => {
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
       decide: createDecide({
+        matrix: POLICY_FLOOR,
         capabilities: new Map(asking.map((c) => [c.id, c])),
         budgetExhausted: () => false,
         hardened: false, // single-user: high risk is ask, never a silent allow
@@ -468,6 +472,7 @@ describe('agent loop', () => {
           return verdict;
         },
         decide: createDecide({
+          matrix: POLICY_FLOOR,
           capabilities: new Map(asking.map((c) => [c.id, c])),
           budgetExhausted: () => false,
           hardened: false,
@@ -507,6 +512,7 @@ describe('agent loop', () => {
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
       decide: createDecide({
+        matrix: POLICY_FLOOR,
         capabilities: new Map(undoable.map((c) => [c.id, c])),
         budgetExhausted: () => false,
         hardened: false,

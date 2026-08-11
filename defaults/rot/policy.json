@@ -1,5 +1,5 @@
 {
-  "_comment": "Permission matrix. Part of the Root of Trust: the agent loop cannot change this at runtime.",
+  "_comment": "Permission matrix, read at boot by core/policy/matrix.ts. Part of the Root of Trust: the agent loop cannot change this at runtime, and your own edits take effect after `muffin rot reseal` and a restart. The two deny lists may only grow — removing a shipped entry from them does nothing.",
   "schemaVersion": 1,
   "defaultMaxTaint": { "low": 3, "medium": 1, "high": 1 },
   "neverAtRuntime": ["rot.write"],
