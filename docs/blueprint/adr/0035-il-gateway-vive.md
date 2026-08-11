@@ -28,3 +28,22 @@ Direttiva owner (2026-08-11), che chiude la questione anche sul lato prompt: *"a
 **Reversibilità.** Alta. Il processo è additivo: la CLI continua a funzionare da sola (un client che non trova il socket fa quello che fa oggi), e `muffin run` headless resta il percorso scriptabile che ADR-0021 vuole. Se il processo si rivelasse più fragile del guadagno, si torna a invocare — perdendo esattamente le cose elencate sopra, che è il modo giusto di misurare cosa costava.
 
 **Segnale che era sbagliata**, contato e non percepito: il processo muore più di una volta a settimana per cause non dovute a un crash del modello; oppure passa un mese di uso quotidiano e il numero di turni originati dal gateway (consolidamento, heartbeat, osservazione) resta sotto quello dei turni chiesti dall'owner — nel qual caso non serviva un processo che vive, serviva un cron.
+
+---
+
+## Come si tiene su — ricerca 2026-08-11, verificata sul sorgente di Hermes
+
+**Il supervisore non è il problema interessante.** systemd/launchd rispondono a *"chi lo riavvia"*; non rispondono a *"è sano?"*, che è dove vivono i nostri fallimenti. Costruire prima il processo, poi la supervisione: sono separabili, e il secondo è il facile.
+
+**Piattaforme, e una correzione**: ADR-0022 dice *"systemd a riavviare"*. Vero **sul VPS di produzione** (Linux, direttiva owner 2026-08-11), falso sulla macchina di sviluppo dell'owner, che è macOS → `launchd`, `~/Library/LaunchAgents/*.plist`. Servono entrambi alla fine (siamo MIT), non subito. Nota per il Linux: una user unit senza `loginctl enable-linger` muore al logout.
+
+**Cosa fa Hermes, letto dal loro sorgente** (`gateway/systemd_notify.py`, `hermes_cli/gateway.py`):
+
+- **`Type=notify` con `sd_notify`**, non `Restart=always` e basta. Il processo manda `READY=1` quando serve davvero — così systemd distingue *"il processo è partito"* da *"sta servendo"*, e un crash-loop smette di somigliare a un avvio riuscito. Manda `WATCHDOG=1` periodico (intervallo letto da `WATCHDOG_USEC`, dichiarato come `WatchdogSec` nell'unit): se smette, systemd ammazza e riavvia. **È l'unica cosa che cattura il processo *su ma piantato*** — il fallimento che `Restart=always` non vede, ed è la forma di fallimento silenzioso che questo repo paga da giorni. Più `STATUS=` leggibile in `systemctl status`, e un concetto esplicito di `unhealthy` con tolleranza al lag. Il modulo è no-op quando `NOTIFY_SOCKET` è assente: *"a missing socket must never prevent the gateway from starting"*.
+- **Riavvio drenante via segnale**, non `systemctl restart`: `SIGUSR1` → rifiuta nuovi turni, aspetta quelli in volo entro un budget, poi `stop()` ed esce; sia systemd che launchd riavviano su qualunque uscita. `systemctl restart` manda SIGTERM e SIGKILLa i turni a metà.
+- **Tre file che esistono solo perché un gateway ha figli**: `cgroup_cleanup` (i sandbox e i server MCP li ammazza il cgroup, non il parent), `shutdown_forensics` (perché è morto), `restart.py`.
+- Unit: `Restart=always`, `RestartSec=5`, `KillMode=mixed`, `TimeoutStopSec` tarato sul drain.
+
+**La cicatrice che prendiamo gratis.** Il loro commento racconta il bug: se l'unit punta `WorkingDirectory` a un checkout che poi si sposta, systemd fallisce allo `CHDIR` **prima che Python parta**, quindi l'auto-riparazione all'avvio non gira mai e *"`Restart=always` crash-loopa per sempre su una directory morta"*. La cura: **ancorare l'unit alla home dei dati** (`~/.muffin`), che non si muove, mai al checkout del codice.
+
+**Quello che NON prendiamo: `StartLimitIntervalSec=0`.** Loro disabilitano il rate-limit di systemd — riavvia per sempre, senza mai arrendersi. Se Muffin muore per una chiave sbagliata deve **restare giù e dirlo**: un riavvio infinito brucia quota e riempie i log senza che nessuno se ne accorga, ed è già il falsificatore scritto sopra ("muore più di una volta a settimana per cause non dovute a un crash del modello"). Serve la distinzione che il processo deve saper fare da sé — *transitorio* contro *non si risolve riprovando* — e nel secondo caso l'uscita è definitiva e rumorosa.
