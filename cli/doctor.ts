@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
+import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { verify } from '../core/rot/verify.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
 
@@ -45,7 +46,16 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
   let config;
   try {
     config = loadConfig(home);
-    ok('config', `schemaVersion ${config.schemaVersion}, provider ${config.provider.kind}`);
+    // The cache dialect is inferred from the endpoint, and an inference the
+    // owner cannot see is one they cannot correct: a miss pays full input
+    // price on every turn, silently (ADR-0008 forbids exactly that shape).
+    const cache =
+      config.provider.kind === 'anthropic'
+        ? 'breakpoints espliciti'
+        : wantsExplicitCache(config.provider.baseUrl)
+          ? 'breakpoints espliciti (endpoint riconosciuto)'
+          : 'implicito (nessun breakpoint richiesto)';
+    ok('config', `schemaVersion ${config.schemaVersion}, provider ${config.provider.kind}, cache ${cache}`);
   } catch (error) {
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');

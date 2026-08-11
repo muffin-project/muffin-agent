@@ -203,6 +203,25 @@ describe('agent loop', () => {
     expect(billed.every((b) => b.tenant === 'host')).toBe(true);
   });
 
+  it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {
+    // The adapter read `cache_write_tokens` off the wire and the loop dropped
+    // it one layer up: the accumulator had no field, the span attribute had a
+    // definition and zero writers, and the telemetry could not say a cache
+    // write ever happened — which is exactly how the missing breakpoints
+    // stayed invisible for the feature's whole life.
+    const withCache = (r: ChatResult): ChatResult => ({
+      ...r,
+      usage: { ...r.usage, cacheReadTokens: 200, cacheWriteTokens: 150 },
+    });
+    const { deps: d, store } = deps([withCache(callTool('demo_read')), withCache(answer('fatto'))]);
+
+    const result = await runTurn(d, input(store));
+
+    // Two calls, both counted: the sum, not the last value.
+    expect(result.usage.cacheWriteTokens).toBe(300);
+    expect(result.usage.cacheReadTokens).toBe(400);
+  });
+
   it('does not let a cached allow outlive the budget that permitted it', async () => {
     // The taint invalidates the decision cache for itself; the budget is the
     // other input the kernel reads, and it can run out mid-turn.

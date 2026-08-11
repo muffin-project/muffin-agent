@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OpenAICompatProvider } from './openai-compat.js';
+import { OpenAICompatProvider, wantsExplicitCache } from './openai-compat.js';
 import type { ChatCall } from './types.js';
 
 /**
@@ -59,6 +59,28 @@ const CALL: ChatCall = {
 
 type SystemPart = { type: string; text: string; cache_control?: { type: string } };
 type Body = { messages: { role: string; content: string | SystemPart[] }[] };
+
+describe('wantsExplicitCache · the endpoint decides, and the default is the decision', () => {
+  it('defaults from the endpoint, so a caller that forgets the flag cannot silently pay full price', () => {
+    // The first version made every caller pass the flag; two eval harnesses
+    // immediately built the provider without it and ran extraction rounds at
+    // full price against the very endpoint the flag exists for. The default is
+    // the fix, and this is the only test that exercises it: every other site
+    // passes the value explicitly, which is how a flipped default stayed green.
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1').explicitCache).toBe(true);
+    expect(new OpenAICompatProvider('k', 'http://localhost:11434/v1').explicitCache).toBe(false);
+    expect(new OpenAICompatProvider('k').explicitCache).toBe(false);
+  });
+
+  it('matches the endpoint, not the spelling', () => {
+    // The trailing-dot form is the same endpoint in DNS and a different string
+    // in a regex — and a miss here does not fail, it pays 10× forever.
+    expect(wantsExplicitCache('https://openrouter.ai./api/v1')).toBe(true);
+    expect(wantsExplicitCache('https://OPENROUTER.AI/api/v1')).toBe(true);
+    expect(wantsExplicitCache('https://openrouter.ai.evil.tld/v1')).toBe(false);
+    expect(wantsExplicitCache('not a url')).toBe(false);
+  });
+});
 
 describe('openai-compat · explicit prompt caching', () => {
   it('carries the stable marker as a cache_control breakpoint when the endpoint understands it', async () => {

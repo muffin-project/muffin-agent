@@ -12,7 +12,12 @@
 
 export type Role = 'user' | 'assistant';
 
-/** `cache: 'stable'` marks the end of a cacheable prefix. Positional, not a flag. */
+/**
+ * `cache: 'stable'` marks the end of a cacheable prefix. Positional, not a
+ * flag — and bounded: Anthropic and OpenRouter accept at most FOUR
+ * `cache_control` blocks per request, and a fifth is a 400. Both adapters mark
+ * every stable block they see, so whoever marks blocks is holding the budget.
+ */
 export type ContentBlock =
   | { type: 'text'; text: string; cache?: 'stable' }
   | { type: 'tool_result'; toolCallId: string; content: string; isError?: boolean }

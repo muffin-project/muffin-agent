@@ -174,7 +174,7 @@ export type TurnResult = {
   iterations: number;
   traceId: string;
   stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   /** Present when `stopped` is 'ask': what the turn wanted permission for. */
   pending?: ApprovalRequest;
 };
@@ -251,7 +251,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     traceId: turn.traceId,
   });
 
-  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let spentUsd = 0;
   const cap = iterationCap(deps.profile);
   let recoveriesLeft = deps.profile.recovery.length;
@@ -323,6 +323,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       usage.inputTokens += result.usage.inputTokens;
       usage.outputTokens += result.usage.outputTokens;
       usage.cacheReadTokens += result.usage.cacheReadTokens;
+      usage.cacheWriteTokens += result.usage.cacheWriteTokens;
 
       // Billed here, on every call, before anything else can go wrong with the
       // iteration. The engine, its caps and its tests all existed before this
@@ -346,6 +347,10 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         [ATTR.usageInputTokens]: result.usage.inputTokens,
         [ATTR.usageOutputTokens]: result.usage.outputTokens,
         [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,
+        // The attribute existed with zero writers while the adapter hardcoded
+        // the value to 0 — the whole feature was invisible in the traces. This
+        // line is what makes a cache write distinguishable from no cache.
+        [ATTR.cacheWriteTokens]: result.usage.cacheWriteTokens,
         [ATTR.stopReason]: result.stopReason,
       });
       chatSpan.end();

@@ -35,6 +35,31 @@ import {
  * on a strict parser is a 400 in production. Off means byte-identical to what
  * this adapter always sent — a plain string — not "parts without the field".
  */
+/**
+ * Whether this endpoint wants explicit cache breakpoints.
+ *
+ * Exported and used as the constructor's own default, because the first version
+ * kept the inference in `buildRuntime` — and two eval harnesses then built the
+ * provider without it and silently paid full price against the same endpoint.
+ * The endpoint→dialect decision is a property of the endpoint, and the provider
+ * already holds the endpoint; a caller that has to remember to pass it is a
+ * caller that will forget.
+ *
+ * Hostname, not substring — `openrouter.ai.evil.tld` must not flip request
+ * shape — and the trailing-dot form of a hostname is folded before matching,
+ * because `https://openrouter.ai./api/v1` is the same endpoint and a silent
+ * miss here pays 10× forever (ADR-0008: degrade declaredly, never silently).
+ */
+export function wantsExplicitCache(baseURL?: string): boolean {
+  try {
+    if (!baseURL) return false;
+    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
+    return /(^|\.)openrouter\.ai$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export class OpenAICompatProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   private readonly client: OpenAI;
@@ -47,7 +72,7 @@ export class OpenAICompatProvider implements Provider {
     private readonly headers: Record<string, string> = {},
     opts: { explicitCache?: boolean; fetch?: typeof globalThis.fetch } = {},
   ) {
-    this.explicitCache = opts.explicitCache ?? false;
+    this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
     this.client = new OpenAI({
       apiKey,
       ...(baseURL ? { baseURL } : {}),
@@ -102,12 +127,10 @@ export class OpenAICompatProvider implements Provider {
           inputTokens: response.usage?.prompt_tokens ?? 0,
           outputTokens: response.usage?.completion_tokens ?? 0,
           cacheReadTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? 0,
-          // Off the SDK's type but on OpenRouter's wire. The hardcoded 0 that
-          // stood here is how a missing feature stayed invisible: zero reads as
-          // "cache unavailable" when the truth was "never requested".
-          cacheWriteTokens:
-            (response.usage?.prompt_tokens_details as { cache_write_tokens?: number } | undefined)
-              ?.cache_write_tokens ?? 0,
+          // On the SDK's own type since v7 (CompletionUsage). The hardcoded 0
+          // that stood here is how a missing feature stayed invisible: zero
+          // reads as "cache unavailable" when the truth was "never requested".
+          cacheWriteTokens: response.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
         model: response.model,
       };
@@ -125,6 +148,12 @@ export class OpenAICompatProvider implements Provider {
    * they do not know.
    */
   private systemMessage(call: ChatCall): OpenAI.Chat.ChatCompletionMessageParam {
+    // One block in, and the two dialects carry identical text — which is all
+    // production sends today (every caller marks a single system block). At two
+    // or more the dialects DIVERGE: the string dialect joins with '\n\n', the
+    // parts dialect concatenates with no separator, so the model reads
+    // different bytes depending on the flag and the cache cannot warm across
+    // the flip. Whoever adds a second system block decides that on purpose.
     if (!this.explicitCache) {
       return { role: 'system', content: call.system.map(flatten).join('\n\n') };
     }
