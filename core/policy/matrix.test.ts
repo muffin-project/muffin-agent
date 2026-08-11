@@ -22,6 +22,31 @@ function home(): string {
 const policyOf = (dir: string) => join(paths(dir).rot, 'policy.json');
 
 describe('the sealed permission matrix', () => {
+  it('lets the file tighten a ceiling and refuses to let it raise one', () => {
+    // The judge measured what an unclamped default bought: `{"medium":3}` in a
+    // resealed policy.json turned `mcp.*` from "a tainted turn cannot reach a
+    // third-party server at all" into a silent allow at taint 3, because that
+    // capability — like fs.write and sys.shell — inherits the class default
+    // instead of pinning its own. A declaration is a reviewed commit; this file
+    // is a write plus a reseal. So it may only lower, exactly like the deny
+    // lists may only grow.
+    const dir = home();
+
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 3, medium: 3, high: 3 } }));
+    expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual(POLICY_FLOOR.defaultMaxTaint);
+
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 1, medium: 0, high: 0 } }));
+    expect(loadPolicyMatrix(dir).defaultMaxTaint).toEqual({ low: 1, medium: 0, high: 0 });
+
+    // And a mixed file: the tightening half lands, the widening half does not.
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, defaultMaxTaint: { low: 0, medium: 3 } }));
+    const mixed = loadPolicyMatrix(dir).defaultMaxTaint;
+    expect(mixed.low).toBe(0);
+    expect(mixed.medium).toBe(POLICY_FLOOR.defaultMaxTaint.medium);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('reproduces the values the kernel used to hardcode, exactly', () => {
     // P2. The JSON and the three `const`s were byte-compatible duplicates on the
     // day this slice started; a default install must not shift behaviour by a
