@@ -29,7 +29,7 @@ describe('persona in the system prompt', () => {
 
   it('carries the voice rules into the prompt the loop actually gets', () => {
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     // Three rules from three different sections of voice.md: a formatting rule,
     // an honesty rule, and the emoji ceiling. If the file is not read, none of
@@ -44,7 +44,7 @@ describe('persona in the system prompt', () => {
     // a first run had three bullet points and a set of formatting rules where
     // the personality should be — which is what "it feels like a mockup" was.
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).toContain('Sono Muffin');
     // The two load-bearing promises: complement the owner's memory rather than
@@ -57,7 +57,7 @@ describe('persona in the system prompt', () => {
 
   it("puts the owner's file after the shared one, so it reads as an overlay", () => {
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     const shared = prompt.indexOf('Sono Muffin');
     const owner = prompt.indexOf('Non mi dai ragione');
     // Both present before comparing: indexOf returns -1 when absent, and -1 is
@@ -74,7 +74,7 @@ describe('persona in the system prompt', () => {
     // became the identity on a fresh install — the agent was given a page about
     // how someone should write its character, and nothing else.
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(readFileSync(join(paths(home).rot, 'identity.md'), 'utf8')).toContain('Questo file è tuo');
     expect(prompt).not.toContain('Questo file è tuo');
@@ -87,7 +87,7 @@ describe('persona in the system prompt', () => {
     // An untouched template carries three empty headings. A bare title with
     // nothing under it reads as a section the model should have opinions about.
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).not.toMatch(/##\s*Chi sei\s*\n/);
     expect(prompt).not.toMatch(/##\s*Il limite che ti do io/);
@@ -104,7 +104,7 @@ describe('persona in the system prompt', () => {
       ),
     );
 
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     expect(prompt).toContain('Sei il mio secondo cervello');
     expect(prompt).toContain('## Chi sei');
   });
@@ -128,7 +128,7 @@ describe('persona in the system prompt', () => {
     // private register to every install — PRACTICES §9, violated by the change
     // that routes the file rather than by the file.
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     expect(prompt).not.toMatch(/Giusto/);
   });
 
@@ -145,7 +145,7 @@ describe('persona in the system prompt', () => {
         '## Come ti comporti quando è difficile\n\n### Quando non sai\n\nLo dici.\n',
       ),
     );
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     expect(prompt).toContain('## Come ti comporti quando è difficile');
     expect(prompt).toContain('Lo dici.');
   });
@@ -157,7 +157,7 @@ describe('persona in the system prompt', () => {
     const home = bootHome();
     const identity = join(paths(home).rot, 'identity.md');
     writeFileSync(identity, readFileSync(identity, 'utf8').replace('-->', ''));
-    const prompt = buildRuntime(home, workspace).deps.systemPrompt;
+    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     expect(prompt).not.toContain('Questo file è tuo');
   });
 });

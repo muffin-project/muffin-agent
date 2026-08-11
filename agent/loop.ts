@@ -6,6 +6,7 @@ import type { SessionMessage, SessionRef, SessionStore } from '../core/session/s
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { checkCompletion, completionNudge } from './completion.js';
+import { tenantClass, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
 import {
@@ -142,8 +143,15 @@ export type LoopDeps = {
    * production means the caps are decorative, which is why `doctor` reports it.
    */
   recordSpend?: ((entry: SpendEntry) => number) | undefined;
-  /** Stable identity and persona, cached as a prefix. */
-  systemPrompt: string;
+  /**
+   * Stable identity and persona, one per tenant class, each cached as its own
+   * prefix. Assembled once (`agent/context/assemble.ts`); the turn selects.
+   *
+   * A single string was the defect: it took no tenant, so a group turn was
+   * handed the owner's `identity.md` and the persona block that tells the agent
+   * to elicit personal facts.
+   */
+  systemPrompts: SystemPrompts;
   /**
    * Absent in tests and before M2 is configured. When present the turn both
    * remembers what was said and recalls what is relevant — and inherits the
@@ -190,9 +198,12 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   });
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
-  // Permissions and taint are resolved before anything is generated, so a
-  // decision never depends on what the model just said.
+  // Permissions, taint and *which context this turn gets* are resolved before
+  // anything is generated, so none of them can depend on what the model just
+  // said. The class is a pure function of the principal and the tenant the
+  // gateway already resolved — the same two values the kernel decides on.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant);
+  const turnClass = tenantClass(input.principal, input.tenant);
 
   // Evidence first: what was said is recorded before anything is generated, so
   // a crash mid-turn cannot lose the input that caused it.
@@ -241,7 +252,16 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     }
   }
 
-  const exposed = deps.tools.slice(0, deps.profile.maxToolsExposed);
+  // What this turn is shown, decided from who is speaking and where — never
+  // from what they said. Filter first, cap second: `slice` on registration
+  // order applied to the full list would spend a weak model's ten slots on
+  // tools the kernel is going to refuse this principal anyway.
+  const exposed = visibleTools(deps.tools, input.principal, deps.capabilities).slice(
+    0,
+    deps.profile.maxToolsExposed,
+  );
+  turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
+
   const messages: Message[] = buildContext(deps, input, recalled);
 
   deps.sessions.append(input.session, {
@@ -286,7 +306,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
       const call: ChatCall = {
         model: deps.model,
-        system: [{ type: 'text', text: deps.systemPrompt, cache: 'stable' }],
+        system: [{ type: 'text', text: deps.systemPrompts[turnClass], cache: 'stable' }],
         messages: compacted.messages,
         ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
         maxOutputTokens: 4096,
@@ -439,7 +459,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         // ignored.
         if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
         try {
-          results.push(await runTool(deps, snapshot, turn, call_, input));
+          results.push(await runTool(deps, snapshot, turn, call_, input, exposed));
         } catch (error) {
           if (error instanceof ApprovalRequired) {
             turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
@@ -489,17 +509,30 @@ async function runTool(
   parent: SpanHandle,
   call: { id: string; name: string; args: unknown },
   input: TurnInput,
+  /** What this turn was actually shown — the only list it may be told about. */
+  exposed: RegisteredTool[],
 ): Promise<ContentBlock> {
   const span = deps.tracer.start('muffin.tool_call', { [ATTR.toolName]: call.name, [ATTR.toolCallId]: call.id }, parent);
+  // Resolved against every registered tool, not against `exposed`, and that is
+  // the load-bearing half of "defence in depth, not replacement": a member who
+  // names a host-only tool anyway must meet `decide.ts:132` and be refused
+  // `principal_forbidden` — a policy denial, on the trace, with a code. Looking
+  // it up in the filtered list instead would answer "that tool does not exist",
+  // which is both a lie and the kernel branch going quietly unexercised.
   const tool = deps.tools.find((t) => t.spec.name === call.name);
 
   if (!tool) {
     // Not an exception: the model gets told, and gets to correct itself.
+    //
+    // Listing `exposed` and not `deps.tools`: this message used to enumerate
+    // every registered tool by name, so one hallucinated call handed a group
+    // member the full host inventory — the host-only tools it may not have,
+    // plus whatever fell past the profile's exposure cap.
     span.end({ status: 'error', error: `unknown tool ${call.name}` });
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: `Tool "${call.name}" non esiste. Disponibili: ${deps.tools.map((t) => t.spec.name).join(', ')}.`,
+      content: `Tool "${call.name}" non esiste. Disponibili: ${exposed.map((t) => t.spec.name).join(', ')}.`,
       isError: true,
     };
   }
