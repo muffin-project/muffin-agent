@@ -14,6 +14,18 @@ import { SessionStore } from '../../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { SCENARIOS, type Scenario, type Verdict } from './scenarios.js';
 
+
+/**
+ * One prompt for both classes: the floor eval measures tool-calling, not
+ * posture, and a scenario that ever runs as a member is measured against
+ * something rather than crashing on a missing key. One constant so the two
+ * entries cannot drift.
+ */
+const FLOOR_PROMPT =
+  'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
+  'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
+  'Quando hai finito, rispondi e basta.';
+
 /**
  * Floor runner.
  *
@@ -100,16 +112,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
         // model can do with its tools, not about which tenant is asking. The
         // group entry is the same text so a scenario that ever runs as a member
         // is measured against something rather than crashing on a missing key.
-        systemPrompts: {
-          owner:
-            'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
-            'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
-            'Quando hai finito, rispondi e basta.',
-          group:
-            'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
-            'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
-            'Quando hai finito, rispondi e basta.',
-        },
+        systemPrompts: { owner: FLOOR_PROMPT, group: FLOOR_PROMPT },
       },
       {
         principal: { kind: 'owner', connector: 'cli', externalId: 'local' },

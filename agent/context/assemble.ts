@@ -90,9 +90,9 @@ export function tenantClass(principal: Principal, tenant: TenantId): TenantClass
  * `decide.ts:132` already refuses every `hostOnly` capability to a member. This
  * does not replace that and must not: the kernel is the enforcement, this is
  * the menu. What it removes is a list of guaranteed refusals sitting in front
- * of a taint-2 turn — eight of the ten tools a stranger could see were tools
- * the kernel would deny, and the "that tool does not exist" message enumerated
- * every one of them by name.
+ * of a taint-2 turn — seven of the nine tools on a default install (more once
+ * web search or MCP is configured) were tools the kernel would deny, and the
+ * "that tool does not exist" message enumerated every one of them by name.
  *
  * Derived from the same `hostOnly` field the kernel reads, so the two cannot
  * drift into disagreeing about which tools those are; `assemble.test.ts`
@@ -225,6 +225,15 @@ const SAFE_MODE_NOTE =
  * Follow-up, out of scope here: the "so già chi sei" epoch flip, which drops
  * the first-encounter block from the *owner* prompt once the owner is known.
  * That is a second axis (time), not a second class (tenant).
+ *
+ * And one sentence below is TRUE TODAY ONLY BY A CONSTANT: "non sto costruendo
+ * il ritratto di nessuno" holds because extraction is never pointed at a group
+ * tenant — `ingestPending`'s single production caller hardcodes
+ * `TENANT = 'host'` (`cli/memory.ts`). Nothing pins that. The day ingestion is
+ * scheduled per tenant (M5), group episodes reach `extractFacts`, whose
+ * speakerName is derived from role — a stranger's claim mined under the label
+ * "owner" — and this sentence silently becomes false. Fix at that seam: derive
+ * the speaker from the episode's principal, and only then widen the tenant.
  */
 const GROUP_PERSONA = `# Chi sono
 
