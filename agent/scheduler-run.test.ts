@@ -7,7 +7,7 @@ const base: TurnResult = {
   iterations: 1,
   traceId: 't',
   stopped: 'answered',
-  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 };
 
 describe('jobOutcomeFromTurn', () => {

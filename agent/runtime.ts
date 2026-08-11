@@ -109,6 +109,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
           readSecret(config.provider.apiKeyRef, home),
           config.provider.baseUrl,
           { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
+          // Cache breakpoints are the provider's own decision, defaulted from
+          // the endpoint (`wantsExplicitCache`): the first version made every
+          // caller pass the flag, and the two eval harnesses immediately forgot
+          // — same endpoint, full price, silently.
         );
 
   const profile = selectProfile(config.models.main, loadProfiles());

@@ -27,6 +27,19 @@ describe('pricing', () => {
     expect(warm).toBeCloseTo(0.3, 5);
   });
 
+  it('bills the cache-write premium, in the direction the header calls safe', () => {
+    // The premium was ignored with a comment claiming that was "the safe
+    // direction" — but this file's header defines safe as charging HIGH so the
+    // cap trips early. Under-charging trips it late, on an unattended budget.
+    // 1M written at sonnet-5 rates: 3.00 base + 0.25 × 3.00 premium.
+    const withWrites = costUsd('anthropic/claude-sonnet-5', {
+      inputTokens: 1e6,
+      outputTokens: 0,
+      cacheWriteTokens: 1e6,
+    });
+    expect(withWrites).toBeCloseTo(3.75, 5);
+  });
+
   it('adds input and output', () => {
     expect(costUsd('anthropic/claude-haiku-4.5', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(6, 5);
   });

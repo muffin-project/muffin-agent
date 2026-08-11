@@ -87,6 +87,9 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
   process.stderr.write(
     `\n${result.iterations} passaggi · ${result.usage.inputTokens} token in / ${result.usage.outputTokens} out` +
       `${result.usage.cacheReadTokens > 0 ? ` · ${result.usage.cacheReadTokens} da cache` : ''}` +
+      // The write line is what stops the first turn reading as "cache broken":
+      // it pays to fill the cache the next turn reads from.
+      `${result.usage.cacheWriteTokens > 0 ? ` · ${result.usage.cacheWriteTokens} scritti in cache` : ''}` +
       ` · sessione ${session.id} · trace ${result.traceId.slice(0, 12)}\n`,
   );
 
