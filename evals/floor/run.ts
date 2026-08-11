@@ -9,6 +9,7 @@ import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
 import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from '../../agent/tools/fs.js';
 import { BudgetEngine } from '../../core/budget/budget.js';
 import { createDecide } from '../../core/policy/decide.js';
+import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import { SessionStore } from '../../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
@@ -103,7 +104,11 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
         profile: selectProfile(model, loadProfiles(join(import.meta.dirname, '..', '..', 'agent', 'profiles'))),
         model,
         tools,
-        decide: createDecide({ capabilities: decls, budgetExhausted: () => budget.exhausted(), hardened: true }),
+        // The compiled floor, deliberately, not `loadPolicyMatrix(home)`: a
+        // score is only comparable across runs if the matrix it was measured
+        // against is the same one. An owner-tightened `policy.json` would move
+        // the floor silently, which is the one thing a floor may not do.
+        decide: createDecide({ capabilities: decls, matrix: POLICY_FLOOR, budgetExhausted: () => budget.exhausted(), hardened: true }),
         tracer: new SimpleTracer(new JsonlExporter(home)),
         sessions,
         budgetExhausted: () => budget.exhausted(),

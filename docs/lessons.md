@@ -308,6 +308,48 @@ by anyone who thought to ask.
 *Found 10 August 2026 while building the absence detector that needed it; the
 gate reached production in the same slice.*
 
+## A sealed file that nobody reads **(this build)**
+
+`rot/policy.json` shipped with the Root of Trust scaffold, was hashed at every
+boot, and opened `_comment` with *"Part of the Root of Trust: the agent loop
+cannot change this at runtime."* It declared `defaultMaxTaint` per risk band,
+`neverAtRuntime` and `forbiddenForSystem`. Nothing read it. The same three values
+lived as `const`s in `decide.ts`, so the file was a byte-perfect copy of the code
+with a sentence on top claiming to govern it — and the owner could not change
+what a group may do without editing TypeScript.
+
+Fifth instance of the class above, and `rot/budgets.json` had already been the
+fourth: `quietHours` eventually got a reader, `monthlyUsd` and
+`perTenantDailyUsd` still have none (`BudgetEngine` is built from `config.budget`,
+which is outside the seal). Two things made these two survive longer than the
+rest. The seal *proves the file has not changed*, which reads exactly like
+"enforced" to anyone who does not go looking. And the previous four were each
+closed with a test for that case, which is a cure that does not compose: the
+sixth instance was going to be a different file.
+
+**What it changed.** `decide` now takes the matrix from the sealed file, parsed
+at the boundary, once, where the kernel's context is built — and the entry point
+that was the whole problem is now tested through a real turn: lower the ceiling
+in `policy.json`, reseal, and a taint-2 member stops reaching a low-risk
+capability. But the part worth reusing is the other half. `core/rot/readers.ts`
+maps every file in the sealed manifest to the production function that opens it,
+or declares it unread-by-design with a reason (`evals/` is the honest case: the
+ratchet's reference suite is sealed so the agent cannot grade itself against a
+test set it rewrote, and no production reader should exist). A sealed file in
+neither column fails, in the suite and in `doctor`.
+
+The check verifies the map against the code instead of believing it — and that
+part was itself wrong on the first try. Mutating `matrix.ts` so no line of code
+named `policy.json` left the check green, because the module's *docstring* named
+it. Prose accepted as evidence of what the code does, inside the mechanism built
+to stop exactly that. It strips comments now.
+
+> **The seal answers "has this changed?". Nobody was asking "is anyone
+> listening?", and the two questions look identical from outside.**
+
+*Found 11 August 2026 by grepping for the readers of every file in the seal —
+the one question none of the previous four rounds had asked in general.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

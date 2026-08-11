@@ -3,6 +3,7 @@ import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, type Config } from '../core/config/config.js';
 import { createDecide } from '../core/policy/decide.js';
+import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
 import { verify } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
@@ -93,6 +94,18 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     }
     safeMode = { reason: rot.reason, diverged: rot.diverged };
   }
+
+  // The permission matrix, read here and nowhere else: `decide` is synchronous
+  // and pure, so the file is opened once per boot and the kernel closes over
+  // the result. Placed immediately after `verify` because that comment above is
+  // literal — this is the "anything reads policy from it" it was written for.
+  // A fallback is a boot line, not a silent substitution: the numbers still
+  // work, and the owner needs to know they are the compiled ones.
+  const matrix = loadPolicyMatrix(home);
+  const matrixNotes =
+    matrix.source === 'fallback' && matrix.note !== null
+      ? [`! matrice permessi: valori compilati, non rot/policy.json — ${matrix.note}`]
+      : [];
 
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
@@ -263,6 +276,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   );
   const decide = createDecide({
     capabilities,
+    // The line that makes `rot/policy.json` load-bearing. Delete it and the
+    // build fails — which is the point: the previous arrangement had the same
+    // numbers compiled in, so deleting the *file* changed nothing at all.
+    matrix,
     // Both caps, not just the monthly one. The per-tenant daily cap is the one
     // that exists for a group talking to itself, and it was declared, tested
     // and never consulted.
@@ -283,7 +300,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     budget,
     jobs,
     safeMode,
-    bootLines: [...skillScan.problems.map((p) => `! ${p}`), ...profileProblems.map((p) => `! ${p}`), ...searchNotes],
+    bootLines: [
+      ...skillScan.problems.map((p) => `! ${p}`),
+      ...profileProblems.map((p) => `! ${p}`),
+      ...searchNotes,
+      ...matrixNotes,
+    ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);

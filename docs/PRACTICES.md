@@ -244,3 +244,30 @@ state look like after N runs?*
 `docs/JUDGE.md` carries this as a standing question now. It is not a new kind of
 rigour — it is the same "review the guarantee, not the diff" rule applied to a
 guarantee that no single file states.
+
+## 12. Una cosa trovata e non scritta è una cosa da ritrovare
+
+Direttiva owner, 2026-08-11: *"TUTTE queste cose, ogni volta, devono diventare
+persistenti nella repo, che sia in roadmap, nel blueprint, ovunque debbano
+esserci."*
+
+Non è ordine: è che questo repo ha già pagato lo stesso difetto nove volte in due
+giorni — un meccanismo scritto, testato, documentato e raggiunto da niente — e
+ogni volta la scoperta era costata ore e la scrittura minuti. Una scoperta che
+resta in una risposta di chat muore col contesto.
+
+**Dove va cosa** (il posto sbagliato equivale a non scriverlo):
+
+| cosa hai trovato | dove va |
+|---|---|
+| un difetto trovato e non ancora chiuso | `04-roadmap.md` (una riga con il costo dell'assenza) **e** `STATE.md` se blocca l'uso quotidiano |
+| una decisione presa, anche implicita | un ADR — e se contraddice un ADR esistente, un emendamento in coda a quello, mai una riscrittura |
+| una cosa che si è rotta e perché | `docs/lessons.md`, con la misura |
+| un fatto verificato su un peer o un paper | `blueprint/research/`, con verificato-vs-ricordato distinti |
+| una regola di lavoro | qui |
+
+**Il momento è "adesso", non "a fine slice"**: la persistenza fatta dopo è la
+prima cosa che salta quando la slice si allunga. E vale anche — soprattutto —
+per le cose scomode: una DoD non soddisfatta scritta in roadmap vale più di dieci
+righe di codice nuove, perché è l'unica che impedisce di dichiararla chiusa una
+seconda volta.
