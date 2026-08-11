@@ -34,6 +34,13 @@ import {
  * opposite: Ollama, llama.cpp and vLLM cache implicitly, and an unknown field
  * on a strict parser is a 400 in production. Off means byte-identical to what
  * this adapter always sent — a plain string — not "parts without the field".
+ *
+ * Scope note: the inference is per-ENDPOINT while the justification is
+ * per-model-family. Through openrouter.ai the markers also reach models that
+ * cache implicitly upstream (deepseek, gemma, gpt-oss) — OpenRouter's docs say
+ * unsupported markers are normalized rather than rejected, which is the
+ * assumption this rests on. If a routed model ever 400s on cache_control, the
+ * gate needs a model-id clause too, and this is the sentence to delete.
  */
 /**
  * Whether this endpoint wants explicit cache breakpoints.

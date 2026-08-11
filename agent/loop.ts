@@ -96,6 +96,7 @@ export type SpendEntry = {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
@@ -335,6 +336,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,
+        cacheWriteTokens: result.usage.cacheWriteTokens,
       });
       if (usd !== undefined) {
         spentUsd += usd;
@@ -348,8 +350,9 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         [ATTR.usageOutputTokens]: result.usage.outputTokens,
         [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,
         // The attribute existed with zero writers while the adapter hardcoded
-        // the value to 0 — the whole feature was invisible in the traces. This
-        // line is what makes a cache write distinguishable from no cache.
+        // the value to 0. Honesty note: no test asserts chat-span attributes
+        // (this one or any other) — the pinned path for this number is
+        // TurnResult and the spend record, not the trace.
         [ATTR.cacheWriteTokens]: result.usage.cacheWriteTokens,
         [ATTR.stopReason]: result.stopReason,
       });

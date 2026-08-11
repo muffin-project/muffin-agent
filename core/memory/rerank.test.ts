@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatResult, Provider } from '../../agent/providers/types.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import type { RecallItem } from './recall.js';
 import { LlmReranker, RERANK_MIN_CANDIDATES } from './rerank.js';
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
   calls = 0;
+  readonly seen: ChatCall[] = [];
   constructor(private readonly reply: string | Error) {}
-  async chat(): Promise<ChatResult> {
+  async chat(request?: ChatCall): Promise<ChatResult> {
+    if (request) this.seen.push(request);
     this.calls += 1;
     if (this.reply instanceof Error) throw this.reply;
     return {
@@ -43,6 +45,11 @@ describe('reranking', () => {
     const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
     expect(provider.calls).toBe(1);
     expect(reranked.map((i) => i.id)).toEqual([14, 3, 7]);
+    // The rerank instructions are the stable half of a per-recall call: on the
+    // endpoints that only cache on request, an unmarked prefix pays full price
+    // on every recall. Deleting the marker at the call site was suite-green —
+    // the same untested join as the loop's, one caller over.
+    expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
   });
 
   it('keeps the RRF order when the reranker breaks', async () => {
