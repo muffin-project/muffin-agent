@@ -9,6 +9,7 @@ import { checkCompletion, completionNudge } from './completion.js';
 import { tenantClass, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
+import { recoveryStep, type RecoveryFailure } from './profiles/recovery.js';
 import {
   ProviderError,
   type ChatCall,
@@ -59,6 +60,31 @@ const TOOL_RESULT_BUDGET_CHARS = 60_000;
  * mechanism for reaching further back — that is what it is for.
  */
 const MAX_HISTORY_TURNS = 40;
+
+/**
+ * Re-attempts for a failure of the *transport* — 429, 502, a reset socket.
+ *
+ * A constant, and not `profile.recovery.length` as it used to be, because how
+ * often to retry a rate limit is a property of the endpoint and never was a
+ * crutch for a weak model. Tying the two together had one visible consequence
+ * and one invisible one: a profile with the crutches off (`recovery: []`, the
+ * neutral profile of 07 §3) got **zero** retries on a 502 — resilience removed
+ * along with the scaffolding — and any transport hiccup silently ate a step of
+ * the model-recovery cascade, so the empty turn that followed had nothing left
+ * to spend.
+ *
+ * Two, matching what the shortest declared cascade bought before this split,
+ * and small on purpose: both SDKs already retry twice underneath us
+ * (`maxRetries ?? 2` — `@anthropic-ai/sdk/client.js`, `openai/client.js`) —
+ * and those retries run INSIDE each provider.chat() call, so the budgets
+ * multiply: on a persistent 502 this constant means 3 loop-level calls × 3
+ * wire attempts = **9 requests**, of which our jitter governs 2 gaps and the
+ * SDKs' own backoff the other 6. Stated because the first version of this
+ * comment said "third and fourth attempt", which reads additive and is not.
+ * If 9 is ever too many, the move is `maxRetries: 0` on both clients and the
+ * loop owning the whole budget — its own slice, not a constant tweak.
+ */
+const MAX_TRANSPORT_RETRIES = 2;
 
 /**
  * How a surface asks the owner.
@@ -280,7 +306,13 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let spentUsd = 0;
   const cap = iterationCap(deps.profile);
-  let recoveriesLeft = deps.profile.recovery.length;
+  /**
+   * How far down the profile's declared cascade this turn has walked. An index,
+   * not a budget: attempt N runs strategy N.
+   */
+  let recoveriesUsed = 0;
+  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
+  let transportRetriesLeft = MAX_TRANSPORT_RETRIES;
   let toolCallsMade = 0;
   let nudgedForCompletion = false;
   let iterations = 0;
@@ -331,17 +363,30 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         result = await deps.provider.chat(call);
       } catch (error) {
         chatSpan.end({ error });
-        // The recovery cascade lives in the profile, not here: a weak model
-        // needs more attempts than a strong one, and that is data.
-        if (error instanceof ProviderError && error.retryable && recoveriesLeft > 0) {
-          recoveriesLeft -= 1;
-          // Backoff, because the retryable case is mostly 429 and hammering a
-          // rate limit four times in a row is how a soft limit becomes a hard
-          // one. Exponential with jitter: the jitter matters when several turns
-          // are throttled at once and would otherwise retry in lockstep.
-          const attempt = deps.profile.recovery.length - recoveriesLeft;
-          await sleep(retryDelayMs(attempt), input.signal);
-          continue;
+        // Two failures wearing one type, and they take different doors.
+        //
+        // `output` is the model's own doing — arguments the adapter could not
+        // parse — so it goes to the profile's cascade, which is where the step
+        // written for almost-JSON lives. Backing off would only wait for the
+        // same JSON to come back.
+        //
+        // `transport` is a 429 or a 502, and it gets its own budget: the
+        // recovery cascade lives in the profile because a weak model needs more
+        // attempts than a strong one, and a rate limit is not a fact about the
+        // model at all.
+        if (error instanceof ProviderError && error.retryable) {
+          if (error.source === 'output') {
+            if (recover('malformed')) continue;
+          } else if (transportRetriesLeft > 0) {
+            transportRetriesLeft -= 1;
+            // Backoff, because the retryable case is mostly 429 and hammering a
+            // rate limit four times in a row is how a soft limit becomes a hard
+            // one. Exponential with jitter: the jitter matters when several turns
+            // are throttled at once and would otherwise retry in lockstep.
+            const attempt = MAX_TRANSPORT_RETRIES - transportRetriesLeft;
+            await sleep(retryDelayMs(attempt), input.signal);
+            continue;
+          }
         }
         throw error;
       }
@@ -383,16 +428,9 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
       });
       chatSpan.end();
 
-      // Nothing at all: nudge rather than presenting silence as an answer.
+      // Nothing at all: recover rather than presenting silence as an answer.
       if (!result.text && result.toolCalls.length === 0) {
-        if (recoveriesLeft > 0 && deps.profile.recovery.includes('nudge')) {
-          recoveriesLeft -= 1;
-          messages.push({
-            role: 'user',
-            content: [{ type: 'text', text: 'Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.' }],
-          });
-          continue;
-        }
+        if (recover('empty')) continue;
         return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', iterations, usage);
       }
 
@@ -403,6 +441,12 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         // made? Deterministic, tool-aware, and it only fires when *nothing* was
         // called — a denied or failed call is still a call, so a model saying
         // "non ho potuto usare fs_write" after a real refusal is out of scope.
+        //
+        // Its own flag, deliberately outside the profile's cascade: this check
+        // is durable (07 classifies the profiles as impalcatura and says
+        // nothing of it), it answers a false-success rate measured on every
+        // model family including the reasoning ones, and a profile that
+        // declares no crutches must still get it. One nudge, always available.
         const completion = checkCompletion({
           text,
           available: exposed.map((t) => t.spec.name),
@@ -493,6 +537,36 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   } catch (error) {
     turn.end({ error });
     throw error;
+  }
+
+  /**
+   * One step down the cascade the profile declared, or false when it is spent.
+   *
+   * Attempt N runs strategy N, in the order the JSON lists them — the property
+   * this function exists to hold. What each strategy *does* is in
+   * `agent/profiles/recovery.ts`; nothing here knows a strategy by name, so a
+   * profile can reorder or drop steps and the loop is unaffected, and turning
+   * every crutch off (`recovery: []`) is a profile edit rather than a code path
+   * (07 §3).
+   *
+   * Not the same mechanism as the completion gate below, which nudges once when
+   * an answer narrates a call the turn never made: that one is durable, applies
+   * to every model, keeps its own flag, and a profile may not decline it.
+   */
+  function recover(failure: RecoveryFailure): boolean {
+    const strategy = deps.profile.recovery[recoveriesUsed];
+    if (strategy === undefined) return false;
+    recoveriesUsed += 1;
+    const step = recoveryStep(strategy, { failure, tools: exposed.map((t) => t.spec.name) });
+    if (step.message !== undefined) {
+      messages.push({ role: 'user', content: [{ type: 'text', text: step.message }] });
+    }
+    turn.setAttributes({
+      'muffin.recovery.attempt': recoveriesUsed,
+      'muffin.recovery.strategy': strategy,
+      'muffin.recovery.failure': failure,
+    });
+    return true;
   }
 
   function finish(

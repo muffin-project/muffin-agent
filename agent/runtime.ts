@@ -114,7 +114,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
           // — same endpoint, full price, silently.
         );
 
-  const profile = selectProfile(config.models.main, loadProfiles());
+  const profileProblems: string[] = [];
+  const profile = selectProfile(config.models.main, loadProfiles(undefined, (line) => profileProblems.push(line)));
 
   // Memory. The vector half is optional and its absence is reported rather than
   // hidden: an embedder that is not running turns semantic recall into keyword
@@ -282,7 +283,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     budget,
     jobs,
     safeMode,
-    bootLines: [...skillScan.problems.map((p) => `! ${p}`), ...searchNotes],
+    bootLines: [...skillScan.problems.map((p) => `! ${p}`), ...profileProblems.map((p) => `! ${p}`), ...searchNotes],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);
