@@ -1,6 +1,8 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { Scheduler, type Deliver, type ForegroundGate } from '../core/scheduler/scheduler.js';
+import { readGateway } from '../core/gateway/lock.js';
+import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
@@ -95,10 +97,10 @@ export async function runRepl(home = paths().home): Promise<number> {
     rl.prompt();
   });
 
-  // The scheduler runs in this same process (ADR-0022): a tick finds what is
-  // due and runs it as system:scheduler. Foreground wins — while an interactive
-  // turn holds the lane (`controller` set), a tick defers, and a job already
-  // running gets that turn's abort signal to yield.
+  // The scheduler runs here only when nothing else owns it (ADR-0035). A tick
+  // finds what is due and runs it as system:scheduler. Foreground wins — while
+  // an interactive turn holds the lane (`controller` set), a tick defers, and a
+  // job already running gets that turn's abort signal to yield.
   const foreground: ForegroundGate = {
     isActive: () => controller !== null,
     signal: () => controller?.signal,
@@ -120,8 +122,29 @@ export async function runRepl(home = paths().home): Promise<number> {
       process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
     }
   });
-  const ticker = setInterval(() => scheduler.tick(), 30_000);
-  ticker.unref(); // the timer must not, by itself, keep the process alive
+  /**
+   * Two schedulers must never run (ADR-0035).
+   *
+   * The gateway owns the ticker whenever it is up; this session takes it only
+   * when nobody has the claim. Both tickers on one job store would run the same
+   * job twice — the shape of Hermes #25517 that ADR-0022's corollary told us to
+   * design out rather than discover.
+   *
+   * The lock is read, never taken: a REPL that claimed it would stop the
+   * gateway from restarting after a crash while a terminal happened to be open.
+   * And a gateway killed with -9 does not wedge this forever — its claim goes
+   * stale after ten missed heartbeats and the next REPL ticks again.
+   */
+  const gateway = readGateway(runtime.db);
+  const ticker = gateway === null ? setInterval(() => scheduler.tick(), TICK_MS) : null;
+  ticker?.unref(); // the timer must not, by itself, keep the process alive
+  // Derived from `ticker`, not from a second reading of the same condition: the
+  // line cannot claim one thing while the timer does another.
+  process.stderr.write(
+    ticker
+      ? `scheduler: in questa sessione — i job girano finché la finestra è aperta\n`
+      : `scheduler: del gateway (pid ${gateway?.pid}) — i job girano anche senza di te\n`,
+  );
 
   try {
     for (;;) {
@@ -180,7 +203,7 @@ export async function runRepl(home = paths().home): Promise<number> {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     }
   } finally {
-    clearInterval(ticker);
+    if (ticker) clearInterval(ticker);
     rl.close();
     // Surfaces first, then the runtime: the connector must stop polling before
     // the database under it goes away.

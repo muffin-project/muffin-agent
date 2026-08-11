@@ -128,6 +128,40 @@ loop rifiuta perché non esiste). **Non** i 95: `/skin`, `/timestamps`,
 `/statusbar`, `/redraw` sono la loro cromatura, ed è il "TROPPE cose" che
 l'owner rifiuta.
 
+✅ **Il processo è costruito** (`slice/gateway`, 2026-08-11, 655 test). `muffin
+gateway run` possiede lo scheduler — il `setInterval` è uscito da `cli/repl.ts`
+— e vive finché non gli si dice di smettere. Verificato eseguendolo: job creato,
+gateway avviato senza nessun REPL, **fire a 24 s** con consegna su stdout;
+`gateway status` e `doctor` lo vedono da un altro processo; `gateway stop` drena
+ed esce. Le parti che valgono più del comando:
+- **Due scheduler non girano mai.** Rivendicazione durevole in `gateway_lock`;
+  il REPL la *legge* e cede il ticker, dicendolo. Il meccanismo è quello del
+  `SendLock`, generalizzato in `core/lock/durable.ts` invece che copiato — con
+  una differenza che contava: l'orizzonte di scadenza è un **battito**, non
+  un'ora, perché un gateway tiene il lock per settimane e il silenzio non prova
+  niente su di lui. Un `kill -9` non incastra il comando: dopo dieci battiti
+  persi la rivendicazione è scaduta.
+- **Supervisione, non solo riavvio.** `READY=1` quando serve davvero,
+  `WATCHDOG=1` alla cadenza che dichiara `WATCHDOG_USEC`, `STATUS=` leggibile.
+  No-op senza `NOTIFY_SOCKET`, che è il caso di macOS.
+- **Un gateway ucciso non perde lavoro**: `markRan` è l'unica cosa che sposta il
+  prossimo fire, quindi un turno interrotto lascia il job **dovuto**. Asserito
+  contro lo store vero, non assunto.
+- `gateway install` genera unit systemd / plist launchd **ancorate a
+  `~/.muffin`**, mai al checkout (la cicatrice di Hermes), e `muffin init` ora
+  **lo propone** invece di lasciare un comando manuale — direttiva owner: *"non
+  lancerò mai quei comandi a mano."*
+
+⛔ **Resta aperto, e sono le cose che il processo ora rende scrivibili**:
+`queue`/`steer` e il concetto di "occupato" (serve il protocollo client/server
+sul socket unix, non costruito); `heartbeat`; `undo`; il **trigger a soglia sul
+consolidamento** (punto 1 qui sotto, tuttora non soddisfatto — il gateway è il
+posto dove va, non è il trigger); la consegna remota su una surface (un job per
+canale remoto emerge ancora nel log invece di arrivare). E un limite dichiarato:
+il `ForegroundGate` del gateway è `ALWAYS_IDLE`, perché senza terminale non c'è
+un foreground — quando un turno di surface saprà dire "l'owner sta parlando", è
+lì che si innesta.
+
 **1. Il consolidamento non parte mai — e la DoD di M5 lo richiedeva.** `ingestPending`
 (episodi → fatti) ha **un solo chiamante: `muffin memory extract`, a mano**. Nessun
 job, nessun trigger a soglia. Quindi la memoria **non si riempie da sola**: anche

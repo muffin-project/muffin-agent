@@ -350,6 +350,33 @@ to stop exactly that. It strips comments now.
 *Found 11 August 2026 by grepping for the readers of every file in the seal —
 the one question none of the previous four rounds had asked in general.*
 
+## A test harness with a constraint nobody was told about
+
+`sendlock.test.ts` spawns two real processes to prove that `BEGIN IMMEDIATE`
+gives a single winner — the one assertion in that file that can tell the fix
+from a restatement of it. It spawned them with `node
+--experimental-transform-types`, and it worked for months.
+
+It worked because `core/scheduler/sendlock.ts` had **no runtime imports**. Node's
+own type stripping does not rewrite a `./x.js` specifier to `./x.ts`, so the
+first time that module imported anything at runtime — the claim moving to
+`core/lock/durable.ts` — the child died with `ERR_MODULE_NOT_FOUND` before
+printing `ready`, and the test failed as a **30-second timeout** rather than as
+an import error. The failure named the barrier, not the cause.
+
+Nothing declared the constraint. There was no comment on `sendlock.ts` saying
+"keep this import-free or a test in another file breaks", and no reason anyone
+would guess it. `--import tsx` resolves the specifiers and the harness stops
+caring what the module under test imports.
+
+> **A test that only passes because of a property nobody wrote down is a trap
+> with a delay on it — and the delay is measured in whoever touches that file
+> next.**
+
+*Found 11 August 2026, building the gateway (ADR-0035). Reproduced directly:
+`node --experimental-transform-types -e "import {SendLock} from './sendlock.ts'"`
+→ `Cannot find module '.../core/lock/durable.js'`.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

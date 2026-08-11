@@ -175,7 +175,15 @@ describe('SendLock', () => {
     // *when* the window opens, once both children exist, and a hot spin to a
     // shared instant makes them collide inside it.
     const start = (): { proc: ReturnType<typeof spawn>; ready: Promise<void>; done: Promise<string> } => {
-      const proc = spawn('node', ['--experimental-transform-types', '--input-type=module', '-e', child, dbPath], {
+      // `--import tsx` and not `--experimental-transform-types`: Node's own type
+      // stripping does not rewrite a `./x.js` specifier to `./x.ts`, so the
+      // child dies with ERR_MODULE_NOT_FOUND the moment the module it imports
+      // has a runtime import of its own (measured, when the claim moved to
+      // `core/lock/durable.ts`). This harness worked only because sendlock.ts
+      // happened to have none — an undeclared constraint on a file nobody was
+      // told to keep import-free. tsx resolves them, and the handshake below
+      // already absorbs the extra startup.
+      const proc = spawn('node', ['--import', 'tsx', '--input-type=module', '-e', child, dbPath], {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let out = '';
