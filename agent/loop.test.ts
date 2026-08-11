@@ -9,7 +9,8 @@ import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
-import { CONSERVATIVE, type Profile } from './profiles/profile.js';
+import { CONSERVATIVE, type Profile, type RecoveryStrategy } from './profiles/profile.js';
+import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './providers/types.js';
 
 /** A provider that replays a script, so the loop is tested and not the model. */
@@ -19,7 +20,13 @@ class ScriptedProvider implements Provider {
   readonly seen: ChatCall[] = [];
   constructor(private readonly script: (ChatResult | ProviderError)[]) {}
   async chat(_request?: ChatCall): Promise<ChatResult> {
-    if (_request) this.seen.push(_request);
+    // A snapshot of the messages, not the live array. `compactToolResults`
+    // returns the caller's own array unchanged when nothing needs clearing
+    // (`agent/context/compact.ts`), so every recorded call aliased ONE growing
+    // conversation: `seen[0].messages` showed what the *last* request sent, and
+    // any assertion about what the loop said on attempt N silently read attempt
+    // last. The loop only ever appends, so a copy of the list is enough.
+    if (_request) this.seen.push({ ..._request, messages: [..._request.messages] });
     const next = this.script[this.calls++] ?? answer('fine script');
     if (next instanceof ProviderError) throw next;
     return next;
@@ -41,6 +48,24 @@ const callTool = (name: string, args: unknown = {}): ChatResult => ({
   usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
   model: 'test',
 });
+
+/** A turn with nothing in it: no text, no call. The cascade's own trigger. */
+const nothing = (): ChatResult => ({
+  text: null,
+  toolCalls: [],
+  stopReason: 'end',
+  usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'test',
+});
+
+/** What the loop said to the model last, in the request it sent. */
+const lastSaid = (call: ChatCall): string => {
+  const last = call.messages[call.messages.length - 1];
+  return (last?.content ?? [])
+    .map((b) => (b.type === 'text' ? b.text : ''))
+    .join('\n')
+    .trim();
+};
 
 const decls: CapabilityDecl[] = [
   { id: 'demo.read', risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false },
@@ -570,5 +595,225 @@ describe('the context a turn is given', () => {
     const call = provider.seen[0]!;
     expect(call.system[0]!.type === 'text' && call.system[0]!.text).toBe(d.systemPrompts.group);
     expect(call.tools?.map((t) => t.name)).toEqual(['demo_read', 'demo_web', 'demo_boom']);
+  });
+});
+
+/**
+ * The cascade a profile declares is the cascade that runs.
+ *
+ * `RecoveryStrategy` has always had four members and the loop consulted one:
+ * `recoveriesLeft` counted down from `recovery.length` while the only branch
+ * ever taken was `includes('nudge')`. On `consumer-local` — the profile written
+ * for the weak model, the one that needs the crutches — `[nudge,
+ * reinjectTools, retryOnce, strictJson]` executed as four identical nudges, and
+ * the count made the lie load-bearing: three names in a JSON were buying
+ * attempts they did not spend.
+ */
+describe('the recovery cascade', () => {
+  const cascade = (recovery: RecoveryStrategy[]): Profile => ({ ...CONSERVATIVE, recovery });
+
+  it('runs attempt N with strategy N, in the order the profile declared', async () => {
+    const { deps: d, store } = deps([nothing(), nothing(), nothing(), nothing(), answer('finalmente')], {
+      profile: cascade(['nudge', 'reinjectTools', 'retryOnce', 'strictJson']),
+    });
+    const provider = d.provider as ScriptedProvider;
+
+    const result = await runTurn(d, input(store));
+    expect(result).toMatchObject({ stopped: 'answered', text: 'finalmente' });
+    expect(provider.seen).toHaveLength(5);
+
+    const [, first, second, third, fourth] = provider.seen as ChatCall[];
+    // 1 — nudge: the corrective turn that already existed, unchanged.
+    expect(lastSaid(first!)).toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+    // 2 — reinjectTools: the names of this turn's tools, inline at the tail.
+    expect(lastSaid(second!)).toContain('demo_read');
+    expect(lastSaid(second!)).toContain('demo_boom');
+    expect(lastSaid(second!)).not.toBe(lastSaid(first!));
+    // 3 — retryOnce: the same request again. It adds nothing to the context,
+    // which is the whole reason it is worth a slot on a small model.
+    expect(third!.messages).toHaveLength(second!.messages.length);
+    expect(lastSaid(third!)).toBe(lastSaid(second!));
+    // 4 — strictJson: the hard constraint, two admissible shapes and no third.
+    expect(lastSaid(fourth!)).not.toBe(lastSaid(second!));
+    expect(lastSaid(fourth!)).toMatch(/JSON/);
+  });
+
+  it('takes its order from the profile and not from a sequence written in the loop', async () => {
+    const { deps: d, store } = deps([nothing(), nothing(), answer('ok')], {
+      profile: cascade(['strictJson', 'nudge']),
+    });
+    const provider = d.provider as ScriptedProvider;
+
+    await runTurn(d, input(store));
+    // Declared first, so it runs first: the loop walks the list, it does not
+    // know that a nudge is the gentle one.
+    expect(lastSaid(provider.seen[1]!)).toMatch(/JSON/);
+    expect(lastSaid(provider.seen[2]!)).toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+  });
+
+  it('stops when the declared cascade is spent instead of repeating its last step', async () => {
+    const { deps: d, store } = deps([nothing(), nothing(), nothing()], { profile: cascade(['nudge']) });
+    const provider = d.provider as ScriptedProvider;
+
+    const result = await runTurn(d, input(store));
+    expect(result.stopped).toBe('error');
+    // One declared attempt: the first call, one recovery, and no third.
+    expect(provider.calls).toBe(2);
+  });
+
+  it('answers unparseable tool arguments with the cascade, not with a backoff', async () => {
+    // `malformed tool arguments` is thrown by the adapter with retryable:true,
+    // so it used to arrive at the loop's catch indistinguishable from a 429 and
+    // was answered by waiting. Waiting cannot improve JSON the model already
+    // emitted; the cascade can, and the wording says what actually broke.
+    const { deps: d, store } = deps(
+      [new ProviderError('malformed tool arguments from demo_read', true, undefined, 'output'), answer('ok')],
+      { profile: cascade(['nudge']) },
+    );
+    const provider = d.provider as ScriptedProvider;
+
+    await runTurn(d, input(store));
+    expect(provider.seen).toHaveLength(2);
+    // The transport path pushes no message at all, so a new corrective turn is
+    // the proof this went through the profile instead.
+    expect(provider.seen[1]!.messages.length).toBe(provider.seen[0]!.messages.length + 1);
+    expect(lastSaid(provider.seen[1]!)).not.toBe('Non ho ricevuto risposta. Continua, oppure dimmi che hai finito.');
+  });
+
+  it('does not spend a cascade step on a transport failure', async () => {
+    // One shared counter meant a 502 ate the profile's only nudge and the empty
+    // turn that followed had nothing left. Two failures, two budgets.
+    const { deps: d, store } = deps([new ProviderError('502 upstream', true), nothing(), answer('ripreso')], {
+      profile: cascade(['nudge']),
+    });
+    const result = await runTurn(d, input(store));
+    expect(result).toMatchObject({ stopped: 'answered', text: 'ripreso' });
+  });
+
+  it('names the tools this turn exposed, never the whole registry', async () => {
+    // Same rule as the invented-tool message: a member who is handed the host
+    // inventory learns the names of everything the kernel is going to refuse.
+    const member: Principal = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:9',
+      externalId: 'u9',
+    };
+    const { deps: d, store } = deps([nothing(), answer('ok')], {
+      profile: cascade(['reinjectTools']),
+      capabilities: new Map(decls.map((x) => [x.id, x])),
+    });
+    const provider = d.provider as ScriptedProvider;
+
+    await runTurn(d, input(store, member));
+    const said = lastSaid(provider.seen[1]!);
+    expect(said).toContain('demo_read');
+    expect(said).not.toContain('demo_write'); // hostOnly: filtered before the model
+  });
+
+  it('runs with a neutral profile: no strategy declared, nothing left behind in the core', async () => {
+    // The honesty test of 07 §3. A profile with every crutch off must still be
+    // a working profile — if something breaks, an impalcatura has leaked into
+    // the loop and that is an architectural bug, not a missing feature.
+    const neutral = cascade([]);
+
+    const empty = deps([nothing()], { profile: neutral });
+    const gaveUp = await runTurn(empty.deps, input(empty.store));
+    expect(gaveUp.stopped).toBe('error');
+    expect((empty.deps.provider as ScriptedProvider).calls).toBe(1);
+
+    // And the transport retry survives the neutral profile, because a 429 is a
+    // property of the endpoint and never was a crutch for a weak model.
+    const flaky = deps([new ProviderError('502 upstream', true), answer('ripreso')], { profile: neutral });
+    await expect(runTurn(flaky.deps, input(flaky.store))).resolves.toMatchObject({ text: 'ripreso' });
+  });
+
+  it('keeps the completion nudge out of the cascade, on a profile that declares none', async () => {
+    // Two nudges, two mechanisms. The completion gate is durable (it answers a
+    // measured false-success rate on every model) and is not a step a profile
+    // may decline; the cascade is scaffolding a profile declares. Deleting the
+    // cascade must not delete the gate.
+    const { deps: d, store, calls } = deps(
+      [answer('[Eseguo `demo_write`] Fatto.'), callTool('demo_write'), answer('scritto per davvero')],
+      { profile: cascade([]) },
+    );
+    const result = await runTurn(d, input(store));
+    expect(calls).toContain('demo_write');
+    expect(result.text).toBe('scritto per davvero');
+  });
+
+  it('routes a real adapter\'s malformed output to the cascade, from the wire up', async () => {
+    // The join, and it was the one thing the rest of this block could not see.
+    // Mutation: deleting `'output'` from the adapter's throw
+    // (`agent/providers/openai-compat.ts`) left every other test here green —
+    // the loop's branch was pinned against a ProviderError built by hand, and
+    // nothing proved the adapter ever produces one. That is the house defect
+    // exactly (two correct halves, an untested join), so the fixture starts at
+    // the bytes: a server that answers with a truncated `arguments` string, a
+    // real `OpenAICompatProvider`, and the assertion that the corrective turn
+    // reaches the *next request body* instead of the loop sleeping on a backoff.
+    const bodies: { messages: { role: string; content: unknown }[] }[] = [];
+    let served = 0;
+    const usage = { prompt_tokens: 10, completion_tokens: 5 };
+    const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
+      bodies.push(JSON.parse(init?.body ?? '{}'));
+      served += 1;
+      const body =
+        served === 1
+          ? {
+              id: 'x',
+              model: 'qwen3-local',
+              usage,
+              choices: [
+                {
+                  finish_reason: 'tool_calls',
+                  message: {
+                    content: null,
+                    // Truncated mid-object: the shape a small model emits when
+                    // it runs out of tokens or loses the brace.
+                    tool_calls: [
+                      { id: 'c1', type: 'function', function: { name: 'demo_read', arguments: '{"q": ' } },
+                    ],
+                  },
+                },
+              ],
+            }
+          : {
+              id: 'x',
+              model: 'qwen3-local',
+              usage,
+              choices: [{ finish_reason: 'stop', message: { content: 'ok, ripreso', tool_calls: [] } }],
+            };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const { deps: d, store } = deps([], {
+      provider: new OpenAICompatProvider('sk-test', 'http://localhost:11434/v1', {}, { fetch: fetchFake as never }),
+      profile: cascade(['nudge']),
+    });
+
+    const result = await runTurn(d, input(store));
+    expect(result).toMatchObject({ stopped: 'answered', text: 'ok, ripreso' });
+    expect(bodies).toHaveLength(2);
+
+    const retried = bodies[1]!.messages;
+    expect(retried[retried.length - 1]).toMatchObject({
+      role: 'user',
+      content: 'La tua ultima tool call non era leggibile: gli argomenti non erano JSON valido. Rifalla per intero.',
+    });
+  });
+
+  it('records which strategy ran, so a cascade that fires is visible on the trace', async () => {
+    const tracer = new RecordingTracer();
+    const { deps: d, store } = deps([nothing(), nothing(), answer('ok')], {
+      tracer,
+      profile: cascade(['nudge', 'strictJson']),
+    });
+    await runTurn(d, input(store));
+
+    const turn = tracer.spans.find((s) => s.name === 'muffin.turn');
+    expect(turn?.attributes['muffin.recovery.attempt']).toBe(2);
+    expect(turn?.attributes['muffin.recovery.strategy']).toBe('strictJson');
+    expect(turn?.attributes['muffin.recovery.failure']).toBe('empty');
   });
 });
