@@ -103,7 +103,7 @@ function harness(allowHost: boolean) {
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     budgetExhausted: () => false,
-    systemPrompt: 'Sei Muffin.',
+    systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
   };
   return { deps, fetched, provider: deps.provider as Scripted };
 }

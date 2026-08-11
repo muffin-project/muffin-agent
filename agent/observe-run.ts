@@ -10,7 +10,8 @@ import { runTurn, type LoopDeps } from './loop.js';
  * Same bridge as `scheduler-run.ts` and for the same reasons — the scheduler
  * principal so the kernel treats this as itself rather than as the owner
  * (threat model §3), a fresh session per composition so nudges are not one
- * growing conversation.
+ * growing conversation, and the owner-class context because the nudge is
+ * written to the owner about the owner's own memory.
  *
  * The one thing this file decides is the goal text, and it is not styling. An
  * absence is **inferred**, and `knowledge/03-observing-spine.md` §"Disciplina di

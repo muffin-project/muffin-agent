@@ -7,6 +7,7 @@ import { createDecide } from '../core/policy/decide.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE, type Profile } from './profiles/profile.js';
 import { ProviderError, type ChatCall, type ChatResult, type Provider } from './providers/types.js';
@@ -94,7 +95,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     budgetExhausted: () => false,
-    systemPrompt: 'Sei Muffin.',
+    systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     ...overrides,
   };
   return { deps: base, store, home, calls };
@@ -145,6 +146,48 @@ describe('agent loop', () => {
     const { deps: d, store, calls } = deps([callTool('demo_write'), answer('non ho potuto')]);
     await runTurn(d, input(store, member));
     expect(calls).not.toContain('demo_write'); // the handler never ran
+  });
+
+  it('filters before it caps, so host-only tools cannot crowd a member out of the window', async () => {
+    // Unobservable on a stock registry (9 tools, smallest cap 10) — this
+    // fixture is what makes the order testable: cap 2, and the two hostOnly
+    // tools registered FIRST. Cap-then-filter hands a member an empty menu
+    // while their usable tool sits outside the window; the moment MCP attaches
+    // (hostOnly, appended last) that stops being hypothetical on consumer
+    // profiles. The judge's mutation reversing the order survived 546 tests;
+    // this is the test that was missing.
+    const member: Principal = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:9',
+      externalId: 'u9',
+    };
+    const hostDecl = (id: string): CapabilityDecl => ({
+      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: true,
+    });
+    const openDecl = (id: string): CapabilityDecl => ({
+      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false,
+    });
+    const tool = (name: string, capability: string): RegisteredTool => ({
+      capability,
+      spec: { name, description: name, inputSchema: { type: 'object', properties: {} } },
+      handler: () => ({ content: 'ok' }),
+    });
+    const provider = new ScriptedProvider([answer('ciao')]);
+    const { deps: d, store } = deps([], {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 2 },
+      tools: [tool('host_a', 'cap.a'), tool('host_b', 'cap.b'), tool('open_c', 'cap.c')],
+      capabilities: new Map([
+        ['cap.a', hostDecl('cap.a')],
+        ['cap.b', hostDecl('cap.b')],
+        ['cap.c', openDecl('cap.c')],
+      ]),
+    });
+    await runTurn(d, input(store, member));
+
+    const sent = provider.seen[0]?.tools?.map((t) => t.name) ?? [];
+    expect(sent).toEqual(['open_c']);
   });
 
   it('closes a medium-risk tool once a web result raised the taint', async () => {
@@ -313,7 +356,7 @@ describe('agent loop', () => {
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
       budgetExhausted: () => false,
-      systemPrompt: 'test',
+      systemPrompts: { owner: 'test', group: 'test in gruppo' },
     };
     const session = store.open('compact');
     await runTurn(d, {
@@ -456,5 +499,76 @@ describe('agent loop', () => {
     });
     await runTurn(d, input(store));
     expect(ran).toEqual([]);
+  });
+});
+
+/**
+ * Which context a turn was given is a security-relevant fact about that turn,
+ * and until the class existed there was nothing to record. Neither the session
+ * file nor the memory row carries it, so the trace is the only place an
+ * incident can be answered from afterwards — which makes an attribute nobody
+ * asserts exactly the wrong kind of record to keep.
+ */
+class RecordingTracer implements Tracer {
+  readonly spans: { name: string; attributes: Record<string, AttributeValue> }[] = [];
+  start(name: SpanName, attributes: Record<string, AttributeValue> = {}): SpanHandle {
+    const span = { name: String(name), attributes: { ...attributes } };
+    this.spans.push(span);
+    return {
+      traceId: 'trace',
+      spanId: `span-${this.spans.length}`,
+      setAttributes: (next) => {
+        span.attributes = { ...span.attributes, ...next };
+      },
+      end: () => {},
+    };
+  }
+}
+
+describe('the context a turn is given', () => {
+  const MEMBER: Principal = {
+    kind: 'member',
+    connector: 'telegram',
+    tenantId: 'group:telegram:-1',
+    externalId: '7',
+  };
+
+  it('records the class and the size of the tool menu on the turn span', async () => {
+    const tracer = new RecordingTracer();
+    const { deps: d, store } = deps([answer('ok')], {
+      tracer,
+      capabilities: new Map(decls.map((x) => [x.id, x])),
+    });
+    await runTurn(d, input(store, MEMBER));
+
+    const turn = tracer.spans.find((s) => s.name === 'muffin.turn');
+    expect(turn?.attributes['muffin.context.class']).toBe('group');
+    // `demo_write` is the host-only one of the four; three survive the filter.
+    expect(turn?.attributes['muffin.context.tools_exposed']).toBe(3);
+  });
+
+  it('gives the owner the owner class and the whole menu on the same fixture', async () => {
+    const tracer = new RecordingTracer();
+    const { deps: d, store } = deps([answer('ok')], {
+      tracer,
+      capabilities: new Map(decls.map((x) => [x.id, x])),
+    });
+    await runTurn(d, input(store));
+
+    const turn = tracer.spans.find((s) => s.name === 'muffin.turn');
+    expect(turn?.attributes['muffin.context.class']).toBe('owner');
+    expect(turn?.attributes['muffin.context.tools_exposed']).toBe(4);
+  });
+
+  it('hands the model the prompt of its class and only its tools', async () => {
+    const { deps: d, store } = deps([answer('ok')], {
+      capabilities: new Map(decls.map((x) => [x.id, x])),
+    });
+    const provider = d.provider as ScriptedProvider;
+
+    await runTurn(d, input(store, MEMBER));
+    const call = provider.seen[0]!;
+    expect(call.system[0]!.type === 'text' && call.system[0]!.text).toBe(d.systemPrompts.group);
+    expect(call.tools?.map((t) => t.name)).toEqual(['demo_read', 'demo_web', 'demo_boom']);
   });
 });
