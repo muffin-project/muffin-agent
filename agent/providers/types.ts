@@ -69,12 +69,28 @@ export interface Provider {
   chat(call: ChatCall): Promise<ChatResult>;
 }
 
+/**
+ * Which side of the call produced the failure.
+ *
+ * Two families were travelling under one type and the loop could not tell them
+ * apart: a 429 and "the model emitted arguments that will not parse" both
+ * arrive as `retryable: true`, so unparseable JSON was answered with
+ * exponential backoff. Waiting cannot improve output the model has already
+ * produced — that one belongs to the profile's recovery cascade, where
+ * `strictJson` is the step written for it.
+ *
+ * Defaults to `transport`, so every construction site that does not say
+ * otherwise keeps the behaviour it had.
+ */
+export type ProviderErrorSource = 'transport' | 'output';
+
 /** Carries what the recovery cascade needs to decide, instead of a bare string. */
 export class ProviderError extends Error {
   constructor(
     message: string,
     readonly retryable: boolean,
     readonly status?: number,
+    readonly source: ProviderErrorSource = 'transport',
   ) {
     super(message);
     this.name = 'ProviderError';

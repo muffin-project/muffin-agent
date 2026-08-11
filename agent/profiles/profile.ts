@@ -16,14 +16,24 @@ import { fileURLToPath } from 'node:url';
  * the durable-vs-scaffolding split in the blueprint.
  */
 
+/**
+ * The vocabulary of the cascade. What each step *does* is in `./recovery.ts`,
+ * beside this file and inside the same removable boundary.
+ *
+ * The list is **executed as declared, in order**: attempt N runs strategy N.
+ * It used to be a length — `recoveriesLeft` counted down from `recovery.length`
+ * while the loop consulted only `includes('nudge')`, so `consumer-local`'s four
+ * declared steps ran as four identical nudges and the other three names bought
+ * attempts they never spent.
+ */
 export type RecoveryStrategy =
-  /** Re-ask for a continuation when the model returned nothing usable. */
+  /** Empty or narrated turn: an open corrective, the gentlest rung. */
   | 'nudge'
-  /** Re-list the valid tools after a call to a name that does not exist. */
+  /** Lost track of the menu: the tool names restated inline, at the tail. */
   | 'reinjectTools'
-  /** One more attempt, for transient provider failures. */
+  /** Transient garbage from the model: ask again, adding nothing. */
   | 'retryOnce'
-  /** Restate the output contract when the shape came back wrong. */
+  /** Prose where a call was needed: a two-option contract, no third shape. */
   | 'strictJson';
 
 export type Profile = {
