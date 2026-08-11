@@ -31,6 +31,34 @@
    ratificata**, e la sua ratifica dovrebbe aspettare un numero che oggi non
    esiste — `muffin observe` sulla memoria vera dà 0 candidati su 0 entità,
    perché non l'hai ancora usato.
+6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
+   chi parla (`slice/contesto-per-tenant`, 546 test). È il punto 1 di
+   `research/confronto-harness.md §9`. Il difetto: `buildSystemPrompt` non
+   prendeva **nessun** parametro tenant e girava una volta sola, quindi un turno
+   di gruppo riceveva byte per byte il prompt dell'owner — `identity.md` (il
+   patto privato, nel RoT) e i 1.330 caratteri di `persona.md §"Al primo
+   incontro"` che dicono all'agente di **chiedere dati personali** «un pezzo per
+   volta», nell'unico tenant la cui memoria non è dell'owner. **Il threat model
+   non ha mai nominato il prompt come superficie**: lo è, e a valle non c'è
+   niente che disfi un'istruzione a chiedere. Ora `agent/context/assemble.ts` —
+   il deliverable M1 dichiarato in tre documenti e mai costruito — produce **due
+   classi**, `owner` e `group`, assemblate una volta a boot: nessun ricalcolo per
+   turno, ciascuna il proprio prefisso cacheabile. Il prompt owner è **pinnato a
+   sha256**: se cambia, ogni cache calda si spegne, e il test lo dice invece di
+   lasciarlo succedere in silenzio. Il gruppo ha un carattere suo (in codice, non
+   in `defaults/`: non è owner-editabile) — sottrarre due sezioni da `persona.md`
+   falliva **aperto**, la sezione successiva che qualcuno aggiunge arriva al
+   gruppo da sola. Seconda metà: `deps.tools` è filtrato per principal prima del
+   modello — un membro vedeva 8 tool `hostOnly` che il kernel avrebbe negato
+   comunque, e il messaggio "quel tool non esiste" glieli elencava tutti.
+   **Il kernel resta l'enforcement** (`decide.ts:132` non toccato): il lookup del
+   tool resta sul registro intero, così un membro che nomina `fs_read` incontra
+   `principal_forbidden` col suo codice sulla traccia, non un "non esiste" che
+   sarebbe una bugia. Provato **attraverso il connettore telegram vero**
+   (`Update` → `drain()` → `runTurn`), rosso verificato sul commit precedente.
+   **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
+   dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
+   non il tenant) e non è in questa slice.
 
 **Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
 
