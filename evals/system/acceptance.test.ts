@@ -107,7 +107,7 @@ describe('M3 acceptance — through the production runtime', () => {
     const withSkill = buildRuntime(home, workspace);
     try {
       expect(withSkill.bootLines).toEqual([]); // nothing skipped
-      expect(withSkill.deps.systemPrompt).toContain('brief-giornata');
+      expect(withSkill.deps.systemPrompts.owner).toContain('brief-giornata');
       expect(withSkill.deps.tools.some((t) => t.spec.name === 'skill_read')).toBe(true);
     } finally {
       withSkill.close();
