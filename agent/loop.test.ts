@@ -15,8 +15,10 @@ import { ProviderError, type ChatCall, type ChatResult, type Provider } from './
 class ScriptedProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   calls = 0;
+  readonly seen: ChatCall[] = [];
   constructor(private readonly script: (ChatResult | ProviderError)[]) {}
   async chat(_request?: ChatCall): Promise<ChatResult> {
+    if (_request) this.seen.push(_request);
     const next = this.script[this.calls++] ?? answer('fine script');
     if (next instanceof ProviderError) throw next;
     return next;
@@ -190,10 +192,19 @@ describe('agent loop', () => {
     // The budget engine, its two caps and its five tests all existed while
     // `record()` had no caller in production: `exhausted()` answered false for
     // ever and `/spend` would have said $0.00 after a night of looping.
-    const billed: { model: string; tenant: string }[] = [];
-    const { deps: d, store } = deps([callTool('demo_read'), answer('fatto')], {
+    const billed: { model: string; tenant: string; reads: number; writes: number }[] = [];
+    const withCache = (r: ChatResult): ChatResult => ({
+      ...r,
+      usage: { ...r.usage, cacheReadTokens: 200, cacheWriteTokens: 150 },
+    });
+    const { deps: d, store } = deps([withCache(callTool('demo_read')), withCache(answer('fatto'))], {
       recordSpend: (entry) => {
-        billed.push({ model: entry.model, tenant: entry.tenant });
+        billed.push({
+          model: entry.model,
+          tenant: entry.tenant,
+          reads: entry.cacheReadTokens,
+          writes: entry.cacheWriteTokens,
+        });
         return 0.01;
       },
     });
@@ -201,6 +212,44 @@ describe('agent loop', () => {
     // Two model calls in this turn, two billing records, both with the tenant.
     expect(billed).toHaveLength(2);
     expect(billed.every((b) => b.tenant === 'host')).toBe(true);
+    // And the cache fields ride along. The premium's formula was pinned while
+    // the line CARRYING the number to it was not: zeroing the spend entry's
+    // cacheWriteTokens killed nothing, so the premium was one edit from being
+    // dead in production with a green suite — F1's shape, one layer over. The
+    // read side had been unpinned since it shipped; same fix, same breath.
+    expect(billed.every((b) => b.reads === 200 && b.writes === 150)).toBe(true);
+  });
+
+  it('marks the system prompt as the cacheable prefix, or the breakpoint has nothing to mark', async () => {
+    // The adapter half is well tested — against fixtures that set the marker by
+    // hand. The one production line that actually sets it could be deleted with
+    // the whole suite green: every turn would pay full price, and the telemetry
+    // that would show it only moves if the marker was there. Two correct
+    // halves, an untested join — the house archetype, on this slice's own
+    // guarantee.
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], { provider });
+    await runTurn(d, input(store));
+    expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
+  });
+
+  it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {
+    // The adapter read `cache_write_tokens` off the wire and the loop dropped
+    // it one layer up: the accumulator had no field, the span attribute had a
+    // definition and zero writers, and the telemetry could not say a cache
+    // write ever happened — which is exactly how the missing breakpoints
+    // stayed invisible for the feature's whole life.
+    const withCache = (r: ChatResult): ChatResult => ({
+      ...r,
+      usage: { ...r.usage, cacheReadTokens: 200, cacheWriteTokens: 150 },
+    });
+    const { deps: d, store } = deps([withCache(callTool('demo_read')), withCache(answer('fatto'))]);
+
+    const result = await runTurn(d, input(store));
+
+    // Two calls, both counted: the sum, not the last value.
+    expect(result.usage.cacheWriteTokens).toBe(300);
+    expect(result.usage.cacheReadTokens).toBe(400);
   });
 
   it('does not let a cached allow outlive the budget that permitted it', async () => {
