@@ -63,7 +63,15 @@
 **⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
 dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
 usabile**. Cinque cose, tutte verificate sul codice:
-0. **Niente vive senza il terminale.** Lo scheduler muore col REPL. Si legge nei
+0. **Niente vive senza il terminale** → **ADR-0035** (direzione owner, 2026-08-11:
+   *"anche a noi serve un gateway sicuro, serve heartbeat… il concetto di
+   occupato, continuo, sempre attivo, sempre vivo"*). ADR-0022 aveva già deciso
+   la forma — *"un processo OS per il runtime (gateway, loop, memoria,
+   scheduler)"* — e ciò che esiste è un `setInterval` dentro `cli/repl.ts`:
+   **undicesima istanza della famiglia, e la più grossa**, perché non è un file
+   senza lettore, è la forma del runtime. I cinque vincoli di sicurezza (socket
+   locale, kernel unico punto di decisione, principal per ogni turno autonomo,
+   nessuna elevazione, visibile e ammazzabile) sono nell'ADR. Lo scheduler muore col REPL. Si legge nei
    verbi: 31 dei 95 comandi di Hermes presuppongono un processo che gira
    (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`); i
    nostri 14 sono tutti "fai e esci". Per questo **"sei un agente continuo" non
