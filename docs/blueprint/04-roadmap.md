@@ -104,14 +104,46 @@ Non è un modulo nuovo: è la lista delle cose che rendono **inservibile** un
 substrato costruito, trovate rispondendo all'owner che chiedeva perché non se la
 sente di usarlo. Ognuna verificata sul codice, non stimata.
 
+**0. Niente vive senza il terminale — ed è la radice delle altre.** Lo scheduler
+gira solo finché il REPL è aperto: chiudi la finestra e non succede più niente.
+Si vede dal **vocabolario**, non dalla dichiarazione: dei 95 comandi di Hermes,
+31 sono di sessione — `heartbeat`, `background`, `queue`, `steer` (inietta dopo
+la prossima tool call senza interrompere), `pause`, `stop`, `restart` (drena e
+riavvia), `undo`, `rollback`, `snapshot`, `handoff`, `compress`. Sono verbi che
+**presuppongono qualcosa che sta già girando**. I nostri quattordici sono tutti
+"fai questo adesso ed esci". Un sistema è continuo se ha comandi che assumono
+che stia girando, e noi non ne abbiamo nessuno — per questo "sei un agente
+continuo" **non va scritto nel prompt**: sarebbe una bugia, e licenzierebbe
+promesse che il runtime non mantiene (contro `identity.md`, "non fingi di aver
+fatto"). Va reso vero, e allora si scrive da sé.
+→ Serve **un processo che vive senza il terminale** (la versione piccola del
+loro gateway da 307 KB: gira, `doctor` lo vede, si ferma e riparte), più i tre
+verbi che ne conseguono — `heartbeat` (prompt ricorrente dichiarato dall'owner
+che rientra quando è inattivo), `queue`/`steer` (parlare a un agente occupato
+senza interromperlo: oggi non esiste nemmeno il concetto di "è occupato" visibile
+all'owner), `undo` (il registro che il kernel già emette come `DRAFT` e che il
+loop rifiuta perché non esiste). **Non** i 95: `/skin`, `/timestamps`,
+`/statusbar`, `/redraw` sono la loro cromatura, ed è il "TROPPE cose" che
+l'owner rifiuta.
+
 **1. Il consolidamento non parte mai — e la DoD di M5 lo richiedeva.** `ingestPending`
 (episodi → fatti) ha **un solo chiamante: `muffin memory extract`, a mano**. Nessun
-job, nessun trigger a soglia, nessun ciclo notturno. Quindi la memoria **non si
-riempie da sola**: anche usandolo ogni giorno, i fatti restano zero (misurato
-sulla home dell'owner: 6 episodi, 0 fatti). La riga *"un trigger a soglia (N
-episodi non consolidati) fa partire il consolidamento da solo"* è nella DoD di M5
-sopra, ed è **non soddisfatta** — M5 è stato dato per chiuso senza. È anche la
-regressione più netta rispetto al vecchio, che il ciclo dream ce l'aveva.
+job, nessun trigger a soglia. Quindi la memoria **non si riempie da sola**: anche
+usandolo ogni giorno, i fatti restano zero. Il numero che lo dice, dall'inventario:
+**414 fatti nel vecchio contro 0 nel nuovo** (4.107 episodi in 4 mesi, 320 entità,
+228 consegne proattive — contro 6 episodi, 0 fatti, 0 entità). La riga *"un trigger
+a soglia (N episodi non consolidati) fa partire il consolidamento da solo"* è nella
+DoD di M5 sopra, ed è **non soddisfatta**: M5 è stato dato per chiuso senza.
+
+⚠️ **Correzione (2026-08-11, dall'inventario)**: la prima stesura di questa riga
+diceva che la regressione era "il vecchio aveva il ciclo dream". **Falso, e la
+parte falsa cambia il rimedio.** Il vecchio non riempiva la memoria di notte: la
+riempiva **a ogni turno, in asincrono** — `gateway.ts:2732` accoda →
+`thinker.ts:581` preleva → `reactor.ts:904` → `memory_learning.ts:625` →
+`saveFact`, con latenza di minuti. Il dream faceva **manutenzione sopra** (la
+work_queue è 2.438 righe contro un centinaio di report dream). Costruire solo un
+job notturno produrrebbe un Muffin che ti conosce con 24 ore di ritardo: servono
+**due meccanismi**, l'estrazione per-turno asincrona e la manutenzione periodica.
 → **priorità 1**: senza questo, tutto il lavoro su memoria, importance, origin e
 assenza è inerte.
 
@@ -136,6 +168,40 @@ eval, ma manca la cosa che l'owner ha chiesto: uno scenario end-to-end con
 provider finto (zero token) più uno smoke piccolo contro il modello vero. È il
 modo per verificare l'harness **senza** doverlo usare come agente quotidiano —
 cioè senza dipendere dalla cosa che il Gate 1 misura.
+
+**6. Un turno autonomo riceve il prompt scritto per te.** `tenantClass` dà classe
+owner a un principal `system`, quindi un cron o un `observe` legge un testo in
+seconda persona rivolto a qualcuno che è lì davanti — mentre **non c'è nessuno
+che aspetta**. Cambia cosa è una buona risposta (niente domande di chiarimento,
+forma da notifica e non da conversazione) ed è verificabile: se in un turno
+autonomo Muffin fa una domanda, l'ha violata. Due forme possibili — una terza
+classe accanto a owner/group (l'asse è stabile per turno, costa una entry di
+cache) oppure una riga nel messaggio (la mossa di Hermes: ciò che varia per turno
+esce dal prompt). Da ADR.
+
+**Dall'inventario vecchio-nuovo** (`research/inventario-vecchio-nuovo.md`, 86
+righe con verdetto: 41% presente, 29% tolto di proposito, 23% manca e serve, 8%
+era slop). Le MANCA-SERVE che non sono già qui sopra:
+- **mail e calendario** — il vecchio li aveva col gate giusto (bozza → outbox →
+  conferma → grace worker); il nuovo ha il kernel e zero adapter. Prima va chiuso
+  il capitolo di threat model sulle sorgenti in ingresso.
+- **note vocali non trascritte** — il vecchio ascoltava (whisper locale,
+  on-device); il nuovo salva l'ogg e tace.
+- **living profile + counterpoint** — la tabella `profiles` esiste in schema
+  **senza scrittori né lettori**: decima istanza della famiglia.
+- **onboarding che impara** — il vecchio aveva un meccanismo, il nuovo una
+  sezione di prompt.
+- e un posto dove **chiedere cosa si regola** (non necessariamente un `muffin
+  config`: basta un comando che elenchi le manopole e dove vivono).
+
+**Il contro-numero, che vale quanto quelli sopra**: dei 47 tool del vecchio,
+**16 non sono mai stati invocati** e **28 su 47 meno di cinque volte in quattro
+mesi**. Sei tool hanno fatto il lavoro. Lo skill layer da 3.052 righe: 3
+candidati, 1 uso. `undo_log`: **zero righe** — il tier act-notify-undo non ha mai
+prodotto un revert. E il loro `config.yaml` è caricato, validato e letto da
+nessuno: la famiglia "dichiarato e non connesso" non è una nostra particolarità.
+Questo è ciò che "TROPPE cose" significa in numeri, e giustifica il tetto sui
+tool meglio di qualunque argomento sul prompt.
 
 **Conseguenza sul Gate 1, detta chiaramente**: il criterio d'uscita resta l'uso
 per due settimane, e resta a zero giorni. Ma la causa non era la pigrizia
