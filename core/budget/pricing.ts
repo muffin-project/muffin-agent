@@ -64,11 +64,26 @@ export function costUsd(model: string, tokens: Tokens, baseUrl?: string): number
   const price = priceOf(model, baseUrl);
   if (price === null) return 0;
   const cached = tokens.cacheReadTokens ?? 0;
-  // Cache reads bill at a fraction; cache writes bill at the input rate (a 25%
-  // premium on Anthropic, ignored here — it rounds the cap in the safe
-  // direction rather than the dangerous one).
+  const written = tokens.cacheWriteTokens ?? 0;
   const fresh = Math.max(0, tokens.inputTokens - cached);
+  // Cache reads bill at a fraction. Cache writes carry a 25% premium on
+  // Anthropic and Alibaba, billed here as a surcharge on top of the input rate.
+  // The earlier version ignored it "in the safe direction" — but this file's
+  // own header defines safe as charging HIGH so the cap trips early, and
+  // under-charging trips it late.
+  //
+  // The surcharge is exact only where inputTokens INCLUDES the written tokens,
+  // which is true on the OpenRouter compat wire (prompt_tokens is the total).
+  // On the native Anthropic adapter it is not: input_tokens there is the
+  // uncached remainder, so written tokens bill at 0.25× against a true 1.25× —
+  // an UNDER-count, in the direction this header calls dangerous. The fix is
+  // normalizing at that adapter's boundary (sum the three usage fields), which
+  // also repairs the pre-existing double-subtraction of cache reads below; it
+  // touches a bug older than the cache slice and is filed, not smuggled in.
   const inputUsd =
-    (fresh * price.inputPerMTok + cached * (price.cachedInputPerMTok ?? price.inputPerMTok)) / 1e6;
+    (fresh * price.inputPerMTok +
+      cached * (price.cachedInputPerMTok ?? price.inputPerMTok) +
+      written * 0.25 * price.inputPerMTok) /
+    1e6;
   return inputUsd + (tokens.outputTokens * price.outputPerMTok) / 1e6;
 }

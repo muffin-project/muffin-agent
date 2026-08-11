@@ -100,3 +100,33 @@ describe('buildRuntime hands the kernel what it needs', () => {
     expect(fetched).toEqual(['https://ok.example.com/page']);
   });
 });
+
+describe('provider caching is wired by endpoint', () => {
+  /**
+   * The flag exists only if this join exists: `explicitCache` defaulting off
+   * means a runtime that forgets to pass it produces a provider that silently
+   * pays full price — the exact invisible state this slice was sent to end.
+   * Asserted on the constructed provider, not on a request, because the request
+   * shape has its own tests and this file owns the joins.
+   */
+  const providerOf = (baseUrl?: string) => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-cachewire-'));
+    runInit({ home, apiKey: 'sk-never-called', ...(baseUrl ? { baseUrl, provider: 'openai-compat' as const } : {}) });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-cachewire-ws-')));
+    const provider = runtime.deps.provider as { explicitCache?: boolean };
+    runtime.close();
+    return provider;
+  };
+
+  it('asks OpenRouter for the cache, because there it only exists on request', () => {
+    expect(providerOf('https://openrouter.ai/api/v1').explicitCache).toBe(true);
+  });
+
+  it('leaves every other endpoint on the byte-identical request it always got', () => {
+    expect(providerOf('http://localhost:11434/v1').explicitCache).toBe(false);
+  });
+
+  it('a hostname that merely contains the name does not flip the request shape', () => {
+    expect(providerOf('https://openrouter.ai.evil.tld/v1').explicitCache).toBe(false);
+  });
+});
