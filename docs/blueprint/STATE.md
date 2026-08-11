@@ -60,6 +60,33 @@
    dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
    non il tenant) e non è in questa slice.
 
+**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
+dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
+usabile**. Cinque cose, tutte verificate sul codice:
+1. **Il consolidamento non parte mai.** `ingestPending` ha un solo chiamante,
+   `muffin memory extract`, a mano. La memoria non si riempie da sola — misurato
+   sulla home dell'owner: 6 episodi, **0 fatti**. La DoD di M5 lo richiedeva
+   («un trigger a soglia fa partire il consolidamento da solo») ed è **non
+   soddisfatta**: M5 è stato chiuso senza. È la regressione più netta contro il
+   vecchio, che il dream ce l'aveva. **Priorità 1**: senza, memoria/importance/
+   origin/assenza sono inerti.
+2. **`thinking` dichiarato nei profili e mai passato al provider** (nono caso della
+   famiglia "dichiarato e non connesso").
+3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
+   dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
+4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la
+   ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
+5. **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
+   finto + smoke piccolo sul modello vero.
+
+**Confronto coi peer, fatto** (`research/confronto-harness.md`, quattro passate
+verificate su Hermes/OpenHands/Goose/Cline/Letta): la scommessa architetturale
+regge su cinque assi su sei, spesso validata dai loro stessi numeri; l'unico
+contraddetto è il resume (punto 4). Ne sono usciti ADR-0032/0033/0034 e
+l'emendamento a 0028 con la contro-posizione di Hermes #17459. **ADR-0032 è già
+emendato dall'owner**: memoria ibrida (il tool scrive il contenuto, l'harness
+governa il timing) con riconciliazione fra tool e pipeline.
+
 **Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
 
 **File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
