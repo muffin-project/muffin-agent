@@ -121,7 +121,9 @@ export class OpenAICompatProvider implements Provider {
         try {
           args = JSON.parse(tc.function.arguments || '{}');
         } catch {
-          throw new ProviderError(`malformed tool arguments from ${tc.function.name}`, true);
+          // `output`, not transport: the model wrote this, and no amount of
+          // waiting rewrites it. The loop routes it to the profile's cascade.
+          throw new ProviderError(`malformed tool arguments from ${tc.function.name}`, true, undefined, 'output');
         }
         return { id: tc.id, name: tc.function.name, args };
       });
