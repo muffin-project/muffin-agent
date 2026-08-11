@@ -45,10 +45,13 @@ describe('reranking', () => {
     const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
     expect(provider.calls).toBe(1);
     expect(reranked.map((i) => i.id)).toEqual([14, 3, 7]);
-    // The rerank instructions are the stable half of a per-recall call: on the
-    // endpoints that only cache on request, an unmarked prefix pays full price
-    // on every recall. Deleting the marker at the call site was suite-green —
-    // the same untested join as the loop's, one caller over.
+    // Honesty about what this pin defends: the marker is correct by
+    // construction, and TODAY it is a no-op — this prefix is ~190 tokens and
+    // the light lane's model (Haiku) ignores cache_control below a 4096-token
+    // minimum. No write happens, no price changes either way. The pin exists so
+    // the marker survives refactors and starts working the day the prefix
+    // grows past the floor — not because it saves money now. Whoever sees a
+    // "cache miss" here later: it is a length problem, not a bug.
     expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
   });
 

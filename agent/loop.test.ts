@@ -192,10 +192,19 @@ describe('agent loop', () => {
     // The budget engine, its two caps and its five tests all existed while
     // `record()` had no caller in production: `exhausted()` answered false for
     // ever and `/spend` would have said $0.00 after a night of looping.
-    const billed: { model: string; tenant: string }[] = [];
-    const { deps: d, store } = deps([callTool('demo_read'), answer('fatto')], {
+    const billed: { model: string; tenant: string; reads: number; writes: number }[] = [];
+    const withCache = (r: ChatResult): ChatResult => ({
+      ...r,
+      usage: { ...r.usage, cacheReadTokens: 200, cacheWriteTokens: 150 },
+    });
+    const { deps: d, store } = deps([withCache(callTool('demo_read')), withCache(answer('fatto'))], {
       recordSpend: (entry) => {
-        billed.push({ model: entry.model, tenant: entry.tenant });
+        billed.push({
+          model: entry.model,
+          tenant: entry.tenant,
+          reads: entry.cacheReadTokens,
+          writes: entry.cacheWriteTokens,
+        });
         return 0.01;
       },
     });
@@ -203,6 +212,12 @@ describe('agent loop', () => {
     // Two model calls in this turn, two billing records, both with the tenant.
     expect(billed).toHaveLength(2);
     expect(billed.every((b) => b.tenant === 'host')).toBe(true);
+    // And the cache fields ride along. The premium's formula was pinned while
+    // the line CARRYING the number to it was not: zeroing the spend entry's
+    // cacheWriteTokens killed nothing, so the premium was one edit from being
+    // dead in production with a green suite — F1's shape, one layer over. The
+    // read side had been unpinned since it shipped; same fix, same breath.
+    expect(billed.every((b) => b.reads === 200 && b.writes === 150)).toBe(true);
   });
 
   it('marks the system prompt as the cacheable prefix, or the breakpoint has nothing to mark', async () => {
