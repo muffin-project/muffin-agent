@@ -12,6 +12,15 @@ import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
  * owner's return (threat model §3), and `outward.*` / `config.ratchet` are
  * denied outright. It never inherits the owner's column. Each fire gets a fresh
  * session: a daily brief is not one growing conversation.
+ *
+ * It does get the **owner-class context** (`agent/context/assemble.ts`), and
+ * that is not the same statement as inheriting the owner's column: the job runs
+ * on the host tenant, over the owner's own memory, and its output is for the
+ * owner. Handing it the group prompt would produce a daily brief written by a
+ * guest in someone else's room. The class follows from the pair it already
+ * passes — `system` principal, `host` tenant — so there is nothing to keep in
+ * sync here; a job ever armed for a group tenant moves to the group class on
+ * its own.
  */
 
 /**
