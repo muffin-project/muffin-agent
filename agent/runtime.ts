@@ -1,6 +1,4 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, type Config } from '../core/config/config.js';
@@ -9,6 +7,7 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { verify } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import { buildSystemPrompts } from './context/assemble.js';
 import type { LoopDeps, RegisteredTool } from './loop.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
@@ -310,7 +309,14 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         budget.record({ ...entry, usd });
         return usd;
       },
-      systemPrompt: buildSystemPrompt(home, safeMode !== null, skillsPromptSection(skillScan.skills)),
+      // One prompt per tenant class, assembled here and never per turn: the
+      // class a turn belongs to is a property of who is speaking, and `runTurn`
+      // picks. Built once so each class keeps its own warm cache prefix.
+      systemPrompts: buildSystemPrompts(
+        home,
+        safeMode !== null,
+        skillsPromptSection(skillScan.skills),
+      ),
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
@@ -342,115 +348,3 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
   return attachment.report;
 }
 
-/**
- * Identity comes from the root of trust, verbatim. It is the one part of the
- * prompt the agent cannot rewrite about itself, which is the whole point of
- * keeping it there rather than in config.
- */
-function buildSystemPrompt(home: string, safeMode: boolean, skillsSection = ''): string {
-  const p = paths(home);
-  // Three files: the shared character, the owner's constraints, the voice.
-  //
-  // The order is deliberate and the ordering is tested. What is NOT claimed is
-  // that later text *wins* a conflict — there is no precedence mechanism here,
-  // only string order, and by the same "later wins" reasoning the voice and the
-  // operational block would outrank identity too. The honest statement is that
-  // identity is read in a position where a model is likely to treat it as
-  // refining what came before; whether it does is unmeasured.
-  const persona = authored(p.persona);
-  const identity = authored(join(p.rot, 'identity.md'));
-  // The voice was written, shipped and then read by nobody: `buildSystemPrompt`
-  // never opened it, so every rule in it — the emoji thresholds, "no corporate
-  // language", "no simulated actions" — was prose with no way to reach a turn.
-  // It goes after identity and before everything operational, which is both the
-  // cache-stable order the comparable harnesses use and the order of authority:
-  // who it is, then how it speaks, then what it is doing right now.
-  const voice = authored(p.voice);
-  const parts = [persona, identity, voice];
-  if (skillsSection.length > 0) parts.push(skillsSection);
-  parts.push(
-    [
-      '## Come lavori',
-      '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
-      '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
-      '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
-    ].join('\n'),
-  );
-  if (safeMode) {
-    parts.push(
-      '## Modalità sicura\nIl Root of Trust è divergente: alcune capability sono negate. Dillo se ti impedisce di fare qualcosa.',
-    );
-  }
-  return parts.filter((s) => s.length > 0).join('\n\n');
-}
-
-/**
- * The authored part of a persona file: what the owner wrote, without the
- * scaffolding that told them how to write it.
- *
- * Both files ship as templates whose HTML comments address the owner —
- * "Questo file è tuo. Scrivilo com'è", "le righe qui sotto sono un punto di
- * partenza". Injected verbatim, as they were, those instructions became part of
- * the identity: on a fresh install the agent was handed a page explaining how a
- * human should fill in its character, and nothing else. Comments are stripped
- * here rather than removed from the files, because in the file they are the
- * thing that makes it writable.
- *
- * Headings left empty are dropped for the same reason. An untouched template
- * would otherwise contribute three bare titles with nothing under them, which
- * reads to a model as a section it is expected to have opinions about.
- */
-function authored(path: string): string {
-  if (!existsSync(path)) return '';
-  let text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-
-  // An unterminated `<!--` matches nothing, and the whole owner-facing block
-  // sails through into the prompt — the exact pre-existing defect, restored by
-  // deleting one `-->`. Cutting from the opener is the fail-safe direction:
-  // losing authored text is recoverable, shipping scaffolding as identity is
-  // what this function exists to stop. (Nested comments leave a stray `-->`,
-  // handled by the same cut.)
-  const orphan = text.indexOf('<!--');
-  if (orphan !== -1) text = text.slice(0, orphan);
-
-  const lines = text.split('\n');
-  const kept: string[] = [];
-  let fenced = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (/^\s*```/.test(line)) fenced = !fenced;
-
-    const heading = !fenced && /^(#{2,6})\s/.exec(line);
-    if (heading) {
-      const level = heading[1]!.length;
-      // A heading is unfilled only when it has neither direct content nor a
-      // subsection. Stopping at the next heading of *any* level deleted a
-      // parent whose content lived under `###` — and `identity.md` ships
-      // exactly such a heading, so an owner who answered it in subsections
-      // would have lost the question. A `#` opening a line inside a code fence
-      // is not a heading either, which is why the fence is tracked.
-      let j = i + 1;
-      let empty = true;
-      let innerFence = fenced;
-      for (; j < lines.length; j++) {
-        const ahead = lines[j]!;
-        if (/^\s*```/.test(ahead)) innerFence = !innerFence;
-        const aheadHeading = !innerFence && /^(#{1,6})\s/.exec(ahead);
-        if (aheadHeading) {
-          // A deeper heading is content: the section was answered below.
-          if (aheadHeading[1]!.length > level) empty = false;
-          break;
-        }
-        if (ahead.trim() !== '') empty = false;
-      }
-      if (empty) {
-        i = j - 1;
-        continue;
-      }
-    }
-    kept.push(line);
-  }
-
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-}

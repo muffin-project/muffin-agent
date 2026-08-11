@@ -95,10 +95,21 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
         tracer: new SimpleTracer(new JsonlExporter(home)),
         sessions,
         budgetExhausted: () => budget.exhausted(),
-        systemPrompt:
-          'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
-          'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
-          'Quando hai finito, rispondi e basta.',
+        // The floor is measured on the owner class: the scenarios run as the
+        // owner on the host tenant, and a capability floor is about what the
+        // model can do with its tools, not about which tenant is asking. The
+        // group entry is the same text so a scenario that ever runs as a member
+        // is measured against something rather than crashing on a missing key.
+        systemPrompts: {
+          owner:
+            'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
+            'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
+            'Quando hai finito, rispondi e basta.',
+          group:
+            'Sei Muffin. Hai dei tool: usali invece di dire che lo faresti. ' +
+            'Se un tool fallisce o un dato non esiste, dillo — non inventare. ' +
+            'Quando hai finito, rispondi e basta.',
+        },
       },
       {
         principal: { kind: 'owner', connector: 'cli', externalId: 'local' },

@@ -107,7 +107,7 @@ function harness(
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions,
       budgetExhausted: () => false,
-      systemPrompt: 'Sei Muffin.',
+      systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
       ...over,
     },
   };
@@ -209,6 +209,20 @@ describe('makeAbsenceComposer', () => {
     // not inherit the owner's column (threat model §3).
     expect(h.principals[0]).toEqual({ kind: 'system', source: 'scheduler' });
     expect(JSON.stringify(h.provider.seen[0]?.messages)).toContain('la tesi');
+  });
+
+  it('composes with the owner-class context, not as a guest in another room', async () => {
+    // `system:scheduler` on the host tenant is host work: the nudge is written
+    // to the owner, about the owner's own memory. The class is decided inside
+    // `runTurn` from the principal/tenant pair this file passes, so nothing
+    // here declares it — which is exactly why it needs asserting through the
+    // real turn. `tenantClass` alone being right is the shape of proof this
+    // repository has been burned by.
+    const h = harness([reply('quando hai visto la tesi?')]);
+    await makeAbsenceComposer(h.deps, 'cli')(ABSENCE);
+
+    const system = h.provider.seen[0]!.system[0]!;
+    expect(system.type === 'text' && system.text).toBe(h.deps.systemPrompts.owner);
   });
 
   it('each composition gets a fresh session — nudges are not one growing conversation', async () => {
