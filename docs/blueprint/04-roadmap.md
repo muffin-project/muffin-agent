@@ -104,7 +104,9 @@ Non è un modulo nuovo: è la lista delle cose che rendono **inservibile** un
 substrato costruito, trovate rispondendo all'owner che chiedeva perché non se la
 sente di usarlo. Ognuna verificata sul codice, non stimata.
 
-**0. Niente vive senza il terminale — ed è la radice delle altre.** Lo scheduler
+**0. Niente vive senza il terminale — ed è la radice delle altre.** → **ADR-0035**
+(la decisione, i cinque vincoli di sicurezza, e le alternative scartate).
+ Lo scheduler
 gira solo finché il REPL è aperto: chiudi la finestra e non succede più niente.
 Si vede dal **vocabolario**, non dalla dichiarazione: dei 95 comandi di Hermes,
 31 sono di sessione — `heartbeat`, `background`, `queue`, `steer` (inietta dopo
