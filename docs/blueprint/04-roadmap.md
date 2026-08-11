@@ -98,6 +98,50 @@ Regole: ogni cartella contiene i *propri* tipi, schema, prompt, test e un README
 - **DoD**: "ogni mattina alle 8 fammi il brief della giornata" da chat → job visibile in `muffin jobs`, arriva alle 8 sul canale scelto, sopravvive al riavvio; un trigger a soglia (N episodi non consolidati) fa partire il consolidamento da solo; un tentativo di armare un trigger da contenuto di gruppo viene rifiutato e loggato (test); il costo giornaliero dello scheduler è visibile e sotto il cap.
 - **Config**: quiet hours/budget proattività — RoT default · owner via chat (ratchet: modifica con notify+undo) · default prudenti; canale di consegna default — owner · primo job · chiede.
 
+### M5-bis — Il divario fra "M0-M5 costruito" e "usabile" *(aperto 2026-08-11, dall'uso mancato)*
+
+Non è un modulo nuovo: è la lista delle cose che rendono **inservibile** un
+substrato costruito, trovate rispondendo all'owner che chiedeva perché non se la
+sente di usarlo. Ognuna verificata sul codice, non stimata.
+
+**1. Il consolidamento non parte mai — e la DoD di M5 lo richiedeva.** `ingestPending`
+(episodi → fatti) ha **un solo chiamante: `muffin memory extract`, a mano**. Nessun
+job, nessun trigger a soglia, nessun ciclo notturno. Quindi la memoria **non si
+riempie da sola**: anche usandolo ogni giorno, i fatti restano zero (misurato
+sulla home dell'owner: 6 episodi, 0 fatti). La riga *"un trigger a soglia (N
+episodi non consolidati) fa partire il consolidamento da solo"* è nella DoD di M5
+sopra, ed è **non soddisfatta** — M5 è stato dato per chiuso senza. È anche la
+regressione più netta rispetto al vecchio, che il ciclo dream ce l'aveva.
+→ **priorità 1**: senza questo, tutto il lavoro su memoria, importance, origin e
+assenza è inerte.
+
+**2. `thinking` è dichiarato e mai passato.** I profili per-modello hanno
+`thinking: 'off' | 'allowed'`, l'adapter Anthropic sa spedirlo — e il loop non lo
+passa al provider. Nono caso della famiglia "dichiarato e non connesso".
+
+**3. Muffin non è governabile da dentro.** Cinque slash nel REPL (`/exit /help
+/new /session /spend`), nessun `muffin config`, nessuna dashboard: provider,
+modelli, budget, quiet hours si cambiano **editando JSON a mano**, e quelli nel
+RoT vogliono pure il reseal. L'owner non sa cosa può regolare perché non c'è un
+posto dove chiederlo.
+
+**4. Niente resume a grana di turno, e niente retry sul percorso lungo.** L'unico
+asse su cui la ricerca peer ha dato torto a noi (`research/confronto-harness.md`
+§2.3): un tool call lungo più un riavvio perde tutto. M5 ha già concesso il
+principio a grana di job; manca la grana di turno, sul jsonl di sessione che
+esiste già.
+
+**5. Nessun eval di accettazione a costo quasi zero.** Ci sono cinque famiglie di
+eval, ma manca la cosa che l'owner ha chiesto: uno scenario end-to-end con
+provider finto (zero token) più uno smoke piccolo contro il modello vero. È il
+modo per verificare l'harness **senza** doverlo usare come agente quotidiano —
+cioè senza dipendere dalla cosa che il Gate 1 misura.
+
+**Conseguenza sul Gate 1, detta chiaramente**: il criterio d'uscita resta l'uso
+per due settimane, e resta a zero giorni. Ma la causa non era la pigrizia
+dell'owner: era che il substrato completo **non produce un agente che si possa
+usare**. Queste cinque righe sono ciò che sta in mezzo.
+
 ### M6 — Introspezione (le due direzioni) + cricchetto *(durevole — è il differenziale)*
 - **Include**: analisi batch dei trace → **report su di sé** (pattern di fallimento, costi, tasso di successo tool, derive) e **report sull'utente** (pattern osservati con evidenza citata e contrappunto — mai psicologizzazione gratuita: ogni claim linka episodi); ratchet API (proposta versionata → eval gate → canary → undo — V3) per voice/prompt/soglie; skill autodraft loop (detect→gate→materializza); il monitor anti-dipendenza (V13: volume che cresce senza esiti → refertato).
 - **NON include**: modifiche autonome fuori dal perimetro ratchet; qualunque scrittura al RoT.

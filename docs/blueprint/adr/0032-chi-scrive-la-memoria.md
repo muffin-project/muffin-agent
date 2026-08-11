@@ -15,3 +15,24 @@
 **Conseguenze.** Più facile: il memory-poisoning per auto-scrittura non è una minaccia da mitigare ma una forma inesistente; l'estrazione è **ri-eseguibile** su tutti gli episodi con una `extraction_v` nuova (un modello che estrae male si corregge rigiocando, non ripulendo a mano); la qualità della memoria non dipende dalla classe del modello del turno. Più difficile: **paghiamo i miss**. Ciò che la pipeline non estrae non entra, e nessuno se ne accorge nel momento in cui succede — un agente curatore, quando funziona, cattura anche l'irregolare. La contromisura non è un tool di scrittura: è la revisione a freddo dei fatti (`02-ontologia.md` §3) e il consolidamento.
 
 **Reversibilità.** Media, e asimmetrica. Aggiungere una scrittura agentica dopo è additivo e a buon mercato (un tool, una capability, il kernel già sa negarla); toglierla dopo significa vivere con una memoria in cui non sai più quale riga è stata scritta da chi — il percorso caro è quello, ed è il motivo per cui si parte da qui. Segnale che era sbagliata, con numeri e senza controfattuali: alla revisione a freddo dei **primi cento fatti estratti dall'uso reale**, più di **10/100** risultano sbagliati o mancanti in un modo che una rilettura umana coglie al volo (il comparatore è la rilettura, che si può fare — non "cosa avrebbe catturato un curatore", che non si può osservare senza costruirlo); oppure compare un head-to-head controllato che misura la nostra stessa domanda e dice il contrario. Si conta sui fatti, non sull'impressione che la memoria "sembri povera".
+
+---
+
+## Emendamento (2026-08-11) — l'owner corregge: ibrido, con riconciliazione
+
+**La correzione, sua**: *"dovremo lasciar gestire la memoria a muffin, e piuttosto se usa un tool per fare ste cose la learning pipeline che spariamo in background ne deve essere consapevole, così da non salvare due volte, o magari sistemare."*
+
+Ha ragione, e la decisione sopra va stretta invece che difesa. Rileggendo l'evidenza che l'ha armata: **nessuno dei due peer sta al polo che questo ADR aveva scelto.** Letta dà all'agente i tool per il *contenuto* e tiene all'harness *timing ed eviction*; Hermes è esplicitamente ibrido (l'agente chiama il tool `memory`, l'harness fa prefetch/sync e lo *sollecita* a scrivere ogni N turni). Il polo puro — "il modello non tocca mai la memoria" — non lo occupa nessuno, e non era necessario per evitare i failure mode misurati.
+
+**Cosa resta identico** (ed è ciò che i numeri difendevano davvero): mai DELETE, solo supersede bitemporale; ogni fatto porta `origin` e provenienza all'episodio; il modello non decide *quando* si consolida. I fallimenti di Memory-R1 (DELETE spurio su non-contraddizione) e di Letta #3388 (poisoning cross-sessione) restano **non rappresentabili** perché nascono dallo *sbiancamento* di righe, non dalla loro scrittura.
+
+**Cosa cambia**: il modello può *scrivere* attraverso un tool, e la scrittura è una riga come le altre — `origin: 'inferred'`, tier del turno, episodio d'origine. Cioè: non un canale privilegiato, una riga in più con la sua provenienza.
+
+**Il problema vero che l'owner nomina — la riconciliazione — e la sua forma.** Se il tool ha già scritto un fatto da un episodio, l'estrazione in background non deve ri-derivarlo. Il materiale c'è già:
+- l'estrazione salta gli episodi già minati (`extraction_v`), quindi il doppio passaggio *sullo stesso episodio* è già escluso;
+- ciò che manca è la chiave che lega un fatto scritto-dal-tool al suo episodio, così che l'estrazione riconosca "questo l'ha già detto lui" invece di produrre un duplicato quasi-uguale;
+- e il caso "magari sistemare": un fatto estratto che contraddice uno scritto dal tool non è un conflitto nuovo — è **esattamente** il giudice di contraddizione di ADR-0006, che chiude la vecchia riga con `superseded_by` invece di cancellarla.
+
+**Cosa non è ancora deciso e va deciso quando si costruisce**: se il tool scrive direttamente o *propone* (Letta sta arretrando verso propose-only, #3118 — e il nostro esito `DRAFT` del kernel esiste già per questa forma); e se un fatto scritto dal modello debba portare un `origin` proprio invece di `inferred`, cioè se "dedotto da me mentre parlavo" e "dedotto dalla pipeline" siano la stessa cosa per il recall. Non le decidiamo qui: le decide il primo turno in cui il tool esiste.
+
+**Segnale che questo emendamento era sbagliato**: duplicati quasi-identici fra fatti scritti dal tool ed estratti (contati sulla revisione a freddo), oppure una scrittura del modello che sopravvive a una contraddizione che avrebbe dovuto chiuderla.
