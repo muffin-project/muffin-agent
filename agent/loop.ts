@@ -163,7 +163,12 @@ export type LoopDeps = {
    * from `resourceKind`/`policyArgs` instead of a hardcoded argument name.
    * Optional only so existing tests can build a minimal deps object — and the
    * kernel refuses a url capability whose resource never arrived, so a runtime
-   * that forgets to pass this degrades to refusals, not to unguarded allows.
+   * that forgets to pass this degrades to refusals, not to unguarded allows —
+   * for the RESOURCE consumer. The second consumer (`visibleTools`, filtering a
+   * member's tool menu) degrades the other way on absence: no declarations, no
+   * filtering, and a member sees host-only tools the kernel will refuse. Not an
+   * allow, but a leaky menu — the omission price differs per consumer, and this
+   * line is where a construction site learns both.
    */
   capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
   now?: () => Date;

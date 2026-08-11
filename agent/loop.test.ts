@@ -148,6 +148,48 @@ describe('agent loop', () => {
     expect(calls).not.toContain('demo_write'); // the handler never ran
   });
 
+  it('filters before it caps, so host-only tools cannot crowd a member out of the window', async () => {
+    // Unobservable on a stock registry (9 tools, smallest cap 10) — this
+    // fixture is what makes the order testable: cap 2, and the two hostOnly
+    // tools registered FIRST. Cap-then-filter hands a member an empty menu
+    // while their usable tool sits outside the window; the moment MCP attaches
+    // (hostOnly, appended last) that stops being hypothetical on consumer
+    // profiles. The judge's mutation reversing the order survived 546 tests;
+    // this is the test that was missing.
+    const member: Principal = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:9',
+      externalId: 'u9',
+    };
+    const hostDecl = (id: string): CapabilityDecl => ({
+      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: true,
+    });
+    const openDecl = (id: string): CapabilityDecl => ({
+      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false,
+    });
+    const tool = (name: string, capability: string): RegisteredTool => ({
+      capability,
+      spec: { name, description: name, inputSchema: { type: 'object', properties: {} } },
+      handler: () => ({ content: 'ok' }),
+    });
+    const provider = new ScriptedProvider([answer('ciao')]);
+    const { deps: d, store } = deps([], {
+      provider,
+      profile: { ...CONSERVATIVE, maxToolsExposed: 2 },
+      tools: [tool('host_a', 'cap.a'), tool('host_b', 'cap.b'), tool('open_c', 'cap.c')],
+      capabilities: new Map([
+        ['cap.a', hostDecl('cap.a')],
+        ['cap.b', hostDecl('cap.b')],
+        ['cap.c', openDecl('cap.c')],
+      ]),
+    });
+    await runTurn(d, input(store, member));
+
+    const sent = provider.seen[0]?.tools?.map((t) => t.name) ?? [];
+    expect(sent).toEqual(['open_c']);
+  });
+
   it('closes a medium-risk tool once a web result raised the taint', async () => {
     // fetch-then-act: the same write is fine before the fetch and refused after.
     const { deps: d, store, calls } = deps([
