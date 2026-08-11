@@ -63,13 +63,21 @@
 **⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
 dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
 usabile**. Cinque cose, tutte verificate sul codice:
+0. **Niente vive senza il terminale.** Lo scheduler muore col REPL. Si legge nei
+   verbi: 31 dei 95 comandi di Hermes presuppongono un processo che gira
+   (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`); i
+   nostri 14 sono tutti "fai e esci". Per questo **"sei un agente continuo" non
+   va scritto nel prompt** — va reso vero. Serve un processo che vive senza il
+   terminale, più `heartbeat`/`queue`/`steer`/`undo`. Non i 95: la loro
+   cromatura è il "TROPPE cose" che l'owner rifiuta.
 1. **Il consolidamento non parte mai.** `ingestPending` ha un solo chiamante,
-   `muffin memory extract`, a mano. La memoria non si riempie da sola — misurato
-   sulla home dell'owner: 6 episodi, **0 fatti**. La DoD di M5 lo richiedeva
-   («un trigger a soglia fa partire il consolidamento da solo») ed è **non
-   soddisfatta**: M5 è stato chiuso senza. È la regressione più netta contro il
-   vecchio, che il dream ce l'aveva. **Priorità 1**: senza, memoria/importance/
-   origin/assenza sono inerti.
+   `muffin memory extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
+   La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
+   ⚠️ E servono **due** meccanismi, non uno: il vecchio non consolidava di notte,
+   estraeva **a ogni turno in asincrono** (latenza: minuti) e il dream faceva
+   manutenzione sopra. Un solo job notturno darebbe un Muffin che ti conosce con
+   24h di ritardo. **Priorità 1**: senza, memoria/importance/origin/assenza sono
+   inerti.
 2. **`thinking` dichiarato nei profili e mai passato al provider** (nono caso della
    famiglia "dichiarato e non connesso").
 3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
@@ -86,6 +94,12 @@ contraddetto è il resume (punto 4). Ne sono usciti ADR-0032/0033/0034 e
 l'emendamento a 0028 con la contro-posizione di Hermes #17459. **ADR-0032 è già
 emendato dall'owner**: memoria ibrida (il tool scrive il contenuto, l'harness
 governa il timing) con riconciliazione fra tool e pipeline.
+
+**Inventario vecchio-nuovo fatto** (`research/inventario-vecchio-nuovo.md`, 86
+righe con verdetto — 41% presente · 29% tolto di proposito · 23% manca e serve ·
+8% era slop). Il contro-numero che giustifica il tetto sui tool meglio di
+qualunque argomento: dei 47 tool del vecchio, **16 mai invocati** e **28 su 47
+meno di cinque volte in quattro mesi** — sei tool hanno fatto il lavoro.
 
 **Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
 
