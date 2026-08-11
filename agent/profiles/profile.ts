@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { z } from 'zod';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,14 +64,47 @@ export const CONSERVATIVE: Profile = {
 /** The hard ceiling. Not a profile setting: no profile may raise it. */
 export const MAX_ITERATIONS_HARD_CAP = 40;
 
-export function loadProfiles(dir?: string): Profile[] {
+/**
+ * Parsed, not cast (PRACTICES §4) — and the history is why. `recovery` used to
+ * be inert data: a typo added 1 to a counter and nothing else. Once the cascade
+ * executed as declared, an unknown name became a TypeError thrown at the one
+ * moment a turn was already failing — a latent bomb armed precisely when the
+ * recovery it names was needed. Profiles are a documented extension point, so
+ * the boundary has to refuse what the switch cannot honor, out loud.
+ */
+const ProfileSchema = z.object({
+  schemaVersion: z.literal(1),
+  name: z.string().min(1),
+  match: z.array(z.string().min(1)).min(1),
+  maxToolsExposed: z.number().int().positive(),
+  maxToolCallsPerTurn: z.number().int().positive(),
+  thinking: z.enum(['off', 'allowed']),
+  recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
+  notes: z.string().default(''),
+});
+
+export function loadProfiles(dir?: string, onProblem?: (line: string) => void): Profile[] {
   const base = dir ?? join(dirname(fileURLToPath(import.meta.url)));
   if (!existsSync(base)) return [];
-  return readdirSync(base)
-    .filter((f) => f.endsWith('.json'))
-    .sort()
-    .map((f) => JSON.parse(readFileSync(join(base, f), 'utf8')) as Profile)
-    .filter((p) => p.schemaVersion === 1);
+  const out: Profile[] = [];
+  for (const f of readdirSync(base).filter((n) => n.endsWith('.json')).sort()) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(join(base, f), 'utf8'));
+    } catch (error) {
+      onProblem?.(`profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const parsed = ProfileSchema.safeParse(raw);
+    if (!parsed.success) {
+      // Dropped and said, never half-loaded: a profile with one bad strategy
+      // name would otherwise select normally and detonate mid-recovery.
+      onProblem?.(`profilo ${f} scartato: ${parsed.error.issues[0]?.message ?? 'schema non valido'}`);
+      continue;
+    }
+    out.push(parsed.data);
+  }
+  return out;
 }
 
 export function selectProfile(model: string, profiles: Profile[]): Profile {

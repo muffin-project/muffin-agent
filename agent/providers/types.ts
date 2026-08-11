@@ -83,6 +83,11 @@ export interface Provider {
  * otherwise keeps the behaviour it had.
  */
 export type ProviderErrorSource = 'transport' | 'output';
+// Producibility is asymmetric on purpose: only the openai-compat adapter can
+// emit 'output' today, because it is the only one that parses tool arguments
+// from a string (the Anthropic SDK returns them structured — there is no
+// JSON.parse to fail). Do not hunt for the missing Anthropic branch; it has
+// nothing to mislabel.
 
 /** Carries what the recovery cascade needs to decide, instead of a bare string. */
 export class ProviderError extends Error {
