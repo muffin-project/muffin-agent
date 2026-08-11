@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { z } from 'zod';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,14 +17,24 @@ import { fileURLToPath } from 'node:url';
  * the durable-vs-scaffolding split in the blueprint.
  */
 
+/**
+ * The vocabulary of the cascade. What each step *does* is in `./recovery.ts`,
+ * beside this file and inside the same removable boundary.
+ *
+ * The list is **executed as declared, in order**: attempt N runs strategy N.
+ * It used to be a length — `recoveriesLeft` counted down from `recovery.length`
+ * while the loop consulted only `includes('nudge')`, so `consumer-local`'s four
+ * declared steps ran as four identical nudges and the other three names bought
+ * attempts they never spent.
+ */
 export type RecoveryStrategy =
-  /** Re-ask for a continuation when the model returned nothing usable. */
+  /** Empty or narrated turn: an open corrective, the gentlest rung. */
   | 'nudge'
-  /** Re-list the valid tools after a call to a name that does not exist. */
+  /** Lost track of the menu: the tool names restated inline, at the tail. */
   | 'reinjectTools'
-  /** One more attempt, for transient provider failures. */
+  /** Transient garbage from the model: ask again, adding nothing. */
   | 'retryOnce'
-  /** Restate the output contract when the shape came back wrong. */
+  /** Prose where a call was needed: a two-option contract, no third shape. */
   | 'strictJson';
 
 export type Profile = {
@@ -53,14 +64,47 @@ export const CONSERVATIVE: Profile = {
 /** The hard ceiling. Not a profile setting: no profile may raise it. */
 export const MAX_ITERATIONS_HARD_CAP = 40;
 
-export function loadProfiles(dir?: string): Profile[] {
+/**
+ * Parsed, not cast (PRACTICES §4) — and the history is why. `recovery` used to
+ * be inert data: a typo added 1 to a counter and nothing else. Once the cascade
+ * executed as declared, an unknown name became a TypeError thrown at the one
+ * moment a turn was already failing — a latent bomb armed precisely when the
+ * recovery it names was needed. Profiles are a documented extension point, so
+ * the boundary has to refuse what the switch cannot honor, out loud.
+ */
+const ProfileSchema = z.object({
+  schemaVersion: z.literal(1),
+  name: z.string().min(1),
+  match: z.array(z.string().min(1)).min(1),
+  maxToolsExposed: z.number().int().positive(),
+  maxToolCallsPerTurn: z.number().int().positive(),
+  thinking: z.enum(['off', 'allowed']),
+  recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
+  notes: z.string().default(''),
+});
+
+export function loadProfiles(dir?: string, onProblem?: (line: string) => void): Profile[] {
   const base = dir ?? join(dirname(fileURLToPath(import.meta.url)));
   if (!existsSync(base)) return [];
-  return readdirSync(base)
-    .filter((f) => f.endsWith('.json'))
-    .sort()
-    .map((f) => JSON.parse(readFileSync(join(base, f), 'utf8')) as Profile)
-    .filter((p) => p.schemaVersion === 1);
+  const out: Profile[] = [];
+  for (const f of readdirSync(base).filter((n) => n.endsWith('.json')).sort()) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(join(base, f), 'utf8'));
+    } catch (error) {
+      onProblem?.(`profilo ${f} illeggibile: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const parsed = ProfileSchema.safeParse(raw);
+    if (!parsed.success) {
+      // Dropped and said, never half-loaded: a profile with one bad strategy
+      // name would otherwise select normally and detonate mid-recovery.
+      onProblem?.(`profilo ${f} scartato: ${parsed.error.issues[0]?.message ?? 'schema non valido'}`);
+      continue;
+    }
+    out.push(parsed.data);
+  }
+  return out;
 }
 
 export function selectProfile(model: string, profiles: Profile[]): Profile {
