@@ -15,8 +15,10 @@ import { ProviderError, type ChatCall, type ChatResult, type Provider } from './
 class ScriptedProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   calls = 0;
+  readonly seen: ChatCall[] = [];
   constructor(private readonly script: (ChatResult | ProviderError)[]) {}
   async chat(_request?: ChatCall): Promise<ChatResult> {
+    if (_request) this.seen.push(_request);
     const next = this.script[this.calls++] ?? answer('fine script');
     if (next instanceof ProviderError) throw next;
     return next;
@@ -201,6 +203,19 @@ describe('agent loop', () => {
     // Two model calls in this turn, two billing records, both with the tenant.
     expect(billed).toHaveLength(2);
     expect(billed.every((b) => b.tenant === 'host')).toBe(true);
+  });
+
+  it('marks the system prompt as the cacheable prefix, or the breakpoint has nothing to mark', async () => {
+    // The adapter half is well tested — against fixtures that set the marker by
+    // hand. The one production line that actually sets it could be deleted with
+    // the whole suite green: every turn would pay full price, and the telemetry
+    // that would show it only moves if the marker was there. Two correct
+    // halves, an untested join — the house archetype, on this slice's own
+    // guarantee.
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], { provider });
+    await runTurn(d, input(store));
+    expect(provider.seen[0]?.system[0]).toMatchObject({ cache: 'stable' });
   });
 
   it('carries cache writes to the surface, so a write is distinguishable from no cache', async () => {
