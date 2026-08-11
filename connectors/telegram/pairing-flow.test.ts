@@ -74,7 +74,7 @@ function harness(config: TelegramConfig) {
     tracer: { start: () => ({ traceId: 't', setAttributes: () => {}, end: () => {} }) },
     sessions: new SessionStore(home),
     budgetExhausted: () => false,
-    systemPrompt: 'x',
+    systemPrompts: { owner: 'x', group: 'x' },
   } as unknown as LoopDeps;
 
   const connector = new TelegramConnector({
