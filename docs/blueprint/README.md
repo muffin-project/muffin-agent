@@ -18,7 +18,7 @@ Refactor da zero di Muffin, prodotto in tre fasi (ricerca parallela → sintesi 
 | `08-assunzioni.md` | 39 scelte implicite da approvare esplicitamente | Revisione owner |
 | **`09-contratti-m0-m1.md`** | **Normativo**: tipi, formati file, numeri del floor, boot, errori, CLI, dipendenze | **Per implementare** |
 | `10-risoluzioni-fase-c.md` | Verdetti sulle 3 critiche ostili + la decisione che resta all'owner | Cosa è cambiato e perché |
-| `adr/0001-0018` | Una decisione per file: contesto, alternative scartate, conseguenze, **reversibilità** | Quando una scelta va rimessa in discussione |
+| `adr/0001-0034` | Una decisione per file: contesto, alternative scartate, conseguenze, **reversibilità** | Quando una scelta va rimessa in discussione |
 | `research/a1-a6` | Evidenza grezza con fonte (inventario, prior art, standard, memoria, modelli, sandbox) | Verificare un claim |
 | `critique/c1-c3` | Le tre critiche ostili integrali | Vedere cosa è stato attaccato |
 
