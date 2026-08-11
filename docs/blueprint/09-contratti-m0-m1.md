@@ -90,9 +90,9 @@ type ChatResult = {
 };
 ```
 
-`cacheHint` sui blocchi è **posizionale**: `{ cache: 'stable' }` marca la fine di un prefisso cacheabile; l'adapter Anthropic lo traduce in `cache_control`, l'adapter openai-compat lo ignora (il caching implicito lavora da solo) e traccia il no-op.
+`cacheHint` sui blocchi è **posizionale**: `{ cache: 'stable' }` marca la fine di un prefisso cacheabile. L'adapter Anthropic lo traduce in `cache_control` su blocchi di sistema **e** di messaggio; l'adapter openai-compat lo traduce **solo sui blocchi di sistema**, e **solo per gli endpoint che cacheano su richiesta** (oggi: hostname `openrouter.ai`, dove Anthropic e Alibaba non hanno caching implicito — `wantsExplicitCache`). Per tutti gli altri endpoint resta la stringa piatta di sempre: metà dell'ecosistema compat cachea implicitamente, e un campo ignoto su un parser rigido è un 400. *(Riscritto 2026-08-11: la versione precedente diceva "openai-compat lo ignora e traccia il no-op" — la prima metà è diventata falsa, la seconda non è mai stata vera. L'asimmetria sui blocchi di messaggio resta e ora è scritta.)*
 
-**Selezione adapter (A14)**: campo esplicito in config `provider: 'anthropic' | 'openai-compat'` — nessuna inferenza dall'URL. `muffin init` lo chiede quando l'endpoint non è riconosciuto.
+**Selezione adapter (A14)**: campo esplicito in config `provider: 'anthropic' | 'openai-compat'` — nessuna inferenza dall'URL. `muffin init` lo chiede quando l'endpoint non è riconosciuto. *(Scope, 2026-08-11: il divieto d'inferenza riguarda la **selezione dell'adapter**, dove un'ipotesi sbagliata fallisce alla prima chiamata. Il dialetto di caching dentro openai-compat è invece inferito dall'endpoint per costruzione — lì un'ipotesi sbagliata non fallisce mai: paga 10× in silenzio, che è il fallimento peggiore dei due, e `doctor` la mostra.)*
 
 **Profilo per-modello** (`agent/profiles/<slug>.json`, A10):
 

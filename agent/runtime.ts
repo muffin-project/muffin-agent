@@ -101,16 +101,6 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budget = new BudgetEngine(db, config.budget);
   const jobs = new JobStore(db);
 
-  // Host, not substring: a substring match would let `openrouter.ai.evil.tld`
-  // — or a path component — flip a request-shape decision.
-  const hostOf = (url?: string): string => {
-    try {
-      return url ? new URL(url).hostname : '';
-    } catch {
-      return '';
-    }
-  };
-
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
     config.provider.kind === 'anthropic'
@@ -119,15 +109,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
           readSecret(config.provider.apiKeyRef, home),
           config.provider.baseUrl,
           { 'HTTP-Referer': 'https://github.com/muffin-ai/muffin', 'X-Title': 'muffin' },
-          {
-            // Inferred, not configured: OpenRouter is the one compat endpoint
-            // verified to want explicit breakpoints (Anthropic and Alibaba
-            // models cache only on request there). Everything else keeps the
-            // byte-identical plain-string request — Ollama and friends cache
-            // implicitly and strict parsers 400 on unknown fields. When a
-            // second gateway earns the flag, this is the line it goes on.
-            explicitCache: /(^|\.)openrouter\.ai$/.test(hostOf(config.provider.baseUrl)),
-          },
+          // Cache breakpoints are the provider's own decision, defaulted from
+          // the endpoint (`wantsExplicitCache`): the first version made every
+          // caller pass the flag, and the two eval harnesses immediately forgot
+          // — same endpoint, full price, silently.
         );
 
   const profile = selectProfile(config.models.main, loadProfiles());
