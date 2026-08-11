@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDecide, type PolicyContext } from './decide.js';
+import { POLICY_FLOOR } from './matrix.js';
 import type { CapabilityDecl, CapabilityId, Principal } from './types.js';
 
 const decls: CapabilityDecl[] = [
@@ -14,6 +15,7 @@ const decls: CapabilityDecl[] = [
 function kernel(overrides: Partial<PolicyContext> = {}) {
   return createDecide({
     capabilities: new Map(decls.map((d) => [d.id, d])),
+    matrix: POLICY_FLOOR,
     budgetExhausted: () => false,
     hardened: true,
     ...overrides,
@@ -67,6 +69,7 @@ describe('policy kernel', () => {
     // a guarantee it was not providing.
     const degraded = createDecide({
       capabilities: new Map(decls.map((d) => [d.id, d])),
+      matrix: POLICY_FLOOR,
       budgetExhausted: () => false,
       hardened: false,
       safeMode: true,

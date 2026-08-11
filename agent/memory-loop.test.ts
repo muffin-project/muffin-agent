@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
+import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { MemoryStore } from '../core/memory/store.js';
 import type { RecallDeps } from '../core/memory/recall.js';
@@ -89,6 +90,7 @@ function harness(script: ChatResult[]) {
     model: 'test',
     tools,
     decide: createDecide({
+      matrix: POLICY_FLOOR,
       capabilities: new Map(decls.map((d) => [d.id, d])),
       budgetExhausted: () => false,
       hardened: true,
