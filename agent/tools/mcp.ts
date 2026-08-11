@@ -20,6 +20,12 @@ import type { RegisteredTool } from '../loop.js';
  * One capability per server (`mcp.<name>`): medium risk, host-only, default
  * taint ceiling 1 — a turn already carrying untrusted content cannot reach
  * out through a third-party server at all.
+ *
+ * That ceiling is INHERITED from the class default, not pinned here, and the
+ * sentence above is only true because `policy.json` may lower the default and
+ * never raise it (`core/policy/matrix.ts`, `tighter`). A judge measured the
+ * version where it could: `{"medium":3}` in a resealed file made this a silent
+ * `allow` at taint 3. If that clamp ever goes, pin `maxTaint: 1` here.
  */
 export function mcpCapabilityFor(server: string): CapabilityDecl {
   return {

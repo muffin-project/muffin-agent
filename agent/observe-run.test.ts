@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { Absence } from '../core/memory/absence.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
+import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, DecisionRequest, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
@@ -87,6 +88,7 @@ function harness(
     },
   ];
   const decide = createDecide({
+    matrix: POLICY_FLOOR,
     capabilities: new Map([[decl.id, decl]]),
     budgetExhausted: () => false,
     hardened: false,

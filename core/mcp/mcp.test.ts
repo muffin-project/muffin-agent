@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../policy/decide.js';
+import { POLICY_FLOOR } from '../policy/matrix.js';
 import { buildMcpTools, mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { connectServer } from './connect.js';
 import {
@@ -176,6 +177,7 @@ describe('against a real stdio server', () => {
 describe('mcp capability through the kernel', () => {
   const decl = mcpCapabilityFor('echo');
   const decide = createDecide({
+    matrix: POLICY_FLOOR,
     capabilities: new Map([[decl.id, decl]]),
     budgetExhausted: () => false,
     hardened: true,

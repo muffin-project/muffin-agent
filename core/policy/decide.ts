@@ -1,3 +1,4 @@
+import type { PolicyMatrix } from './matrix.js';
 import type {
   CapabilityDecl,
   CapabilityId,
@@ -5,8 +6,6 @@ import type {
   Decision,
   DecisionRequest,
   Principal,
-  RiskClass,
-  TrustTier,
 } from './types.js';
 
 /**
@@ -17,44 +16,33 @@ import type {
  * for the runtime. See docs/adr/0013.
  */
 
-/**
- * Default ceiling on context taint, by risk class, used when a declaration does
- * not state one.
- *
- * A declaration's own `maxTaint` is authoritative in **both** directions — it
- * may narrow the default and it may widen it. This comment used to claim the
- * opposite ("may narrow it, never widen it"), which was never true of the code
- * below and was already contradicted by a shipped declaration: `sys.http` is
- * medium risk, whose default ceiling is 1, and deliberately declares 3.
- *
- * That declaration is the correct one, which is why the comment moved rather
- * than the code. The threat model's taint-2/3 row reads "solo read-only su
- * allowlist pubblica": having read a web page, the agent may read another one.
- * What the ceiling exists to stop is a tainted context reaching a capability
- * that *acts* — and those declare a low ceiling explicitly (`sys.process` and
- * the skill reader both pin 1).
- *
- * Widening is therefore a deliberate, reviewable act per capability, not an
- * accident the type system prevents. Keep it that way: a declaration that
- * widens without a comment saying why is the thing to catch in review.
- */
-const DEFAULT_MAX_TAINT: Record<RiskClass, TrustTier> = {
-  low: 3,
-  medium: 1,
-  high: 1,
-};
-
-/** Capabilities no principal may ever exercise at runtime, whatever the taint. */
-const NEVER_AT_RUNTIME: ReadonlySet<CapabilityId> = new Set(['rot.write']);
-
-/** Capabilities excluded from autonomous principals regardless of taint (blueprint 03 §3). */
-const FORBIDDEN_FOR_SYSTEM: ReadonlySet<CapabilityId> = new Set([
-  'outward.send',
-  'config.ratchet',
-]);
-
 export type PolicyContext = {
   capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
+  /**
+   * The permission matrix, loaded from `rot/policy.json` where this context is
+   * built (`agent/runtime.ts`) — never from here, so a decision stays pure and
+   * synchronous and is explainable from a snapshot.
+   *
+   * Required, not optional with a default. Every one of these numbers used to
+   * be a `const` in this file, and a matrix that quietly reappears when the
+   * wiring is forgotten is how the file it comes from went unread for months.
+   * Tests pass `POLICY_FLOOR`, which is those same constants under their own
+   * name; production that forgets does not compile.
+   *
+   * On `defaultMaxTaint`: it is the ceiling for declarations that state no
+   * `maxTaint` of their own, and a declaration's own value is authoritative in
+   * **both** directions — it may narrow the default and it may widen it. That
+   * is not an oversight. The threat model's taint-2/3 row reads "solo read-only
+   * su allowlist pubblica": having read a web page, the agent may read another
+   * one, which is why `sys.http` is medium risk (default ceiling 1) and
+   * deliberately declares 3. What the ceiling exists to stop is a tainted
+   * context reaching a capability that *acts*, and those pin a low ceiling
+   * explicitly (`sys.process` and the skill reader both pin 1). Widening is a
+   * deliberate, reviewable act per capability, not an accident the type system
+   * prevents: a declaration that widens without a comment saying why is the
+   * thing to catch in review.
+   */
+  matrix: PolicyMatrix;
   /** Budget check, injected so the kernel stays pure and synchronous. */
   budgetExhausted: () => boolean;
   /**
@@ -112,7 +100,7 @@ export function createDecide(ctx: PolicyContext): Decide {
       };
     }
 
-    if (NEVER_AT_RUNTIME.has(capability)) {
+    if (ctx.matrix.neverAtRuntime.has(capability)) {
       return {
         effect: 'deny',
         code: 'rot_violation',
@@ -133,11 +121,11 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 
-    if (principal.kind === 'system' && FORBIDDEN_FOR_SYSTEM.has(capability)) {
+    if (principal.kind === 'system' && ctx.matrix.forbiddenForSystem.has(capability)) {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' };
     }
 
-    const ceiling = decl.maxTaint ?? DEFAULT_MAX_TAINT[decl.risk];
+    const ceiling = decl.maxTaint ?? ctx.matrix.defaultMaxTaint[decl.risk];
     if (taint > ceiling) {
       return {
         effect: 'deny',
