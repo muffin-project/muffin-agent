@@ -8,8 +8,10 @@ import type { RecoveryStrategy } from './profile.js';
  * impalcatura may not cross ("ogni impalcatura vive in **un** posto con un
  * confine netto: i profili in `agent/profiles/*`"). The loop walks the list the
  * profile declared and pushes whatever comes back; it never branches on a
- * strategy name. Deleting a profile deletes its crutches, and deleting this
- * file with the profiles is a subtraction, not a rewrite.
+ * strategy name. Deleting a profile deletes its crutches — `recovery: []` runs
+ * bare, and the neutral-profile test proves it. Deleting this FILE is more than
+ * a subtraction: the loop imports it at runtime, so the file goes only together
+ * with `recover()` and its call sites. Data off is free; code off is an edit.
  *
  * Not beside `agent/completion.ts`, which is the other nudge in the system and
  * the tempting neighbour: the completion gate is **durable** — a deterministic
@@ -168,5 +170,12 @@ export function recoveryStep(strategy: RecoveryStrategy, ctx: RecoveryContext): 
           'Due sole risposte sono ammesse: una tool call con argomenti JSON validi, ' +
           "oppure una riga che dice che non puoi e perché. Nient'altro.",
       };
+    default:
+      // Unreachable through production: `loadProfiles` refuses a profile whose
+      // recovery names anything outside the union. The belt exists for the
+      // fifth strategy someone adds to the type but not to this switch — a
+      // bare re-ask instead of a TypeError thrown mid-recovery, on the one
+      // turn that was already failing.
+      return {};
   }
 }

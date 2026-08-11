@@ -75,8 +75,14 @@ const MAX_HISTORY_TURNS = 40;
  *
  * Two, matching what the shortest declared cascade bought before this split,
  * and small on purpose: both SDKs already retry twice underneath us
- * (`maxRetries ?? 2` — `@anthropic-ai/sdk/client.js`, `openai/client.js`), so
- * this is the third and fourth attempt, not the first.
+ * (`maxRetries ?? 2` — `@anthropic-ai/sdk/client.js`, `openai/client.js`) —
+ * and those retries run INSIDE each provider.chat() call, so the budgets
+ * multiply: on a persistent 502 this constant means 3 loop-level calls × 3
+ * wire attempts = **9 requests**, of which our jitter governs 2 gaps and the
+ * SDKs' own backoff the other 6. Stated because the first version of this
+ * comment said "third and fourth attempt", which reads additive and is not.
+ * If 9 is ever too many, the move is `maxRetries: 0` on both clients and the
+ * loop owning the whole budget — its own slice, not a constant tweak.
  */
 const MAX_TRANSPORT_RETRIES = 2;
 
