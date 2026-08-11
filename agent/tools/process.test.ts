@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
+import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import { makeProcessTools, processCapabilities } from './process.js';
 
 const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
@@ -131,7 +132,7 @@ describe('process_kill argument boundary', () => {
  */
 describe('process capabilities through the kernel', () => {
   const caps = new Map(processCapabilities.map((c) => [c.id, c]));
-  const base = { capabilities: caps, budgetExhausted: () => false };
+  const base = { capabilities: caps, matrix: POLICY_FLOOR, budgetExhausted: () => false };
   const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
 
   it('list is denied once the context is tainted to 2', () => {
