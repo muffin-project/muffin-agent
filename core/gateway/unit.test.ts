@@ -3,8 +3,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DRAIN_BUDGET_MS } from './service.js';
-import { planUnit, resolveLauncher, WATCHDOG_SEC } from './unit.js';
+import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
+import { EXIT_PERMANENT, planUnit, resolveLauncher, WATCHDOG_SEC } from './unit.js';
 
 /**
  * The unit, and the scar it is shaped around.
@@ -27,6 +27,43 @@ const plan = (over: Parameters<typeof planUnit>[0] extends infer T ? Partial<T> 
     configHome: '/home/g/.config',
     ...over,
   });
+
+/**
+ * Does the supervisor bring it back after *this* exit code?
+ *
+ * The old assertions were `toContain('Restart=always')` and
+ * `toContain('<key>KeepAlive</key>')` — both true, on both sides, while `stop`
+ * did not stop on Linux and the restart signal left the agent down on macOS.
+ * A string being present says nothing about what it does; the two functions
+ * below say what it does, so a directive that flips is a test that fails.
+ *
+ * Each models one documented rule and nothing else:
+ *  - systemd: `Restart=always` restarts on every exit, and
+ *    `RestartPreventExitStatus=` is a whitespace-separated list of the codes
+ *    exempted from it. (Explicit `systemctl stop|restart` jobs are outside
+ *    both, which is why the unit's own comment says so.)
+ *  - launchd: `KeepAlive` as `<true/>` means always; as a dict carrying
+ *    `SuccessfulExit</key><false/>` it means "only when the exit was *not*
+ *    successful", i.e. non-zero.
+ */
+function systemdRestartsAfter(text: string, code: number): boolean {
+  if (!/^Restart=always$/m.test(text)) return false;
+  const prevented = (/^RestartPreventExitStatus=(.*)$/m.exec(text)?.[1] ?? '')
+    .split(/\s+/)
+    .filter((t) => t.length > 0)
+    .map(Number);
+  return !prevented.includes(code);
+}
+
+function launchdRestartsAfter(text: string, code: number): boolean {
+  const keepAlive = /<key>KeepAlive<\/key>\s*(<true\/>|<false\/>|<dict>[\s\S]*?<\/dict>)/.exec(text)?.[1];
+  if (keepAlive === undefined || keepAlive === '<false/>') return false;
+  if (keepAlive === '<true/>') return true;
+  const successful = /<key>SuccessfulExit<\/key>\s*<(true|false)\/>/.exec(keepAlive)?.[1];
+  if (successful === 'false') return code !== 0;
+  if (successful === 'true') return code === 0;
+  return true;
+}
 
 describe('the systemd unit is anchored to the data home', () => {
   it('sets WorkingDirectory to ~/.muffin and never to the checkout', () => {
@@ -91,6 +128,91 @@ describe('the systemd unit declares supervision, not just restarting', () => {
     // outliving the gateway that spawned them.
     expect(text).toContain('KillMode=mixed');
   });
+
+  it('leaves the ping alive long enough to cover a drain, because the drain alone outlasts the deadline', () => {
+    // The arithmetic that made the split in `service.ts` necessary, asserted
+    // here so it fails if either constant moves: a self-initiated drain can
+    // spend the whole budget, and the budget alone already reaches the
+    // watchdog deadline. A drain that stopped pinging would be killed mid-way
+    // through the shutdown it was asked to perform.
+    expect(DRAIN_BUDGET_MS).toBeGreaterThanOrEqual(WATCHDOG_SEC * 1000);
+  });
+});
+
+describe('what the supervisor does with each exit code', () => {
+  /**
+   * The two broken verbs, as a table. Neither half works alone: `service.ts`
+   * decides the code, this decides what is done with it.
+   */
+  it('systemd: restarts a crash and a restart-me, stays down on stop and on permanent', () => {
+    const { text } = plan();
+    // SIGUSR1 drains and exits 0 — the whole point of the signal is that it
+    // comes back.
+    expect(systemdRestartsAfter(text, 0)).toBe(true);
+    // A crash. The property the fix is not allowed to cost.
+    expect(systemdRestartsAfter(text, 1)).toBe(true);
+    // Another gateway holds the lock: transient, retry is correct.
+    expect(systemdRestartsAfter(text, 75)).toBe(true);
+    // `muffin gateway stop`. Before this it came back after RestartSec, on the
+    // Linux VPS that is production — "stop" that stopped nothing.
+    expect(systemdRestartsAfter(text, EXIT_STOPPED)).toBe(false);
+    // Config or secret missing, root of trust refusing.
+    expect(systemdRestartsAfter(text, EXIT_PERMANENT)).toBe(false);
+  });
+
+  it('launchd: restarts a crash and a restart-me, and cannot express the other two', () => {
+    const { text, warnings } = planUnit({
+      platform: 'darwin',
+      home: '/Users/g/.muffin',
+      exec: ['/usr/local/bin/muffin', 'gateway', 'run'],
+    });
+    // The failure this replaces: under `SuccessfulExit: false` the SIGUSR1
+    // drain-restart exited 0 and launchd left the agent down — the opposite of
+    // what the signal exists for.
+    expect(launchdRestartsAfter(text, 0)).toBe(true);
+    expect(launchdRestartsAfter(text, 1)).toBe(true);
+    // launchd has no per-code exemption, so both of these come back up. Not a
+    // silent divergence: the warning has to name the verb it costs, or macOS
+    // gets a `gateway stop` that lies (JUDGE: "la divergenza è registrata o
+    // solo avvenuta?").
+    expect(launchdRestartsAfter(text, EXIT_STOPPED)).toBe(true);
+    expect(launchdRestartsAfter(text, EXIT_PERMANENT)).toBe(true);
+    expect(warnings.join(' ')).toContain('bootout');
+    expect(warnings.join(' ')).toMatch(new RegExp(`${EXIT_STOPPED}`));
+  });
+});
+
+describe('Type=notify needs a sender that exists', () => {
+  it('falls back to Type=exec, with no watchdog, when systemd-notify is missing', () => {
+    // Not a degradation: under Type=notify with no way to send READY=1 the unit
+    // never reaches "started", systemd kills it at TimeoutStartSec (90 s by
+    // default) and Restart=always retries forever — without ever tripping the
+    // start rate limit, because five starts in ten seconds cannot happen when
+    // each takes a minute and a half.
+    const { text, warnings } = plan({ systemdNotify: false });
+    expect(text).toContain('Type=exec');
+    expect(text).not.toContain('Type=notify');
+    // A declared watchdog nobody can feed kills a healthy process every
+    // WatchdogSec, which is the same failure wearing the other hat.
+    expect(text).not.toMatch(/^WatchdogSec=/m);
+    expect(text).not.toContain('NotifyAccess');
+    expect(warnings.join(' ')).toMatch(/systemd-notify/);
+    expect(warnings.join(' ')).toMatch(/watchdog/i);
+  });
+
+  it('still restarts, and still stays down on stop, without the watchdog', () => {
+    // The fallback changes what supervision *sees*, not what it *does*.
+    const { text } = plan({ systemdNotify: false });
+    expect(systemdRestartsAfter(text, 1)).toBe(true);
+    expect(systemdRestartsAfter(text, EXIT_STOPPED)).toBe(false);
+  });
+
+  it('keeps the watchdog when the sender is there', () => {
+    const { text, warnings } = plan({ systemdNotify: true });
+    expect(text).toContain('Type=notify');
+    expect(text).toContain(`WatchdogSec=${WATCHDOG_SEC}`);
+    expect(warnings).toEqual([]);
+  });
 });
 
 describe('a permanent failure stays down and says so', () => {
@@ -126,7 +248,11 @@ describe('the launchd agent', () => {
 
   it('keeps itself alive and throttles, and says what it cannot express', () => {
     const p = mac();
-    expect(p.text).toContain('<key>KeepAlive</key>');
+    // Unconditional, not `{SuccessfulExit: false}` — see the exit-code table
+    // above for what each choice does. Asserted on the value and not on the
+    // key: `toContain('<key>KeepAlive</key>')` was green through the whole
+    // period when SIGUSR1 left the agent down.
+    expect(p.text).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
     expect(p.text).toContain('<key>ThrottleInterval</key>');
     // launchd has no RestartPreventExitStatus. Divergence recorded rather than
     // silently accepted (JUDGE: "la divergenza è registrata o solo avvenuta?").
@@ -192,8 +318,45 @@ describe('resolveLauncher — what ExecStart is allowed to point at', () => {
       entry: '/home/g/dev/muffin-agent/dist/cli/main.js',
       candidates: [],
       realpath: () => null,
+      entryExists: () => true,
     });
     expect(found.warning).toMatch(/install\.sh|sposta|checkout/i);
     expect(found.argv).toContain('/home/g/dev/muffin-agent/dist/cli/main.js');
+    // "Fragile" and not "wrong": the file is there, it is just in a directory
+    // that can move. The next test is the other one.
+    expect(found.warning).not.toMatch(/non esiste/);
+  });
+
+  it('says so when the entry it falls back to does not exist at all', () => {
+    // The dev path, and `muffin init` offers the install on it: run under `tsx`
+    // from a source checkout the entry is `<checkout>/cli/main.js`, while the
+    // source beside it is `main.ts` — only `dist/cli/main.js` ever exists. That
+    // unit does not degrade, it fails at exec on a name, and the old warning
+    // talked about *moving* the checkout as if the file were there.
+    const found = resolveLauncher({
+      buildRoot: '/home/g/dev/muffin-agent',
+      entry: '/home/g/dev/muffin-agent/cli/main.js',
+      candidates: [],
+      realpath: () => null,
+      entryExists: () => false,
+    });
+    expect(found.warning).toContain('non esiste');
+    expect(found.warning).toContain('/home/g/dev/muffin-agent/cli/main.js');
+  });
+
+  it('does not call a candidate foreign when no candidate resolved at all', () => {
+    // The candidate list is never empty in production (`/usr/local/bin` and
+    // friends are unconditional), so counting it made the warning say "quelli
+    // trovati sono di un altro programma" on a machine where nothing had been
+    // found — sending the owner to look for a conflict that does not exist.
+    const found = resolveLauncher({
+      buildRoot: '/home/g/dev/muffin-agent',
+      entry: '/home/g/dev/muffin-agent/dist/cli/main.js',
+      candidates: ['/usr/local/bin/muffin', '/opt/homebrew/bin/muffin'],
+      realpath: () => null,
+      entryExists: () => true,
+    });
+    expect(found.warning).not.toMatch(/un altro programma/);
+    expect(found.warning).toMatch(/checkout/);
   });
 });

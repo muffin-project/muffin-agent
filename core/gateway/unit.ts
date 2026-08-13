@@ -1,7 +1,7 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DRAIN_BUDGET_MS } from './service.js';
+import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
 
 /**
  * The supervisor's half, generated rather than pasted from a README.
@@ -22,9 +22,30 @@ import { DRAIN_BUDGET_MS } from './service.js';
  * ## What is deliberately not here
  *
  * `StartLimitIntervalSec=0`. Hermes sets it and restarts forever; the ADR
- * refuses it by name. A Muffin that dies because the API key is wrong has to
- * stay down and say so, so the unit keeps systemd's default rate limit *and*
- * names the exit code that must never be retried.
+ * refuses it by name. A Muffin that cannot read its own config has to stay down
+ * and say so, so the unit keeps systemd's default rate limit *and* names the
+ * exit codes that must never be retried.
+ *
+ * ## The three exits, and what each supervisor is asked to do with them
+ *
+ * | exit | means | systemd | launchd |
+ * |---|---|---|---|
+ * | 0 | drained, restart me (SIGUSR1) | restarts | restarts |
+ * | `EXIT_STOPPED` | told to stop | stays down | **restarts** — see the warning |
+ * | `EXIT_PERMANENT` | will not fix itself | stays down | **restarts** — see the warning |
+ * | anything else | crash | restarts | restarts |
+ *
+ * The row that used to be wrong in both directions is the middle one. With
+ * `Restart=always` and nothing else, a drained `muffin gateway stop` came back
+ * `RestartSec` later — stop did not stop, on the Linux VPS that is production.
+ * With launchd's `SuccessfulExit: false`, the SIGUSR1 drain-restart exited 0
+ * and the agent stayed down, which is the opposite failure and defeats the
+ * signal's only purpose. The bottom row is the property neither fix is allowed
+ * to cost: **a crash still restarts on both.**
+ *
+ * `RestartPreventExitStatus` does not disarm the supervisor's own verbs:
+ * `systemctl stop` and `systemctl restart` are explicit jobs, and the setting
+ * governs what systemd does *on its own* when the process exits.
  */
 
 /**
@@ -75,15 +96,49 @@ export type UnitOptions = {
   exec: string[];
   configHome?: string;
   homeDir?: string;
+  /**
+   * Is `systemd-notify(1)` on PATH? The caller probes; the planner stays pure.
+   *
+   * It decides `Type=notify` against `Type=exec`, and getting it wrong is not a
+   * degraded watchdog — it is a unit that never starts. Under `Type=notify` the
+   * `READY=1` datagram is what tells systemd the service came up, and we cannot
+   * send it without that binary (Node cannot open an `AF_UNIX SOCK_DGRAM`
+   * socket — see `notify.ts`). So systemd waits the whole `TimeoutStartSec`
+   * (90 s by default), kills it, and `Restart=always` tries again — forever,
+   * without ever tripping the start rate limit, because five starts inside ten
+   * seconds is impossible when each one takes a minute and a half.
+   *
+   * Defaults to true: the option exists so a machine without it gets a unit
+   * that works, not so every caller has to think about it.
+   */
+  systemdNotify?: boolean;
 };
 
 export function planUnit(options: UnitOptions): UnitPlan {
   return options.platform === 'darwin' ? launchdPlan(options) : systemdPlan(options);
 }
 
-function systemdPlan({ home, exec, configHome, homeDir }: UnitOptions): UnitPlan {
+function systemdPlan({ home, exec, configHome, homeDir, systemdNotify = true }: UnitOptions): UnitPlan {
   const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
   const path = join(dir, `${SERVICE_NAME}.service`);
+  const supervision = systemdNotify
+    ? `# notify e non simple: READY=1 distingue "il processo è partito" da "sta
+# servendo", e WATCHDOG=1 è l'unica cosa che vede un processo su ma piantato.
+Type=notify
+# Il datagram di notifica lo manda systemd-notify, cioè un figlio: senza questa
+# riga systemd lo ignora "for security reasons" e il watchdog non viene mai
+# alimentato — cioè uccide un gateway sano ogni WatchdogSec. Vedi notify.ts.
+NotifyAccess=all
+WatchdogSec=${WATCHDOG_SEC}`
+    : // Niente Type=notify senza systemd-notify sulla macchina: READY=1 non
+      // partirebbe mai, systemd ucciderebbe il servizio a TimeoutStartSec e
+      // Restart=always ci riproverebbe all'infinito. E niente WatchdogSec: con
+      // Type=exec un watchdog dichiarato e mai alimentato uccide comunque un
+      // processo sano. Vedi la nota in fondo a `muffin gateway install`.
+      `# systemd-notify non è su PATH su questa macchina: Type=exec, che considera
+# il servizio avviato quando il binario parte. Nessun watchdog — un processo
+# "su ma piantato" qui non lo vede nessuno.
+Type=exec`;
   const text = `[Unit]
 Description=Muffin — runtime dell'agente personale
 Documentation=https://github.com/muffin-ai/muffin
@@ -93,14 +148,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-# notify e non simple: READY=1 distingue "il processo è partito" da "sta
-# servendo", e WATCHDOG=1 è l'unica cosa che vede un processo su ma piantato.
-Type=notify
-# Il datagram di notifica lo manda systemd-notify, cioè un figlio: senza questa
-# riga systemd lo ignora "for security reasons" e il watchdog non viene mai
-# alimentato — cioè uccide un gateway sano ogni WatchdogSec. Vedi notify.ts.
-NotifyAccess=all
-WatchdogSec=${WATCHDOG_SEC}
+${supervision}
 
 ExecStart=${exec.join(' ')}
 # Ancorato alla home dei dati, MAI al checkout del codice: un checkout che si
@@ -111,10 +159,21 @@ Environment=MUFFIN_HOME=${home}
 
 Restart=always
 RestartSec=${RESTART_SEC}
-# Un fallimento che non si risolve riprovando (chiave sbagliata, config rotta)
-# esce ${EXIT_PERMANENT} e resta giù. Il rate limit di systemd NON è disabilitato,
-# di proposito (ADR-0035): è l'ultima rete sotto questa riga.
-RestartPreventExitStatus=${EXIT_PERMANENT}
+# Due uscite che systemd NON deve riavviare, e sono cose diverse:
+#   ${EXIT_PERMANENT}  non si risolve riprovando — config assente o illeggibile, un
+#       secret che manca, il root of trust che rifiuta. Misurato: sono questi
+#       tre a uscire ${EXIT_PERMANENT}. Una chiave API *sbagliata* non è fra loro — viene
+#       passata al provider e il 401 arriva dentro un turno, quindi il gateway
+#       parte e resta su. Un fallimento di autenticazione a turno non è un
+#       fallimento di avvio, e questa riga non lo copre.
+#   ${EXIT_STOPPED} gliel'ha chiesto qualcuno (\`muffin gateway stop\`, SIGTERM). Senza
+#       questa riga il drenaggio finiva e Restart=always lo riportava su dopo
+#       ${RESTART_SEC}s: "stop" che non ferma niente.
+# Non tocca \`systemctl stop|restart\`: quelli sono job espliciti, e questa riga
+# governa solo cosa fa systemd di sua iniziativa quando il processo esce.
+# Il rate limit di systemd NON è disabilitato, di proposito (ADR-0035): è
+# l'ultima rete sotto questa riga.
+RestartPreventExitStatus=${EXIT_PERMANENT} ${EXIT_STOPPED}
 # I figli — server MCP, sandbox — li chiude il cgroup, non il parent.
 KillMode=mixed
 # Più lungo del nostro budget di drenaggio (${Math.round(DRAIN_BUDGET_MS / 1000)}s), o systemd
@@ -139,7 +198,12 @@ WantedBy=default.target
       // "il gateway si ferma da solo ogni tanto" (ADR-0035).
       `loginctl enable-linger "$USER"   # senza questo la unit utente muore al logout`,
     ],
-    warnings: [],
+    warnings: systemdNotify
+      ? []
+      : [
+          `\`systemd-notify\` non è su PATH: la unit usa Type=exec e **non ha watchdog**. Resta il riavvio se il processo muore; non c'è niente che veda un gateway su ma piantato. Installa il pacchetto che porta systemd-notify (di solito \`systemd\` stesso) e rigenera la unit con \`muffin gateway install --write --force\`.`,
+          `Il controllo guarda il PATH di questa shell. systemd avvia il servizio con un PATH suo: se lì il binario c'è, Type=notify andrebbe bene lo stesso — ma un Type=notify senza il mittente non degrada, non parte proprio (TimeoutStartSec, poi crash-loop), quindi in dubbio si sceglie quello che parte.`,
+        ],
   };
 }
 
@@ -165,11 +229,14 @@ ${args}
   </dict>
   <key>RunAtLoad</key>
   <true/>
+  <!-- KeepAlive incondizionato, e la scelta è fra due difetti. Con
+       {SuccessfulExit: false} launchd riavvia solo su uscita ≠ 0: il drenaggio
+       da SIGUSR1 esce 0 e l'agente resta GIÙ, cioè esattamente il contrario di
+       quello per cui esiste quel segnale. Con {SuccessfulExit: true} un crash
+       non tornerebbe su. Qui torna su sempre — e il prezzo, che launchd non sa
+       esprimere, è che nemmeno "muffin gateway stop" lo tiene giù. -->
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <true/>
   <key>ThrottleInterval</key>
   <integer>${RESTART_SEC * 2}</integer>
   <key>ExitTimeOut</key>
@@ -194,7 +261,8 @@ ${args}
     ],
     warnings: [
       // The divergence, recorded rather than merely suffered.
-      `launchd non ha un equivalente di RestartPreventExitStatus: un fallimento permanente (uscita ${EXIT_PERMANENT}, es. chiave sbagliata) verrà comunque riavviato, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')} — leggilo lì, poi \`launchctl bootout\`.`,
+      `launchd non ha un equivalente di RestartPreventExitStatus: né un fallimento permanente (uscita ${EXIT_PERMANENT}: config o secret mancanti, root of trust che rifiuta) né uno stop chiesto (uscita ${EXIT_STOPPED}) lo tengono giù — KeepAlive lo riporta su, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')}.`,
+      `Quindi su macOS \`muffin gateway stop\` ferma *quel processo*, non il servizio: launchd ne avvia un altro. Per tenerlo giù serve il verbo di launchd — \`launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}\` — e per rimetterlo su il \`bootstrap\` qui sopra. Su Linux, che è la produzione, \`stop\` ferma davvero (RestartPreventExitStatus=${EXIT_STOPPED}).`,
       `launchd non ha watchdog: READY=1 e WATCHDOG=1 non hanno un ascoltatore su macOS, quindi qui la supervisione è "riavvia se muore", non "riavvia se si pianta".`,
     ],
   };
@@ -218,6 +286,17 @@ export type LauncherProbe = {
   candidates: string[];
   /** Injected for the test; `realpathSync` in production. */
   realpath?: (path: string) => string | null;
+  /**
+   * Does `entry` exist? Injected for the test; `existsSync` in production.
+   *
+   * Not paranoia: run from a source checkout under `tsx`, the entry is
+   * `<checkout>/cli/main.js` and the source next to it is `main.ts` — only
+   * `dist/cli/main.js` ever exists. `install.sh` makes the sanctioned path fine,
+   * but `muffin init` offers the install on the dev path too, and a unit
+   * pointing at a file that is not there does not degrade: systemd fails at
+   * exec and crash-loops on a name.
+   */
+  entryExists?: (path: string) => boolean;
 };
 
 export type Launcher = { argv: string[]; warning: string | null };
@@ -253,13 +332,24 @@ export function resolveLauncher(probe: LauncherProbe): Launcher {
     }
   }
 
-  const foreign = probe.candidates.length > 0;
+  // "Foreign" means a candidate resolved to something outside this build, not
+  // that we looked at some paths: the list always has entries (`/usr/local/bin`
+  // and friends are unconditional), so counting it said "quelli trovati sono di
+  // un altro programma" on a machine where nothing had been found at all.
+  const foreign = probe.candidates.some((c) => resolve(c) !== null);
+  const exists = (probe.entryExists ?? existsSync)(probe.entry);
+  const missing = exists
+    ? ''
+    : ` **E ${probe.entry} non esiste**: sotto \`tsx\` da un checkout il sorgente è \`main.ts\`, il \`.js\` sta solo in \`dist/\`. Così com'è, il supervisore fallisce l'exec e riprova su un nome che non c'è.`;
   return {
-    // `process.execPath` is added by the caller when the entry is a script; here
-    // the entry is already the executable `install.sh` chmod +x'd.
+    // The entry is executable only when it is the built `dist/cli/main.js`,
+    // which `install.sh` chmod +x's along with the shebang the build keeps. The
+    // source-checkout entry beside this file is a `.ts` and is neither — hence
+    // the existence check above, which is what turns "ExecStart is fragile"
+    // into "ExecStart is wrong".
     argv: [probe.entry, 'gateway', 'run'],
     warning: foreign
-      ? `nessun launcher su PATH punta a questa build (quelli trovati sono di un altro programma: su Linux Mint \`muffin\` è il window manager di Cinnamon). L'unit punta direttamente a ${probe.entry}: se sposti il checkout, il supervisore fallisce prima ancora di caricare il runtime. Esegui \`./install.sh\` e rigenera.`
-      : `l'unit punta direttamente a ${probe.entry}, dentro il checkout del codice. Se lo sposti, il supervisore fallisce allo CHDIR prima che il runtime carichi e va in crash-loop su una directory morta. Esegui \`./install.sh\` e rigenera l'unit.`,
+      ? `nessun launcher su PATH punta a questa build (quelli trovati sono di un altro programma: su Linux Mint \`muffin\` è il window manager di Cinnamon). L'unit punta direttamente a ${probe.entry}: se sposti il checkout, il supervisore fallisce prima ancora di caricare il runtime.${missing} Esegui \`./install.sh\` e rigenera.`
+      : `l'unit punta direttamente a ${probe.entry}, dentro il checkout del codice. Se lo sposti, il supervisore fallisce allo CHDIR prima che il runtime carichi e va in crash-loop su una directory morta.${missing} Esegui \`./install.sh\` e rigenera l'unit.`,
   };
 }

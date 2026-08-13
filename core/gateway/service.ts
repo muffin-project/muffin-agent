@@ -23,8 +23,17 @@ import type { Notifier } from './notify.js';
  * inside a budget, tear down, exit. The ADR takes this from Hermes and the
  * reason is specific — `systemctl restart` sends SIGTERM and then SIGKILLs
  * turns in half, so a restart to pick up a new build silently destroys whatever
- * was running. Both signals drain because both supervisors restart on any exit;
- * the distinction is for the person reading the log, not for the code.
+ * was running.
+ *
+ * **The signals differ in the exit code, and that is not cosmetic.** The first
+ * version of this file said *"both supervisors restart on any exit; the
+ * distinction is for the person reading the log"*. That sentence was false in
+ * both directions and each direction was a broken verb: under `Restart=always`
+ * a drained `muffin gateway stop` came straight back five seconds later, so
+ * **stop did not stop**; under launchd's `SuccessfulExit: false` the SIGUSR1
+ * drain-restart exited 0 and the agent stayed **down**, which is the opposite
+ * failure and the exact thing the signal exists to do. The codes below are how
+ * the two verbs are made true — see `unit.ts` for the supervisor half.
  *
  * The budget is a ceiling, not a promise. Past it the gateway leaves anyway and
  * says so, because the alternative is a process that never dies and gets
@@ -35,8 +44,17 @@ import type { Notifier } from './notify.js';
  * asserts it against the real store rather than trusting this paragraph).
  */
 
-/** The scheduler's cadence. Moved here from `cli/repl.ts`, unchanged. */
-export const TICK_MS = 30_000;
+/**
+ * The scheduler's cadence — and the heartbeat, which is the same timer.
+ *
+ * Defined *as* `HEARTBEAT_MS` rather than as a second `30_000` that has to
+ * agree with it. They were two literals, and the coupling was real but
+ * unwritten: `tick()` is what refreshes the claim, and `STALE_AFTER_MS` is ten
+ * heartbeats, so raising this past `STALE_AFTER_MS` would make every other
+ * process judge a healthy gateway stale — two schedulers again, through a door
+ * nobody was watching. One constant cannot drift from itself.
+ */
+export const TICK_MS = HEARTBEAT_MS;
 
 /**
  * How long a shutdown may wait for turns in flight. A scheduled turn is a model
@@ -55,6 +73,43 @@ export const DRAIN_BUDGET_MS = 60_000;
  * `cli/observe.ts` already uses 75 for exactly this shape of refusal.
  */
 export const EXIT_ALREADY_RUNNING = 75;
+
+/**
+ * "I stopped because I was told to" — the code that makes `muffin gateway stop`
+ * a true verb.
+ *
+ * 143 is 128 + SIGTERM, the encoding every shell already uses, chosen so the
+ * line in `systemctl status` reads as *terminated on request* to a person who
+ * has never seen this codebase instead of as an invented number. `unit.ts`
+ * names it in `RestartPreventExitStatus`, which is the half that does the work:
+ * without it a drained stop came straight back `RestartSec` later.
+ *
+ * SIGINT exits the same way. To this process the two signals mean one thing,
+ * and the only reader of the code is a supervisor that never sends SIGINT —
+ * Ctrl-C on `muffin gateway run` is a person at a terminal, where nothing is
+ * watching the code at all.
+ */
+export const EXIT_STOPPED = 143;
+
+/**
+ * What each way out asks the supervisor to do, in one place because the two
+ * halves used to disagree in opposite directions on the two platforms.
+ *
+ * **0 means "restart me"** — SIGUSR1 is the drain-and-come-back signal, and on
+ * launchd (`KeepAlive: true`) and systemd (`Restart=always`) alike a zero exit
+ * is what brings the process back. A claim taken over by another gateway
+ * (`drain('lock')`) falls through to the same 0 deliberately: coming back and
+ * refusing with `EXIT_ALREADY_RUNNING` is the honest sequence, and the loser
+ * of that race is the process that should not be the one deciding to stay down.
+ *
+ * Anything not listed is a crash, and a crash must always restart. That is the
+ * property the exit codes are not allowed to cost us, on either supervisor.
+ */
+const EXIT_FOR: Record<string, number> = {
+  SIGUSR1: 0,
+  SIGTERM: EXIT_STOPPED,
+  SIGINT: EXIT_STOPPED,
+};
 
 /**
  * What the gateway says it is doing. One place, because this string is read in
@@ -108,7 +163,25 @@ export class Gateway {
   private stopping = false;
   private claimed = false;
   private stopped: (() => void) | null = null;
-  private timers: NodeJS.Timeout[] = [];
+  private exitCode = 0;
+  private tickTimer: NodeJS.Timeout | null = null;
+  /**
+   * Kept apart from the tick timer, and the separation is the whole point.
+   *
+   * `drain` used to clear every timer at once, including this one, and then
+   * wait up to `DRAIN_BUDGET_MS` (60 s) against a `WatchdogSec` of 60 s — so a
+   * drain the supervisor did not initiate (SIGUSR1, or the SIGTERM `muffin
+   * gateway stop` sends straight to the pid) meant up to ninety seconds of
+   * silence against a sixty-second deadline. The rescue was *presumed* to be
+   * `notify.stopping()`, and that presumption is exactly what could not be
+   * checked: there is no systemd on the machine this was written on, and
+   * `sd_notify(3)` documents `STOPPING=1` as "the service is beginning its
+   * shutdown" without saying one word about the watchdog while it does. So the
+   * dependency is removed instead of documented — the ping keeps going for as
+   * long as the drain does, and this timer is cleared only once the wait is
+   * over.
+   */
+  private watchdogTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly deps: GatewayDeps) {
     this.scheduler = deps.scheduler;
@@ -147,8 +220,7 @@ export class Gateway {
    */
   tick(now: Date = this.now()): void {
     if (this.stopping) return; // see `drain`: clearInterval does not unqueue a fired callback
-    const state = this.scheduler.isRunning() ? STATUS.working : this.idleStatus(now);
-    if (!this.deps.lock.beat(now, state, this.pid)) {
+    if (!this.deps.lock.beat(now, this.state(now), this.pid)) {
       // Something took the claim over, which can only mean this process was
       // judged dead. Two schedulers is the thing we refuse, so this one leaves.
       this.deps.log('gateway: la sua rivendicazione è stata presa da un altro processo — esco');
@@ -158,15 +230,39 @@ export class Gateway {
     this.deps.scheduler.tick(now);
   }
 
+  /**
+   * The one sentence describing what this process is doing right now — written
+   * to the claim row *and* carried on the watchdog ping, so `muffin gateway
+   * status`, `doctor` and `systemctl status` cannot disagree.
+   *
+   * Draining wins over everything: without this line a ping landing during a
+   * drain would republish "in attesa" over the `STOPPING=1` status and a stop
+   * in progress would read, to the one tool watching from outside, as an idle
+   * gateway that had simply gone quiet.
+   */
+  private state(now: Date): string {
+    if (this.stopping) return STATUS.draining;
+    return this.scheduler.isRunning() ? STATUS.working : this.idleStatus(now);
+  }
+
   private idleStatus(now: Date): string {
     const next = this.deps.jobs.list().find((j) => j.nextFireAt >= now)?.nextFireAt;
     if (!next) return STATUS.idle;
     return `${STATUS.idle} · prossimo job ${next.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}`;
   }
 
-  /** The watchdog ping, at the cadence the supervisor declared. */
-  beat(): void {
-    this.deps.notify.watchdog();
+  /**
+   * The watchdog ping, at the cadence the supervisor declared, carrying the
+   * status with it.
+   *
+   * The status is not a second message: `WATCHDOG=1\nSTATUS=…` is one datagram
+   * and therefore one `systemd-notify` spawn, which is what makes publishing it
+   * twice a minute free. Before this the live status reached only the SQLite
+   * row, so `systemctl status` showed the boot-time line for the life of the
+   * process while ADR-0035 asked for a readable `STATUS=`.
+   */
+  beat(now: Date = this.now()): void {
+    this.deps.notify.watchdog(this.state(now));
   }
 
   /**
@@ -176,11 +272,24 @@ export class Gateway {
   async drain(reason: string): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
-    for (const t of this.timers) clearInterval(t);
-    this.timers = [];
+    // Decided here and not in the signal handler, because `drain` is the thing
+    // that is idempotent: a SIGUSR1 arriving during a SIGTERM drain must not
+    // turn a stop into a restart.
+    this.exitCode = EXIT_FOR[reason] ?? 0;
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    this.tickTimer = null;
+    // The watchdog timer deliberately survives this line — see its declaration.
 
     this.deps.notify.stopping(STATUS.draining);
-    this.deps.log(`gateway: ${reason} — drenaggio, nessun turno nuovo`);
+    this.deps.log(
+      `gateway: ${reason} — drenaggio, nessun turno nuovo` +
+        // Said in the same breath as the drain, because the drain is exactly
+        // when it gets asked: the signal handlers are registered and
+        // idempotent, so a second Ctrl-C is absorbed and the terminal looks
+        // hung for up to the whole budget. Correct, intended, and indis-
+        // tinguishable from a crash unless the way out is written here.
+        ` (fino a ${Math.round(this.drainBudgetMs / 1000)}s; un secondo Ctrl-C non accelera niente — se devi uscire adesso, kill -9 ${this.pid})`,
+    );
 
     const deadline = Date.now() + this.drainBudgetMs;
     while (this.deps.scheduler.isRunning() && Date.now() < deadline) {
@@ -193,6 +302,10 @@ export class Gateway {
         `gateway: un turno era ancora in volo dopo ${Math.round(this.drainBudgetMs / 1000)}s — esco comunque, il job resta dovuto`,
       );
     }
+
+    // Only now: the ping had to outlive the wait above, not the process.
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
 
     // The claim goes before the teardown: from here on there is no scheduler in
     // this process, so a REPL starting now is right to start its own ticker.
@@ -212,6 +325,9 @@ export class Gateway {
    * command. Clearing it in `drain` lets the process end on its own rather than
    * through `process.exit`, which would truncate whatever is still being
    * written to stdout.
+   *
+   * The code it resolves with is the supervisor's instruction, not a summary:
+   * `EXIT_FOR` above, and `unit.ts` for what each supervisor then does.
    */
   async serve(): Promise<number> {
     // The claim belongs to the thing that starts ticking, not to a caller that
@@ -235,9 +351,9 @@ export class Gateway {
       }
     });
 
-    this.timers.push(setInterval(() => this.tick(), this.tickMs));
+    this.tickTimer = setInterval(() => this.tick(), this.tickMs);
     const watchdogMs = this.deps.notify.watchdogIntervalMs;
-    if (watchdogMs !== null) this.timers.push(setInterval(() => this.beat(), watchdogMs));
+    if (watchdogMs !== null) this.watchdogTimer = setInterval(() => this.beat(), watchdogMs);
 
     // READY only now: under `Type=notify` this is what separates "the process
     // started" from "it is serving", and announcing it before the lock was taken
@@ -264,7 +380,7 @@ export class Gateway {
     // Handlers off before returning: a leaked one makes a second serve() in the
     // same process drain twice on one SIGTERM.
     for (const [signal, handler] of handlers) this.signals.off(signal, handler);
-    return 0;
+    return this.exitCode;
   }
 }
 

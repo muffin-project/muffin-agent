@@ -377,6 +377,65 @@ caring what the module under test imports.
 `node --experimental-transform-types -e "import {SendLock} from './sendlock.ts'"`
 → `Cannot find module '.../core/lock/durable.js'`.*
 
+## An exit code is half a contract, and the halves failed in opposite directions **(this build)**
+
+`muffin gateway stop` drained the turns in flight, released its claim, printed
+`gateway fermato`, and exited 0. The generated systemd unit carried
+`Restart=always` with `RestartPreventExitStatus=78`, and 0 is not 78 — so
+`RestartSec=5` later the gateway was back. **Stop did not stop**, on the Linux
+VPS that is production, and every layer of it was individually correct: the
+drain drained, the CLI reported truthfully what it had done, the unit restarted
+what had exited. Nothing in the repo held both halves at once.
+
+The macOS half failed the other way and for the same reason. The plist carried
+`KeepAlive = {SuccessfulExit: false}` — restart only on a non-zero exit — while
+`SIGUSR1`, the *drain-and-come-back* signal the ADR takes from Hermes, exited 0.
+So the one signal whose entire purpose is to restart the process left the agent
+**down**, silently, on the owner's own machine.
+
+Both were invisible to a reviewer reading either file. `service.ts` said "both
+supervisors restart on any exit; the distinction is for the person reading the
+log" — a sentence that was false in both directions, and the tests agreed with
+it: `unit.test.ts` asserted `toContain('Restart=always')` and
+`toContain('<key>KeepAlive</key>')`. Both strings were present the whole time.
+A string being present says nothing about what it does to a given exit code, and
+the exit code was the entire subject.
+
+> **When a behaviour is a contract between two artifacts, test the contract, not
+> either artifact: given this exit code, does the supervisor bring it back?**
+
+*Found 13 August 2026, reviewing `slice/gateway`. The replacement asserts the
+question directly, for 0, 1, 75, `EXIT_STOPPED` and `EXIT_PERMANENT`, on both
+platforms — and the property neither fix was allowed to cost is in the table
+too: a crash still restarts on both.*
+
+## A presumption you cannot execute is a dependency you should remove **(this build)**
+
+`Gateway.drain` cleared every timer, the watchdog ping included, and then waited
+up to `DRAIN_BUDGET_MS` — 60 s — against a declared `WatchdogSec` of 60 s. A
+drain systemd did not itself initiate (a `SIGUSR1` restart, or the `SIGTERM`
+that `muffin gateway stop` sends straight to the pid) therefore meant up to
+**90 seconds of watchdog silence against a 60-second deadline**: the supervisor
+killing a process in the middle of the graceful shutdown it was performing.
+
+It was probably fine. `notify.stopping()` sends `STOPPING=1` first, and systemd
+plausibly stops enforcing the watchdog once a service is stopping. But
+"plausibly" was the whole basis: `sd_notify(3)` documents `STOPPING=1` as *"the
+service is beginning its shutdown"* and says nothing about the watchdog, there
+is no systemd on the machine this was written on, and nothing in the repo
+recorded that the drain depended on the answer.
+
+The fix is not a comment explaining the risk. It is splitting the tick timer
+from the watchdog timer so the drain clears only the first — after which the
+question stops being load-bearing and it does not matter what the answer is.
+
+> **An assumption you cannot execute is not a risk to document. It is a
+> dependency to delete, and deleting it is usually cheaper than proving it.**
+
+*Found 13 August 2026, reviewing `slice/gateway`. The arithmetic is the whole
+finding: `DRAIN_BUDGET_MS` (60 000) ≥ `WATCHDOG_SEC × 1000` (60 000), asserted
+in `unit.test.ts` so neither constant can drift into the gap alone.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

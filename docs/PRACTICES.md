@@ -55,6 +55,16 @@ codebase before they had names:
 Pick by risk: one-time design question → spike; can regress silently → tracer
 bullet in `doctor`.
 
+**E quando la sonda non la puoi proprio eseguire** — la piattaforma non è questa,
+il servizio non gira qui, il comportamento è di un supervisore che su questa
+macchina non esiste: allora la risposta non va assunta e non va nemmeno
+documentata come rischio. **Va tolta la dipendenza.** Costa quasi sempre meno di
+dimostrarla, e la dimostrazione comunque non l'hai. Il caso che ha prodotto la
+regola: `Gateway.drain` spegneva il ping del watchdog e poi aspettava 60 s contro
+una scadenza di 60 s, salvato *presumibilmente* da `STOPPING=1` — presunzione non
+verificabile senza systemd e non documentata in `sd_notify(3)`. Separare i due
+timer è stata una riga; provare quella presunzione, zero righe e nessuna prova.
+
 ## 3. Prior art before shape
 
 **Trigger: designing anything a person or another program will hold — a CLI

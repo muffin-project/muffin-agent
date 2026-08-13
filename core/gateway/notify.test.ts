@@ -22,7 +22,7 @@ describe('notifier without a supervisor', () => {
     const n = createNotifier({}, s.send);
 
     n.ready('in attesa');
-    n.status('job in corso');
+    n.watchdog('job in corso');
     n.watchdog();
     n.stopping();
 
@@ -59,6 +59,18 @@ describe('notifier under a supervisor', () => {
     expect(s.sent).toEqual(['WATCHDOG=1', 'STOPPING=1\nSTATUS=drenaggio']);
   });
 
+  it('carries the live status on the ping, in the same datagram', () => {
+    // The status used to have a method of its own that nothing called, so
+    // `systemctl status` showed the boot-time line for the life of the process.
+    // Riding the ping is what makes publishing it free: one datagram is one
+    // `systemd-notify` spawn, and the wire format allows the pair — *"a
+    // newline-separated list of variable assignments"*, `sd_notify(3)`, whose
+    // own Example 2 sends READY=1, STATUS= and MAINPID= in one call.
+    const s = sink();
+    createNotifier(env, s.send).watchdog('job in corso');
+    expect(s.sent).toEqual(['WATCHDOG=1\nSTATUS=job in corso']);
+  });
+
   it('reads the ping cadence from WATCHDOG_USEC, at a fraction of it', () => {
     // The interval is systemd's to declare, never ours to assume: the unit says
     // WatchdogSec and systemd passes it down in microseconds. Pinging at the
@@ -92,9 +104,20 @@ describe('notifier under a supervisor', () => {
     // status is not a formatting blemish: it is a second assignment. A job goal
     // echoed into the status could otherwise send `READY=1` on its own, and the
     // status text is the one field here that carries model-adjacent input.
+    //
+    // Asserted on every method that carries one, because the injection point
+    // moved: the status now rides the watchdog ping, which is the message this
+    // process sends twice a minute for as long as it lives.
     const s = sink();
-    createNotifier(env, s.send).status('riga\nREADY=1\nancora');
-    expect(s.sent).toEqual(['STATUS=riga READY=1 ancora']);
+    const n = createNotifier(env, s.send);
+    n.watchdog('riga\nREADY=1\nancora');
+    n.ready('riga\nREADY=1\nancora');
+    n.stopping('riga\nREADY=1\nancora');
+    expect(s.sent).toEqual([
+      'WATCHDOG=1\nSTATUS=riga READY=1 ancora',
+      'READY=1\nSTATUS=riga READY=1 ancora',
+      'STOPPING=1\nSTATUS=riga READY=1 ancora',
+    ]);
   });
 
   it('survives a transport that throws, and reports it once', () => {

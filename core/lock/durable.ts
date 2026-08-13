@@ -168,18 +168,18 @@ export class DurableLock {
     this.releaseStmt.run(pid);
   }
 
-  /** The current holder, or null when free, dead or stale. */
-  holder(now: Date = new Date()): number | null {
-    return this.currentHolder(now.getTime());
-  }
-
   /**
-   * The row as written, with no judgement about liveness applied.
+   * The row as written, with no judgement about liveness applied — "who wrote
+   * this row", which is what an inspection command reports.
    *
-   * Kept separate from `holder` because the two answer different questions and
-   * conflating them is a real bug in both directions: "who wrote this row" is
-   * what an inspection command reports, "who holds this lock right now" is what
-   * a claim decides. A caller that wants the second must say so.
+   * There was a `holder(now)` beside this one, returning the liveness-judged
+   * pid, and its docstring argued at length for the distinction between the
+   * two. Nothing ever called it — made to throw, the whole suite stayed green,
+   * and removing it left `tsc` clean. The distinction was real and the second
+   * half of it was already `acquire`'s job, so the method went rather than the
+   * argument: a public method with no caller is this repo's signature defect,
+   * not a convenience. (`SendLock.holder()` is a different function and does
+   * have callers — it reads this row, deliberately unjudged.)
    */
   recorded(): { pid: number | null; takenAt: string | null } | undefined {
     return this.readStmt.get() as { pid: number | null; takenAt: string | null } | undefined;
