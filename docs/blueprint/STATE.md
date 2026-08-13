@@ -187,6 +187,43 @@ usabile**. Cinque cose, tutte verificate sul codice:
    (`muffin secret set --persist`), `denyRead` copre entrambi gli store più la
    `.env`, e il loop `uninstall && init` continua a ritrovarla. **La superficie
    di scrittura conversazionale si può ora costruire.**
+
+   ✅ **I tre pezzi che l'ADR chiedeva, in ordine di priorità** (slice/gateway,
+   in lavorazione — non committato, 830 test contro 781 di partenza).
+   Dettaglio completo in `04-roadmap.md` §M5-bis punto 3; qui solo il
+   riassunto. **(a) `muffin config`**, sola lettura per costruzione
+   (`core/config/inventory.ts` + `cli/config.ts`): ogni manopola, valore,
+   file di origine, se sigillata — forma presa da `aws configure list` dopo
+   aver guardato anche `git config --list --show-origin` e `gh config list`
+   (`docs/PRACTICES.md` §3). La lista **deriva dall'oggetto `Config` reale**
+   invece di un elenco scritto a mano: provato aggiungendo `models.deep` a un
+   `config.json` senza toccare `inventory.ts` — compare da solo. Il
+   "sigillato" è un fatto sul file, non sul parse di oggi: provato rompendo
+   `rot/budgets.json` e vedendo il valore cadere sul compilato mentre la
+   colonna resta "sì". **(b) Il primo avvio dice cosa ha dedotto.**
+   L'inferenza del provider (`inferProvider`) **era già cablata dentro
+   `cmdInit` dal 2026-08-09** (`eb45b86`, quattro giorni prima di questa ADR)
+   — la frase dell'ADR e del mandato di questa slice sul default silenzioso
+   ad `anthropic` descriveva uno stato già superato, verificato leggendo il
+   codice prima di toccarlo. Quello che mancava davvero: un'inferenza
+   riuscita non lo diceva mai. Ora `chooseProvider`/`describeProviderChoice`
+   (`cli/onboarding.ts`) annunciano sempre la scelta. **Provato eseguendo il
+   binario reale** su una pty vera (`expect`, non solo i test): chiave
+   `sk-or-v1-…` incollata al primo avvio → `config.json` con
+   `provider.kind: "openai-compat"` e la riga *"dedotto dalla chiave"* nel
+   transcript, prima degli step di `runInit`. Trovato e chiuso nello stesso
+   giro: il controllo anti-token-Telegram era dentro
+   `if (apiKey && !providerFlag)`, quindi un `--provider` esplicito lo
+   bypassava. **(c) Alias italiani selettivi**: `memoria/lavori/segreto`,
+   esattamente i tre che l'ADR nomina, una mappa sola davanti allo switch.
+   **Scoped apposta**: la spazzata italiano copre `USAGE`, il primo avvio,
+   `muffin config`, gli errori top-level — non le sei `*_USAGE` dei
+   sotto-comandi né `cli/doctor.ts`, già miste da prima e ognuna con la
+   propria distesa di test da verificare prima di poter tradurre senza
+   romperli. **Resta aperto**: nessuna superficie di scrittura
+   conversazionale (non era lo scopo — sola lettura per ADR-0036), e nessun
+   tool in `agent/tools/` legge ancora `listConfigKnobs` — posizionata in
+   `core/` apposta perché possa, ma quel tool non esiste ancora.
 4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la
    ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
 5. **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider

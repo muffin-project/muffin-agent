@@ -182,3 +182,46 @@ tainted a 3, `fs_read(".env")` restituiva la chiave. La chiave si sposta in
 tutto il resto del paragrafo: `muffin init` senza argomenti la ritrova da lì,
 senza re-incollarla. Il punto 1 di «cosa fa il terminale» acquista quindi un
 flag, non un significato nuovo.
+
+---
+
+## Emendamento 2026-08-13 (secondo giro) — la sezione «cosa fa il terminale» sul primo avvio era anche lei già superata, e i tre pezzi rimasti sono chiusi
+
+**La frase sull'inferenza del provider descriveva un difetto già risolto
+quattro giorni prima che questa ADR fosse scritta.** Il testo sopra dice: *«Il
+risultato non fallisce al setup — fallisce alla prima chiamata al modello…
+`options.provider ?? 'anthropic'` scrive `anthropic` anche a chi ha una chiave
+OpenRouter»*. Verificato leggendo `cli/main.ts` riga per riga prima di
+toccarlo: `cmdInit` chiamava già `inferProvider(keyForInference)` — cablato in
+`eb45b86` (2026-08-09, *"feat(onboarding): interactive init prompt,
+first-run, provider inference"*) — e passava il risultato a `runInit`, per
+entrambe le vie (chiave appena incollata o già in `secret://provider_api_key`
+via ADR-0039). `cli/init.ts:99`'s `options.provider ?? 'anthropic'` è ancora
+lì, ma **irraggiungibile da questo percorso**: `cmdInit` risolve sempre il
+provider prima di chiamarlo, quindi quel default resta solo per chi chiama
+`runInit` direttamente (i test, per costruzione — `runInit` non deve indovinare
+per conto di un chiamante che sa già cosa vuole).
+
+**Quello che restava per davvero, chiuso in questo giro** (slice/gateway, non
+committato — dettaglio in `04-roadmap.md` §M5-bis punto 3, `STATE.md` voce 3):
+un'inferenza riuscita non veniva mai detta — un avviso esisteva solo quando
+falliva, silenzio quando andava bene, il contrario esatto di *«say what was
+inferred rather than deciding silently»*. `chooseProvider`/
+`describeProviderChoice` (`cli/onboarding.ts`) uniscono la decisione in un solo
+posto e la annunciano sempre. Provato eseguendo il binario reale su una pty
+vera (`expect`): incollata una chiave `sk-or-v1-…` al primo avvio, il
+transcript mostra *"✓ provider openai-compat (…) — dedotto dalla chiave"*
+prima degli step di `runInit`, e `config.json` risulta `openai-compat`.
+Trovato e chiuso nello stesso giro, non cercato: il controllo anti-token-
+Telegram viveva dentro `if (apiKey && !providerFlag)`, quindi un `--provider`
+esplicito lo bypassava — un token di bot incollato insieme a `--provider
+anthropic` finiva salvato come chiave del modello.
+
+**`muffin config` e gli alias sono costruiti come decisi qui**, senza
+scostamenti: sola lettura, la lista dietro una funzione
+(`core/config/inventory.ts`) perché un tool che guida la legga da lì, e solo
+i tre alias nominati (`memoria`, `lavori`, `segreto`). Non è una decisione
+nuova — è l'implementazione di questa ADR, e resta qui perché il punto 1
+sopra ha appena dimostrato che «descritto come rotto» e «rotto» possono
+divergere, ed è un fatto che vale la pena correggere quando si trova, non
+solo quando si cerca (`docs/PRACTICES.md` §12).
