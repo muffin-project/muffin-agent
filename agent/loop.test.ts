@@ -823,3 +823,125 @@ describe('the recovery cascade', () => {
     expect(turn?.attributes['muffin.recovery.failure']).toBe('empty');
   });
 });
+
+/**
+ * Reasoning continuity across a tool-use turn.
+ *
+ * Tested at `runTurn` and not only at the adapter on purpose: the adapter's half
+ * was one filter and the loop's half was one array literal, and *each half is
+ * plausible on its own*. This repo's list of "correct mechanism, reached by
+ * nothing" is nine entries long, and the ninth was this feature's own
+ * `thinking` flag. So the thing pinned here is the round trip a real turn makes.
+ *
+ * What the API says, and why silence is the failure mode: *"Required: within a
+ * tool-use turn, pass thinking blocks back"* — but omitting them is not a 400.
+ * The server *"may strip thinking blocks that would create an invalid turn
+ * structure, or disable thinking when the conversation history is
+ * incompatible"*. So nothing was ever going to break loudly, which is why this
+ * needs a test and not a code review.
+ */
+describe('the loop hands the model its own reasoning back', () => {
+  const THINKING = { type: 'thinking' as const, thinking: 'devo leggere il file', signature: 'sig-abc' };
+  const REDACTED = { type: 'redacted_thinking' as const, data: 'ENCRYPTED-PAYLOAD' };
+
+  /** A tool call that arrived with reasoning in front of it, as the real thing does. */
+  const thinkThenCall = (name: string): ChatResult => ({
+    text: 'ci penso',
+    toolCalls: [{ id: 'toolu_1', name, args: {} }],
+    thinking: [THINKING, REDACTED],
+    stopReason: 'tool_use',
+    usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    model: 'test',
+  });
+
+  it('echoes them into the next request, unmodified and ahead of the tool_use', async () => {
+    const provider = new ScriptedProvider([thinkThenCall('demo_read'), answer('fatto')]);
+    const { deps: d, store } = deps([], { provider });
+    await runTurn(d, input(store));
+
+    // The second request is the one that carries the tool result — the exact
+    // moment the docs call Required.
+    const assistant = provider.seen[1]!.messages.find((m) => m.role === 'assistant');
+    expect(assistant).toBeDefined();
+    const blocks = assistant!.content;
+
+    // Unmodified: deep equality against what the provider produced. A mutation
+    // that blanks `signature`, re-serialises, or "normalises" the payload dies
+    // here — and `signature` is the only thing that makes the block mean
+    // anything to the server.
+    expect(blocks[0]).toEqual(THINKING);
+    // Both kinds. Filtering on `type === 'thinking'` alone is the failure the
+    // docs name by hand; it would leave this index holding the text block.
+    expect(blocks[1]).toEqual(REDACTED);
+
+    // In front. "alongside the tool_use block it accompanied" — a mutation that
+    // appends them after the calls, or interleaves them, dies here.
+    const types = blocks.map((b) => b.type);
+    expect(types).toEqual(['thinking', 'redacted_thinking', 'text', 'tool_use']);
+  });
+
+  it('sends the profile\'s thinking mode, instead of declaring it and passing nothing', async () => {
+    // The defect this closes: every profile carried `thinking`, the adapter knew
+    // how to spell it, and no request ever contained it.
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], {
+      provider,
+      profile: { ...CONSERVATIVE, thinking: 'adaptive', sampling: 'model-default' },
+    });
+    await runTurn(d, input(store));
+
+    expect(provider.seen[0]?.thinking).toBe('adaptive');
+    // …and the sampling parameter the 5-series rejects is *absent*, not
+    // undefined: `'temperature' in call` is the assertion, because a key
+    // holding undefined is a key on the wire for some serialisers.
+    expect(provider.seen[0]).not.toHaveProperty('temperature');
+  });
+
+  it('still sends temperature 0 where a profile asks for it', async () => {
+    // The other direction of the same switch: a local model wanders without it,
+    // and CONSERVATIVE is what an unrecognised model gets.
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], { provider, profile: CONSERVATIVE });
+    await runTurn(d, input(store));
+
+    expect(provider.seen[0]?.temperature).toBe(0);
+    expect(provider.seen[0]?.thinking).toBe('off');
+  });
+
+  it('survives compaction: clearing a tool result must not touch the reasoning', async () => {
+    // compactToolResults rewrites tool_result payloads in place. It walks every
+    // block of every message, and a thinking block that came back edited is a
+    // 400 — the one loud failure in this whole area. This is the test that says
+    // the two features were asked what they do to each other (PRACTICES §11).
+    const big = 'x'.repeat(200_000);
+    const provider = new ScriptedProvider([
+      thinkThenCall('demo_big'),
+      { ...thinkThenCall('demo_big'), toolCalls: [{ id: 'toolu_2', name: 'demo_big', args: {} }] },
+      answer('fatto'),
+    ]);
+    const { deps: d, store } = deps([], {
+      provider,
+      tools: [
+        {
+          capability: 'demo.read',
+          spec: { name: 'demo_big', description: 'big', inputSchema: { type: 'object', properties: {} } },
+          handler: () => ({ content: big }),
+        },
+      ],
+      capabilities: new Map([
+        ['demo.read', { id: 'demo.read', risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
+      ]),
+    });
+    await runTurn(d, input(store));
+
+    const third = provider.seen[2]!;
+    // Compaction actually fired — otherwise this test proves nothing.
+    const cleared = third.messages.some((m) =>
+      m.content.some((b) => b.type === 'tool_result' && b.content.includes('rimosso dal contesto')),
+    );
+    expect(cleared).toBe(true);
+    // …and every reasoning block is byte-identical to what came out.
+    const kept = third.messages.flatMap((m) => m.content).filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
+    expect(kept).toEqual([THINKING, REDACTED, THINKING, REDACTED]);
+  });
+});

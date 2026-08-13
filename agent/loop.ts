@@ -347,7 +347,18 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         messages: compacted.messages,
         ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
         maxOutputTokens: 4096,
-        temperature: 0,
+        // The profile decides both, and until this slice neither reached the
+        // wire: `thinking` was declared in every profile and passed by nobody
+        // (the ninth "mechanism with no caller" in this repo's list), and
+        // `temperature: 0` was hardcoded here — a 400 on every model
+        // frontier.json matches, on the config `muffin init` writes by default.
+        //
+        // Spread rather than `temperature: profile.sampling === ... ? 0 :
+        // undefined`, because under exactOptionalPropertyTypes an explicit
+        // `undefined` is not the same as an absent field, and the difference is
+        // exactly what the newest models reject.
+        ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
+        thinking: deps.profile.thinking,
         stream: false,
         ...(input.signal ? { signal: input.signal } : {}),
       };
@@ -491,9 +502,23 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
       // Model's turn goes into the transcript before the results, so a crash
       // between the two leaves a record that explains itself.
+      //
+      // Reasoning first, unmodified, ahead of the `tool_use` blocks it came
+      // with. This is the half the API calls **Required** — "within a tool-use
+      // turn, pass thinking blocks back" — and the half that was missing: this
+      // array used to be rebuilt from `text` + `toolCalls`, so whatever the
+      // model thought was gone by iteration 2 of every tool-using turn. No 400
+      // was ever going to tell us; the server strips or disables instead, so
+      // the symptom was a worse agent and a colder cache, not an error.
+      //
+      // Spread of `result.thinking`, never a map or a filter: their order is
+      // the model's and the contents are opaque. A `?? []` because an adapter
+      // may legitimately have none (openai-compat says so with `[]`), not
+      // because absence is expected here.
       messages.push({
         role: 'assistant',
         content: [
+          ...(result.thinking ?? []),
           ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
           ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
         ],
