@@ -459,6 +459,37 @@ case.
 *Found 13 August 2026, building ADR-0038. Seven mutations, one survivor, one
 deletion and one new test.*
 
+## An import is not a call, and the check that could not tell was the check
+
+`core/rot/readers.ts` verifies that every sealed file has a *real* reader by
+looking for two strings in the reader's source: the filename, and the function
+named in the allowlist. It already carried one scar about evidence — the source
+is stripped of comments, because a docstring saying "the first real reader of
+rot/policy.json" once satisfied the filename half while no line of code opened
+the file.
+
+The symbol half had the identical hole one layer down. Mutating `cli/observe.ts`
+to stop calling `loadSealedBudgets` — replacing the call with a hardcoded object,
+which is precisely the defect the invariant exists to catch — left the check
+**green**, because `import { loadSealedBudgets } from …` still contained the
+name. Measured both ways: green with the import line, red once imports are
+stripped too.
+
+The reason it matters more than a missing string: this was the mutation run for
+the slice that *closed* the budget defect. The invariant was being extended to
+name the three consumers of the sealed file, so that "someone loads it" could
+never again stand in for "the thing that spends money asks it" — and the
+extension would have shipped unable to detect exactly that.
+
+> **An import declares that a module may use a symbol. Only a call is evidence
+> that it does — and a check that accepts declarations is a check that will
+> accept the next docstring too.**
+
+*Found 13 August 2026, mutating ADR-0039. The fix is six lines
+(`withoutImports`), and the test that holds it uses an aliased import
+(`import { load as yamlLoad }`) as its fixture, because an alias is the honest
+shape of a name that is imported and never written again.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

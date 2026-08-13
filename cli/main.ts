@@ -28,7 +28,15 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
+import {
+  loadConfig,
+  locateSecret,
+  locateSecretAll,
+  paths,
+  writeSecret,
+  ConfigError,
+  type ProviderKind,
+} from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
 import { inferProvider, isOpenRouterKey, keyHint, looksLikeTelegramToken, OPENROUTER_BASE_URL } from './onboarding.js';
 
@@ -55,9 +63,14 @@ operator commands:
                                 nessuna finestra aperta. \`muffin init\` propone
                                 di installarlo; \`run\` lo lancia il supervisore.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
-  muffin secret set NAME        (value on stdin)
+  muffin secret set NAME [--persist]
+                                (value on stdin) --persist lo scrive fuori da
+                                ~/.muffin, così sopravvive a \`uninstall\` e
+                                \`init\` lo ritrova senza re-incollarlo
   muffin rot verify | reseal
-  muffin uninstall [--yes]      remove ~/.muffin (config, keys, memory)
+  muffin uninstall [--yes]      remove ~/.muffin (config, keys, memory). Una
+                                chiave scritta con --persist vive fuori: resta,
+                                e il comando lo dice.
 
 inspection:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
@@ -90,11 +103,19 @@ function readOwnVersion(): string {
 
 /**
  * Load a .env from the working directory if present — a development convenience
- * so the model key survives a `muffin uninstall` and onboarding can be re-run
- * without re-pasting. Real environment variables win (verified against Node 22:
+ * for non-secret variables (`MUFFIN_HOME` above all, which is how dev and prod
+ * are separated). Real environment variables win (verified against Node 22:
  * loadEnvFile does not override an already-set value); a missing file is a
  * no-op, so production — which ships no .env — is untouched. Node 22 native, no
  * dotenv dependency.
+ *
+ * **It is no longer where the model key goes** (ADR-0039 amends ADR-0030). The
+ * key survived a `muffin uninstall` by living here, which worked — and put the
+ * plaintext key inside `root`, the directory `fs_read` is scoped to, at a taint
+ * ceiling of 3. `muffin secret set --persist` replaces it. The loader stays,
+ * because `MUFFIN_HOME` in a `.env` is a real convenience and carries nothing
+ * secret; a key left here anyway still works, and is on the tools' deny-read
+ * list so it cannot be read back by the agent.
  */
 function loadDotenvIfPresent(): void {
   const envPath = `${process.cwd()}/.env`;
@@ -185,12 +206,22 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 78;
   }
 
-  // Acquire the key: flag > env > an interactive prompt on a terminal. A missing
-  // key is not fatal — runInit records the step as incomplete and the user can
-  // re-run — but on a TTY we ask rather than fail, which is the whole point of a
-  // first run (the init.ts docstring promised this; it was never implemented).
+  // Acquire the key: flag > env > an already-stored secret > an interactive
+  // prompt on a terminal. A missing key is not fatal — runInit records the step
+  // as incomplete and the user can re-run — but on a TTY we ask rather than
+  // fail, which is the whole point of a first run (the init.ts docstring
+  // promised this; it was never implemented).
+  //
+  // The stored-secret step is what makes `muffin uninstall --yes && muffin init`
+  // a loop again now that the key no longer has to sit in a `.env` the agent can
+  // read: `--persist` put it outside the home the wipe reaches, so the chain
+  // answers and nothing is prompted or copied.
   let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
-  if (!apiKey && process.stdin.isTTY) {
+  const stored = apiKey ? null : locateSecret('secret://provider_api_key');
+  if (stored) {
+    process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
+  }
+  if (!apiKey && !stored && process.stdin.isTTY) {
     process.stderr.write(keyHint(providerFlag, values['base-url']));
     apiKey = await promptSecret('API key (hidden — paste, or Enter to skip): ');
   }
@@ -214,9 +245,18 @@ async function cmdInit(argv: string[]): Promise<number> {
     }
   }
 
-  const provider = providerFlag ?? inferProvider(apiKey);
+  // The provider is inferred from the key's prefix, so a key that is only
+  // *stored* still has to be looked at — otherwise the dev loop that this whole
+  // change exists to preserve would start writing `anthropic` for an OpenRouter
+  // key the moment the `.env` went away, and ADR-0036 already named where that
+  // surfaces: not at setup, but at the first call to the model. Read, never
+  // printed, never re-written (`runInit` gets no `apiKey`, so nothing is copied).
+  const keyForInference =
+    apiKey ?? (stored ? readFileSync(stored.path, 'utf8').trim() : undefined);
+  const provider = providerFlag ?? inferProvider(keyForInference);
   const baseUrl =
-    values['base-url'] ?? (isOpenRouterKey(apiKey) && !providerFlag ? OPENROUTER_BASE_URL : undefined);
+    values['base-url'] ??
+    (isOpenRouterKey(keyForInference) && !providerFlag ? OPENROUTER_BASE_URL : undefined);
 
   const steps = runInit({
     ...(values.hardened ? { hardened: true } : {}),
@@ -314,8 +354,23 @@ async function cmdUninstall(argv: string[]): Promise<number> {
       return 0;
     }
   }
+  // Every backend, not the first one that answers: a home copy shadows the
+  // persistent one in the read chain, and the whole point of this line is the
+  // copy that the wipe does *not* reach.
+  const persistent = locateSecretAll('secret://provider_api_key', home).find((l) => l.backend === 'persistent');
   rmSync(home, { recursive: true, force: true });
   process.stderr.write(`Removed ${home}.\n`);
+  // The message used to say "config, keys, memory" and that is now half true:
+  // a `--persist` key lives outside this directory on purpose — it is what makes
+  // `uninstall && init` a loop instead of a re-paste. Saying so is the price of
+  // the convenience; an uninstall that quietly leaves a credential behind is the
+  // kind of surprise that ends trust in the command.
+  if (persistent) {
+    process.stderr.write(
+      `La chiave persistente resta: ${persistent.path}\n` +
+        `  (è ciò che fa ritrovare la chiave a \`muffin init\`; cancellala a mano se non la vuoi)\n`,
+    );
+  }
   process.stderr.write(`The muffin command itself is still installed; to remove it too: ./install.sh --uninstall\n`);
   return 0;
 }
@@ -507,9 +562,11 @@ async function cmdSurface(argv: string[]): Promise<number> {
 }
 
 function cmdSecret(argv: string[]): number {
-  const [sub, name] = argv;
+  const [sub, ...rest] = argv;
+  const persist = rest.includes('--persist');
+  const name = rest.find((a) => !a.startsWith('-'));
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
+    process.stderr.write(`usage: muffin secret set NAME [--persist]  (value on stdin)\n`);
     return 78;
   }
   // Read from stdin, never from argv: a key in a shell argument is a key in the
@@ -524,8 +581,12 @@ function cmdSecret(argv: string[]): number {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
     return 78;
   }
-  writeSecret(name, value);
-  process.stdout.write(`stored ${name} (0600), ${value.length} chars\n`);
+  // Default is this home's own store, so the command keeps meaning what it
+  // meant and `muffin uninstall` keeps deleting what it says it deletes.
+  // `--persist` is the opt-in that replaces the `.env`: outside the wiped home,
+  // outside the working directory, 0700/0600, and on the tools' deny-read list.
+  const at = writeSecret(name, value, paths().home, persist ? 'persistent' : 'home');
+  process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
   return 0;
 }
 

@@ -1,17 +1,15 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { z } from 'zod';
 import type { LoopDeps } from '../agent/loop.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { ConfigError, loadConfig, paths } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { detectAbsences, formatP } from '../core/memory/absence.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { FireLog } from '../core/scheduler/firelog.js';
 import { SendLock } from '../core/scheduler/sendlock.js';
 import { observe, recordFired, type Observation } from '../core/scheduler/observe.js';
-import { decideProactive, type QuietHours } from '../core/scheduler/proactivity.js';
+import { decideProactive } from '../core/scheduler/proactivity.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
 
 /**
@@ -42,47 +40,6 @@ export type ObserveOverrides = {
   deliver?: Deliver;
   now?: Date;
 };
-
-/**
- * Quiet hours are a rail, so they are read from the root of trust and not from
- * config.json — which is outside the seal and therefore not a place a rail can
- * live. Parsed rather than cast (PRACTICES §4), and the regex is the part that
- * does the work. Measured on `proactivity.ts`, on the two ways a hand-edit goes
- * wrong:
- *
- *  - `from: "11pm"` — no crash, and at 23:30 Rome `inQuietHours` answers false
- *    where `"23:00"` answers true. That is the night quietly opening: an hour
- *    the owner declared closed, with nothing said about it anywhere.
- *  - `to: "8am"` — `decideProactive` computes the end of the window before it
- *    checks anything, so the run dies inside cron-parser with
- *    "Invalid characters, got value: NaN" instead of deferring.
- *
- * The old version of this comment cited `"23"` as the NaN case; it is not one.
- * `"23"` parses as 23:00 (`m ?? 0`) and behaves identically to `"23:00"` —
- * which is its own small lie, but not the one being guarded here.
- */
-const BudgetsFile = z.object({
-  quietHours: z.object({
-    from: z.string().regex(/^\d{1,2}:\d{2}$/),
-    to: z.string().regex(/^\d{1,2}:\d{2}$/),
-    timezone: z.string().min(1),
-  }),
-});
-
-/** A window, never an empty one: an unreadable file is not a licence to speak at 3am. */
-const FALLBACK_QUIET: QuietHours = { from: '23:00', to: '08:00', timezone: 'UTC' };
-
-function ownerQuietHours(home: string): { quiet: QuietHours; note: string | null } {
-  const file = join(paths(home).rot, 'budgets.json');
-  if (!existsSync(file)) return { quiet: FALLBACK_QUIET, note: `${file} assente` };
-  try {
-    const parsed = BudgetsFile.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-    if (!parsed.success) return { quiet: FALLBACK_QUIET, note: `${file}: quietHours non valide` };
-    return { quiet: parsed.data.quietHours, note: null };
-  } catch {
-    return { quiet: FALLBACK_QUIET, note: `${file} illeggibile` };
-  }
-}
 
 /**
  * Delivery, and the reason it throws rather than shrugging.
@@ -163,7 +120,13 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
     // turn has no memory schema, and no home has ever had a fires table.
     new MemoryStore(db);
     const fires = new FireLog(db);
-    const budget = new BudgetEngine(db, config.budget);
+    // One read of the sealed file for both rails this command needs: the spend
+    // cap and the quiet window. They used to come from two places — the cap from
+    // `config.json`, outside the seal, and the window from `rot/budgets.json` —
+    // so the sentence "the same budget engine the kernel reads" below was true
+    // of the object and false of the number inside it.
+    const sealed = loadSealedBudgets(home);
+    const budget = new BudgetEngine(db, sealed.caps);
 
     const now = over.now ?? new Date();
 
@@ -179,8 +142,8 @@ export async function cmdObserve(home: string, argv: string[], over: ObserveOver
       }
       releaseLock = lock.release;
     }
-    const { quiet, note } = ownerQuietHours(home);
-    if (note) process.stderr.write(`! quiet hours dal default (${note})\n`);
+    for (const note of sealed.notes) process.stderr.write(`! ${note}\n`);
+    const quiet = sealed.quietHours;
     const channel = config.surfaces.default;
 
     const observations = observe({

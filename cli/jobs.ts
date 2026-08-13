@@ -1,8 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig, paths } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { JobError, JobStore, type Job } from '../core/scheduler/jobs.js';
 
 /**
@@ -29,18 +28,16 @@ function openStore(home: string): { store: JobStore; db: DatabaseCtor.Database }
   return { store: new JobStore(db), db };
 }
 
-/** The owner's timezone lives in the root of trust, so "8am" means their 8am. */
+/**
+ * The owner's timezone lives in the root of trust, so "8am" means their 8am.
+ * Through the one loader (`core/rot/budgets.ts`) rather than a third hand-rolled
+ * parse of the same file: this one used to accept `{quietHours:{timezone:1}}`
+ * shapes the observe path rejected, so the same sealed file meant two things
+ * depending on who opened it. A broken RoT is still doctor's problem, not jobs' —
+ * the fallback is UTC either way.
+ */
 function ownerTimezone(home: string): string {
-  const file = join(paths(home).rot, 'budgets.json');
-  if (existsSync(file)) {
-    try {
-      const tz = (JSON.parse(readFileSync(file, 'utf8')) as { quietHours?: { timezone?: string } }).quietHours?.timezone;
-      if (typeof tz === 'string' && tz.length > 0) return tz;
-    } catch {
-      // fall through to UTC — a broken RoT is doctor's problem, not jobs'
-    }
-  }
-  return 'UTC';
+  return loadSealedBudgets(home).quietHours.timezone;
 }
 
 function fmt(job: Job): string {
