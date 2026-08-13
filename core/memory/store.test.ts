@@ -167,4 +167,85 @@ describe('memory store', () => {
     // a re-extraction is a job rather than a migration.
     expect(s.pendingEpisodes(HOST, 2).map((e) => e.id)).toEqual([a, b]);
   });
+
+  it('does not fork an entity when the same name is upserted under a different kind', () => {
+    // `kind` is a per-mention guess from the extractor, not a stable identity
+    // property. Forking on it used to mean "Giusto" seen once as `person` and
+    // once as `thing` became two rows — and since fact dedup and the judge are
+    // both scoped to one subjectId, every fact recorded against the second
+    // fork duplicated the first with no judge call at all.
+    const s = store();
+    const now = '2026-08-04T10:00:00Z';
+    const first = s.upsertEntity(HOST, 'Giusto', 'person', now);
+    const second = s.upsertEntity(HOST, 'Giusto', 'thing', now);
+    expect(second).toBe(first);
+    expect(s.entitiesByName(HOST, 'Giusto')).toHaveLength(1);
+    // The kind recorded is the first one seen — a later, different guess does
+    // not silently overwrite it.
+    expect(s.entitiesByName(HOST, 'Giusto')[0]?.kind).toBe('person');
+  });
+
+  it('still tells two different names apart, kind fix notwithstanding', () => {
+    // The fix drops `kind` from the lookup entirely; this guards against an
+    // overcorrection that would fold every entity in a tenant into one row.
+    const s = store();
+    const now = '2026-08-04T10:00:00Z';
+    const giusto = s.upsertEntity(HOST, 'Giusto', 'person', now);
+    const cagliari = s.upsertEntity(HOST, 'Cagliari', 'place', now);
+    expect(giusto).not.toBe(cagliari);
+  });
+
+  it('records a review item and reads it back, most recent first', () => {
+    // The durable home for what used to go only to stderr: the judge's
+    // `review` verdict and pipeline errors.
+    const s = store();
+    const me = s.upsertEntity(HOST, 'Giusto', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, HOST, 'nota');
+    const marco = s.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Marco',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+    });
+    const lucia = s.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-05T10:00:00Z',
+    });
+
+    s.recordReview({
+      tenantId: HOST, kind: 'contradiction', subject: 'Giusto', predicate: 'accountant',
+      existingFactId: marco, incomingFactId: lucia, detail: 'non chiaro se è un cambio',
+      createdAt: '2026-08-05T10:00:00Z',
+    });
+    s.recordReview({
+      tenantId: HOST, kind: 'error', detail: 'giudice non disponibile',
+      createdAt: '2026-08-05T10:01:00Z',
+    });
+
+    const items = s.pendingReview(HOST);
+    expect(items).toHaveLength(2);
+    // Most recent first.
+    expect(items[0]?.kind).toBe('error');
+    expect(items[1]?.kind).toBe('contradiction');
+    expect(items[1]?.existingFactId).toBe(marco);
+    expect(items[1]?.incomingFactId).toBe(lucia);
+    // Never crosses a tenant.
+    expect(s.pendingReview(GROUP)).toHaveLength(0);
+    // And it is not write-only: `muffin memory stats` reads this count, so a
+    // review item that never surfaces anywhere but `pendingReview` would be
+    // the same "declared and connected to nothing" shape this was meant to
+    // fix in the first place.
+    expect(s.stats(HOST).needsReview).toBe(2);
+  });
+
+  it('claims the ingest lane and refuses a second claim while the first holds it', () => {
+    // The store is what `ingestPending` asks for the claim, so the wiring has
+    // to be provable at this level too, not just through the whole pipeline.
+    const s = store();
+    const now = new Date('2026-08-13T10:00:00Z');
+    const first = s.acquireIngestLock(now);
+    expect('release' in first).toBe(true);
+    const second = s.acquireIngestLock(now);
+    expect(second).toMatchObject({ held: expect.stringContaining(String(process.pid)) });
+    s.releaseIngestLock();
+    expect('release' in s.acquireIngestLock(now)).toBe(true);
+  });
 });

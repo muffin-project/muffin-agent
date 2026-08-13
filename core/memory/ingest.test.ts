@@ -401,6 +401,221 @@ describe('memory ingestion', () => {
     const report = await ingestPending(deps, HOST);
     expect(report.factsAdded).toBe(1);
   });
+
+  it('marks an empty-content episode instead of leaving it pending forever', async () => {
+    // Defect #1: `pendingEpisodes` filters `content IS NOT NULL`, which an
+    // empty STRING satisfies. The old code did a bare `continue` on it, never
+    // marking it — so it came back on every future run, forever.
+    const { store, deps } = harness([]);
+    const empty = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: '', trustTier: 0, createdAt: '2026-08-04T11:00:00Z',
+    });
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.skippedEmpty).toBe(1);
+    expect(report.episodes).toBe(0);
+    expect(store.pendingEpisodes(HOST, 1).map((e) => e.id)).not.toContain(empty);
+    expect(store.pendingEpisodes(HOST, 1)).toHaveLength(0);
+  });
+
+  it('makes progress past a page of empty-content episodes instead of looping on them forever', async () => {
+    // Defect #1, through a batch: if `limit` empty rows sit at the head of
+    // `ORDER BY created_at`, a scheduler calling this on every tick with the
+    // same small limit must not re-fetch the same stuck page every time —
+    // that is the "infinite no-op loop that looks healthy" the roadmap names.
+    const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari'))]);
+    const mk = (content: string, createdAt: string) =>
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+        content, trustTier: 0, createdAt,
+      });
+    mk('', '2026-08-04T11:00:00Z');
+    mk('', '2026-08-04T11:01:00Z');
+    const real = mk('abito a Cagliari', '2026-08-04T11:02:00Z');
+
+    // Tick one: batch of 2, both empty. No episode "mined", but not stuck.
+    const first = await ingestPending(deps, HOST, 2);
+    expect(first.skippedEmpty).toBe(2);
+    expect(first.episodes).toBe(0);
+    expect(store.pendingEpisodes(HOST, 1).map((e) => e.id)).toEqual([real]);
+
+    // Tick two: same limit, and the batch has moved past the empty page.
+    const second = await ingestPending(deps, HOST, 2);
+    expect(second.episodes).toBe(1);
+    expect(second.factsAdded).toBe(1);
+    expect(store.pendingEpisodes(HOST, 1)).toHaveLength(0);
+  });
+
+  it('marks each episode as it finishes, so a crash mid-batch only replays what was in flight', async () => {
+    // Defect #2: the old code accumulated ids in `processed`/
+    // `processedNonExtractable` and called `markExtracted` ONCE after the
+    // whole loop. A crash partway through the loop meant the call never
+    // happened at all — so even an episode that fully succeeded, fact
+    // already written, came back as pending after the crash. A thrown error
+    // partway through stands in for the crash: whatever was durably written
+    // to sqlite before the throw stays written regardless of what the JS
+    // process does next.
+    class ThrowsOnSecondCall implements Provider {
+      readonly kind = 'openai-compat' as const;
+      private i = 0;
+      constructor(private readonly replies: string[]) {}
+      async chat(): Promise<ChatResult> {
+        this.i += 1;
+        if (this.i === 2) throw new Error('provider caduto a metà batch');
+        return {
+          text: this.replies[this.i - 1] ?? '{"facts":[]}',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'test',
+        };
+      }
+    }
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-crash-'));
+    const deps = {
+      store,
+      provider: new ThrowsOnSecondCall([facts(fact('Giusto', 'lives_in', 'Cagliari'))]),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+    const e1 = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'abito a Cagliari', trustTier: 0, createdAt: '2026-08-04T11:00:00Z',
+    });
+    const e2 = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'sto lavorando al progetto', trustTier: 0, createdAt: '2026-08-04T11:01:00Z',
+    });
+
+    await expect(ingestPending(deps, HOST)).rejects.toThrow('provider caduto a metà batch');
+
+    // e1 finished (its fact is written) before the crash on e2's extraction —
+    // it must already be marked, not waiting on a batch-end marker that never
+    // ran because the batch never finished.
+    expect(store.pendingEpisodes(HOST, 1).map((e) => e.id)).toEqual([e2]);
+    const me = store.findEntity(HOST, 'Giusto');
+    expect(me).not.toBeNull();
+    expect(store.activeFacts(HOST, me!, 'lives_in')[0]?.objectValue).toBe('Cagliari');
+  });
+
+  it('lets a correction that repeats an older active value still reach the judge', async () => {
+    // The duplicate-check fix named in the task's "constraints" section: a new
+    // value that exactly matches an OLDER active fact — not the current one —
+    // used to return 'skipped' on the spot, before the judge ever ran. Two
+    // active facts for one (subject, predicate) is exactly what an earlier
+    // judge `coexist` mistake (or the crash window fixed above) can produce.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'accountant', 'Marco')),
+      JSON.stringify({
+        reasoning: 'Marco torna commercialista, Lucia non lo è più',
+        verdict: 'supersede',
+        confidence: 0.9,
+      }),
+    ]);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', '2026-01-01T10:00:00Z');
+    const ep0 = episode(store, 'nota storica');
+    store.markExtracted(HOST, [ep0], 1); // already-processed backstory, not part of this run
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep0,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    // Marco is the OLDER active fact; Lucia is the CURRENT belief.
+    store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-01-01T10:00:00Z' });
+    store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-03-01T10:00:00Z' });
+
+    episode(store, 'sono tornato da Marco per la contabilità');
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.superseded).toBe(1);
+    const active = store.activeFacts(HOST, me, 'accountant');
+    expect(active.find((f) => f.objectValue === 'Lucia')).toBeUndefined();
+  });
+
+  it('does not let a re-guessed entity kind duplicate a fact with no judge call', async () => {
+    // Defect #4: `upsertEntity` used to fork on `kind`, a per-mention guess
+    // from the extractor. Two forks means two subjectIds, and fact dedup is
+    // scoped to one subjectId — so the second mention duplicated the fact
+    // with the judge never even consulted (existing was empty for the fork).
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'accountant', 'Marco', { subjectKind: 'person' })),
+      facts(fact('Giusto', 'accountant', 'Marco', { subjectKind: 'thing' })),
+    ]);
+    const mk = (content: string, createdAt: string) =>
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+        content, trustTier: 0, createdAt,
+      });
+    mk('Marco è il mio commercialista', '2026-08-04T11:00:00Z');
+    mk('ancora Marco, il commercialista', '2026-08-04T11:01:00Z');
+
+    const report = await ingestPending(deps, HOST);
+
+    expect(store.entitiesByName(HOST, 'Giusto')).toHaveLength(1);
+    expect(report.factsAdded).toBe(1);
+  });
+
+  it('persists the judge review verdict durably, not just in the returned report', async () => {
+    // Defect #5: `report.needsReview` used to go only to `cli/memory.ts`'s
+    // stderr. Once a scheduler is the caller, nothing reads it.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'date_of_birth', '1997-04-02')),
+      facts(fact('Giusto', 'date_of_birth', '1998-04-02')),
+      JSON.stringify({
+        reasoning: 'potrebbe essere un refuso ma non ne sono certo',
+        verdict: 'supersede',
+        confidence: SUPERSEDE_THRESHOLD - 0.1,
+      }),
+    ]);
+    episode(store, 'sono del 1997');
+    episode(store, 'forse sono del 1998');
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.needsReview).toHaveLength(1);
+    const persisted = store.pendingReview(HOST);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.kind).toBe('contradiction');
+    expect(persisted[0]?.subject).toBe('Giusto');
+    expect(persisted[0]?.predicate).toBe('date_of_birth');
+    expect(persisted[0]?.detail).toContain('refuso');
+  });
+
+  it('persists a failed extraction as a review item too', async () => {
+    const { store, deps } = harness(['non è affatto JSON']);
+    episode(store, 'qualcosa di importante');
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.errors).toHaveLength(1);
+    const persisted = store.pendingReview(HOST);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.kind).toBe('error');
+  });
+});
+
+describe('the ingest lock', () => {
+  it('refuses to run while another extraction already holds the lane', async () => {
+    // Defect #3: two whole-batch invocations of `ingestPending` — a
+    // hand-typed `muffin memory extract` and a scheduler tick — used to both
+    // read the same pending set and both extract it.
+    const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari'))]);
+    episode(store, 'abito a Cagliari');
+
+    const held = store.acquireIngestLock(new Date('2026-08-04T12:00:00Z'));
+    expect('release' in held).toBe(true); // sanity: we really hold it
+
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.episodes).toBe(0);
+    expect(report.factsAdded).toBe(0);
+    expect(report.errors.join(' ')).toContain("un'altra estrazione è già in corso");
+    expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1);
+
+    store.releaseIngestLock();
+    const second = await ingestPending(deps, HOST);
+    expect(second.factsAdded).toBe(1);
+  });
 });
 
 describe('what the agent said is evidence, not proof', () => {
