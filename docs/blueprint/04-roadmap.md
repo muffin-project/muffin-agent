@@ -371,6 +371,85 @@ un upgrade aggiunge davvero un file a `defaults/rot/`, e quel giorno l'owner ved
 un'installazione che sembra manomessa. Va costruito **prima** di quella slice, non
 durante.
 
+✅ **I tre pezzi che ADR-0036 chiedeva, in ordine di priorità dichiarato**
+(slice/gateway, in lavorazione — non committato, 830 test contro i 781 di
+partenza).
+
+- **`muffin config`, sola lettura** (`core/config/inventory.ts` +
+  `cli/config.ts`). Ogni manopola: valore, file di origine, se è sigillata.
+  Guardati prima i tre strumenti che l'ADR nomina (`docs/PRACTICES.md` §3) —
+  `git config --list --show-origin` (valore + origine, nessun asse
+  "sigillato"), `gh config list` (bare key=value, nessuna origine), `aws
+  configure list` (Name/Value/Type/Location, verificato solo per
+  documentazione: `aws` non è installato su questa macchina) — e scelta la
+  forma di `aws`, con "Type" sostituito da "Sigillato", l'unica colonna che
+  nessuno dei tre doveva rispondere e per cui questo comando esiste. La lista
+  **deriva dallo schema dove è pratico farlo**: cammina l'oggetto `Config`
+  restituito da `loadConfig` — che *è* `z.infer<ConfigSchema>` — invece di un
+  elenco scritto a mano campo per campo. Provato: `models.deep` scritto a
+  mano in un `config.json` compare nella lista senza toccare
+  `inventory.ts`. **Scartata l'introspezione diretta dello schema zod**
+  (probe fatto contro la 4.4.3 installata): raggiungibile solo via
+  `_zod.def`, un interno con underscore senza precedenti nel resto del repo e
+  nessuna garanzia fra un patch e l'altro di zod — costruirci sopra avrebbe
+  scambiato una lista scritta a mano che invecchia con un'API privata che si
+  rompe. Il "sigillato" è un fatto sul **file**, non sul parse di oggi:
+  provato spezzando `rot/budgets.json` e vedendo il valore cadere sul
+  compilato mentre la colonna sigillato resta "sì".
+- **Il primo avvio dice cosa ha dedotto.** L'inferenza del provider
+  (`cli/onboarding.ts`, `inferProvider`) **era già cablata dentro `cmdInit`
+  dal 2026-08-09** (`eb45b86`, quattro giorni prima che ADR-0036 fosse
+  scritta) — la frase sia dell'ADR sia del mandato di questa slice
+  («`options.provider ?? 'anthropic'` scrive anthropic anche a chi ha una
+  chiave OpenRouter») descrive uno stato già superato, verificato leggendo il
+  codice riga per riga prima di toccarlo. Quello che restava davvero:
+  **un'inferenza riuscita non lo diceva mai** — un avviso esisteva solo
+  quando falliva, silenzio quando andava bene. `chooseProvider` +
+  `describeProviderChoice` (`cli/onboarding.ts`) uniscono la decisione in un
+  solo posto e la annunciano sempre, es. *"✓ provider openai-compat
+  (https://openrouter.ai/api/v1) — dedotto dalla chiave (sk-or-…)"*. **Provato
+  eseguendo il binario reale** su una pty vera (`expect`, non solo i test):
+  `MUFFIN_HOME` vuoto, "Lo configuro ora?" → sì, incolla una chiave
+  `sk-or-v1-…`, e il transcript mostra la riga sopra prima degli step di
+  `runInit`; `config.json` risultante ha `provider.kind: "openai-compat"`.
+  **Trovato un secondo difetto, minore, rifattorizzando**: il controllo "sembra
+  un token Telegram" viveva dentro `if (apiKey && !providerFlag)`, quindi un
+  `--provider` esplicito lo bypassava — un token di bot incollato insieme a
+  `--provider anthropic` finiva salvato come chiave del modello. Ora
+  incondizionato; test verificato fallire senza (nessun file di chiave dopo
+  l'incollata, con la vecchia guardia).
+- **Alias italiani selettivi.** Una mappa in testa a `main()`,
+  `memoria→memory · lavori→jobs · segreto→secret` — esattamente i tre che
+  l'ADR nomina, nessuno in più. `muffin memoria` e `muffin memory` producono
+  output byte-identico (stesso ramo: la mappa risolve solo il nome del
+  comando, prima dello switch); `memorie` — quasi giusto — resta "comando
+  sconosciuto", a provare che la mappa non fa fuzzy match.
+
+⚠️ **La spazzata italiano è deliberatamente parziale — il mandato la chiedeva
+scoped, non totale.** Tradotti: `USAGE` di `cli/main.ts`, `firstRun`,
+`cmdInit`, `offerGateway`, `cmdUninstall`, l'errore top-level (`unknown
+command:` → `comando sconosciuto:`), e `muffin config` (nativo italiano fin
+dall'inizio). **Lasciati fuori apposta**, e il motivo: le sei costanti
+`*_USAGE` di `cli/{memory,vault,surface,mcp,jobs,gateway}.ts`,
+`cmdRot`/`cmdSecret`/`cmdTrace`/`cmdRun` dentro `cli/main.ts`, e
+`cli/doctor.ts` sono già oggi mescolate inglese/italiano — la deriva che
+l'ADR nomina, circa 280 stringhe — e ognuna richiederebbe il proprio giro di
+audit sui test che ne dipendono prima di poter tradurre senza rompere
+un'asserzione: esattamente il costo che il mandato segnalava come rischio
+reale di uno spazzata totale. Restano per una prossima passata, elencate qui
+perché "trovato e non scritto" (`docs/PRACTICES.md` §12).
+
+⛔ **Resta aperto.** Nessuna superficie di scrittura conversazionale — non
+richiesta da questa slice (ADR-0036: *"`muffin config` è sola lettura, e
+questo è il punto"*), ma è la ragione per cui l'onboarding guidato-da-Muffin
+resta *"una sezione di prompt"*, non un meccanismo (`STATE.md`, voce 3). E
+nessun tool in `agent/tools/` legge ancora `listConfigKnobs` — la funzione
+vive apposta in `core/config/inventory.ts` e non in `cli/`, perché un tool
+futuro possa importarla senza dipendere da `cli/` (verificato: nessun file di
+*produzione* sotto `agent/` importa da `cli/` oggi — solo i fixture dei test,
+via `runInit`, che è un pattern diverso e già stabilito), ma quel tool non è
+ancora costruito.
+
 **4. Niente resume a grana di turno, e niente retry sul percorso lungo.** L'unico
 asse su cui la ricerca peer ha dato torto a noi (`research/confronto-harness.md`
 §2.3): un tool call lungo più un riavvio perde tutto. M5 ha già concesso il
