@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA, type FactOrigin } from './schema.js';
+import { IngestLock, type LockOutcome } from './ingest-lock.js';
+import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA, type FactOrigin, type ReviewKind } from './schema.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -71,9 +72,37 @@ export type Fact = {
   supersededBy: number | null;
 };
 
+export type ReviewItemInput = {
+  tenantId: string;
+  kind: ReviewKind;
+  /** Absent for a `kind: 'error'` row that is not about one subject/predicate. */
+  subject?: string | null;
+  predicate?: string | null;
+  existingFactId?: number | null;
+  incomingFactId?: number | null;
+  /** The judge's reasoning, or the error message. Human-readable either way. */
+  detail: string;
+  createdAt: string;
+};
+
+export type ReviewItem = {
+  id: number;
+  tenantId: string;
+  kind: ReviewKind;
+  subject: string | null;
+  predicate: string | null;
+  existingFactId: number | null;
+  incomingFactId: number | null;
+  detail: string;
+  createdAt: string;
+};
+
 export class MemoryStore {
+  private readonly ingestLock: IngestLock;
+
   constructor(private readonly db: Database.Database) {
     db.exec(MEMORY_SCHEMA);
+    this.ingestLock = new IngestLock(db);
     // `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
@@ -153,6 +182,20 @@ export class MemoryStore {
     tx(episodeIds);
   }
 
+  // ---- coordination -----------------------------------------------------------
+
+  /**
+   * One extractor at a time. See `ingest-lock.ts` for why a single lane lock
+   * is the whole mechanism rather than a per-episode claim.
+   */
+  acquireIngestLock(now: Date, pid: number = process.pid): LockOutcome {
+    return this.ingestLock.acquire(now, pid);
+  }
+
+  releaseIngestLock(pid: number = process.pid): void {
+    this.ingestLock.release(pid);
+  }
+
   // ---- entities -------------------------------------------------------------
 
   /**
@@ -172,8 +215,24 @@ export class MemoryStore {
     return row?.id ?? null;
   }
 
+  /**
+   * Looked up by name **alone** — `kind` is not passed to `findEntity` here,
+   * on purpose. It used to be, and the fork it caused was silent: `kind` is a
+   * per-mention guess from the extractor, not a stable identity property, so
+   * the same person extracted once as `person` and once as `thing` (a plural
+   * pronoun, an ambiguous sentence, anything that nudges the model's guess)
+   * produced two entities instead of one. Fact dedup and the judge are both
+   * scoped to a single `subjectId` and never look across entities, so the two
+   * forks did not just duplicate the entity — they duplicated every fact
+   * recorded against it, with no judge call, because each fork's fact history
+   * started empty. The kind recorded here is therefore the first one seen; a
+   * later mention that guesses differently still resolves to the same row and
+   * does not overwrite it. `findEntity`'s own docstring already describes
+   * exact-name matching as the fast path — this was the one caller not taking
+   * it.
+   */
   upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {
-    const existing = this.findEntity(tenantId, name, kind);
+    const existing = this.findEntity(tenantId, name);
     if (existing !== null) return existing;
     const info = this.db
       .prepare(`INSERT INTO entities (tenant_id, kind, name, recorded_at) VALUES (?, ?, ?, ?)`)
@@ -318,6 +377,46 @@ export class MemoryStore {
          ORDER BY length(name) LIMIT ?`,
       )
       .all(tenantId, `%${name.trim()}%`, limit) as { id: number; name: string; kind: string }[];
+  }
+
+  // ---- review -----------------------------------------------------------------
+
+  /**
+   * Durable home for the judge's `review` verdict and any error the pipeline
+   * could not act on — both used to go only to `process.stderr` from
+   * `cli/memory.ts`, which is fine for a human running the command by hand and
+   * loses everything the moment the caller is a scheduler instead.
+   *
+   * Append-only, like the rest of the store: no resolution state. Reading it
+   * back is `pendingReview`.
+   */
+  recordReview(input: ReviewItemInput): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO memory_review (tenant_id, kind, subject, predicate, existing_fact_id,
+                                     incoming_fact_id, detail, created_at)
+         VALUES (@tenantId, @kind, @subject, @predicate, @existingFactId, @incomingFactId, @detail, @createdAt)`,
+      )
+      .run({
+        ...input,
+        subject: input.subject ?? null,
+        predicate: input.predicate ?? null,
+        existingFactId: input.existingFactId ?? null,
+        incomingFactId: input.incomingFactId ?? null,
+      });
+    return Number(info.lastInsertRowid);
+  }
+
+  /** Everything recorded for this tenant, most recent first. */
+  pendingReview(tenantId: string, limit = 50): ReviewItem[] {
+    return this.db
+      .prepare(
+        `SELECT id, tenant_id AS tenantId, kind, subject, predicate,
+                existing_fact_id AS existingFactId, incoming_fact_id AS incomingFactId,
+                detail, created_at AS createdAt
+         FROM memory_review WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(tenantId, limit) as ReviewItem[];
   }
 
   // ---- vault ----------------------------------------------------------------
@@ -499,6 +598,10 @@ export class MemoryStore {
         `SELECT count(*) AS v FROM facts WHERE tenant_id = ? AND expired_at IS NOT NULL`,
         tenantId,
       ),
+      needsReview: one<number>(
+        `SELECT count(*) AS v FROM memory_review WHERE tenant_id = ?`,
+        tenantId,
+      ),
       predicates: one<number>(
         `SELECT count(DISTINCT predicate) AS v FROM facts WHERE tenant_id = ?`,
         tenantId,
@@ -525,6 +628,8 @@ export type MemoryStats = {
   entities: number;
   activeFacts: number;
   retiredFacts: number;
+  /** Judge `review` verdicts plus pipeline errors, durable — see `memory_review`. */
+  needsReview: number;
   predicates: number;
   topPredicates: { predicate: string; n: number }[];
   span: { from_: string | null; to_: string | null };

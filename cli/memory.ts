@@ -172,7 +172,16 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
   const runtime = buildRuntime(home);
   try {
     let rounds = 0;
-    const total = { episodes: 0, facts: 0, superseded: 0, skipped: 0, indexed: 0, review: 0, errors: 0 };
+    const total = {
+      episodes: 0,
+      facts: 0,
+      superseded: 0,
+      skipped: 0,
+      skippedEmpty: 0,
+      indexed: 0,
+      review: 0,
+      errors: 0,
+    };
     for (;;) {
       const report = await ingestPending(
         {
@@ -189,6 +198,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       total.facts += report.factsAdded;
       total.superseded += report.superseded;
       total.skipped += report.skippedAgentOutput;
+      total.skippedEmpty += report.skippedEmpty;
       total.indexed += report.indexed;
       total.review += report.needsReview.length;
       total.errors += report.errors.length;
@@ -197,13 +207,26 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       }
       for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
       rounds += 1;
-      // Nothing left to do, or the caller asked for a bounded run.
-      if (report.episodes === 0 && report.skippedAgentOutput === 0 && report.skippedDocuments === 0) break;
+      // Nothing left to do, or the caller asked for a bounded run. `skippedEmpty`
+      // is in this condition for the same reason the other two skip counts are:
+      // a round that only marked a page of empty-content episodes still made
+      // progress, and stopping here — before checking whether more pending
+      // episodes sit past this round's `limit` — used to be exactly the
+      // "reports success while stuck" shape a scheduler would hit forever.
+      if (
+        report.episodes === 0 &&
+        report.skippedAgentOutput === 0 &&
+        report.skippedDocuments === 0 &&
+        report.skippedEmpty === 0
+      ) {
+        break;
+      }
       if (rounds * 25 >= limit) break;
     }
     process.stdout.write(
       `${total.episodes} episodi estratti · ${total.facts} fatti · ${total.superseded} ritirati · ` +
         `${total.skipped} dell'agente tenuti come evidenza · ${total.indexed} chunk indicizzati` +
+        `${total.skippedEmpty > 0 ? ` · ${total.skippedEmpty} vuoti segnati` : ''}` +
         `${total.review > 0 ? ` · ${total.review} da rivedere` : ''}\n`,
     );
     return total.errors > 0 ? 1 : 0;
@@ -227,6 +250,7 @@ export function cmdMemoryStats(home: string): number {
         `finestra       ${span}`,
         `entità         ${s.entities}`,
         `fatti          ${s.activeFacts} attivi · ${s.retiredFacts} ritirati`,
+        `da rivedere    ${s.needsReview}`,
         `predicati      ${s.predicates} distinti`,
         `indice vett.   ${vectorRows === null ? 'assente' : `${vectorRows} chunk · ${vectorIndexed ?? 0} vettori`}`,
         '',

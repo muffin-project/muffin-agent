@@ -43,6 +43,14 @@ export type IngestReport = {
   skippedAgentOutput: number;
   /** Same, for vault documents: recall yes, beliefs no. */
   skippedDocuments: number;
+  /**
+   * Episodes with no content at all — marked done, nothing to mine. Tracked
+   * separately from the other two skip counts so a caller can tell "nothing
+   * pending" from "a batch of empty rows just got marked": both make
+   * `episodes` read 0, and only this field says whether more work might still
+   * be waiting past the current `limit`.
+   */
+  skippedEmpty: number;
   /** Chunks embedded this run. Zero with an embedder present is worth noticing. */
   indexed: number;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
@@ -55,11 +63,6 @@ export async function ingestPending(
   limit = 20,
 ): Promise<IngestReport> {
   const now = deps.now ?? (() => new Date());
-  const span = deps.tracer.start('muffin.turn', {
-    [ATTR.operationName]: 'memory.ingest',
-    [ATTR.tenant]: tenantId,
-  });
-
   const report: IngestReport = {
     tenantId,
     episodes: 0,
@@ -67,20 +70,46 @@ export async function ingestPending(
     superseded: 0,
     skippedAgentOutput: 0,
     skippedDocuments: 0,
+    skippedEmpty: 0,
     indexed: 0,
     needsReview: [],
     errors: [],
   };
 
+  // One extractor at a time. A hand-typed `muffin memory extract` overlapping
+  // a scheduled tick used to read the same pending set and both extract it —
+  // every episode processed twice, every judge call paid for twice. Refused,
+  // not queued: `ingestPending` always returns a report rather than blocking
+  // on a batch it did not start, and a scheduler's next tick is the retry.
+  // See ingest-lock.ts for why a single lane lock — not a per-episode claim
+  // like the old system's `memory_work_queue` — is the whole mechanism.
+  const claim = deps.store.acquireIngestLock(now());
+  if ('held' in claim) {
+    report.errors.push(`${claim.held} — ${claim.remedy}`);
+    return report;
+  }
+
+  const span = deps.tracer.start('muffin.turn', {
+    [ATTR.operationName]: 'memory.ingest',
+    [ATTR.tenant]: tenantId,
+  });
+
   try {
     const pending = deps.store.pendingEpisodes(tenantId, EXTRACTION_VERSION, limit);
-    const processed: number[] = [];
-    // Marked as done without extraction: they must not come back as pending on
-    // every run, but nothing was mined from them.
-    const processedNonExtractable: number[] = [];
 
     for (const episode of pending) {
-      if (!episode.content) continue;
+      if (!episode.content) {
+        // Marked immediately, unlike the bare `continue` this replaced. An
+        // empty-content episode still satisfies `content IS NOT NULL` in
+        // `pendingEpisodes`, so leaving it unmarked meant it came back on
+        // every future run: if `limit` such rows sat at the head of
+        // `ORDER BY created_at`, the batch made zero progress forever while
+        // still reporting success. Under a scheduler that is an infinite
+        // no-op that looks healthy.
+        report.skippedEmpty += 1;
+        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
+        continue;
+      }
 
       // The agent's own words are evidence of what was said, never a source of
       // facts about the world. Mining them means the system manufactures its own
@@ -89,8 +118,8 @@ export async function ingestPending(
       // In the corpus being migrated, agent output is 68% of the text — this is
       // not a corner case, it is most of it.
       if (episode.role === 'agent') {
-        processedNonExtractable.push(episode.id);
         report.skippedAgentOutput += 1;
+        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
         continue;
       }
 
@@ -100,8 +129,8 @@ export async function ingestPending(
       // reach extraction at all. Something in a note that should become a belief
       // arrives the normal way — the owner says it, with a speaker attached.
       if (episode.kind === 'document') {
-        processedNonExtractable.push(episode.id);
         report.skippedDocuments += 1;
+        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
         continue;
       }
 
@@ -114,7 +143,14 @@ export async function ingestPending(
       });
 
       if (extraction.error) {
-        report.errors.push(`episodio ${episode.id}: ${extraction.error}`);
+        const detail = `episodio ${episode.id}: ${extraction.error}`;
+        report.errors.push(detail);
+        deps.store.recordReview({
+          tenantId,
+          kind: 'error',
+          detail: `estrazione fallita su ${detail}`,
+          createdAt: now().toISOString(),
+        });
         // Not marked as processed: a failed extraction is retried next run
         // rather than silently losing the evidence.
         continue;
@@ -132,12 +168,30 @@ export async function ingestPending(
         if (outcome !== 'skipped') report.factsAdded += 1;
       }
 
-      processed.push(episode.id);
+      // Marked immediately after this episode's facts — and any judge calls
+      // they triggered — are fully written. That is the smallest window the
+      // constraint below allows, and far smaller than "the rest of the batch":
+      // better-sqlite3 12.11.1 rejects an async transaction function
+      // ("Transaction function cannot return a promise"), and this loop awaits
+      // `extractFacts` and `judgeContradiction`, so no `db.transaction()` can
+      // span an episode's extraction and its marker. Marking here, right after
+      // the awaits return, is as close to atomic as that constraint allows.
+      //
+      // What remains: a crash between the last write inside this episode's
+      // `reconcile()` calls and this line replays this ONE episode next run —
+      // never the ones before it, which is what the old end-of-batch marker
+      // risked (up to `limit` episodes, replayed together). Replaying means
+      // re-running extraction and reconcile on it: an exact-repeat fact is
+      // absorbed for free by reconcile's own duplicate check, and a fact whose
+      // wording drifted is a second row plus, if its predicate already has an
+      // active fact, a second judge call — a real cost, never a lost belief.
+      // That asymmetry is decision #2 of the 2026-08-13 research doc:
+      // at-least-once, because losing an extraction is silently invisible and
+      // a spurious duplicate row is not.
+      deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
     }
 
-    deps.store.markExtracted(tenantId, [...processed, ...processedNonExtractable], EXTRACTION_VERSION);
-
-    // After marking, and separately: the backlog is idempotent, so an embedder
+    // After the loop, and separately: the backlog is idempotent, so an embedder
     // that is down costs a retry next run instead of losing the extraction that
     // already succeeded.
     if (deps.vectors) {
@@ -147,9 +201,10 @@ export async function ingestPending(
           report.indexed = await deps.vectors.index(tenantId, backlog, now().toISOString());
         }
       } catch (error) {
-        report.errors.push(
-          `indice vettoriale: ${error instanceof Error ? error.message : String(error)} — il recall resta testuale`,
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        const detail = `indice vettoriale: ${message} — il recall resta testuale`;
+        report.errors.push(detail);
+        deps.store.recordReview({ tenantId, kind: 'error', detail, createdAt: now().toISOString() });
       }
     }
 
@@ -166,6 +221,8 @@ export async function ingestPending(
   } catch (error) {
     span.end({ error });
     throw error;
+  } finally {
+    claim.release();
   }
 }
 
@@ -187,12 +244,6 @@ async function reconcile(
   report: IngestReport,
 ): Promise<'added' | 'skipped'> {
   const existing = deps.store.activeFacts(tenantId, subjectId, fact.predicate);
-
-  // Same thing said twice is not news.
-  const duplicate = existing.find(
-    (f) => (f.objectValue ?? f.objectName ?? '').toLowerCase() === fact.object.toLowerCase(),
-  );
-  if (duplicate) return 'skipped';
 
   const insert = () =>
     deps.store.addFact({
@@ -244,6 +295,25 @@ async function reconcile(
   // the latest. Leaving it as `existing[0]` would have silently made "the most
   // important fact" the supersede candidate the day that ORDER BY changed.
   const candidate = [...existing].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]!;
+
+  // Same thing said twice is not news — but "the same thing" means the
+  // CURRENT belief, i.e. `candidate`, and only that. This used to check every
+  // member of `existing`: with two active facts for one (subject, predicate)
+  // — a legitimately set-valued predicate, or an earlier judge `coexist` call
+  // that should not have let both stand — a new value matching the OLDER,
+  // non-current one returned 'skipped' right here, before the judge ever ran.
+  // That is the failure the research doc names: a correction whose new value
+  // happens to duplicate an existing-but-not-current fact never retired the
+  // fact that actually was current, because the code never reached the
+  // comparison that would have noticed. Matching only `candidate` keeps the
+  // free case free — repeating what is already believed still costs
+  // nothing — while letting a reversion-shaped correction reach the judge
+  // like any other change. Proven in ingest.test.ts: "lets a correction that
+  // repeats an older active value still reach the judge".
+  if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === fact.object.toLowerCase()) {
+    return 'skipped';
+  }
+
   let verdict: JudgeOutcome;
   const judgeSpan = deps.tracer.start(
     'muffin.chat_call',
@@ -277,9 +347,18 @@ async function reconcile(
   // letting it look like one is how "the memory just accumulates" becomes
   // something nobody can explain months later.
   if (verdict.confidence === 0 && verdict.downgraded) {
-    report.errors.push(
-      `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori`,
-    );
+    const detail = `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori`;
+    report.errors.push(detail);
+    deps.store.recordReview({
+      tenantId,
+      kind: 'error',
+      subject: fact.subject,
+      predicate: fact.predicate,
+      existingFactId: candidate.id,
+      incomingFactId: newId,
+      detail,
+      createdAt: now.toISOString(),
+    });
   }
 
   switch (verdict.verdict) {
@@ -298,13 +377,26 @@ async function reconcile(
       report.superseded += 1;
       break;
     case 'review':
-      // Both stay. The owner is told, rather than the system choosing quietly.
+      // Both stay. The owner is told, rather than the system choosing quietly
+      // — and told durably: `recordReview` is what keeps this outcome from
+      // disappearing into a stderr nobody reads once a scheduler, not a human
+      // at a terminal, is what calls `ingestPending`.
       report.needsReview.push({
         subject: fact.subject,
         predicate: fact.predicate,
         existing: candidate.objectValue ?? candidate.objectName ?? '',
         incoming: fact.object,
         why: verdict.reasoning,
+      });
+      deps.store.recordReview({
+        tenantId,
+        kind: 'contradiction',
+        subject: fact.subject,
+        predicate: fact.predicate,
+        existingFactId: candidate.id,
+        incomingFactId: newId,
+        detail: verdict.reasoning,
+        createdAt: now.toISOString(),
       });
       break;
     case 'coexist':
