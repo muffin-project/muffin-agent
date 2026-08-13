@@ -37,6 +37,22 @@ export type RecoveryStrategy =
   /** Prose where a call was needed: a two-option contract, no third shape. */
   | 'strictJson';
 
+/**
+ * What the loop asks the provider for. Two fields, both of them corrections.
+ *
+ * `thinking` was `'allowed' | 'off'` — a permission with no unit, and a wrong
+ * one for every model this file's shipped profiles match. There is nothing to
+ * permit: on the 5-series thinking is **on unless you disable it**, so `'off'`
+ * that sends no field is a declaration the request contradicts, and `'allowed'`
+ * described a budget the API deleted. `'adaptive'` and `'off'` are the two
+ * modes that exist (ADR-0037).
+ *
+ * `sampling` exists because `temperature: 0` was hardcoded in the loop and is a
+ * **400** on Opus 4.7 and later — including `claude-sonnet-5`, which is what
+ * `muffin init` writes on a default install. It is per-model data, so it lives
+ * here for the same reason `thinking` does: never as `if (model === ...)` in
+ * the loop.
+ */
 export type Profile = {
   schemaVersion: 1;
   name: string;
@@ -44,7 +60,12 @@ export type Profile = {
   match: string[];
   maxToolsExposed: number;
   maxToolCallsPerTurn: number;
-  thinking: 'allowed' | 'off';
+  thinking: 'adaptive' | 'off';
+  /**
+   * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
+   * sampling parameter at all, because the model rejects one.
+   */
+  sampling: 'deterministic' | 'model-default';
   recovery: RecoveryStrategy[];
   notes: string;
 };
@@ -57,6 +78,12 @@ export const CONSERVATIVE: Profile = {
   maxToolsExposed: 10,
   maxToolCallsPerTurn: 15,
   thinking: 'off',
+  // Cautious means "what every model before 4.7 accepted", not "what the newest
+  // one wants": an unknown model is far more likely to be a local one that
+  // wanders without temperature 0 than a frontier one that refuses it. A model
+  // that refuses it fails loudly with a 400 naming the parameter, which is the
+  // right kind of wrong for an unrecognised id.
+  sampling: 'deterministic',
   recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
@@ -78,7 +105,14 @@ const ProfileSchema = z.object({
   match: z.array(z.string().min(1)).min(1),
   maxToolsExposed: z.number().int().positive(),
   maxToolCallsPerTurn: z.number().int().positive(),
-  thinking: z.enum(['off', 'allowed']),
+  // No `'allowed'` alias. A third-party profile still saying it is dropped at
+  // the boundary and named in `doctor`, which is the point: the word described
+  // a budget that no longer exists, and keeping it working would keep it true.
+  thinking: z.enum(['off', 'adaptive']),
+  // Defaulted, not required, and the default is what the loop hardcoded before
+  // this field existed — so a profile written against the old schema keeps
+  // exactly the behaviour it had instead of silently acquiring a new one.
+  sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
   recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
   notes: z.string().default(''),
 });

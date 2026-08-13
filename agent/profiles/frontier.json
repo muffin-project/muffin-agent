@@ -9,10 +9,11 @@
   ],
   "maxToolsExposed": 24,
   "maxToolCallsPerTurn": 30,
-  "thinking": "allowed",
+  "thinking": "adaptive",
+  "sampling": "model-default",
   "recovery": [
     "nudge",
     "retryOnce"
   ],
-  "notes": "No crutches beyond a nudge and one retry. If this profile ever needs more, the loop has a bug \u2014 do not paper over it here. Note on retryOnce: at temperature 0 it re-sends a byte-identical request \u2014 it only pays where the failure was non-deterministic (provider-side sampling variance, transient serving glitches). If it never fires usefully, the honest edit is [\"nudge\"], not a bigger cascade."
+  "notes": "No crutches beyond a nudge and one retry. If this profile ever needs more, the loop has a bug — do not paper over it here. thinking=adaptive is what these models already do when asked for nothing, so declaring it changes no spend on the direct Anthropic path; it is here so the declaration matches the request, and so 'off' stays sayable. sampling=model-default because temperature is a 400 on all three Claude globs (Opus 4.7 and later removed it) — which also un-breaks retryOnce: at the model's own temperature a resend is no longer byte-identical, so the step finally does something."
 }
