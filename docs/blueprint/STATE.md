@@ -92,8 +92,9 @@ usabile**. Cinque cose, tutte verificate sul codice:
    *(Chiude anche il "da verificare prima del deploy VPS" in fondo a questo file:
    sotto systemd stdin è `/dev/null` e il REPL uscirebbe subito — il gateway non
    ha readline, quindi la modalità di servizio che mancava adesso esiste.)*
-1. **Il consolidamento non parte mai.** `ingestPending` ha un solo chiamante,
-   `muffin memory extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
+1. 🟡 **Il consolidamento non partiva mai — ora parte, ma solo il primo dei due
+   meccanismi.** `ingestPending` aveva un solo chiamante, `muffin memory
+   extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
    La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
    ⚠️ E servono **due** meccanismi, non uno: il vecchio non consolidava di notte,
    estraeva **a ogni turno in asincrono** e il dream faceva manutenzione sopra.
@@ -117,12 +118,35 @@ usabile**. Cinque cose, tutte verificate sul codice:
    per-batch; due esecuzioni non estraggono più lo stesso insieme (lock di corsia
    su `core/lock/durable.ts`, non copiato); le entità non si biforcano più su
    `kind`; e il verdetto `review` del giudice — l'esito «decida un umano» — ha un
-   registro invece di morire su stderr. **Non è la riga chiusa**: il grilletto non
-   esiste ancora, e serve un post-turn hook che `LoopDeps` non ha.
-   Decisioni prese, con l'evidenza in ricerca: grilletto a **debounce di
-   inattività** con tetto a conteggio (la DoD dice «N episodi non consolidati», ed
-   è l'opzione che il campo sostiene di meno); marcatura **almeno-una-volta**, mai
-   al-più-una-volta. Resta aperta e **è dell'owner** la terza: se il tool
+   registro invece di morire su stderr.
+
+   ✅ **Il primo meccanismo esiste** (`slice/gateway`, 2026-08-13, **ADR-0038**,
+   751 test): **coda d'inattività a fronte discendente** armata dalla fine di ogni
+   turno (`LoopDeps.onTurnEnd`, il post-turn hook che mancava), con **tetto a
+   conteggio** come rete. Le due costanti sono **misurate sul corpus vero**
+   dell'owner (4.107 episodi, marzo→luglio), non prese da un peer: **20 s** perché
+   solo l'1,0% dei messaggi consecutivi dell'owner dista meno di 20 s e perché
+   ancorata alla risposta la coda fa **−26% di chiamate** contro il per-turno del
+   vecchio (che rendeva il 3,4%), mentre a 60 s si supererebbe la mediana di 56 s
+   fra risposta e messaggio dopo — cioè si perderebbe la proprietà che gli 11,8 s
+   compravano; **tetto 12** perché la sequenza più lunga senza pausa nel corpus è
+   7. Nella stessa slice: la **spesa della corsia light entra nel budget** (era
+   zero per `/spend` e per il cap — chiude anche il punto ⚠️ di M5-bis §7 sul
+   `temperature: 0` fuori dai profili), la **cucitura per-tenant è rifiutata con
+   due test** (solo host consolida: `extractFacts` deriva il parlante da `role`),
+   e la corsia **si vede** (`consolidation_runs` in `memory stats` e `doctor`).
+   **Provato eseguendolo**: dal REPL vero, turno → risposta subito → fatto in
+   memoria a **+20,0 s**; dal **gateway senza REPL**, job → estrazione a **+20,0
+   s**. E l'indice vettoriale è passato da vuoto a `5 chunk · 5 vettori, in sync`.
+
+   ⛔ **Metà riga ancora aperta, e va detto**: il **secondo meccanismo — la
+   manutenzione periodica — non è costruito**. Manca il drenaggio di un arretrato
+   più grande di un batch (sotto arretrato la proprietà «prima del messaggio dopo»
+   non tiene, perché `pendingEpisodes` parte dal più vecchio), il dream/
+   compattazione, l'audit dei predicati, e il consumo del registro `review`. Più
+   un limite dichiarato: **`muffin run` headless non consolida** (timer `unref`'d
+   — un comando scriptabile non resta in piedi 20 s dopo aver risposto).
+   Resta aperta e **è dell'owner** la terza decisione: se il tool
    `ricorda` scrive o propone — cancella ADR-0032 §9, e nel vecchio quel percorso
    ha fatto il 9,7% dei fatti **decadendo a zero in quattro mesi**.
 2. ✅ **`thinking` era dichiarato nei profili e mai passato** (nono caso della
@@ -135,10 +159,13 @@ usabile**. Cinque cose, tutte verificate sul codice:
    dalla seconda iterazione di ogni turno con tool il ragionamento del modello era
    perso (e con lui i cache hit che i doc attribuiscono proprio a quei blocchi); e
    `temperature: 0` era cablato nel loop, che su Opus 4.7+ è un 400 dichiarato.
-   ⚠️ **Resta aperto**: `core/memory/{extract,judge,rerank}.ts` cablano
-   `temperature: 0` **fuori** dal sistema dei profili — legale oggi (il light è
-   haiku 4.5), un 400 il giorno che `--light-model` punta a qualcosa 4.7+, e
-   nessuna modifica ai profili può ripararlo.
+   ✅ **Chiuso il 2026-08-13 (ADR-0038)**: `core/memory/{extract,judge,rerank}.ts`
+   cablavano `temperature: 0` **fuori** dal sistema dei profili — legale finché il
+   light è haiku 4.5, un 400 il giorno che `--light-model` punta a qualcosa 4.7+,
+   e nessuna modifica ai profili poteva ripararlo. Rimediato dal confine che il
+   punto 1 doveva costruire comunque per il budget
+   (`agent/providers/light-lane.ts`): la corsia light si costruisce dietro un
+   wrapper che fattura **e** applica il `sampling` del profilo del modello light.
 3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
    dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
 4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la

@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { paths } from '../core/config/config.js';
+import { readConsolidation } from '../core/memory/consolidator.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { recall } from '../core/memory/recall.js';
 import type { FactOrigin } from '../core/memory/schema.js';
@@ -25,7 +26,7 @@ const TENANT = 'host';
 export const MEMORY_USAGE = `usage:
   muffin memory why <fact-id>          l'episodio da cui viene un fatto
   muffin memory search "<query>" [-n N] [--history]
-  muffin memory extract [--limit N]    lancia estrazione + indicizzazione (M5 lo schedula)
+  muffin memory extract [--limit N]    drena l'arretrato a mano (di norma parte da solo)
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
 `;
@@ -160,15 +161,17 @@ export async function cmdMemorySearch(
 }
 
 /**
- * Runs the ingestion job by hand.
+ * Runs the ingestion batch by hand.
  *
- * M5 schedules this; until then it needs a trigger, and having one is not a
- * stopgap — the scheduler will call exactly this function, so whatever the eval
- * exercises here is the code that runs at 3am.
+ * No longer the *only* trigger: ADR-0038 gave the lane a trailing-edge debounce
+ * armed by the end of every turn, so this is the drain, not the pump. It goes
+ * through `runtime.consolidation` rather than calling `ingestPending` directly,
+ * so a hand-typed run and an automatic one cannot diverge — same budget gate,
+ * same lane lock, and the same row in the run log, which is what lets `memory
+ * stats` say "it ran" without asking who started it.
  */
 export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {
   const { buildRuntime } = await import('../agent/runtime.js');
-  const { ingestPending } = await import('../core/memory/ingest.js');
   const runtime = buildRuntime(home);
   try {
     let rounds = 0;
@@ -183,17 +186,15 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       errors: 0,
     };
     for (;;) {
-      const report = await ingestPending(
-        {
-          store: runtime.memory.store,
-          provider: runtime.light.provider,
-          model: runtime.light.model,
-          tracer: runtime.deps.tracer,
-          vectors: runtime.memory.recall.vectors,
-        },
-        TENANT,
-        Math.min(limit, 25),
-      );
+      const outcome = await runtime.consolidation.runNow('manual', Math.min(limit, 25));
+      const report = outcome.report;
+      if (!report) {
+        // Budget refused it, or the batch threw. `Consolidator` has already
+        // said which on stderr and written the row; there is nothing here to
+        // aggregate and nothing gained by looping into the same wall.
+        process.stderr.write(`  ! consolidamento non eseguito (${outcome.run.outcome})\n`);
+        return 1;
+      }
       total.episodes += report.episodes;
       total.facts += report.factsAdded;
       total.superseded += report.superseded;
@@ -253,6 +254,7 @@ export function cmdMemoryStats(home: string): number {
         `da rivedere    ${s.needsReview}`,
         `predicati      ${s.predicates} distinti`,
         `indice vett.   ${vectorRows === null ? 'assente' : `${vectorRows} chunk · ${vectorIndexed ?? 0} vettori`}`,
+        `consolidam.    ${consolidationLine(db)}`,
         '',
         ...s.topPredicates.map((p) => `  ${String(p.n).padStart(4)}  ${p.predicate}`),
       ].join('\n') + '\n',
@@ -261,6 +263,32 @@ export function cmdMemoryStats(home: string): number {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Whether the lane that fills all of the above has ever run, and when.
+ *
+ * Without this line the numbers cannot be read: zero facts is the correct
+ * output of a working lane on a quiet week (the measured yield is one fact per
+ * thirty turns) *and* the output of a lane that never starts, which is exactly
+ * what this install shipped with. Distinguishing them is the whole reason the
+ * run log exists — a lane that runs unattended and says nothing is
+ * indistinguishable from one that does not run.
+ */
+function consolidationLine(db: DatabaseCtor.Database): string {
+  const seen = readConsolidation(db);
+  if (!seen) return `mai — parte da solo a fine turno, o \`muffin memory extract\``;
+  const last = seen.last;
+  const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+  const outcome =
+    last.outcome === 'ran'
+      ? `${last.episodes} episodi · ${last.facts} fatti in ${(last.ms / 1000).toFixed(1)}s`
+      : last.outcome === 'budget'
+        ? 'saltato: budget esaurito'
+        : last.outcome === 'busy'
+          ? "saltato: un'altra estrazione in corso"
+          : 'fallito';
+  return `${when} (${last.trigger}) · ${outcome} — ${seen.runs} run, ${seen.facts} fatti in totale`;
 }
 
 export function cmdMemoryCheck(home: string, json: boolean): number {

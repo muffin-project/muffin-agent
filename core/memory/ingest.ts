@@ -1,4 +1,5 @@
 import type { Provider } from '../../agent/providers/types.js';
+import type { Principal } from '../policy/types.js';
 import type { SpanHandle, Tracer } from '../tracing/types.js';
 import type { VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
@@ -14,9 +15,31 @@ import type { MemoryStore } from './store.js';
  * across tenants for efficiency is how a stranger's claim ends up in the
  * owner's profile, and nothing downstream would notice.
  *
- * Never on the response path: this is a background job (M5 will schedule it,
- * ADR-0022 says where it runs). A turn should never wait for extraction.
+ * Never on the response path: this is a background job. Since ADR-0038 it has a
+ * trigger — `core/memory/consolidator.ts`, a trailing-edge debounce armed by the
+ * end of every turn — and the property that made this sentence worth writing is
+ * now the thing that trigger is built to hold: a turn never waits for
+ * extraction, so the hook that arms the lane may only start a timer.
  */
+
+/**
+ * The lane's own principal, and the first producer a slot in
+ * `core/policy/types.ts` has ever had.
+ *
+ * It lives here, next to the work it names, rather than in `consolidator.ts`
+ * which is its main consumer — that direction keeps the import one-way
+ * (consolidator → ingest) instead of building a cycle around a constant.
+ *
+ * The claim it carries is deliberately narrow, and `consolidator.ts` states it
+ * in full: the kernel never inspects `source`, so this is not a policy branch.
+ * It is what distinguishes the memory lane from a scheduled job in the two
+ * places the owner can look — this span in `muffin trace`, and the `capability`
+ * column behind `/spend`.
+ */
+export const CONSOLIDATION_PRINCIPAL = {
+  kind: 'system',
+  source: 'consolidation',
+} as const satisfies Principal;
 
 export type IngestDeps = {
   store: MemoryStore;
@@ -53,6 +76,15 @@ export type IngestReport = {
   skippedEmpty: number;
   /** Chunks embedded this run. Zero with an embedder present is worth noticing. */
   indexed: number;
+  /**
+   * The lane lock refused: another extraction already held it.
+   *
+   * Structural rather than left for a caller to recognise in `errors[0]`. The
+   * automatic lane has to tell this apart from a failure because they mean
+   * opposite things — this one is the guarantee working — and matching on the
+   * Italian text of a refusal message would make the run log depend on wording.
+   */
+  busy: boolean;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
   errors: string[];
 };
@@ -72,6 +104,7 @@ export async function ingestPending(
     skippedDocuments: 0,
     skippedEmpty: 0,
     indexed: 0,
+    busy: false,
     needsReview: [],
     errors: [],
   };
@@ -85,6 +118,7 @@ export async function ingestPending(
   // like the old system's `memory_work_queue` — is the whole mechanism.
   const claim = deps.store.acquireIngestLock(now());
   if ('held' in claim) {
+    report.busy = true;
     report.errors.push(`${claim.held} — ${claim.remedy}`);
     return report;
   }
@@ -92,6 +126,10 @@ export async function ingestPending(
   const span = deps.tracer.start('muffin.turn', {
     [ATTR.operationName]: 'memory.ingest',
     [ATTR.tenant]: tenantId,
+    // The lane's own principal, so a trace can tell the memory lane's model
+    // calls from a scheduled job's. Before the automatic trigger existed this
+    // value had no producer anywhere in the repo.
+    [ATTR.principalKind]: `${CONSOLIDATION_PRINCIPAL.kind}:${CONSOLIDATION_PRINCIPAL.source}`,
   });
 
   try {

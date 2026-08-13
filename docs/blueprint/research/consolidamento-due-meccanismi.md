@@ -377,3 +377,47 @@ che governerebbe è scattata **due volte in quattro mesi**.
    Add/Update/Skip, e `UpdateMemory` emette un rimpiazzo. Ritirato.
 8. **«Auto Dream» / `/dream` di Claude Code** — descritto in post di community,
    zero conferme ufficiali. Non verificato.
+
+---
+
+## Appendice (2026-08-13) — la condizione di invalidamento è scattata
+
+Il blocco di freschezza in testa dice `invaliderebbe: un post-turn hook che
+compare in LoopDeps`. È successo: **ADR-0038** l'ha costruito. Aggiunto qui in
+coda e non riscrivendo il testo sopra (PRACTICES §13.3: il corpus è append-only).
+
+**Cosa resta vero:** tutto §Parte concettuale e §Parte tecnica. Le decisioni 1 e 2
+sono state implementate nella forma che questa ricerca raccomandava — coda
+d'inattività con tetto a conteggio, marcatura almeno-una-volta. La decisione 3
+resta aperta e dell'owner.
+
+**Cosa la ricerca non poteva dare, e che la costruzione ha misurato.** §Il
+grilletto elenca i valori dei peer e osserva che rispondono a *"la sessione è
+finita"*, ma non offre il numero che sceglie **il nostro**. Quel numero non è nella
+letteratura: è nel corpus dell'owner, e sono tre misure sullo stesso
+`muffin.dev.db` di questo documento (4.107 episodi ⬤):
+
+| misura | valore |
+|---|---|
+| messaggi consecutivi dell'owner a meno di 20 s (n = 1.793) | **1,0%** (3,5% < 30 s · 9,6% < 45 s) |
+| mediana dell'intervallo fra messaggi consecutivi dell'owner | **272 s** |
+| mediana dell'intervallo risposta → messaggio successivo (n = 1.449) | **56 s** |
+| batch a una coda di 20 s ancorata alla risposta | **1.326 per 1.793 turni** (1,35 turni/batch, **−26% di chiamate**) |
+| idem a 30 s · a 60 s | 1.282 (−3,3% in più) · 1.075 (−19%, ma oltre la mediana di 56 s) |
+| turni consecutivi senza una pausa di 20 s: p90 · p99 · max | **2 · 4 · 7** (a 60 s: 3 · 6 · 12) |
+
+Le due righe che decidono: la **mediana di 56 s** è ciò che rende una coda da 60
+minuti — o anche da un minuto — una regressione rispetto agli 11,8 s, perché il
+fatto atterrerebbe *dopo* il messaggio successivo; e il **max = 7** è ciò che fa
+di un tetto a 12 una rete invece di un secondo grilletto.
+
+**Una cosa che questo documento non aveva previsto**: che il tetto a conteggio
+fosse rappresentabile *solo* in memoria. La lettura ovvia — un ticker che guarda
+`stats.pending` — è sbagliata per una ragione che si vede solo scrivendola: un
+episodio che fallisce l'estrazione in modo permanente resta pending, tiene il
+conteggio sopra la soglia e fa scattare la corsia a **ogni** turno, per sempre.
+
+**E una che è più forte del previsto**: §"«I fatti restano a zero» dice meno del
+vero" prevedeva che il grilletto sbloccasse anche l'indice vettoriale. Confermato
+eseguendolo — l'indice della home di prova è passato da vuoto a `5 chunk · 5
+vettori, in sync` senza che nessuno chiamasse `vault reindex`.

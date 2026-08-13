@@ -197,6 +197,30 @@ export type LoopDeps = {
    * line is where a construction site learns both.
    */
   capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
+  /**
+   * The turn ended. **Synchronous, and it must not block.**
+   *
+   * The loop had no way to hand a finished turn to anything, which is why the
+   * memory lane never started: `ingestPending` was correct and had one caller,
+   * a person typing `muffin memory extract`. This is that missing seam, and its
+   * contract is narrow on purpose — it is called from `finish`, microseconds
+   * before the caller writes the reply, so anything that awaits here is
+   * something the owner waits for. The implementation
+   * (`core/memory/consolidator.ts`) arms a timer and returns.
+   *
+   * Deliberately **not** the closure-handed-back shape of
+   * `agent/observe-run.ts`. There the write is withheld until delivery
+   * succeeded, because an episode recorded for a message nobody received is
+   * memory of something that did not happen. Here the episode is written at the
+   * top of this function, before the model is called, so the trigger's input
+   * exists whether or not the reply lands — withholding the notification would
+   * only delay work already owed.
+   *
+   * Fires on every ending, `error` and `aborted` included: the owner's words
+   * were recorded before the model was asked anything, so they are owed
+   * extraction regardless of how the turn went.
+   */
+  onTurnEnd?: ((info: { tenant: TenantId; principal: Principal; stopped: TurnResult['stopped'] }) => void) | undefined;
   now?: () => Date;
 };
 
@@ -571,7 +595,30 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     );
   } catch (error) {
     turn.end({ error });
+    // A turn that threw still recorded the owner's words at the top of this
+    // function, so they are still owed extraction. Announced here as well as in
+    // `finish` because a provider that exhausted its retries never reaches
+    // `finish` at all, and "the memory lane starts only when the model behaves"
+    // is not a property anyone would have chosen.
+    announceEnd('error');
     throw error;
+  }
+
+  /**
+   * Tells the background lane a turn is over, and refuses to let it matter.
+   *
+   * Swallowed rather than propagated: this hook exists to start work *after*
+   * the answer, and a background lane that can turn a good turn into an
+   * exception would be a worse bug than the one it fixes. There is nothing for
+   * the owner to do about it either, which is the test for whether an error
+   * belongs on their screen.
+   */
+  function announceEnd(stopped: TurnResult['stopped']): void {
+    try {
+      deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });
+    } catch {
+      /* a lane that runs after the reply may not take the reply down with it */
+    }
   }
 
   /**
@@ -613,6 +660,10 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
     span.end({ status: stopped === 'error' ? 'error' : 'ok' });
+    // Last thing before the return, so the span is closed and the result is
+    // built: the hook is not allowed to see a half-finished turn, and it is not
+    // allowed to delay this return.
+    announceEnd(stopped);
     return { text, iterations: iters, traceId: span.traceId, stopped, usage: used };
   }
 }
