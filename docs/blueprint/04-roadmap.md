@@ -312,7 +312,64 @@ boot).
 /new /session /spend`), nessun `muffin config`, nessuna dashboard: provider,
 modelli, budget, quiet hours si cambiano **editando JSON a mano**, e quelli nel
 RoT vogliono pure il reseal. L'owner non sa cosa può regolare perché non c'è un
-posto dove chiederlo.
+posto dove chiederlo. → **ADR-0036** (dove passa la linea: sigillato = terminale,
+tutto il resto lo guida Muffin).
+
+✅ **La precondizione bloccante di ADR-0036 è chiusa** (`slice/gateway`,
+2026-08-13, **ADR-0039**, 781 test). Erano **due difetti con la stessa forma** —
+una protezione che nomina un file mentre la cosa protetta vive in un altro — e si
+sono chiusi insieme perché la risposta è la stessa: spostare il confine dov'è il
+dato.
+
+- **Il sigillo proteggeva una copia.** `BudgetEngine` nasceva da `config.budget`,
+  fuori dal manifest, mentre il sigillato `rot/budgets.json` portava gli stessi
+  numeri per duplicazione: comportamento corretto, garanzia inesistente.
+  Trovato da ADR-0028 il 2026-08-10 e lasciato aperto due volte. Ora
+  `core/rot/budgets.ts` è l'unico lettore e **`config.budget` non esiste più**.
+  Provato eseguendo, nelle due direzioni che contano: tetto sigillato a 0 → il
+  turno si ferma a «Budget esaurito» con **0 passaggi**, cioè prima di qualunque
+  chiamata al modello; lo stesso 0 (o un 999999) scritto in `config.json` → non
+  cambia niente. **L'insieme sigillato resta di cinque file**: il manifest
+  dell'owner non è invalidato e `rot verify` esce 0 prima e dopo.
+- **La migrazione era la parte difficile.** `CONFIG_SCHEMA_VERSION` passa a 2, e
+  `loadConfig` — che rifiutava qualunque versione non fosse l'attuale — ora ha
+  una scala di migrazioni **in memoria**: un loader che riscrive il file che gli
+  è stato chiesto di leggere è una corsa fra il gateway e un REPL, e `saveConfig`
+  aggiorna comunque il file alla prima modifica. I numeri vecchi **non** vengono
+  copiati nel file sigillato (sarebbe il buco stesso): la nota li dice, con il
+  comando, nei `bootLines` e come check `config migrata` in `doctor`.
+- **L'agente poteva leggere la chiave dell'owner con un tool dichiarato.**
+  `denyRead` nominava solo `~/.muffin/secrets`, ma `root` è la cwd e ADR-0030
+  *richiede* che sia il repo, dov'è la `.env` con la chiave; `fs.read` è low
+  senza `maxTaint`, quindi tetto 3. Con un solo risultato tier-3 in contesto —
+  fetch-then-act, `03 §2` — `fs_read(".env")` restituiva la chiave in chiaro.
+  Riprodotto: rimessa la `denyRead` di prima, il transcript del modello contiene
+  la chiave due volte. Chiuso da entrambi i lati: la chiave si sposta in
+  `$XDG_CONFIG_HOME/muffin/secrets/` (`muffin secret set --persist`, dir 0700 /
+  file 0600, fuori da `MUFFIN_HOME` **e** dal repo, quindi il loop
+  `uninstall && init` continua a ritrovarla) e `denyRead` copre ora entrambi gli
+  store più la `.env`.
+- **`fs.read` resta a `maxTaint` 3**, esaminato e non stretto per riflesso: lo
+  stesso argomento di `web_search` (a tetto 1 si leggerebbe *un* file per turno
+  dopo una ricerca) più il fatto che la lettura non è la fuga — la gamba egress è
+  gated a parte. La precondizione che lo rende vero è scritta sulla
+  dichiarazione: vale *perché* dentro `root` non c'è nessun segreto raggiungibile.
+- **Trovato mutando, e vale più della slice**: l'invariante «ogni file sigillato
+  ha un lettore vero» accettava un `import` come prova di un uso. Togliere la
+  chiamata a `loadSealedBudgets` da `cli/observe.ts` lasciava il check **verde**,
+  perché il nome era ancora nella riga di import. Stessa forma della cicatrice che
+  quel file già portava (una docstring che valeva come lettore). Ora gli import
+  sono strippati come i commenti, i tre consumatori sono elencati come `indirect`,
+  e c'è il test permanente. Lezione in `docs/lessons.md`.
+
+⛔ **Resta aperto, dalla stessa slice**: `rot verify` **non distingue** «un file
+sigillato è cambiato» (attacco) da «l'insieme sigillato ha cambiato forma» (un
+upgrade che porta un file nuovo) — entrambi arrivano come `files_diverged … 
+(untracked)`. Oggi non ha grilletto, perché ADR-0039 ha scelto apposta la forma
+che *non* tocca l'insieme sigillato; il costo dell'assenza si paga il giorno che
+un upgrade aggiunge davvero un file a `defaults/rot/`, e quel giorno l'owner vede
+un'installazione che sembra manomessa. Va costruito **prima** di quella slice, non
+durante.
 
 **4. Niente resume a grana di turno, e niente retry sul percorso lungo.** L'unico
 asse su cui la ricerca peer ha dato torto a noi (`research/confronto-harness.md`

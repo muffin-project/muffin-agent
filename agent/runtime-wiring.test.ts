@@ -162,6 +162,116 @@ describe('the sealed permission matrix reaches the kernel', () => {
   });
 });
 
+describe('the cap that binds comes from inside the seal', () => {
+  /**
+   * P1: the spend cap is load-bearing, proven the only way that counts — the
+   * sealed file changes the answer and the unsealed copy does not.
+   *
+   * `BudgetEngine` was built from `config.budget`, which the manifest does not
+   * cover, while `rot/budgets.json` carried the same two numbers and the comment
+   * *"the agent cannot raise them itself"*. Identical values meant every
+   * observable behaviour was correct and the guarantee was absent: anything able
+   * to write `~/.muffin/config.json` raised the monthly cap and the root of trust
+   * never noticed (ADR-0028 found it, ADR-0036 made it blocking, ADR-0039 closed
+   * it).
+   *
+   * Asserted through `runTurn` rather than on `runtime.budget`, because the
+   * question is whether the number reaches the thing that stops a turn: the loop
+   * checks `budgetExhausted()` before the first model call, so a cap of zero has
+   * to produce a turn that never speaks to the provider.
+   */
+  function homeWithCaps(sealedMonthly: number, unsealedClaim?: number): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-cap-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const file = join(paths(home).rot, 'budgets.json');
+    const budgets = JSON.parse(readFileSync(file, 'utf8'));
+    budgets.monthlyUsd = sealedMonthly;
+    writeFileSync(file, `${JSON.stringify(budgets, null, 2)}\n`);
+    seal(home, '1', new Date());
+    if (unsealedClaim !== undefined) {
+      // Exactly what an attacker — or a careless conversational config surface —
+      // can do without touching the seal: write one key into config.json. Before
+      // this slice that key *was* the cap.
+      const configFile = paths(home).config;
+      const config = JSON.parse(readFileSync(configFile, 'utf8'));
+      config.budget = { monthlyUsd: unsealedClaim, perTenantDailyUsd: unsealedClaim };
+      writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+    }
+    return home;
+  }
+
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  async function turnOn(home: string, session: string): Promise<{ stopped: string; calls: number }> {
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-cap-ws-')));
+    let calls = 0;
+    const counting: Provider = {
+      kind: 'openai-compat',
+      async chat(): Promise<ChatResult> {
+        calls += 1;
+        return {
+          text: 'ciao', toolCalls: [], stopReason: 'end',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+        };
+      },
+    };
+    const deps: LoopDeps = { ...runtime.deps, provider: counting };
+    const result = await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open(session), text: 'ciao',
+    });
+    runtime.close();
+    return { stopped: result.stopped, calls };
+  }
+
+  it('a cap of zero in the sealed file stops the turn before the model is called', async () => {
+    const { stopped, calls } = await turnOn(homeWithCaps(0), 'cap1');
+    expect(stopped).toBe('budget');
+    expect(calls).toBe(0);
+  });
+
+  it('the same zero written into the unsealed config.json changes nothing', async () => {
+    // The mutation that used to be the exploit, run forwards: the sealed file
+    // says 80, config.json says 0. If `config.budget` were still the source this
+    // turn would stop, and it must not.
+    const { stopped, calls } = await turnOn(homeWithCaps(80, 0), 'cap2');
+    expect(stopped).toBe('answered');
+    expect(calls).toBe(1);
+  });
+
+  it('and raising it in the unsealed copy cannot lift a sealed zero', async () => {
+    // The direction that costs money: the seal says stop, the unsealed copy says
+    // a million. Without this half the test above passes just as well on a build
+    // that reads neither file and hardcodes 80.
+    const { stopped, calls } = await turnOn(homeWithCaps(0, 1_000_000), 'cap3');
+    expect(stopped).toBe('budget');
+    expect(calls).toBe(0);
+  });
+
+  it('a stale budget in a schemaVersion-1 config boots, and says so', () => {
+    // The migration, on the shape the owner's live home actually has. Bricking
+    // it — which is what `loadConfig` did to any version it did not recognise —
+    // would have been a fix worse than the defect: `muffin rot verify` fails,
+    // safe mode denies everything above low risk, and the remedy is a command
+    // nobody has heard of.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-v1-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const configFile = paths(home).config;
+    const config = JSON.parse(readFileSync(configFile, 'utf8'));
+    config.schemaVersion = 1;
+    config.budget = { monthlyUsd: 500, perTenantDailyUsd: 9 };
+    writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-v1-ws-')));
+    // The cap that binds is the sealed one, not the 500 the old file claimed.
+    expect(runtime.budget.status().monthlyCapUsd).toBe(80);
+    // And the owner is told, at boot, that the number they had stopped counting.
+    expect(runtime.bootLines.join('\n')).toContain('monthlyUsd 500');
+    expect(runtime.bootLines.join('\n')).toContain('rot reseal');
+    runtime.close();
+  });
+});
+
 describe('provider caching is wired by endpoint', () => {
   /**
    * The flag exists only if this join exists: `explicitCache` defaulting off

@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { paths } from '../core/config/config.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { paths, writeSecret } from '../core/config/config.js';
 import { seal } from '../core/rot/verify.js';
 import { runInit } from './init.js';
 import { runDoctor, type Check } from './doctor.js';
@@ -19,9 +19,16 @@ import { runDoctor, type Check } from './doctor.js';
 
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-doctor-'));
+  // The persistent secret store defaults to the *real* `~/.config`, so without
+  // this every assertion about which backend answered would depend on whether
+  // the person running the suite has migrated their own key. A test whose result
+  // is a property of the developer's machine is not a test.
+  vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'xdg'));
   runInit({ home: dir, apiKey: 'sk-never-called' });
   return dir;
 }
+
+afterEach(() => vi.unstubAllEnvs());
 
 const check = (dir: string, name: string): Check | undefined =>
   runDoctor(dir).checks.find((c) => c.name === name);
@@ -162,6 +169,71 @@ describe('doctor runs the root-of-trust readers invariant', () => {
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('decorative.json');
     expect(report.exitCode).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor names the spend cap and where it came from', () => {
+  it('says the sealed file, with the numbers', () => {
+    // Same class of invisible fact as the matrix above, and worse in
+    // consequence: `rot/budgets.json` and `config.json` carried identical caps
+    // for months, so nothing anywhere distinguished "the seal holds the cap"
+    // from "the seal holds a copy of the cap".
+    const dir = home();
+    const c = check(dir, 'tetto di spesa');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('rot/budgets.json');
+    expect(c?.detail).toContain('80');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns, with the reason, when the compiled floor is what answered', () => {
+    const dir = home();
+    writeFileSync(join(paths(dir).rot, 'budgets.json'), 'not json at all');
+    const c = check(dir, 'tetto di spesa');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('compilati');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reports a config still carrying the old cap, instead of migrating in silence', () => {
+    const dir = home();
+    const file = paths(dir).config;
+    const config = JSON.parse(readFileSync(file, 'utf8'));
+    config.schemaVersion = 1;
+    config.budget = { monthlyUsd: 500, perTenantDailyUsd: 9 };
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+    const c = check(dir, 'config migrata');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('monthlyUsd 500');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor names which secret store answered', () => {
+  it('names the backend and the path, so a chain is never silent', () => {
+    const dir = home();
+    const c = check(dir, 'api key');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('home');
+    expect(c?.detail).toContain(join(paths(dir).secrets, 'provider_api_key'));
+    // Never the value. The check counts characters precisely so it does not
+    // have to print any of them.
+    expect(c?.detail).not.toContain('sk-never-called');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns when a second copy exists, because the losing one looks identical', () => {
+    // The failure this exists for: an owner migrates the key to the persistent
+    // store, the old copy in the home keeps answering, and every symptom of a
+    // successful migration is present.
+    const dir = home();
+    writeSecret('provider_api_key', 'sk-never-called', dir, 'persistent');
+    const c = check(dir, 'api key');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non viene mai usata');
+    expect(c?.remedy).toBeTruthy();
     rmSync(dir, { recursive: true, force: true });
   });
 });

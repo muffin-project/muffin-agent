@@ -168,6 +168,25 @@ usabile**. Cinque cose, tutte verificate sul codice:
    wrapper che fattura **e** applica il `sampling` del profilo del modello light.
 3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
    dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
+   → **ADR-0036** decide dove passa la linea (sigillato = terminale, il resto lo
+   guida Muffin) e si dà una **precondizione bloccante**: niente superficie di
+   scrittura conversazionale finché il tetto di spesa non è sigillato davvero.
+   ✅ **Precondizione sciolta il 2026-08-13 (ADR-0039)** — e sono due difetti
+   della stessa forma, chiusi insieme. **(a)** `BudgetEngine` nasceva da
+   `config.budget`, **fuori dal manifest**, mentre il sigillato
+   `rot/budgets.json` portava gli stessi numeri per duplicazione: il sigillo
+   proteggeva una copia. Ora `core/rot/budgets.ts` è l'unico lettore,
+   `config.budget` **non esiste più** (`CONFIG_SCHEMA_VERSION` 2, migrazione in
+   memoria — rifiutare la versione vecchia avrebbe murato l'unica installazione
+   che esiste), e **l'insieme sigillato resta di cinque file**, quindi il
+   manifest reale non è invalidato. **(b)** `denyRead` nominava solo
+   `~/.muffin/secrets` mentre ADR-0030 metteva la chiave in una `.env` dentro
+   `root`, e `fs.read` (low, nessun `maxTaint`) ha tetto **3**: con un solo
+   risultato tier-3 in contesto, `fs_read(".env")` restituiva la chiave in
+   chiaro. La chiave si sposta in `$XDG_CONFIG_HOME/muffin/secrets/`
+   (`muffin secret set --persist`), `denyRead` copre entrambi gli store più la
+   `.env`, e il loop `uninstall && init` continua a ritrovarla. **La superficie
+   di scrittura conversazionale si può ora costruire.**
 4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la
    ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
 5. **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider

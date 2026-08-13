@@ -1,7 +1,9 @@
 import DatabaseCtor from 'better-sqlite3';
+import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { loadConfig, paths, readSecret, type Config } from '../core/config/config.js';
+import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { createDecide } from '../core/policy/decide.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
@@ -102,7 +104,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
 
-  const config = loadConfig(home);
+  const configNotes: string[] = [];
+  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
   exporter.pruneOlderThan(config.traces.retentionDays);
 
   // Root of trust before anything reads policy from it: in single-user mode a
@@ -130,10 +133,19 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       ? [`! matrice permessi: valori compilati, non rot/policy.json — ${matrix.note}`]
       : [];
 
+  // The caps come from inside the seal, and this line is the whole point of the
+  // change: they used to come from `config.budget`, a file the manifest does not
+  // cover, so the sealed `budgets.json` was protecting a copy of the numbers
+  // while the ones that bound sat where anything able to write the home could
+  // raise them. Same placement argument as the matrix above — read once at boot,
+  // never per decision.
+  const budgets = loadSealedBudgets(home);
+  const budgetNotes = budgets.notes.map((n) => `! ${n}`);
+
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
-  const budget = new BudgetEngine(db, config.budget);
+  const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
@@ -195,7 +207,31 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   // Writes are scoped to the working directory, and the root of trust is never
   // writable from a tool whatever the scope says.
-  const scope: FsScope = { root: cwd, denyWrite: [p.rot, p.secrets, p.config], denyRead: [p.secrets] };
+  //
+  // `denyRead` names every place a secret can be, which is more than one now.
+  // The list was `[p.secrets]` while ADR-0030 required `cwd` to be the repo —
+  // because that is where the gitignored `.env` with the model key lives — and
+  // `fs.read` is low risk with no `maxTaint`, so its ceiling is
+  // `defaultMaxTaint.low`, which `rot/policy.json` sets to 3. In an owner turn
+  // that had already taken one tier-3 tool result (the fetch-then-act pattern
+  // the threat model calls *"il più comune, e va chiuso"*), `fs_read(".env")`
+  // returned the provider key in plaintext. Not exploitable on the owner's
+  // machine only because no `.env` existed yet — and ADR-0030 is the document
+  // telling them to create one.
+  const secretPaths = [secretDir('home', home), secretDir('persistent', home)];
+  // Named explicitly rather than by a "looks like a secret" heuristic. `.env` is
+  // the one file inside `root` that a decision record instructs the owner to
+  // fill with a key; a pattern over `*.pem`, `id_rsa`, `credentials` and the
+  // rest would deny a moving target and buy the confidence of a complete list
+  // without being one. What makes the key safe is that it no longer has to be
+  // here (`secretDir('persistent')`); this entry is the belt for the owner who
+  // has not moved it yet.
+  const dotenv = join(cwd, '.env');
+  const scope: FsScope = {
+    root: cwd,
+    denyWrite: [p.rot, p.secrets, p.config],
+    denyRead: [...secretPaths, dotenv],
+  };
   const tools: RegisteredTool[] = [
     {
       capability: 'fs.read',
@@ -232,9 +268,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // real containment on this host: absent sandbox → absent tool, declared in
   // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1 is
   // strict mode, the ask-gated escape hatch arrives as its own capability).
+  // Same list as the fs tools above, for the same reason: two deny-lists that
+  // drift are one deny-list plus a hole, and the sandbox is the layer that has
+  // to hold when the kernel is the thing that is wrong.
   const executor = new SandboxExecutor({
     denyWrite: [p.rot, p.secrets, p.config],
-    denyRead: [p.secrets],
+    denyRead: [...secretPaths, dotenv],
   });
   if (executor.status().available) {
     tools.push(makeShellTool(executor, { root: cwd }));
@@ -382,6 +421,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,
       ...matrixNotes,
+      ...budgetNotes,
+      ...configNotes,
     ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);

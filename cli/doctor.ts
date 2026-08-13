@@ -9,7 +9,8 @@ import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
-import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -55,8 +56,9 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
   ok('home', p.home);
 
   let config;
+  const configNotes: string[] = [];
   try {
-    config = loadConfig(home);
+    config = loadConfig(home, (line) => configNotes.push(line));
     // The cache dialect is inferred from the endpoint, and an inference the
     // owner cannot see is one they cannot correct: a miss pays full input
     // price on every turn, silently (ADR-0008 forbids exactly that shape).
@@ -71,6 +73,15 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
     return report(checks);
+  }
+
+  // A migration that ran in memory and said nothing would be the same class of
+  // invisible fact as the cache dialect above: the file on disk still declares a
+  // `budget` that no longer does anything, and the owner has no way to learn
+  // that the number they raised last month stopped binding. Warn, not ok — there
+  // is something for them to do (or decide not to do).
+  for (const note of configNotes) {
+    warn('config migrata', note, 'la riscrittura avviene da sé alla prossima modifica di config.json');
   }
 
   // Which per-model profile `config.models.main` actually resolves to, and
@@ -165,13 +176,52 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     );
   }
 
+  // The caps that bind, and which file they came from. Same shape of invisible
+  // fact as the policy matrix above and worse in consequence: for months the
+  // sealed `budgets.json` and the unsealed `config.json` carried identical
+  // numbers, so nothing anywhere distinguished "the seal is holding the cap"
+  // from "the seal is holding a copy of the cap".
+  const budgets = loadSealedBudgets(home);
+  if (budgets.capsSource === 'sealed') {
+    ok(
+      'tetto di spesa',
+      `rot/budgets.json — ${budgets.caps.monthlyUsd} USD/mese, ${budgets.caps.perTenantDailyUsd} USD/giorno per tenant`,
+    );
+  } else {
+    warn(
+      'tetto di spesa',
+      `valori compilati (${budgets.caps.monthlyUsd}/${budgets.caps.perTenantDailyUsd} USD) — ${budgets.notes.join(' · ')}`,
+      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+    );
+  }
+  if (budgets.quietSource === 'fallback') {
+    warn(
+      'quiet hours',
+      `finestra compilata ${budgets.quietHours.from}-${budgets.quietHours.to} ${budgets.quietHours.timezone} — ${budgets.notes.join(' · ')}`,
+      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+    );
+  }
+
   // Key presence only. A network call costs money and needs an explicit opt-in.
+  // *Which backend answered* is part of the check, not decoration: the read
+  // chain has two links now, and a chain that does not say which one spoke is
+  // how an install that believes it has moved its key keeps reading the old
+  // copy forever. Both locations are named when both exist, because that is the
+  // shadowing case and it is silent from every other angle.
   try {
     const key = readSecret(config.provider.apiKeyRef, home);
+    const where = locateSecretAll(config.provider.apiKeyRef, home);
+    const answered = where[0];
     if (key.length === 0) {
       fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
+    } else if (where.length > 1) {
+      warn(
+        'api key',
+        `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
+        'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
+      );
     } else {
-      ok('api key', `${config.provider.apiKeyRef} present (${key.length} chars, never printed)`);
+      ok('api key', `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`);
     }
   } catch (error) {
     const e = error as ConfigError;
@@ -245,7 +295,10 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         warn(
           'consolidamento',
           `fermo dal ${when}: budget mensile esaurito`,
-          'alza `budget.monthlyUsd` in config.json, o aspetta il mese nuovo',
+          // The cap moved into the seal, so the remedy moved with it: telling the
+          // owner to edit config.json would now send them to a field that no
+          // longer exists.
+          'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
         );
       } else {
         ok(

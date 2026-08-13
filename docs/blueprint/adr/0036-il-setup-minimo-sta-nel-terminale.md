@@ -60,6 +60,8 @@ tetto sia sigillato per davvero** (o `BudgetEngine` legge il file sigillato, o
 «Muffin può regolare i modelli sotto il tetto» è una frase che non descrive
 niente.
 
+> ✅ **Sciolta il 2026-08-13 — ADR-0039.** Vedi l'emendamento in coda.
+
 ## Cosa fa il terminale, in tutto e per tutto
 
 Due cose, e sono le due che un agente non può fare per sé:
@@ -150,3 +152,33 @@ non dice quale comando usare è un vicolo cieco travestito da sicurezza.
 spesso, la linea è nel posto sbagliato: vorrebbe dire che uno dei cinque non è
 una cosa «su cui l'agente non deve essere indulgente con se stesso», ma una
 preferenza finita nel sigillo per abitudine.
+
+---
+
+## Emendamento 2026-08-13 — la precondizione è sciolta, e una frase qui era già falsa (ADR-0039)
+
+**1. Il tetto è sigillato per davvero.** Delle due forme che questa ADR lasciava
+aperte è stata presa la prima: `BudgetEngine` legge `rot/budgets.json`
+(`core/rot/budgets.ts`, unico lettore) e **`config.budget` non esiste più** —
+`CONFIG_SCHEMA_VERSION` passa a 2 con una migrazione in memoria, perché rifiutare
+una versione vecchia avrebbe murato l'unica installazione che esiste. Tenere
+entrambi sarebbe stato lo stesso difetto con un'etichetta di avviso; sigillare
+`config.json` avrebbe reso ogni cambio modello un `rot reseal`, cioè avrebbe
+rotto proprio la frase che questa ADR vuole rendere vera. **L'insieme sigillato
+resta di cinque file**, quindi il manifest dell'owner non è invalidato. Provato
+eseguendo: con il tetto sigillato a 0 il turno si ferma a «Budget esaurito» prima
+di qualunque chiamata al modello, mentre lo stesso 0 scritto in `config.json` non
+cambia niente. Il vincolo che questa ADR impone alla futura superficie di
+scrittura — passa dal kernel, `hostOnly`, non può nominare i cinque sigillati —
+ha ora un tetto vero sotto di sé, e la superficie si può costruire.
+
+**2. La frase sulla chiave era vera del meccanismo e sbagliata sulla sicurezza.**
+Qui sopra c'è scritto che la chiave *«è già risolta e bene»* perché ADR-0030 la fa
+vivere in una `.env` gitignorata della working dir. Il meccanismo funzionava;
+quello che nessuno aveva composto è che la working dir **è** `root` per
+`fs.read`, che a `risk: 'low'` senza `maxTaint` ha tetto 3. In un turno owner già
+tainted a 3, `fs_read(".env")` restituiva la chiave. La chiave si sposta in
+`$XDG_CONFIG_HOME/muffin/secrets/` (`muffin secret set --persist`), e resta vero
+tutto il resto del paragrafo: `muffin init` senza argomenti la ritrova da lì,
+senza re-incollarla. Il punto 1 di «cosa fa il terminale» acquista quindi un
+flag, non un significato nuovo.
