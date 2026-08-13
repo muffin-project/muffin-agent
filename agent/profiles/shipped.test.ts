@@ -110,6 +110,34 @@ describe('shipped profiles', () => {
     expect(problems[0]).toContain('legacy.json');
   });
 
+  it('names the field, not just that something was invalid', () => {
+    // D4 (judge, 2026-08-13): measured on the wire, this message used to be
+    // exactly `profilo frontier.json scartato: Invalid option: expected one
+    // of "off"|"adaptive"` — the zod message on its own, naming neither the
+    // field nor (downstream, before D3/D4's doctor fix) the cost of the drop.
+    // zod's own issue carries the path; the boundary just was not reading it.
+    const problems: string[] = [];
+    const tmp = mkdtempSync(join(tmpdir(), 'muffin-profiles-'));
+    writeFileSync(
+      join(tmp, 'frontier.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        name: 'frontier',
+        match: ['*claude-sonnet-5*'],
+        maxToolsExposed: 24,
+        maxToolCallsPerTurn: 30,
+        thinking: 'allowed', // stale, pre-ADR-0037 vocabulary
+        sampling: 'model-default',
+        recovery: ['nudge', 'retryOnce'],
+        notes: '',
+      }),
+    );
+    loadProfiles(tmp, (line) => problems.push(line));
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('thinking');
+  });
+
   it('the models the owner actually runs select the profiles meant for them', () => {
     // The join between the JSON's glob and the configured model id: a rename on
     // either side breaks selection silently, and selection decides everything
@@ -117,6 +145,27 @@ describe('shipped profiles', () => {
     expect(selectProfile('anthropic/claude-sonnet-5', profiles).name).toBe('frontier');
     expect(selectProfile('qwen/qwen3-max', profiles).name).toBe('consumer-local');
     expect(selectProfile('some-model-nobody-knows', profiles).name).toBe('conservative');
+  });
+
+  it('claude-opus-4-7 and claude-opus-4-8 land on frontier, not the 400 they used to get', () => {
+    // N4 (judge, 2026-08-13): both are real, current, shipped model ids
+    // (verified against the live model list) that reject temperature same as
+    // Opus 5 — before this glob, an owner on either one got CONSERVATIVE,
+    // sampling=deterministic, temperature:0, a 400 on every single turn.
+    expect(selectProfile('claude-opus-4-7', profiles).name).toBe('frontier');
+    expect(selectProfile('claude-opus-4-8', profiles).name).toBe('frontier');
+  });
+
+  it('claude-mythos-5 still falls to conservative — deliberately, not forgotten', () => {
+    // D1: Mythos 5 shares Fable 5's spec, and CONSERVATIVE's thinking:'off'
+    // would 400 it exactly like Fable 5 (always-on thinking, rejects
+    // {type:'disabled'}). Not added to frontier.json's match array anyway:
+    // it is invite-only (Project Glasswing, no self-serve access, read
+    // 2026-08-13), so almost no install can reach it. Pinned here so the day
+    // someone "fixes" this by adding the glob, they find this comment instead
+    // of silently re-deciding it — and re-verify the request shape first, as
+    // frontier.json's own note says.
+    expect(selectProfile('claude-mythos-5', profiles).name).toBe('conservative');
   });
 
   it('a profile with an unknown recovery name is refused at the boundary, out loud', () => {

@@ -255,6 +255,88 @@ perché entrambi i file sono in mano a un'altra slice in corso.
 
 ---
 
+## Correzione (2026-08-13, dal giro di review sullo stesso slice)
+
+Un giro di review lo stesso giorno dell'accettazione ha trovato che due punti
+sopra erano veri del meccanismo e falsi — o incompleti — sulla garanzia.
+Corretti nel codice; scritti qui perché altrimenti la riga sbagliata resta
+quella che sembra più solida (lo stesso principio di `04-roadmap.md` §M5-bis).
+
+**`'off'` non è sayable a tutti i modelli che questa ADR intercetta (D1).** La
+tabella per-modello (Anthropic, *thinking-troubleshooting*, letta 2026-08-13)
+dice che Claude Fable 5 e Claude Mythos 5 hanno il thinking **sempre acceso** e
+rifiutano con 400 sia `{type:"enabled"}` sia `{type:"disabled"}` — non solo il
+budget deprecato. `frontier.json` non manda mai `'off'` (manda `'adaptive'`),
+quindi il difetto non mordeva sul percorso diretto; avrebbe morso se
+`frontier.json` fosse mai stato scartato al confine — esattamente lo scenario
+di D4 sotto — perché allora `claude-fable-5` sarebbe caduto su CONSERVATIVE,
+che manda `'off'`. Aggiunto un terzo valore, `thinking: 'unset'`, che omette
+il campo — l'unica forma provata sicura su ogni modello, perché è quella che
+ogni modello accettava prima che questo campo esistesse. `agent/loop.ts` ora
+la rispetta (spread condizionale, come `sampling`; test in
+`agent/loop.test.ts`). CONSERVATIVE resta `thinking: 'off'` di proposito: un
+id sconosciuto è ancora più probabilmente un modello vecchio o locale — per
+cui `'off'` è sempre stato sicuro — che uno dei due modelli nominati sopra, e
+lo stesso argomento "fallisce forte e nomina il parametro" che regge
+`sampling: 'deterministic'` regge anche qui. `'unset'` esiste per chi scrive
+un profilo che *sa* di puntare a un modello fatto così.
+
+**Una riga che questa ADR non scriveva: Opus 5 accetta `{type:"disabled"}`
+solo a `effort` "high" o meno.** Combinarlo con `effort: "xhigh"` o `"max"` è
+un 400 (stessa tabella, nota 2). Siamo al sicuro *perché* `effort` non viene
+mandato affatto e il default dell'API è `"high"` — ma niente nel codice
+registra l'accoppiamento, e il giorno in cui un profilo aggiungesse
+`output_config: {effort: 'xhigh'}` per qualunque motivo, `'off'` diventerebbe
+un 400 anche su Opus 5.
+
+**`claude-opus-4-7` e `claude-opus-4-8` sono modelli reali e correnti che
+`frontier.json` non intercettava (N4).** Verificato contro l'elenco modelli
+live (`about-claude/models/overview`, letto 2026-08-13): esistono, rifiutano
+`temperature`/`top_p`/`top_k` come Opus 5, e supportano `{type:'adaptive'}`.
+Prima di questa correzione cadevano su CONSERVATIVE → `temperature: 0` → 400
+su ogni turno. Aggiunti ai glob. Effetto collaterale dichiarato, non nascosto:
+a differenza degli altri glob del file, questi due hanno il thinking **spento
+di default** — matcharli qui lo accende, che è esattamente il caso "un
+Anthropic più vecchio dietro un profilo `adaptive`" già previsto sopra in
+Conseguenze punto 1, senza che allora nessun profilo lo facesse ancora. Ora
+uno lo fa, e il costo è nominato nella nota di `frontier.json`.
+
+**`claude-mythos-5` resta fuori dai glob, per scelta e non per dimenticanza.**
+Condivide le specifiche di Fable 5, quindi lo stesso rischio di `'off'` — ma è
+ad accesso ristretto (Project Glasswing, nessuna iscrizione self-serve, letto
+2026-08-13 su `about-claude/models/overview`): quasi nessuna installazione lo
+raggiunge, e dichiarare il suo request shape senza poterlo verificare non vale
+il beneficio per il pubblico a cui questo file è distribuito. La nota di
+`frontier.json` lo dice; se l'accesso diventa pubblico, il request shape va
+riverificato prima di aggiungere il glob, non assunto identico a Fable 5.
+
+**"nominato in `doctor`" (sopra) era falso finché non si è reso vero (D3).**
+`cli/doctor.ts` non importava né `loadProfiles` né un runtime; i problemi
+arrivavano solo a `bootLines` (stderr al boot, via `agent/runtime.ts`), letto
+da REPL, `run` e gateway — mai da `doctor`, che è dove un owner guarda quando
+qualcosa non va. `doctor` ora chiama `loadProfiles` lui stesso, nomina ogni
+problema con il campo colpito (D4: il messaggio di scarto ora include il
+`path` dell'issue zod, non solo il messaggio), dice a quale profilo risolve
+`config.models.main`, e — se un problema è scattato *e* la risoluzione è
+caduta su CONSERVATIVE — nomina il costo della ricaduta (thinking, sampling,
+tool esposti, orizzonte, stampelle), non solo il fatto.
+
+**La regola di sampling per Sonnet 5, ricontrollata (U2).** "Cosa resta non
+misurato" sopra diceva che la regola veniva "dalla tabella di riferimento".
+Verificato: nessuna pagina della guida di migrazione ha una tabella di
+confronto fra modelli con una riga sampling. La regola è testuale quanto
+quella di Opus 4.7+, solo su una pagina diversa — *"What's new in Claude
+Sonnet 5"* §Sampling parameters not accepted, letta 2026-08-13: *"Setting
+`temperature`, `top_p`, or `top_k` to a non-default value returns a 400
+error."* Non era una tabella non misurata; era la pagina sbagliata citata.
+
+`docs/blueprint/04-roadmap.md` §M5-bis punto 2 corretto nella stessa sessione.
+`docs/blueprint/STATE.md:103` ha ancora la stessa frase stantia — fuori dal
+perimetro di questa correzione (file di un'altra slice in corso al momento di
+scrivere), segnalato separatamente.
+
+---
+
 ## Reversibilità
 
 **Alta per la forma della richiesta**, bassa per il tipo.

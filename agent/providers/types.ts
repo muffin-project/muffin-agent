@@ -72,7 +72,18 @@ export type ToolSpec = {
  *
  * `'off'` is `{type:'disabled'}` at the wire, not "send nothing": on a 5-series
  * model sending nothing means thinking is **on**, so the old `'off'` was a
- * declaration the request contradicted.
+ * declaration the request contradicted. Not universal, though: Claude Fable 5
+ * and Claude Mythos 5 have no disable switch at all — thinking is always on
+ * and both `{type:'enabled'}` and `{type:'disabled'}` are a 400 (per-model
+ * table, read 2026-08-13). `Profile.thinking`'s third value, `'unset'`, is for
+ * exactly that model shape: the field omitted, never sent as `'off'`.
+ *
+ * N3 (judge, 2026-08-13): Claude Haiku 4.5 has no honest value in this type at
+ * all — it supports only manual extended thinking (the `budget_tokens` shape
+ * this vocabulary deliberately has no number for) and returns a 400 on
+ * `{type:'adaptive'}`. Do not add it to a profile's `match` list that declares
+ * `thinking: 'adaptive'`. Harmless today only because the light lane — the one
+ * place Haiku 4.5 runs — never consults a profile at all.
  */
 export type ThinkingMode = 'adaptive' | 'off';
 

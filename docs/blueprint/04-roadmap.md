@@ -228,9 +228,24 @@ job notturno produrrebbe un Muffin che ti conosce con 24 ore di ritardo: servono
 → **priorità 1**: senza questo, tutto il lavoro su memoria, importance, origin e
 assenza è inerte.
 
-**2. `thinking` è dichiarato e mai passato.** I profili per-modello hanno
-`thinking: 'off' | 'allowed'`, l'adapter Anthropic sa spedirlo — e il loop non lo
-passa al provider. Nono caso della famiglia "dichiarato e non connesso".
+**2. ~~`thinking` è dichiarato e mai passato~~ — chiuso (ADR-0037, poi la sua
+correzione lo stesso giorno).** Il rimedio scritto qui era sbagliato nella
+direzione: la riga sopra diceva "il loop non lo passa", ma passarlo nella
+forma che allora esisteva (`{type:'enabled', budget_tokens}`) sarebbe stato un
+400 su ogni modello frontier, non un fix — il vero difetto era la *forma*
+della richiesta, e sulla stessa riga del loop c'era un secondo hardcode
+(`temperature: 0`) anch'esso un 400 sull'installazione di default
+(`claude-sonnet-5`). ADR-0037 ha corretto entrambi: `thinking: 'adaptive' |
+'off'` sul wire, `sampling` per-profilo. La correzione trovata nello stesso
+giro di review ha chiuso il seguito: un terzo valore `thinking: 'unset'` per i
+modelli senza uno switch di disabilitazione noto (Claude Fable 5 e Claude
+Mythos 5 rifiutano `{type:'disabled'}` sempre — tabella per-modello, letta
+2026-08-13); `claude-opus-4-7` e `claude-opus-4-8` aggiunti ai glob di
+`frontier.json` (prima cadevano su CONSERVATIVE → `temperature: 0` → 400 ogni
+turno); e `muffin doctor` che ora chiama `loadProfiles` lui stesso e nomina
+sia il profilo scartato sia — quando la risoluzione ricade su CONSERVATIVE —
+cosa costa la ricaduta, cosa che prima raggiungeva solo `bootLines` (stderr al
+boot).
 
 **3. Muffin non è governabile da dentro.** Cinque slash nel REPL (`/exit /help
 /new /session /spend`), nessun `muffin config`, nessuna dashboard: provider,
@@ -259,6 +274,16 @@ autonomo Muffin fa una domanda, l'ha violata. Due forme possibili — una terza
 classe accanto a owner/group (l'asse è stabile per turno, costa una entry di
 cache) oppure una riga nel messaggio (la mossa di Hermes: ciò che varia per turno
 esce dal prompt). Da ADR.
+
+**7. La lane `light` non consulta mai un profilo — quindi nessuna modifica a un
+profilo la può correggere.** `core/memory/extract.ts:157`, `judge.ts:135` e
+`rerank.ts:84` fissano `temperature: 0` fuori dal sistema dei profili, con lo
+stesso hardcode che ADR-0037 ha tolto dal loop principale. Corretto oggi solo
+perché il modello light di default è haiku 4.5, che lo accetta ancora — un 400
+il giorno in cui `--light-model` punta a un 4.7+, perché quella lane non
+guarda `agent/profiles/*` affatto: è un secondo punto d'ingresso al provider,
+non coperto dalla correzione di M1. Trovato durante la review di ADR-0037
+(2026-08-13); i tre file sono di un'altra slice in corso, non toccati qui.
 
 **Dall'inventario vecchio-nuovo** (`research/inventario-vecchio-nuovo.md`, 86
 righe con verdetto: 41% presente, 29% tolto di proposito, 23% manca e serve, 8%

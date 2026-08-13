@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
@@ -31,7 +32,13 @@ export type Check = {
 
 export type DoctorReport = { checks: Check[]; exitCode: 0 | 1 | 2 };
 
-export function runDoctor(home = paths().home, options: { online?: boolean } = {}): DoctorReport {
+export type DoctorOptions = {
+  online?: boolean;
+  /** Test-only: overrides the shipped `agent/profiles/` directory. */
+  profilesDir?: string;
+};
+
+export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
@@ -63,6 +70,42 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
     return report(checks);
+  }
+
+  // Which per-model profile `config.models.main` actually resolves to, and
+  // whether anything was dropped getting there. `profile.ts:109` and
+  // ADR-0037 both say a stale profile is "nominato in `doctor`" — that was
+  // false: the problems only ever reached `bootLines` (stderr at boot, via
+  // `agent/runtime.ts`), which `doctor` neither imported nor ran (D3, judge,
+  // 2026-08-13). `doctor` is where an owner looks when something is wrong,
+  // and a model silently falling back to the conservative floor — fewer
+  // tools, a shorter horizon, every crutch on, possibly a 400 on every turn
+  // (D4) — is exactly that class of thing.
+  const profileProblems: string[] = [];
+  const profiles = loadProfiles(options.profilesDir, (line) => profileProblems.push(line));
+  const resolvedProfile = selectProfile(config.models.main, profiles);
+  if (profileProblems.length === 0) {
+    ok('model profile', `${config.models.main} -> ${resolvedProfile.name}`);
+  } else if (resolvedProfile === CONSERVATIVE) {
+    // D4: a problem fired AND the configured model landed on the floor
+    // profile. Named with the cost, not just the fact — an owner reading
+    // this should not have to go read profile.ts to know what changed.
+    fail(
+      'model profile',
+      `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
+        `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
+        `${resolvedProfile.maxToolsExposed} tool esposti (orizzonte ${resolvedProfile.maxToolCallsPerTurn}), ` +
+        `stampelle [${resolvedProfile.recovery.join(', ')}]`,
+      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+    );
+  } else {
+    // Something is wrong but the model in use was not the one that paid for
+    // it — still worth a line, never a fail: the owner is not degraded today.
+    warn(
+      'model profile',
+      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}"`,
+      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+    );
   }
 
   // Root of trust: integrity, and an honest statement of which guarantee the

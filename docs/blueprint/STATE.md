@@ -125,8 +125,20 @@ usabile**. Cinque cose, tutte verificate sul codice:
    al-più-una-volta. Resta aperta e **è dell'owner** la terza: se il tool
    `ricorda` scrive o propone — cancella ADR-0032 §9, e nel vecchio quel percorso
    ha fatto il 9,7% dei fatti **decadendo a zero in quattro mesi**.
-2. **`thinking` dichiarato nei profili e mai passato al provider** (nono caso della
-   famiglia "dichiarato e non connesso").
+2. ✅ **`thinking` era dichiarato nei profili e mai passato** (nono caso della
+   famiglia). Chiuso il 2026-08-13 (`6d2cd21` + giro di judge), e il rimedio
+   scritto qui era **sbagliato**: passarlo com'era dichiarato avrebbe dato un 400
+   a ogni turno frontier, perché `{type:'enabled', budget_tokens}` è rifiutato da
+   4.7 in poi — cioè esattamente i glob di `frontier.json`. Era una migrazione ad
+   `adaptive`, non un cablaggio. Nella stessa passata sono usciti due difetti
+   peggiori: i **blocchi di thinking venivano buttati via** dall'adapter, quindi
+   dalla seconda iterazione di ogni turno con tool il ragionamento del modello era
+   perso (e con lui i cache hit che i doc attribuiscono proprio a quei blocchi); e
+   `temperature: 0` era cablato nel loop, che su Opus 4.7+ è un 400 dichiarato.
+   ⚠️ **Resta aperto**: `core/memory/{extract,judge,rerank}.ts` cablano
+   `temperature: 0` **fuori** dal sistema dei profili — legale oggi (il light è
+   haiku 4.5), un 400 il giorno che `--light-model` punta a qualcosa 4.7+, e
+   nessuna modifica ai profili può ripararlo.
 3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
    dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
 4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la

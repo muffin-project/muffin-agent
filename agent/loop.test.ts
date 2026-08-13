@@ -841,13 +841,22 @@ describe('the recovery cascade', () => {
  * needs a test and not a code review.
  */
 describe('the loop hands the model its own reasoning back', () => {
-  const THINKING = { type: 'thinking' as const, thinking: 'devo leggere il file', signature: 'sig-abc' };
+  // U1 (judge, 2026-08-13): 20 characters, which used to be this fixture's
+  // whole `thinking` string, makes any truncate-at-N mutation with N>=20 a
+  // no-op against the "byte-identical" assertions below — the mutation would
+  // still pass. Long enough that a truncation has somewhere to bite.
+  const THINKING = {
+    type: 'thinking' as const,
+    thinking:
+      'devo leggere il file di configurazione per capire quale profilo è stato selezionato, poi controllare se il nome del modello combacia con uno dei pattern dichiarati prima di decidere come procedere',
+    signature: 'sig-abc',
+  };
   const REDACTED = { type: 'redacted_thinking' as const, data: 'ENCRYPTED-PAYLOAD' };
 
   /** A tool call that arrived with reasoning in front of it, as the real thing does. */
-  const thinkThenCall = (name: string): ChatResult => ({
+  const thinkThenCall = (name: string, id = 'toolu_1'): ChatResult => ({
     text: 'ci penso',
-    toolCalls: [{ id: 'toolu_1', name, args: {} }],
+    toolCalls: [{ id, name, args: {} }],
     thinking: [THINKING, REDACTED],
     stopReason: 'tool_use',
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -880,6 +889,30 @@ describe('the loop hands the model its own reasoning back', () => {
     expect(types).toEqual(['thinking', 'redacted_thinking', 'text', 'tool_use']);
   });
 
+  it('keeps the head order at every assistant turn, not just the first', async () => {
+    // U1 (judge, 2026-08-13): the test above reads `provider.seen[1]` only,
+    // which exists once per turn — nothing pinned block order past iteration
+    // 1. The judge's mutation (head placement correct on the first assistant
+    // turn, tail thereafter) survived all 702 tests. Two tool-calling
+    // iterations here, checked per-message rather than flattened: flattening
+    // across messages (as the compaction test below already did) can hide a
+    // block sitting in the wrong position *within* one message.
+    const provider = new ScriptedProvider([
+      thinkThenCall('demo_read', 'toolu_1'),
+      thinkThenCall('demo_read', 'toolu_2'),
+      answer('fatto'),
+    ]);
+    const { deps: d, store } = deps([], { provider });
+    await runTurn(d, input(store));
+
+    const third = provider.seen[2]!;
+    const assistantTurns = third.messages.filter((m) => m.role === 'assistant');
+    expect(assistantTurns).toHaveLength(2);
+    for (const turn of assistantTurns) {
+      expect(turn.content.map((b) => b.type)).toEqual(['thinking', 'redacted_thinking', 'text', 'tool_use']);
+    }
+  });
+
   it('sends the profile\'s thinking mode, instead of declaring it and passing nothing', async () => {
     // The defect this closes: every profile carried `thinking`, the adapter knew
     // how to spell it, and no request ever contained it.
@@ -906,6 +939,26 @@ describe('the loop hands the model its own reasoning back', () => {
 
     expect(provider.seen[0]?.temperature).toBe(0);
     expect(provider.seen[0]?.thinking).toBe('off');
+  });
+
+  it("omits thinking entirely for 'unset' — the ADR's own escape hatch, made reachable", async () => {
+    // D2 (judge, 2026-08-13): ADR-0037's reversibility plan says "si spegne
+    // il campo (`thinking` assente resta una forma valida e l'adapter la
+    // supporta già)" — but until 'unset' existed, no profile value made this
+    // line take that branch: `thinking: deps.profile.thinking` ran
+    // unconditionally and `Profile.thinking` had no value that meant
+    // "omit". This is the test that proves the documented remedy is
+    // reachable, not merely described. It also closes D1's own hole: Claude
+    // Fable 5 and Claude Mythos 5 reject `{type:'disabled'}` outright, so
+    // 'off' is not a safe substitute for a profile that targets them.
+    const provider = new ScriptedProvider([answer('ok')]);
+    const { deps: d, store } = deps([], {
+      provider,
+      profile: { ...CONSERVATIVE, thinking: 'unset' },
+    });
+    await runTurn(d, input(store));
+
+    expect(provider.seen[0]).not.toHaveProperty('thinking');
   });
 
   it('survives compaction: clearing a tool result must not touch the reasoning', async () => {
