@@ -67,9 +67,25 @@ export type Notifier = {
   readonly watchdogIntervalMs: number | null;
   /** Startup is finished and the gateway is actually serving. */
   ready(status?: string): void;
-  /** One line describing what it is doing, for `systemctl status`. */
-  status(text: string): void;
-  watchdog(): void;
+  /**
+   * The periodic "I am alive", carrying what it is doing.
+   *
+   * The status rides the ping rather than having a method of its own, and that
+   * is the whole reason `systemctl status` stops showing the boot-time line
+   * forever. There *was* a `status(text)` method here: written, tested twice,
+   * and called by nothing — the repo's signature defect, in the file whose job
+   * is to be reached. Sending it separately would also have cost a second
+   * `systemd-notify` spawn every thirty seconds for a string the ping was
+   * already going to carry.
+   *
+   * The wire format permits it, checked in the documentation rather than
+   * assumed: *"The state parameter should contain a newline-separated list of
+   * variable assignments"*, and `sd_notify(3)`'s own Example 2 sends
+   * `READY=1\nSTATUS=Processing requests...\nMAINPID=%lu` in one call.
+   * `systemd-notify(1)` takes `[VARIABLE=VALUE...]` and sends them as one
+   * status update. Both read 2026-08-13 from man7.org.
+   */
+  watchdog(status?: string): void;
   /** Shutdown has begun — so a drain is not mistaken for a hang. */
   stopping(status?: string): void;
   /** The last transport failure, for a boot line. Null while it is working. */
@@ -117,8 +133,7 @@ export function createNotifier(
     supervised,
     watchdogIntervalMs,
     ready: (status) => send(status === undefined ? 'READY=1' : `READY=1\nSTATUS=${oneLine(status)}`),
-    status: (text) => send(`STATUS=${oneLine(text)}`),
-    watchdog: () => send('WATCHDOG=1'),
+    watchdog: (status) => send(status === undefined ? 'WATCHDOG=1' : `WATCHDOG=1\nSTATUS=${oneLine(status)}`),
     stopping: (status) => send(status === undefined ? 'STOPPING=1' : `STOPPING=1\nSTATUS=${oneLine(status)}`),
     problem: () => failure,
   };

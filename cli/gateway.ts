@@ -10,7 +10,14 @@ import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
-import { planUnit, resolveLauncher, EXIT_PERMANENT, STOP_TIMEOUT_SEC } from '../core/gateway/unit.js';
+import {
+  planUnit,
+  resolveLauncher,
+  EXIT_PERMANENT,
+  LAUNCHD_LABEL,
+  RESTART_SEC,
+  STOP_TIMEOUT_SEC,
+} from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
 import { connectSurfaces } from './surface.js';
 
@@ -45,6 +52,34 @@ export const GATEWAY_USAGE = `usage:
   muffin gateway run            il processo stesso — lo lancia il supervisore,
                                 non tu (vedi \`muffin gateway install\`)
 `;
+
+/**
+ * Where `gateway install` would have put the LaunchAgent — the same path the
+ * planner computes, derived here rather than passed, because `stop` has no plan.
+ * Its existence is the only local evidence that launchd, and not a terminal, is
+ * what will decide whether the gateway comes back.
+ */
+function launchAgentPath(): string {
+  return join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+}
+
+/**
+ * What `stop` still has to admit after it succeeded, or null when nothing.
+ *
+ * On Linux the verb is true end to end: the drain exits `EXIT_STOPPED` and the
+ * unit names that code in `RestartPreventExitStatus`. launchd has no per-code
+ * exemption and the plist must keep `KeepAlive: true` — otherwise the SIGUSR1
+ * drain-restart, which exits 0, would leave the agent down. So on macOS
+ * "fermato" means *this process*, and launchd starts another one.
+ *
+ * A pure function because the branch it guards cannot be reached from the
+ * suite: driving a real `gateway stop` means SIGTERMing the pid on the claim,
+ * and the only pid a fixture can honestly put there is the test runner's.
+ */
+export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {
+  if (platform !== 'darwin' || !agentInstalled) return null;
+  return `! su macOS launchd lo riavvia entro ${RESTART_SEC * 2}s. Per tenerlo giù: \`launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}\`\n`;
+}
 
 /** Read-only view of the gateway, for the three commands that only look. */
 function inspect(home: string): GatewayInfo | null {
@@ -118,6 +153,11 @@ export async function cmdGatewayStop(home: string): Promise<number> {
     await new Promise((r) => setTimeout(r, 200));
     if (!inspect(home)) {
       process.stdout.write(`gateway fermato\n`);
+      // Said at the moment it stops being true, and only when a LaunchAgent is
+      // really installed: a gateway started by hand in a terminal has nothing
+      // watching it, and would get a false alarm.
+      const caveat = stopCaveat(process.platform, existsSync(launchAgentPath()));
+      if (caveat) process.stderr.write(caveat);
       return 0;
     }
   }
@@ -148,6 +188,7 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
     platform: process.platform,
     home,
     exec: launcher.argv,
+    systemdNotify: hasSystemdNotify(),
     // Both passed explicitly rather than defaulted inside the planner. XDG is
     // where systemd genuinely looks for user units when it is set, and having
     // the destination be an argument is what lets a test target a temp home
@@ -197,12 +238,40 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
 }
 
 /**
+ * Is the one binary the whole `Type=notify` unit depends on actually here?
+ *
+ * A PATH walk and not `spawnSync('which')`: `muffin gateway install` should not
+ * fork a shell to answer a question `existsSync` answers, and `which` is not
+ * guaranteed to exist on a minimal container image — the exact kind of host
+ * where `systemd-notify` is missing in the first place.
+ *
+ * Only meaningful on Linux, and only consulted there (`planUnit` routes darwin
+ * to launchd before this reaches anything). The honest limit is written into
+ * the warning the planner emits: this is the PATH of the shell running
+ * `install`, and systemd starts the service with its own.
+ */
+function hasSystemdNotify(): boolean {
+  if (process.platform !== 'linux') return true;
+  const path = process.env['PATH'] ?? '';
+  return path
+    .split(':')
+    .filter((d) => d.length > 0)
+    .some((d) => existsSync(join(d, 'systemd-notify')));
+}
+
+/**
  * What this build can ask a supervisor to execute.
  *
  * `install.sh` links `dist/cli/main.js` into `~/.local/bin`, so the launcher is
  * a symlink *into the checkout*. That is as close to ADR-0035's cure as an
  * ExecStart can get: the unit names the symlink, and re-running `install.sh`
  * after a move re-points it without touching the unit.
+ *
+ * The fallback `entry` is only a real file on the built path. Run under `tsx`
+ * from a source checkout — which is where `muffin init` also offers to install
+ * the unit — `here` is `<checkout>/cli` and `main.js` is not there at all;
+ * `resolveLauncher` checks and says so, because a unit naming a file that does
+ * not exist fails at exec rather than degrading.
  */
 function currentLauncher(): { argv: string[]; warning: string | null } {
   const here = dirname(fileURLToPath(import.meta.url));

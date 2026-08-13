@@ -152,6 +152,51 @@ ed esce. Le parti che valgono più del comando:
   **lo propone** invece di lasciare un comando manuale — direttiva owner: *"non
   lancerò mai quei comandi a mano."*
 
+⚠️ **Correzione (2026-08-13, dal giro di review su `slice/gateway`)**: cinque
+frasi qui sopra erano vere del meccanismo e false della garanzia. Corrette nel
+codice e scritte qui perché la riga sbagliata era quella che sembrava più solida.
+
+- **"Due scheduler non girano mai" era un assoluto, e non lo è.** Il REPL
+  leggeva la rivendicazione **una volta sola, all'avvio**: nell'ordine
+  REPL-prima-gateway-poi (una finestra aperta, poi `gateway install`, oppure
+  systemd che arriva alla unit un attimo dopo la shell) i due ticker
+  convivevano, e nessuno se ne sarebbe accorto. Stesso difetto al risveglio dal
+  sonno del laptop, dove la rivendicazione di un gateway *vivo* si legge scaduta
+  a un REPL aperto in quell'istante. Ora la domanda si rifà **a ogni tick**
+  (`standDown`), in tutte e due le direzioni: il REPL cede e lo dice, e se il
+  gateway muore riprende e lo dice. **La finestra residua, detta onesta**: il
+  controllo si ripete anche subito prima della consegna, quindi per una *consegna
+  doppia* la finestra è sotto il millisecondo; per un'*esecuzione doppia* è
+  lunga quanto un turno, perché due processi possono aver girato lo stesso goal
+  prima che il secondo controllo scatti. Sono soldi, non correttezza, e chiuderla
+  richiederebbe di rivendicare il fire *prima* di eseguirlo — cosa che ADR-0035
+  rifiuta, perché `markRan` unico scrittore di `next_fire_at` è ciò che fa sì che
+  un gateway ucciso non perda lavoro.
+- **`STATUS=` leggibile non era cablato.** Era scritto, testato due volte e
+  chiamato da niente: lo stato vivo finiva solo nella riga SQLite, e
+  `systemctl status` mostrava la riga dell'avvio per tutta la vita del processo.
+  Ora viaggia sul ping del watchdog (`WATCHDOG=1\nSTATUS=…`, un datagram, zero
+  spawn in più).
+- **`gateway stop` non fermava niente.** Il drenaggio usciva 0 e
+  `Restart=always` lo riportava su dopo 5 s — sulla VPS Linux che è la
+  produzione. Su launchd il difetto era speculare: `SuccessfulExit: false`
+  riavviava solo su uscita ≠ 0, quindi il riavvio drenante da SIGUSR1 usciva 0 e
+  l'agente **restava giù**. Ora SIGUSR1 esce 0 e SIGTERM esce 143, che la unit
+  nomina in `RestartPreventExitStatus`; launchd va a `KeepAlive` incondizionato.
+  La proprietà tenuta ferma in tutte e due: **un crash riavvia sempre.**
+- **Il watchdog taceva proprio durante il drenaggio.** `drain` azzerava tutti i
+  timer, incluso il ping, e poi aspettava fino a 60 s contro un `WatchdogSec` di
+  60. Si presumeva che `STOPPING=1` sospendesse il watchdog: presunzione non
+  verificabile qui (non c'è systemd su questa macchina) e non documentata in
+  `sd_notify(3)`. Tolta la dipendenza invece che documentata: il ping vive
+  quanto il drenaggio.
+- **`Type=notify` senza `systemd-notify` sulla macchina non degrada: non
+  parte.** `READY=1` non arriva mai, systemd uccide a `TimeoutStartSec` (90 s) e
+  `Restart=always` ci riprova per sempre senza mai toccare il rate limit (cinque
+  avvii in dieci secondi è impossibile se ognuno dura un minuto e mezzo).
+  `gateway install` su linux ora controlla il PATH e in assenza emette
+  `Type=exec` più l'avviso che il watchdog è spento.
+
 ⛔ **Resta aperto, e sono le cose che il processo ora rende scrivibili**:
 `queue`/`steer` e il concetto di "occupato" (serve il protocollo client/server
 sul socket unix, non costruito); `heartbeat`; `undo`; il **trigger a soglia sul

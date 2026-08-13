@@ -5,7 +5,7 @@ import { JobStore } from '../scheduler/jobs.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { createNotifier } from './notify.js';
 import { GatewayLock, readGateway } from './lock.js';
-import { Gateway, STATUS } from './service.js';
+import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
 
 /**
  * The process, on the two things a process has that a command does not: it
@@ -17,7 +17,14 @@ import { Gateway, STATUS } from './service.js';
  * a mock scheduler would prove that against a mock.
  */
 
-function harness(over: { runJob?: () => Promise<{ stopped: 'answered'; text: string }>; tickMs?: number } = {}) {
+function harness(
+  over: {
+    runJob?: () => Promise<{ stopped: 'answered'; text: string }>;
+    tickMs?: number;
+    /** Pass an array to make it supervised: every datagram lands here. */
+    sent?: string[];
+  } = {},
+) {
   const db = new DatabaseCtor(':memory:');
   /**
    * One clock for this whole world, anchored to the real now and moved by hand.
@@ -51,9 +58,14 @@ function harness(over: { runJob?: () => Promise<{ stopped: 'answered'; text: str
     },
   );
 
+  const sent = over.sent;
   const gateway = new Gateway({
     lock: new GatewayLock(db, () => true),
-    notify: createNotifier({}, () => {}),
+    // Supervised only when the test asked: `WATCHDOG_USEC` of 4 000 µs gives a
+    // 2 ms ping, so a 50 ms drain is dozens of beats rather than a coin flip.
+    notify: sent
+      ? createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p))
+      : createNotifier({}, () => {}),
     scheduler,
     jobs,
     close: () => {
@@ -103,7 +115,7 @@ describe('the gateway owns the scheduler', () => {
     await vi.waitFor(() => expect(h.delivered).toEqual(['fatto']), { timeout: 2000 });
 
     h.signals.emit('SIGTERM');
-    expect(await served).toBe(0);
+    expect(await served).toBe(EXIT_STOPPED);
   });
 
   it('refuses to be the second gateway, and names the pid of the first', async () => {
@@ -143,7 +155,7 @@ describe('the gateway owns the scheduler', () => {
     expect(readGateway(h.db, h.now(), () => true)?.status).not.toBe(STATUS.starting);
 
     h.signals.emit('SIGTERM');
-    expect(await served).toBe(0);
+    expect(await served).toBe(EXIT_STOPPED);
   });
 
   it('says what it is doing, and the idle line names the next fire', async () => {
@@ -183,7 +195,7 @@ describe('a drain does not lose work', () => {
     expect(h.closed()).toBe(0);
 
     release();
-    expect(await served).toBe(0);
+    expect(await served).toBe(EXIT_STOPPED);
     expect(h.closed()).toBe(1);
     expect(h.delivered).toEqual(['fatto']);
   });
@@ -194,6 +206,50 @@ describe('a drain does not lose work', () => {
     h.signals.emit('SIGUSR1');
     expect(await served).toBe(0);
     expect(h.closed()).toBe(1);
+  });
+
+  it('exits 0 on SIGUSR1 and EXIT_STOPPED on SIGTERM — the two verbs, in the code', async () => {
+    // The same drain, two different instructions to the supervisor, and until
+    // this line they were the same instruction. Under `Restart=always` a drained
+    // `muffin gateway stop` came back five seconds later — stop did not stop —
+    // and under launchd's `SuccessfulExit: false` the SIGUSR1 restart exited 0
+    // and stayed down. `unit.test.ts` holds the supervisor half; this is the
+    // process half, and neither is worth anything without the other.
+    const restart = harness();
+    const restarted = restart.gateway.serve();
+    restart.signals.emit('SIGUSR1');
+    expect(await restarted).toBe(0);
+
+    const stop = harness();
+    const stopped = stop.gateway.serve();
+    stop.signals.emit('SIGTERM');
+    expect(await stopped).toBe(EXIT_STOPPED);
+    expect(EXIT_STOPPED).not.toBe(0);
+  });
+
+  it('a SIGUSR1 arriving mid-drain does not turn a stop into a restart', async () => {
+    // The drain is idempotent, so the second signal is absorbed — but the exit
+    // code is what the supervisor reads, and it must be absorbed too. Otherwise
+    // `muffin gateway stop` racing anything that restarts comes back up.
+    const h = harness({ runJob: () => new Promise(() => {}) });
+    dueJob(h);
+    const served = h.gateway.serve();
+    await vi.waitFor(() => expect(h.gateway.scheduler.isRunning()).toBe(true));
+
+    h.signals.emit('SIGTERM');
+    h.signals.emit('SIGUSR1');
+
+    expect(await served).toBe(EXIT_STOPPED);
+  });
+
+  it('says that a second Ctrl-C will not help, and what does', async () => {
+    // Handlers are registered and idempotent, so Ctrl-C twice does nothing for
+    // up to the whole budget while the terminal looks hung. Correct, intended,
+    // and indistinguishable from a wedge unless the way out is in the log.
+    const h = harness();
+    await h.gateway.drain('SIGINT');
+    expect(h.logs.join(' ')).toMatch(/Ctrl-C/);
+    expect(h.logs.join(' ')).toMatch(/kill -9 4242/);
   });
 
   it('starts no further work once the drain has begun', async () => {
@@ -222,7 +278,7 @@ describe('a drain does not lose work', () => {
     await vi.waitFor(() => expect(h.gateway.scheduler.isRunning()).toBe(true));
 
     h.signals.emit('SIGTERM');
-    expect(await served).toBe(0);
+    expect(await served).toBe(EXIT_STOPPED);
     expect(h.closed()).toBe(1);
     expect(h.logs.join(' ')).toMatch(/budget|volo/i);
   });
@@ -274,7 +330,7 @@ describe('supervision hooks', () => {
     // and a gateway that announced ready and then lost the lock would have told
     // systemd a crash-loop was a healthy boot.
     await vi.waitFor(() => expect(sent[0]).toMatch(/^READY=1/));
-    await vi.waitFor(() => expect(sent.filter((p) => p === 'WATCHDOG=1').length).toBeGreaterThan(1), {
+    await vi.waitFor(() => expect(sent.filter((p) => p.startsWith('WATCHDOG=1')).length).toBeGreaterThan(1), {
       timeout: 2000,
     });
 
@@ -282,7 +338,58 @@ describe('supervision hooks', () => {
     await served;
 
     expect(sent.some((p) => p.startsWith('STOPPING=1'))).toBe(true);
-    expect(sent.filter((p) => p === 'WATCHDOG=1').length).toBeGreaterThan(1);
+    expect(sent.filter((p) => p.startsWith('WATCHDOG=1')).length).toBeGreaterThan(1);
+  });
+
+  it('keeps feeding the watchdog for the whole drain', async () => {
+    // `drain` used to clear every timer, this one included, and then wait up to
+    // DRAIN_BUDGET_MS (60 s) against a WatchdogSec of 60 s — so a drain systemd
+    // did not initiate (SIGUSR1, or the SIGTERM `gateway stop` sends straight to
+    // the pid) meant up to 90 s of silence against a 60 s deadline. It was
+    // *presumed* that `STOPPING=1` suspends the watchdog; that presumption
+    // cannot be executed here, and `sd_notify(3)` documents STOPPING=1 without
+    // mentioning the watchdog at all. So the presumption is gone instead.
+    const sent: string[] = [];
+    const h = harness({ sent, runJob: () => new Promise(() => {}) });
+    dueJob(h);
+
+    const served = h.gateway.serve();
+    await vi.waitFor(() => expect(h.gateway.scheduler.isRunning()).toBe(true));
+    h.signals.emit('SIGTERM');
+    await served;
+
+    // Counted from the STOPPING=1 marker, not from a timestamp: what has to be
+    // true is that pings kept arriving *after the drain began*, and with the
+    // old code that slice of the transcript was empty.
+    const from = sent.findIndex((p) => p.startsWith('STOPPING=1'));
+    expect(from).toBeGreaterThanOrEqual(0);
+    const during = sent.slice(from).filter((p) => p.startsWith('WATCHDOG=1'));
+    expect(during.length).toBeGreaterThan(0);
+    // And they say what is happening. Without the draining branch in `state()`
+    // the first ping after STOPPING=1 republishes "in attesa" over it, and a
+    // stop in progress reads from outside as a gateway that just went quiet.
+    expect(during.every((p) => p === `WATCHDOG=1\nSTATUS=${STATUS.draining}`)).toBe(true);
+  });
+
+  it('publishes the live status on the ping, not only into the row', async () => {
+    // `systemctl status` used to show the boot-time line for the life of the
+    // process: the status was computed every tick and written only to SQLite,
+    // and the method that could have sent it had no callers at all.
+    const sent: string[] = [];
+    const h = harness({ sent });
+    h.jobs.add({ cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' });
+    h.gateway.start(h.now());
+
+    // Both timers, as in production: the tick publishes into the row, the beat
+    // publishes to the supervisor. They must say the same thing.
+    h.gateway.tick(h.now());
+    h.gateway.beat(h.now());
+
+    const last = sent.at(-1) ?? '';
+    expect(last.startsWith(`WATCHDOG=1\nSTATUS=${STATUS.idle}`)).toBe(true);
+    // The same string the claim row carries — one vocabulary for one state, or
+    // "is it stuck" stops having an answer depending on where you ask.
+    expect(last).toContain(readGateway(h.db, h.now(), () => true)?.status ?? 'nope');
   });
 
   it('starts, and keeps ticking, with no supervisor at all', async () => {
@@ -293,7 +400,7 @@ describe('supervision hooks', () => {
     const served = h.gateway.serve();
     await vi.waitFor(() => expect(h.delivered).toEqual(['fatto']), { timeout: 2000 });
     h.signals.emit('SIGTERM');
-    expect(await served).toBe(0);
+    expect(await served).toBe(EXIT_STOPPED);
   });
 
   it('removes its signal handlers when it stops', async () => {
