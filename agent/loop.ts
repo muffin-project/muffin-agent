@@ -358,7 +358,17 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         // `undefined` is not the same as an absent field, and the difference is
         // exactly what the newest models reject.
         ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
-        thinking: deps.profile.thinking,
+        // D2 (judge, 2026-08-13): this was `thinking: deps.profile.thinking`
+        // unconditionally, so ADR-0037's own documented escape hatch — "si
+        // spegne il campo (`thinking` assente resta una forma valida e
+        // l'adapter la supporta già)" — was unreachable from any profile:
+        // `Profile.thinking` was a required two-value field and this line
+        // never omitted it. 'unset' is the profile value that reaches the
+        // branch below; spread rather than `thinking: … ? undefined : …` for
+        // the same exactOptionalPropertyTypes reason as `temperature` above —
+        // an explicit `undefined` can still be a key on the wire, an absent
+        // key never is.
+        ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
         stream: false,
         ...(input.signal ? { signal: input.signal } : {}),
       };
