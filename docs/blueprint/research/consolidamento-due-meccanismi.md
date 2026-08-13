@@ -1,16 +1,15 @@
 # Il consolidamento — cosa lo fa partire, come si segna, e chi scrive
 
-**Data**: 2026-08-13 · **Ultima verifica contro il codice**: 2026-08-13 ·
-**Domanda dell'owner**: *"il memory extract dovrebbe essere automatico, non una
-cosa che lanci"* · **Cosa la invaliderebbe**: un cambio di `ingestPending`, un
-post-turn hook che compare in `LoopDeps`, o una misura vera su volume reale (che
-oggi non esiste).
+```
+scritto: 2026-08-13
+verificato: 2026-08-13
+verificato-contro: muffin-agent @ 80950bd · vecchio Muffin @ 09e02db · muffin.dev.db (2.264 item, 2026-04-14 → 2026-07-18)
+modello-strumenti: Opus 5 via Claude Code — repo letti in loco, SQL eseguito sul db vero, peer letti via API GitHub (non le homepage), doc esterni via fetch diretto
+invaliderebbe: un post-turn hook che compare in `LoopDeps`; una riscrittura di `ingestPending`; o la prima esecuzione vera su volume reale, che oggi non esiste
+```
 
-**Metodo**: lettura esaustiva del percorso di scrittura sul repo nuovo; misure
-SQL sul database di produzione del vecchio (`~/dev/Muffin/muffin.dev.db`,
-2.264 item completati, 2026-04-14 → 2026-07-18); survey esterna su fonte
-primaria, con lettura del codice dei peer via API GitHub, non delle loro
-homepage.
+**Domanda dell'owner**: *"il memory extract dovrebbe essere automatico, non una
+cosa che lanci"*. Prima ricerca scritta secondo `PRACTICES.md §13`.
 
 **Come leggere le etichette.** ⬤ **misurato** qui, con il comando che lo produce.
 ◐ **letto sulla fonte primaria** (doc ufficiale, codice del peer). ○ **riportato

@@ -281,3 +281,133 @@ prima cosa che salta quando la slice si allunga. E vale anche — soprattutto �
 per le cose scomode: una DoD non soddisfatta scritta in roadmap vale più di dieci
 righe di codice nuove, perché è l'unica che impedisce di dichiararla chiusa una
 seconda volta.
+
+## 13. Come si scrive una ricerca: due zone, una data, e ciò che non si è stabilito
+
+Direttiva owner, 2026-08-13: *"le ricerche vanno documentate così da non rifarle
+ogni volta, datate così sappiamo quanto sono aggiornate… ci deve essere una parte
+concettuale e una parte tecnica"*, e *"usiamo ASD-STE100 come linguaggio"*.
+
+### 13.1 Le due zone, e perché non si mescolano
+
+Diátaxis obietta all'**interlacciamento**, non alla coabitazione: la spiegazione
+sparsa dentro il riferimento rende il riferimento *"interrupted and obscured by
+digressions"* e non lascia sviluppare la spiegazione. Due zone separate da un
+titolo sopravvivono all'obiezione; un paragrafo che alterna i due registri no.
+
+- **Parte concettuale — italiano.** La domanda, perché conta, il ragionamento, le
+  alternative scartate. Qui vivono i modali e le ipotesi: *"potrebbe fallire
+  se"*, *"andrebbe riaperto quando"*. È il ragionamento dell'owner con se stesso
+  (ADR-0020), e in una lingua non sua rallenta il pensiero.
+- **Parte tecnica — inglese, disciplina STE.** I fatti, i contratti, le tabelle,
+  i `file:riga`, le misure. Nessun modale: se una frase qui ha bisogno di *"could"*
+  o *"should"*, appartiene alla zona di sopra.
+
+Quella separazione **risolve** il conflitto invece di subirlo. La regola 3.4 di
+STE vieta i modali, e per un registro di decisioni sarebbe fatale — il valore di
+un ADR sta quasi tutto nelle cautele che quella regola cancella. Ma i modali
+vivono nella zona italiana, e la zona inglese contiene esattamente il materiale
+descrittivo per cui STE è stato scritto. Il taglio per lingua è anche il taglio
+per registro.
+
+### 13.2 Il sottoinsieme STE che prendiamo, e quello che rifiutiamo
+
+STE nasce per manuali di manutenzione aeronautica letti da non madrelingua sotto
+pressione, mentre eseguono una procedura fisica. Una ricerca è il genere opposto
+su ogni asse, quindi si prende il pezzo giusto e si dice quale.
+
+**Preso** — è la sezione *descrittiva* (6), non quella procedurale (5), e lo dice
+lo standard stesso: 25 parole per frase, non 20; passivo ammesso quando l'agente
+è davvero ignoto (3.6); frase per affermazione; topic sentence in testa, un tema
+per paragrafo, massimo sei frasi (6.4-6.6). Più la disciplina terminologica:
+**un termine, un referente, e non lo si rinomina** (1.3, 1.11).
+
+Quest'ultima non è teoria — l'abbiamo già pagata. `STATE.md` registra che il
+campo si chiama `origin` e non `source_kind` perché `chunks.source_kind` esisteva
+già due file più in là con un altro significato. Quello è il modo di fallire
+della regola 1.11, in codice di produzione, e non dipende dalla lingua.
+
+**Rifiutato**, e con la ragione: la sezione 5 (procedurale — imperativo e 20
+parole, il genere sbagliato); la regola 3.4 (vieta i modali, §13.1); la regola
+3.5 nella parte che vieta la narrazione di processo — *"mentre X stava girando, Y
+è successo"* è esattamente la forma di ogni racconto di una corsa o di un bug, e
+i nostri migliori ne dipendono; il dizionario e le 22 categorie di nomi tecnici,
+calibrati per cataloghi di ricambi con molti autori, sproporzionati per un corpus
+a un autore.
+
+**Vincolo di licenza, e va rispettato.** ASD-STE100 è gratuito da **leggere e
+applicare**, non da **riprodurre**: i diritti di copia sono ristretti a otto
+categorie di enti, e un progetto open-source non è fra quelle. Quindi le regole
+si applicano e si riassumono con parole nostre — come sopra — e **non si incolla
+il dizionario né il testo delle regole dentro il repo**.
+
+Nota di versione: da Issue 9 (2025-01-15) *"technical name"* non esiste più, si
+dice **technical noun**. Chi scrive «technical name» sta citando Issue 8.
+
+### 13.3 Il blocco di freschezza
+
+In testa a ogni ricerca, prima del bottom line:
+
+```
+scritto: AAAA-MM-GG
+verificato: AAAA-MM-GG
+verificato-contro: <sha | versione pacchetto | "solo lettura, non eseguito">
+modello-strumenti: <quale modello, quali strumenti, se il repo è stato clonato ed eseguito>
+invaliderebbe: <il fatto che costringerebbe a riscriverla>
+estende: <file precedente, se continua un'altra ricerca>
+```
+
+Perché ognuno si guadagna il posto:
+
+- **`verificato` è separato da `scritto`** perché un documento si può
+  ri-confermare vero senza riscriverlo. Il default è gratis e meccanico:
+  `git log -1 --format=%ad --date=short -- <file>` — provato su cinque file di
+  `research/`, coincide con la data che ogni file dichiara di suo.
+- **`verificato-contro`** è la risposta concreta a «misurato o letto»: non un
+  aggettivo di fiducia ma *l'ancora* — uno sha, una versione, o l'ammissione
+  esplicita. `a1-inventario-codebase.md` lo fa già informalmente, appuntando
+  l'intero rapporto a un commit.
+- **`invaliderebbe`** costringe a nominare la condizione di falsificazione mentre
+  si scrive, invece di lasciarla indovinare a chi legge fra sei mesi. È l'unico
+  campo che dice *quando* riaprire, non solo *che è vecchia*.
+- **`estende`** risponde alla domanda se serva datare ogni singola affermazione:
+  no, se si segue questa regola. Una scoperta nuova è un file o una sezione
+  nuova che cita la precedente, **mai** una modifica silenziosa in loco. È la
+  regola «non cancellare righe» applicata alla prosa invece che ai dati.
+
+**Escluso di proposito: un campo `confidenza` a livello di documento.** Le due
+tradizioni serie graduano *per affermazione*, mai per rapporto — l'Admiralty Code
+tiene due assi separati (affidabilità della fonte, credibilità
+dell'informazione) e non li fonde mai in un numero; GRADE gradua un corpo di
+evidenza con fattori nominati. L'unica convenzione che mette un bollino unico in
+testa a un documento, l'«epistemic status», ha un modo di fallire documentato:
+diventa decorativo e si scollega dal contenuto. La §8 qui sopra chiede già
+l'etichetta per affermazione — misurato · riportato · folklore — che è la cosa
+più rigorosa, non quella da sostituire.
+
+### 13.4 «Cosa non si è potuto stabilire» è obbligatoria
+
+Non è una scusa in coda: è parte del risultato, ed è la sezione che impedisce a
+chi legge dopo di rifare la stessa ricerca credendo che non fosse stata tentata.
+Il template delle RFC di Rust ha la stessa cosa come sezione obbligatoria
+(*Unresolved questions*), accanto a *Prior art*.
+
+Il corpus ci sta già arrivando da solo: la convenzione è passata da un tag
+inline `[NON DETERMINATO]` (le ricerche di fase A), a sezioni «Aperto» in undici
+file su ventiquattro, fino al titolo esplicito nei due file più recenti e più
+rigorosi. Standardizzare significa finire una traiettoria, non importare una
+regola estranea.
+
+### 13.5 Il retrofit: no, e perché
+
+Le ventiquattro ricerche esistenti **non si riorganizzano**. Il blocco di
+freschezza si può aggiungere a costo quasi zero (`verificato` è la data di git),
+ma rimappare un corpus per-argomento su una struttura per-feature è caro,
+ambiguo — «memoria» è una feature o cinque? — e costringerebbe a riscrivere
+ricerche già citate altrove. È lo stesso motivo per cui non si cancellano righe:
+si applica lo standard da qui in avanti e il corpus resta append-only.
+
+Un doc-feature, quando serve, **indicizza e collega**: racconta la feature e
+punta all'ADR che l'ha decisa e alle ricerche che l'hanno informata, ognuna con
+la sua data. Non ricopia il contenuto — quella sarebbe la doppia scrittura che
+questo repo rifiuta ovunque.
