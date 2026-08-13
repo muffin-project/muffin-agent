@@ -96,6 +96,13 @@ Regole: ogni cartella contiene i *propri* tipi, schema, prompt, test e un README
 - **NON include**: outward autonomo (mail a terzi ecc. — draft-only resta la regola), "iniziativa" senza trigger dichiarato.
 - **Dipendenze**: M1-M2. 
 - **DoD**: "ogni mattina alle 8 fammi il brief della giornata" da chat → job visibile in `muffin jobs`, arriva alle 8 sul canale scelto, sopravvive al riavvio; un trigger a soglia (N episodi non consolidati) fa partire il consolidamento da solo; un tentativo di armare un trigger da contenuto di gruppo viene rifiutato e loggato (test); il costo giornaliero dello scheduler è visibile e sotto il cap.
+  - ⚠️ **Nota (2026-08-13, ADR-0038)**: la clausola sul consolidamento è ora
+    soddisfatta, ma **non nella forma scritta qui**. Il grilletto primario è una
+    coda d'inattività, non una soglia a conteggio: la soglia è la *rete*, ed è
+    l'opzione che l'evidenza esterna sostiene di meno da sola
+    (`research/consolidamento-due-meccanismi.md` §Il grilletto). La riga resta
+    com'era scritta perché non si riscrive la storia; il rimedio vero è in
+    §M5-bis riga 1, dove è anche detto quale metà è ancora aperta.
 - **Config**: quiet hours/budget proattività — RoT default · owner via chat (ratchet: modifica con notify+undo) · default prudenti; canale di consegna default — owner · primo job · chiede.
 
 ### M5-bis — Il divario fra "M0-M5 costruito" e "usabile" *(aperto 2026-08-11, dall'uso mancato)*
@@ -199,10 +206,13 @@ codice e scritte qui perché la riga sbagliata era quella che sembrava più soli
 
 ⛔ **Resta aperto, e sono le cose che il processo ora rende scrivibili**:
 `queue`/`steer` e il concetto di "occupato" (serve il protocollo client/server
-sul socket unix, non costruito); `heartbeat`; `undo`; il **trigger a soglia sul
-consolidamento** (punto 1 qui sotto, tuttora non soddisfatto — il gateway è il
-posto dove va, non è il trigger); la consegna remota su una surface (un job per
-canale remoto emerge ancora nel log invece di arrivare). E un limite dichiarato:
+sul socket unix, non costruito); `heartbeat`; `undo`; ~~il trigger sul
+consolidamento~~ (chiuso il 2026-08-13, ADR-0038 — e la risposta a "il gateway è
+il posto dove va" si è rivelata **no, non solo**: il grilletto vive nel runtime,
+quindi ce l'ha ogni processo che esegue turni, perché darlo al solo gateway
+lascerebbe a zero fatti chi non ha installato la unit); la consegna remota su una
+surface (un job per canale remoto emerge ancora nel log invece di arrivare). E un
+limite dichiarato:
 il `ForegroundGate` del gateway è `ALWAYS_IDLE`, perché senza terminale non c'è
 un foreground — quando un turno di surface saprà dire "l'owner sta parlando", è
 lì che si innesta.
@@ -227,6 +237,57 @@ job notturno produrrebbe un Muffin che ti conosce con 24 ore di ritardo: servono
 **due meccanismi**, l'estrazione per-turno asincrona e la manutenzione periodica.
 → **priorità 1**: senza questo, tutto il lavoro su memoria, importance, origin e
 assenza è inerte.
+
+✅ **Primo meccanismo costruito — l'estrazione per-turno asincrona**
+(`slice/gateway`, 2026-08-13, **ADR-0038**, 751 test). Il grilletto è una **coda
+d'inattività a fronte discendente** armata dalla fine di ogni turno
+(`LoopDeps.onTurnEnd`, che non esisteva), con un **tetto a conteggio** come rete.
+Le due costanti sono misurate sul corpus vero dell'owner (4.107 episodi,
+2026-03-16 → 2026-07-18), non prese da un peer — i valori del campo (15-60 min)
+rispondono a *"la sessione è finita"*, che non è la nostra domanda:
+- **20 s di coda**: l'1,0% dei messaggi consecutivi dell'owner dista meno di 20 s
+  (quindi un turno su cento paga una chiamata in più); ancorata alla risposta, la
+  coda fa scattare **1.326 batch per 1.793 turni = −26% di chiamate** contro il
+  per-turno del vecchio, che rendeva il 3,4%. A 30 s si risparmierebbe un altro
+  3,3% pagando il 50% di latenza; a 60 s si supera la **mediana di 56 s** fra
+  risposta e messaggio successivo, cioè si perde la proprietà che gli 11,8 s del
+  vecchio compravano — il fatto a posto *prima del messaggio dopo*.
+- **tetto 12 turni**: alla coda di 20 s la sequenza più lunga senza pausa nel
+  corpus è **7** (p90 2, p99 4). Dodici è una rete che su quattro mesi di traffico
+  vero non sarebbe mai scattata.
+
+Nella stessa slice, e non come contorno: la **spesa della corsia light entra nel
+budget** (era zero per `/spend`, per il cap mensile e per il ramo
+`budget_exhausted` del kernel — inaccettabile per una corsia che ora gira da
+sola), il che **chiude anche il punto 7 qui sotto**; la **cucitura per-tenant è
+rifiutata esplicitamente e con due test** (solo il tenant host consolida, perché
+`extractFacts` deriva `speakerName` da `role`); `{kind:'system',
+source:'consolidation'}` ha finalmente un produttore e `ProactiveKind =
+'consolidation'` è **cancellato** (il consolidamento non parla, quindi non
+appartiene all'insieme chiuso di ciò che fa parlare per primo); e la corsia si
+**vede** — `consolidation_runs` letta da `muffin memory stats` e `muffin doctor`,
+più una riga al boot, perché zero fatti è anche l'output corretto di una corsia
+sana e il numero che distingue è quello dei run.
+
+**Provato eseguendolo**, due volte e su una home vera: dal REPL, turno →
+risposta consegnata subito → estrazione a **+20,010 s** → `owner lives_in
+Cagliari` in `facts` (batch 321 ms); dal **gateway senza nessun REPL aperto**, un
+job spara → estrazione a **+20,003 s**. E l'indice vettoriale è passato da vuoto a
+`5 chunk · 5 vettori, in sync` — la seconda metà del difetto, quella che la
+ricerca aveva trovato e questa riga non diceva.
+
+⛔ **Resta aperto, ed è metà della riga: il secondo meccanismo, la manutenzione
+periodica.** Non è costruito, e dirlo è il punto — è la quinta volta che una riga
+di questa roadmap rischia di essere dichiarata chiusa a metà. Cosa manca, in
+concreto: drenare un arretrato più grande di un batch (`CONSOLIDATION_BATCH = 20`,
+e `pendingEpisodes` ordina dal più vecchio, quindi sotto arretrato l'episodio
+consolidato **non** è il più recente e la proprietà «prima del messaggio dopo»
+non tiene); il dream/compattazione che il vecchio faceva *sopra* la work_queue;
+l'audit dei predicati; e il consumo del registro `review` del giudice, che oggi
+accumula righe che nessuno guarda. Più un limite dichiarato: **`muffin run`
+headless non consolida** — il timer è `unref`'d perché un comando scriptabile non
+deve restare in piedi venti secondi dopo aver risposto, quindi i suoi episodi
+restano dovuti fino alla prima coda di un processo di lunga vita.
 
 **2. ~~`thinking` è dichiarato e mai passato~~ — chiuso (ADR-0037, poi la sua
 correzione lo stesso giorno).** Il rimedio scritto qui era sbagliato nella
@@ -275,15 +336,20 @@ classe accanto a owner/group (l'asse è stabile per turno, costa una entry di
 cache) oppure una riga nel messaggio (la mossa di Hermes: ciò che varia per turno
 esce dal prompt). Da ADR.
 
-**7. La lane `light` non consulta mai un profilo — quindi nessuna modifica a un
-profilo la può correggere.** `core/memory/extract.ts:157`, `judge.ts:135` e
-`rerank.ts:84` fissano `temperature: 0` fuori dal sistema dei profili, con lo
-stesso hardcode che ADR-0037 ha tolto dal loop principale. Corretto oggi solo
-perché il modello light di default è haiku 4.5, che lo accetta ancora — un 400
-il giorno in cui `--light-model` punta a un 4.7+, perché quella lane non
-guarda `agent/profiles/*` affatto: è un secondo punto d'ingresso al provider,
-non coperto dalla correzione di M1. Trovato durante la review di ADR-0037
-(2026-08-13); i tre file sono di un'altra slice in corso, non toccati qui.
+**7. ~~La lane `light` non consulta mai un profilo~~ — chiuso (ADR-0038).**
+`core/memory/extract.ts:157`, `judge.ts:135` e `rerank.ts:84` fissano
+`temperature: 0` fuori dal sistema dei profili, con lo stesso hardcode che
+ADR-0037 ha tolto dal loop principale: legale solo finché il light di default è
+haiku 4.5, un **400 su ogni consolidamento** il giorno che `--light-model` punta
+a un 4.7+, e nessuna modifica ai profili poteva ripararlo. Chiuso dal confine che
+la riga 1 doveva costruire comunque per il budget
+(`agent/providers/light-lane.ts`): la corsia light si costruisce dietro un
+wrapper che fattura la chiamata **e** applica il `sampling` del profilo risolto
+per il modello light. I tre letterali restano dove sono e continuano a dire ciò
+che dicono — *questo lavoro vuole determinismo* — e il confine è dove quella
+richiesta incontra ciò che il modello accetta. Wrapper e non tre parametri: il
+difetto di questo repo non è una riga sbagliata, è un meccanismo che il quarto
+chiamante non sa di dover raggiungere.
 
 **Dall'inventario vecchio-nuovo** (`research/inventario-vecchio-nuovo.md`, 86
 righe con verdetto: 41% presente, 29% tolto di proposito, 23% manca e serve, 8%

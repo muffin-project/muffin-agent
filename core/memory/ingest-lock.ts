@@ -17,10 +17,16 @@ import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
  * work and a separate "thinker" process dequeuing it, concurrently. That shape
  * does not exist here. ADR-0022 is one OS process for the whole runtime,
  * `ingestPending` already documents itself as running "one tenant at a time,
- * always", and its only two callers — today a hand-typed CLI invocation,
- * after M5 a scheduler tick too — are two *whole-batch* invocations of the
- * same job racing each other, never two workers splitting one batch between
- * them. A lane lock — one row, one holder, the whole job or nothing — covers
+ * always", and its callers — a hand-typed CLI invocation and, since ADR-0038,
+ * the trailing-edge trigger in `consolidator.ts` — are *whole-batch*
+ * invocations of the same job racing each other, never two workers splitting
+ * one batch between them.
+ *
+ * ADR-0035 made that race real rather than hypothetical, and the sentence above
+ * about "one OS process" now needs its caveat: a gateway and a REPL window can
+ * both be up, each with its own consolidator, over one database. This lock is
+ * what makes that safe, and it is the only thing that does — the in-process
+ * guard in `Consolidator.fire` cannot see the other process at all. A lane lock — one row, one holder, the whole job or nothing — covers
  * every collision that can actually happen. Per-episode claiming would add a
  * status column, claim/release semantics on every row and a stale-processing
  * sweep (the old system's `recoverStaleProcessing`) to protect against a race

@@ -8,6 +8,7 @@ import { verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { readConsolidation } from '../core/memory/consolidator.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
 
 /**
@@ -224,6 +225,37 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
       }
     }
+    // Has the memory lane ever run? Third of the same shape, and the one that
+    // was the whole defect: `ingestPending` had a single hand-typed caller, so
+    // an install could sit for weeks with 0 facts and nothing anywhere said
+    // why. Zero facts is also the *correct* state of a working lane on a quiet
+    // week — the measured yield is one fact per thirty turns — so the number
+    // that separates the two is the run count, not the fact count.
+    const consolidation = readConsolidation(db);
+    if (consolidation === null) {
+      warn(
+        'consolidamento',
+        'mai eseguito: gli episodi non diventano fatti e il recall resta solo-keyword',
+        'apri `muffin` (parte da solo a fine turno) oppure `muffin memory extract`',
+      );
+    } else {
+      const last = consolidation.last;
+      const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      if (last.outcome === 'budget') {
+        warn(
+          'consolidamento',
+          `fermo dal ${when}: budget mensile esaurito`,
+          'alza `budget.monthlyUsd` in config.json, o aspetta il mese nuovo',
+        );
+      } else {
+        ok(
+          'consolidamento',
+          `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
+            `${last.facts} fatti · ${consolidation.runs} run in totale`,
+        );
+      }
+    }
+
     // Is anything running? Same shape of invisible fact as the cache dialect
     // and the policy source above: with the scheduler moved out of the REPL
     // (ADR-0035) a home with no gateway schedules *nothing*, and nothing in the

@@ -10,6 +10,7 @@ import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
+import { consolidationBootLine } from '../core/memory/consolidator.js';
 import {
   planUnit,
   resolveLauncher,
@@ -368,6 +369,11 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
+      // Said here too, and not only in the REPL: under a supervisor this line
+      // is the journal entry that proves the memory lane exists in the process
+      // that has no terminal — which is the one that was never going to be
+      // watched.
+      `${consolidationBootLine()}\n` +
       `supervisione: ${notify.supervised ? 'sd_notify attivo' : 'nessun supervisore (NOTIFY_SOCKET assente)'}\n`,
   );
 

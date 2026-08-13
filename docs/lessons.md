@@ -436,6 +436,29 @@ question stops being load-bearing and it does not matter what the answer is.
 finding: `DRAIN_BUDGET_MS` (60 000) ≥ `WATCHDOG_SEC × 1000` (60 000), asserted
 in `unit.test.ts` so neither constant can drift into the gap alone.*
 
+## A guard that survives every mutation is not a guard
+
+The consolidator shipped with two "one batch at a time" checks: one in `notify`
+(a turn arrived while a batch is running) and one in `fire` (the trailing edge
+expired while a batch is running). Both read as obviously correct. Running the
+mutation table for the slice showed that **deleting the first one broke no test
+and, on inspection, changed no outcome** — the second guard caught every path the
+first one covered, and the only difference the first made was to stop mid-batch
+turns from counting toward the ceiling, which is behaviour we did not want.
+
+The interesting part is not that a line was redundant. It is that the redundancy
+was invisible to review and visible to a five-minute mutation run — and that the
+run also found the *reachable* path neither guard had a test for: a hand-typed
+`muffin memory extract` racing an armed trailing edge in the same process. That
+test was written because the mutation survived, not because anyone thought of the
+case.
+
+> **Delete the guard your mutation table cannot kill, then go and test the path
+> it turns out you were actually defending.**
+
+*Found 13 August 2026, building ADR-0038. Seven mutations, one survivor, one
+deletion and one new test.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

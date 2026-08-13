@@ -9,7 +9,7 @@ import { verify } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPrompts } from './context/assemble.js';
-import type { LoopDeps, RegisteredTool } from './loop.js';
+import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -32,6 +32,13 @@ import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { ingestPending } from '../core/memory/ingest.js';
+import {
+  Consolidator,
+  CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_TENANT,
+} from '../core/memory/consolidator.js';
+import { lightLane } from './providers/light-lane.js';
 
 /**
  * Assembly.
@@ -66,6 +73,12 @@ export type Runtime = {
    * le connessioni al DB e le corse"*. One process, one connection.
    */
   db: DatabaseCtor.Database;
+  /**
+   * The memory lane's trigger (ADR-0038). Already wired to `deps.onTurnEnd`;
+   * exposed so a surface can print what it is doing at boot and so `muffin
+   * memory extract` runs the hand-typed batch through the same door.
+   */
+  consolidation: Consolidator;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
   /**
@@ -138,7 +151,31 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         );
 
   const profileProblems: string[] = [];
-  const profile = selectProfile(config.models.main, loadProfiles(undefined, (line) => profileProblems.push(line)));
+  const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
+  const profile = selectProfile(config.models.main, profiles);
+
+  const recordSpend = (entry: SpendEntry): number => {
+    const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+    budget.record({ ...entry, usd });
+    return usd;
+  };
+
+  /**
+   * The light lane, behind the boundary that bills it and makes its requests
+   * legal on the wire.
+   *
+   * The unwrapped `provider` is never handed to extraction, the judge or the
+   * reranker again: those three were a second entry point to the model that the
+   * loop's `recordSpend` and `profile.sampling` did not reach, so the memory
+   * lane spent invisibly and would 400 on any light model from 4.7 onward. See
+   * `agent/providers/light-lane.ts` for why this is a wrapper and not three
+   * parameters.
+   */
+  const light = lightLane(provider, {
+    profile: selectProfile(config.models.light, profiles),
+    record: (entry) =>
+      void recordSpend({ ...entry, tenant: CONSOLIDATION_TENANT, capability: CONSOLIDATION_CAPABILITY }),
+  });
 
   // Memory. The vector half is optional and its absence is reported rather than
   // hidden: an embedder that is not running turns semantic recall into keyword
@@ -153,7 +190,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const recallDeps: RecallDeps = {
     store: memoryStore,
     vectors,
-    reranker: new LlmReranker(provider, config.models.light),
+    reranker: new LlmReranker(light, config.models.light),
   };
 
   // Writes are scoped to the working directory, and the root of trust is never
@@ -305,11 +342,40 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   const closeHooks: Array<() => Promise<void>> = [];
 
+  /**
+   * The thing that makes memory fill itself (ADR-0038).
+   *
+   * Built here and not in the gateway, deliberately: turns happen in whichever
+   * process is running them — the gateway hosts the remote surfaces, a REPL
+   * window hosts the terminal — and a consolidator that only the gateway owned
+   * would leave an owner with no installed unit exactly where they are today,
+   * at zero facts. Two processes cannot double-extract; the durable lane lock
+   * inside `ingestPending` refuses the second.
+   */
+  const consolidation = new Consolidator({
+    db,
+    budgetExhausted: () => budget.exhausted(),
+    ingest: (limit) =>
+      ingestPending(
+        {
+          store: memoryStore,
+          provider: light,
+          model: config.models.light,
+          tracer,
+          ...(vectors ? { vectors } : {}),
+        },
+        CONSOLIDATION_TENANT,
+        limit,
+      ),
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+
   return {
     config,
     budget,
     jobs,
     db,
+    consolidation,
     safeMode,
     bootLines: [
       ...skillScan.problems.map((p) => `! ${p}`),
@@ -324,7 +390,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     onClose: (hook) => {
       closeHooks.push(hook);
     },
-    light: { provider, model: config.models.light },
+    light: { provider: light, model: config.models.light },
     memory: { store: memoryStore, recall: recallDeps },
     deps: {
       provider,
@@ -338,11 +404,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       tracer,
       sessions: new SessionStore(home),
       budgetExhausted: () => budget.exhausted(),
-      recordSpend: (entry) => {
-        const usd = costUsd(entry.model, entry, config.provider.baseUrl);
-        budget.record({ ...entry, usd });
-        return usd;
-      },
+      recordSpend,
+      // The seam the loop never had. It is what turns "a turn ended" into "the
+      // memory lane has work", and without it `ingestPending` keeps the single
+      // hand-typed caller it has had since M2 — which is why an install's facts
+      // stay at zero and recall stays keyword-only for its whole life.
+      onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       // One prompt per tenant class, assembled here and never per turn: the
       // class a turn belongs to is a property of who is speaking, and `runTurn`
       // picks. Built once so each class keeps its own warm cache prefix.
@@ -354,6 +421,13 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
+      // First, and before the database goes: a trailing edge that fires after
+      // `db.close()` writes against a closed handle, which is the shape that
+      // once took the gateway down through an unhandled rejection
+      // (`Scheduler.run`). A batch already in flight is left to finish or die
+      // with the process — its lane lock goes stale on its own, and `markRan`'s
+      // per-episode marker means a killed batch replays one episode, not many.
+      consolidation.stop();
       // Async teardown is best-effort (srt registers its own exit hook, MCP
       // children die with the pipe); the DB close stays synchronous and
       // unconditional.
