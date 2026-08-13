@@ -96,10 +96,35 @@ usabile**. Cinque cose, tutte verificate sul codice:
    `muffin memory extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
    La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
    ⚠️ E servono **due** meccanismi, non uno: il vecchio non consolidava di notte,
-   estraeva **a ogni turno in asincrono** (latenza: minuti) e il dream faceva
-   manutenzione sopra. Un solo job notturno darebbe un Muffin che ti conosce con
-   24h di ritardo. **Priorità 1**: senza, memoria/importance/origin/assenza sono
-   inerti.
+   estraeva **a ogni turno in asincrono** e il dream faceva manutenzione sopra.
+   Un solo job notturno darebbe un Muffin che ti conosce con 24h di ritardo.
+   **Priorità 1**: senza, memoria/importance/origin/assenza sono inerti.
+
+   ⚠️ **Due correzioni dalla ricerca del 2026-08-13**
+   (`research/consolidamento-due-meccanismi.md`, misurate sui dati veri).
+   (a) La latenza del vecchio **non era «minuti»: era 11,8 s di mediana** su
+   2.264 item — la media a 48 s la trascina la coda. A dodici secondi il fatto è
+   a posto *prima del messaggio successivo della stessa conversazione*, che è un
+   prodotto diverso; un meccanismo che atterra a minuti sarebbe una regressione.
+   (b) **«I fatti restano a zero» dice meno del vero**: nessun altro percorso
+   indicizza un episodio, quindi finché non parte **il recall è solo-keyword per
+   tutta la vita dell'installazione** — la metà vettoriale di RRF non ha chi la
+   alimenti. Non manca un livello, ne mancano due.
+
+   ✅ **La fondazione è corretta** (`6ddba7c`, 2026-08-13, 102 test su
+   `core/memory`): l'episodio a contenuto vuoto non resta più dovuto per sempre
+   (bloccava il batch **riportando successo**); il marcatore è per-episodio e non
+   per-batch; due esecuzioni non estraggono più lo stesso insieme (lock di corsia
+   su `core/lock/durable.ts`, non copiato); le entità non si biforcano più su
+   `kind`; e il verdetto `review` del giudice — l'esito «decida un umano» — ha un
+   registro invece di morire su stderr. **Non è la riga chiusa**: il grilletto non
+   esiste ancora, e serve un post-turn hook che `LoopDeps` non ha.
+   Decisioni prese, con l'evidenza in ricerca: grilletto a **debounce di
+   inattività** con tetto a conteggio (la DoD dice «N episodi non consolidati», ed
+   è l'opzione che il campo sostiene di meno); marcatura **almeno-una-volta**, mai
+   al-più-una-volta. Resta aperta e **è dell'owner** la terza: se il tool
+   `ricorda` scrive o propone — cancella ADR-0032 §9, e nel vecchio quel percorso
+   ha fatto il 9,7% dei fatti **decadendo a zero in quattro mesi**.
 2. **`thinking` dichiarato nei profili e mai passato al provider** (nono caso della
    famiglia "dichiarato e non connesso").
 3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
