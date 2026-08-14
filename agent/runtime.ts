@@ -7,7 +7,7 @@ import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { createDecide } from '../core/policy/decide.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
-import { verify } from '../core/rot/verify.js';
+import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPrompts } from './context/assemble.js';
@@ -112,6 +112,27 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // Root of trust before anything reads policy from it: in single-user mode a
   // divergence degrades instead of refusing, but it is never ignored.
   const rot = verify(home, config.rot.mode);
+
+  // `hardened` is checked, never believed. The mode in `config.json` is a
+  // self-report — `init --hardened` wrote the word and created no service user
+  // — and the kernel reads that word to turn a high-risk owner capability from
+  // *ask* into a silent allow. Asking for the stronger mode therefore delivered
+  // a weaker one. The claim now has to hold on this machine, and when it does
+  // not the kernel is told the truth and the owner is told which file gave it
+  // away.
+  const hardening: HardeningCheck =
+    config.rot.mode === 'hardened'
+      ? hardeningHolds(home)
+      : { holds: false, why: 'modalità dichiarata single-user' };
+  const rotNotes: string[] = [];
+  if (config.rot.mode === 'hardened' && !hardening.holds) {
+    rotNotes.push(
+      `! rot: modalità "hardened" dichiarata ma non vera su questa macchina (${hardening.why}) — ` +
+        'tratto il root of trust come single-user: rilevo le manomissioni, non le impedisco, ' +
+        'e le capability ad alto rischio continuano a chiedere',
+    );
+  }
+
   let safeMode: Runtime['safeMode'] = null;
   if (!rot.ok) {
     if (rot.action === 'refuse') {
@@ -376,7 +397,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // most instructive shape this repo produces, because prose that describes
     // the fix reads exactly like prose that documents it.
     budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
-    hardened: config.rot.mode === 'hardened',
+    hardened: hardening.holds,
     egressAllowed: (host) => hostAllowed(host, egress),
     // Safe mode was computed at boot and never reached the kernel, while the
     // CLI told the user "capabilities above low risk are denied". That was the
@@ -435,6 +456,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       ...searchNotes,
       ...matrixNotes,
       ...budgetNotes,
+      ...rotNotes,
       ...configNotes,
     ],
     register: (tool, decl) => {

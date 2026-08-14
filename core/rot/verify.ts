@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 /**
@@ -65,6 +65,65 @@ export function listRotFiles(rotDir: string): string[] {
   };
   walk(rotDir);
   return out;
+}
+
+/** Whether this machine actually delivers what `hardened` claims, and if not, why not. */
+export type HardeningCheck = { holds: true } | { holds: false; why: string };
+
+/**
+ * Is the `hardened` claim true of this process, right now?
+ *
+ * `config.rot.mode` was a **self-report**. `muffin init --hardened` wrote the
+ * string and nothing else — no service user, no chown, no check — and
+ * `agent/runtime.ts` turned that string into `hardened: true`, which
+ * `core/policy/decide.ts` reads to turn a high-risk owner capability from *ask*
+ * into a **silent allow**. So asking for the stronger mode delivered a strictly
+ * weaker one, on any machine, with no feedback: the label bought the permission
+ * that the protection was supposed to pay for. `muffin doctor` even recommended
+ * it, and warned only in the mode that was actually safe.
+ *
+ * The property is not invented here — the docstring at the top of this file
+ * already states it in one line: *"hardened — the RoT is owned by another OS
+ * user; the runtime cannot write it at all. Prevention."* So that is what gets
+ * tested, and `W_OK` is the exact question rather than a proxy for it. Reading
+ * uid and mode bits and reasoning about them would re-derive, less accurately,
+ * what the kernel will answer directly — and would get ACLs, mounts and
+ * `root` all wrong. Running as root fails this check, correctly: root can write
+ * anything, so no file is prevention against root.
+ *
+ * The manifest and the anchor are included deliberately. Prevention that
+ * covered the sealed files but left the manifest writable would let a process
+ * rewrite the hashes rather than the contents, which is the same attack with
+ * one more step.
+ */
+export function hardeningHolds(homeDir: string): HardeningCheck {
+  const rotDir = join(homeDir, 'rot');
+  if (!existsSync(rotDir)) return { holds: false, why: `${rotDir} non esiste` };
+
+  let entries: string[];
+  try {
+    entries = listRotFiles(rotDir);
+  } catch (error) {
+    return { holds: false, why: `non ho potuto elencare ${rotDir}: ${(error as Error).message}` };
+  }
+
+  const guarded = [
+    rotDir,
+    join(homeDir, ANCHOR),
+    join(rotDir, MANIFEST),
+    ...entries.map((f) => join(rotDir, ...f.split('/'))),
+  ];
+
+  for (const path of guarded) {
+    if (!existsSync(path)) continue;
+    try {
+      accessSync(path, constants.W_OK);
+    } catch {
+      continue; // not writable by us: this one holds
+    }
+    return { holds: false, why: `questo processo può scrivere ${relative(homeDir, path) || path}` };
+  }
+  return { holds: true };
 }
 
 export function buildManifest(rotDir: string, rotVersion: string, installedAt: string): RotManifest {
