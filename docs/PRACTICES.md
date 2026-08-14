@@ -156,8 +156,33 @@ below it changes, and every hash in the handoff becomes a pointer nobody can
 have forgotten. Link the PR instead; it survives the rebase. A hash is fine once
 it is on `main`.
 
+One rule about **how big** the block is, and it cost a discovery to learn
+(2026-08-14). The hook's output is capped at 10,000 characters — past that Claude
+Code replaces the whole string with a preview and a path, i.e. exactly the
+pointer this hook exists to avoid — so the hook truncates the block itself and
+says so. It had been doing that for a while: the block had grown to **16,716
+characters against a ~9,870 budget**, and the cut landed a third of the way in.
+Everything past it never reached a session — including the *"File load-bearing —
+LEGGI PRIMA di lavorare"* list, which is the block's own declared cure for not
+having the files.
+
+Nothing was broken. The cap was documented, the truncation marker was printed,
+and no test could have failed. What was missing is the same thing as always:
+**nobody compared the two sides.** So:
+
+- **The block has a budget, and the budget is checked when the block grows.** One
+  command, no ceremony:
+  `node .claude/hooks/inject-state.mjs | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const c=JSON.parse(s).hookSpecificOutput.additionalContext;console.log(c.length, c.includes('troncato')?'TRONCATO':'ok')})"`
+- **What earns a place in the block is what is still open.** A finished item is
+  chronicle: it goes below the horizontal rule, verbatim, where the rest of the
+  chronicle lives. Five closed points were taking 45% of the budget.
+- **The tail is what you lose.** So the load-bearing pointers go *last* only if
+  the block fits; if it ever stops fitting, they are the first thing to protect,
+  not the first thing to drop.
+
 The honest summary: re-grounding is deterministic, flushing is not. Knowing
-which half is which is the point.
+which half is which is the point — and a deterministic mechanism can still
+deliver the wrong two thirds.
 
 ## 8. Converge before you research
 
