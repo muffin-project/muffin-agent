@@ -19,7 +19,9 @@ Refactor da zero di Muffin, prodotto in tre fasi (ricerca parallela → sintesi 
 | **`09-contratti-m0-m1.md`** | **Normativo**: tipi, formati file, numeri del floor, boot, errori, CLI, dipendenze | **Per implementare** |
 | `10-risoluzioni-fase-c.md` | Verdetti sulle 3 critiche ostili + la decisione che resta all'owner | Cosa è cambiato e perché |
 | `adr/0001-0035` | Una decisione per file: contesto, alternative scartate, conseguenze, **reversibilità** | Quando una scelta va rimessa in discussione |
-| `research/a1-a6` | Evidenza grezza con fonte (inventario, prior art, standard, memoria, modelli, sandbox) | Verificare un claim |
+| `research/a1-a6`, `b1-b3` | Evidenza grezza di Fase A/D con fonte (inventario, prior art, standard, memoria, modelli, sandbox; runtime, multimodale, media) | Verificare un claim |
+| `research/` (il resto) | Ricerche nate durante il building, una per domanda: confronto coi peer, inventario vecchio-nuovo, **confronto con la consulenza esterna**, superficie capability, architettura del system prompt, proattività, salienza e fusione, caching per-connector, benchmark, EU AI Act, onboarding, dev-setup | Prima di progettare l'organo di cui parlano |
+| `knowledge/` | Il corpus cognitivo — cosa abbiamo capito noi e perché, con VIVO/SUPERATO in testa a ogni voce | **Prima di progettare un organo cognitivo** (memoria, proattività, specchio, retrieval) |
 | `critique/c1-c3` | Le tre critiche ostili integrali | Vedere cosa è stato attaccato |
 
 ## Precedenza tra documenti
@@ -35,4 +37,13 @@ L'owner ha approvato le assunzioni #1-39 il 2026-08-04. Dopo di allora sono nate
 
 ## Stato
 
-Fase A, B e C completate. Aperto: la decisione rewrite-vs-retrofit-vs-strangler (`10` §4, raccomandazione: strangler), la verifica delle collisioni di namespace per "muffin", la scelta del modello consumer-locale di riferimento via eval interna, e la licenza (owner).
+**Questo paragrafo non è la fonte dello stato: lo è `STATE.md`**, che è anche il
+blocco iniettato a ogni sessione. Qui resta solo la fase di *questo* blueprint —
+Fase A, B, C e D completate — perché è ciò che il documento descrive.
+
+Delle quattro voci che questa sezione elencava come aperte, **tre sono chiuse**
+(strangler scelto in `10` §4 e nell'ordine di costruzione di `04`; namespace
+verificato in ADR-0012 §verifica; licenza **MIT** in ADR-0019) e tenerle qui
+faceva sembrare aperte cose decise. **Una è ancora aperta** e vive in `STATE.md`
+§Aperto: la scelta del modello consumer-locale di riferimento, da rivalutare a
+metà agosto 2026.
