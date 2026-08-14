@@ -39,6 +39,19 @@ describe('budget', () => {
     expect(b.exhausted()).toBe(false);
   });
 
+  it('never applies the daily cap to the owner, however much the owner spends', () => {
+    // The test above passes for a weak reason: `host` had spent nothing. This
+    // is the strong one. Two dollars is roughly fifteen frontier turns, so a
+    // cap written to stop a group echo loop would, applied to `host`, stop the
+    // owner by mid-morning — and the exit criterion for Gate 1 is days of
+    // ordinary use. The owner's ceiling is the monthly cap and nothing else.
+    const b = engine(() => new Date('2026-08-04T10:00:00Z'));
+    b.record(spend('host', 9));
+    expect(b.tenantTodayUsd('host')).toBe(9);
+    expect(b.tenantExhausted('host')).toBe(false);
+    expect(b.exhausted()).toBe(false);
+  });
+
   it('resets the tenant cap the next day and keeps the monthly one', () => {
     let now = new Date('2026-08-04T10:00:00Z');
     const b = engine(() => now);
