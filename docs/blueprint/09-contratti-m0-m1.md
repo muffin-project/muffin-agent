@@ -102,7 +102,13 @@ type ChatResult = {
   "recovery": ["nudge", "retryOnce"], "notes": "profilo neutro: nessuna stampella" }
 ```
 
-`match` = glob sul nome modello, primo match vince, fallback = `profiles/conservative.json` per modelli ignoti. Strategie di recovery ammesse: `nudge` (reinietta l'istruzione di continuare), `reinjectTools` (rilista i tool validi dopo un nome inesistente), `retryOnce`, `strictJson` (forza structured output). **Nessun `providerSwitch` in v1** (richiederebbe un secondo provider configurato: fuori scope, dichiarato).
+`match` = glob sul nome modello, primo match vince, fallback = `profiles/conservative.json` per modelli ignoti. Strategie di recovery ammesse: `nudge` (reinietta l'istruzione di continuare), `reinjectTools` (rilista i tool validi dopo un nome inesistente), `retryOnce`, `strictJson`. **Nessun `providerSwitch` in v1** (richiederebbe un secondo provider configurato: fuori scope, dichiarato).
+
+*(Corretto 2026-08-14, trovato propagando `research/confronto-gemini.md` §13. Due righe di questo paragrafo dicevano più del codice, e questo documento è normativo — quindi la divergenza era una violazione, non una nota.)*
+
+- **`strictJson` non forza structured output**, e non per dimenticanza: `agent/profiles/recovery.ts` lo implementa come **turno correttivo testuale** ("due sole risposte ammesse: una tool call con argomenti JSON validi, oppure una riga che dice che non puoi"). Le ragioni sono nel file e sono due, entrambe di forma. `ChatCall.toolChoice` è `'auto' | 'none'` ed entrambi gli adapter mappano qualunque cosa-non-`'none'` su `'auto'`: `'required'` **degraderebbe in silenzio**, e l'unico posto dove lo useremmo è il modello locale debole, cioè l'endpoint più probabile che ignori il campo. E forzare una chiamata dopo un turno **vuoto** fabbrica un'azione che il modello non ha scelto — la stessa disonestà che `completion.ts` rifiuta quando declina di riscrivere una risposta. Il contratto qui si allinea al codice; se un giorno la forzatura a filo arriva, arriva come campo nuovo, non cambiando cosa significa questa parola.
+- **`structuredOutputMode` non esiste**: non è nel tipo `Profile` né nello schema zod (`agent/profiles/profile.ts:75`), e nessuno dei due profili spediti lo porta. Resta nell'esempio sopra come campo mai costruito — cioè un pezzo di contratto che non ha mai avuto un consumatore, e la riga si legge come se ce l'avesse.
+- **`structuredOutput` sul `ChatCall` (riga 80) non ha consumatori**, ed è l'ultima voce aperta di M1. Quando si cabla, **il primo consumatore non è il loop**: sono `core/memory/extract.ts` e `core/memory/judge.ts`, gli unici due posti dove uno schema è già obbligatorio e dove oggi un JSON malformato si paga come una riga in `report.errors` e un episodio riprovato al giro dopo. Implementarlo altrove prima significherebbe aggiungerlo dove non serve mentre resta assente dove già costa.
 
 ## 3. Il floor: i numeri (E1, E2, K7)
 

@@ -8,57 +8,36 @@
 
 **✅ CONSOLIDATO (2026-08-09, `e034853`, ADR-0031).** Design/blueprint/research/knowledge/STATE/workflow sono TUTTI qui in `muffin-agent` — repo unico (anche per l'open-source: un `git clone` e hai tutto). **Questo file è la fonte autoritativa** (`muffin-agent/docs/blueprint/STATE.md`): edita QUI. Il vecchio repo `~/dev/Muffin` è solo il **vecchio muffin (produzione)** fino al cutover — mai scrivere lì.
 
-**La lista forzata verso "usabile ogni giorno"** (è ciò che *rende* usabile, non una scelta):
-1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag (`muffin-agent@20554dd`).
-2. ✅ **memoria-che-ti-conosce** ([PR #2](https://github.com/GiustoPiedimonte/muffin-agent/pull/2)) — `importance` ordinale 0/1/2 (forced-choice all'estrazione, non un voto: i rater LLM comprimono al centro e sotto-predicono proprio l'estremo alto dove vive l'evento carico) + `origin` detto/dedotto/importato. **Il campo si chiama `origin`, non `source_kind`**: `chunks.source_kind` esisteva già due file più in là con un altro significato. **`importance` NON entra in RRF** — a k=60 il gap fra ranghi adiacenti è 0.000264 e il consenso fra ranker vale 0.016393 (62×): un boost che sposta qualcosa è già capace di cancellare l'unica cosa che RRF misura, e fallisce in modo invisibile. Agisce invece **dentro** l'espansione del grafo (`activeFacts ORDER BY importance DESC`), che decide quali 6 fatti sopravvivono al taglio. Ricerca: `research/memory-salience-and-fusion.md` — il termine di importance di Park et al. **non è mai stato ablato** (verificato sul testo primario), e l'unica ablation credibile è sulla *ritenzione*, non sul ranking.
-3. 🟡 **persona + prompt d'onboarding** — (a) ✅ **cablato** ([PR #3](https://github.com/GiustoPiedimonte/muffin-agent/pull/3)): `voice.md` entra nel prompt, e `authored()` toglie i commenti HTML rivolti all'owner (prima finivano *dentro* l'identità: un'installazione nuova riceveva la pagina che spiega a un umano come scrivere il carattere) e scarta le sezioni non ancora compilate. Ordine: **persona (condivisa) → identity (tua, nel RoT) → voce → operativo**. L'ordine è testato; che "l'ultimo vinca" un conflitto **non** è un meccanismo che abbiamo — è un'assunzione non misurata. (b) 🟡 **bozza da plasmare**: `defaults/persona.md` — puro-muffin, nuovo file perché `identity.md` parte vuoto per costruzione e senza questo un'installazione fresca non ha *nessun* carattere. Si impegna su tre cose discutibili: completa la tua memoria invece di ripeterla · promette solo ciò che i tool del turno fanno davvero (una lista scritta a mano invecchia in silenzio) · afferma il detto e ipotizza il dedotto (la faccia comportamentale della colonna `origin`). **Manca**: il tuo taglio sul contenuto, e `identity.md` è ancora il template vuoto — le sezioni "Chi sei" / "Come ti comporti quando è difficile" / "Il limite che ti do io" sono tue e nessuno può scriverle al posto tuo. Il carattere resta **collaborativo** (io bozzo, tu plasmi; esempi canonici, non overfit) e finché non lo plasmi "sa di mockup" → **NON è l'MVP**.
-4. ✅ **una capability agente** ([PR #4](https://github.com/GiustoPiedimonte/muffin-agent/pull/4)) — `web_search` (Tavily, contratto verificato sulla reference ufficiale) + `fs_write` che c'era già. Solo snippet: `include_raw_content`/`include_answer` restano off **con un test** — pagine intere sarebbero superficie d'iniezione per una capability il cui unico compito è *trovare* la pagina (campagna SEO-poisoning lug 2026: 4 modelli su 26 hanno pagato un attaccante). `hostOnly` (una ricerca spende i tuoi crediti, un membro no) e `maxTaint 3` (un risultato tier-3 sporca il turno a 3: con un tetto più basso si potrebbe cercare **una volta sola** per turno e deep-research sarebbe impossibile). Registrata solo se configurata **e** se l'endpoint è in `egress.json`. **Trovato mentre la cablavo — e vale più della feature**: l'allowlist egress **non è mai entrata in funzione in produzione**. `decide.ts` gate sui `resource.kind === 'url'`, i suoi test passano quel resource a mano e sono verdi, ma `loop.ts` costruiva il resource dal solo `args['path']` → ogni tool call arrivava come `{kind:'none'}` e il ramo non è mai stato eseguito; e `http_get` salta l'allowlist all'hop 0 *apposta*, perché crede che il kernel abbia già deciso. Due metà corrette, ognuna in attesa dell'altra. Un turno di gruppo (taint 2) poteva raggiungere qualunque host. Test di regressione **attraverso `runTurn`**, verificato fallire sul commit precedente. Lezione in `docs/lessons.md`.
-5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza
-   (`slice/spina-osservante`, 12 commit, 509 test). **Stadio 1**
-   (`core/memory/absence.ts`): chi ha smesso di comparire rispetto al *proprio*
-   ritmo. La regola ereditata dal vecchio Muffin («3 menzioni, silenzio >
-   media×3») sembra una soglia al 5% e lo è solo se la media è nota: stimata su
-   pochi intervalli è un test al **16%** proprio dove il vecchio detector viveva.
-   Ora la manopola è **alpha**, il tasso di falsi allarmi, esatto a qualunque
-   lunghezza di storia — e la degradazione su code pesanti è misurata, non
-   ignorata (0,083-0,105 a σ=1.5, fino a 3,1× a σ=2). **Stadio 2**: un modello
-   scrive il messaggio, solo su ciò che ha passato il cancello.
-   **`decideProactive` aveva zero chiamanti** — rails, threat model, ADR, test,
-   e raggiunto da niente: ora ci arriva `muffin observe`. **La consegna nasce
-   spenta**: `muffin observe` mostra, `--send` è un atto esplicito.
-   **Aperto, e tuo**: `gone_quiet` tocca ciò che ADR-0028 aveva respinto con la
-   tua esperienza diretta. L'emendamento è scritto come **proposta non
-   ratificata**, e la sua ratifica dovrebbe aspettare un numero che oggi non
-   esiste — `muffin observe` sulla memoria vera dà 0 candidati su 0 entità,
-   perché non l'hai ancora usato.
+**La spinta MVP — sei punti, cinque chiusi** (per esteso nella cronaca sotto,
+§"La spinta MVP: i sei punti per esteso"):
+1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag.
+2. ✅ **memoria-che-ti-conosce** — `importance` ordinale 0/1/2 (forced-choice
+   all’estrazione) e `origin` detto/dedotto/importato. `importance` **non entra
+   in RRF**: a k=60 il gap fra ranghi adiacenti è 0,000264 contro 0,016393 del
+   consenso fra ranker (62×), quindi un boost che sposta qualcosa è già capace
+   di cancellare l’unica cosa che RRF misura. Agisce **dentro** l’espansione del
+   grafo, che decide quali 6 fatti sopravvivono al taglio.
+3. 🟡 **persona + prompt d’onboarding — l’UNICO APERTO, ED È TUO.** Cablato:
+   `voice.md` entra nel prompt e i commenti HTML rivolti a te non finiscono più
+   *dentro* l’identità. **Manca il tuo taglio** su `defaults/persona.md`, e
+   `identity.md` è ancora il template vuoto — "Chi sei" / "Come ti comporti
+   quando è difficile" / "Il limite che ti do io" nessuno può scriverle al posto
+   tuo. Finché non lo plasmi "sa di mockup" → **NON è l’MVP**.
+4. ✅ **una capability agente** — `web_search` solo-snippet (pagine intere
+   sarebbero superficie d’iniezione), `hostOnly`, `maxTaint 3`. E, trovato
+   cablandola e più importante della feature: l’**allowlist egress non era mai
+   entrata in funzione** — due metà corrette, ognuna in attesa dell’altra.
+5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza.
+   La manopola è **alpha** (il tasso di falsi allarmi, esatto a qualunque
+   lunghezza di storia), non la regola ereditata "media×3", che a n=2 è un test
+   al 16% e non al 5%. `muffin observe` **nasce spento**: mostra, `--send` è un
+   atto esplicito. Aperto e tuo: `gone_quiet` tocca ciò che ADR-0028 aveva
+   respinto, e l’emendamento resta **proposta non ratificata**.
 6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
-   chi parla (`slice/contesto-per-tenant`, 546 test). È il punto 1 di
-   `research/confronto-harness.md §9`. Il difetto: `buildSystemPrompt` non
-   prendeva **nessun** parametro tenant e girava una volta sola, quindi un turno
-   di gruppo riceveva byte per byte il prompt dell'owner — `identity.md` (il
-   patto privato, nel RoT) e i 1.330 caratteri di `persona.md §"Al primo
-   incontro"` che dicono all'agente di **chiedere dati personali** «un pezzo per
-   volta», nell'unico tenant la cui memoria non è dell'owner. **Il threat model
-   non ha mai nominato il prompt come superficie**: lo è, e a valle non c'è
-   niente che disfi un'istruzione a chiedere. Ora `agent/context/assemble.ts` —
-   il deliverable M1 dichiarato in tre documenti e mai costruito — produce **due
-   classi**, `owner` e `group`, assemblate una volta a boot: nessun ricalcolo per
-   turno, ciascuna il proprio prefisso cacheabile. Il prompt owner è **pinnato a
-   sha256**: se cambia, ogni cache calda si spegne, e il test lo dice invece di
-   lasciarlo succedere in silenzio. Il gruppo ha un carattere suo (in codice, non
-   in `defaults/`: non è owner-editabile) — sottrarre due sezioni da `persona.md`
-   falliva **aperto**, la sezione successiva che qualcuno aggiunge arriva al
-   gruppo da sola. Seconda metà: `deps.tools` è filtrato per principal prima del
-   modello — un membro vedeva 8 tool `hostOnly` che il kernel avrebbe negato
-   comunque, e il messaggio "quel tool non esiste" glieli elencava tutti.
-   **Il kernel resta l'enforcement** (`decide.ts:132` non toccato): il lookup del
-   tool resta sul registro intero, così un membro che nomina `fs_read` incontra
-   `principal_forbidden` col suo codice sulla traccia, non un "non esiste" che
-   sarebbe una bugia. Provato **attraverso il connettore telegram vero**
-   (`Update` → `drain()` → `runTurn`), rosso verificato sul commit precedente.
-   **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
-   dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
-   non il tenant) e non è in questa slice.
+   chi parla (`agent/context/assemble.ts`, il deliverable M1 mai costruito). Un
+   turno di gruppo riceveva byte per byte il prompt dell’owner: `identity.md` e
+   la sezione che istruisce a **chiedere dati personali**. Il kernel resta
+   l’enforcement; questo è il menu. Resta aperto l’epoch flip «so già chi sei».
 
 **⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
 dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
@@ -243,16 +222,28 @@ righe con verdetto — 41% presente · 29% tolto di proposito · 23% manca e ser
 qualunque argomento: dei 47 tool del vecchio, **16 mai invocati** e **28 su 47
 meno di cinque volte in quattro mesi** — sei tool hanno fatto il lavoro.
 
+**Confronto con la consulenza esterna, fatto** (`research/confronto-gemini.md`,
+2026-08-14): una consulenza generica di design d'agente (Gemini 3.6 Flash, nove
+turni owner) confrontata riga per riga col codice. **Non sposta l'ordine di
+lavoro**: delle ~25 raccomandazioni, 14 descrivono cose già costruite (spesso
+più severe), 5 erano già decise contro con evidenza scritta, 2 sono sbagliate
+per la nostra forma (event bus / microservizi agentici — contro ADR-0022;
+classifier routing sui tool — due retrocessioni in casa), 4 sono buchi veri e
+piccoli (§M5-bis "Dal confronto esterno"). **Il contributo che vale non è una
+feature**: "voce e mani" applicato alla chat dà ad ADR-0035 il criterio d'uscita
+dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
+(→ ADR-0035 §revisione). Conferma esterna su due assi: niente critico LLM
+(=ADR-0034) e la corsia asincrona di estrazione fra i componenti fondamentali
+(=la nostra priorità 1, costruita e attaccata a niente). Mai nominati da lei:
+provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
+di trigger, Root of Trust, il costo della cache come vincolo di design.
+
 **Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
 
 **File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
 - `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
 - `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
 - Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
-
-**Sessione 2026-08-09 (questo giro).** `muffin` è un **comando installabile** (bin+dist+`install.sh` collision-safe Mint, `LICENSE` MIT); **onboarding** (init interattivo, inferenza provider dal prefisso chiave, first-run, guardia bot-token, `muffin uninstall`); **dev-setup** (`.env` caricata dalla CWD via `process.loadEnvFile` nativo, `MUFFIN_HOME` dev/prod); pushato **privato**. **Knowledge base cognitiva** creata (`knowledge/`, il corpus del vecchio che il blueprint aveva perso). **MVP #1** (recall) chiuso. Ricerche persistite: `research/{system-prompt-architecture,capability-surface,eu-ai-act-gdpr,onboarding-first-run,local-dev-setup}.md`. ADR nuovi: 0026-0030. **EU AI Act** (research): fuori-scope come deployer per uso personale, Art.50 coperto da HITL, serve avvocato pre-rilascio-pubblico.
-
-**Sessione workflow + MVP #2 (2026-08-09, sera).** **Il compact non porta più via lo stato**: `.claude/hooks/inject-state.mjs` inietta questo blocco a ogni SessionStart *compreso il source `compact`* — Claude Code ri-legge da disco solo il `CLAUDE.md` di root, e un doc annidato dietro un puntatore è esattamente ciò che non torna. Path risolti da `import.meta.url` (il cwd si resetta fra i turni; `CLAUDE_PROJECT_DIR` dentro un worktree è **non documentato** — verificato). **Onestà sul meccanismo**: `PreCompact` NON può iniettare contesto né far agire il modello (verificato sulla reference) → il ri-grounding è deterministico, il *flush* resta disciplina, e `PRACTICES.md` §7 lo dice invece di implicare una garanzia che non c'è. Aggiunte §7-9 (stato in STATE · converge-prima-di-ricercare · puro-muffin vs il-tuo-muffin). **MVP #2 chiuso** (sopra). **Routine settimanale ricerca→proposta→PR** specificata in `proposals/README.md`: propone e basta, **non scrive codice** — il ciclo è proposta → l'owner reagisce → si itera → si decide se implementare. **Non attiva: 403, l'ambiente cloud non ha accesso al repo privato** (permesso da dare, non scelta di design). **Benchmark**: `research/benchmark-comparabilita-harness.md` — uno solo vale la pena, **AgentDojo** (testa il kernel, non il modello; ~$2-5/run; nessuna capability che abbiamo tagliato). Sulla memoria **non girare niente**: il finding interno regge (LoCoMo ha il 6.4% di ground truth corrotta; la disputa Zep-vs-Mem0 è il caso di scuola di "stessa benchmark, harness diversa, numero diverso"). Trappola confermata con numeri: lo scaffold da solo muove GAIA fino a **28 punti** a modello invariato (arXiv:2606.08529).
 
 ---
 
@@ -364,6 +355,75 @@ Substrato già in piedi: principal `system:scheduler`, `quietHours` nel RoT (`de
 **Resta di M5** (connect owner-gated, come la prova bot di M4): (1) delivery remota telegram via connector send (oggi un messaggio schedulato per canale remoto emerge nel REPL invece di sparire); (2) event-bus soglia→consolidamento (consuma il conteggio episodi della memoria); (3) i signal-detector (`deadline_near`, `commitment_due`) che producono i `kind` chiusi del gate. La prova end-to-end (un brief che spara attraverso il modello alle 8) richiede la chiave e il sistema che gira.
 
 **MVP (Gate 1 = M0→M5): substrato completo.** Tutti i moduli hanno il loro core durevole costruito e testato; ciò che resta è connect-sul-sistema-che-gira (prova bot M4 + delivery/detector M5) e le decisioni-owner residue (assunzioni 08). Nessuna decisione di design aperta.
+
+## La spinta MVP: i sei punti per esteso
+
+> Spostato qui dal blocco iniettato il 2026-08-14, **verbatim e senza tagli**.
+> Il blocco era **16.716 caratteri contro un budget di ~9.870**, quindi veniva
+> troncato a metà del punto 0 del divario: la lista dei **file load-bearing** —
+> che è la cura dichiarata al "non avere i file" — non arrivava mai in contesto,
+> e nemmeno niente di ciò che le sta accanto. Il meccanismo funzionava e lo
+> diceva pure (il marcatore di troncamento c’era); l’esito era sbagliato lo
+> stesso. Cinque punti su sei sono chiusi e il loro dettaglio è cronaca, che è
+> questo posto qui. Niente è stato cancellato.
+
+**La lista forzata verso "usabile ogni giorno"** (è ciò che *rende* usabile, non una scelta):
+1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag (`muffin-agent@20554dd`).
+2. ✅ **memoria-che-ti-conosce** ([PR #2](https://github.com/GiustoPiedimonte/muffin-agent/pull/2)) — `importance` ordinale 0/1/2 (forced-choice all'estrazione, non un voto: i rater LLM comprimono al centro e sotto-predicono proprio l'estremo alto dove vive l'evento carico) + `origin` detto/dedotto/importato. **Il campo si chiama `origin`, non `source_kind`**: `chunks.source_kind` esisteva già due file più in là con un altro significato. **`importance` NON entra in RRF** — a k=60 il gap fra ranghi adiacenti è 0.000264 e il consenso fra ranker vale 0.016393 (62×): un boost che sposta qualcosa è già capace di cancellare l'unica cosa che RRF misura, e fallisce in modo invisibile. Agisce invece **dentro** l'espansione del grafo (`activeFacts ORDER BY importance DESC`), che decide quali 6 fatti sopravvivono al taglio. Ricerca: `research/memory-salience-and-fusion.md` — il termine di importance di Park et al. **non è mai stato ablato** (verificato sul testo primario), e l'unica ablation credibile è sulla *ritenzione*, non sul ranking.
+3. 🟡 **persona + prompt d'onboarding** — (a) ✅ **cablato** ([PR #3](https://github.com/GiustoPiedimonte/muffin-agent/pull/3)): `voice.md` entra nel prompt, e `authored()` toglie i commenti HTML rivolti all'owner (prima finivano *dentro* l'identità: un'installazione nuova riceveva la pagina che spiega a un umano come scrivere il carattere) e scarta le sezioni non ancora compilate. Ordine: **persona (condivisa) → identity (tua, nel RoT) → voce → operativo**. L'ordine è testato; che "l'ultimo vinca" un conflitto **non** è un meccanismo che abbiamo — è un'assunzione non misurata. (b) 🟡 **bozza da plasmare**: `defaults/persona.md` — puro-muffin, nuovo file perché `identity.md` parte vuoto per costruzione e senza questo un'installazione fresca non ha *nessun* carattere. Si impegna su tre cose discutibili: completa la tua memoria invece di ripeterla · promette solo ciò che i tool del turno fanno davvero (una lista scritta a mano invecchia in silenzio) · afferma il detto e ipotizza il dedotto (la faccia comportamentale della colonna `origin`). **Manca**: il tuo taglio sul contenuto, e `identity.md` è ancora il template vuoto — le sezioni "Chi sei" / "Come ti comporti quando è difficile" / "Il limite che ti do io" sono tue e nessuno può scriverle al posto tuo. Il carattere resta **collaborativo** (io bozzo, tu plasmi; esempi canonici, non overfit) e finché non lo plasmi "sa di mockup" → **NON è l'MVP**.
+4. ✅ **una capability agente** ([PR #4](https://github.com/GiustoPiedimonte/muffin-agent/pull/4)) — `web_search` (Tavily, contratto verificato sulla reference ufficiale) + `fs_write` che c'era già. Solo snippet: `include_raw_content`/`include_answer` restano off **con un test** — pagine intere sarebbero superficie d'iniezione per una capability il cui unico compito è *trovare* la pagina (campagna SEO-poisoning lug 2026: 4 modelli su 26 hanno pagato un attaccante). `hostOnly` (una ricerca spende i tuoi crediti, un membro no) e `maxTaint 3` (un risultato tier-3 sporca il turno a 3: con un tetto più basso si potrebbe cercare **una volta sola** per turno e deep-research sarebbe impossibile). Registrata solo se configurata **e** se l'endpoint è in `egress.json`. **Trovato mentre la cablavo — e vale più della feature**: l'allowlist egress **non è mai entrata in funzione in produzione**. `decide.ts` gate sui `resource.kind === 'url'`, i suoi test passano quel resource a mano e sono verdi, ma `loop.ts` costruiva il resource dal solo `args['path']` → ogni tool call arrivava come `{kind:'none'}` e il ramo non è mai stato eseguito; e `http_get` salta l'allowlist all'hop 0 *apposta*, perché crede che il kernel abbia già deciso. Due metà corrette, ognuna in attesa dell'altra. Un turno di gruppo (taint 2) poteva raggiungere qualunque host. Test di regressione **attraverso `runTurn`**, verificato fallire sul commit precedente. Lezione in `docs/lessons.md`.
+5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza
+   (`slice/spina-osservante`, 12 commit, 509 test). **Stadio 1**
+   (`core/memory/absence.ts`): chi ha smesso di comparire rispetto al *proprio*
+   ritmo. La regola ereditata dal vecchio Muffin («3 menzioni, silenzio >
+   media×3») sembra una soglia al 5% e lo è solo se la media è nota: stimata su
+   pochi intervalli è un test al **16%** proprio dove il vecchio detector viveva.
+   Ora la manopola è **alpha**, il tasso di falsi allarmi, esatto a qualunque
+   lunghezza di storia — e la degradazione su code pesanti è misurata, non
+   ignorata (0,083-0,105 a σ=1.5, fino a 3,1× a σ=2). **Stadio 2**: un modello
+   scrive il messaggio, solo su ciò che ha passato il cancello.
+   **`decideProactive` aveva zero chiamanti** — rails, threat model, ADR, test,
+   e raggiunto da niente: ora ci arriva `muffin observe`. **La consegna nasce
+   spenta**: `muffin observe` mostra, `--send` è un atto esplicito.
+   **Aperto, e tuo**: `gone_quiet` tocca ciò che ADR-0028 aveva respinto con la
+   tua esperienza diretta. L'emendamento è scritto come **proposta non
+   ratificata**, e la sua ratifica dovrebbe aspettare un numero che oggi non
+   esiste — `muffin observe` sulla memoria vera dà 0 candidati su 0 entità,
+   perché non l'hai ancora usato.
+6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
+   chi parla (`slice/contesto-per-tenant`, 546 test). È il punto 1 di
+   `research/confronto-harness.md §9`. Il difetto: `buildSystemPrompt` non
+   prendeva **nessun** parametro tenant e girava una volta sola, quindi un turno
+   di gruppo riceveva byte per byte il prompt dell'owner — `identity.md` (il
+   patto privato, nel RoT) e i 1.330 caratteri di `persona.md §"Al primo
+   incontro"` che dicono all'agente di **chiedere dati personali** «un pezzo per
+   volta», nell'unico tenant la cui memoria non è dell'owner. **Il threat model
+   non ha mai nominato il prompt come superficie**: lo è, e a valle non c'è
+   niente che disfi un'istruzione a chiedere. Ora `agent/context/assemble.ts` —
+   il deliverable M1 dichiarato in tre documenti e mai costruito — produce **due
+   classi**, `owner` e `group`, assemblate una volta a boot: nessun ricalcolo per
+   turno, ciascuna il proprio prefisso cacheabile. Il prompt owner è **pinnato a
+   sha256**: se cambia, ogni cache calda si spegne, e il test lo dice invece di
+   lasciarlo succedere in silenzio. Il gruppo ha un carattere suo (in codice, non
+   in `defaults/`: non è owner-editabile) — sottrarre due sezioni da `persona.md`
+   falliva **aperto**, la sezione successiva che qualcuno aggiunge arriva al
+   gruppo da sola. Seconda metà: `deps.tools` è filtrato per principal prima del
+   modello — un membro vedeva 8 tool `hostOnly` che il kernel avrebbe negato
+   comunque, e il messaggio "quel tool non esiste" glieli elencava tutti.
+   **Il kernel resta l'enforcement** (`decide.ts:132` non toccato): il lookup del
+   tool resta sul registro intero, così un membro che nomina `fs_read` incontra
+   `principal_forbidden` col suo codice sulla traccia, non un "non esiste" che
+   sarebbe una bugia. Provato **attraverso il connettore telegram vero**
+   (`Update` → `drain()` → `runTurn`), rosso verificato sul commit precedente.
+   **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
+   dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
+   non il tenant) e non è in questa slice.
+
+## Sessioni 2026-08-09
+
+**Sessione 2026-08-09 (questo giro).** `muffin` è un **comando installabile** (bin+dist+`install.sh` collision-safe Mint, `LICENSE` MIT); **onboarding** (init interattivo, inferenza provider dal prefisso chiave, first-run, guardia bot-token, `muffin uninstall`); **dev-setup** (`.env` caricata dalla CWD via `process.loadEnvFile` nativo, `MUFFIN_HOME` dev/prod); pushato **privato**. **Knowledge base cognitiva** creata (`knowledge/`, il corpus del vecchio che il blueprint aveva perso). **MVP #1** (recall) chiuso. Ricerche persistite: `research/{system-prompt-architecture,capability-surface,eu-ai-act-gdpr,onboarding-first-run,local-dev-setup}.md`. ADR nuovi: 0026-0030. **EU AI Act** (research): fuori-scope come deployer per uso personale, Art.50 coperto da HITL, serve avvocato pre-rilascio-pubblico.
+
+**Sessione workflow + MVP #2 (2026-08-09, sera).** **Il compact non porta più via lo stato**: `.claude/hooks/inject-state.mjs` inietta questo blocco a ogni SessionStart *compreso il source `compact`* — Claude Code ri-legge da disco solo il `CLAUDE.md` di root, e un doc annidato dietro un puntatore è esattamente ciò che non torna. Path risolti da `import.meta.url` (il cwd si resetta fra i turni; `CLAUDE_PROJECT_DIR` dentro un worktree è **non documentato** — verificato). **Onestà sul meccanismo**: `PreCompact` NON può iniettare contesto né far agire il modello (verificato sulla reference) → il ri-grounding è deterministico, il *flush* resta disciplina, e `PRACTICES.md` §7 lo dice invece di implicare una garanzia che non c'è. Aggiunte §7-9 (stato in STATE · converge-prima-di-ricercare · puro-muffin vs il-tuo-muffin). **MVP #2 chiuso** (sopra). **Routine settimanale ricerca→proposta→PR** specificata in `proposals/README.md`: propone e basta, **non scrive codice** — il ciclo è proposta → l'owner reagisce → si itera → si decide se implementare. **Non attiva: 403, l'ambiente cloud non ha accesso al repo privato** (permesso da dare, non scelta di design). **Benchmark**: `research/benchmark-comparabilita-harness.md` — uno solo vale la pena, **AgentDojo** (testa il kernel, non il modello; ~$2-5/run; nessuna capability che abbiamo tagliato). Sulla memoria **non girare niente**: il finding interno regge (LoCoMo ha il 6.4% di ground truth corrotta; la disputa Zep-vs-Mem0 è il caso di scuola di "stessa benchmark, harness diversa, numero diverso"). Trappola confermata con numeri: lo scaffold da solo muove GAIA fino a **28 punti** a modello invariato (arXiv:2606.08529).
 
 ## Aperto (owner)
 
