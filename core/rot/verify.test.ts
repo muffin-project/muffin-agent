@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { seal, verify } from './verify.js';
+import { hardeningHolds, seal, verify } from './verify.js';
 
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-rot-'));
@@ -67,5 +67,67 @@ describe('root of trust integrity', () => {
     writeFileSync(join(dir, 'rot', 'identity.md'), '# ci ho messo mano io\n');
     seal(dir, '0.0.0', NOW);
     expect(verify(dir, 'single-user')).toMatchObject({ ok: true });
+  });
+});
+
+describe('hardening is checked, not believed', () => {
+  // Running as root every path is writable, so the "holds" case cannot exist —
+  // which is itself the correct answer, and not something to assert around.
+  const asRoot = process.getuid?.() === 0;
+
+  const readOnly = (dir: string): void => {
+    seal(dir, '0.0.0', NOW);
+    chmodSync(join(dir, 'rot', 'evals', 'voice.json'), 0o444);
+    chmodSync(join(dir, 'rot', 'policy.json'), 0o444);
+    chmodSync(join(dir, 'rot', 'identity.md'), 0o444);
+    chmodSync(join(dir, 'rot', 'manifest.json'), 0o444);
+    chmodSync(join(dir, '.rot-anchor'), 0o444);
+    chmodSync(join(dir, 'rot', 'evals'), 0o555);
+    chmodSync(join(dir, 'rot'), 0o555);
+  };
+
+  it('refuses the claim when this process can write the files it names', () => {
+    // The defect this closes: `muffin init --hardened` wrote one string into
+    // config.json — no service user, no chown, no check — and `agent/runtime.ts`
+    // turned that string into `hardened: true`, which `core/policy/decide.ts`
+    // reads to make a high-risk owner capability a **silent allow** instead of
+    // an ask. Asking for the stronger mode bought a strictly weaker one, on any
+    // machine, with no feedback anywhere. `muffin doctor` even recommended it,
+    // and warned only in the mode that was honest.
+    const dir = home();
+    seal(dir, '0.0.0', NOW);
+    const check = hardeningHolds(dir);
+    expect(check.holds).toBe(false);
+    // Names the file that gave it away, because "hardened is false" without a
+    // reason is the kind of message that gets configured around.
+    if (!check.holds) expect(check.why).toMatch(/rot/);
+  });
+
+  it.skipIf(asRoot)('accepts it when the root of trust is genuinely unwritable', () => {
+    const dir = home();
+    readOnly(dir);
+    try {
+      expect(hardeningHolds(dir)).toEqual({ holds: true });
+    } finally {
+      chmodSync(join(dir, 'rot'), 0o755);
+      chmodSync(join(dir, 'rot', 'evals'), 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)('one writable file is enough to break it — including the manifest', () => {
+    // The manifest is guarded on purpose. Prevention that covered the sealed
+    // files and left the hashes writable would let a process rewrite the
+    // manifest instead of the contents: the same attack with one more step.
+    const dir = home();
+    readOnly(dir);
+    try {
+      chmodSync(join(dir, 'rot', 'manifest.json'), 0o644);
+      const check = hardeningHolds(dir);
+      expect(check.holds).toBe(false);
+      if (!check.holds) expect(check.why).toContain('manifest.json');
+    } finally {
+      chmodSync(join(dir, 'rot'), 0o755);
+      chmodSync(join(dir, 'rot', 'evals'), 0o755);
+    }
   });
 });
