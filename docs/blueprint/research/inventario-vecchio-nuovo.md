@@ -241,7 +241,7 @@ Nuovo: **10 tool** + `mcp_*` dinamici — `fs_read`, `fs_list`, `fs_write`
 | Telegram | `src/telegram.ts` (129 KB) + transport tipato | `connectors/telegram/` (1.173 righe), inbox durevole, pairing, media | **PRESENTE**, più pulito |
 | modello (OpenRouter / Anthropic / Ollama) | `src/llm.ts:400,424`; local-first con probe del tag esatto | `agent/providers/{openai-compat,anthropic}.ts` | **PRESENTE** — il nuovo perde il **local-first automatico**, ma il vecchio aveva 0/1689 turni locali tracciati (`01-verdetti.md` V2): era un'etichetta |
 | Tavily (web search) | `src/tools/search.ts:112` | `agent/tools/search.ts:116` | **PRESENTE** |
-| fetch web | `src/tools/fetchUrl.ts` (Readability + SSRF guard) | `agent/tools/http.ts` (GET, egress allowlist, SSRF su ogni hop) | **PRESENTE**, più stretto |
+| fetch web | `src/tools/fetchUrl.ts` (**Readability** + SSRF guard) | `agent/tools/http.ts` (GET, egress allowlist, SSRF su ogni hop) | ⚠️ **corretto 2026-08-14: PRESENTE più stretto *sulla sicurezza*, REGRESSIONE sulla resa** — vedi §8-bis |
 | **Google Calendar** (REST v3 + iCal) | `src/outward/google_calendar_rest.ts`, `src/adapters/calendar.ts:14`; OAuth cifrato in `agent_state` | — | **MANCA, SERVE** |
 | **Gmail** (leggi · cerca · bozza · invia · archivia) | `src/tools/gmailRead.ts`, `gmailModify.ts`; scrittura via outbox (`src/outward/adapters/gmail_*.ts`) | — | **MANCA, SERVE** |
 | **CalDAV** | `src/outward/caldav_client.ts`, credenziali AES-256-GCM in `agent_state` | — | **MANCA, NON SERVE** — ridondante con Calendar; una sola strada basta |
@@ -415,6 +415,43 @@ e il costo di disegno è già stato pagato una volta.
     (`core/tracing/types.ts:46-70`), quindi "perché hai risposto così" non è
     ancora rispondibile — che è una promessa esplicita di V7 ed M6.
     *Costo*: basso per l'uso, alto per il debug.
+
+---
+
+## 8-bis. La riga che questo documento ha sbagliato (2026-08-14)
+
+Trovata dal confronto con una consulenza esterna
+(`research/confronto-gemini.md` §10), cioè **da fuori e senza vedere il
+codice** — il che è la parte da tenere.
+
+§5 marcava `fetch web` come *"PRESENTE, più stretto"*. Il verdetto è vero **su
+un asse solo**. Sulla sicurezza il nuovo è davvero più stretto: allowlist
+ri-applicata a ogni hop di redirect, ogni hostname risolto, ogni indirizzo
+privato rifiutato (SSRF floor, v4-mapped-v6 incluso). Sulla **resa** è una
+regressione, e il confronto era proprio con la riga che ce l'aveva:
+
+- vecchio → `src/tools/fetchUrl.ts`, **Readability**: la pagina arriva al
+  modello come testo;
+- nuovo → `agent/tools/http.ts:130`, `await response.text()` **grezzo**, HTML
+  compreso, poi `clipBody` (`:169`) che tiene head 40k + tail 10k.
+
+Il troncamento head+tail su una pagina HTML taglia esattamente a metà del
+`<body>`: butta il contenuto e tiene `<head>` e footer. In token: ~12k di cui
+forse 800 di testo, dentro un turno con tetto 4096 in uscita e, sul profilo
+consumer, 10 tool.
+
+**Dove sta nell'ordine di §8**: fra il 6 e il 7 — costo medio, ma a differenza
+del decay morde **subito**, perché ogni fetch lo paga.
+
+**Rimedio, e la forma**: estrazione **locale** davanti a `clipBody`. Non
+Firecrawl né Jina Reader: sono servizi terzi, cioè un endpoint in più in
+`egress.json` e la pagina la leggono loro. Il taint resta 3 e il fence resta
+dov'è — **pulire non è fidarsi**.
+
+**La lezione di metodo, che vale più della riga**: un confronto riga-per-riga
+confronta l'asse a cui stavi pensando. Questo documento stava contando
+capability e sicurezza, e su quella riga entrambe erano a posto. Registrata in
+`docs/lessons.md`.
 
 ---
 

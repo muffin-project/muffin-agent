@@ -72,6 +72,17 @@ predicati — stessa disciplina di ADR-0028, che ha reso il firehose
 *incostruibile* rendendo `kind` un enum invece che una stringa libera. Se il
 predicato è testo libero, si è ricostruito il demone che osserva tutto.
 
+**E, nella stessa slice, la condizione di stop** (aggiunto 2026-08-14 da
+`research/confronto-gemini.md` §15). Le richieste vere hanno una fine dentro:
+*«controlla questo sito ogni mattina **per due settimane**»*, *«ricordamelo
+finché non l'ho fatto»*. Oggi un job si spegne **solo se qualcuno lo toglie a
+mano**, quindi ogni richiesta a termine lascia dietro di sé un job che nessuno
+disarmerà — e il modo in cui te ne accorgi è che continua ad arrivarti. È una
+colonna sul job (`until` come data, o un conteggio di fire) più un controllo in
+`markRan`, che già ricalcola da *ora*. Costa poco e va fatto qui, perché un
+trigger a predicato senza condizione di stop è la forma che accumula sveglie:
+il cron a data almeno ti ricorda quando l'hai messo.
+
 ## I casi proposti e validati (2026-08-09)
 
 Cinque, in ordine di quanto convincono:
@@ -112,6 +123,28 @@ un canale d'uscita** — il modello sceglie la stringa e la stringa parte. È
 tollerabile perché l'endpoint è approvato dall'owner. Con le sorgenti in
 ingresso il conto cambia, perché il contenuto che *scrive* la query non l'ha più
 scelto l'owner.
+
+## Quando si costruiranno mail e calendario: leggi prima di scrivere
+
+Nota per gli adapter, non un componente (aggiunto 2026-08-14 da
+`research/confronto-gemini.md` §11). Prima di una scrittura, l'adapter
+**interroga lo stato reale** e rifiuta il payload del modello come *fatto di
+sistema*, non come rifiuto generico:
+
+> `ConstraintError: le 15:00 sono occupate da "Riunione X". Scegli uno slot libero.`
+
+Perché è una proprietà dell'adapter e non un layer: il kernel decide **se** una
+capability può agire, e non sa niente di calendari; un verificatore centrale
+che sapesse di calendari sarebbe un secondo posto dove vive la conoscenza del
+dominio. E perché la forma dell'errore conta: un `deny` nudo insegna al modello
+a riprovare, un vincolo nominato gli dice cosa cambiare — è la stessa ragione
+per cui il messaggio del kernel dice *"non insistere"* invece di *"negato"*.
+
+Vale per entrambi i lati dell'ambiguità: il calendario controlla la
+sovrapposizione, la rubrica controlla che l'indirizzo generato esista fra i
+contatti invece di essere plausibile. Il secondo è il caso che rende `outward`
+pericoloso senza rumore — un indirizzo inventato ma ben formato passa ogni
+validazione sintattica.
 
 ## Fonti
 
