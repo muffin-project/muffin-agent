@@ -490,6 +490,70 @@ extension would have shipped unable to detect exactly that.
 (`import { load as yamlLoad }`) as its fixture, because an alias is the honest
 shape of a name that is imported and never written again.*
 
+## A row-by-row comparison compares the axis you were already thinking about **(this build)**
+
+The old-vs-new inventory graded 86 capabilities and got 85 of them right. The one
+it got wrong is instructive because nothing about it looks like an error.
+
+`fetch web` was marked **"PRESENTE, più stretto"**. That is true: the new
+`http_get` re-applies the egress allowlist to every redirect hop, resolves every
+hostname, and refuses every private address. The old one had a single SSRF guard.
+On the axis the document was counting — capability present, and how contained —
+the new one wins outright.
+
+What nobody compared was **what the model actually receives**. The old tool ran
+the page through Readability and handed over text. The new one returns
+`await response.text()` raw, HTML included, then keeps the first 40k characters
+and the last 10k — which on an HTML page cuts through the middle of the `<body>`,
+so it throws away the content and keeps `<head>` and the footer. Roughly 12k
+tokens, of which perhaps 800 are text, in a turn whose output ceiling is 4096.
+
+The inventory was written to answer "are we worse than the old one", it had the
+old row with the word *Readability* sitting right there in the same table cell,
+and it still passed — because the comparison was running on capability and
+containment, and both were fine. It took an outside description of the same
+problem, written by someone with no access to the code, to see it.
+
+**The rule that came out of it:** when a comparison produces a verdict per row,
+write down which axis the verdict is on. A row graded on one axis is not a row
+that was checked; and the axes worth naming up front are *does it exist*, *is it
+contained*, and **what does it hand back**. The third is the one that goes
+missing, because it is the only one you cannot answer from a signature.
+
+## The handoff that survived the compact and arrived one third short **(this build)**
+
+The SessionStart hook exists so the START HERE block of `STATE.md` is *in*
+context rather than pointed at — the failure it closes is a session rebuilding a
+wrong picture from the router alone. It works. It has since the day it shipped.
+
+It also has a documented 10,000-character cap on what a hook may emit, and it
+handles it correctly: it truncates the block and appends
+`[…blocco troncato: leggi docs/blueprint/STATE.md]`, so a cut handoff never reads
+as a complete one. Measured while adding a paragraph to it: the block had grown
+to **16,716 characters against a ~9,870 budget**. The cut was landing a third of
+the way in, mid-sentence, and everything after it had not reached a session in
+weeks — including the block's own *"File load-bearing — LEGGI PRIMA di lavorare"*
+list, which is the section written to cure not having the files.
+
+Nothing here was a bug. The cap is documented, the truncation is announced, the
+hook is honest, and there is no test that could have gone red: the mechanism did
+exactly what it says. What was missing is what is always missing — **nobody
+compared what went in against what came out.** The one command that shows it
+takes a second and nobody had a reason to run it, because the feature was
+working.
+
+**What it changed.** Five closed items were taking 45% of the budget: their
+detail moved below the horizontal rule into the chronicle, verbatim, and the
+block went to 8,993 characters with no truncation. The rule went into
+`docs/PRACTICES.md` §7 with the command: what earns a place in the injected block
+is what is still **open**; a finished item is chronicle.
+
+The general shape, and the reason this belongs on this page rather than in a
+changelog: a size limit is a silent failure mode wearing the costume of a
+configuration value. Everything about it is documented, nothing about it is
+enforced against the content, and the part you lose is always the tail — which is
+where people put the pointers, because pointers feel like an appendix.
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The

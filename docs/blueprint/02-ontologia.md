@@ -169,3 +169,26 @@ La versione precedente di questa sezione diceva "si migra, il dataset è il moat
 ## 9. Recall
 
 Ibrido confermato: FTS5 + vettoriale con RRF (pattern in prod) + **espansione grafo 1-hop** sulle entità dei candidati (i fatti attivi dell'entità entrano come contesto strutturato con le loro etichette) + reranking finale (il gap dichiarato dell'attuale sistema): cross-encoder locale o LLM-rerank light-tier, budget fisso, misurato in 05. Ordinamento sensibile a: pertinenza, recency, trust_tier, stato bi-temporale. **Niente classificatore "è una domanda storica"** (C2-#3): i fatti expired entrano nel recall con la loro etichetta temporale esplicita (`valido dal … al …`, `superseded da …`) e decide il modello — un classificatore in meno significa una fonte d'errore in meno, e la lezione degli intent-classifier retrocessi a monitor-only vale anche qui.
+
+**Manca la navigazione, ed è distinta dal recall** (aggiunto 2026-08-14 da
+`research/confronto-gemini.md` §7). Il recall risponde a *"cosa è pertinente
+adesso"*; una domanda come *"cosa ti ho detto giovedì scorso dal telefono"*
+è un'altra cosa — è **navigazione**, e oggi non esiste: `memory_search` prende
+una query e basta, mentre `episodes` porta già `connector`, `thread_key` e
+`created_at`. Due primitive, entrambe SQL su una tabella che c'è:
+
+1. **filtro** — `(surface, date_range)` accanto alla query;
+2. **vicinato** — dato un episodio, i K prima e i K dopo nel suo thread.
+
+Il secondo non è comodità: senza intorno, un episodio ripescato è **una frase
+tagliata**, e ciò che un modello fa più facilmente con una frase tagliata è
+completarne il contesto da sé. Il fence dice "usalo se pertinente"; non dice
+"questa frase ha un prima e un dopo che non ti ho dato".
+
+Due vincoli, che sono gli stessi di sempre e vanno ripetuti perché qui è facile
+perderli. Il **tenant non è mai un argomento**: la firma è (tenant del turno,
+surface, range) — la stessa regola che `searchMemory` rispetta dopo il leak in
+cui il tenant era cablato al momento della registrazione. E il vicinato eredita
+il **taint massimo della finestra**, non quello dell'item trovato: cinque
+messaggi prima e cinque dopo, dentro un gruppo, sono dieci occasioni in più
+perché un'iniezione entri al tier di chi ha cercato.

@@ -502,6 +502,54 @@ era slop). Le MANCA-SERVE che non sono già qui sopra:
 - e un posto dove **chiedere cosa si regola** (non necessariamente un `muffin
   config`: basta un comando che elenchi le manopole e dove vivono).
 
+**Dal confronto con la consulenza esterna** (`research/confronto-gemini.md`,
+2026-08-14). Quattro buchi veri, tutti **piccoli e fuori dal cammino critico** —
+nessuno viene prima dei punti 0 e 1 qui sopra. Sono elencati qui perché tre su
+quattro erano già dentro `inventario-vecchio-nuovo.md §8` e uno no, e perché
+essere stati ritrovati da fuori, senza vedere il codice, dice che sono i buchi
+che si vedono usando:
+
+- **A · il fetch non estrae il testo.** `agent/tools/http.ts:130` restituisce il
+  corpo **grezzo** (HTML compreso) e `:169` lo tronca head 40k + tail 10k — cioè
+  butta il `<body>` e tiene `<head>` e footer. Sono ~12k token di cui forse 800
+  di testo, in un turno con un tetto di 4096 in uscita. **Regressione rispetto al
+  vecchio**, che aveva Readability; l'inventario aveva marcato la riga "PRESENTE,
+  più stretto" guardando la sicurezza (vera e migliore: SSRF su ogni hop) e
+  mancando la resa — corretto lì. Rimedio: estrazione **locale** davanti a
+  `clipBody` (non Firecrawl/Jina: sarebbero un endpoint terzo che legge la pagina
+  al posto nostro). Il taint non cambia — pulire non è fidarsi.
+- **B · non si può navigare la storia.** `memory_search` prende **solo una
+  query**: niente `date_range`, niente `surface`, niente vicinato. È il caso
+  d'uso letterale dell'owner (*"navigare i messaggi anche tra più surface"*) e i
+  campi esistono già su `episodes` (`connector`, `thread_key`, `created_at`).
+  Oltre alla comodità c'è una ragione strutturale: senza vicinato un episodio
+  ripescato è **una frase senza il suo intorno**, e la cosa più facile che un
+  modello ci faccia sopra è inventare il contesto mancante. Due vincoli nostri
+  che la forma esterna non ha: il tenant **non è mai un argomento** (è quello del
+  turno), e il vicinato eredita il **taint massimo della finestra**, non quello
+  dell'item trovato.
+- **C · il budget è solo globale.** Cap mensile e cap giornaliero per-tenant
+  (`core/budget/budget.ts`), consultati dal kernel; il cap per-turno conta i
+  giri, non i token. Basta finché c'è un umano davanti — **con ADR-0035 non
+  c'è**. Serve un budget **per-job** (token, chiamate, timeout) in
+  `core/scheduler/jobs.ts`: è la differenza fra un job rotto che costa €0,50 e
+  uno che si mangia il mese prima delle 7. Stessa slice di ADR-0035, e il
+  conteggio va tenuto fuori dal turno per la stessa ragione dell'heartbeat.
+- **D · la storia si tronca invece di comprimersi.** 40 turni secchi
+  (`agent/loop.ts:62`) sulla parte *parlata*, che è l'unica non recuperabile da
+  un tool; `digests` esiste (`core/memory/schema.ts:138`) **senza scrittori né
+  lettori**. Già in `inventario §8` punto 7 come costo medio-differito: qui
+  cambia solo l'ordine delle tre mosse possibili — **prima si svuota** (fatto:
+  `compact.ts`, la cosa più economica misurata), **poi** si riassume. Non serve
+  un compattatore nuovo, serve scrivere `digests`.
+
+Fuori da questi quattro, **da annotare e non costruire**: la sottostruttura del
+vault (`inbox/notes/research/artifacts/tmp` — convenzione, mai semantica: una
+cartella non è un permesso), la **condizione di stop** sui job (oggi un job "per
+due settimane" si spegne solo se qualcuno lo toglie — stessa slice del trigger a
+predicato), il constraint-verifier come **proprietà degli adapter** mail e
+calendario, e il rollback-all'eccezione per le skill quando arriva M6.
+
 **Il contro-numero, che vale quanto quelli sopra**: dei 47 tool del vecchio,
 **16 non sono mai stati invocati** e **28 su 47 meno di cinque volte in quattro
 mesi**. Sei tool hanno fatto il lavoro. Lo skill layer da 3.052 righe: 3

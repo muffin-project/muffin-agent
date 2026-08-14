@@ -147,3 +147,26 @@ sono separati, `drain` azzera solo il primo, e il ping vive quanto l'attesa.
 **5. Il REPL rileggeva la rivendicazione una volta sola.** Vedi
 `04-roadmap.md` §M5-bis punto 0, correzione del 2026-08-13, per l'ordine che
 rompeva "due scheduler non girano mai" e per la finestra residua detta onesta.
+
+---
+
+## §revisione 2026-08-14 — il criterio d'uscita dal lato di chi lo usa, e il budget che ne consegue
+
+Da `research/confronto-gemini.md` §2 e §18. Non sposta la decisione: aggiunge il criterio che le mancava e una cosa che va costruita **dentro** la stessa slice, non dopo.
+
+**1. Il criterio d'uscita, detto dal lato dell'esperienza.** L'ADR sopra si giustifica dal lato del runtime — undicesima istanza di "dichiarato e non connesso", 31 verbi Hermes su 95 che presuppongono un processo. È corretto e non basta: un ADR che si argomenta con un conteggio di verbi non dice all'owner **cosa cambia mentre lo usa**, e "il processo gira" è verificabile con `ps`, il che lo rende un criterio troppo facile da soddisfare.
+
+La formulazione che lo dice in una riga è la separazione **voce / mani** applicata alla chat: la *voce* accusa ricezione entro ~500 ms ("ricevuto, ci lavoro, ti aggiorno qui"), le *mani* lavorano in asincrono, l'aggiornamento arriva dopo sullo stesso filo. Quindi il criterio d'uscita di questa decisione, accanto ai cinque vincoli:
+
+> **Un turno lungo restituisce entro ~500 ms e consegna dopo, senza che nessuno resti a guardare i puntini.**
+
+Due precisazioni che il criterio porta con sé e che sono nostre:
+
+- **Metà ce l'abbiamo già, ed è quella cosmetica.** `connectors/telegram/presence.ts` rinnova il draft ogni 22 s e `sendChatAction` ogni 4 s — nasce così perché il vecchio Muffin l'aveva tolto sull'assunzione che le risposte stessero dentro il TTL, e rimesso due settimane dopo. La metà **strutturale** (accetta, torna, consegna dopo) non esiste: `runTurn` è sincrono e il connettore lo attende. È una **conseguenza** di questa decisione, non un lavoro parallelo — un worker asincrono dentro `cli/repl.ts` muore col REPL, che è il difetto che questo ADR esiste per chiudere.
+- **L'ACK ha un costo: raddoppia i messaggi.** La forma giusta è già scritta e già in codice per i gruppi — placeholder poi `editMessageText`, **un messaggio invece di due**, e nessun orfano se il turno muore. Vale come forma anche per l'ACK in privato; il draft effimero resta dov'è.
+
+**2. Il budget per-job entra in questa slice, non dopo.** Oggi i cap sono **globali** (mese, e giorno-per-tenant, `core/budget/budget.ts`), e il solo limite per-turno è l'iteration cap del profilo, che conta i giri e non i token. Regge finché l'unico consumatore è l'owner davanti al terminale: se un turno impazzisce, lo vedi. **Un processo che vive rimuove esattamente quella condizione** — i turni autonomi girano di notte, e "il mese si è esaurito" è un controllo troppo grosso: è la differenza fra un job rotto che costa €0,50 e uno che si mangia il mese prima delle 7.
+
+La forma non è un middleware sul client HTTP: il posto è **il job**. `core/scheduler/jobs.ts` ha già la riga; le servono un tetto (token, chiamate, timeout) e un contatore, e `markRan` sa già chiudere un giro. E il corollario di ADR-0022 sul bug Hermes #25517 vale identico qui: **il conto va tenuto fuori dal turno**, non dentro — un contatore che si aggiorna solo quando il loop torna al controllo è un contatore che non protegge dal caso in cui il loop non torna.
+
+**Segnale che questa revisione era sbagliata**: l'ACK viene percepito come rumore (due messaggi dove ne bastava uno) invece che come reattività — nel qual caso la soglia non è il tempo di risposta ma la **durata attesa del turno**, e l'ACK va emesso solo oltre una soglia misurata, non sempre.
