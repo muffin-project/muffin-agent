@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3';
 import { IngestLock, type LockOutcome } from './ingest-lock.js';
-import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA, type FactOrigin, type ReviewKind } from './schema.js';
+import {
+  DEFAULT_FUNCTIONAL_PREDICATES,
+  EXTRACTION_VERSION,
+  MEMORY_SCHEMA,
+  type FactOrigin,
+  type ReviewKind,
+} from './schema.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -713,9 +719,21 @@ export class MemoryStore {
       (this.db.prepare(sql).get(...params) as { v: T }).v;
     return {
       episodes: one<number>(`SELECT count(*) AS v FROM episodes WHERE tenant_id = ?`, tenantId),
+      // Deliberately the exact complement of `pendingEpisodes` — same three
+      // conditions, same version constant. It used to diverge on all three, and
+      // each divergence undercounted in a way that only bites once the lane runs
+      // unattended: `role = 'user'` ignored every agent-role episode the lane
+      // will in fact extract; `extraction_v = 0` would miss rows left at an
+      // older non-zero version the day `EXTRACTION_VERSION` is bumped, which is
+      // the one moment a backlog appears out of nowhere; and no `content IS NOT
+      // NULL` counted rows the fetch can never return, so the number could not
+      // reach zero. A pending count that a human reads to decide "is it caught
+      // up?" has to answer for the fetch, not for a similar-sounding question.
       pending: one<number>(
-        `SELECT count(*) AS v FROM episodes WHERE tenant_id = ? AND extraction_v = 0 AND role = 'user'`,
+        `SELECT count(*) AS v FROM episodes
+          WHERE tenant_id = ? AND extraction_v < ? AND content IS NOT NULL`,
         tenantId,
+        EXTRACTION_VERSION,
       ),
       entities: one<number>(
         `SELECT count(*) AS v FROM entities WHERE tenant_id = ? AND expired_at IS NULL`,

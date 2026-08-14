@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { EXTRACTION_VERSION } from './schema.js';
 import { MemoryStore } from './store.js';
 
 const HOST = 'host';
@@ -247,5 +248,53 @@ describe('memory store', () => {
     expect(second).toMatchObject({ held: expect.stringContaining(String(process.pid)) });
     s.releaseIngestLock();
     expect('release' in s.acquireIngestLock(now)).toBe(true);
+  });
+
+  it('counts as pending exactly what the fetch will return, role and version included', () => {
+    // The two queries answer the same question and used to disagree three ways.
+    // Asserting the count against a literal would have stayed green through all
+    // three: the number was self-consistent, it just described a different set
+    // from the one the lane drains. So the assertion is the *identity* — stats
+    // and fetch, on the same store — which is the property that has to hold and
+    // the only one a wrong filter can break.
+    const s = store();
+    episode(s, HOST, 'detto da me');
+    s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'e questo l’ho detto io',
+      trustTier: 0,
+      createdAt: '2026-08-04T10:00:01Z',
+    });
+    // Never fetchable, so it must never be counted: `pendingEpisodes` filters
+    // `content IS NOT NULL`, and a row the fetch cannot return is a row the
+    // count can never work off.
+    s.addEpisode({
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'user',
+      kind: 'media',
+      content: null,
+      trustTier: 0,
+      createdAt: '2026-08-04T10:00:02Z',
+    });
+    episode(s, GROUP, 'un altro tenant');
+
+    const fetched = s.pendingEpisodes(HOST, EXTRACTION_VERSION, 999);
+    expect(s.stats(HOST).pending).toBe(fetched.length);
+    expect(fetched.map((e) => e.role).sort()).toEqual(['agent', 'user']);
+
+    // And it reaches zero when the lane has done its work, which the old query
+    // could not promise: the null-content row would have sat in it forever.
+    s.markExtracted(
+      HOST,
+      fetched.map((e) => e.id),
+      EXTRACTION_VERSION,
+    );
+    expect(s.stats(HOST).pending).toBe(0);
   });
 });
