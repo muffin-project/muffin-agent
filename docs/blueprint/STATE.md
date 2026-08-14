@@ -1,6 +1,6 @@
 # Stato esecuzione blueprint Muffin
 
-> ⭐ **START HERE — handoff (leggi questo blocco per primo; sopravvive al compact). Aggiornato 2026-08-09.**
+> ⭐ **START HERE — handoff (leggi questo blocco per primo; sopravvive al compact). Aggiornato 2026-08-14.**
 
 **Dove siamo.** Il **substrato M0–M5 è costruito e testato** (cronaca sotto). Ma "cores pronti" **NON è** l'MVP: il criterio d'uscita del Gate 1 (`04-roadmap.md §I due gate`) è **"l'owner lo usa come agente quotidiano per due settimane consecutive senza tornare al vecchio, tranne i gruppi"** — una **soglia d'uso**, non una checklist di feature. Siamo nella **spinta MVP**: chiudere il divario "substrato costruito" → "usabile ogni giorno". Nessuna **decisione di design** grossa aperta — le direzioni le forza la ricerca (`knowledge/` + `research/`); le vere-owner sono poche (il carattere).
 
@@ -38,6 +38,266 @@
    turno di gruppo riceveva byte per byte il prompt dell’owner: `identity.md` e
    la sezione che istruisce a **chiedere dati personali**. Il kernel resta
    l’enforcement; questo è il menu. Resta aperto l’epoch flip «so già chi sei».
+
+**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11;
+dettaglio in `04-roadmap.md` §M5-bis, e il per-esteso dei punti chiusi in cronaca
+§"Il divario M5-bis"). M0-M5 è costruito e **non produce un agente usabile**.
+Cinque cose, tutte verificate sul codice:
+0. 🟡 **Niente vive senza il terminale** → **ADR-0035**. ✅ Il processo **c'è**
+   (`slice/gateway`): `muffin gateway run` possiede lo scheduler (il
+   `setInterval` è uscito da `cli/repl.ts`), SIGTERM/SIGUSR1 drenano, `sd_notify`
+   è no-op senza `NOTIFY_SOCKET`, due scheduler non girano mai. **Resta aperto**:
+   (a) `queue`/`steer`/`heartbeat`/`undo` — vogliono il protocollo sul socket,
+   non costruito; (b) la consegna remota; (c) **il criterio d'uscita dal lato di
+   chi lo usa**, da ADR-0035 §revisione 2026-08-14 — *un turno lungo torna entro
+   ~500 ms e consegna dopo*: `runTurn` è sincrono e il connettore lo attende, la
+   metà strutturale non esiste (quella cosmetica sì, `telegram/presence.ts`);
+   (d) **il budget per-job**, che entra in questa slice e non dopo — i cap oggi
+   sono solo globali (mese, giorno-per-tenant) e l'unico limite per-turno conta i
+   giri, non i token: un processo che vive toglie l'owner-che-guarda, ed è la
+   differenza fra un job rotto che costa €0,50 e uno che si mangia il mese.
+1. 🟡 **Consolidamento — il primo dei due meccanismi parte, il secondo no.**
+   `ingestPending` aveva un solo chiamante a mano: **414 fatti nel vecchio contro
+   0 nel nuovo**, e la DoD di M5 lo richiedeva. **Priorità 1**: senza, memoria/
+   importance/origin/assenza sono inerti. ✅ Fondazione corretta (`6ddba7c`) e
+   ✅ **primo meccanismo** (ADR-0038): coda d'inattività a fronte discendente
+   armata da `LoopDeps.onTurnEnd`, **20 s** e **tetto 12**, costanti misurate sul
+   corpus vero dell'owner (4.107 episodi). Provato eseguendolo: fatto in memoria
+   a +20,0 s dal REPL **e** dal gateway senza REPL.
+   ⛔ **Il secondo meccanismo — la manutenzione periodica — non è costruito**:
+   drenaggio di un arretrato più grande di un batch (sotto arretrato la proprietà
+   «prima del messaggio dopo» non tiene, `pendingEpisodes` parte dal più
+   vecchio), dream/compattazione, audit dei predicati, consumo del registro
+   `review`. Limite dichiarato: **`muffin run` headless non consolida** (timer
+   `unref`'d). **Decisione owner aperta**: se il tool `ricorda` **scrive o
+   propone** — cancella ADR-0032 §9, e nel vecchio quel percorso ha fatto il 9,7%
+   dei fatti **decadendo a zero in quattro mesi**.
+   ⚠️ Le due correzioni che governano il resto (da
+   `research/consolidamento-due-meccanismi.md`, misurate): la latenza del vecchio
+   **era 11,8 s di mediana**, non «minuti» — un meccanismo che atterra a minuti è
+   una regressione; e finché non parte **il recall è solo-keyword**, perché
+   nessun altro percorso indicizza un episodio: non manca un livello, ne mancano
+   due.
+2. ✅ **`thinking` dichiarato nei profili e mai passato** — chiuso 2026-08-13
+   (`6d2cd21`). Non era un cablaggio ma una **migrazione ad `adaptive`**:
+   `{type:'enabled',budget_tokens}` è un 400 da 4.7 in poi. Nella stessa passata,
+   due difetti peggiori: i **blocchi di thinking venivano buttati via**
+   dall'adapter, e `temperature: 0` era cablato nel loop (400 su Opus 4.7+) e in
+   `core/memory/{extract,judge,rerank}.ts` **fuori** dal sistema dei profili.
+3. ✅ **Non era governabile da dentro** → **ADR-0036**, e la sua precondizione
+   bloccante (il tetto di spesa sigillato davvero) è **sciolta** il 2026-08-13
+   (**ADR-0039**): `core/rot/budgets.ts` è l'unico lettore, `config.budget` non
+   esiste più, e `denyRead` copre entrambi gli store di segreti più la `.env`
+   (prima `fs_read(".env")` restituiva la chiave in chiaro). Costruiti i tre
+   pezzi che l'ADR chiedeva: **`muffin config`** sola-lettura che deriva le
+   manopole dall'oggetto `Config` reale, **il primo avvio che dice cosa ha
+   dedotto**, **alias italiani selettivi** (`memoria/lavori/segreto`).
+   **Resta aperto**: nessuna superficie di scrittura conversazionale (non era lo
+   scopo — sola lettura per ADR-0036), e nessun tool in `agent/tools/` legge
+   ancora `listConfigKnobs`.
+4. ⛔ **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui
+   la ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
+5. ⛔ **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
+   finto + smoke piccolo sul modello vero.
+
+**Le tre ricerche di confronto, tutte fatte** (dettaglio in cronaca; nessuna
+sposta l'ordine di lavoro): **peer harness** — la scommessa regge su cinque assi
+su sei, l'unico contraddetto è il resume (punto 4); **inventario vecchio-nuovo**
+— dei 47 tool del vecchio **16 mai invocati** e 28 su 47 sotto le cinque
+chiamate in quattro mesi, sei tool hanno fatto il lavoro; **consulenza esterna**
+(`confronto-gemini.md`, 2026-08-14) — 14 raccomandazioni su ~25 descrivono cose
+già costruite, 4 sono buchi veri e piccoli, e il contributo che vale non è una
+feature ma il criterio d'uscita di ADR-0035 (punto 0c).
+
+**Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
+
+**File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
+- `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
+- `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
+- Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
+
+---
+
+> Cronaca dettagliata (log, dal 2026-08-04). Fasi A, B, C, D completate. Indice: `README.md`. Mandato: `BRIEF.md` + Addendum №1.
+
+## Completato
+
+- **Fase A** — 6 scout (`research/a1..a6`): inventario, prior art, standard, memoria, modelli/economia, brain-hands/sandbox.
+- **Checkpoint** — 6 direttive owner incorporate.
+- **Fase B** — `01`…`08` + `adr/0001-0018`.
+- **Fase C** — 3 critici ostili (`critique/c1-c3`), obiezioni risolte nei documenti; `09-contratti-m0-m1.md` (normativo) e `10-risoluzioni-fase-c.md`.
+- **Fase D** — decisioni owner + 3 scout (`research/b1..b3`):
+  - Licenza **MIT** (ADR-0019), **lingua** del progetto (ADR-0020), **surface model** (ADR-0021), **RoT rivisto** (ADR-0003 §revisione), **due gate MVP/cutover** (04 §3), **namespace verificato** (ADR-0012 §verifica).
+  - **B1** → ADR-0022: un processo confermato, ma con **gate di priorità foreground** (pattern Odysseus) e **worker_thread per il batch pesante** (better-sqlite3 sincrono blocca l'event loop). Lezione dal bug Hermes #25517: l'heartbeat di un job non può dipendere dal ritorno del loop.
+  - **B2** → 06 §2-bis/2-ter: **Qwen 3.8 27B non esiste ancora** (pesi annunciati per metà agosto); catalogo 20-40B verificato; l'incumbent **è già multimodale sull'endpoint già cablato**; audio = servizio a sé (locale con Metal, API altrove); **lingua del prompt: nessuna evidenza controllata, in nessuna direzione**; nuovo rischio: licenze open-weight cinesi che escludono l'UE.
+  - **B3** → ADR-0023: ingresso **doppio binario** (pass-through + descrizione indicizzabile), uscita **immagine e testo mai al posto del testo** (WCAG 1.4.5), pipeline `satori`→`resvg-js`, grafici Vega-Lite, **video fuori dalla v1**.
+
+## Implementazione (dal 2026-08-04)
+
+Il codice vive in **`~/dev/muffin-agent`**, repo git separato. **Rinominato il 2026-08-09** da `muffin-next` (che era provvisorio: macOS case-insensitive collideva col checkout `muffin` esistente). Decisione owner: `muffin-agent` come repo+package, `muffin` resta nome-prodotto+comando+identità (ADR-0012 §revisione). Nulla nel codice hardcodava il vecchio nome (path relativi ovunque); aggiornati package.json e l'hook `guard-frozen-deps` del vecchio worktree.
+
+- **M0 chiuso** — policy kernel, RoT, tracing OTel pinnato, config XDG, budget, `init`/`doctor`.
+- **M1 chiuso e verificato su modello vero** — loop, due adapter dietro `ChatCall`, profili per-modello come dati, CLI `run` + `repl`. Capability floor **6/6 su Sonnet 5 e 6/6 su Qwen3.6-27B**: il gate anti-"harness su Sonnet" tiene.
+- **M2 quasi chiuso (2026-08-05)** — schema a tre piani, estrazione, giudice di contraddizione, recall ibrido (FTS5 + vec, RRF k=60, espansione grafo, reranking), invarianti property-based, `muffin memory why|search|extract|stats|check`. **Scenario di accettazione 9/9** (`evals/memory/acceptance.ts`): ogni turno un processo separato, ogni domanda una sessione nuova, stato asserito in SQL.
+  **Vault chiuso** (2026-08-05, ADR-0024): chunking strutturale heading-first con riga di contesto in ogni chunk, supersede dei chunk ritirati, `muffin vault reindex|add|ls|check`. Il `check` confronta disco e indice — la trappola che i sistemi confrontabili hanno tutti aperta.
+  **Manca ancora**: il golden set della suite memoria (05 §3.1). Il consolidamento schedulato è M5 per costruzione: oggi `muffin memory extract` innesca a mano la stessa funzione che lo scheduler chiamerà.
+- **Prossimo**: **M4** (Telegram) — non M3, ordine strangler.
+
+Due difetti trovati costruendo M2, entrambi invisibili dall'interno dei test: l'**indice vettoriale non lo riempiva nessuno** (`VectorIndex.index` chiamato solo dai test) e il **giudice non vedeva mai le frasi**, solo i due valori nudi — 0/4 verdetti utili sui quattro archetipi, 4/4 dopo. Vedi i commit `112d948` e successivo.
+
+### Audit avversariale (2026-08-06)
+
+Quattro agenti in parallelo — review avversariale, ricerca sui parametri numerici, loop vs SOTA 2026, conformità al normativo. Verdetto: *"non ci costruirei sopra i prossimi tre moduli"*, e aveva ragione. Il pattern trovato non era un tipo di bug ma un'abitudine: **quattro difese scritte, testate, documentate e collegate a niente** — budget engine (`record()` senza chiamanti), safe mode (calcolato e mai passato al kernel, mentre la CLI diceva all'utente che negava), invariante `vector_desync` (salta in silenzio proprio dove serve), probe sandbox macOS (profilo `allow default` che riportava "containment held").
+
+Chiuse tutte, più: leak cross-tenant già cablato (`searchMemory` col tenant hardcoded), quattro bypass del containment fs (symlink penzolante, hardlink, case su APFS, `fs_read` che saltava la deny-list e leggeva la chiave API), `draft` eseguito come `allow`, taint azzerato dalla metà vettoriale del recall, sentinel dello spotlighting falsificabile in 5 punti, vault che riciclava il tier con un `mv` e indicizzava i dotfile, sessione REPL che moriva in modo permanente. Aggiunti context compaction (−48% picco token misurato altrove) e **completion-gate deterministico** (−31pp nell'ablation GAIA quando manca; il vecchio Muffin ce l'aveva e non era ricomparso in nessun modulo). **155 test**, accettazione M2 ancora 9/9.
+
+Sui numeri: quattro dei sei parametri sono **folklore** e la ricerca non offre alternative — `SUPERSEDE_THRESHOLD 0.75` potrebbe proteggere *meno* di quanto sembra (le confidenze LLM sono sovrastimate di 15-27 punti), e `limit=8` + espansione 1-hop inietta il profilo di distrattore peggiore. Entrambi richiedono una misura nostra sul golden set, non altra ricerca.
+
+**Lista dell'audit chiusa** (2026-08-06): kNN-poi-filtra risolto con `PARTITION KEY` di sqlite-vec — verificato con probe, migrazione dei vettori senza re-embedding, e la sequenza è drop-poi-create perché `ALTER TABLE RENAME` su `vec0` lascia gli shadow col nome vecchio. Canale `ask` cablato (REPL chiede, headless esce 3). Isolamento per costruzione nei tre write path che filtravano sul solo id. `AGENTS.md`, config validata con zod, backoff con jitter, abort tra i tool, `fsList` che sopravvive a un symlink rotto.
+
+Resta aperto solo `structuredOutput` nel `ChatCall` normativo (nessun consumatore oggi).
+
+### M4 — Telegram (in corso, 2026-08-06)
+
+**ADR-0025**: nessuna libreria a runtime. Telegraf è **abbandonato a monte** (ultima release 2024-02-29, tipi fermi da 11 mesi) — ma la premessa che il god-file fosse colpa sua era **sbagliata**: la diagnosi originale nomina `TG-BOUNDARY`, l'assenza di un confine tipato, e il fix è indipendente dalla libreria. Quindi: raw `fetch` + `@grammyjs/types` come `import type` (zero byte a runtime), dietro un confine tipato. Fallback dichiarato a `grammY.Api` standalone se il multipart si rivela costoso. Long polling, HTML e non MarkdownV2 (3 caratteri da escapare contro 18, inclusi `.` e `-`).
+
+**Fatto**: inbox durevole (scrittura prima dell'ack — Telegram non rimanda mai un update confermato, quindi avanzare l'offset prima di salvare perde il messaggio per sempre), renderer HTML col chunker che misura l'**HTML renderizzato** e riapre i blocchi di codice tagliati, client con retry su `retry_after`, presence col keepalive dal primo giorno, connector con mapping tenant/principal, `muffin telegram run|status`. **185 test.**
+
+**Media chiusi** (2026-08-06): allegato → `vault/inbox/` → indicizzato **prima** del turno, col tier del mittente. Il nome file non è sanificato ma **ricostruito** da un alfabeto sicuro (`../../.ssh/authorized_keys` non ha modo di uscire), niente dotfile, unicità da data+update-id senza check di collisione. Dimensione verificata due volte, e l'URL di download — che contiene il token — non finisce mai in un errore o in un log. Multipart in uscita con `FormData` nativa; `muffin telegram send` è un comando **dell'owner**, non un tool del modello: mandare è azione outward e ha il suo gate. **195 test.**
+
+**CLI rimodellata su critica owner (2026-08-06)**: `muffin telegram run|send` erano verbi sbagliati — il primo un secondo processo dove ADR-0022 ne prescrive uno, il secondo un chiamante finto bullonato per esercitare il multipart. Ora **`muffin` avvia l'agente** (REPL + ogni surface abilitata nello stesso processo) e le surface si gestiscono col registro di ADR-0021: `muffin surface list|enable|disable`. L'owner chat id sta in config, non in una env var. `sendDocument` resta con un test e un commento che dichiara il chiamante differito (modulo outward) — cablaggio rimandato per decisione, non dimenticato.
+
+**Processo (2026-08-07, direttiva owner)**: `docs/PRACTICES.md` in muffin-next — sei pratiche con trigger (doc via MCP prima delle API, probe sul load-bearing, prior art prima delle forme, parse-at-boundary, test-del-cablaggio, escalation prosa→hook) + primo hook deterministico (`PreToolUse` che blocca `npm install` di pacchetti non dichiarati; allucinazione pacchetti frontier 2026: 4.6-6.1%, arXiv:2605.17062). Aggiunti `--version` e alias `repl` documentato (gap trovati dal checklist GNU). **Da verificare prima del deploy VPS**: sotto systemd stdin è `/dev/null` → il loop readline del REPL riceve EOF subito e chiuderebbe le surface appena connesse — serve una modalità serve/headless per il processo di servizio (inferenza ad alta confidenza dello scout, non ancora eseguita).
+
+**Manca per chiudere M4**: la prova end-to-end su un bot vero — `echo -n "<token>" | muffin secret set telegram_token`, poi `muffin surface enable telegram` (trova da solo la chat dell'owner dopo il primo messaggio al bot), poi `muffin`. È l'unico pezzo che richiede l'owner.
+
+### M3 — Primitivi, skills, dev (avviato 2026-08-08)
+
+Mandato owner via /loop: **si lavora fino all'MVP** (Gate 1 = M0→M5), Context7 prima di ogni API, pratiche di PRACTICES.md.
+
+**Ricerca chiusa** (2026-08-08, stesso giorno): report persistiti in `research/m3-a-sandbox-runtime-lib.md` (con clone+build+esecuzione del codice srt — profili SBPL reali 11-19KB, cluster di bug fail-silenzioso #432/#434/#446 aperti quella settimana) e `research/m3-b-skillmd-shell.md` (6 campi frontmatter standard vs ~19 estensioni proprietarie CC; tre semantiche diverse dietro "timeout"; Gemini unico dove il retry unsandboxed non è mai del modello). **ADR-0026**: srt adottato come **dipendenza sorvegliata** — pin esatto, config costruita campo-per-campo dietro zod v4 (typo impossibile → #434), un tracer bullet per ogni garanzia usata (→ #432, #446), probe fallito = degrade ad ASK (si diverge dal fail-open di Claude Code), niente PTY, niente apply-seccomp su Linux in v1.
+
+**Mandato della ricerca (com'era)**:
+- Scout A: `@anthropic-ai/sandbox-runtime` come *libreria* — versione/manutenzione, API programmatica, write-scope per-invocazione, costi per-comando, profili SBPL minimi dei peer, raccomandazione ufficiale AppArmor Ubuntu 24. Baseline A6 (2026-08-04) esclusa dal mandato: non si rifà.
+- Scout B: spec SKILL.md esatta (agentskills.io + anthropics/skills) e semantica shell-tool dei peer (timeout, troncamento, background, UX del fallimento sandbox).
+- Context7, fatto: **SDK MCP v2 = package split** `@modelcontextprotocol/client|server|node`, versione **2.0.0-alpha.2** (alpha: da pesare contro v1.29 stabile al momento della build), `callTool` senza schema param (risoluzione interna), errori tipizzati ProtocolError/SdkError distinti da `isError` tool-level, `listTools()` espone name/description/inputSchema — la base del pinning hash di §3-bis (c-bis).
+
+**Substrato già in piedi da M0**: `core/rot/verify.ts` ha `RotMode = hardened | single-user` e `decide.ts` porta già `ctx.hardened` — la regola "single-user → `sys.shell` sempre ASK" (threat model §g, contratti §4) ha l'idraulica pronta, mancano le capability sys.* da dichiararci sopra.
+
+**Slice pianificate** (task #12-#18): ADR-0026 (executor: dipendenza vs profili in casa) → executor + sys.shell/sys.process → sys.http con egress → client MCP (allowlist + hash pinning + `mcp list --verify`) → runtime SKILL.md → capability dev (clone dedicato, PR-only) → accettazione end-to-end con misura dell'overhead sandbox (gap A6 §5.6, dovuto da ADR-0018).
+
+**Slice 1 chiusa** (2026-08-08, muffin-next `06c0ed4`, 219 test): srt 0.0.71 pinnata esatta; `core/sandbox/executor.ts` = il confine (config campo-per-campo, guardie ripetute in ogni per-call, env del figlio ricostruito — la chiave API non entra mai nel sandbox via environ); **10 contenimenti reali come test** (guard con cwd altrove → #432, deny-batte-allowWrite, write positiva → #446, rete negata, timeout, troncamento annunciato head+tail); `sys.shell` high/hostOnly → single-user = sempre ASK provato attraverso il kernel vero; shell_run stateless-cwd (modello Gemini/Codex), timeout 120s/600s controllato dal modello (convenzione CC); **v1 strict**: nessun retry unsandboxed — l'escape hatch arriverà come capability always-ask a sé. Vitest ora esclude `.claude/worktrees` (i worktree degli agenti raddoppiavano la suite).
+
+**Slice 2 chiusa** (2026-08-08, muffin-next `bb02ac1`, 277 test): `sys.http` + `sys.process`.
+- **Egress.** `core/net/egress.ts` è il primo lettore vero di `rot/egress.json` (c'era e veniva hashato da M0, consumato da nessuno — la solita "difesa scollegata"). Il kernel ha un **ramo egress**: URL in allowlist → parla la classe di rischio; fuori allowlist → owner-in-contesto-pulito **ASK**, turno tainted **DENY** (un contesto avvelenato non deve poter *nominare* l'endpoint di esfiltrazione). Allowlist assente = ask-per-tutto, non allow-per-tutto (il fallimento del cablaggio-dimenticato è quello sicuro). Match su confini di label (`evil-example.com` ≠ `example.com`; `*.wiki.org` = una label). `http_get` ricontrolla **ogni hop di redirect** sulla stessa lista e risolve ogni host per rifiutare indirizzi privati/link-local/metadata (**SSRF floor**, v4-mapped-v6 incluso — via Context7/undici: `redirect:'manual'` per seguire hop-by-hop coi check in mezzo). GET-only, corpo tier-3 e recintato.
+- **Process.** `sys.process.list`/`kill` **tipati** (non shell): `kill 0`/`-1`/self irrappresentabili (schema o pre-syscall), `process_list` chiede a ps la colonna `comm` mai `args` (l'argv altrui può portare un token come flag). `kill` high → ASK in single-user. Iniezione di ps/kill per test deterministici.
+- Ogni guardia col suo test-del-cablaggio, **verificato fallire senza**: disabilitando il ramo egress si arrossano 5 test (provato). `sys.process` decisione di scope: costruito minimale perché la lista è utile e sicura, ma è il kernel l'unico contenimento (nessun sandbox: opera sulla tabella processi dell'host).
+
+**Slice 3 quasi chiusa** (2026-08-08, muffin-next `60dbc7f`, 290 test): **client MCP col rug-pull gate** (threat model §c-bis). L'approvazione pinna sha256 di name+description+inputSchema di ogni tool (serializzazione canonica, ordine chiavi irrilevante); un server che a riconnessione lista qualcosa di diverso è **SOSPESO** — zero tool registrati, riga di report al boot, si rientra solo ri-approvando. Il rug-pull è **provato contro un server stdio vero** (fixture con descrizione flippata via env → sospensione verificata). SDK **v2 stabile 2.0.0** (uscita il 2026-07-28 insieme alla revision — il caveat alpha è morto sul check npm); divergenza trovata sondando il pacchetto installato: `StdioClientTransport` è dietro il subpath `/stdio`. Env safelist del transport verificata a sorgente (la chiave API non raggiunge i server salvo nome esplicito nel registro). Descrizioni terze **recintate col nonce** e appese DOPO i tool interni; risultati tier-3 recintati. Una capability per server (`mcp.<n>`, medium/hostOnly/taint≤1: un turno tainted non chiama server terzi, un membro mai). Runtime con `register()`/`onClose()` per attachment asincroni; repl e run headless stampano il report per-server. **Chiusa** (`5fa8d21`, 292 test): verbi CLI `muffin mcp add|list --verify|remove` — `add` stampa ogni descrizione prima di pinnare (approvare = aver letto), ri-`add` su nome esistente = ri-approvazione, `list --verify` esce 0 solo ad audit pulito (scriptabile); flusso intero provato contro il fixture reale.
+
+**Slice 4 chiusa** (2026-08-08, muffin-next `b5964a0`, 305 test): **runtime SKILL.md** (#16). Formato standard agentskills.io, nessun formato proprio: 6 campi validati col campo nominato al fallimento, `name`===directory normativo, chiavi non-standard ignorate PER NOME nel report. Divergenza deliberata da Claude Code: skill malformata → **skip con motivo stampato al boot** (`runtime.bootLines`), mai il mezzo-caricamento silenzioso. Progressive disclosure: metadata sempre nel system prompt (sezione assente se zero skill), body via `skill_read` — porta dedicata contenuta nella dir della skill (entrambi i lati realpath'd; traversal e symlink-escape sono test). `allowed-tools` parsato e mostrato, enforcement dichiarato differito. js-yaml (^5) giustificata: le skill dell'ecosistema usano YAML vero; `load()` v4+ = vecchio safeLoad, verificato via Context7 prima dell'install.
+
+**Slice 5 — costruita poi tagliata** (2026-08-09): la capability `dev` (livello a: `dev_clone`+`dev_run` su workspace, commit `7d2d175`, 316 test) è stata **rimossa** per direttiva owner dopo due redirect consecutivi (`5b3f9c1`-ish, 305 test). **ADR-0027**: Muffin **non è un coding agent**. Sul codice fa tre cose: (1) legge (`fs_read`/`fs_list`), (2) esegue script contenuti (`shell_run`, unico tool comando — i check dei comandi dev vivono qui in generale, un solo punto di contenimento), (3) tetto differito = orchestra un coding agent esterno via API (ADR-0015 livello b, fuori v1). L'introspezione effettiva resta desiderata ma è **M6** (span citati, non a metà adesso). Costo pagato: codice funzionante e testato rimosso — l'aver costruito nella direzione sbagliata prima del redirect, saldato subito. **M3 semplificato e sostanzialmente chiuso**: restano solo l'accettazione end-to-end + misura overhead sandbox (#18).
+
+**Ricerca per-connector chiusa** (2026-08-09, domanda owner "system prompt prima o dopo il gateway? + sfruttiamo cache"): 2 scout su fonte primaria + nota caching + **§revisione ADR-0016**. Report in `research/m3-connector-timing-hermes-openclaw-goose.md`, `m3-connector-capabilities-telegram-discord.md`, `m3-caching-and-per-connector-timing.md`. Risposte verificate: (1) il **gateway precede sempre** l'assemblaggio — il prompt-builder *legge* il connettore risolto dal routing, non lo decide; (2) la capability del connettore alimenta **sia il renderer sia il prompt**, ma il prompt-hint va in **coda volatile, mai nel prefisso cacheabile** (Hermes/OpenClaw fanno esattamente questo per riusare il prefisso across channel turns — conferma esterna della meccanica caching); (3) **tool uniformi**, le capability NON diventano tool condizionali (i bottoni sono un tool universale reso a valle); (4) **gemma post-cutoff**: Telegram `sendRichMessage` (Bot API 10.1/10.2, giu-lug 2026, già live) rende tabelle/formule/liste native — capability `rich-native` opt-in con fallback obbligatorio (modello Hermes/Vercel), satori→resvg resta il floor; (5) regola concreta: immagini renderizzate via `sendDocument` non `sendPhoto` (che ricomprime JPEG). MCP Apps assente da TG/Discord, fallback screenshot già precluso dal taglio Chromium.
+
+**Incidente di processo (2026-08-08, rimediato + meccanizzato)**: il cwd della Bash si resetta a ogni turno del /loop → due `npm install` per muffin-next sono atterrati nel **vecchio** worktree. Ripristino byte-exact (`npm uninstall` + `git checkout` dei manifest, verificato pulito) e — secondo incidente di classe cwd — escalation a meccanismo: hook `guard-frozen-deps.mjs` in `.claude/` del vecchio worktree (blocca npm/pnpm/yarn mutanti lì, override `MUFFIN_OLD_OK=1`), esercitato su 4 percorsi. Memoria aggiornata.
+
+**M3 CHIUSO** (2026-08-09, muffin-next `ca575b2`, 312 test). Le slice portanti: executor+`sys.shell` (`06c0ed4`), `sys.process`, `sys.http` egress-gated, client MCP col rug-pull gate (`60dbc7f`) + verbi CLI (`5fa8d21`), runtime SKILL.md (`b5964a0`), capability `dev` **costruita e poi tagliata** (ADR-0027, non è coding agent). **Accettazione end-to-end** attraverso `buildRuntime` — l'assembly di produzione, non pezzi a mano (il principio "testa il cablaggio"): kernel sigillato nega il gruppo/chiede all'owner, ogni capability registrata è nota al kernel, skill scoperta nel prompt / rotta saltata rumorosamente, MCP allowlistato attaccato / driftato sospeso, shell di produzione contiene la scrittura fuori-workspace. **Overhead sandbox misurato**: ~16ms/comando su Seatbelt (debito A6 §5.6/ADR-0018 saldato). Resta il piano affinato del renderer per-connector (§revisione ADR-0016) per quando si costruisce M4-rendering.
+
+**Sequenza MVP (Gate 1 = M0→M5)**: M0-M4 sostanzialmente chiusi (M4 manca solo la prova bot-vero owner-gated), M3 chiuso. **M5 avviato** (scheduler & proattività) — l'ultimo prima del Gate 1.
+
+### M5 — Scheduler & proattività (avviato 2026-08-09)
+
+Substrato già in piedi: principal `system:scheduler`, `quietHours` nel RoT (`defaults/rot/budgets.json`: 23-08 Europe/Rome), budget engine. Regole trigger dal threat model §3: proattività solo da evidenza tier ≤1; `system@scheduler` non eredita la colonna owner (ASK-in-coda, `outward.*`/`config.ratchet` esclusi). Vincolo ADR-0022: l'heartbeat di un job NON può dipendere dal ritorno del loop (bug Hermes #25517, doppio worker).
+
+**Slice 1 chiusa** (muffin-next `d76597d`, 322 test): **job store durevole + next-fire deterministico**. `core/scheduler/jobs.ts` — tabella jobs (soft-delete §I-8), `nextFire` via **cron-parser** (^5.7.0, scelta con Context7+npm: parser puro senza timer, il loop resta nostro per ADR-0022; una dip transitiva luxon; tz validata via `Intl` perché cron-parser accetta silenziosamente una zona ignota). `markRan` ricalcola da *ora* (catch-up: un processo giù su un fire gira una volta, non replaya gli slot persi). Persistenza provata come chiede la DoD: JobStore fresco su stesso file vede il job = "sopravvive al riavvio". DST wall-clock stabile (test su spring-forward italiano).
+
+**Nota di processo**: il `cd /home/user/dev/muffin-next &&` non entrava nel comando bash (glitch ripetuto) → il hook `guard-frozen-deps` ha correttamente bloccato l'install nel vecchio worktree; aggirato con `npm install --prefix /home/user/dev/muffin-next` (via che il hook accetta esplicitamente, robusta al cwd). Il hook ha fatto il suo lavoro.
+
+**Slice 2 chiusa** (muffin-next `f36f021`, 333 test): **Scheduler + `muffin jobs`**. `core/scheduler/scheduler.ts` con le tre proprietà di ADR-0022, ognuna un bug evitato: `tick()` lancia il job e ritorna senza attenderlo (heartbeat indipendente dalla durata — il caso Hermes #25517); un job in volo è saltato da ogni tick successivo (un owner, una lane, un job alla volta); il foreground vince (tick differisce mentre l'owner tiene la lane, un job in corso riceve l'abort per cedere). Job ceduto (aborted) = resta due, ritentato, non contato come run. ASK del principal system = consegnato come outcome; fallimento di consegna = markRan comunque (mai raddoppiare il lavoro). CLI `jobs list|add|remove` apre il DB diretto (list non richiede il modello), default tz dalla zona owner nel RoT ("le 8" = le sue 8). `add` prende un cron esplicito; il path NL è un loop-tool che atterra sullo stesso store dopo conferma. Provato sul binario vero (job creato/listato, cron malformato → exit 78).
+
+**Confine onesto slice 2**: il tick-loop LIVE nel REPL (timer + gate foreground cablato ai turni interattivi + `runTurn` come RunJob + consegna alle surface) è il "connect", differito come la prova bot di M4 — la meccanica è costruita e testata, cablarla al sistema che gira è il passo successivo.
+
+**Gate di proattività chiuso** (muffin-next `e764311`, 342 test, **ADR-0028**): decisione owner **"segnale ad alta confidenza"** (opzione B/3) + vincolo dall'esperienza col vecchio Muffin ("la vecchia proattività era un firehose di 'ho notato X, ho notato Y', vaga e iper-complessa"). `decideProactive` = funzione pura come il kernel: tier>1 → deny (gruppo non arma mai un nudge — memory-poisoning §b, isolamento DoD); quiet-hours → defer a fine finestra; budget → defer. E il rail sul *cosa*: `ProactiveTrigger.kind` è un insieme **CHIUSO** azionabile (commitment_due/deadline_near/fact_actionable/consolidation) + anchor per dedup — un'"osservazione libera" non è rappresentabile, il firehose è incostruibile. Memoria owner aggiornata.
+
+**Scheduler LIVE cablato** (muffin-next `8487c30`, 347 test): `buildRuntime` espone un `JobStore` sulla stessa connessione (ADR-0022), il REPL ci gira sopra uno `Scheduler` — tick 30s, `ForegroundGate` che legge il controller del turno interattivo (foreground vince, il job in corso cede). `makeJobRunner` fa il ponte job→turno reale (sessione fresca per fire, principal `system:scheduler`); `jobOutcomeFromTurn` (l'ASK-in-coda → testo per l'owner) è puro e testato senza modello. Prova d'assembly di produzione: `runtime.jobs` guidato da uno Scheduler con runner fake → job due, eseguito, consegnato.
+
+**Resta di M5** (connect owner-gated, come la prova bot di M4): (1) delivery remota telegram via connector send (oggi un messaggio schedulato per canale remoto emerge nel REPL invece di sparire); (2) event-bus soglia→consolidamento (consuma il conteggio episodi della memoria); (3) i signal-detector (`deadline_near`, `commitment_due`) che producono i `kind` chiusi del gate. La prova end-to-end (un brief che spara attraverso il modello alle 8) richiede la chiave e il sistema che gira.
+
+**MVP (Gate 1 = M0→M5): substrato completo.** Tutti i moduli hanno il loro core durevole costruito e testato; ciò che resta è connect-sul-sistema-che-gira (prova bot M4 + delivery/detector M5) e le decisioni-owner residue (assunzioni 08). Nessuna decisione di design aperta.
+
+## La spinta MVP: i sei punti per esteso
+
+> Spostato qui dal blocco iniettato il 2026-08-14, **verbatim e senza tagli**.
+> Il blocco era **16.716 caratteri contro un budget di ~9.870**, quindi veniva
+> troncato a metà del punto 0 del divario: la lista dei **file load-bearing** —
+> che è la cura dichiarata al "non avere i file" — non arrivava mai in contesto,
+> e nemmeno niente di ciò che le sta accanto. Il meccanismo funzionava e lo
+> diceva pure (il marcatore di troncamento c’era); l’esito era sbagliato lo
+> stesso. Cinque punti su sei sono chiusi e il loro dettaglio è cronaca, che è
+> questo posto qui. Niente è stato cancellato.
+
+**La lista forzata verso "usabile ogni giorno"** (è ciò che *rende* usabile, non una scelta):
+1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag (`muffin-agent@20554dd`).
+2. ✅ **memoria-che-ti-conosce** ([PR #2](https://github.com/GiustoPiedimonte/muffin-agent/pull/2)) — `importance` ordinale 0/1/2 (forced-choice all'estrazione, non un voto: i rater LLM comprimono al centro e sotto-predicono proprio l'estremo alto dove vive l'evento carico) + `origin` detto/dedotto/importato. **Il campo si chiama `origin`, non `source_kind`**: `chunks.source_kind` esisteva già due file più in là con un altro significato. **`importance` NON entra in RRF** — a k=60 il gap fra ranghi adiacenti è 0.000264 e il consenso fra ranker vale 0.016393 (62×): un boost che sposta qualcosa è già capace di cancellare l'unica cosa che RRF misura, e fallisce in modo invisibile. Agisce invece **dentro** l'espansione del grafo (`activeFacts ORDER BY importance DESC`), che decide quali 6 fatti sopravvivono al taglio. Ricerca: `research/memory-salience-and-fusion.md` — il termine di importance di Park et al. **non è mai stato ablato** (verificato sul testo primario), e l'unica ablation credibile è sulla *ritenzione*, non sul ranking.
+3. 🟡 **persona + prompt d'onboarding** — (a) ✅ **cablato** ([PR #3](https://github.com/GiustoPiedimonte/muffin-agent/pull/3)): `voice.md` entra nel prompt, e `authored()` toglie i commenti HTML rivolti all'owner (prima finivano *dentro* l'identità: un'installazione nuova riceveva la pagina che spiega a un umano come scrivere il carattere) e scarta le sezioni non ancora compilate. Ordine: **persona (condivisa) → identity (tua, nel RoT) → voce → operativo**. L'ordine è testato; che "l'ultimo vinca" un conflitto **non** è un meccanismo che abbiamo — è un'assunzione non misurata. (b) 🟡 **bozza da plasmare**: `defaults/persona.md` — puro-muffin, nuovo file perché `identity.md` parte vuoto per costruzione e senza questo un'installazione fresca non ha *nessun* carattere. Si impegna su tre cose discutibili: completa la tua memoria invece di ripeterla · promette solo ciò che i tool del turno fanno davvero (una lista scritta a mano invecchia in silenzio) · afferma il detto e ipotizza il dedotto (la faccia comportamentale della colonna `origin`). **Manca**: il tuo taglio sul contenuto, e `identity.md` è ancora il template vuoto — le sezioni "Chi sei" / "Come ti comporti quando è difficile" / "Il limite che ti do io" sono tue e nessuno può scriverle al posto tuo. Il carattere resta **collaborativo** (io bozzo, tu plasmi; esempi canonici, non overfit) e finché non lo plasmi "sa di mockup" → **NON è l'MVP**.
+4. ✅ **una capability agente** ([PR #4](https://github.com/GiustoPiedimonte/muffin-agent/pull/4)) — `web_search` (Tavily, contratto verificato sulla reference ufficiale) + `fs_write` che c'era già. Solo snippet: `include_raw_content`/`include_answer` restano off **con un test** — pagine intere sarebbero superficie d'iniezione per una capability il cui unico compito è *trovare* la pagina (campagna SEO-poisoning lug 2026: 4 modelli su 26 hanno pagato un attaccante). `hostOnly` (una ricerca spende i tuoi crediti, un membro no) e `maxTaint 3` (un risultato tier-3 sporca il turno a 3: con un tetto più basso si potrebbe cercare **una volta sola** per turno e deep-research sarebbe impossibile). Registrata solo se configurata **e** se l'endpoint è in `egress.json`. **Trovato mentre la cablavo — e vale più della feature**: l'allowlist egress **non è mai entrata in funzione in produzione**. `decide.ts` gate sui `resource.kind === 'url'`, i suoi test passano quel resource a mano e sono verdi, ma `loop.ts` costruiva il resource dal solo `args['path']` → ogni tool call arrivava come `{kind:'none'}` e il ramo non è mai stato eseguito; e `http_get` salta l'allowlist all'hop 0 *apposta*, perché crede che il kernel abbia già deciso. Due metà corrette, ognuna in attesa dell'altra. Un turno di gruppo (taint 2) poteva raggiungere qualunque host. Test di regressione **attraverso `runTurn`**, verificato fallire sul commit precedente. Lezione in `docs/lessons.md`.
+5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza
+   (`slice/spina-osservante`, 12 commit, 509 test). **Stadio 1**
+   (`core/memory/absence.ts`): chi ha smesso di comparire rispetto al *proprio*
+   ritmo. La regola ereditata dal vecchio Muffin («3 menzioni, silenzio >
+   media×3») sembra una soglia al 5% e lo è solo se la media è nota: stimata su
+   pochi intervalli è un test al **16%** proprio dove il vecchio detector viveva.
+   Ora la manopola è **alpha**, il tasso di falsi allarmi, esatto a qualunque
+   lunghezza di storia — e la degradazione su code pesanti è misurata, non
+   ignorata (0,083-0,105 a σ=1.5, fino a 3,1× a σ=2). **Stadio 2**: un modello
+   scrive il messaggio, solo su ciò che ha passato il cancello.
+   **`decideProactive` aveva zero chiamanti** — rails, threat model, ADR, test,
+   e raggiunto da niente: ora ci arriva `muffin observe`. **La consegna nasce
+   spenta**: `muffin observe` mostra, `--send` è un atto esplicito.
+   **Aperto, e tuo**: `gone_quiet` tocca ciò che ADR-0028 aveva respinto con la
+   tua esperienza diretta. L'emendamento è scritto come **proposta non
+   ratificata**, e la sua ratifica dovrebbe aspettare un numero che oggi non
+   esiste — `muffin observe` sulla memoria vera dà 0 candidati su 0 entità,
+   perché non l'hai ancora usato.
+6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
+   chi parla (`slice/contesto-per-tenant`, 546 test). È il punto 1 di
+   `research/confronto-harness.md §9`. Il difetto: `buildSystemPrompt` non
+   prendeva **nessun** parametro tenant e girava una volta sola, quindi un turno
+   di gruppo riceveva byte per byte il prompt dell'owner — `identity.md` (il
+   patto privato, nel RoT) e i 1.330 caratteri di `persona.md §"Al primo
+   incontro"` che dicono all'agente di **chiedere dati personali** «un pezzo per
+   volta», nell'unico tenant la cui memoria non è dell'owner. **Il threat model
+   non ha mai nominato il prompt come superficie**: lo è, e a valle non c'è
+   niente che disfi un'istruzione a chiedere. Ora `agent/context/assemble.ts` —
+   il deliverable M1 dichiarato in tre documenti e mai costruito — produce **due
+   classi**, `owner` e `group`, assemblate una volta a boot: nessun ricalcolo per
+   turno, ciascuna il proprio prefisso cacheabile. Il prompt owner è **pinnato a
+   sha256**: se cambia, ogni cache calda si spegne, e il test lo dice invece di
+   lasciarlo succedere in silenzio. Il gruppo ha un carattere suo (in codice, non
+   in `defaults/`: non è owner-editabile) — sottrarre due sezioni da `persona.md`
+   falliva **aperto**, la sezione successiva che qualcuno aggiunge arriva al
+   gruppo da sola. Seconda metà: `deps.tools` è filtrato per principal prima del
+   modello — un membro vedeva 8 tool `hostOnly` che il kernel avrebbe negato
+   comunque, e il messaggio "quel tool non esiste" glieli elencava tutti.
+   **Il kernel resta l'enforcement** (`decide.ts:132` non toccato): il lookup del
+   tool resta sul registro intero, così un membro che nomina `fs_read` incontra
+   `principal_forbidden` col suo codice sulla traccia, non un "non esiste" che
+   sarebbe una bugia. Provato **attraverso il connettore telegram vero**
+   (`Update` → `drain()` → `runTurn`), rosso verificato sul commit precedente.
+   **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
+   dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
+   non il tenant) e non è in questa slice.
+
+## Il divario M5-bis: i cinque punti per esteso
+
+> Spostato qui dal blocco iniettato il 2026-08-14, **verbatim e senza tagli**,
+> per la stessa ragione della sezione sopra: il merge di `slice/gateway` con
+> `dev` ha riportato il blocco a **18.700 caratteri contro un budget di 9.875**,
+> quindi di nuovo troncato — e di nuovo la vittima era la coda, cioè la lista dei
+> file load-bearing. Il dettaglio dei punti **chiusi** è cronaca; nel blocco
+> resta ciò che è ancora aperto. Niente è stato cancellato.
 
 **⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
 dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
@@ -237,187 +497,6 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 (=la nostra priorità 1, costruita e attaccata a niente). Mai nominati da lei:
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
-
-**Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
-
-**File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
-- `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
-- `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
-- Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
-
----
-
-> Cronaca dettagliata (log, dal 2026-08-04). Fasi A, B, C, D completate. Indice: `README.md`. Mandato: `BRIEF.md` + Addendum №1.
-
-## Completato
-
-- **Fase A** — 6 scout (`research/a1..a6`): inventario, prior art, standard, memoria, modelli/economia, brain-hands/sandbox.
-- **Checkpoint** — 6 direttive owner incorporate.
-- **Fase B** — `01`…`08` + `adr/0001-0018`.
-- **Fase C** — 3 critici ostili (`critique/c1-c3`), obiezioni risolte nei documenti; `09-contratti-m0-m1.md` (normativo) e `10-risoluzioni-fase-c.md`.
-- **Fase D** — decisioni owner + 3 scout (`research/b1..b3`):
-  - Licenza **MIT** (ADR-0019), **lingua** del progetto (ADR-0020), **surface model** (ADR-0021), **RoT rivisto** (ADR-0003 §revisione), **due gate MVP/cutover** (04 §3), **namespace verificato** (ADR-0012 §verifica).
-  - **B1** → ADR-0022: un processo confermato, ma con **gate di priorità foreground** (pattern Odysseus) e **worker_thread per il batch pesante** (better-sqlite3 sincrono blocca l'event loop). Lezione dal bug Hermes #25517: l'heartbeat di un job non può dipendere dal ritorno del loop.
-  - **B2** → 06 §2-bis/2-ter: **Qwen 3.8 27B non esiste ancora** (pesi annunciati per metà agosto); catalogo 20-40B verificato; l'incumbent **è già multimodale sull'endpoint già cablato**; audio = servizio a sé (locale con Metal, API altrove); **lingua del prompt: nessuna evidenza controllata, in nessuna direzione**; nuovo rischio: licenze open-weight cinesi che escludono l'UE.
-  - **B3** → ADR-0023: ingresso **doppio binario** (pass-through + descrizione indicizzabile), uscita **immagine e testo mai al posto del testo** (WCAG 1.4.5), pipeline `satori`→`resvg-js`, grafici Vega-Lite, **video fuori dalla v1**.
-
-## Implementazione (dal 2026-08-04)
-
-Il codice vive in **`~/dev/muffin-agent`**, repo git separato. **Rinominato il 2026-08-09** da `muffin-next` (che era provvisorio: macOS case-insensitive collideva col checkout `muffin` esistente). Decisione owner: `muffin-agent` come repo+package, `muffin` resta nome-prodotto+comando+identità (ADR-0012 §revisione). Nulla nel codice hardcodava il vecchio nome (path relativi ovunque); aggiornati package.json e l'hook `guard-frozen-deps` del vecchio worktree.
-
-- **M0 chiuso** — policy kernel, RoT, tracing OTel pinnato, config XDG, budget, `init`/`doctor`.
-- **M1 chiuso e verificato su modello vero** — loop, due adapter dietro `ChatCall`, profili per-modello come dati, CLI `run` + `repl`. Capability floor **6/6 su Sonnet 5 e 6/6 su Qwen3.6-27B**: il gate anti-"harness su Sonnet" tiene.
-- **M2 quasi chiuso (2026-08-05)** — schema a tre piani, estrazione, giudice di contraddizione, recall ibrido (FTS5 + vec, RRF k=60, espansione grafo, reranking), invarianti property-based, `muffin memory why|search|extract|stats|check`. **Scenario di accettazione 9/9** (`evals/memory/acceptance.ts`): ogni turno un processo separato, ogni domanda una sessione nuova, stato asserito in SQL.
-  **Vault chiuso** (2026-08-05, ADR-0024): chunking strutturale heading-first con riga di contesto in ogni chunk, supersede dei chunk ritirati, `muffin vault reindex|add|ls|check`. Il `check` confronta disco e indice — la trappola che i sistemi confrontabili hanno tutti aperta.
-  **Manca ancora**: il golden set della suite memoria (05 §3.1). Il consolidamento schedulato è M5 per costruzione: oggi `muffin memory extract` innesca a mano la stessa funzione che lo scheduler chiamerà.
-- **Prossimo**: **M4** (Telegram) — non M3, ordine strangler.
-
-Due difetti trovati costruendo M2, entrambi invisibili dall'interno dei test: l'**indice vettoriale non lo riempiva nessuno** (`VectorIndex.index` chiamato solo dai test) e il **giudice non vedeva mai le frasi**, solo i due valori nudi — 0/4 verdetti utili sui quattro archetipi, 4/4 dopo. Vedi i commit `112d948` e successivo.
-
-### Audit avversariale (2026-08-06)
-
-Quattro agenti in parallelo — review avversariale, ricerca sui parametri numerici, loop vs SOTA 2026, conformità al normativo. Verdetto: *"non ci costruirei sopra i prossimi tre moduli"*, e aveva ragione. Il pattern trovato non era un tipo di bug ma un'abitudine: **quattro difese scritte, testate, documentate e collegate a niente** — budget engine (`record()` senza chiamanti), safe mode (calcolato e mai passato al kernel, mentre la CLI diceva all'utente che negava), invariante `vector_desync` (salta in silenzio proprio dove serve), probe sandbox macOS (profilo `allow default` che riportava "containment held").
-
-Chiuse tutte, più: leak cross-tenant già cablato (`searchMemory` col tenant hardcoded), quattro bypass del containment fs (symlink penzolante, hardlink, case su APFS, `fs_read` che saltava la deny-list e leggeva la chiave API), `draft` eseguito come `allow`, taint azzerato dalla metà vettoriale del recall, sentinel dello spotlighting falsificabile in 5 punti, vault che riciclava il tier con un `mv` e indicizzava i dotfile, sessione REPL che moriva in modo permanente. Aggiunti context compaction (−48% picco token misurato altrove) e **completion-gate deterministico** (−31pp nell'ablation GAIA quando manca; il vecchio Muffin ce l'aveva e non era ricomparso in nessun modulo). **155 test**, accettazione M2 ancora 9/9.
-
-Sui numeri: quattro dei sei parametri sono **folklore** e la ricerca non offre alternative — `SUPERSEDE_THRESHOLD 0.75` potrebbe proteggere *meno* di quanto sembra (le confidenze LLM sono sovrastimate di 15-27 punti), e `limit=8` + espansione 1-hop inietta il profilo di distrattore peggiore. Entrambi richiedono una misura nostra sul golden set, non altra ricerca.
-
-**Lista dell'audit chiusa** (2026-08-06): kNN-poi-filtra risolto con `PARTITION KEY` di sqlite-vec — verificato con probe, migrazione dei vettori senza re-embedding, e la sequenza è drop-poi-create perché `ALTER TABLE RENAME` su `vec0` lascia gli shadow col nome vecchio. Canale `ask` cablato (REPL chiede, headless esce 3). Isolamento per costruzione nei tre write path che filtravano sul solo id. `AGENTS.md`, config validata con zod, backoff con jitter, abort tra i tool, `fsList` che sopravvive a un symlink rotto.
-
-Resta aperto solo `structuredOutput` nel `ChatCall` normativo (nessun consumatore oggi).
-
-### M4 — Telegram (in corso, 2026-08-06)
-
-**ADR-0025**: nessuna libreria a runtime. Telegraf è **abbandonato a monte** (ultima release 2024-02-29, tipi fermi da 11 mesi) — ma la premessa che il god-file fosse colpa sua era **sbagliata**: la diagnosi originale nomina `TG-BOUNDARY`, l'assenza di un confine tipato, e il fix è indipendente dalla libreria. Quindi: raw `fetch` + `@grammyjs/types` come `import type` (zero byte a runtime), dietro un confine tipato. Fallback dichiarato a `grammY.Api` standalone se il multipart si rivela costoso. Long polling, HTML e non MarkdownV2 (3 caratteri da escapare contro 18, inclusi `.` e `-`).
-
-**Fatto**: inbox durevole (scrittura prima dell'ack — Telegram non rimanda mai un update confermato, quindi avanzare l'offset prima di salvare perde il messaggio per sempre), renderer HTML col chunker che misura l'**HTML renderizzato** e riapre i blocchi di codice tagliati, client con retry su `retry_after`, presence col keepalive dal primo giorno, connector con mapping tenant/principal, `muffin telegram run|status`. **185 test.**
-
-**Media chiusi** (2026-08-06): allegato → `vault/inbox/` → indicizzato **prima** del turno, col tier del mittente. Il nome file non è sanificato ma **ricostruito** da un alfabeto sicuro (`../../.ssh/authorized_keys` non ha modo di uscire), niente dotfile, unicità da data+update-id senza check di collisione. Dimensione verificata due volte, e l'URL di download — che contiene il token — non finisce mai in un errore o in un log. Multipart in uscita con `FormData` nativa; `muffin telegram send` è un comando **dell'owner**, non un tool del modello: mandare è azione outward e ha il suo gate. **195 test.**
-
-**CLI rimodellata su critica owner (2026-08-06)**: `muffin telegram run|send` erano verbi sbagliati — il primo un secondo processo dove ADR-0022 ne prescrive uno, il secondo un chiamante finto bullonato per esercitare il multipart. Ora **`muffin` avvia l'agente** (REPL + ogni surface abilitata nello stesso processo) e le surface si gestiscono col registro di ADR-0021: `muffin surface list|enable|disable`. L'owner chat id sta in config, non in una env var. `sendDocument` resta con un test e un commento che dichiara il chiamante differito (modulo outward) — cablaggio rimandato per decisione, non dimenticato.
-
-**Processo (2026-08-07, direttiva owner)**: `docs/PRACTICES.md` in muffin-next — sei pratiche con trigger (doc via MCP prima delle API, probe sul load-bearing, prior art prima delle forme, parse-at-boundary, test-del-cablaggio, escalation prosa→hook) + primo hook deterministico (`PreToolUse` che blocca `npm install` di pacchetti non dichiarati; allucinazione pacchetti frontier 2026: 4.6-6.1%, arXiv:2605.17062). Aggiunti `--version` e alias `repl` documentato (gap trovati dal checklist GNU). **Da verificare prima del deploy VPS**: sotto systemd stdin è `/dev/null` → il loop readline del REPL riceve EOF subito e chiuderebbe le surface appena connesse — serve una modalità serve/headless per il processo di servizio (inferenza ad alta confidenza dello scout, non ancora eseguita).
-
-**Manca per chiudere M4**: la prova end-to-end su un bot vero — `echo -n "<token>" | muffin secret set telegram_token`, poi `muffin surface enable telegram` (trova da solo la chat dell'owner dopo il primo messaggio al bot), poi `muffin`. È l'unico pezzo che richiede l'owner.
-
-### M3 — Primitivi, skills, dev (avviato 2026-08-08)
-
-Mandato owner via /loop: **si lavora fino all'MVP** (Gate 1 = M0→M5), Context7 prima di ogni API, pratiche di PRACTICES.md.
-
-**Ricerca chiusa** (2026-08-08, stesso giorno): report persistiti in `research/m3-a-sandbox-runtime-lib.md` (con clone+build+esecuzione del codice srt — profili SBPL reali 11-19KB, cluster di bug fail-silenzioso #432/#434/#446 aperti quella settimana) e `research/m3-b-skillmd-shell.md` (6 campi frontmatter standard vs ~19 estensioni proprietarie CC; tre semantiche diverse dietro "timeout"; Gemini unico dove il retry unsandboxed non è mai del modello). **ADR-0026**: srt adottato come **dipendenza sorvegliata** — pin esatto, config costruita campo-per-campo dietro zod v4 (typo impossibile → #434), un tracer bullet per ogni garanzia usata (→ #432, #446), probe fallito = degrade ad ASK (si diverge dal fail-open di Claude Code), niente PTY, niente apply-seccomp su Linux in v1.
-
-**Mandato della ricerca (com'era)**:
-- Scout A: `@anthropic-ai/sandbox-runtime` come *libreria* — versione/manutenzione, API programmatica, write-scope per-invocazione, costi per-comando, profili SBPL minimi dei peer, raccomandazione ufficiale AppArmor Ubuntu 24. Baseline A6 (2026-08-04) esclusa dal mandato: non si rifà.
-- Scout B: spec SKILL.md esatta (agentskills.io + anthropics/skills) e semantica shell-tool dei peer (timeout, troncamento, background, UX del fallimento sandbox).
-- Context7, fatto: **SDK MCP v2 = package split** `@modelcontextprotocol/client|server|node`, versione **2.0.0-alpha.2** (alpha: da pesare contro v1.29 stabile al momento della build), `callTool` senza schema param (risoluzione interna), errori tipizzati ProtocolError/SdkError distinti da `isError` tool-level, `listTools()` espone name/description/inputSchema — la base del pinning hash di §3-bis (c-bis).
-
-**Substrato già in piedi da M0**: `core/rot/verify.ts` ha `RotMode = hardened | single-user` e `decide.ts` porta già `ctx.hardened` — la regola "single-user → `sys.shell` sempre ASK" (threat model §g, contratti §4) ha l'idraulica pronta, mancano le capability sys.* da dichiararci sopra.
-
-**Slice pianificate** (task #12-#18): ADR-0026 (executor: dipendenza vs profili in casa) → executor + sys.shell/sys.process → sys.http con egress → client MCP (allowlist + hash pinning + `mcp list --verify`) → runtime SKILL.md → capability dev (clone dedicato, PR-only) → accettazione end-to-end con misura dell'overhead sandbox (gap A6 §5.6, dovuto da ADR-0018).
-
-**Slice 1 chiusa** (2026-08-08, muffin-next `06c0ed4`, 219 test): srt 0.0.71 pinnata esatta; `core/sandbox/executor.ts` = il confine (config campo-per-campo, guardie ripetute in ogni per-call, env del figlio ricostruito — la chiave API non entra mai nel sandbox via environ); **10 contenimenti reali come test** (guard con cwd altrove → #432, deny-batte-allowWrite, write positiva → #446, rete negata, timeout, troncamento annunciato head+tail); `sys.shell` high/hostOnly → single-user = sempre ASK provato attraverso il kernel vero; shell_run stateless-cwd (modello Gemini/Codex), timeout 120s/600s controllato dal modello (convenzione CC); **v1 strict**: nessun retry unsandboxed — l'escape hatch arriverà come capability always-ask a sé. Vitest ora esclude `.claude/worktrees` (i worktree degli agenti raddoppiavano la suite).
-
-**Slice 2 chiusa** (2026-08-08, muffin-next `bb02ac1`, 277 test): `sys.http` + `sys.process`.
-- **Egress.** `core/net/egress.ts` è il primo lettore vero di `rot/egress.json` (c'era e veniva hashato da M0, consumato da nessuno — la solita "difesa scollegata"). Il kernel ha un **ramo egress**: URL in allowlist → parla la classe di rischio; fuori allowlist → owner-in-contesto-pulito **ASK**, turno tainted **DENY** (un contesto avvelenato non deve poter *nominare* l'endpoint di esfiltrazione). Allowlist assente = ask-per-tutto, non allow-per-tutto (il fallimento del cablaggio-dimenticato è quello sicuro). Match su confini di label (`evil-example.com` ≠ `example.com`; `*.wiki.org` = una label). `http_get` ricontrolla **ogni hop di redirect** sulla stessa lista e risolve ogni host per rifiutare indirizzi privati/link-local/metadata (**SSRF floor**, v4-mapped-v6 incluso — via Context7/undici: `redirect:'manual'` per seguire hop-by-hop coi check in mezzo). GET-only, corpo tier-3 e recintato.
-- **Process.** `sys.process.list`/`kill` **tipati** (non shell): `kill 0`/`-1`/self irrappresentabili (schema o pre-syscall), `process_list` chiede a ps la colonna `comm` mai `args` (l'argv altrui può portare un token come flag). `kill` high → ASK in single-user. Iniezione di ps/kill per test deterministici.
-- Ogni guardia col suo test-del-cablaggio, **verificato fallire senza**: disabilitando il ramo egress si arrossano 5 test (provato). `sys.process` decisione di scope: costruito minimale perché la lista è utile e sicura, ma è il kernel l'unico contenimento (nessun sandbox: opera sulla tabella processi dell'host).
-
-**Slice 3 quasi chiusa** (2026-08-08, muffin-next `60dbc7f`, 290 test): **client MCP col rug-pull gate** (threat model §c-bis). L'approvazione pinna sha256 di name+description+inputSchema di ogni tool (serializzazione canonica, ordine chiavi irrilevante); un server che a riconnessione lista qualcosa di diverso è **SOSPESO** — zero tool registrati, riga di report al boot, si rientra solo ri-approvando. Il rug-pull è **provato contro un server stdio vero** (fixture con descrizione flippata via env → sospensione verificata). SDK **v2 stabile 2.0.0** (uscita il 2026-07-28 insieme alla revision — il caveat alpha è morto sul check npm); divergenza trovata sondando il pacchetto installato: `StdioClientTransport` è dietro il subpath `/stdio`. Env safelist del transport verificata a sorgente (la chiave API non raggiunge i server salvo nome esplicito nel registro). Descrizioni terze **recintate col nonce** e appese DOPO i tool interni; risultati tier-3 recintati. Una capability per server (`mcp.<n>`, medium/hostOnly/taint≤1: un turno tainted non chiama server terzi, un membro mai). Runtime con `register()`/`onClose()` per attachment asincroni; repl e run headless stampano il report per-server. **Chiusa** (`5fa8d21`, 292 test): verbi CLI `muffin mcp add|list --verify|remove` — `add` stampa ogni descrizione prima di pinnare (approvare = aver letto), ri-`add` su nome esistente = ri-approvazione, `list --verify` esce 0 solo ad audit pulito (scriptabile); flusso intero provato contro il fixture reale.
-
-**Slice 4 chiusa** (2026-08-08, muffin-next `b5964a0`, 305 test): **runtime SKILL.md** (#16). Formato standard agentskills.io, nessun formato proprio: 6 campi validati col campo nominato al fallimento, `name`===directory normativo, chiavi non-standard ignorate PER NOME nel report. Divergenza deliberata da Claude Code: skill malformata → **skip con motivo stampato al boot** (`runtime.bootLines`), mai il mezzo-caricamento silenzioso. Progressive disclosure: metadata sempre nel system prompt (sezione assente se zero skill), body via `skill_read` — porta dedicata contenuta nella dir della skill (entrambi i lati realpath'd; traversal e symlink-escape sono test). `allowed-tools` parsato e mostrato, enforcement dichiarato differito. js-yaml (^5) giustificata: le skill dell'ecosistema usano YAML vero; `load()` v4+ = vecchio safeLoad, verificato via Context7 prima dell'install.
-
-**Slice 5 — costruita poi tagliata** (2026-08-09): la capability `dev` (livello a: `dev_clone`+`dev_run` su workspace, commit `7d2d175`, 316 test) è stata **rimossa** per direttiva owner dopo due redirect consecutivi (`5b3f9c1`-ish, 305 test). **ADR-0027**: Muffin **non è un coding agent**. Sul codice fa tre cose: (1) legge (`fs_read`/`fs_list`), (2) esegue script contenuti (`shell_run`, unico tool comando — i check dei comandi dev vivono qui in generale, un solo punto di contenimento), (3) tetto differito = orchestra un coding agent esterno via API (ADR-0015 livello b, fuori v1). L'introspezione effettiva resta desiderata ma è **M6** (span citati, non a metà adesso). Costo pagato: codice funzionante e testato rimosso — l'aver costruito nella direzione sbagliata prima del redirect, saldato subito. **M3 semplificato e sostanzialmente chiuso**: restano solo l'accettazione end-to-end + misura overhead sandbox (#18).
-
-**Ricerca per-connector chiusa** (2026-08-09, domanda owner "system prompt prima o dopo il gateway? + sfruttiamo cache"): 2 scout su fonte primaria + nota caching + **§revisione ADR-0016**. Report in `research/m3-connector-timing-hermes-openclaw-goose.md`, `m3-connector-capabilities-telegram-discord.md`, `m3-caching-and-per-connector-timing.md`. Risposte verificate: (1) il **gateway precede sempre** l'assemblaggio — il prompt-builder *legge* il connettore risolto dal routing, non lo decide; (2) la capability del connettore alimenta **sia il renderer sia il prompt**, ma il prompt-hint va in **coda volatile, mai nel prefisso cacheabile** (Hermes/OpenClaw fanno esattamente questo per riusare il prefisso across channel turns — conferma esterna della meccanica caching); (3) **tool uniformi**, le capability NON diventano tool condizionali (i bottoni sono un tool universale reso a valle); (4) **gemma post-cutoff**: Telegram `sendRichMessage` (Bot API 10.1/10.2, giu-lug 2026, già live) rende tabelle/formule/liste native — capability `rich-native` opt-in con fallback obbligatorio (modello Hermes/Vercel), satori→resvg resta il floor; (5) regola concreta: immagini renderizzate via `sendDocument` non `sendPhoto` (che ricomprime JPEG). MCP Apps assente da TG/Discord, fallback screenshot già precluso dal taglio Chromium.
-
-**Incidente di processo (2026-08-08, rimediato + meccanizzato)**: il cwd della Bash si resetta a ogni turno del /loop → due `npm install` per muffin-next sono atterrati nel **vecchio** worktree. Ripristino byte-exact (`npm uninstall` + `git checkout` dei manifest, verificato pulito) e — secondo incidente di classe cwd — escalation a meccanismo: hook `guard-frozen-deps.mjs` in `.claude/` del vecchio worktree (blocca npm/pnpm/yarn mutanti lì, override `MUFFIN_OLD_OK=1`), esercitato su 4 percorsi. Memoria aggiornata.
-
-**M3 CHIUSO** (2026-08-09, muffin-next `ca575b2`, 312 test). Le slice portanti: executor+`sys.shell` (`06c0ed4`), `sys.process`, `sys.http` egress-gated, client MCP col rug-pull gate (`60dbc7f`) + verbi CLI (`5fa8d21`), runtime SKILL.md (`b5964a0`), capability `dev` **costruita e poi tagliata** (ADR-0027, non è coding agent). **Accettazione end-to-end** attraverso `buildRuntime` — l'assembly di produzione, non pezzi a mano (il principio "testa il cablaggio"): kernel sigillato nega il gruppo/chiede all'owner, ogni capability registrata è nota al kernel, skill scoperta nel prompt / rotta saltata rumorosamente, MCP allowlistato attaccato / driftato sospeso, shell di produzione contiene la scrittura fuori-workspace. **Overhead sandbox misurato**: ~16ms/comando su Seatbelt (debito A6 §5.6/ADR-0018 saldato). Resta il piano affinato del renderer per-connector (§revisione ADR-0016) per quando si costruisce M4-rendering.
-
-**Sequenza MVP (Gate 1 = M0→M5)**: M0-M4 sostanzialmente chiusi (M4 manca solo la prova bot-vero owner-gated), M3 chiuso. **M5 avviato** (scheduler & proattività) — l'ultimo prima del Gate 1.
-
-### M5 — Scheduler & proattività (avviato 2026-08-09)
-
-Substrato già in piedi: principal `system:scheduler`, `quietHours` nel RoT (`defaults/rot/budgets.json`: 23-08 Europe/Rome), budget engine. Regole trigger dal threat model §3: proattività solo da evidenza tier ≤1; `system@scheduler` non eredita la colonna owner (ASK-in-coda, `outward.*`/`config.ratchet` esclusi). Vincolo ADR-0022: l'heartbeat di un job NON può dipendere dal ritorno del loop (bug Hermes #25517, doppio worker).
-
-**Slice 1 chiusa** (muffin-next `d76597d`, 322 test): **job store durevole + next-fire deterministico**. `core/scheduler/jobs.ts` — tabella jobs (soft-delete §I-8), `nextFire` via **cron-parser** (^5.7.0, scelta con Context7+npm: parser puro senza timer, il loop resta nostro per ADR-0022; una dip transitiva luxon; tz validata via `Intl` perché cron-parser accetta silenziosamente una zona ignota). `markRan` ricalcola da *ora* (catch-up: un processo giù su un fire gira una volta, non replaya gli slot persi). Persistenza provata come chiede la DoD: JobStore fresco su stesso file vede il job = "sopravvive al riavvio". DST wall-clock stabile (test su spring-forward italiano).
-
-**Nota di processo**: il `cd /home/user/dev/muffin-next &&` non entrava nel comando bash (glitch ripetuto) → il hook `guard-frozen-deps` ha correttamente bloccato l'install nel vecchio worktree; aggirato con `npm install --prefix /home/user/dev/muffin-next` (via che il hook accetta esplicitamente, robusta al cwd). Il hook ha fatto il suo lavoro.
-
-**Slice 2 chiusa** (muffin-next `f36f021`, 333 test): **Scheduler + `muffin jobs`**. `core/scheduler/scheduler.ts` con le tre proprietà di ADR-0022, ognuna un bug evitato: `tick()` lancia il job e ritorna senza attenderlo (heartbeat indipendente dalla durata — il caso Hermes #25517); un job in volo è saltato da ogni tick successivo (un owner, una lane, un job alla volta); il foreground vince (tick differisce mentre l'owner tiene la lane, un job in corso riceve l'abort per cedere). Job ceduto (aborted) = resta due, ritentato, non contato come run. ASK del principal system = consegnato come outcome; fallimento di consegna = markRan comunque (mai raddoppiare il lavoro). CLI `jobs list|add|remove` apre il DB diretto (list non richiede il modello), default tz dalla zona owner nel RoT ("le 8" = le sue 8). `add` prende un cron esplicito; il path NL è un loop-tool che atterra sullo stesso store dopo conferma. Provato sul binario vero (job creato/listato, cron malformato → exit 78).
-
-**Confine onesto slice 2**: il tick-loop LIVE nel REPL (timer + gate foreground cablato ai turni interattivi + `runTurn` come RunJob + consegna alle surface) è il "connect", differito come la prova bot di M4 — la meccanica è costruita e testata, cablarla al sistema che gira è il passo successivo.
-
-**Gate di proattività chiuso** (muffin-next `e764311`, 342 test, **ADR-0028**): decisione owner **"segnale ad alta confidenza"** (opzione B/3) + vincolo dall'esperienza col vecchio Muffin ("la vecchia proattività era un firehose di 'ho notato X, ho notato Y', vaga e iper-complessa"). `decideProactive` = funzione pura come il kernel: tier>1 → deny (gruppo non arma mai un nudge — memory-poisoning §b, isolamento DoD); quiet-hours → defer a fine finestra; budget → defer. E il rail sul *cosa*: `ProactiveTrigger.kind` è un insieme **CHIUSO** azionabile (commitment_due/deadline_near/fact_actionable/consolidation) + anchor per dedup — un'"osservazione libera" non è rappresentabile, il firehose è incostruibile. Memoria owner aggiornata.
-
-**Scheduler LIVE cablato** (muffin-next `8487c30`, 347 test): `buildRuntime` espone un `JobStore` sulla stessa connessione (ADR-0022), il REPL ci gira sopra uno `Scheduler` — tick 30s, `ForegroundGate` che legge il controller del turno interattivo (foreground vince, il job in corso cede). `makeJobRunner` fa il ponte job→turno reale (sessione fresca per fire, principal `system:scheduler`); `jobOutcomeFromTurn` (l'ASK-in-coda → testo per l'owner) è puro e testato senza modello. Prova d'assembly di produzione: `runtime.jobs` guidato da uno Scheduler con runner fake → job due, eseguito, consegnato.
-
-**Resta di M5** (connect owner-gated, come la prova bot di M4): (1) delivery remota telegram via connector send (oggi un messaggio schedulato per canale remoto emerge nel REPL invece di sparire); (2) event-bus soglia→consolidamento (consuma il conteggio episodi della memoria); (3) i signal-detector (`deadline_near`, `commitment_due`) che producono i `kind` chiusi del gate. La prova end-to-end (un brief che spara attraverso il modello alle 8) richiede la chiave e il sistema che gira.
-
-**MVP (Gate 1 = M0→M5): substrato completo.** Tutti i moduli hanno il loro core durevole costruito e testato; ciò che resta è connect-sul-sistema-che-gira (prova bot M4 + delivery/detector M5) e le decisioni-owner residue (assunzioni 08). Nessuna decisione di design aperta.
-
-## La spinta MVP: i sei punti per esteso
-
-> Spostato qui dal blocco iniettato il 2026-08-14, **verbatim e senza tagli**.
-> Il blocco era **16.716 caratteri contro un budget di ~9.870**, quindi veniva
-> troncato a metà del punto 0 del divario: la lista dei **file load-bearing** —
-> che è la cura dichiarata al "non avere i file" — non arrivava mai in contesto,
-> e nemmeno niente di ciò che le sta accanto. Il meccanismo funzionava e lo
-> diceva pure (il marcatore di troncamento c’era); l’esito era sbagliato lo
-> stesso. Cinque punti su sei sono chiusi e il loro dettaglio è cronaca, che è
-> questo posto qui. Niente è stato cancellato.
-
-**La lista forzata verso "usabile ogni giorno"** (è ciò che *rende* usabile, non una scelta):
-1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag (`muffin-agent@20554dd`).
-2. ✅ **memoria-che-ti-conosce** ([PR #2](https://github.com/GiustoPiedimonte/muffin-agent/pull/2)) — `importance` ordinale 0/1/2 (forced-choice all'estrazione, non un voto: i rater LLM comprimono al centro e sotto-predicono proprio l'estremo alto dove vive l'evento carico) + `origin` detto/dedotto/importato. **Il campo si chiama `origin`, non `source_kind`**: `chunks.source_kind` esisteva già due file più in là con un altro significato. **`importance` NON entra in RRF** — a k=60 il gap fra ranghi adiacenti è 0.000264 e il consenso fra ranker vale 0.016393 (62×): un boost che sposta qualcosa è già capace di cancellare l'unica cosa che RRF misura, e fallisce in modo invisibile. Agisce invece **dentro** l'espansione del grafo (`activeFacts ORDER BY importance DESC`), che decide quali 6 fatti sopravvivono al taglio. Ricerca: `research/memory-salience-and-fusion.md` — il termine di importance di Park et al. **non è mai stato ablato** (verificato sul testo primario), e l'unica ablation credibile è sulla *ritenzione*, non sul ranking.
-3. 🟡 **persona + prompt d'onboarding** — (a) ✅ **cablato** ([PR #3](https://github.com/GiustoPiedimonte/muffin-agent/pull/3)): `voice.md` entra nel prompt, e `authored()` toglie i commenti HTML rivolti all'owner (prima finivano *dentro* l'identità: un'installazione nuova riceveva la pagina che spiega a un umano come scrivere il carattere) e scarta le sezioni non ancora compilate. Ordine: **persona (condivisa) → identity (tua, nel RoT) → voce → operativo**. L'ordine è testato; che "l'ultimo vinca" un conflitto **non** è un meccanismo che abbiamo — è un'assunzione non misurata. (b) 🟡 **bozza da plasmare**: `defaults/persona.md` — puro-muffin, nuovo file perché `identity.md` parte vuoto per costruzione e senza questo un'installazione fresca non ha *nessun* carattere. Si impegna su tre cose discutibili: completa la tua memoria invece di ripeterla · promette solo ciò che i tool del turno fanno davvero (una lista scritta a mano invecchia in silenzio) · afferma il detto e ipotizza il dedotto (la faccia comportamentale della colonna `origin`). **Manca**: il tuo taglio sul contenuto, e `identity.md` è ancora il template vuoto — le sezioni "Chi sei" / "Come ti comporti quando è difficile" / "Il limite che ti do io" sono tue e nessuno può scriverle al posto tuo. Il carattere resta **collaborativo** (io bozzo, tu plasmi; esempi canonici, non overfit) e finché non lo plasmi "sa di mockup" → **NON è l'MVP**.
-4. ✅ **una capability agente** ([PR #4](https://github.com/GiustoPiedimonte/muffin-agent/pull/4)) — `web_search` (Tavily, contratto verificato sulla reference ufficiale) + `fs_write` che c'era già. Solo snippet: `include_raw_content`/`include_answer` restano off **con un test** — pagine intere sarebbero superficie d'iniezione per una capability il cui unico compito è *trovare* la pagina (campagna SEO-poisoning lug 2026: 4 modelli su 26 hanno pagato un attaccante). `hostOnly` (una ricerca spende i tuoi crediti, un membro no) e `maxTaint 3` (un risultato tier-3 sporca il turno a 3: con un tetto più basso si potrebbe cercare **una volta sola** per turno e deep-research sarebbe impossibile). Registrata solo se configurata **e** se l'endpoint è in `egress.json`. **Trovato mentre la cablavo — e vale più della feature**: l'allowlist egress **non è mai entrata in funzione in produzione**. `decide.ts` gate sui `resource.kind === 'url'`, i suoi test passano quel resource a mano e sono verdi, ma `loop.ts` costruiva il resource dal solo `args['path']` → ogni tool call arrivava come `{kind:'none'}` e il ramo non è mai stato eseguito; e `http_get` salta l'allowlist all'hop 0 *apposta*, perché crede che il kernel abbia già deciso. Due metà corrette, ognuna in attesa dell'altra. Un turno di gruppo (taint 2) poteva raggiungere qualunque host. Test di regressione **attraverso `runTurn`**, verificato fallire sul commit precedente. Lezione in `docs/lessons.md`.
-5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza
-   (`slice/spina-osservante`, 12 commit, 509 test). **Stadio 1**
-   (`core/memory/absence.ts`): chi ha smesso di comparire rispetto al *proprio*
-   ritmo. La regola ereditata dal vecchio Muffin («3 menzioni, silenzio >
-   media×3») sembra una soglia al 5% e lo è solo se la media è nota: stimata su
-   pochi intervalli è un test al **16%** proprio dove il vecchio detector viveva.
-   Ora la manopola è **alpha**, il tasso di falsi allarmi, esatto a qualunque
-   lunghezza di storia — e la degradazione su code pesanti è misurata, non
-   ignorata (0,083-0,105 a σ=1.5, fino a 3,1× a σ=2). **Stadio 2**: un modello
-   scrive il messaggio, solo su ciò che ha passato il cancello.
-   **`decideProactive` aveva zero chiamanti** — rails, threat model, ADR, test,
-   e raggiunto da niente: ora ci arriva `muffin observe`. **La consegna nasce
-   spenta**: `muffin observe` mostra, `--send` è un atto esplicito.
-   **Aperto, e tuo**: `gone_quiet` tocca ciò che ADR-0028 aveva respinto con la
-   tua esperienza diretta. L'emendamento è scritto come **proposta non
-   ratificata**, e la sua ratifica dovrebbe aspettare un numero che oggi non
-   esiste — `muffin observe` sulla memoria vera dà 0 candidati su 0 entità,
-   perché non l'hai ancora usato.
-6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
-   chi parla (`slice/contesto-per-tenant`, 546 test). È il punto 1 di
-   `research/confronto-harness.md §9`. Il difetto: `buildSystemPrompt` non
-   prendeva **nessun** parametro tenant e girava una volta sola, quindi un turno
-   di gruppo riceveva byte per byte il prompt dell'owner — `identity.md` (il
-   patto privato, nel RoT) e i 1.330 caratteri di `persona.md §"Al primo
-   incontro"` che dicono all'agente di **chiedere dati personali** «un pezzo per
-   volta», nell'unico tenant la cui memoria non è dell'owner. **Il threat model
-   non ha mai nominato il prompt come superficie**: lo è, e a valle non c'è
-   niente che disfi un'istruzione a chiedere. Ora `agent/context/assemble.ts` —
-   il deliverable M1 dichiarato in tre documenti e mai costruito — produce **due
-   classi**, `owner` e `group`, assemblate una volta a boot: nessun ricalcolo per
-   turno, ciascuna il proprio prefisso cacheabile. Il prompt owner è **pinnato a
-   sha256**: se cambia, ogni cache calda si spegne, e il test lo dice invece di
-   lasciarlo succedere in silenzio. Il gruppo ha un carattere suo (in codice, non
-   in `defaults/`: non è owner-editabile) — sottrarre due sezioni da `persona.md`
-   falliva **aperto**, la sezione successiva che qualcuno aggiunge arriva al
-   gruppo da sola. Seconda metà: `deps.tools` è filtrato per principal prima del
-   modello — un membro vedeva 8 tool `hostOnly` che il kernel avrebbe negato
-   comunque, e il messaggio "quel tool non esiste" glieli elencava tutti.
-   **Il kernel resta l'enforcement** (`decide.ts:132` non toccato): il lookup del
-   tool resta sul registro intero, così un membro che nomina `fs_read` incontra
-   `principal_forbidden` col suo codice sulla traccia, non un "non esiste" che
-   sarebbe una bugia. Provato **attraverso il connettore telegram vero**
-   (`Update` → `drain()` → `runTurn`), rosso verificato sul commit precedente.
-   **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
-   dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
-   non il tenant) e non è in questa slice.
 
 ## Sessioni 2026-08-09
 

@@ -77,6 +77,22 @@ describe('inject-state hook', () => {
     expect(context).not.toMatch(/blocco troncato/);
   });
 
+  it('fits the real STATE.md, whole, with room to grow', () => {
+    // Every test above proves the mechanism handles a block of size N. None of
+    // them ever looked at OUR block, and that is the gap the mechanism cannot
+    // see: it truncated the real handoff twice — at 16,716 characters and again
+    // at 18,700 after a merge — announcing it correctly both times while the
+    // tail, which is where the load-bearing file list lives, stopped arriving
+    // for weeks. The cap is not the failure. Nobody comparing what went in
+    // against what came out is the failure, so this is the comparison, run.
+    const context = contextOf(execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }));
+    expect(context).not.toMatch(/blocco troncato/);
+    // The block ends with the list; if that arrives, everything before it did.
+    expect(context).toMatch(/File load-bearing/);
+    // Headroom, so the next paragraph fails here rather than in a live session.
+    expect(context.length).toBeLessThanOrEqual(MAX - 250);
+  });
+
   it('stays silent rather than failing when there is nothing to inject', () => {
     // A session without its handoff is a bad day; a session that will not start
     // because a doc was mid-edit is worse. Every one of these exits 0, empty.

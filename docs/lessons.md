@@ -554,6 +554,28 @@ configuration value. Everything about it is documented, nothing about it is
 enforced against the content, and the part you lose is always the tail — which is
 where people put the pointers, because pointers feel like an appendix.
 
+**Postscript, one day later, and it is the real lesson.** The fix above was a
+rule in `PRACTICES.md` §7 and a one-off measurement. The next merge — a branch
+that had been adding to the block in parallel — put it at **18,700 characters**,
+worse than the state that prompted the fix, and truncated in the same place. The
+rule was correct, written down, and had been read; it lost to a three-way merge,
+which is the one editor that has never read anything.
+
+Note what the test file already contained: six sizes swept across the cap,
+including the exact 9,876-10,000 window that had been broken. Thorough about the
+mechanism, and silent about **our** block — the one input that ships. The test
+that now holds it runs the real hook against the real `STATE.md`, asserts the
+tail arrives, and keeps 250 characters of headroom so the next paragraph fails
+in CI rather than in a live session.
+
+> **A budget defended by a practice is defended against people. It is not
+> defended against a merge, a generated file, or anyone who did not read the
+> practice — and a test suite that covers the mechanism exhaustively can still
+> never once have looked at the input you actually ship.**
+
+*Found 14 August 2026, merging `origin/dev` into `slice/gateway`: both sides had
+added to the handoff, neither had made it smaller.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The
