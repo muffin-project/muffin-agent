@@ -120,10 +120,73 @@ export const CONSOLIDATION_CEILING = 12;
  * The consequence, stated because it is real: `pendingEpisodes` is
  * `ORDER BY created_at`, so while a backlog larger than this exists, the
  * *newest* episode is not the one being consolidated and the "in place before
- * the next message" property does not hold. Draining a backlog is the job of
- * the periodic-maintenance mechanism, which is **not in this slice**.
+ * the next message" property does not hold. That is what the drain below
+ * exists to end.
  */
 export const CONSOLIDATION_BATCH = 20;
+
+/**
+ * The drain: what happens when one page was not enough.
+ *
+ * ## The problem, precisely
+ *
+ * A backlog larger than `CONSOLIDATION_BATCH` costs the trailing edge its whole
+ * point. `pendingEpisodes` is `ORDER BY created_at`, so a fire under backlog
+ * spends its page on the *oldest* episodes and the message that just armed it
+ * is not in the batch. The property being bought — the fact in place before the
+ * next message of the same conversation — is silently not held, and nothing
+ * says so. Backlogs are not hypothetical here: `muffin run` headless leaves its
+ * episodes pending by design (the timer is `unref`'d), a gateway that was down
+ * accumulates, and a migration starts with the whole corpus owed.
+ *
+ * ## The fix, and why it is not a reordering
+ *
+ * The obvious move is to make the live fire take the *newest* pending episodes
+ * and leave the tail to maintenance. It is wrong, and quietly: `reconcile`
+ * picks its supersede candidate by `recorded_at` — when we learned it — so
+ * extracting out of chronological order makes an *older* episode's claim arrive
+ * as the "incoming" one against a newer belief. The judge would then be asked
+ * whether last month's answer replaces this week's, and a `supersede` verdict
+ * would un-correct a correction. Losing an extraction is recoverable
+ * (`extraction_v` exists for that); a wrong supersede is invisible until
+ * somebody asks the question it answered. The asymmetry is decision #2 of the
+ * research doc, and it rules the reordering out.
+ *
+ * So the order stays, and the backlog is removed instead: after a page that was
+ * **full** and **made progress**, the lane re-arms itself and takes the next
+ * page. The property is restored by convergence rather than by priority.
+ *
+ * ## Why it re-uses `CONSOLIDATION_IDLE_MS` instead of getting its own constant
+ *
+ * Two reasons, and the first is the important one. **The peak rate of the drain
+ * is then the peak rate of the live lane, by construction** — one bounded page
+ * per twenty seconds, which is exactly what the trailing edge already spends
+ * when the owner is talking steadily. That makes "maintenance must not cost
+ * more than the lane it maintains" a property of the shape rather than a number
+ * to defend. Second: a new constant would need its own corpus measurement to be
+ * anything but folklore, and there is nothing in the corpus that decides it —
+ * the drain's pace has no user-visible deadline, only a convergence time. At
+ * one page per 20 s the owner's whole four-month corpus (4 107 episodes, 206
+ * pages) drains in ~69 minutes of quiet, which is well inside a single evening
+ * and does not need to wait for one.
+ *
+ * The drain always loses to the live lane: a turn arriving mid-drain re-arms
+ * the trailing edge instead, so the head of the queue is served next.
+ *
+ * ## The stop condition is progress, never a count
+ *
+ * `fetched === limit` says there is more behind this page. `marked > 0` says
+ * the head of the queue actually moved. Both, or the drain stops.
+ *
+ * The second half is not caution. An episode whose extraction fails
+ * permanently is deliberately left unmarked so it is retried, so it sits at the
+ * head of `ORDER BY created_at` for ever. A drain that continued on "is
+ * anything still pending" would re-read that page every twenty seconds and pay
+ * for the same failing extraction until the month's budget was gone — which is
+ * the *same* failure ADR-0038 rejected the `stats.pending` ticker for, arriving
+ * through a different door.
+ */
+export const CONSOLIDATION_DRAIN_MS = CONSOLIDATION_IDLE_MS;
 
 /**
  * The only tenant this lane consolidates, and the refusal is the point.
@@ -179,8 +242,15 @@ export function consolidationBootLine(): string {
   );
 }
 
-/** What made this fire. `manual` is `muffin memory extract`, on the same lane. */
-export type ConsolidationTrigger = 'idle' | 'ceiling' | 'manual';
+/**
+ * What made this fire.
+ *
+ * `manual` is `muffin memory extract`, on the same lane. `drain` is the
+ * continuation of a full page — told apart from `idle` because the two answer
+ * different questions in the run log: a week of `idle` rows is a healthy lane,
+ * and a week of `drain` rows is an install that has never caught up.
+ */
+export type ConsolidationTrigger = 'idle' | 'ceiling' | 'manual' | 'drain';
 
 /**
  * How it ended. `busy` is the durable lane lock refusing — another process (or
@@ -200,7 +270,8 @@ CREATE TABLE IF NOT EXISTS consolidation_runs (
   indexed    INTEGER NOT NULL,
   review     INTEGER NOT NULL,
   errors     INTEGER NOT NULL,
-  ms         INTEGER NOT NULL
+  ms         INTEGER NOT NULL,
+  merged     INTEGER NOT NULL DEFAULT 0
 );
 `;
 
@@ -218,6 +289,17 @@ export type ConsolidationRun = {
    * logged to console and persisted nothing, so of its 18.5 s claim→processed
    * we never learned how much was extraction. */
   ms: number;
+  /**
+   * Duplicate beliefs retired by the maintenance sweep this run.
+   *
+   * Recorded for the reason every other number here is: a sweep that runs
+   * unattended and announces nothing is indistinguishable from a sweep that
+   * does not run, and this one *retires rows*, which is the half of the lane an
+   * owner would most want a receipt for. Zero is the expected value — ⬤ two
+   * merges in four months of the old system's traffic — so a run of non-zero
+   * values is the signal that something upstream started producing duplicates.
+   */
+  merged: number;
 };
 
 type Row = {
@@ -231,6 +313,8 @@ type Row = {
   review: number;
   errors: number;
   ms: number;
+  /** Absent on a database written before the sweep existed. See `hydrate`. */
+  merged?: number | null;
 };
 
 /**
@@ -253,10 +337,18 @@ export class ConsolidationLog {
 
   constructor(db: Database.Database) {
     db.exec(SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+    // so the column above never reaches a database written by ADR-0038. Same
+    // one-line migration `MemoryStore` uses, and it carries a default for the
+    // same reason: an ALTER adding NOT NULL without one is rejected outright.
+    const columns = db.prepare(`PRAGMA table_info(consolidation_runs)`).all() as { name: string }[];
+    if (!columns.some((c) => c.name === 'merged')) {
+      db.exec(`ALTER TABLE consolidation_runs ADD COLUMN merged INTEGER NOT NULL DEFAULT 0`);
+    }
     this.insertStmt = db.prepare(
       `INSERT INTO consolidation_runs
-         (ran_at, trigger, outcome, episodes, facts, superseded, indexed, review, errors, ms)
-       VALUES (@ranAt, @trigger, @outcome, @episodes, @facts, @superseded, @indexed, @review, @errors, @ms)`,
+         (ran_at, trigger, outcome, episodes, facts, superseded, indexed, review, errors, ms, merged)
+       VALUES (@ranAt, @trigger, @outcome, @episodes, @facts, @superseded, @indexed, @review, @errors, @ms, @merged)`,
     );
     this.lastStmt = db.prepare(`SELECT * FROM consolidation_runs ORDER BY id DESC LIMIT 1`);
     this.countStmt = db.prepare(
@@ -318,6 +410,12 @@ function hydrate(row: Row): ConsolidationRun {
     review: row.review,
     errors: row.errors,
     ms: row.ms,
+    // `?? 0` and not `row.merged`: `doctor` opens the database **readonly**, so
+    // on an install written before the sweep existed the migration above cannot
+    // have run and the column is genuinely absent. Reading it as zero is true —
+    // no sweep ran on those rows — and is the difference between a diagnosis
+    // that works on the install that most needs it and one that throws.
+    merged: row.merged ?? 0,
   };
 }
 
@@ -342,10 +440,32 @@ export type ConsolidatorDeps = {
    * this slice the memory lane could not even be seen by it.
    */
   budgetExhausted: () => boolean;
+  /**
+   * The maintenance sweep — `sweepDuplicates` in `maintenance.ts`, bound by
+   * `buildRuntime`.
+   *
+   * Optional because it is not part of the trigger's contract: a test of the
+   * timing rules should not have to own a graph. Absent in production would
+   * mean duplicates accumulate, which is why `runtime.ts` binds it in the same
+   * object literal as `ingest` rather than anywhere a later edit could separate
+   * the two.
+   *
+   * Synchronous and model-free on purpose. It runs inside `execute`, between
+   * the batch and its log row, and anything asynchronous there would be a
+   * second place a shutdown can catch the lane mid-write.
+   */
+  sweep?: ((now: Date) => { merges: unknown[] }) | undefined;
   /** Where a refusal or an error is said out loud. stderr, in every surface. */
   log?: ((line: string) => void) | undefined;
   now?: (() => Date) | undefined;
   idleMs?: number | undefined;
+  /**
+   * The gap between drain pages. Defaults to `idleMs`, which is the decision —
+   * see `CONSOLIDATION_DRAIN_MS`. Separable so that a future "drain more slowly
+   * on battery" is a value and not a rewrite, and so the two rates are visibly
+   * one choice rather than an accident of sharing a field.
+   */
+  drainMs?: number | undefined;
   ceiling?: number | undefined;
   batch?: number | undefined;
 };
@@ -354,6 +474,7 @@ export class Consolidator {
   private readonly log: ConsolidationLog;
   private readonly now: () => Date;
   private readonly idleMs: number;
+  private readonly drainMs: number;
   private readonly ceiling: number;
   private readonly batch: number;
 
@@ -362,12 +483,15 @@ export class Consolidator {
   private running: Promise<void> | null = null;
   /** A turn arrived while a batch was in flight: re-arm when it finishes. */
   private armAgain = false;
+  /** The last page was full and moved: take the next one. See the drain. */
+  private drainAgain = false;
   private stopped = false;
 
   constructor(private readonly deps: ConsolidatorDeps) {
     this.log = new ConsolidationLog(deps.db);
     this.now = deps.now ?? (() => new Date());
     this.idleMs = deps.idleMs ?? CONSOLIDATION_IDLE_MS;
+    this.drainMs = deps.drainMs ?? deps.idleMs ?? CONSOLIDATION_DRAIN_MS;
     this.ceiling = deps.ceiling ?? CONSOLIDATION_CEILING;
     this.batch = deps.batch ?? CONSOLIDATION_BATCH;
   }
@@ -440,12 +564,15 @@ export class Consolidator {
     return this.start(trigger, limit);
   }
 
-  private rearm(): void {
+  private rearm(trigger: 'idle' | 'drain' = 'idle'): void {
     this.disarm();
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.fire('idle');
-    }, this.idleMs);
+    this.timer = setTimeout(
+      () => {
+        this.timer = null;
+        this.fire(trigger);
+      },
+      trigger === 'drain' ? this.drainMs : this.idleMs,
+    );
     // The trailing edge must never be the reason a process stays alive: a
     // headless `muffin run` that finished its turn should exit, not linger 20 s
     // waiting to extract. `cli/repl.ts` does the same to the scheduler ticker.
@@ -488,10 +615,21 @@ export class Consolidator {
     );
     void this.running.finally(() => {
       this.running = null;
-      if (this.armAgain && !this.stopped) {
+      if (this.stopped) return;
+      // A turn beats a drain, always. `armAgain` means the owner spoke while
+      // this batch was running, so the head of the queue has new work and the
+      // live trailing edge is what should serve it — the drain would spend the
+      // next page on the tail instead, which is the very inversion it exists to
+      // end. Both flags are cleared either way: whichever timer is armed, its
+      // batch re-evaluates both conditions when it finishes.
+      const drain = this.drainAgain;
+      this.drainAgain = false;
+      if (this.armAgain) {
         this.armAgain = false;
-        this.rearm();
+        this.rearm('idle');
+        return;
       }
+      if (drain) this.rearm('drain');
     });
     return run;
   }
@@ -512,6 +650,7 @@ export class Consolidator {
       indexed: 0,
       review: 0,
       errors: 0,
+      merged: 0,
     };
 
     if (this.deps.budgetExhausted()) {
@@ -536,6 +675,27 @@ export class Consolidator {
       return { run, report: null };
     }
 
+    // The sweep, gated on the batch having added a fact — and the gate is an
+    // argument, not a saving. A duplicate among the *current* beliefs can only
+    // come into existence when a row is added: `supersede` only ever removes
+    // one from the active set, and nothing else writes to `facts`. So a batch
+    // that added nothing cannot have created a pair the last sweep missed, and
+    // running it anyway would be scanning the graph to rediscover that on every
+    // quiet fire — which, at the measured yield of one fact per thirty turns,
+    // is almost all of them.
+    let merged = 0;
+    if (report.factsAdded > 0 && this.deps.sweep) {
+      try {
+        merged = this.deps.sweep(this.now()).merges.length;
+      } catch (error) {
+        // The batch is what mattered. A sweep that threw must not turn a run
+        // that wrote facts into an `error` row, because the facts are there and
+        // the row is what the owner reads to know it.
+        const message = error instanceof Error ? error.message : String(error);
+        report.errors.push(`manutenzione: ${message}`);
+      }
+    }
+
     // The lane lock refuses rather than queues (`ingest-lock.ts`). Told apart
     // from a real failure because they mean opposite things: `busy` is the
     // guarantee working, `error` is it not.
@@ -549,9 +709,18 @@ export class Consolidator {
       review: report.needsReview.length,
       errors: report.errors.length,
       ms: Date.now() - started,
+      merged,
     };
     this.write(run);
     for (const e of report.errors) this.deps.log?.(`consolidamento: ${e}`);
+
+    // The drain. Both halves, and the `busy` exclusion: a lane lock refusal
+    // fetched nothing, so `fetched === limit` is false anyway — but stating it
+    // keeps the condition readable as "this process consumed a full page", not
+    // as "some process might have".
+    if (!report.busy && report.fetched >= limit && report.marked > 0) {
+      this.drainAgain = true;
+    }
     return { run, report };
   }
 

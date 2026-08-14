@@ -56,28 +56,22 @@ Cinque cose, tutte verificate sul codice:
    sono solo globali (mese, giorno-per-tenant) e l'unico limite per-turno conta i
    giri, non i token: un processo che vive toglie l'owner-che-guarda, ed è la
    differenza fra un job rotto che costa €0,50 e uno che si mangia il mese.
-1. 🟡 **Consolidamento — il primo dei due meccanismi parte, il secondo no.**
-   `ingestPending` aveva un solo chiamante a mano: **414 fatti nel vecchio contro
-   0 nel nuovo**, e la DoD di M5 lo richiedeva. **Priorità 1**: senza, memoria/
-   importance/origin/assenza sono inerti. ✅ Fondazione corretta (`6ddba7c`) e
-   ✅ **primo meccanismo** (ADR-0038): coda d'inattività a fronte discendente
-   armata da `LoopDeps.onTurnEnd`, **20 s** e **tetto 12**, costanti misurate sul
-   corpus vero dell'owner (4.107 episodi). Provato eseguendolo: fatto in memoria
-   a +20,0 s dal REPL **e** dal gateway senza REPL.
-   ⛔ **Il secondo meccanismo — la manutenzione periodica — non è costruito**:
-   drenaggio di un arretrato più grande di un batch (sotto arretrato la proprietà
-   «prima del messaggio dopo» non tiene, `pendingEpisodes` parte dal più
-   vecchio), dream/compattazione, audit dei predicati, consumo del registro
-   `review`. Limite dichiarato: **`muffin run` headless non consolida** (timer
-   `unref`'d). **Decisione owner aperta**: se il tool `ricorda` **scrive o
-   propone** — cancella ADR-0032 §9, e nel vecchio quel percorso ha fatto il 9,7%
-   dei fatti **decadendo a zero in quattro mesi**.
-   ⚠️ Le due correzioni che governano il resto (da
-   `research/consolidamento-due-meccanismi.md`, misurate): la latenza del vecchio
-   **era 11,8 s di mediana**, non «minuti» — un meccanismo che atterra a minuti è
-   una regressione; e finché non parte **il recall è solo-keyword**, perché
-   nessun altro percorso indicizza un episodio: non manca un livello, ne mancano
-   due.
+1. ✅ **Consolidamento — entrambi i meccanismi girano.** ADR-0038 il flusso
+   (coda d'inattività 20 s, tetto 12, misurati sul corpus vero) e **ADR-0040** lo
+   stock (drenaggio dell'arretrato, deduplica senza soglia, registro `review`
+   letto e risposto con `muffin memory review [keep <id>]`). Provati eseguendoli.
+   Dettaglio in cronaca §"Il divario M5-bis" e in `04-roadmap.md` §M5-bis.
+   ⛔ **Resta aperto**: **dream/compattazione** — non costruito perché manca il
+   *consumatore* (`profiles`/`digests`: zero lettori; prima il lettore, poi lo
+   scrittore) — e l'**audit dei predicati** a metà (l'invariante rileva, ma
+   proporre un merge vuole un giudizio di sinonimia: modello o vocabolario
+   chiuso, e li rifiutiamo entrambi). **`muffin run` headless non consolida**
+   (timer `unref`'d): limite dichiarato, ora meno caro perché il primo processo
+   di lunga vita drena tutto. **Rifiutato e non rimandato**: il decadimento della
+   confidenza (ADR-0040 §"Quello che NON è costruito").
+   🟡 **Decisione owner aperta**: se il tool `ricorda` **scrive o propone** —
+   cancella ADR-0032 §9, e nel vecchio quel percorso ha fatto il 9,7% dei fatti
+   **decadendo a zero in quattro mesi**.
 2. ✅ **`thinking` dichiarato nei profili e mai passato** — chiuso 2026-08-13
    (`6d2cd21`). Non era un cablaggio ma una **migrazione ad `adaptive`**:
    `{type:'enabled',budget_tokens}` è un 400 da 4.7 in poi. Nella stessa passata,
@@ -378,13 +372,61 @@ usabile**. Cinque cose, tutte verificate sul codice:
    memoria a **+20,0 s**; dal **gateway senza REPL**, job → estrazione a **+20,0
    s**. E l'indice vettoriale è passato da vuoto a `5 chunk · 5 vettori, in sync`.
 
-   ⛔ **Metà riga ancora aperta, e va detto**: il **secondo meccanismo — la
-   manutenzione periodica — non è costruito**. Manca il drenaggio di un arretrato
-   più grande di un batch (sotto arretrato la proprietà «prima del messaggio dopo»
-   non tiene, perché `pendingEpisodes` parte dal più vecchio), il dream/
-   compattazione, l'audit dei predicati, e il consumo del registro `review`. Più
-   un limite dichiarato: **`muffin run` headless non consolida** (timer `unref`'d
-   — un comando scriptabile non resta in piedi 20 s dopo aver risposto).
+   ✅ **Il secondo meccanismo esiste** (`slice/gateway`, 2026-08-14,
+   **ADR-0040**, 870 test): la manutenzione. La prima cosa che ha prodotto è una
+   correzione al nome — **«periodica» era sbagliato**. Elencando cosa dovesse
+   fare, ogni voce è risultata guidata dai **dati** e non dall'orologio: un
+   arretrato esiste o no, un duplicato esiste o no, una riga `review` è aperta o
+   è stata risolta. Niente in questo schema cambia perché è passato un giorno,
+   quindi un cron sarebbe un timer senza niente che dipenda dal tempo — e
+   nessuno dei dodici sistemi letti ne gira uno. Il grilletto resta la stessa
+   coda d'inattività, nel runtime.
+   La regola di costo che governa tutto: nel vecchio il dream era la **metà
+   piccola** (⬤ 100 report contro 2.438 righe di work queue, il 4%). Quindi
+   **la manutenzione non spende niente** — nessuna chiamata al modello, SQL su
+   righe già scritte. L'unica parte che chiama un modello è il drenaggio, e paga
+   estrazioni che la corsia viva avrebbe pagato comunque: il totale non cambia,
+   cambia *quando*.
+   - **Drenaggio.** Dopo una pagina **piena** che ha **fatto progresso**, la
+     corsia si ri-arma e prende la successiva, allo stesso passo della coda viva
+     (nessuna costante nuova: il tetto di costo diventa una proprietà della
+     forma). Perde sempre contro un turno. La condizione d'arresto è il
+     *progresso* (`marked > 0`), mai un conteggio di pendenti — un episodio che
+     fallisce l'estrazione in modo permanente resta in testa per sempre, e un
+     drenaggio guidato da `stats.pending` ripagherebbe quella pagina ogni venti
+     secondi: **lo stesso fallimento che ADR-0038 aveva già scartato**, entrato
+     da un'altra porta. E **non** si riordina al più-nuovo-per-primo, che è la
+     mossa ovvia: `reconcile` sceglie il candidato per `recorded_at`, quindi
+     estrarre fuori ordine farebbe **dis-correggere una correzione**.
+   - **Deduplica senza soglia.** Solo chiave esatta normalizzata (maiuscole,
+     spazi, punteggiatura finale): lo 0,85 del vecchio non porta fra embedder, e
+     la ricerca lo misura (99,00% di falsi positivi a un ingenuo 0,7 su due
+     modelli comuni). ⬤ E il corpus chiede esattamente questo gradino: sui
+     quattro mesi del vecchio i gruppi (soggetto, predicato) con più di un valore
+     attivo erano **2 su 308 fatti attivi**, e **tutti e due erano duplicati
+     esatti**. Si ritira con `supersede`, **mai DELETE** — e con `valid_to` non
+     toccato, perché un duplicato non ha mai smesso di essere vero: non era una
+     verità separata.
+   - **Il registro `review` letto e risposto.** `muffin memory review` +
+     `review keep <fact-id>`, più la riga in `memory stats`, in `doctor` e al
+     boot. «Aperta» è una **join** (entrambi i fatti ancora attivi), non una
+     colonna di stato: una domanda che la conversazione risolve da sola esce
+     dalla lista senza che nessuno scriva niente. Rispondere è un `supersede`, e
+     lo fa **l'owner** — ADR-0032 §9 resta dov'era.
+   **Provato eseguendolo**: 45 episodi di arretrato, un turno, poi silenzio →
+   `idle` a +20 s, `drain` a +44 s, `drain` a +64 s, gli episodi dovuti scesi a
+   **0**, e nessuna quarta pagina perché la terza era corta.
+   ⛔ **Resta aperto**: dream/compattazione (manca il *consumatore* —
+   `profiles`/`digests` hanno zero lettori) e l'audit dei predicati a metà.
+   **Rifiutato e non rimandato**: il decadimento della confidenza — nessun tasso
+   difendibile, ⬤ nessun lettore (l'unica soglia sulla confidenza è
+   `extract.ts:176`, *prima* della scrittura), e con un lettore sarebbe una
+   credenza irrecuperabile senza `expired_at` né `superseded_by`, cioè una
+   cancellazione senza traccia. Una **passata di scadenza** non è costruita
+   perché ⬤ non ha niente da scadere: `valid_to` è scritto solo da `supersede`,
+   che scrive anche `expired_at`. Limite dichiarato che resta: **`muffin run`
+   headless non consolida** (timer `unref`'d), ora meno caro perché il primo
+   processo di lunga vita drena tutto invece di una pagina.
    Resta aperta e **è dell'owner** la terza decisione: se il tool
    `ricorda` scrive o propone — cancella ADR-0032 §9, e nel vecchio quel percorso
    ha fatto il 9,7% dei fatti **decadendo a zero in quattro mesi**.

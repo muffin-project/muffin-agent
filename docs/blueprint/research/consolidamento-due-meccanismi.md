@@ -421,3 +421,70 @@ conteggio sopra la soglia e fa scattare la corsia a **ogni** turno, per sempre.
 vero" prevedeva che il grilletto sbloccasse anche l'indice vettoriale. Confermato
 eseguendolo — l'indice della home di prova è passato da vuoto a `5 chunk · 5
 vettori, in sync` senza che nessuno chiamasse `vault reindex`.
+
+---
+
+## Appendice 2 (2026-08-14) — le misure che il secondo meccanismo ha chiesto
+
+Stessa regola dell'appendice sopra (PRACTICES §13.3: il corpus è append-only —
+si aggiunge in coda, non si riscrive il testo). ADR-0040 ha costruito la
+manutenzione, e tre delle sue decisioni volevano un numero che questo documento
+non aveva. Misurati sugli stessi due database: `~/dev/Muffin/muffin.dev.db`
+(vecchio, 2026-04-14 → 2026-07-18) in sola lettura.
+
+**1. La deduplica non ha bisogno di una soglia — sul corpus vero, di nessuna.**
+§"Dedup thresholds do not port across embedders" dice che lo 0,85 non è
+portabile, e lascia aperto quale cascata serva. Il corpus risponde più
+seccamente di così ⬤:
+
+| misura | valore |
+|---|---|
+| fatti attivi | **308** (su 414 totali) |
+| gruppi (soggetto, predicato) con più di un valore attivo | **2**, per 5 righe |
+| di quelli, duplicati esatti dopo normalizzazione (case · spazi · punteggiatura finale) | **2 su 2** |
+| di quelli, identici byte per byte senza alcuna normalizzazione | **2 su 2** |
+
+Cioè: **ogni** gruppo multi-valore realmente avvenuto in quattro mesi era un
+duplicato, e nemmeno uno avrebbe avuto bisogno di un giudizio di similarità. Il
+primo gradino della cascata di Graphiti — chiave esatta normalizzata — copre il
+100% del fenomeno osservato, e la normalizzazione stessa è margine: a byte nudi
+il risultato è lo stesso.
+
+Nota di lettura: il vecchio **aveva** una deduplica a coseno 0,85 e questi tre
+duplicati le sono passati sotto. Non prova che 0,85 fosse sbagliato — prova che
+un gradino esatto e uno approssimato falliscono in modi diversi, e che il primo
+è quello di cui esiste evidenza di aver servito.
+
+**2. La coda del vecchio arrivava a giorni, non a minuti.** §"La riga di roadmap
+era giusta per metà" cita gli 11,8 s di mediana. La distribuzione completa dice
+perché il drenaggio dell'arretrato è un meccanismo separato e non un
+raffinamento del primo ⬤ (2.438 righe di `work_queue`, `created_at` →
+`processed_at`):
+
+| p50 | p90 | p99 | max |
+|---|---|---|---|
+| **12,4 s** | 40,4 s | **4.173 s** (~70 min) | **1.449.440 s** (16,8 giorni) |
+
+La mediana è il prodotto; la coda è quello che succede quando il sistema resta
+indietro. Un p99 di settanta minuti e un massimo di sedici giorni sono la stessa
+forma che qui produce un arretrato più grande di una pagina — e nel vecchio, che
+rivendicava *per episodio*, non c'era niente che la chiudesse più in fretta.
+
+**3. La manutenzione era la metà piccola, e di quanto.** ⬤ Nello stesso arco:
+**100 righe in `dream_reports`** (2026-03-26 → 2026-07-19) contro **2.438 in
+`work_queue`** (2026-04-14 → 2026-07-18) — il **4%**. È il numero che ADR-0040
+usa come tetto di progetto: un passaggio di manutenzione che costasse più della
+corsia che mantiene sarebbe peggio di nessun passaggio.
+
+## Cosa questa appendice non ha potuto stabilire
+
+1. **Il costo in chiamate al modello del dream del vecchio.** `dream_reports`
+   conta i report, non le chiamate; il ledger non è stato ricostruito (già
+   dichiarato al punto 4 della sezione originale).
+2. **Se i 3 duplicati siano passati sotto la soglia 0,85 o accanto ad essa** —
+   cioè se la deduplica a coseno sia stata invocata su di loro e abbia detto no,
+   oppure non sia stata invocata affatto. Le righe non registrano il confronto.
+3. **Quanti duplicati produrrà il nuovo pipeline.** Zero fatti sul database
+   nuovo: il tasso resta non misurato finché non ci sono mesi d'uso vero, ed è
+   per questo che `consolidation_runs.merged` esiste — il segnale «era sbagliata»
+   di ADR-0040 è contato lì, non percepito.

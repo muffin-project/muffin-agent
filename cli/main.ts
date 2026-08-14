@@ -10,6 +10,8 @@ import { runRepl } from './repl.js';
 import {
   cmdMemoryCheck,
   cmdMemoryExtract,
+  cmdMemoryReview,
+  cmdMemoryReviewKeep,
   cmdMemorySearch,
   cmdMemoryStats,
   cmdMemoryWhy,
@@ -77,6 +79,9 @@ comandi operatore:
 
 ispezione:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
+  muffin memory review [keep <fact-id>]
+                                le contraddizioni che il giudice ha lasciato a
+                                te. \`keep\` ritira l'altra: niente si cancella
   muffin vault reindex | add <file> | ls | check
   muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<obiettivo>" | remove <id>
   muffin observe [--send]       cosa è rimasto in silenzio, e cosa farebbe il
@@ -447,6 +452,21 @@ async function cmdMemory(argv: string[]): Promise<number> {
   }
 
   if (sub === 'stats') return cmdMemoryStats(home);
+
+  if (sub === 'review') {
+    const [verb, id] = rest;
+    if (verb === undefined) return cmdMemoryReview(home);
+    if (verb !== 'keep') {
+      process.stderr.write(`usage: muffin memory review [keep <fact-id>]\n`);
+      return 78;
+    }
+    const factId = Number(id);
+    if (!Number.isInteger(factId) || factId <= 0) {
+      process.stderr.write(`usage: muffin memory review keep <fact-id>\n`);
+      return 78;
+    }
+    return cmdMemoryReviewKeep(home, factId);
+  }
 
   if (sub === 'extract') {
     const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });

@@ -1,8 +1,10 @@
+import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeSecret } from '../core/config/config.js';
+import { MemoryStore } from '../core/memory/store.js';
 import { seal } from '../core/rot/verify.js';
 import { runInit } from './init.js';
 import { runDoctor, type Check } from './doctor.js';
@@ -234,6 +236,59 @@ describe('doctor names which secret store answered', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non viene mai usata');
     expect(c?.remedy).toBeTruthy();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor names the memory questions waiting on the owner', () => {
+  /**
+   * The one memory state that cannot resolve itself. A judge `review` verdict
+   * leaves **both** beliefs current on purpose — the system refuses to guess —
+   * so recall keeps returning both and nothing in the lane will ever choose.
+   * Before this, the register had no reader anywhere in production: the rows
+   * accumulated and the only number that surfaced was a total over every row
+   * ever written, which on an append-only table only grows.
+   *
+   * Silent when there is nothing open, because a line that fires on the empty
+   * case is the firehose ADR-0028 exists to prevent, smaller.
+   */
+  const seedContradiction = (dir: string): void => {
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new MemoryStore(db);
+    const episodeId = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+    });
+    const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
+    const believe = (object: string, at: string) =>
+      store.addFact({
+        tenantId: 'host', subjectId, predicate: 'accountant', objectValue: object,
+        episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: at,
+      });
+    store.recordReview({
+      tenantId: 'host',
+      kind: 'contradiction',
+      existingFactId: believe('Marco', '2026-06-01T10:00:00Z'),
+      incomingFactId: believe('Lucia', '2026-08-13T10:00:00Z'),
+      detail: 'nessuna delle due frasi dice quando',
+      createdAt: '2026-08-13T10:00:01Z',
+    });
+    db.close();
+  };
+
+  it('says nothing on an install with no open question', () => {
+    const dir = home();
+    expect(check(dir, 'memoria da decidere')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns, with the command that answers it, when one is open', () => {
+    const dir = home();
+    seedContradiction(dir);
+    const c = check(dir, 'memoria da decidere');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 contraddizioni');
+    expect(c?.remedy).toContain('muffin memory review');
     rmSync(dir, { recursive: true, force: true });
   });
 });

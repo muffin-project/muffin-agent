@@ -59,6 +59,31 @@ export type IngestDeps = {
 
 export type IngestReport = {
   tenantId: string;
+  /**
+   * Rows `pendingEpisodes` handed back this run — the page size actually read,
+   * not the page size asked for.
+   *
+   * With `marked` below, this is what makes draining a backlog decidable
+   * without a second query. `fetched < limit` means the queue is shorter than
+   * one page, i.e. there is nothing left behind this batch. Counting instead of
+   * re-asking matters because the obvious re-ask — "is `stats.pending` still
+   * above zero" — is the alternative ADR-0038 rejected by name: an episode that
+   * fails extraction permanently keeps that count above zero forever.
+   */
+  fetched: number;
+  /**
+   * Episodes whose `extraction_v` this run advanced — mined, or skipped for a
+   * declared reason and marked done.
+   *
+   * The progress signal, and the whole anti-livelock argument for the drain:
+   * `marked === 0` on a **full** page means the head of the queue cannot be
+   * consumed, so continuing would re-read the same rows and pay the same model
+   * calls forever. Derived from the marker rather than from `episodes`, which
+   * counts episodes the extractor *attempted* — a failed extraction is
+   * deliberately left unmarked (retry next run), so it raises `episodes` while
+   * making no progress at all.
+   */
+  marked: number;
   episodes: number;
   factsAdded: number;
   superseded: number;
@@ -97,6 +122,8 @@ export async function ingestPending(
   const now = deps.now ?? (() => new Date());
   const report: IngestReport = {
     tenantId,
+    fetched: 0,
+    marked: 0,
     episodes: 0,
     factsAdded: 0,
     superseded: 0,
@@ -134,6 +161,16 @@ export async function ingestPending(
 
   try {
     const pending = deps.store.pendingEpisodes(tenantId, EXTRACTION_VERSION, limit);
+    report.fetched = pending.length;
+
+    // Every marker goes through here, so `marked` cannot drift from the column
+    // it claims to count. The drain decides whether to take another page from
+    // this number, and a counter incremented at three of the four call sites
+    // would read as "stuck" on exactly the page that was working.
+    const mark = (id: number): void => {
+      deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);
+      report.marked += 1;
+    };
 
     for (const episode of pending) {
       if (!episode.content) {
@@ -145,7 +182,7 @@ export async function ingestPending(
         // still reporting success. Under a scheduler that is an infinite
         // no-op that looks healthy.
         report.skippedEmpty += 1;
-        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
+        mark(episode.id);
         continue;
       }
 
@@ -157,7 +194,7 @@ export async function ingestPending(
       // not a corner case, it is most of it.
       if (episode.role === 'agent') {
         report.skippedAgentOutput += 1;
-        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
+        mark(episode.id);
         continue;
       }
 
@@ -168,7 +205,7 @@ export async function ingestPending(
       // arrives the normal way — the owner says it, with a speaker attached.
       if (episode.kind === 'document') {
         report.skippedDocuments += 1;
-        deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
+        mark(episode.id);
         continue;
       }
 
@@ -226,7 +263,7 @@ export async function ingestPending(
       // That asymmetry is decision #2 of the 2026-08-13 research doc:
       // at-least-once, because losing an extraction is silently invisible and
       // a spurious duplicate row is not.
-      deps.store.markExtracted(tenantId, [episode.id], EXTRACTION_VERSION);
+      mark(episode.id);
     }
 
     // After the loop, and separately: the backlog is idempotent, so an embedder
