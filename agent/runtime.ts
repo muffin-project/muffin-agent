@@ -283,7 +283,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // Both caps, not just the monthly one. The per-tenant daily cap is the one
     // that exists for a group talking to itself, and it was declared, tested
     // and never consulted.
-    budgetExhausted: () => budget.exhausted(),
+    //
+    // That comment shipped above a line that wired only the monthly cap. It
+    // named its own defect and the line below it did not change — which is the
+    // most instructive shape this repo produces, because prose that describes
+    // the fix reads exactly like prose that documents it.
+    budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
     hardened: config.rot.mode === 'hardened',
     egressAllowed: (host) => hostAllowed(host, egress),
     // Safe mode was computed at boot and never reached the kernel, while the
@@ -326,7 +331,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       capabilities,
       tracer,
       sessions: new SessionStore(home),
-      budgetExhausted: () => budget.exhausted(),
+      budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
       recordSpend: (entry) => {
         const usd = costUsd(entry.model, entry, config.provider.baseUrl);
         budget.record({ ...entry, usd });
