@@ -363,7 +363,11 @@ export function cmdMemoryStats(home: string): number {
 
     process.stdout.write(
       [
-        `episodi        ${s.episodes} (${s.pending} tuoi da estrarre)`,
+        // "tuoi" was true of the old query, which counted only `role='user'`,
+        // and false of what the lane does. The word went rather than the number:
+        // this line is read to answer "è in pari?", and the honest answer counts
+        // everything the lane still owes.
+        `episodi        ${s.episodes} (${s.pending} da estrarre)`,
         `finestra       ${span}`,
         `entità         ${s.entities}`,
         `fatti          ${s.activeFacts} attivi · ${s.retiredFacts} ritirati`,
