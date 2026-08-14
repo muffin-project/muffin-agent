@@ -158,6 +158,12 @@ describe('SendLock', () => {
       while (Date.now() < at) {}
       const got = 'release' in new SendLock(db).acquire(new Date());
       process.stdout.write(got ? 'got' : 'refused');
+      // Report, then stay. The parent kills us once both have reported. See the
+      // note on the barrier below for why exiting here made the test lie.
+      // The self-destruct is for the case where the parent dies first: an
+      // orphan holding a lock in a temp dir is litter, not a hang, but it is
+      // still litter.
+      setTimeout(() => process.exit(0), 10_000);
     `;
     // `spawn`, not `spawnSync`: a blocking spawn runs the children one after the
     // other, the first exits before the second starts, and the second finds a
@@ -174,6 +180,18 @@ describe('SendLock', () => {
     // and the deferred mutation started surviving. So: the handshake decides
     // *when* the window opens, once both children exist, and a hot spin to a
     // shared instant makes them collide inside it.
+    //
+    // And a third half, found by running the suite ten times: colliding inside
+    // `acquire` is not enough, because the winner used to **exit immediately
+    // after winning**. Under load the loser could reach `heldBy` after the
+    // winner's pid was already gone, read it as dead — correctly, that is what
+    // `pidAlive` is for — and take the lock over. Two `got`, from a lock
+    // behaving exactly as designed. Measured once in ten full-suite runs, and it
+    // is the worst possible flake: this is the only assertion that distinguishes
+    // `IMMEDIATE` from deferred, so a maintainer seeing it go red at a bad
+    // moment would hunt a concurrency bug that is not there. The children now
+    // report and wait; the parent kills them once both have spoken, so neither
+    // can ever observe the other as a corpse.
     const start = (): { proc: ReturnType<typeof spawn>; ready: Promise<void>; done: Promise<string> } => {
       // `--import tsx` and not `--experimental-transform-types`: Node's own type
       // stripping does not rewrite a `./x.js` specifier to `./x.ts`, so the
@@ -188,12 +206,21 @@ describe('SendLock', () => {
       });
       let out = '';
       let markReady: () => void;
+      let markDone: (outcome: string) => void;
       const ready = new Promise<void>((r) => (markReady = r));
+      const done = new Promise<string>((r) => (markDone = r));
+      const outcome = (): string => out.replace('ready', '').trim();
       proc.stdout.on('data', (d) => {
         out += String(d);
         if (out.includes('ready')) markReady();
+        // Done is "it has spoken", not "it has exited" — the child outlives its
+        // own answer on purpose now.
+        if (outcome() === 'got' || outcome() === 'refused') markDone(outcome());
       });
-      return { proc, ready, done: new Promise((r) => proc.on('close', () => r(out.replace('ready', '').trim()))) };
+      // A child that dies without speaking still resolves, so a broken harness
+      // fails on the assertion with what it did say instead of on a timeout.
+      proc.on('close', () => markDone(outcome()));
+      return { proc, ready, done };
     };
 
     const children = [start(), start()];
@@ -204,6 +231,7 @@ describe('SendLock', () => {
     const at = Date.now() + 250;
     for (const c of children) c.proc.stdin!.end(`${at}\n`);
     const outcomes = await Promise.all(children.map((c) => c.done));
+    for (const c of children) c.proc.kill();
 
     expect(outcomes.filter((o) => o === 'got')).toHaveLength(1);
     expect(outcomes.filter((o) => o === 'refused')).toHaveLength(1);

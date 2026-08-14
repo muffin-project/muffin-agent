@@ -576,6 +576,44 @@ in CI rather than in a live session.
 *Found 14 August 2026, merging `origin/dev` into `slice/gateway`: both sides had
 added to the handoff, neither had made it smaller.*
 
+## The test broke because the thing it tests works **(this build)**
+
+`sendlock.test.ts` spawns two real processes to prove `BEGIN IMMEDIATE` yields a
+single holder. It is the only assertion in this repository that can tell the fix
+from a restatement of it: inside one process better-sqlite3 is synchronous, so
+`IMMEDIATE` and the default deferred look identical.
+
+Ten full-suite runs, one red: `expected [ 'got', 'got' ] to have a length of 1`.
+Two winners on the lock that exists to have exactly one — the shape of finding
+that stops a day, because the same file's own history says the harness is
+delicate and the same claim now guards the gateway, the scheduler and the ingest
+lane.
+
+It was not the lock. The winner wrote its answer and **exited immediately**.
+Under load the loser reached `heldBy` after the winner's pid was already gone,
+read it as dead — which is exactly what `pidAlive` is for — and correctly took
+over a free lock. Two `got`, produced by the takeover path working. The test
+that proves a mutual-exclusion property was being broken by a *different*
+correct property of the same mechanism, and the barrier the file already carried
+was two-thirds of the way there: the handshake makes both children exist, the
+hot spin makes them collide inside `acquire`, and nothing made the winner
+outlive the loser's inspection.
+
+Forced rather than argued, because a one-in-ten flake is not evidence of its own
+cause: a standalone script that makes the loser wait 400 ms produced `[got, got]`
+three times out of three with the old child, and `[got, refused]` three times out
+of three with a child that reports and waits. The children now hold until the
+parent kills them.
+
+> **A concurrency test is a claim about an interleaving, and the interleaving is
+> part of the test — not part of the environment. If nothing in the harness
+> *forces* the window you are asserting about, the suite is sampling the
+> scheduler, and the day it samples badly it will accuse the code.**
+
+*Found 14 August 2026, running the suite ten times for an unrelated reason. The
+cost of the wrong diagnosis is what makes this worth a page: the honest reading
+of that red is "the lock is broken", and it would have been wrong.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The
