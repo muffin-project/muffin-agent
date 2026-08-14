@@ -43,8 +43,16 @@ export type PolicyContext = {
    * thing to catch in review.
    */
   matrix: PolicyMatrix;
-  /** Budget check, injected so the kernel stays pure and synchronous. */
-  budgetExhausted: () => boolean;
+  /**
+   * Budget check, injected so the kernel stays pure and synchronous.
+   *
+   * It takes the tenant because there are two caps and the kernel has to be
+   * able to ask about both. The nullary version could only ever ask the global
+   * one, which meant a group tenant's daily ceiling was unreachable from here —
+   * not unwired, *unaskable*, which is the version of this defect that survives
+   * someone noticing it.
+   */
+  budgetExhausted: (tenant: string) => boolean;
   /**
    * In single-user mode the Root of Trust is detection, not prevention, so
    * shell can never be a silent allow. See docs/adr/0003 (revision).
@@ -134,7 +142,7 @@ export function createDecide(ctx: PolicyContext): Decide {
       };
     }
 
-    if (decl.risk !== 'low' && ctx.budgetExhausted()) {
+    if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {
       return { effect: 'deny', code: 'budget_exhausted' };
     }
 

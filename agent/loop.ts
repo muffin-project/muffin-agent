@@ -158,7 +158,13 @@ export type LoopDeps = {
   decide: Decide;
   tracer: Tracer;
   sessions: SessionStore;
-  budgetExhausted: () => boolean;
+  /**
+   * Takes the tenant, and that is the whole fix: the signature used to be
+   * `() => boolean`, so the per-tenant daily cap could not be consulted through
+   * it even by someone trying. It was sealed, loaded, tested, reported healthy
+   * by `doctor` — and asked by nobody.
+   */
+  budgetExhausted: (tenant: TenantId) => boolean;
   /**
    * Asks the owner. Absent on a surface that cannot: the turn then stops with
    * `stopped: 'ask'` rather than pretending the tool failed.
@@ -343,7 +349,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
   try {
     while (iterations < cap) {
-      if (deps.budgetExhausted()) {
+      if (deps.budgetExhausted(input.tenant)) {
         return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
       }
       if (input.signal?.aborted) {
