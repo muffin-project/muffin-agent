@@ -2,7 +2,8 @@ import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
 import { readGateway } from '../core/gateway/lock.js';
-import { consolidationBootLine } from '../core/memory/consolidator.js';
+import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
+import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
@@ -99,12 +100,16 @@ export async function runRepl(home = paths().home): Promise<number> {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
 
+  // Only when there is something to decide — see `reviewBootLine`.
+  const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
+
   process.stderr.write(
     `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
       `${consolidationBootLine()}\n` +
+      (review === null ? '' : `${review}\n`) +
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 

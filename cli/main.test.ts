@@ -1,8 +1,10 @@
+import DatabaseCtor from 'better-sqlite3';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { MemoryStore } from '../core/memory/store.js';
 
 /**
  * The wiring, from the command line the owner actually types — the same
@@ -183,5 +185,63 @@ describe('the top-level error and usage surface, in Italian (ADR-0036)', () => {
     expect(r.out).toContain('memoria=memory');
     expect(r.out).toContain('lavori=jobs');
     expect(r.out).toContain('segreto=secret');
+  });
+});
+
+describe('muffin memory review — the register the owner can finally act on', () => {
+  /**
+   * Through the real argv, because that is the part no unit test covers: the
+   * verbs live in a `switch` in this file, and `cli/memory.test.ts` calls the
+   * functions directly. A subcommand that exists and is not routed is the same
+   * defect as a mechanism with no caller, one layer up.
+   *
+   * The home needs no `init`: these two verbs open the database and nothing
+   * else — no provider, no key, no network — which is the property that makes
+   * them usable in the moment you actually need them.
+   */
+  function seedContradiction(dir: string): { existing: number; incoming: number } {
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    const store = new MemoryStore(db);
+    const episodeId = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+    });
+    const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
+    const believe = (object: string, at: string) =>
+      store.addFact({
+        tenantId: 'host', subjectId, predicate: 'accountant', objectValue: object,
+        episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: at,
+      });
+    const existing = believe('Marco', '2026-06-01T10:00:00Z');
+    const incoming = believe('Lucia', '2026-08-13T10:00:00Z');
+    store.recordReview({
+      tenantId: 'host', kind: 'contradiction', subject: 'owner', predicate: 'accountant',
+      existingFactId: existing, incomingFactId: incoming,
+      detail: 'nessuna delle due frasi dice quando', createdAt: '2026-08-13T10:00:01Z',
+    });
+    db.close();
+    return { existing, incoming };
+  }
+
+  it('lists the open question, answers it, and then has nothing left to ask', () => {
+    const { dir, xdg } = scratchHome();
+    const { existing, incoming } = seedContradiction(dir);
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+
+    const listed = muffin(env, ['memory', 'review']);
+    // Exit 1 is "someone should look", the same code `check` uses for warnings:
+    // scriptable, and the only way a shell can tell an install with open
+    // questions from one without.
+    expect(listed.code).toBe(1);
+    expect(listed.out).toContain('Marco');
+    expect(listed.out).toContain(`muffin memory review keep ${incoming}`);
+
+    const kept = muffin(env, ['memory', 'review', 'keep', String(incoming)]);
+    expect(kept.code).toBe(0);
+    expect(kept.out).toContain(`ritiro #${existing}`);
+
+    const after = muffin(env, ['memory', 'review']);
+    expect(after.code).toBe(0);
+    expect(after.out).toContain('niente da decidere');
   });
 });

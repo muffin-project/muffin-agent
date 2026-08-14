@@ -276,18 +276,63 @@ job spara → estrazione a **+20,003 s**. E l'indice vettoriale è passato da vu
 `5 chunk · 5 vettori, in sync` — la seconda metà del difetto, quella che la
 ricerca aveva trovato e questa riga non diceva.
 
-⛔ **Resta aperto, ed è metà della riga: il secondo meccanismo, la manutenzione
-periodica.** Non è costruito, e dirlo è il punto — è la quinta volta che una riga
-di questa roadmap rischia di essere dichiarata chiusa a metà. Cosa manca, in
-concreto: drenare un arretrato più grande di un batch (`CONSOLIDATION_BATCH = 20`,
-e `pendingEpisodes` ordina dal più vecchio, quindi sotto arretrato l'episodio
-consolidato **non** è il più recente e la proprietà «prima del messaggio dopo»
-non tiene); il dream/compattazione che il vecchio faceva *sopra* la work_queue;
-l'audit dei predicati; e il consumo del registro `review` del giudice, che oggi
-accumula righe che nessuno guarda. Più un limite dichiarato: **`muffin run`
-headless non consolida** — il timer è `unref`'d perché un comando scriptabile non
-deve restare in piedi venti secondi dopo aver risposto, quindi i suoi episodi
-restano dovuti fino alla prima coda di un processo di lunga vita.
+✅ **Secondo meccanismo costruito — la manutenzione** (`slice/gateway`,
+2026-08-14, **ADR-0040**, 870 test). Tre pezzi, e la prima cosa che ha prodotto è
+una correzione al nome: **«periodica» era sbagliato.** Elencando cosa dovesse
+fare, ogni voce si è rivelata guidata dai **dati** e non dall'orologio — un
+arretrato esiste o no, un duplicato esiste o no, una riga `review` è aperta o è
+stata risolta; niente in questo schema cambia perché è passato un giorno. Quindi
+niente cron (e nessuno dei dodici sistemi letti ne gira uno): il grilletto resta
+la stessa coda d'inattività, nel runtime.
+
+La regola di costo che governa tutto: nel vecchio il dream era la **metà piccola**
+— ⬤ 100 report contro 2.438 righe di work queue, il 4%. Quindi **la manutenzione
+non spende niente**: nessuna chiamata al modello, è SQL su righe già scritte.
+L'unica parte che chiama un modello è il drenaggio, e paga estrazioni che la
+corsia viva avrebbe pagato comunque — il totale non cambia, cambia quando.
+
+- **Drenaggio dell'arretrato.** Dopo una pagina **piena** che ha **fatto
+  progresso**, la corsia si ri-arma e prende la successiva, allo stesso passo
+  della coda viva (nessuna costante nuova: il tetto di costo diventa così una
+  proprietà della forma). Perde sempre contro un turno. La condizione d'arresto è
+  il *progresso* (`marked > 0`), mai un conteggio di pendenti: un episodio che
+  fallisce l'estrazione in modo permanente resta in testa per sempre, e un
+  drenaggio guidato da `stats.pending` ripagherebbe quella pagina ogni venti
+  secondi — lo stesso fallimento che ADR-0038 aveva già scartato, da un'altra
+  porta. **Non** si riordina al più-nuovo-per-primo: `reconcile` sceglie il
+  candidato per `recorded_at`, quindi estrarre fuori ordine farebbe
+  **dis-correggere una correzione**.
+- **Deduplica senza soglia.** Solo chiave esatta normalizzata (maiuscole, spazi,
+  punteggiatura finale) — lo 0,85 del vecchio non porta fra embedder e la ricerca
+  lo misura (99,00% di falsi positivi a 0,7 su due modelli comuni). ⬤ E il corpus
+  chiede esattamente questo gradino: sui quattro mesi del vecchio i gruppi
+  (soggetto, predicato) con più di un valore attivo erano **2 su 308 fatti**, e
+  **tutti e due erano duplicati esatti**. Si ritira con `supersede`, mai DELETE —
+  e con `valid_to` **non toccato**, perché un duplicato non ha mai smesso di
+  essere vero: non era una verità separata.
+- **Il registro `review` si legge e si risponde.** `muffin memory review` +
+  `review keep <fact-id>`, più la riga in `memory stats`, in `doctor` e al boot.
+  «Aperta» è una **join** (entrambi i fatti ancora attivi), non una colonna di
+  stato — così una domanda che la conversazione risolve da sola esce dalla lista
+  senza che nessuno scriva niente. Rispondere è un `supersede`, ed è **l'owner**
+  a farlo: ADR-0032 §9 resta dov'era.
+
+⛔ **Resta aperto, e va detto**: **dream/compattazione** (non costruito, e la
+ragione è che manca il *consumatore* — `profiles` e `digests` hanno zero lettori:
+prima il lettore, poi lo scrittore); **l'audit dei predicati** a metà (l'invariante
+`predicate_vocabulary` rileva, ma proporre un merge vuole un giudizio di
+sinonimia, cioè una chiamata al modello — contro la regola di costo — o un
+vocabolario chiuso, contro ADR-0032). **Il decadimento della confidenza è
+rifiutato**, non rimandato: non c'è un tasso difendibile, ⬤ l'unica soglia sulla
+confidenza in tutto il repo è `extract.ts:176` *prima* della scrittura (quindi
+sarebbe una mutazione senza lettore), e il giorno che un lettore ci fosse una
+credenza scivolata sotto soglia diventerebbe irrecuperabile **senza `expired_at`
+né `superseded_by`**: una cancellazione senza traccia. Una **passata di scadenza**
+non è costruita perché ⬤ non ha niente da scadere: `valid_to` è scritto solo da
+`supersede`, che scrive anche `expired_at`, quindi «vero-finito ma ancora
+creduto» non è rappresentabile oggi. Più il limite dichiarato che resta: **`muffin
+run` headless non consolida** (timer `unref`'d) — ma ora costa meno, perché il
+primo processo di lunga vita **drena tutto** invece di prendere una pagina sola.
 
 **2. ~~`thinking` è dichiarato e mai passato~~ — chiuso (ADR-0037, poi la sua
 correzione lo stesso giorno).** Il rimedio scritto qui era sbagliato nella

@@ -10,7 +10,8 @@ import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
-import { consolidationBootLine } from '../core/memory/consolidator.js';
+import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
+import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
   planUnit,
   resolveLauncher,
@@ -364,6 +365,9 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
 
+  // Only when there is something to decide — see `reviewBootLine`.
+  const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
+
   process.stderr.write(
     `muffin gateway · pid ${process.pid} · ${runtime.config.models.main}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
@@ -374,6 +378,7 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
       // that has no terminal — which is the one that was never going to be
       // watched.
       `${consolidationBootLine()}\n` +
+      (review === null ? '' : `${review}\n`) +
       `supervisione: ${notify.supervised ? 'sd_notify attivo' : 'nessun supervisore (NOTIFY_SOCKET assente)'}\n`,
   );
 

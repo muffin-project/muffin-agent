@@ -9,6 +9,7 @@ import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
+import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 
@@ -307,6 +308,22 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
             `${last.facts} fatti · ${consolidation.runs} run in totale`,
         );
       }
+    }
+
+    // The judge's "a human should decide" outcome, which had a durable register
+    // and no reader. Here rather than only in `memory stats` because this is the
+    // command an owner runs when something feels wrong, and an open contradiction
+    // is the one memory state that cannot resolve itself: both beliefs stay
+    // current, recall keeps returning both, and nothing in the lane will ever
+    // choose. Counted open — derived from the facts — not counted total, which on
+    // an append-only register only ever grows.
+    const open = readOpenContradictions(db, 'host');
+    if (open !== null && open > 0) {
+      warn(
+        'memoria da decidere',
+        `${open} contraddizioni aspettano te: due valori restano entrambi attivi finché non scegli`,
+        'run `muffin memory review`',
+      );
     }
 
     // Is anything running? Same shape of invisible fact as the cache dialect

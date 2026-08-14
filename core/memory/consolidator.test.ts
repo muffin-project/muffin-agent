@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Consolidator,
   CONSOLIDATION_CEILING,
+  CONSOLIDATION_DRAIN_MS,
   CONSOLIDATION_IDLE_MS,
   readConsolidation,
 } from './consolidator.js';
@@ -20,6 +21,11 @@ import type { IngestReport } from './ingest.js';
 
 const empty = (over: Partial<IngestReport> = {}): IngestReport => ({
   tenantId: 'host',
+  // One episode, one fact, one page that was *not* full: the default report is
+  // the ordinary trailing-edge fire, and it must not arm the drain. Every test
+  // about the drain says so explicitly by overriding `fetched`.
+  fetched: 1,
+  marked: 1,
   episodes: 1,
   factsAdded: 1,
   superseded: 0,
@@ -254,6 +260,224 @@ describe('one batch at a time', () => {
     await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
     await h.consolidator.settled();
     expect(readConsolidation(h.db)?.last.outcome).toBe('busy');
+  });
+});
+
+describe('the drain', () => {
+  /**
+   * A backlog with a page-by-page harness: `ingest` hands back a full page while
+   * the queue lasts, then a short one. What is being asserted is that the lane
+   * keeps taking pages **on its own**, which is the whole of the second
+   * mechanism — before it, a fire under backlog spent its page on the oldest
+   * episodes and the message that armed it was not in the batch at all.
+   */
+  function backlog(pages: number, over: { marked?: number } = {}) {
+    const db = new DatabaseCtor(':memory:');
+    const triggers: string[] = [];
+    let left = pages;
+    const consolidator = new Consolidator({
+      db,
+      ingest: async (limit) => {
+        left -= 1;
+        const full = left > 0;
+        return empty({
+          fetched: full ? limit : 3,
+          marked: full ? (over.marked ?? limit) : 3,
+          episodes: 1,
+          factsAdded: 0,
+        });
+      },
+      budgetExhausted: () => false,
+    });
+    const pageCount = () =>
+      (db.prepare(`SELECT count(*) AS n FROM consolidation_runs`).get() as { n: number }).n;
+    const seen = () =>
+      (db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]).map(
+        (r) => r.trigger,
+      );
+    return { db, consolidator, triggers, pageCount, seen };
+  }
+
+  it('keeps taking pages until the queue is shorter than one', async () => {
+    const h = backlog(4);
+    h.consolidator.notify('host');
+    for (let i = 0; i < 6; i += 1) {
+      await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+      await h.consolidator.settled();
+    }
+    // Four pages, and then it stops: the fourth was short, so nothing is behind
+    // it and re-arming would be a timer with no work.
+    expect(h.pageCount()).toBe(4);
+    expect(h.seen()).toEqual(['idle', 'drain', 'drain', 'drain']);
+    expect(h.consolidator.isArmed()).toBe(false);
+  });
+
+  /**
+   * The mutation this kills, and it is the expensive one: driving the drain off
+   * "is anything still pending" instead of off progress. An episode whose
+   * extraction fails permanently is left unmarked *on purpose* so it is retried,
+   * so it sits at the head of `ORDER BY created_at` for ever — and a drain that
+   * asked the queue would re-read that page every twenty seconds and re-pay the
+   * same failing model call until the month's budget was gone. That is the same
+   * failure ADR-0038 rejected the `stats.pending` ticker for, through a
+   * different door.
+   */
+  it('stops on a full page that moved nothing, instead of paying for it forever', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const calls: number[] = [];
+    const consolidator = new Consolidator({
+      db,
+      ingest: async (limit) => {
+        calls.push(limit);
+        // A full page, one episode attempted, and the marker never advanced:
+        // exactly what a permanently failing head looks like.
+        return empty({ fetched: limit, marked: 0, episodes: 1, factsAdded: 0, errors: ['episodio 7: fallita'] });
+      },
+      budgetExhausted: () => false,
+    });
+
+    consolidator.notify('host');
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+      await consolidator.settled();
+    }
+    expect(calls.length).toBe(1);
+  });
+
+  it('does not arm at all when the page was not full', async () => {
+    const h = harness({ report: empty({ fetched: 5, marked: 5 }) });
+    h.consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidator.settled();
+    expect(h.consolidator.isArmed()).toBe(false);
+  });
+
+  /**
+   * The arbitration, and it is the reason the drain is safe to run at the live
+   * lane's own pace: a turn arriving mid-drain re-arms the *trailing edge*, so
+   * the head of the queue — where the owner's new words are — is served next.
+   * The drain never gets to keep the lane away from a live conversation.
+   */
+  it('loses to a turn: the live trailing edge takes the next page', async () => {
+    const h = backlog(6);
+    h.consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await h.consolidator.settled();
+    expect(h.seen()).toEqual(['idle']);
+
+    // The owner speaks while the drain is armed.
+    h.consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidator.settled();
+    expect(h.seen()).toEqual(['idle', 'idle']);
+  });
+
+  it('does not keep the process alive: the drain timer is unref’d like the trailing edge', async () => {
+    const h = backlog(3);
+    h.consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await h.consolidator.settled();
+    expect(h.consolidator.isArmed()).toBe(true);
+    // `hasRef` is node's own answer, so this asserts the timer and not a flag we
+    // set beside it. A headless `muffin run` that finished its turn must exit.
+    const timer = (h.consolidator as unknown as { timer: NodeJS.Timeout }).timer;
+    expect(timer.hasRef()).toBe(false);
+  });
+
+  it('stops draining the moment the lane is stopped', async () => {
+    const h = backlog(5);
+    h.consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS);
+    await h.consolidator.settled();
+    h.consolidator.stop();
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_DRAIN_MS * 5);
+    await h.consolidator.settled();
+    expect(h.pageCount()).toBe(1);
+  });
+});
+
+describe('the maintenance sweep', () => {
+  /**
+   * The gate is an argument, not a saving: a duplicate among the *current*
+   * beliefs can only come into existence when a row is added, because
+   * `supersede` only ever removes one from the active set and nothing else
+   * writes to `facts`. So a batch that added nothing cannot have created a pair
+   * the last sweep missed — and at the measured yield of one fact per thirty
+   * turns, that is almost every fire.
+   */
+  it('does not run on a batch that added no facts', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const sweeps: number[] = [];
+    const consolidator = new Consolidator({
+      db,
+      ingest: async () => empty({ factsAdded: 0 }),
+      budgetExhausted: () => false,
+      sweep: () => {
+        sweeps.push(1);
+        return { merges: [] };
+      },
+    });
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await consolidator.settled();
+    expect(sweeps).toEqual([]);
+  });
+
+  it('runs on a batch that added one, and records what it retired', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const consolidator = new Consolidator({
+      db,
+      ingest: async () => empty({ factsAdded: 1 }),
+      budgetExhausted: () => false,
+      sweep: () => ({ merges: [{ keptFactId: 9 }, { keptFactId: 10 }] }),
+    });
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await consolidator.settled();
+    // Visible, for the same reason every other number in this row is: a sweep
+    // that retires rows unattended and announces nothing is indistinguishable
+    // from one that does not run.
+    expect(readConsolidation(db)?.last.merged).toBe(2);
+  });
+
+  /**
+   * The batch is what mattered. A sweep that threw must not turn a run that
+   * wrote facts into an `error` row — the facts are there, and that row is what
+   * the owner reads to know it.
+   */
+  it('a sweep that throws does not lose the batch that wrote the facts', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const consolidator = new Consolidator({
+      db,
+      ingest: async () => empty({ factsAdded: 1 }),
+      budgetExhausted: () => false,
+      sweep: () => {
+        throw new Error('database bloccato');
+      },
+    });
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await consolidator.settled();
+    const last = readConsolidation(db)?.last;
+    expect(last?.outcome).toBe('ran');
+    expect(last?.facts).toBe(1);
+    expect(last?.errors).toBe(1);
+  });
+
+  it('reads a run written before the sweep column existed as zero, not as a crash', () => {
+    // `doctor` opens the database readonly, so on an ADR-0038 install the
+    // migration cannot have run and the column is genuinely absent. That is the
+    // install a diagnosis most needs to work on.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`CREATE TABLE consolidation_runs (
+      id INTEGER PRIMARY KEY, ran_at TEXT NOT NULL, trigger TEXT NOT NULL, outcome TEXT NOT NULL,
+      episodes INTEGER NOT NULL, facts INTEGER NOT NULL, superseded INTEGER NOT NULL,
+      indexed INTEGER NOT NULL, review INTEGER NOT NULL, errors INTEGER NOT NULL, ms INTEGER NOT NULL)`);
+    db.prepare(
+      `INSERT INTO consolidation_runs VALUES (1, '2026-08-13T18:16:00Z', 'idle', 'ran', 1, 1, 0, 3, 0, 0, 321)`,
+    ).run();
+    expect(readConsolidation(db)?.last.merged).toBe(0);
+    db.close();
   });
 });
 

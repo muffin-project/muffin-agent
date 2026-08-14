@@ -162,6 +162,42 @@ describe('memory ingestion', () => {
     expect(report.factsAdded).toBe(0);
     expect(report.errors).toHaveLength(1);
     expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1); // will be retried
+    // And it counts as **no progress**, which is what stops the drain from
+    // buying this page again every twenty seconds for ever. `episodes` reads 1
+    // here — the extractor did attempt it — so a drain keyed on that number
+    // would loop; `marked` is the marker itself and reads 0.
+    expect(report.episodes).toBe(1);
+    expect(report.marked).toBe(0);
+  });
+
+  /**
+   * The two numbers the backlog drain is decided on, asserted against a page
+   * that mixes every reason an episode can leave the queue.
+   *
+   * `fetched` is what `pendingEpisodes` returned, so `fetched < limit` means
+   * nothing is behind this page. `marked` is how many markers advanced, so
+   * `marked > 0` means the head moved. Counted here rather than re-derived by
+   * the caller from the skip counters, which is what `cli/memory.ts` used to do
+   * and what could not see a permanently failing head at all.
+   */
+  it('reports the page it read and the markers it advanced', async () => {
+    const { store, deps } = harness([facts(fact('Giusto', 'lives_in', 'Cagliari')), 'non è JSON']);
+    const mk = (content: string, role: 'user' | 'agent', createdAt: string) =>
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role, kind: 'message',
+        content, trustTier: 0, createdAt,
+      });
+    mk('abito a Cagliari', 'user', '2026-08-04T11:00:00Z');
+    mk('capito', 'agent', '2026-08-04T11:01:00Z');
+    mk('', 'user', '2026-08-04T11:02:00Z');
+    mk('e poi qualcosa che non si estrae', 'user', '2026-08-04T11:03:00Z');
+
+    const report = await ingestPending(deps, HOST, 4);
+
+    expect(report.fetched).toBe(4);
+    // Mined + agent output + empty. The fourth failed extraction is not marked.
+    expect(report.marked).toBe(3);
+    expect(store.pendingEpisodes(HOST, 1)).toHaveLength(1);
   });
 
   it('inherits the tier of the evidence and never raises it', async () => {

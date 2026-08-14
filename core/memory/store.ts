@@ -97,6 +97,22 @@ export type ReviewItem = {
   createdAt: string;
 };
 
+/**
+ * What makes a contradiction *open*, written once.
+ *
+ * Two readers need it and they cannot share a code path: this class hydrates
+ * the rows, and `muffin doctor` opens the database **readonly** so it can never
+ * be the thing that creates or migrates a table — which rules out constructing
+ * a `MemoryStore` at all, because the constructor runs DDL. Two hand-copied
+ * joins would be the shape this repo keeps paying for, so the join is the
+ * shared thing and only the SELECT list differs. One bind parameter: the tenant.
+ */
+export const OPEN_CONTRADICTION_FROM = `FROM memory_review r
+         JOIN facts e ON e.id = r.existing_fact_id AND e.tenant_id = r.tenant_id
+         JOIN facts i ON i.id = r.incoming_fact_id AND i.tenant_id = r.tenant_id
+        WHERE r.tenant_id = ? AND r.kind = 'contradiction'
+          AND e.expired_at IS NULL AND i.expired_at IS NULL`;
+
 export class MemoryStore {
   private readonly ingestLock: IngestLock;
 
@@ -277,14 +293,35 @@ export class MemoryStore {
    * says when it stopped being true out there, `expired_at` when we stopped
    * believing it. Nothing is deleted, so "what did I think in May" stays
    * answerable.
+   *
+   * `validTo` has three states and the third one is not decoration:
+   *
+   *   a date     the judge said when it stopped being true (`temporal_scope`)
+   *   omitted    nobody said, so world time closes when system time did
+   *   **null**   **do not touch world time at all**
+   *
+   * That last state exists for the maintenance sweep. Retiring an exact
+   * *duplicate* is not a claim that anything stopped being true out there — the
+   * duplicate was never a separate truth — so writing today's date into
+   * `valid_to` would invent a world-time boundary that never happened. This
+   * schema's own rule is that `valid_from` is never guessed, *"because a
+   * fabricated timestamp is indistinguishable from a real one a month later"*,
+   * and the same argument applies to the closing end. Bound as SQL NULL, which
+   * `COALESCE(valid_to, NULL)` leaves as it found it.
    */
-  supersede(tenantId: string, oldFactId: number, newFactId: number, at: string, validTo?: string): void {
+  supersede(
+    tenantId: string,
+    oldFactId: number,
+    newFactId: number,
+    at: string,
+    validTo?: string | null,
+  ): void {
     this.db
       .prepare(
         `UPDATE facts SET expired_at = ?, superseded_by = ?, valid_to = COALESCE(valid_to, ?)
          WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
       )
-      .run(at, newFactId, validTo ?? at, oldFactId, tenantId);
+      .run(at, newFactId, validTo === null ? null : (validTo ?? at), oldFactId, tenantId);
   }
 
   /**
@@ -328,6 +365,64 @@ export class MemoryStore {
          ORDER BY f.recorded_at DESC`,
       )
       .all(tenantId, subjectId, predicate ?? null, predicate ?? null) as Fact[];
+  }
+
+  /**
+   * Every (subject, predicate) that currently holds **more than one** belief.
+   *
+   * The whole input of the maintenance sweep, and it is deliberately shaped as
+   * "the groups that could contain a duplicate" rather than "all active facts".
+   * Two reasons, and only the second is about speed:
+   *
+   *  - A group of one cannot contain a duplicate, so a sweep that read every
+   *    active fact would be doing arithmetic to rediscover that. ⬤ On the old
+   *    system's four-month graph this filter cut the input from **308 active
+   *    facts to 5** — the two multi-valued groups it held, both of which were
+   *    duplicates.
+   *  - Set-valued predicates are the norm here by design (`schema.ts`: the old
+   *    schema treated every predicate as single-valued and expired 27 of 28
+   *    `interest` rows by accident). So a multi-valued group is *legal* and
+   *    common, and this method must not be read as finding a problem. It finds
+   *    the only place a duplicate can hide.
+   *
+   * Ordered so a group arrives together and its rows arrive newest-first, which
+   * is the order the sweep's survivor rule wants — but the sweep re-sorts
+   * anyway, because a guarantee that lives in an ORDER BY two files away is the
+   * kind that changes without its caller noticing (see `activeFacts`, where
+   * exactly that happened).
+   */
+  multiValuedActiveFacts(tenantId: string): { subjectId: number; predicate: string; facts: Fact[] }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.expired_at IS NULL
+           AND (f.subject_id, f.predicate) IN (
+             SELECT subject_id, predicate FROM facts
+             WHERE tenant_id = ? AND expired_at IS NULL
+             GROUP BY subject_id, predicate HAVING count(*) > 1
+           )
+         ORDER BY f.subject_id, f.predicate, f.recorded_at DESC, f.id DESC`,
+      )
+      .all(tenantId, tenantId) as Fact[];
+
+    const groups: { subjectId: number; predicate: string; facts: Fact[] }[] = [];
+    for (const row of rows) {
+      const last = groups[groups.length - 1];
+      if (last && last.subjectId === row.subjectId && last.predicate === row.predicate) {
+        last.facts.push(row);
+      } else {
+        groups.push({ subjectId: row.subjectId, predicate: row.predicate, facts: [row] });
+      }
+    }
+    return groups;
   }
 
   /** Includes retired beliefs, for "what did I think then" questions. */
@@ -405,6 +500,42 @@ export class MemoryStore {
         incomingFactId: input.incomingFactId ?? null,
       });
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * The contradictions still waiting for a human, and **only** those.
+   *
+   * "Open" is a join, not a column. `memory_review` has no `resolved_at` and is
+   * not getting one — the schema says why: a register that tracked whether a
+   * human had looked yet would be the workflow engine this was explicitly asked
+   * not to become. So a contradiction is open exactly while both of its facts
+   * are still active, which means the question closes itself the moment the
+   * conversation supersedes either one, with nothing written anywhere.
+   *
+   * The filter lives in SQL rather than in the caller because the caller that
+   * existed did not have it: `pendingReview` returns every row ever recorded,
+   * and the only number this register ever surfaced was that total. On an
+   * append-only table a total only grows, which is how a number stops being
+   * read.
+   */
+  openContradictions(
+    tenantId: string,
+    limit = 50,
+  ): { id: number; createdAt: string; detail: string; existingFactId: number; incomingFactId: number }[] {
+    return this.db
+      .prepare(
+        `SELECT r.id, r.created_at AS createdAt, r.detail,
+                r.existing_fact_id AS existingFactId, r.incoming_fact_id AS incomingFactId
+         ${OPEN_CONTRADICTION_FROM}
+         ORDER BY r.created_at DESC LIMIT ?`,
+      )
+      .all(tenantId, limit) as {
+      id: number;
+      createdAt: string;
+      detail: string;
+      existingFactId: number;
+      incomingFactId: number;
+    }[];
   }
 
   /** Everything recorded for this tenant, most recent first. */

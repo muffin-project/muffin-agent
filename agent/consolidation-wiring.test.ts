@@ -218,6 +218,60 @@ describe('consolidation starts by itself', () => {
   });
 });
 
+describe('a backlog drains itself', () => {
+  /**
+   * The half of M5-bis row 1 ADR-0038 left open, end to end through the real
+   * `ingestPending`.
+   *
+   * Under a backlog the trailing edge loses its whole point: `pendingEpisodes`
+   * is `ORDER BY created_at`, so a fire spends its bounded page on the *oldest*
+   * episodes and the message that just armed it is not in the batch — the fact
+   * does not land before the next message, and nothing says so. Backlogs are
+   * ordinary here: `muffin run` headless leaves its episodes pending by design,
+   * a gateway that was down accumulates, a migration starts owing the whole
+   * corpus.
+   *
+   * Agent-role episodes, deliberately: extraction skips them without a model
+   * call, so this asserts the paging and the stop condition with no provider
+   * involved at all.
+   */
+  it('keeps taking pages on its own until the queue is shorter than one', async () => {
+    const h = harness([reply('ok')]);
+    for (let i = 0; i < 25; i += 1) {
+      h.store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'agent',
+        kind: 'message',
+        content: `risposta ${i}`,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      });
+    }
+    // One turn arms one trailing edge. Before the drain, that is all the lane
+    // ever got: one page of twenty, and five episodes left owed until the owner
+    // happened to speak again.
+    await h.speak('ciao');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+    expect(h.store.stats('host').pending).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS);
+    await h.consolidation.settled();
+
+    expect(h.store.stats('host').pending).toBe(0);
+    const triggers = (
+      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]
+    ).map((r) => r.trigger);
+    expect(triggers).toEqual(['idle', 'drain']);
+    // And it stops: nothing is behind the short page, so re-arming would be a
+    // timer with no work — and a timer with no work on a lane that calls a model
+    // is the shape that spends a month's budget on an empty queue.
+    expect(h.consolidation.isArmed()).toBe(false);
+  });
+});
+
 describe('the memory lane is inside the budget', () => {
   /**
    * The mutation this kills: `runtime.light.provider` handed out unwrapped.
@@ -349,6 +403,65 @@ describe('buildRuntime wires it', () => {
     try {
       expect(runtime.light.provider).not.toBe(runtime.deps.provider);
       expect(runtime.deps.recordSpend).toBeTypeOf('function');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  /**
+   * The maintenance sweep, reached from the production assembly.
+   *
+   * Read out of the consolidator's deps and then *called*, which is what makes
+   * this a wiring test rather than a shape test: invoking the bound closure
+   * proves it points at `runtime.memory.store` and at the host tenant, and it
+   * needs no model, because the sweep spends nothing by design.
+   *
+   * The mutation it kills is the one this repo keeps paying for: a `sweep` that
+   * some caller wires and `buildRuntime` does not. `maintenance.test.ts` owns
+   * the merge rules; this owns the join.
+   */
+  it('binds the duplicate sweep to its own store, on the host tenant', () => {
+    const runtime = buildRuntime(freshHome(), mkdtempSync(join(tmpdir(), 'muffin-cons-ws-')));
+    try {
+      const store = runtime.memory.store;
+      const episodeId = store.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: 'mi interessa la vela',
+        trustTier: 0,
+        createdAt: '2026-08-01T10:00:00Z',
+      });
+      const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-01T10:00:00Z');
+      const believe = (object: string, at: string) =>
+        store.addFact({
+          tenantId: 'host',
+          subjectId,
+          predicate: 'interested_in',
+          objectValue: object,
+          episodeId,
+          trustTier: 0,
+          confidence: 0.9,
+          extractionV: 1,
+          recordedAt: at,
+        });
+      const first = believe('vela', '2026-06-01T10:00:00Z');
+      const again = believe('Vela.', '2026-08-01T10:00:00Z');
+
+      const bound = (
+        runtime.consolidation as unknown as {
+          deps: { sweep?: (at: Date) => { merges: unknown[] } };
+        }
+      ).deps.sweep;
+      expect(bound).toBeTypeOf('function');
+      expect(bound!(new Date('2026-08-14T12:00:00Z')).merges).toHaveLength(1);
+
+      expect(store.factById('host', again)?.expiredAt).toBeNull();
+      // Retired, not removed — the rule that matters most in a pass that runs in
+      // bulk with nobody watching.
+      expect(store.factById('host', first)?.supersededBy).toBe(again);
     } finally {
       runtime.close();
     }

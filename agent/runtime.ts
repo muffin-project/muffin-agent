@@ -35,6 +35,7 @@ import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import type { RecallDeps } from '../core/memory/recall.js';
 import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
 import {
   Consolidator,
   CONSOLIDATION_CAPABILITY,
@@ -406,6 +407,13 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         CONSOLIDATION_TENANT,
         limit,
       ),
+    // The maintenance half, in the same object literal as the batch it follows.
+    // Bound here and not left for a surface to remember: a sweep that some
+    // callers wire and others do not is the twelfth member of this repo's
+    // "declared and connected to nothing" family. It spends nothing — SQL over
+    // rows the batch just wrote — so there is no install for which switching it
+    // off would be the right default.
+    sweep: (at) => sweepDuplicates(memoryStore, CONSOLIDATION_TENANT, at),
     log: (line) => process.stderr.write(`${line}\n`),
   });
 

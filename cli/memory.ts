@@ -4,6 +4,7 @@ import { paths } from '../core/config/config.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { recall } from '../core/memory/recall.js';
+import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
 import type { FactOrigin } from '../core/memory/schema.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
 import type { TrustTier } from '../core/policy/types.js';
@@ -27,6 +28,7 @@ export const MEMORY_USAGE = `usage:
   muffin memory why <fact-id>          l'episodio da cui viene un fatto
   muffin memory search "<query>" [-n N] [--history]
   muffin memory extract [--limit N]    drena l'arretrato a mano (di norma parte da solo)
+  muffin memory review [keep <fact-id>]  le contraddizioni che aspettano te
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
 `;
@@ -208,20 +210,18 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       }
       for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
       rounds += 1;
-      // Nothing left to do, or the caller asked for a bounded run. `skippedEmpty`
-      // is in this condition for the same reason the other two skip counts are:
-      // a round that only marked a page of empty-content episodes still made
-      // progress, and stopping here — before checking whether more pending
-      // episodes sit past this round's `limit` — used to be exactly the
-      // "reports success while stuck" shape a scheduler would hit forever.
-      if (
-        report.episodes === 0 &&
-        report.skippedAgentOutput === 0 &&
-        report.skippedDocuments === 0 &&
-        report.skippedEmpty === 0
-      ) {
-        break;
-      }
+      // The same stop condition as the automatic drain, from the same two
+      // fields — and that is the point of it being the same. This used to be a
+      // four-way test over the skip counters, which had to be kept in step with
+      // every reason an episode can be marked (it already had one correction
+      // for `skippedEmpty`) and still could not see the one case that matters:
+      // a page whose head fails extraction permanently raises `episodes`,
+      // touches no skip counter, and would have looped here until `limit` was
+      // exhausted, re-paying the same failing model call each round.
+      // `marked` counts the marker itself, so it cannot drift from what
+      // progress means.
+      if (report.marked === 0) break;
+      if (report.fetched < Math.min(limit, 25)) break;
       if (rounds * 25 >= limit) break;
     }
     process.stdout.write(
@@ -236,6 +236,116 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
   }
 }
 
+/**
+ * The read side of `memory_review`, which had none.
+ *
+ * The judge's `review` verdict — the deliberate *"a human should decide"* — has
+ * had a durable register since `6ddba7c` and, until this command, **no reader
+ * anywhere in production**: `store.pendingReview` was called only by tests, and
+ * the single number that surfaced (`da rivedere` in `memory stats`) counted
+ * every row ever written, including the ones the conversation had long since
+ * settled. That is the register in this repo's most familiar failure shape —
+ * written, tested, documented, reached by nothing — and it matters more now
+ * than it did, because a lane that runs unattended is precisely one whose
+ * "ask a human" outcomes nobody is standing next to.
+ *
+ * Opens nothing but the database: no provider, no key, no network. Same
+ * argument as `check` — the moment you need this is not a moment to require the
+ * model to be configured.
+ */
+export function cmdMemoryReview(home: string): number {
+  const { db, store } = openStore(home);
+  try {
+    const summary = reviewSummary(store, TENANT);
+    const out: string[] = [];
+
+    for (const item of summary.open) {
+      const when = item.createdAt.slice(0, 16).replace('T', ' ');
+      out.push(`#${item.reviewId} ${item.existing.subjectName} ${item.existing.predicate} — ${when}`);
+      // Both spelled out with their ids, because the id is what the owner types
+      // back. Printing the two values without them would be a question with no
+      // way to answer it.
+      out.push(`   tengo   #${item.existing.id} "${objectOf(item.existing)}" (${item.existing.recordedAt.slice(0, 10)})`);
+      out.push(`   oppure  #${item.incoming.id} "${objectOf(item.incoming)}" (${item.incoming.recordedAt.slice(0, 10)})`);
+      out.push(`   il giudice: ${item.why}`);
+      out.push(`   → muffin memory review keep ${item.incoming.id}`);
+      out.push('');
+    }
+
+    if (summary.errors.length > 0) {
+      out.push('problemi della pipeline (raggruppati per messaggio):');
+      for (const e of summary.errors) {
+        const span =
+          e.count === 1
+            ? e.lastAt.slice(0, 10)
+            : `${e.count}× · ${e.firstAt.slice(0, 10)} → ${e.lastAt.slice(0, 10)}`;
+        out.push(`   ${span}  ${e.detail}`);
+      }
+      out.push('');
+    }
+
+    if (out.length === 0) {
+      // Told apart from "the register is empty", because they are different
+      // findings: nothing recorded means the lane has never had to ask, and
+      // nothing open means every question it asked has been answered by the
+      // conversation moving on.
+      process.stdout.write(
+        summary.total === 0
+          ? 'niente in sospeso — il giudice non ha mai dovuto chiedere\n'
+          : `niente da decidere · ${summary.total} righe in archivio (mai cancellate)\n`,
+      );
+      return 0;
+    }
+
+    process.stdout.write(`${out.join('\n')}\n`);
+    process.stderr.write(
+      `${summary.open.length} da decidere · ${summary.total} righe in archivio\n`,
+    );
+    // Exit 1, like `check` with warnings: "someone should look". Scriptable, and
+    // it is the exit code that lets a shell tell an install with open questions
+    // from one without.
+    return summary.open.length > 0 ? 1 : 0;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Answering one: keep this fact, retire the other.
+ *
+ * A `supersede`, which is the operation the store already has and which never
+ * deletes — so the retired belief keeps `superseded_by` pointing here and
+ * `muffin memory why` reads the decision back as a chain. The owner is deciding
+ * by hand on a row the pipeline put in front of them, which is why this does not
+ * touch the open ADR-0032 §9 question about the model writing memory: nothing
+ * here is the model.
+ */
+export function cmdMemoryReviewKeep(home: string, factId: number): number {
+  const { db, store } = openStore(home);
+  try {
+    const answered = resolveContradiction(store, TENANT, factId, new Date());
+    if (answered.length === 0) {
+      process.stderr.write(
+        `#${factId} non è uno dei due fatti di una contraddizione aperta — \`muffin memory review\` per la lista\n`,
+      );
+      return 1;
+    }
+    for (const item of answered) {
+      const dropped = item.existing.id === factId ? item.incoming : item.existing;
+      process.stdout.write(
+        `#${item.reviewId} deciso: tengo #${factId}, ritiro #${dropped.id} "${objectOf(dropped)}"\n`,
+      );
+    }
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+function objectOf(f: Fact): string {
+  return f.objectName ?? f.objectValue ?? '?';
+}
+
 export function cmdMemoryStats(home: string): number {
   const { db, store } = openStore(home);
   try {
@@ -244,6 +354,12 @@ export function cmdMemoryStats(home: string): number {
       s.span.from_ && s.span.to_ ? `${s.span.from_.slice(0, 10)} → ${s.span.to_.slice(0, 10)}` : 'vuota';
     const vectorRows = tableCount(db, 'chunks');
     const vectorIndexed = tableCount(db, 'chunks_vec');
+    // `needsReview` alone was the whole read side of the register, and it counts
+    // every row ever written — a number that only ever grows, on an append-only
+    // table, is a number that stops being read within a week. What is *open* is
+    // derived from the facts (see `maintenance.ts`), so it falls on its own when
+    // the conversation settles a question.
+    const review = reviewSummary(store, TENANT);
 
     process.stdout.write(
       [
@@ -251,7 +367,7 @@ export function cmdMemoryStats(home: string): number {
         `finestra       ${span}`,
         `entità         ${s.entities}`,
         `fatti          ${s.activeFacts} attivi · ${s.retiredFacts} ritirati`,
-        `da rivedere    ${s.needsReview}`,
+        `da rivedere    ${reviewLine(review.open.length, review.errors.length, review.total)}`,
         `predicati      ${s.predicates} distinti`,
         `indice vett.   ${vectorRows === null ? 'assente' : `${vectorRows} chunk · ${vectorIndexed ?? 0} vettori`}`,
         `consolidam.    ${consolidationLine(db)}`,
