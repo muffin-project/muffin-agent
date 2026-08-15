@@ -341,6 +341,29 @@ describe('recall', () => {
     expect(accountants.map((a) => a.text).join(' ')).not.toContain('Marco');
   });
 
+  it('includeHistory brings the retired belief back, marked as retired, beside the current one', async () => {
+    // `RecallOptions.includeHistory` was declared, threaded through
+    // `cli/memory.ts` and `cli/main.ts`, and documented in the USAGE — and
+    // `recall()` never read it. `--history` answered exactly like the default
+    // search: silently. This is the wiring test that fails without it.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'cambio commercialista');
+    const base = { tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW };
+    const marco = store.addFact({ ...base, objectValue: 'Marco' });
+    const lucia = store.addFact({ ...base, objectValue: 'Lucia' });
+    store.supersede(HOST, marco, lucia, NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto commercialista', { includeHistory: true });
+    const accountants = result.items.filter((i) => i.kind === 'fact' && /accountant/.test(i.text));
+    const retired = accountants.find((a) => a.text.includes('Marco'));
+    const current = accountants.find((a) => a.text.includes('Lucia'));
+    expect(retired).toBeDefined();
+    expect(retired?.expired).toBe(true);
+    expect(current).toBeDefined();
+    expect(current?.expired).toBe(false);
+  });
+
   it('never crosses a tenant, on either half', async () => {
     const { store, vectors } = harness();
     const mine = episode(store, 'il codice del deposito è ZK-4417');
