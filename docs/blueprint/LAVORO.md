@@ -9,17 +9,19 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis (`M5-BIS.md`) ordinato per **irreversibilita**: forma del turno > permessi > schema > resto. Un flag CLI si cambia domani, la forma di un turno no.
+**Obiettivo**: M5-bis (`M5-BIS.md`) per **irreversibilita**: forma del turno > permessi > superfici > schema. Un flag CLI si cambia domani, la forma di un turno no.
 
-**Ogni giro, prima di scegliere**: aggiorna questo blocco e ripubblica la plancia (stesso URL). Se diverge da M5-BIS, ha ragione il file.
+**Ogni giro**: aggiorna questo blocco, ripubblica plancia e mappa (stessi URL), `node docs/blueprint/mappa/ancore.mjs` finche esce 0.
 
-**Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
+**Deleghe in volo**: documenti/PDF (C7) · taint in ingresso · superfici+Discord (B8).
 
-**Prossimo**: i consumatori del record del turno (ADR-0042, gia costruito) — `wait`, `todo`, resume, consegna dalla corsia.
+**Prossimo**: consumatori del record del turno (ADR-0042 costruito) — `wait`, `todo`, resume. Poi: doc Hermes da inglobare.
+
+**La critica di fondo**: le garanzie stanno sui chiamanti, non sui dati — `tier?` opzionale, redazione solo nel tracer, `markRan` cieco alla consegna. Dove una proprieta e' portante, l'assenza non dev'essere rappresentabile: vedi `rerunnable`.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
 
-**Trappole**: il kernel legge `reversible` solo in `case medium` — irreversibile collassa su allow · `approve` solo nel REPL · una base incompleta produce inventari falsi.
+**Trappole**: il kernel legge `reversible` solo in `case medium` · `approve` solo nel REPL.
 <!-- FINE BLOCCO -->
 
 ---
