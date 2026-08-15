@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis (`M5-BIS.md`), ordinato per **irreversibilita**: prima cio che non si potra piu cambiare. Forma del turno > modello dei permessi > schema > tutto il resto. Un flag CLI si cambia domani, la forma di un turno no.
+**Obiettivo**: M5-bis (`M5-BIS.md`) ordinato per **irreversibilita**: forma del turno > permessi > schema > resto. Un flag CLI si cambia domani, la forma di un turno no.
 
-**A ogni giro del loop, prima di scegliere l'obiettivo**: aggiorna questo blocco E ripubblica la plancia (scratchpad/plancia.html, stesso URL). Se plancia e M5-BIS divergono ha ragione il file.
+**Ogni giro, prima di scegliere**: aggiorna questo blocco e ripubblica la plancia (stesso URL). Se diverge da M5-BIS, ha ragione il file.
 
-**Deleghe in volo**: gate1 x4 · reasoning-budget · superfici+streaming · confronto-permessi · documentazione · radice-Deliver · turno-sospendibile.
+**Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
 
-**La tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — un turno dev'essere sospendibile e ripristinabile. Se e vera, costruirle separate darebbe tre meccanismi che non compongono.
+**Tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — il turno dev'essere sospendibile e ripristinabile.
 
-**Decisioni owner aperte**: scope di lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity.md e persona.md.
+**Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
 
-**Trappole note**: `episodes.kind` CHECK non alterabile · il kernel legge `reversible` solo in `case medium`, irreversibile collassa su allow · `approve` cablato solo nel REPL · una base incompleta produce inventari falsi.
+**Trappole**: il kernel legge `reversible` solo in `case medium` — irreversibile collassa su allow · `approve` solo nel REPL · una base incompleta produce inventari falsi.
 <!-- FINE BLOCCO -->
 
 ---

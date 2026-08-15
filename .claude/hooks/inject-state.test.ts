@@ -90,7 +90,13 @@ describe('inject-state hook', () => {
     const context = contextOf(execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }));
     expect(context).not.toMatch(/blocco troncato/);
     expect(context).toMatch(/File load-bearing/); // the handoff's last line
-    expect(context).toMatch(/Deleghe in volo/); // the work state arrived too
+    // Structural, not literal: the preamble is emitted only when the work block
+    // is non-empty, and every work block carries its own date. Keying on a
+    // phrase from the content — the first version used "Deleghe in volo" —
+    // makes the test fail when the work state legitimately changes, which is
+    // the one thing it is supposed to allow.
+    expect(context).toMatch(/LAVORO\.md/);
+    expect(context).toMatch(/\*\*Aggiornato\*\*/);
     expect(context.length).toBeLessThanOrEqual(MAX - 250);
   });
 
