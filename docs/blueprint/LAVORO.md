@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: chiudere i buchi trovati dagli audit e portare la slice su `dev`.
+**Obiettivo**: M5-bis per intero. Inventario Gate 1: `docs/blueprint/M5-BIS.md`. Fondo = zero BLOCKER, ogni riga READY o FUORI-con-ragione.
 
-**PR aperte**: #8 slice/gateway (23 commit) · #9 tre fix sicurezza su dev · #10 CI+template (verde).
+**Mergiate in dev**: #8 slice/gateway (24 commit) · #9 · #10 · #11. **Aperte**: #12 eventi · #14 audit-fix · #15 inventario · #16 modelli.
 
-**Deleghe in volo**: sandbox-linux (opus) · audit-fix (sonnet) · ricerca-modelli (sonnet) · disegno-eventi (opus).
+**Deleghe in volo**: sandbox-linux · reversibilita · gate1 x4 (installazione, continuita, capability, memoria+osservabilita).
 
-**Decisioni dell'owner, aperte**: livello «chi è questa persona» a budget sopra il grafo · forma di MuffinBus e confine vault/workspace · lingua di README/CONTRIBUTING per l'open source · `ricorda` scrive o propone (ADR-0032 §9) · `identity.md` e il taglio di `persona.md` sono solo suoi.
+**Decisioni owner, aperte**: modello di reversibilita sotto `fs.write` · `ricorda` scrive o propone · lingua README open-source · `identity.md` e taglio `persona.md`.
 
-**Rischi noti**: il contenimento del sandbox è provato solo su macOS, non su Linux che è la produzione · `fs.write` rifiuta ogni draft (registro undo assente) · il binario che l'owner usa è del 2026-08-11 e non contiene niente di questa slice.
+**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile — la novita va in `connector` · `agent/loop.ts:379` cabla `maxOutputTokens: 4096` e `openai-compat` non manda mai un budget di reasoning e scarta `thinking: []` al ritorno: un modello che ragiona di default (qwen3.8, gemini 3.7, grok 4.6) paga il ragionamento e lo butta · lanciare agenti da una base incompleta produce inventari falsi.
 
-**Prossima azione**: verificare le quattro deleghe quando rientrano, una per una, senza fidarsi del report.
+**Prossima azione**: verificare le sei deleghe al rientro col metro di ORCHESTRATION §11.
 <!-- FINE BLOCCO -->
 
 ---
