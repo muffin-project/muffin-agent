@@ -8,36 +8,19 @@
 
 **✅ CONSOLIDATO (2026-08-09, `e034853`, ADR-0031).** Design/blueprint/research/knowledge/STATE/workflow sono TUTTI qui in `muffin-agent` — repo unico (anche per l'open-source: un `git clone` e hai tutto). **Questo file è la fonte autoritativa** (`muffin-agent/docs/blueprint/STATE.md`): edita QUI. Il vecchio repo `~/dev/Muffin` è solo il **vecchio muffin (produzione)** fino al cutover — mai scrivere lì.
 
-**La spinta MVP — sei punti, cinque chiusi** (per esteso nella cronaca sotto,
-§"La spinta MVP: i sei punti per esteso"):
-1. ✅ recall-polish — non ripesca il messaggio corrente, non narra i tag.
-2. ✅ **memoria-che-ti-conosce** — `importance` ordinale 0/1/2 (forced-choice
-   all’estrazione) e `origin` detto/dedotto/importato. `importance` **non entra
-   in RRF**: a k=60 il gap fra ranghi adiacenti è 0,000264 contro 0,016393 del
-   consenso fra ranker (62×), quindi un boost che sposta qualcosa è già capace
-   di cancellare l’unica cosa che RRF misura. Agisce **dentro** l’espansione del
-   grafo, che decide quali 6 fatti sopravvivono al taglio.
-3. 🟡 **persona + prompt d’onboarding — l’UNICO APERTO, ED È TUO.** Cablato:
-   `voice.md` entra nel prompt e i commenti HTML rivolti a te non finiscono più
-   *dentro* l’identità. **Manca il tuo taglio** su `defaults/persona.md`, e
-   `identity.md` è ancora il template vuoto — "Chi sei" / "Come ti comporti
-   quando è difficile" / "Il limite che ti do io" nessuno può scriverle al posto
-   tuo. Finché non lo plasmi "sa di mockup" → **NON è l’MVP**.
-4. ✅ **una capability agente** — `web_search` solo-snippet (pagine intere
-   sarebbero superficie d’iniezione), `hostOnly`, `maxTaint 3`. E, trovato
-   cablandola e più importante della feature: l’**allowlist egress non era mai
-   entrata in funzione** — due metà corrette, ognuna in attesa dell’altra.
-5. ✅ **spina osservante primo-taglio** — cancello a 2 stadi + segnale-assenza.
-   La manopola è **alpha** (il tasso di falsi allarmi, esatto a qualunque
-   lunghezza di storia), non la regola ereditata "media×3", che a n=2 è un test
-   al 16% e non al 5%. `muffin observe` **nasce spento**: mostra, `--send` è un
-   atto esplicito. Aperto e tuo: `gone_quiet` tocca ciò che ADR-0028 aveva
-   respinto, e l’emendamento resta **proposta non ratificata**.
-6. ✅ **contesto per-tenant** — il prompt e la lista dei tool sono funzione di
-   chi parla (`agent/context/assemble.ts`, il deliverable M1 mai costruito). Un
-   turno di gruppo riceveva byte per byte il prompt dell’owner: `identity.md` e
-   la sezione che istruisce a **chiedere dati personali**. Il kernel resta
-   l’enforcement; questo è il menu. Resta aperto l’epoch flip «so già chi sei».
+**La spinta MVP — sei punti, cinque chiusi.** Per esteso, verbatim, in cronaca
+§"La spinta MVP: i sei punti per esteso": recall-polish · memoria-che-ti-conosce
+(`importance`/`origin`, e `importance` **non** entra in RRF) · una capability
+agente (`web_search` solo-snippet — e cablandola si è scoperto che l'allowlist
+egress non era mai entrata in funzione) · spina osservante (la manopola è
+**alpha**, non "media×3") · contesto per-tenant (`agent/context/assemble.ts`).
+
+🟡 **Il sesto è l'unico aperto, ED È TUO: persona + onboarding.** Cablato —
+`voice.md` entra nel prompt, i commenti rivolti a te non finiscono dentro
+l'identità. **Manca il tuo taglio** su `defaults/persona.md`, e `identity.md` è
+ancora il template vuoto: "Chi sei" / "Come ti comporti quando è difficile" /
+"Il limite che ti do io" nessuno può scriverle al posto tuo. Finché non lo
+plasmi "sa di mockup" → **NON è l'MVP**.
 
 **⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11;
 dettaglio in `04-roadmap.md` §M5-bis, e il per-esteso dei punti chiusi in cronaca
