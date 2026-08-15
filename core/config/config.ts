@@ -9,7 +9,16 @@ import { dirname, join } from 'node:path';
  * XDG's three directories for a system whose data is this personal.
  */
 
-export const CONFIG_SCHEMA_VERSION = 1;
+/**
+ * 2 since the spend caps left this file.
+ *
+ * They lived here *and* in the sealed `rot/budgets.json`, and the one that bound
+ * was the copy nobody sealed. Keeping a deprecated-but-parsed `budget` would
+ * have been the same defect wearing a warning label — a number that reads as the
+ * cap and is not — so the field is gone and `loadConfig` migrates a v1 file in
+ * memory instead of refusing to open it. See `core/rot/budgets.ts`.
+ */
+export const CONFIG_SCHEMA_VERSION = 2;
 
 export type ProviderKind = 'anthropic' | 'openai-compat';
 
@@ -46,8 +55,10 @@ export const ConfigSchema = z.object({
       maxResults: z.number().int().min(1).max(20).optional(),
     })
     .optional(),
-  // Non-negative rather than positive: zero is a legitimate cap, meaning stop.
-  budget: z.object({ monthlyUsd: z.number().nonnegative(), perTenantDailyUsd: z.number().nonnegative() }),
+  // No `budget` here, deliberately. The caps are a rail, so they live inside the
+  // seal (`rot/budgets.json`, read by `core/rot/budgets.ts`) and this file — which
+  // the agent is meant to be able to change while talking (ADR-0036) — must not
+  // carry a second copy of them.
   rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),
   traces: z.object({ retentionDays: z.number().int().positive() }),
   surfaces: z.object({
@@ -86,7 +97,6 @@ export type Config = z.infer<typeof ConfigSchema>;
 
 export const DEFAULT_CONFIG: Omit<Config, 'provider' | 'models'> = {
   schemaVersion: CONFIG_SCHEMA_VERSION,
-  budget: { monthlyUsd: 80, perTenantDailyUsd: 2 },
   rot: { mode: 'single-user' },
   traces: { retentionDays: 90 },
   surfaces: { default: 'cli', enabled: ['cli'] },
@@ -115,7 +125,48 @@ export const paths = (home = muffinHome()) => ({
   secrets: join(home, 'secrets'),
 });
 
-export function loadConfig(home = muffinHome()): Config {
+/**
+ * The v1 → v2 step: `budget` stops living here.
+ *
+ * In memory, not on disk, and that is the whole migration story. A loader that
+ * rewrites the file it was asked to read is a surprise in every read-only
+ * command and a race between the gateway and a REPL; `saveConfig` writes the
+ * current version anyway, so the file upgrades itself the first time anything
+ * changes a setting. Until then every load repairs it again, which is what
+ * "idempotent" has to mean for a step nobody runs on purpose.
+ *
+ * The dropped numbers are **not** copied into `rot/budgets.json`. Letting an
+ * unsealed file's value flow into the seal on its own is precisely the hole this
+ * closes, so the note says what was there and leaves the decision — and the
+ * `muffin rot reseal` that carries it — to the owner.
+ */
+function migrateV1(raw: Record<string, unknown>, note: (line: string) => void): Record<string, unknown> {
+  const { budget, ...rest } = raw;
+  if (budget !== null && typeof budget === 'object') {
+    const b = budget as { monthlyUsd?: unknown; perTenantDailyUsd?: unknown };
+    note(
+      `config.json era schemaVersion 1: "budget" non vive più qui — il tetto viene da rot/budgets.json, ` +
+        `dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +
+        `perTenantDailyUsd ${String(b.perTenantDailyUsd)}) non sono stati copiati: se vuoi quel tetto, ` +
+        `scrivilo in rot/budgets.json e fai \`muffin rot reseal\`.`,
+    );
+  }
+  return { ...rest, schemaVersion: 2 };
+}
+
+/** Indexed by the version being left behind, so the ladder reads in one direction. */
+const MIGRATIONS: Record<number, (raw: Record<string, unknown>, note: (line: string) => void) => Record<string, unknown>> = {
+  1: migrateV1,
+};
+
+/**
+ * @param onNote receives one line per migration step that changed something.
+ *   Nothing here is silent by design: a config whose meaning shifted under the
+ *   owner has to say so somewhere they look, so `buildRuntime` prints these at
+ *   boot and `doctor` shows them as a check. Callers that do not pass it are
+ *   read-only paths where the note would have nowhere to go.
+ */
+export function loadConfig(home = muffinHome(), onNote: (line: string) => void = () => {}): Config {
   const file = paths(home).config;
   if (!existsSync(file)) {
     throw new ConfigError(`no config at ${file}`, 'run `muffin init` first');
@@ -131,16 +182,36 @@ export function loadConfig(home = muffinHome()): Config {
   }
 
   // Version first: a file from a future build will fail validation for reasons
-  // that have nothing to do with the real problem.
+  // that have nothing to do with the real problem. An *older* one is not that
+  // case — it is a home that has been here longer than the schema, which is the
+  // normal case for the only install that exists, so it gets migrated rather
+  // than refused. Bricking it would have been a fix worse than the defect.
   const version = (raw as { schemaVersion?: unknown }).schemaVersion;
-  if (version !== CONFIG_SCHEMA_VERSION) {
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
     throw new ConfigError(
       `config schemaVersion ${String(version)}, this build understands ${CONFIG_SCHEMA_VERSION}`,
-      'upgrade muffin, or migrate the file by hand',
+      'fix the field, or move the file aside and run `muffin init`',
     );
   }
+  if (version > CONFIG_SCHEMA_VERSION) {
+    throw new ConfigError(
+      `config schemaVersion ${version}, this build understands ${CONFIG_SCHEMA_VERSION}`,
+      'upgrade muffin — a newer build wrote this file',
+    );
+  }
+  let migrated = raw as Record<string, unknown>;
+  for (let v = version; v < CONFIG_SCHEMA_VERSION; v++) {
+    const step = MIGRATIONS[v];
+    if (!step) {
+      throw new ConfigError(
+        `no migration from config schemaVersion ${v} to ${v + 1}`,
+        'upgrade muffin, or migrate the file by hand',
+      );
+    }
+    migrated = step(migrated, onNote);
+  }
 
-  const validated = ConfigSchema.safeParse(raw);
+  const validated = ConfigSchema.safeParse(migrated);
   if (!validated.success) {
     // Names the field. "config non valida" sends someone reading the schema.
     const issues = validated.error.issues
@@ -158,29 +229,98 @@ export function saveConfig(config: Config, home = muffinHome()): void {
 }
 
 /**
+ * Where a secret may live. Ordered: `home` is asked first.
+ *
+ * `home` is this install's own store, inside `MUFFIN_HOME`. `persistent` is a
+ * fixed path outside it — `$XDG_CONFIG_HOME/muffin/secrets/` — and exists so the
+ * dev loop `muffin uninstall --yes && muffin init` finds the key again without
+ * re-pasting it. That is ADR-0030's actual principle (*"la chiave vive fuori
+ * dalla home wipeata"*) with the CWD-dependence removed: the old answer was a
+ * gitignored `.env` in the working directory, which `fs_read` can open, because
+ * `root` is the repo and the ceiling for a low-risk read is taint 3.
+ *
+ * **Why `home` wins.** A per-install secret must be able to shadow the shared
+ * one, or `muffin secret set` becomes a command with no effect on a machine that
+ * has a persistent key. The other order fails silently, which is the direction
+ * that never gets noticed.
+ */
+export type SecretBackend = 'home' | 'persistent';
+
+export const SECRET_BACKENDS: readonly SecretBackend[] = ['home', 'persistent'];
+
+function xdgConfigHome(): string {
+  const xdg = process.env['XDG_CONFIG_HOME'];
+  return xdg !== undefined && xdg.length > 0 ? xdg : join(homedir(), '.config');
+}
+
+export function secretDir(backend: SecretBackend, home = muffinHome()): string {
+  return backend === 'home' ? paths(home).secrets : join(xdgConfigHome(), 'muffin', 'secrets');
+}
+
+export type SecretLocation = { backend: SecretBackend; path: string };
+
+/**
+ * Which backend answers for this name, without reading the value.
+ *
+ * Separate from `readSecret` so `doctor` can say *where* the key came from
+ * without loading it. A chain nobody can see is how a hardened install keeps
+ * reading the old copy forever — the migration looks done from every angle
+ * except the one that matters.
+ */
+export function locateSecret(ref: string, home = muffinHome()): SecretLocation | null {
+  const name = requireSecretRef(ref);
+  for (const backend of SECRET_BACKENDS) {
+    const path = join(secretDir(backend, home), name);
+    if (existsSync(path)) return { backend, path };
+  }
+  return null;
+}
+
+/** Every backend that holds this name. More than one means one is shadowing the other. */
+export function locateSecretAll(ref: string, home = muffinHome()): SecretLocation[] {
+  const name = requireSecretRef(ref);
+  return SECRET_BACKENDS.map((backend) => ({ backend, path: join(secretDir(backend, home), name) })).filter(
+    (l) => existsSync(l.path),
+  );
+}
+
+/**
  * Secrets live in a 0600 file, referenced by name from the config.
  *
  * Stated plainly rather than dressed up: this is filesystem permissions, not
  * encryption at rest. It keeps keys out of the config, out of the traces (see
  * tracing/redact.ts) and out of any diff, which is what actually leaks them in
  * practice. Age-encrypted storage is a declared gap, not a silent one.
+ *
+ * Both directories are on the tools' `denyRead` list (`agent/runtime.ts`), so
+ * adding a backend here without adding it there re-opens the hole this chain was
+ * built to close.
  */
 export function readSecret(ref: string, home = muffinHome()): string {
   const name = requireSecretRef(ref);
-  const file = join(paths(home).secrets, name);
-  if (!existsSync(file)) {
-    throw new ConfigError(`missing secret "${name}"`, `write it with \`muffin secret set ${name}\``);
+  const found = locateSecret(ref, home);
+  if (!found) {
+    throw new ConfigError(
+      `missing secret "${name}" — cercato in ${SECRET_BACKENDS.map((b) => secretDir(b, home)).join(' e ')}`,
+      `write it with \`muffin secret set ${name}\` (aggiungi --persist perché sopravviva a \`muffin uninstall\`)`,
+    );
   }
-  return readFileSync(file, 'utf8').trim();
+  return readFileSync(found.path, 'utf8').trim();
 }
 
-export function writeSecret(name: string, value: string, home = muffinHome()): void {
-  const dir = paths(home).secrets;
+export function writeSecret(
+  name: string,
+  value: string,
+  home = muffinHome(),
+  backend: SecretBackend = 'home',
+): string {
+  const dir = secretDir(backend, home);
   mkdirSync(dir, { recursive: true });
   chmodSync(dir, 0o700);
   const file = join(dir, name);
   writeFileSync(file, `${value}\n`, { encoding: 'utf8', mode: 0o600 });
   chmodSync(file, 0o600);
+  return file;
 }
 
 export function requireSecretRef(ref: string): string {

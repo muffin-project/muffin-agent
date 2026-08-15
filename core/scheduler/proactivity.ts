@@ -45,7 +45,24 @@ export type ProactiveKind =
   | 'commitment_due' // an obligation the owner recorded, its time approaching
   | 'deadline_near' // a dated fact whose deadline is close
   | 'fact_actionable' // a tier ≤1 fact that just became something to act on
-  | 'consolidation' // internal: unconsolidated episodes crossed the threshold
+  /*
+   * `'consolidation'` was here, with zero producers, from the day this set was
+   * written. Removed by ADR-0038 rather than filled, because building the
+   * trigger showed it to be a category error: this set is the closed list of
+   * things that may make Muffin **speak first**, and consolidation does not
+   * speak — it turns episodes into facts and says nothing. Routing it through
+   * `decideProactive` would have applied the wrong rails to it: quiet hours
+   * would defer the memory lane until 08:00 (a conversation at 2am consolidated
+   * six hours late, for no benefit to anyone's sleep), and the tier ≤ 1 rail
+   * asks about evidence that may arm a *message*, which there is none of here.
+   * The lane keeps the rail that does apply — the budget — and asks the engine
+   * directly (`core/memory/consolidator.ts`).
+   *
+   * If consolidation ever needs to speak, what speaks is the judge's `review`
+   * register ("two beliefs contradict, decide"), and that is a different signal
+   * with a different anchor and a detector that does not exist yet. It gets its
+   * own kind then, with a producer in the same commit.
+   */
   /**
    * An entity whose silence broke its own measured rhythm (`memory/absence.ts`).
    *

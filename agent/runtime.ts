@@ -1,7 +1,9 @@
 import DatabaseCtor from 'better-sqlite3';
+import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { loadConfig, paths, readSecret, type Config } from '../core/config/config.js';
+import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { createDecide } from '../core/policy/decide.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
@@ -9,7 +11,7 @@ import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPrompts } from './context/assemble.js';
-import type { LoopDeps, RegisteredTool } from './loop.js';
+import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -32,6 +34,14 @@ import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { ingestPending } from '../core/memory/ingest.js';
+import { sweepDuplicates } from '../core/memory/maintenance.js';
+import {
+  Consolidator,
+  CONSOLIDATION_CAPABILITY,
+  CONSOLIDATION_TENANT,
+} from '../core/memory/consolidator.js';
+import { lightLane } from './providers/light-lane.js';
 
 /**
  * Assembly.
@@ -56,6 +66,22 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
+  /**
+   * That same connection, for the coordination a runtime cannot express through
+   * one of its stores — today the gateway lock (ADR-0035), which the REPL reads
+   * to decide whether it may start a ticker.
+   *
+   * Exposed rather than letting callers open a second handle, which is what
+   * `connectSurfaces` does and what ADR-0035 warns against by name: *"moltiplica
+   * le connessioni al DB e le corse"*. One process, one connection.
+   */
+  db: DatabaseCtor.Database;
+  /**
+   * The memory lane's trigger (ADR-0038). Already wired to `deps.onTurnEnd`;
+   * exposed so a surface can print what it is doing at boot and so `muffin
+   * memory extract` runs the hand-typed batch through the same door.
+   */
+  consolidation: Consolidator;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
   /**
@@ -79,7 +105,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
 
-  const config = loadConfig(home);
+  const configNotes: string[] = [];
+  const config = loadConfig(home, (line) => configNotes.push(`! ${line}`));
   exporter.pruneOlderThan(config.traces.retentionDays);
 
   // Root of trust before anything reads policy from it: in single-user mode a
@@ -128,10 +155,19 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       ? [`! matrice permessi: valori compilati, non rot/policy.json — ${matrix.note}`]
       : [];
 
+  // The caps come from inside the seal, and this line is the whole point of the
+  // change: they used to come from `config.budget`, a file the manifest does not
+  // cover, so the sealed `budgets.json` was protecting a copy of the numbers
+  // while the ones that bound sat where anything able to write the home could
+  // raise them. Same placement argument as the matrix above — read once at boot,
+  // never per decision.
+  const budgets = loadSealedBudgets(home);
+  const budgetNotes = budgets.notes.map((n) => `! ${n}`);
+
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
-  const budget = new BudgetEngine(db, config.budget);
+  const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
@@ -149,7 +185,31 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
         );
 
   const profileProblems: string[] = [];
-  const profile = selectProfile(config.models.main, loadProfiles(undefined, (line) => profileProblems.push(line)));
+  const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
+  const profile = selectProfile(config.models.main, profiles);
+
+  const recordSpend = (entry: SpendEntry): number => {
+    const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+    budget.record({ ...entry, usd });
+    return usd;
+  };
+
+  /**
+   * The light lane, behind the boundary that bills it and makes its requests
+   * legal on the wire.
+   *
+   * The unwrapped `provider` is never handed to extraction, the judge or the
+   * reranker again: those three were a second entry point to the model that the
+   * loop's `recordSpend` and `profile.sampling` did not reach, so the memory
+   * lane spent invisibly and would 400 on any light model from 4.7 onward. See
+   * `agent/providers/light-lane.ts` for why this is a wrapper and not three
+   * parameters.
+   */
+  const light = lightLane(provider, {
+    profile: selectProfile(config.models.light, profiles),
+    record: (entry) =>
+      void recordSpend({ ...entry, tenant: CONSOLIDATION_TENANT, capability: CONSOLIDATION_CAPABILITY }),
+  });
 
   // Memory. The vector half is optional and its absence is reported rather than
   // hidden: an embedder that is not running turns semantic recall into keyword
@@ -164,12 +224,36 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const recallDeps: RecallDeps = {
     store: memoryStore,
     vectors,
-    reranker: new LlmReranker(provider, config.models.light),
+    reranker: new LlmReranker(light, config.models.light),
   };
 
   // Writes are scoped to the working directory, and the root of trust is never
   // writable from a tool whatever the scope says.
-  const scope: FsScope = { root: cwd, denyWrite: [p.rot, p.secrets, p.config], denyRead: [p.secrets] };
+  //
+  // `denyRead` names every place a secret can be, which is more than one now.
+  // The list was `[p.secrets]` while ADR-0030 required `cwd` to be the repo —
+  // because that is where the gitignored `.env` with the model key lives — and
+  // `fs.read` is low risk with no `maxTaint`, so its ceiling is
+  // `defaultMaxTaint.low`, which `rot/policy.json` sets to 3. In an owner turn
+  // that had already taken one tier-3 tool result (the fetch-then-act pattern
+  // the threat model calls *"il più comune, e va chiuso"*), `fs_read(".env")`
+  // returned the provider key in plaintext. Not exploitable on the owner's
+  // machine only because no `.env` existed yet — and ADR-0030 is the document
+  // telling them to create one.
+  const secretPaths = [secretDir('home', home), secretDir('persistent', home)];
+  // Named explicitly rather than by a "looks like a secret" heuristic. `.env` is
+  // the one file inside `root` that a decision record instructs the owner to
+  // fill with a key; a pattern over `*.pem`, `id_rsa`, `credentials` and the
+  // rest would deny a moving target and buy the confidence of a complete list
+  // without being one. What makes the key safe is that it no longer has to be
+  // here (`secretDir('persistent')`); this entry is the belt for the owner who
+  // has not moved it yet.
+  const dotenv = join(cwd, '.env');
+  const scope: FsScope = {
+    root: cwd,
+    denyWrite: [p.rot, p.secrets, p.config],
+    denyRead: [...secretPaths, dotenv],
+  };
   const tools: RegisteredTool[] = [
     {
       capability: 'fs.read',
@@ -206,9 +290,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // real containment on this host: absent sandbox → absent tool, declared in
   // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1 is
   // strict mode, the ask-gated escape hatch arrives as its own capability).
+  // Same list as the fs tools above, for the same reason: two deny-lists that
+  // drift are one deny-list plus a hole, and the sandbox is the layer that has
+  // to hold when the kernel is the thing that is wrong.
   const executor = new SandboxExecutor({
     denyWrite: [p.rot, p.secrets, p.config],
-    denyRead: [p.secrets],
+    denyRead: [...secretPaths, dotenv],
   });
   if (executor.status().available) {
     tools.push(makeShellTool(executor, { root: cwd }));
@@ -321,17 +408,56 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   const closeHooks: Array<() => Promise<void>> = [];
 
+  /**
+   * The thing that makes memory fill itself (ADR-0038).
+   *
+   * Built here and not in the gateway, deliberately: turns happen in whichever
+   * process is running them — the gateway hosts the remote surfaces, a REPL
+   * window hosts the terminal — and a consolidator that only the gateway owned
+   * would leave an owner with no installed unit exactly where they are today,
+   * at zero facts. Two processes cannot double-extract; the durable lane lock
+   * inside `ingestPending` refuses the second.
+   */
+  const consolidation = new Consolidator({
+    db,
+    budgetExhausted: () => budget.exhausted(),
+    ingest: (limit) =>
+      ingestPending(
+        {
+          store: memoryStore,
+          provider: light,
+          model: config.models.light,
+          tracer,
+          ...(vectors ? { vectors } : {}),
+        },
+        CONSOLIDATION_TENANT,
+        limit,
+      ),
+    // The maintenance half, in the same object literal as the batch it follows.
+    // Bound here and not left for a surface to remember: a sweep that some
+    // callers wire and others do not is the twelfth member of this repo's
+    // "declared and connected to nothing" family. It spends nothing — SQL over
+    // rows the batch just wrote — so there is no install for which switching it
+    // off would be the right default.
+    sweep: (at) => sweepDuplicates(memoryStore, CONSOLIDATION_TENANT, at),
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+
   return {
     config,
     budget,
     jobs,
+    db,
+    consolidation,
     safeMode,
     bootLines: [
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,
       ...matrixNotes,
+      ...budgetNotes,
       ...rotNotes,
+      ...configNotes,
     ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
@@ -340,7 +466,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     onClose: (hook) => {
       closeHooks.push(hook);
     },
-    light: { provider, model: config.models.light },
+    light: { provider: light, model: config.models.light },
     memory: { store: memoryStore, recall: recallDeps },
     deps: {
       provider,
@@ -354,11 +480,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       tracer,
       sessions: new SessionStore(home),
       budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
-      recordSpend: (entry) => {
-        const usd = costUsd(entry.model, entry, config.provider.baseUrl);
-        budget.record({ ...entry, usd });
-        return usd;
-      },
+      recordSpend,
+      // The seam the loop never had. It is what turns "a turn ended" into "the
+      // memory lane has work", and without it `ingestPending` keeps the single
+      // hand-typed caller it has had since M2 — which is why an install's facts
+      // stay at zero and recall stays keyword-only for its whole life.
+      onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       // One prompt per tenant class, assembled here and never per turn: the
       // class a turn belongs to is a property of who is speaking, and `runTurn`
       // picks. Built once so each class keeps its own warm cache prefix.
@@ -370,6 +497,13 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
+      // First, and before the database goes: a trailing edge that fires after
+      // `db.close()` writes against a closed handle, which is the shape that
+      // once took the gateway down through an unhandled rejection
+      // (`Scheduler.run`). A batch already in flight is left to finish or die
+      // with the process — its lane lock goes stale on its own, and `markRan`'s
+      // per-episode marker means a killed batch replays one episode, not many.
+      consolidation.stop();
       // Async teardown is best-effort (srt registers its own exit hook, MCP
       // children die with the pipe); the DB close stays synchronous and
       // unconditional.

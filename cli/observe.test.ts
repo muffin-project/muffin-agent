@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,7 @@ import { FireLog } from '../core/scheduler/firelog.js';
 import { SendLock } from '../core/scheduler/sendlock.js';
 import type { LoopDeps } from '../agent/loop.js';
 import type { ChatResult, Provider } from '../agent/providers/types.js';
+import { seal } from '../core/rot/verify.js';
 import { runInit } from './init.js';
 import { cmdObserve } from './observe.js';
 
@@ -115,6 +116,13 @@ const budgetsFile = (home: string): string => join(paths(home).rot, 'budgets.jso
 
 function patchConfig(home: string, patch: (c: Config) => Config): void {
   saveConfig(patch(loadConfig(home)), home);
+}
+
+/** Edits the sealed file and reseals, the way an owner legitimately would. */
+function patchBudgets(home: string, patch: (b: Record<string, unknown>) => Record<string, unknown>): void {
+  const file = budgetsFile(home);
+  writeFileSync(file, `${JSON.stringify(patch(JSON.parse(readFileSync(file, 'utf8'))), null, 2)}\n`);
+  seal(home, '1', new Date());
 }
 
 /**
@@ -305,9 +313,11 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
     // able to compose, the only thing holding the message in is the gate.
     const rt = scriptedRuntime(home, ['non doveva uscire']);
     // The real mechanism, not a stub: zero is a legitimate cap meaning stop
-    // (`core/config/config.ts`), so `BudgetEngine.exhausted()` answers yes
-    // without the test having to fabricate spend.
-    patchConfig(home, (c) => ({ ...c, budget: { ...c.budget, monthlyUsd: 0 } }));
+    // (`core/rot/budgets.ts`), so `BudgetEngine.exhausted()` answers yes without
+    // the test having to fabricate spend. Dropped in the *sealed* file and
+    // resealed — since ADR-0039 that is the only file the cap comes from, and a
+    // patch of `config.json` here would now change nothing at all.
+    patchBudgets(home, (b) => ({ ...b, monthlyUsd: 0 }));
     const { out } = capture();
     const delivered: string[] = [];
     try {
@@ -424,9 +434,18 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       (home) =>
         // The owner's hand, not a random byte: "11pm" is how a time gets written
         // when nobody said the format is HH:MM.
+        // `schemaVersion` stays: the loader checks the version before the shape,
+        // and an owner fixing a time by hand does not delete the version line.
+        // Without it this row would exercise the version gate instead of the
+        // regex, which is a different claim.
         writeFileSync(
           budgetsFile(home),
-          JSON.stringify({ quietHours: { from: '11pm', to: '08:00', timezone: 'Europe/Rome' } }),
+          JSON.stringify({
+            schemaVersion: 1,
+            monthlyUsd: 80,
+            perTenantDailyUsd: 2,
+            quietHours: { from: '11pm', to: '08:00', timezone: 'Europe/Rome' },
+          }),
         ),
       'quietHours non valide',
     ],
@@ -435,7 +454,12 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       (home) =>
         writeFileSync(
           budgetsFile(home),
-          JSON.stringify({ quietHours: { from: '23:00', to: '8am', timezone: 'Europe/Rome' } }),
+          JSON.stringify({
+            schemaVersion: 1,
+            monthlyUsd: 80,
+            perTenantDailyUsd: 2,
+            quietHours: { from: '23:00', to: '8am', timezone: 'Europe/Rome' },
+          }),
         ),
       'quietHours non valide',
     ],
@@ -470,7 +494,15 @@ describe('muffin observe · quiet hours come from the RoT', () => {
     const home = homeWithSilence();
     // A window the fallback would never produce: if anyone stopped reading the
     // file, this home would speak at midday.
-    writeFileSync(budgetsFile(home), JSON.stringify({ quietHours: { from: '10:00', to: '18:00', timezone: 'Europe/Rome' } }));
+    writeFileSync(
+      budgetsFile(home),
+      JSON.stringify({
+        schemaVersion: 1,
+        monthlyUsd: 80,
+        perTenantDailyUsd: 2,
+        quietHours: { from: '10:00', to: '18:00', timezone: 'Europe/Rome' },
+      }),
+    );
     const rt = scriptedRuntime(home, ['non doveva uscire']);
     const { out, err } = capture();
     const delivered: string[] = [];
@@ -483,7 +515,8 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       expect(code).toBe(0);
       expect(delivered).toEqual([]);
       expect(out.join('')).toContain('(quiet_hours)');
-      expect(err.join('')).not.toContain('quiet hours dal default');
+      // Not a single fallback note: both halves of the sealed file were read.
+      expect(err.join('')).not.toContain('compilat');
     } finally {
       rt.close();
     }

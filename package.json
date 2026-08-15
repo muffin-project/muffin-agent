@@ -35,9 +35,13 @@
     "@modelcontextprotocol/client": "2.0.0",
     "better-sqlite3": "^12.11.1",
     "cron-parser": "^5.7.0",
+    "defuddle": "^0.19.2",
     "js-yaml": "^5.2.3",
+    "linkedom": "^0.18.13",
+    "mathml-to-latex": "^1.8.0",
     "openai": "^7.4.0",
     "sqlite-vec": "^0.1.9",
+    "turndown": "^7.2.4",
     "zod": "^4.4.3"
   }
 }

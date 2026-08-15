@@ -1,5 +1,12 @@
 import type Database from 'better-sqlite3';
-import { DEFAULT_FUNCTIONAL_PREDICATES, MEMORY_SCHEMA, type FactOrigin } from './schema.js';
+import { IngestLock, type LockOutcome } from './ingest-lock.js';
+import {
+  DEFAULT_FUNCTIONAL_PREDICATES,
+  EXTRACTION_VERSION,
+  MEMORY_SCHEMA,
+  type FactOrigin,
+  type ReviewKind,
+} from './schema.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -71,9 +78,53 @@ export type Fact = {
   supersededBy: number | null;
 };
 
+export type ReviewItemInput = {
+  tenantId: string;
+  kind: ReviewKind;
+  /** Absent for a `kind: 'error'` row that is not about one subject/predicate. */
+  subject?: string | null;
+  predicate?: string | null;
+  existingFactId?: number | null;
+  incomingFactId?: number | null;
+  /** The judge's reasoning, or the error message. Human-readable either way. */
+  detail: string;
+  createdAt: string;
+};
+
+export type ReviewItem = {
+  id: number;
+  tenantId: string;
+  kind: ReviewKind;
+  subject: string | null;
+  predicate: string | null;
+  existingFactId: number | null;
+  incomingFactId: number | null;
+  detail: string;
+  createdAt: string;
+};
+
+/**
+ * What makes a contradiction *open*, written once.
+ *
+ * Two readers need it and they cannot share a code path: this class hydrates
+ * the rows, and `muffin doctor` opens the database **readonly** so it can never
+ * be the thing that creates or migrates a table — which rules out constructing
+ * a `MemoryStore` at all, because the constructor runs DDL. Two hand-copied
+ * joins would be the shape this repo keeps paying for, so the join is the
+ * shared thing and only the SELECT list differs. One bind parameter: the tenant.
+ */
+export const OPEN_CONTRADICTION_FROM = `FROM memory_review r
+         JOIN facts e ON e.id = r.existing_fact_id AND e.tenant_id = r.tenant_id
+         JOIN facts i ON i.id = r.incoming_fact_id AND i.tenant_id = r.tenant_id
+        WHERE r.tenant_id = ? AND r.kind = 'contradiction'
+          AND e.expired_at IS NULL AND i.expired_at IS NULL`;
+
 export class MemoryStore {
+  private readonly ingestLock: IngestLock;
+
   constructor(private readonly db: Database.Database) {
     db.exec(MEMORY_SCHEMA);
+    this.ingestLock = new IngestLock(db);
     // `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
@@ -153,6 +204,20 @@ export class MemoryStore {
     tx(episodeIds);
   }
 
+  // ---- coordination -----------------------------------------------------------
+
+  /**
+   * One extractor at a time. See `ingest-lock.ts` for why a single lane lock
+   * is the whole mechanism rather than a per-episode claim.
+   */
+  acquireIngestLock(now: Date, pid: number = process.pid): LockOutcome {
+    return this.ingestLock.acquire(now, pid);
+  }
+
+  releaseIngestLock(pid: number = process.pid): void {
+    this.ingestLock.release(pid);
+  }
+
   // ---- entities -------------------------------------------------------------
 
   /**
@@ -172,8 +237,24 @@ export class MemoryStore {
     return row?.id ?? null;
   }
 
+  /**
+   * Looked up by name **alone** — `kind` is not passed to `findEntity` here,
+   * on purpose. It used to be, and the fork it caused was silent: `kind` is a
+   * per-mention guess from the extractor, not a stable identity property, so
+   * the same person extracted once as `person` and once as `thing` (a plural
+   * pronoun, an ambiguous sentence, anything that nudges the model's guess)
+   * produced two entities instead of one. Fact dedup and the judge are both
+   * scoped to a single `subjectId` and never look across entities, so the two
+   * forks did not just duplicate the entity — they duplicated every fact
+   * recorded against it, with no judge call, because each fork's fact history
+   * started empty. The kind recorded here is therefore the first one seen; a
+   * later mention that guesses differently still resolves to the same row and
+   * does not overwrite it. `findEntity`'s own docstring already describes
+   * exact-name matching as the fast path — this was the one caller not taking
+   * it.
+   */
   upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {
-    const existing = this.findEntity(tenantId, name, kind);
+    const existing = this.findEntity(tenantId, name);
     if (existing !== null) return existing;
     const info = this.db
       .prepare(`INSERT INTO entities (tenant_id, kind, name, recorded_at) VALUES (?, ?, ?, ?)`)
@@ -218,14 +299,35 @@ export class MemoryStore {
    * says when it stopped being true out there, `expired_at` when we stopped
    * believing it. Nothing is deleted, so "what did I think in May" stays
    * answerable.
+   *
+   * `validTo` has three states and the third one is not decoration:
+   *
+   *   a date     the judge said when it stopped being true (`temporal_scope`)
+   *   omitted    nobody said, so world time closes when system time did
+   *   **null**   **do not touch world time at all**
+   *
+   * That last state exists for the maintenance sweep. Retiring an exact
+   * *duplicate* is not a claim that anything stopped being true out there — the
+   * duplicate was never a separate truth — so writing today's date into
+   * `valid_to` would invent a world-time boundary that never happened. This
+   * schema's own rule is that `valid_from` is never guessed, *"because a
+   * fabricated timestamp is indistinguishable from a real one a month later"*,
+   * and the same argument applies to the closing end. Bound as SQL NULL, which
+   * `COALESCE(valid_to, NULL)` leaves as it found it.
    */
-  supersede(tenantId: string, oldFactId: number, newFactId: number, at: string, validTo?: string): void {
+  supersede(
+    tenantId: string,
+    oldFactId: number,
+    newFactId: number,
+    at: string,
+    validTo?: string | null,
+  ): void {
     this.db
       .prepare(
         `UPDATE facts SET expired_at = ?, superseded_by = ?, valid_to = COALESCE(valid_to, ?)
          WHERE id = ? AND tenant_id = ? AND expired_at IS NULL`,
       )
-      .run(at, newFactId, validTo ?? at, oldFactId, tenantId);
+      .run(at, newFactId, validTo === null ? null : (validTo ?? at), oldFactId, tenantId);
   }
 
   /**
@@ -269,6 +371,64 @@ export class MemoryStore {
          ORDER BY f.recorded_at DESC`,
       )
       .all(tenantId, subjectId, predicate ?? null, predicate ?? null) as Fact[];
+  }
+
+  /**
+   * Every (subject, predicate) that currently holds **more than one** belief.
+   *
+   * The whole input of the maintenance sweep, and it is deliberately shaped as
+   * "the groups that could contain a duplicate" rather than "all active facts".
+   * Two reasons, and only the second is about speed:
+   *
+   *  - A group of one cannot contain a duplicate, so a sweep that read every
+   *    active fact would be doing arithmetic to rediscover that. ⬤ On the old
+   *    system's four-month graph this filter cut the input from **308 active
+   *    facts to 5** — the two multi-valued groups it held, both of which were
+   *    duplicates.
+   *  - Set-valued predicates are the norm here by design (`schema.ts`: the old
+   *    schema treated every predicate as single-valued and expired 27 of 28
+   *    `interest` rows by accident). So a multi-valued group is *legal* and
+   *    common, and this method must not be read as finding a problem. It finds
+   *    the only place a duplicate can hide.
+   *
+   * Ordered so a group arrives together and its rows arrive newest-first, which
+   * is the order the sweep's survivor rule wants — but the sweep re-sorts
+   * anyway, because a guarantee that lives in an ORDER BY two files away is the
+   * kind that changes without its caller noticing (see `activeFacts`, where
+   * exactly that happened).
+   */
+  multiValuedActiveFacts(tenantId: string): { subjectId: number; predicate: string; facts: Fact[] }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.expired_at IS NULL
+           AND (f.subject_id, f.predicate) IN (
+             SELECT subject_id, predicate FROM facts
+             WHERE tenant_id = ? AND expired_at IS NULL
+             GROUP BY subject_id, predicate HAVING count(*) > 1
+           )
+         ORDER BY f.subject_id, f.predicate, f.recorded_at DESC, f.id DESC`,
+      )
+      .all(tenantId, tenantId) as Fact[];
+
+    const groups: { subjectId: number; predicate: string; facts: Fact[] }[] = [];
+    for (const row of rows) {
+      const last = groups[groups.length - 1];
+      if (last && last.subjectId === row.subjectId && last.predicate === row.predicate) {
+        last.facts.push(row);
+      } else {
+        groups.push({ subjectId: row.subjectId, predicate: row.predicate, facts: [row] });
+      }
+    }
+    return groups;
   }
 
   /** Includes retired beliefs, for "what did I think then" questions. */
@@ -318,6 +478,82 @@ export class MemoryStore {
          ORDER BY length(name) LIMIT ?`,
       )
       .all(tenantId, `%${name.trim()}%`, limit) as { id: number; name: string; kind: string }[];
+  }
+
+  // ---- review -----------------------------------------------------------------
+
+  /**
+   * Durable home for the judge's `review` verdict and any error the pipeline
+   * could not act on — both used to go only to `process.stderr` from
+   * `cli/memory.ts`, which is fine for a human running the command by hand and
+   * loses everything the moment the caller is a scheduler instead.
+   *
+   * Append-only, like the rest of the store: no resolution state. Reading it
+   * back is `pendingReview`.
+   */
+  recordReview(input: ReviewItemInput): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO memory_review (tenant_id, kind, subject, predicate, existing_fact_id,
+                                     incoming_fact_id, detail, created_at)
+         VALUES (@tenantId, @kind, @subject, @predicate, @existingFactId, @incomingFactId, @detail, @createdAt)`,
+      )
+      .run({
+        ...input,
+        subject: input.subject ?? null,
+        predicate: input.predicate ?? null,
+        existingFactId: input.existingFactId ?? null,
+        incomingFactId: input.incomingFactId ?? null,
+      });
+    return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * The contradictions still waiting for a human, and **only** those.
+   *
+   * "Open" is a join, not a column. `memory_review` has no `resolved_at` and is
+   * not getting one — the schema says why: a register that tracked whether a
+   * human had looked yet would be the workflow engine this was explicitly asked
+   * not to become. So a contradiction is open exactly while both of its facts
+   * are still active, which means the question closes itself the moment the
+   * conversation supersedes either one, with nothing written anywhere.
+   *
+   * The filter lives in SQL rather than in the caller because the caller that
+   * existed did not have it: `pendingReview` returns every row ever recorded,
+   * and the only number this register ever surfaced was that total. On an
+   * append-only table a total only grows, which is how a number stops being
+   * read.
+   */
+  openContradictions(
+    tenantId: string,
+    limit = 50,
+  ): { id: number; createdAt: string; detail: string; existingFactId: number; incomingFactId: number }[] {
+    return this.db
+      .prepare(
+        `SELECT r.id, r.created_at AS createdAt, r.detail,
+                r.existing_fact_id AS existingFactId, r.incoming_fact_id AS incomingFactId
+         ${OPEN_CONTRADICTION_FROM}
+         ORDER BY r.created_at DESC LIMIT ?`,
+      )
+      .all(tenantId, limit) as {
+      id: number;
+      createdAt: string;
+      detail: string;
+      existingFactId: number;
+      incomingFactId: number;
+    }[];
+  }
+
+  /** Everything recorded for this tenant, most recent first. */
+  pendingReview(tenantId: string, limit = 50): ReviewItem[] {
+    return this.db
+      .prepare(
+        `SELECT id, tenant_id AS tenantId, kind, subject, predicate,
+                existing_fact_id AS existingFactId, incoming_fact_id AS incomingFactId,
+                detail, created_at AS createdAt
+         FROM memory_review WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(tenantId, limit) as ReviewItem[];
   }
 
   // ---- vault ----------------------------------------------------------------
@@ -483,9 +719,21 @@ export class MemoryStore {
       (this.db.prepare(sql).get(...params) as { v: T }).v;
     return {
       episodes: one<number>(`SELECT count(*) AS v FROM episodes WHERE tenant_id = ?`, tenantId),
+      // Deliberately the exact complement of `pendingEpisodes` — same three
+      // conditions, same version constant. It used to diverge on all three, and
+      // each divergence undercounted in a way that only bites once the lane runs
+      // unattended: `role = 'user'` ignored every agent-role episode the lane
+      // will in fact extract; `extraction_v = 0` would miss rows left at an
+      // older non-zero version the day `EXTRACTION_VERSION` is bumped, which is
+      // the one moment a backlog appears out of nowhere; and no `content IS NOT
+      // NULL` counted rows the fetch can never return, so the number could not
+      // reach zero. A pending count that a human reads to decide "is it caught
+      // up?" has to answer for the fetch, not for a similar-sounding question.
       pending: one<number>(
-        `SELECT count(*) AS v FROM episodes WHERE tenant_id = ? AND extraction_v = 0 AND role = 'user'`,
+        `SELECT count(*) AS v FROM episodes
+          WHERE tenant_id = ? AND extraction_v < ? AND content IS NOT NULL`,
         tenantId,
+        EXTRACTION_VERSION,
       ),
       entities: one<number>(
         `SELECT count(*) AS v FROM entities WHERE tenant_id = ? AND expired_at IS NULL`,
@@ -497,6 +745,10 @@ export class MemoryStore {
       ),
       retiredFacts: one<number>(
         `SELECT count(*) AS v FROM facts WHERE tenant_id = ? AND expired_at IS NOT NULL`,
+        tenantId,
+      ),
+      needsReview: one<number>(
+        `SELECT count(*) AS v FROM memory_review WHERE tenant_id = ?`,
         tenantId,
       ),
       predicates: one<number>(
@@ -525,6 +777,8 @@ export type MemoryStats = {
   entities: number;
   activeFacts: number;
   retiredFacts: number;
+  /** Judge `review` verdicts plus pipeline errors, durable — see `memory_review`. */
+  needsReview: number;
   predicates: number;
   topPredicates: { predicate: string; n: number }[];
   span: { from_: string | null; to_: string | null };

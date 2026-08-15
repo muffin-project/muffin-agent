@@ -203,6 +203,30 @@ export type LoopDeps = {
    * line is where a construction site learns both.
    */
   capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
+  /**
+   * The turn ended. **Synchronous, and it must not block.**
+   *
+   * The loop had no way to hand a finished turn to anything, which is why the
+   * memory lane never started: `ingestPending` was correct and had one caller,
+   * a person typing `muffin memory extract`. This is that missing seam, and its
+   * contract is narrow on purpose — it is called from `finish`, microseconds
+   * before the caller writes the reply, so anything that awaits here is
+   * something the owner waits for. The implementation
+   * (`core/memory/consolidator.ts`) arms a timer and returns.
+   *
+   * Deliberately **not** the closure-handed-back shape of
+   * `agent/observe-run.ts`. There the write is withheld until delivery
+   * succeeded, because an episode recorded for a message nobody received is
+   * memory of something that did not happen. Here the episode is written at the
+   * top of this function, before the model is called, so the trigger's input
+   * exists whether or not the reply lands — withholding the notification would
+   * only delay work already owed.
+   *
+   * Fires on every ending, `error` and `aborted` included: the owner's words
+   * were recorded before the model was asked anything, so they are owed
+   * extraction regardless of how the turn went.
+   */
+  onTurnEnd?: ((info: { tenant: TenantId; principal: Principal; stopped: TurnResult['stopped'] }) => void) | undefined;
   now?: () => Date;
 };
 
@@ -353,7 +377,28 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
         messages: compacted.messages,
         ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
         maxOutputTokens: 4096,
-        temperature: 0,
+        // The profile decides both, and until this slice neither reached the
+        // wire: `thinking` was declared in every profile and passed by nobody
+        // (the ninth "mechanism with no caller" in this repo's list), and
+        // `temperature: 0` was hardcoded here — a 400 on every model
+        // frontier.json matches, on the config `muffin init` writes by default.
+        //
+        // Spread rather than `temperature: profile.sampling === ... ? 0 :
+        // undefined`, because under exactOptionalPropertyTypes an explicit
+        // `undefined` is not the same as an absent field, and the difference is
+        // exactly what the newest models reject.
+        ...(deps.profile.sampling === 'deterministic' ? { temperature: 0 } : {}),
+        // D2 (judge, 2026-08-13): this was `thinking: deps.profile.thinking`
+        // unconditionally, so ADR-0037's own documented escape hatch — "si
+        // spegne il campo (`thinking` assente resta una forma valida e
+        // l'adapter la supporta già)" — was unreachable from any profile:
+        // `Profile.thinking` was a required two-value field and this line
+        // never omitted it. 'unset' is the profile value that reaches the
+        // branch below; spread rather than `thinking: … ? undefined : …` for
+        // the same exactOptionalPropertyTypes reason as `temperature` above —
+        // an explicit `undefined` can still be a key on the wire, an absent
+        // key never is.
+        ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
         stream: false,
         ...(input.signal ? { signal: input.signal } : {}),
       };
@@ -497,9 +542,23 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
 
       // Model's turn goes into the transcript before the results, so a crash
       // between the two leaves a record that explains itself.
+      //
+      // Reasoning first, unmodified, ahead of the `tool_use` blocks it came
+      // with. This is the half the API calls **Required** — "within a tool-use
+      // turn, pass thinking blocks back" — and the half that was missing: this
+      // array used to be rebuilt from `text` + `toolCalls`, so whatever the
+      // model thought was gone by iteration 2 of every tool-using turn. No 400
+      // was ever going to tell us; the server strips or disables instead, so
+      // the symptom was a worse agent and a colder cache, not an error.
+      //
+      // Spread of `result.thinking`, never a map or a filter: their order is
+      // the model's and the contents are opaque. A `?? []` because an adapter
+      // may legitimately have none (openai-compat says so with `[]`), not
+      // because absence is expected here.
       messages.push({
         role: 'assistant',
         content: [
+          ...(result.thinking ?? []),
           ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
           ...result.toolCalls.map((c) => ({ type: 'tool_use' as const, id: c.id, name: c.name, input: c.args })),
         ],
@@ -542,7 +601,30 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     );
   } catch (error) {
     turn.end({ error });
+    // A turn that threw still recorded the owner's words at the top of this
+    // function, so they are still owed extraction. Announced here as well as in
+    // `finish` because a provider that exhausted its retries never reaches
+    // `finish` at all, and "the memory lane starts only when the model behaves"
+    // is not a property anyone would have chosen.
+    announceEnd('error');
     throw error;
+  }
+
+  /**
+   * Tells the background lane a turn is over, and refuses to let it matter.
+   *
+   * Swallowed rather than propagated: this hook exists to start work *after*
+   * the answer, and a background lane that can turn a good turn into an
+   * exception would be a worse bug than the one it fixes. There is nothing for
+   * the owner to do about it either, which is the test for whether an error
+   * belongs on their screen.
+   */
+  function announceEnd(stopped: TurnResult['stopped']): void {
+    try {
+      deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });
+    } catch {
+      /* a lane that runs after the reply may not take the reply down with it */
+    }
   }
 
   /**
@@ -584,6 +666,10 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
     span.end({ status: stopped === 'error' ? 'error' : 'ok' });
+    // Last thing before the return, so the span is closed and the result is
+    // built: the hook is not allowed to see a half-finished turn, and it is not
+    // allowed to delay this return.
+    announceEnd(stopped);
     return { text, iterations: iters, traceId: span.traceId, stopped, usage: used };
   }
 }

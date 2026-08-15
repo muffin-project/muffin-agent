@@ -137,4 +137,110 @@ describe('http_get', () => {
     expect(out.isError).toBe(true);
     expect(out.content).toContain('redirects');
   });
+
+  describe('local extraction in front of clipBody', () => {
+    const ARTICLE_HTML = `<!doctype html>
+<html><head><title>x</title>
+<style>.nav { display: flex; }</style>
+<script>window.dataLayer = [];</script>
+</head><body>
+<nav><a href="/">Home</a><a href="/about">About</a></nav>
+<div class="cookie-banner">This site uses cookies. <button>Accept</button></div>
+<main><article>
+<h1>How to bake a proper muffin</h1>
+<p>A good muffin starts with cold butter and a light hand. Overmixing the batter
+develops gluten and produces a tough, chewy crumb instead of a tender one.</p>
+</article></main>
+<footer><p>Copyright 2026 Muffin Bakery.</p><ul><li>Twitter</li></ul></footer>
+</body></html>`;
+
+    it('reaches production extraction: an HTML page is reduced to its article, nav/banner/footer/script/style dropped', async () => {
+      // No extractFn override — this is the real Defuddle+linkedom pipeline,
+      // proving the wiring reaches it (docs/PRACTICES.md §5), not a mock of it.
+      const { fetchFn } = fetchScript([
+        new Response(ARTICLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
+      ]);
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup });
+      const out = await tool.handler({ url: 'https://api.example.com/muffins' }, ctx);
+      expect(out.isError).toBeUndefined();
+      expect(out.tier).toBe(3);
+      expect(out.content).toContain('cold butter');
+      expect(out.content).not.toContain('Home');
+      expect(out.content).not.toContain('cookies');
+      expect(out.content).not.toContain('Twitter');
+      expect(out.content).not.toContain('dataLayer');
+    });
+
+    it('never runs extraction on a JSON response, and returns the body byte-identical', async () => {
+      const jsonBody = JSON.stringify({ note: 'a value that <looks like markup> but is not', items: [1, 2, 3] });
+      const { fetchFn } = fetchScript([
+        new Response(jsonBody, { status: 200, headers: { 'content-type': 'application/json' } }),
+      ]);
+      let extractCalled = false;
+      const extractFn = async () => {
+        extractCalled = true;
+        return 'should never be used';
+      };
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup, extractFn });
+      const out = await tool.handler({ url: 'https://api.example.com/data.json' }, ctx);
+      expect(extractCalled).toBe(false);
+      expect(out.content).toContain(jsonBody);
+    });
+
+    it('never runs extraction on a CSV response, and returns the body byte-identical', async () => {
+      const csvBody = 'name,role\nowner,host\nMarco,accountant';
+      const { fetchFn } = fetchScript([
+        new Response(csvBody, { status: 200, headers: { 'content-type': 'text/csv' } }),
+      ]);
+      let extractCalled = false;
+      const extractFn = async () => {
+        extractCalled = true;
+        return 'should never be used';
+      };
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup, extractFn });
+      const out = await tool.handler({ url: 'https://api.example.com/export.csv' }, ctx);
+      expect(extractCalled).toBe(false);
+      expect(out.content).toContain(csvBody);
+    });
+
+    it('falls back to the raw body when extraction throws — the fetch must not fail because parsing did', async () => {
+      const { fetchFn } = fetchScript([
+        new Response(ARTICLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
+      ]);
+      const extractFn = async (): Promise<string | null> => {
+        throw new Error('defuddle blew up on this fixture');
+      };
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup, extractFn });
+      const out = await tool.handler({ url: 'https://api.example.com/muffins' }, ctx);
+      expect(out.isError).toBeUndefined();
+      expect(out.tier).toBe(3);
+      expect(out.content).toContain('cold butter');
+      expect(out.content).toContain('Home'); // raw body, unextracted
+    });
+
+    it('falls back to the raw body when extraction reports nothing worth preferring', async () => {
+      const { fetchFn } = fetchScript([
+        new Response(ARTICLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
+      ]);
+      const extractFn = async (): Promise<string | null> => null;
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup, extractFn });
+      const out = await tool.handler({ url: 'https://api.example.com/muffins' }, ctx);
+      expect(out.isError).toBeUndefined();
+      expect(out.content).toContain('cold butter');
+      expect(out.content).toContain('Home'); // raw body, unextracted
+    });
+
+    it('still clips extracted content that exceeds the body cap — clipBody is the final net either way', async () => {
+      const { fetchFn } = fetchScript([
+        new Response(ARTICLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
+      ]);
+      const huge = `INIZIO${'x'.repeat(120_000)}FINE`;
+      const extractFn = async (): Promise<string | null> => huge;
+      const tool = makeHttpTool(policy, { fetchFn, lookupFn: publicLookup, extractFn });
+      const out = await tool.handler({ url: 'https://api.example.com/muffins' }, ctx);
+      expect(out.content).toContain('risposta troncata');
+      expect(out.content).toContain('INIZIO');
+      expect(out.content).toContain('FINE');
+    });
+  });
 });

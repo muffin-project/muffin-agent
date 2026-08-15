@@ -10,6 +10,8 @@ import { runRepl } from './repl.js';
 import {
   cmdMemoryCheck,
   cmdMemoryExtract,
+  cmdMemoryReview,
+  cmdMemoryReviewKeep,
   cmdMemorySearch,
   cmdMemoryStats,
   cmdMemoryWhy,
@@ -19,11 +21,27 @@ import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } 
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
+import {
+  cmdGatewayInstall,
+  cmdGatewayRun,
+  cmdGatewayStatus,
+  cmdGatewayStop,
+  GATEWAY_USAGE,
+} from './gateway.js';
 import { cmdObserve } from './observe.js';
+import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { loadConfig, paths, writeSecret, ConfigError, type ProviderKind } from '../core/config/config.js';
+import {
+  loadConfig,
+  locateSecret,
+  locateSecretAll,
+  paths,
+  writeSecret,
+  ConfigError,
+  type ProviderKind,
+} from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
-import { inferProvider, isOpenRouterKey, keyHint, looksLikeTelegramToken, OPENROUTER_BASE_URL } from './onboarding.js';
+import { chooseProvider, describeProviderChoice, keyHint, looksLikeTelegramToken } from './onboarding.js';
 
 /**
  * Entry point.
@@ -32,32 +50,58 @@ import { inferProvider, isOpenRouterKey, keyHint, looksLikeTelegramToken, OPENRO
  * means something — this thing has to be scriptable before it is conversational.
  */
 
-const USAGE = `muffin — personal agent runtime
+const USAGE = `muffin — agente personale, sempre acceso
+alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
-  muffin (or: muffin repl)      start the agent: REPL + every enabled surface
-  muffin run "<goal>"           one goal, headless, meaningful exit code
+  muffin (o: muffin repl)       avvia l'agente: REPL + ogni surface abilitata
+  muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
-operator commands:
+comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NAME] [--light-model NAME] [--api-key KEY]
+              [--base-url URL] [--model NOME] [--light-model NOME] [--api-key CHIAVE]
+  muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin gateway status | stop | install [--write]
+                                il processo che tiene vivi i job quando non hai
+                                nessuna finestra aperta. \`muffin init\` propone
+                                di installarlo; \`run\` lo lancia il supervisore.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
-  muffin secret set NAME        (value on stdin)
+  muffin secret set NOME [--persist]
+                                (valore su stdin) --persist lo scrive fuori da
+                                ~/.muffin, così sopravvive a \`uninstall\` e
+                                \`init\` lo ritrova senza re-incollarlo
   muffin rot verify | reseal
-  muffin uninstall [--yes]      remove ~/.muffin (config, keys, memory)
+  muffin uninstall [--yes]      rimuove ~/.muffin (config, chiavi, memoria). Una
+                                chiave scritta con --persist vive fuori: resta,
+                                e il comando lo dice.
 
-inspection:
+ispezione:
   muffin memory why <fact-id> | search "<query>" | extract | stats | check
+  muffin memory review [keep <fact-id>]
+                                le contraddizioni che il giudice ha lasciato a
+                                te. \`keep\` ritira l'altra: niente si cancella
   muffin vault reindex | add <file> | ls | check
-  muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<goal>" | remove <id>
-  muffin observe [--send]       what has gone quiet, and what the proactivity
-                                gate would do with it. Sends only with --send.
+  muffin jobs list | add --cron "<expr>" [--tz] [--channel] "<obiettivo>" | remove <id>
+  muffin observe [--send]       cosa è rimasto in silenzio, e cosa farebbe il
+                                cancello di proattività. Manda solo con --send.
   muffin trace tail [-n N] [--errors] | grep PATTERN
 
-Exit codes: 0 ok · 1 warnings · 2 blocking error · 3 needs approval · 78 bad configuration
+Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 78 configurazione non valida
 `;
+
+/**
+ * Selective, not exhaustive (ADR-0036, emendamento lingua): an alias only
+ * where Italian has the word an owner would actually say — not a translation
+ * table for every command. English keeps working; this is a lookup consulted
+ * once, in front of the switch, never a second command table to keep in sync.
+ */
+const COMMAND_ALIASES: Readonly<Record<string, string>> = {
+  memoria: 'memory',
+  lavori: 'jobs',
+  segreto: 'secret',
+};
 
 /**
  * package.json sits one level above `cli/` in source but two levels above once
@@ -79,11 +123,19 @@ function readOwnVersion(): string {
 
 /**
  * Load a .env from the working directory if present — a development convenience
- * so the model key survives a `muffin uninstall` and onboarding can be re-run
- * without re-pasting. Real environment variables win (verified against Node 22:
+ * for non-secret variables (`MUFFIN_HOME` above all, which is how dev and prod
+ * are separated). Real environment variables win (verified against Node 22:
  * loadEnvFile does not override an already-set value); a missing file is a
  * no-op, so production — which ships no .env — is untouched. Node 22 native, no
  * dotenv dependency.
+ *
+ * **It is no longer where the model key goes** (ADR-0039 amends ADR-0030). The
+ * key survived a `muffin uninstall` by living here, which worked — and put the
+ * plaintext key inside `root`, the directory `fs_read` is scoped to, at a taint
+ * ceiling of 3. `muffin secret set --persist` replaces it. The loader stays,
+ * because `MUFFIN_HOME` in a `.env` is a real convenience and carries nothing
+ * secret; a key left here anyway still works, and is on the tools' deny-read
+ * list so it cannot be read back by the agent.
  */
 function loadDotenvIfPresent(): void {
   const envPath = `${process.cwd()}/.env`;
@@ -98,7 +150,11 @@ function loadDotenvIfPresent(): void {
 
 async function main(argv: string[]): Promise<number> {
   loadDotenvIfPresent();
-  const [command, ...rest] = argv;
+  const [typed, ...rest] = argv;
+  // Resolved once, here, so every branch below — including the error path —
+  // only ever sees canonical command names. `typed` itself is undefined for a
+  // bare `muffin`, which must not become the string "undefined" in a lookup.
+  const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;
   switch (command) {
     case 'run':
       return cmdRun(rest);
@@ -106,6 +162,8 @@ async function main(argv: string[]): Promise<number> {
       return runRepl();
     case 'init':
       return cmdInit(rest);
+    case 'config':
+      return cmdConfig(paths().home, rest);
     case 'doctor':
       return cmdDoctor(rest);
     case 'rot':
@@ -122,6 +180,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMcp(rest);
     case 'jobs':
       return cmdJobs(rest);
+    case 'gateway':
+      return cmdGateway(rest);
     case 'observe':
       return cmdObserve(paths().home, rest);
     case 'secret':
@@ -146,7 +206,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
+      process.stderr.write(`comando sconosciuto: ${typed}\n\n${USAGE}`);
       return 78;
   }
 }
@@ -168,48 +228,59 @@ async function cmdInit(argv: string[]): Promise<number> {
 
   const providerFlag = values.provider as ProviderKind | undefined;
   if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {
-    process.stderr.write(`--provider must be anthropic or openai-compat\n`);
+    process.stderr.write(`--provider deve essere anthropic o openai-compat\n`);
     return 78;
   }
 
-  // Acquire the key: flag > env > an interactive prompt on a terminal. A missing
-  // key is not fatal — runInit records the step as incomplete and the user can
-  // re-run — but on a TTY we ask rather than fail, which is the whole point of a
-  // first run (the init.ts docstring promised this; it was never implemented).
+  // Acquire the key: flag > env > an already-stored secret > an interactive
+  // prompt on a terminal. A missing key is not fatal — runInit records the step
+  // as incomplete and the user can re-run — but on a TTY we ask rather than
+  // fail, which is the whole point of a first run (the init.ts docstring
+  // promised this; it was never implemented).
+  //
+  // The stored-secret step is what makes `muffin uninstall --yes && muffin init`
+  // a loop again now that the key no longer has to sit in a `.env` the agent can
+  // read: `--persist` put it outside the home the wipe reaches, so the chain
+  // answers and nothing is prompted or copied.
   let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
-  if (!apiKey && process.stdin.isTTY) {
+  const stored = apiKey ? null : locateSecret('secret://provider_api_key');
+  if (stored) {
+    process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
+  }
+  if (!apiKey && !stored && process.stdin.isTTY) {
     process.stderr.write(keyHint(providerFlag, values['base-url']));
-    apiKey = await promptSecret('API key (hidden — paste, or Enter to skip): ');
+    apiKey = await promptSecret('Chiave API (nascosta — incollala, o invio per saltare): ');
   }
 
-  // Infer the provider from the key when the user did not pin one, and default an
-  // OpenRouter key to its gateway URL. An explicit flag always wins over both.
-  // Catch the mistake before it becomes a confusing 401 at the first message.
-  if (apiKey && !providerFlag) {
-    if (looksLikeTelegramToken(apiKey)) {
-      process.stderr.write(
-        `! that looks like a Telegram bot token, not a model API key — not storing it.\n` +
-          `  The model key is an OpenRouter (sk-or-…) or Anthropic (sk-ant-…) key: https://openrouter.ai/keys\n` +
-          `  A bot token goes elsewhere: muffin secret set telegram_token\n`,
-      );
-      apiKey = undefined;
-    } else if (inferProvider(apiKey) === undefined) {
-      process.stderr.write(
-        `! that key isn't sk-or- or sk-ant-, so the provider defaults to anthropic.\n` +
-          `  If that is wrong, re-run with a valid key or --provider.\n`,
-      );
-    }
+  // Caught regardless of --provider: a pasted Telegram token is not a key for
+  // any provider, so there is no reading of an explicit flag that should still
+  // let it through and fail confusingly at the first call to the model.
+  if (apiKey && looksLikeTelegramToken(apiKey)) {
+    process.stderr.write(
+      `! sembra il token di un bot Telegram, non una chiave del modello — non la salvo.\n` +
+        `  La chiave del modello è OpenRouter (sk-or-…) o Anthropic (sk-ant-…): https://openrouter.ai/keys\n` +
+        `  Il token del bot va altrove: muffin secret set telegram_token\n`,
+    );
+    apiKey = undefined;
   }
 
-  const provider = providerFlag ?? inferProvider(apiKey);
-  const baseUrl =
-    values['base-url'] ?? (isOpenRouterKey(apiKey) && !providerFlag ? OPENROUTER_BASE_URL : undefined);
+  // The provider is inferred from the key's prefix, so a key that is only
+  // *stored* still has to be looked at — otherwise the dev loop this whole
+  // change exists to preserve would start writing `anthropic` for an OpenRouter
+  // key the moment the `.env` went away. Read, never printed, never re-written
+  // (`runInit` gets no `apiKey`, so nothing is copied). One function decides
+  // (`chooseProvider`) and one function says what it decided
+  // (`describeProviderChoice`) — ADR-0036: ask only what cannot be inferred,
+  // and never decide silently.
+  const keyForInference = apiKey ?? (stored ? readFileSync(stored.path, 'utf8').trim() : undefined);
+  const choice = chooseProvider(providerFlag, keyForInference, values['base-url']);
+  process.stderr.write(describeProviderChoice(choice, keyForInference));
 
   const steps = runInit({
     ...(values.hardened ? { hardened: true } : {}),
     ...(values.force ? { force: true } : {}),
-    ...(provider ? { provider } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
+    provider: choice.provider,
+    ...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),
     ...(values.model ? { mainModel: values.model } : {}),
     ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
     ...(apiKey ? { apiKey } : {}),
@@ -218,11 +289,47 @@ async function cmdInit(argv: string[]): Promise<number> {
   for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
   const incomplete = steps.filter((s) => !s.done);
   if (incomplete.length > 0) {
-    process.stderr.write(`\nRun \`muffin init\` again once resolved — it picks up where it left off.\n`);
+    process.stderr.write(`\nRilancia \`muffin init\` quando è risolto — riprende da dove si era fermato.\n`);
     return 1;
   }
-  process.stderr.write(`\nNext: muffin doctor\n`);
+
+  await offerGateway();
+  process.stderr.write(`\nOra: muffin doctor\n`);
   return 0;
+}
+
+/**
+ * The one question that decides whether Muffin is a process or a command.
+ *
+ * ADR-0035 says to print the unit rather than enable it silently, and that is
+ * right about consent and wrong about ergonomics: a manual step at the end of a
+ * setup is a step nobody takes — owner, verbatim, about exactly these commands:
+ * *"non lancerò mai quei comandi a mano."* A gateway nobody installs leaves the
+ * scheduler where it was, which is the defect this whole slice exists to close.
+ *
+ * So it is asked here, once, inside a setup the owner is already sitting
+ * through — still their explicit act, just at the moment they are present. Off
+ * a TTY it prints the command instead and installs nothing: `promptLine`
+ * returns undefined on a pipe, which is the same rule `cmdInit` uses for the
+ * API key and `install.sh` uses for the wizard. An installer that wrote a
+ * service unit into a scripted run would be doing exactly what the ADR forbids.
+ */
+async function offerGateway(): Promise<void> {
+  const answer = await promptLine(
+    '\nInstallo il gateway, così i job girano anche a finestra chiusa? [Y/n] ',
+  );
+  if (answer === undefined) {
+    process.stderr.write(`\nPer far girare i job senza una finestra aperta:\n  muffin gateway install --write\n`);
+    return;
+  }
+  if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
+    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install\n`);
+    return;
+  }
+  // `--write` and not the enable: writing the file is what the owner just
+  // agreed to, and loading it into the supervisor stays their command. The
+  // difference matters — one is a file in their home, the other is a service.
+  cmdGatewayInstall(paths().home, ['--write']);
 }
 
 /**
@@ -231,18 +338,18 @@ async function cmdInit(argv: string[]): Promise<number> {
  * terminal print the one command to run instead of hanging on a pipe.
  */
 async function firstRun(): Promise<number> {
-  const answer = await promptLine("Muffin isn't set up on this machine yet. Set it up now? [Y/n] ");
+  const answer = await promptLine('Muffin non è ancora configurato su questa macchina. Lo configuro ora? [Y/n] ');
   if (answer === undefined) {
-    process.stderr.write('Muffin is not configured. Run:\n  muffin init\n');
+    process.stderr.write('Muffin non è configurato. Esegui:\n  muffin init\n');
     return 78;
   }
-  if (answer !== '' && !/^y(es)?$/i.test(answer)) {
-    process.stderr.write('Run `muffin init` when ready.\n');
+  if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
+    process.stderr.write('Esegui `muffin init` quando vuoi.\n');
     return 0;
   }
   const code = await cmdInit([]);
-  if (code !== 0) return code; // init already said what is missing
-  process.stderr.write('\nStarting Muffin.\n');
+  if (code !== 0) return code; // init ha già detto cosa manca
+  process.stderr.write('\nAvvio Muffin.\n');
   return runRepl();
 }
 
@@ -250,24 +357,39 @@ async function cmdUninstall(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { yes: { type: 'boolean' } }, allowPositionals: false });
   const home = paths().home;
   if (!existsSync(home)) {
-    process.stderr.write(`Nothing to remove: ${home} does not exist.\n`);
+    process.stderr.write(`Niente da rimuovere: ${home} non esiste.\n`);
     return 0;
   }
   // Deleting keys and memory is not something a pipe should trigger by accident.
   if (!values.yes) {
-    const answer = await promptLine(`Delete ${home} and everything in it — config, keys, memory? [y/N] `);
+    const answer = await promptLine(`Cancello ${home} e tutto il suo contenuto — config, chiavi, memoria? [y/N] `);
     if (answer === undefined) {
-      process.stderr.write(`Refusing to delete without confirmation on a pipe. Re-run with --yes.\n`);
+      process.stderr.write(`Rifiuto di cancellare senza conferma su una pipe. Rilancia con --yes.\n`);
       return 78;
     }
-    if (!/^y(es)?$/i.test(answer)) {
-      process.stderr.write(`Cancelled.\n`);
+    if (!/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
+      process.stderr.write(`Annullato.\n`);
       return 0;
     }
   }
+  // Every backend, not the first one that answers: a home copy shadows the
+  // persistent one in the read chain, and the whole point of this line is the
+  // copy that the wipe does *not* reach.
+  const persistent = locateSecretAll('secret://provider_api_key', home).find((l) => l.backend === 'persistent');
   rmSync(home, { recursive: true, force: true });
-  process.stderr.write(`Removed ${home}.\n`);
-  process.stderr.write(`The muffin command itself is still installed; to remove it too: ./install.sh --uninstall\n`);
+  process.stderr.write(`Rimosso ${home}.\n`);
+  // The message used to say "config, keys, memory" and that is now half true:
+  // a `--persist` key lives outside this directory on purpose — it is what makes
+  // `uninstall && init` a loop instead of a re-paste. Saying so is the price of
+  // the convenience; an uninstall that quietly leaves a credential behind is the
+  // kind of surprise that ends trust in the command.
+  if (persistent) {
+    process.stderr.write(
+      `La chiave persistente resta: ${persistent.path}\n` +
+        `  (è ciò che fa ritrovare la chiave a \`muffin init\`; cancellala a mano se non la vuoi)\n`,
+    );
+  }
+  process.stderr.write(`Il comando muffin resta installato; per rimuovere anche quello: ./install.sh --uninstall\n`);
   return 0;
 }
 
@@ -331,6 +453,21 @@ async function cmdMemory(argv: string[]): Promise<number> {
 
   if (sub === 'stats') return cmdMemoryStats(home);
 
+  if (sub === 'review') {
+    const [verb, id] = rest;
+    if (verb === undefined) return cmdMemoryReview(home);
+    if (verb !== 'keep') {
+      process.stderr.write(`usage: muffin memory review [keep <fact-id>]\n`);
+      return 78;
+    }
+    const factId = Number(id);
+    if (!Number.isInteger(factId) || factId <= 0) {
+      process.stderr.write(`usage: muffin memory review keep <fact-id>\n`);
+      return 78;
+    }
+    return cmdMemoryReviewKeep(home, factId);
+  }
+
   if (sub === 'extract') {
     const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });
     return cmdMemoryExtract(home, Number(values.limit ?? 200));
@@ -393,6 +530,17 @@ async function cmdVault(argv: string[]): Promise<number> {
   return 78;
 }
 
+async function cmdGateway(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  const home = paths().home;
+  if (sub === 'run') return cmdGatewayRun(home);
+  if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
+  if (sub === 'stop') return cmdGatewayStop(home);
+  if (sub === 'install') return cmdGatewayInstall(home, rest);
+  process.stderr.write(GATEWAY_USAGE);
+  return 78;
+}
+
 function cmdJobs(argv: string[]): number {
   const [sub, ...rest] = argv;
   const home = paths().home;
@@ -447,9 +595,11 @@ async function cmdSurface(argv: string[]): Promise<number> {
 }
 
 function cmdSecret(argv: string[]): number {
-  const [sub, name] = argv;
+  const [sub, ...rest] = argv;
+  const persist = rest.includes('--persist');
+  const name = rest.find((a) => !a.startsWith('-'));
   if (sub !== 'set' || !name) {
-    process.stderr.write(`usage: muffin secret set NAME  (value on stdin)\n`);
+    process.stderr.write(`usage: muffin secret set NAME [--persist]  (value on stdin)\n`);
     return 78;
   }
   // Read from stdin, never from argv: a key in a shell argument is a key in the
@@ -464,8 +614,12 @@ function cmdSecret(argv: string[]): number {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
     return 78;
   }
-  writeSecret(name, value);
-  process.stdout.write(`stored ${name} (0600), ${value.length} chars\n`);
+  // Default is this home's own store, so the command keeps meaning what it
+  // meant and `muffin uninstall` keeps deleting what it says it deletes.
+  // `--persist` is the opt-in that replaces the `.env`: outside the wiped home,
+  // outside the working directory, 0700/0600, and on the tools' deny-read list.
+  const at = writeSecret(name, value, paths().home, persist ? 'persistent' : 'home');
+  process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
   return 0;
 }
 
