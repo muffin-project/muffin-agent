@@ -674,6 +674,25 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   }
 }
 
+/**
+ * Compile-time exhaustiveness, not a runtime nicety.
+ *
+ * Called only from a `switch`'s `default` after every real case of a closed
+ * union has its own `case`. If the switch stays exhaustive, TypeScript
+ * narrows the switched value to `never` at that `default`, so `x` type-checks
+ * against the `never` parameter here and the file compiles. The day a case is
+ * added to the union without a matching `case` in that switch, `x` is no
+ * longer `never` there and the build breaks — on the addition, not on
+ * whatever depended on the branch nobody wrote. If it is somehow still
+ * reached at runtime (a value that bypassed the type checker: a cast, a
+ * dependency built from a different commit, a persisted record replayed after
+ * a schema change), it throws loudly instead of letting the caller silently
+ * treat the unrecognised value as whichever branch happens to be last.
+ */
+function assertNever(x: never): never {
+  throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
+}
+
 async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -732,53 +751,73 @@ async function runTool(
   });
   decisionSpan.end();
 
-  if (decision.effect === 'deny') {
-    span.end({ status: 'error', error: decision.code });
-    return {
-      type: 'tool_result',
-      toolCallId: call.id,
-      content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
-      isError: true,
-    };
-  }
-  // `draft` means "do it, but reversibly, and tell the owner". There is no undo
-  // journal yet, so the honest reading is `ask`: executing it as an allow was
-  // the kernel emitting a verdict nobody implemented, which is worse than
-  // refusing — the caller had already decided the write was reversible.
-  if (decision.effect === 'draft') {
-    span.end({ status: 'error', error: 'draft_unavailable' });
-    return {
-      type: 'tool_result',
-      toolCallId: call.id,
-      content:
-        `"${capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
-        `Non eseguito: dillo all'owner invece di riprovare.`,
-      isError: true,
-    };
-  }
-  if (decision.effect === 'ask') {
-    const request: ApprovalRequest = {
-      capability,
-      prompt: decision.ask.prompt,
-      ...(resource.kind === 'path' ? { resource: resource.value } : {}),
-    };
-    if (!deps.approve) {
-      // No channel on this surface: the turn stops and says what it wanted,
-      // rather than the tool reporting a failure it did not have.
-      span.end({ status: 'error', error: 'ask_unavailable' });
-      throw new ApprovalRequired(request);
-    }
-    const answer = await deps.approve(request);
-    span.setAttributes({ 'muffin.policy.approval': answer });
-    if (answer === 'deny') {
-      span.end({ status: 'error', error: 'ask_denied' });
+  // A `switch` over `decision.effect` with an explicit `default`, not the
+  // `if`-chain this used to be. The chain fell through to execution for
+  // anything it did not have a branch for — which is exactly how `draft` used
+  // to run as an implicit allow, before the case below existed (ADR-0022's
+  // undo model landed after this file did). `Decision['effect']` is a closed
+  // union, but a closed union is only as safe as its last consumer: nothing
+  // stopped it from growing a fifth member with nobody touching this
+  // function, and the chain would have handed that verdict the tool exactly
+  // as it once handed `draft` the write. `assertNever` in `default` turns that
+  // into a compile error the day the union grows, instead of a silent allow
+  // the day someone forgets this file exists — the same guarantee
+  // `core/policy/decide.ts`'s own `switch (decl.risk)` already gets for free
+  // from its non-void return type; this one needs to say so, because `ask`'s
+  // approved path does not return here, it falls through to execution below.
+  switch (decision.effect) {
+    case 'deny':
+      span.end({ status: 'error', error: decision.code });
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: `L'owner ha rifiutato "${capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
+        content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
         isError: true,
       };
+    case 'draft':
+      // `draft` means "do it, but reversibly, and tell the owner". There is no
+      // undo journal yet, so the honest reading is `ask`: executing it as an
+      // allow was the kernel emitting a verdict nobody implemented, which is
+      // worse than refusing — the caller had already decided the write was
+      // reversible.
+      span.end({ status: 'error', error: 'draft_unavailable' });
+      return {
+        type: 'tool_result',
+        toolCallId: call.id,
+        content:
+          `"${capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
+          `Non eseguito: dillo all'owner invece di riprovare.`,
+        isError: true,
+      };
+    case 'ask': {
+      const request: ApprovalRequest = {
+        capability,
+        prompt: decision.ask.prompt,
+        ...(resource.kind === 'path' ? { resource: resource.value } : {}),
+      };
+      if (!deps.approve) {
+        // No channel on this surface: the turn stops and says what it wanted,
+        // rather than the tool reporting a failure it did not have.
+        span.end({ status: 'error', error: 'ask_unavailable' });
+        throw new ApprovalRequired(request);
+      }
+      const answer = await deps.approve(request);
+      span.setAttributes({ 'muffin.policy.approval': answer });
+      if (answer === 'deny') {
+        span.end({ status: 'error', error: 'ask_denied' });
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content: `L'owner ha rifiutato "${capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
+          isError: true,
+        };
+      }
+      break; // approved: fall through to execution below, same as 'allow'
     }
+    case 'allow':
+      break;
+    default:
+      return assertNever(decision);
   }
 
   try {
