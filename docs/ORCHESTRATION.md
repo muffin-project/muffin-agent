@@ -221,3 +221,44 @@ interni confrontano il codice **con i nostri stessi documenti**. Trovano ciò ch
 abbiamo scritto e non fatto. Sono **strutturalmente ciechi** a ciò che non
 abbiamo mai scritto — lo streaming non era «dichiarato e non collegato», era mai
 pensato. Quella categoria si trova solo guardando fuori, e vuole una passata sua.
+
+## 14. Si ripara alla radice, e la radice è quasi sempre una forma
+
+Direttiva owner, 2026-08-15: *«quando ci sono cose da fixxare, proviamo sempre a
+fixxare alla radice, magari sono scelte sbagliate, o cose del genere, cerchiamo
+di andare più alla radice possibile e sempre primitivo, architetturale»*.
+
+Un difetto trovato **due volte** non è due difetti: è una forma che li produce.
+Ripararne le istanze una per una è lavoro che si ripete, e che finisce quando
+qualcuno smette di guardare — non quando la causa smette di esistere.
+
+**Il livello a cui fermarsi.** Salendo dall'istanza: la riga · la funzione · il
+contratto fra due moduli · **il tipo che permette lo stato sbagliato** · la
+decisione architetturale. Ci si ferma al primo livello in cui il difetto diventa
+**non rappresentabile**, non al primo in cui sparisce.
+
+L'esempio da cui viene la regola, e vale come metro perché è tutto misurato in
+un giorno solo. Tre istanze della stessa famiglia — «riporta successo mentre
+fallisce» — in `cli/repl.ts`, `cli/gateway.ts`, `cli/doctor.ts`. Tre riparazioni
+puntuali sarebbero state tre riparazioni corrette e la quarta istanza sarebbe
+arrivata comunque, perché:
+
+- `Deliver` ritorna `Promise<void>`. **Una firma che ritorna `void` non può dire
+  «non ho consegnato»**: ogni implementazione deve *ricordarsi* di lanciare, e
+  delle tre una sola se n'è ricordata. Il tipo permette il difetto.
+- `doctor` distingue i casi di un'unione chiusa con una catena di `if`, e il
+  ramo non gestito **cade su quello verde**. Questo repo ha già la prova che la
+  forma alternativa funziona: `switch (decl.risk)` in `core/policy/decide.ts` non
+  ha `default` e **rompe la build** se manca un caso, mentre la catena di `if` in
+  `runTool` *esegue il tool* su un effetto sconosciuto. Stessa domanda, due forme,
+  due esiti opposti — e uno dei due si accorge da solo.
+
+**La regola operativa**: quando la stessa forma compare due volte, si smette di
+ripararla e si chiede *quale primitiva la renderebbe impossibile*. Se la risposta
+è cara, si porta all'owner con pro e contro — ma si **chiede**, prima di riparare
+la terza.
+
+E il corollario che questo repo paga più spesso: preferire la forma che
+**fallisce da sola** — un `switch` esaustivo, un tipo che obbliga il chiamante a
+gestire l'esito, un sink obbligatorio nella firma — a quella che dipende dal
+fatto che qualcuno si ricordi.
