@@ -56,15 +56,22 @@ export function makeSkillTool(skills: readonly SkillInfo[]): RegisteredTool {
   return {
     capability: skillCapability.id,
     spec: skillSpec,
+    // Every refusal below is `tier: 0`: they are this file's own sentences,
+    // written before any skill file was opened. The one path that opens a file
+    // is the one at the bottom, and it is the one that carries a tier.
     handler: (args) => {
       const parsed = skillArgs.safeParse(args);
       if (!parsed.success) {
-        return { content: 'invalid arguments: name is required', isError: true };
+        return { content: 'invalid arguments: name is required', isError: true, tier: 0 };
       }
       const skill = byName.get(parsed.data.name);
       if (!skill) {
         const known = [...byName.keys()].join(', ') || '(nessuna)';
-        return { content: `skill sconosciuta: ${parsed.data.name}. Installate: ${known}`, isError: true };
+        return {
+          content: `skill sconosciuta: ${parsed.data.name}. Installate: ${known}`,
+          isError: true,
+          tier: 0,
+        };
       }
 
       const requested = parsed.data.file ?? 'SKILL.md';
@@ -77,14 +84,14 @@ export function makeSkillTool(skills: readonly SkillInfo[]): RegisteredTool {
         realRoot = realpathSync(skill.dir);
         real = realpathSync(candidate);
       } catch {
-        return { content: `file non trovato: ${requested}`, isError: true };
+        return { content: `file non trovato: ${requested}`, isError: true, tier: 0 };
       }
       const escape = relative(realRoot, real);
       if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
-        return { content: `il percorso esce dalla skill: ${requested}`, isError: true };
+        return { content: `il percorso esce dalla skill: ${requested}`, isError: true, tier: 0 };
       }
       if (!existsSync(real)) {
-        return { content: `file non trovato: ${requested}`, isError: true };
+        return { content: `file non trovato: ${requested}`, isError: true, tier: 0 };
       }
 
       const content = readFileSync(real);
@@ -92,6 +99,8 @@ export function makeSkillTool(skills: readonly SkillInfo[]): RegisteredTool {
         return {
           content: `${requested} è ${content.length} byte: oltre il limite di lettura (${MAX_SKILL_FILE_BYTES}). Le skill grandi vanno spezzate in file richiamati al bisogno.`,
           isError: true,
+          // Refused on the length, and the bytes go no further than this branch.
+          tier: 0,
         };
       }
       // `tier: 1`, which this file's own docstring has claimed since it was

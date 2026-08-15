@@ -84,7 +84,7 @@ function harness(
     {
       capability: 'demo.read',
       spec: { name: 'demo_read', description: 'read', inputSchema: { type: 'object', properties: {} } },
-      handler: () => ({ content: 'letto' }),
+      handler: () => ({ content: 'letto', tier: 0 as const }),
     },
   ];
   const decide = createDecide({

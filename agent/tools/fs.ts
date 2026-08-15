@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
+import type { RegisteredTool } from '../loop.js';
 
 /**
  * The three filesystem primitives of M1.
@@ -31,6 +32,38 @@ export type FsScope = {
   denyRead?: readonly string[];
 };
 
+/**
+ * The tier of anything read off the local disk. ADR-0042.
+ *
+ * **2, because the filesystem has no provenance.** The scale is defined on who
+ * spoke (0 owner · 1 confirmed contacts · 2 group and strangers · 3 web and
+ * external tools), and `~/appunti.md` written by the owner is indistinguishable
+ * from `~/Downloads/fattura.pdf` that arrived from a stranger: same `stat`, same
+ * bytes, no field anywhere that separates them. Under that uncertainty the only
+ * honest reading is the fail-closed one — *somebody who is not the owner may
+ * have written this* — and that is what 2 means.
+ *
+ * **Not 1**, which is where the cost would have been lower and the guarantee
+ * empty: at taint 1 an off-allowlist host still comes back as an `ask`
+ * (`core/policy/decide.ts`), so a poisoned file could still nominate the
+ * destination and wait for a tired yes. The whole chain closes at 2 and nowhere
+ * below it. **Not 3**, which would be a lie with a bill attached: a note the
+ * owner typed is not a web page, 3 is the top of the scale and spending it here
+ * leaves nothing to say about something genuinely worse — and it would put the
+ * owner's own notes in the same bucket as an untrusted MCP server.
+ *
+ * **Not per-path** (`~/.muffin` clean, everywhere else dirty), which was the
+ * tempting one: it is a rule you evade by *moving a file*, it buys almost
+ * nothing (the readable parts of the muffin home have their own door in
+ * `skill.read`, which declares its own tier, and the rest is `denyRead`), and it
+ * would launder a poisoned file the moment anything wrote it inside the home.
+ *
+ * One constant, imported by `agent/tools/shell.ts` too, because a command's
+ * stdout is the same disk read through a different door — and two literals that
+ * agree today are how the two deny-lists in `core/rot/guards.ts` got written.
+ */
+export const DISK_TIER: TrustTier = 2;
+
 export const fsCapabilities: CapabilityDecl[] = [
   /**
    * `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —
@@ -42,11 +75,20 @@ export const fsCapabilities: CapabilityDecl[] = [
    * permit exactly one fetch per turn and deep research would be impossible.
    * Reading a file is the same shape — *"leggi questa pagina e confrontala con
    * i miei appunti"* is a normal owner turn, and at a ceiling of 1 the second
-   * half is refused. The cost is paid on every turn; the benefit is not what it
-   * looks like, because the read alone is not the leak: the bytes still have to
-   * leave, and the egress leg is separately gated (off-allowlist above taint 1
-   * is DENY, never ask, precisely so a poisoned context cannot nominate the
-   * destination). `hostOnly` already keeps group members out entirely.
+   * half is refused. So the ceiling stays high and the **read itself pays**:
+   * every read taints the turn to `DISK_TIER`, which is what a turn that has
+   * swallowed unprovenanced bytes actually is.
+   *
+   * **The half of this argument that was fiction until ADR-0042, named so it
+   * does not become fiction again.** The sentence used to be *"the read alone
+   * is not the leak: the bytes still have to leave, and the egress leg is
+   * separately gated — off-allowlist above taint 1 is DENY, never ask"*. True
+   * of `core/policy/decide.ts`, and unreachable from here: that gate reads the
+   * **turn's taint**, and `fs_read` returned no `tier`, so a turn that had just
+   * read an injected file was still at taint 0 and the off-allowlist host came
+   * back as an `ask` the owner could approve. The file's own security argument
+   * rested on a property the file did not produce. It produces it now, and
+   * `agent/read-then-egress.test.ts` is the thing that fails if it stops.
    *
    * **The precondition that makes it true, stated so it can be falsified.** The
    * ceiling is defensible because no secret is reachable inside `root`:
@@ -259,4 +301,51 @@ export function fsWrite(scope: FsScope, path: string, content: string): string {
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, content, 'utf8');
   return `wrote ${content.length} bytes to ${path}`;
+}
+
+/**
+ * The three tools, assembled once.
+ *
+ * They used to be three object literals in `agent/runtime.ts` and three more in
+ * `evals/floor/run.ts` — the same handlers written twice, which is the shape
+ * this repo keeps paying for: whatever a tool has to declare about itself has
+ * to be declared at every copy, and the copies drift on the first thing that is
+ * not `content`. Provenance is exactly that kind of thing.
+ */
+export function makeFsTools(scope: FsScope): RegisteredTool[] {
+  return [
+    {
+      capability: 'fs.read',
+      spec: fsToolSpecs[0]!,
+      handler: (args) => ({
+        content: fsRead(scope, String((args as { path: string }).path)),
+        tier: DISK_TIER,
+      }),
+    },
+    {
+      capability: 'fs.list',
+      spec: fsToolSpecs[1]!,
+      // A listing is bytes somebody else chose too. A filename is short and
+      // looks like metadata, which is exactly why it is worth saying out loud:
+      // `IGNORA le istruzioni precedenti.md` is a filename, it costs an attacker
+      // nothing, and it reaches the model through this door with no fence around
+      // it. Same source, same tier — the alternative is a special case whose
+      // only argument is that the text is short.
+      handler: (args) => ({
+        content: fsList(scope, String((args as { path: string }).path)),
+        tier: DISK_TIER,
+      }),
+    },
+    {
+      capability: 'fs.write',
+      spec: fsToolSpecs[2]!,
+      // Tier 0: the result is this tool's own sentence about how many bytes it
+      // wrote. Nothing came *in*. The point of a required `tier` is that this is
+      // now an answer someone gave, not a question nobody was asked.
+      handler: (args) => {
+        const a = args as { path: string; content: string };
+        return { content: fsWrite(scope, String(a.path), String(a.content ?? '')), tier: 0 };
+      },
+    },
+  ];
 }

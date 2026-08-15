@@ -77,22 +77,26 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
   return {
     capability: httpCapability.id,
     spec: httpSpec,
+    // `tier: 0` on every path that stops before a body arrives, and `tier: 3`
+    // on the only one where one does. Not a formality: raising the taint on a
+    // refusal would let a failed fetch quietly narrow what the rest of the turn
+    // may do, and leaving it unstated is what this slice exists to end.
     handler: async (args) => {
       const parsed = httpArgs.safeParse(args);
       if (!parsed.success) {
-        return { content: 'invalid arguments: url is required', isError: true };
+        return { content: 'invalid arguments: url is required', isError: true, tier: 0 };
       }
 
       let current: URL;
       try {
         current = new URL(parsed.data.url);
       } catch {
-        return { content: `not a URL: ${parsed.data.url}`, isError: true };
+        return { content: `not a URL: ${parsed.data.url}`, isError: true, tier: 0 };
       }
 
       for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
         if (current.protocol !== 'http:' && current.protocol !== 'https:') {
-          return { content: `scheme not allowed: ${current.protocol}`, isError: true };
+          return { content: `scheme not allowed: ${current.protocol}`, isError: true, tier: 0 };
         }
         // Redirect hops answer to the same allowlist as the first URL. The
         // kernel approved hop 0; nobody approved where a 302 points.
@@ -100,11 +104,12 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
           return {
             content: `redirect left the allowlist at hop ${hop}: ${current.hostname} — stopped before connecting`,
             isError: true,
+            tier: 0,
           };
         }
         const veto = await addressVeto(current.hostname, lookupFn);
         if (veto !== null) {
-          return { content: veto, isError: true };
+          return { content: veto, isError: true, tier: 0 };
         }
 
         let response: Response;
@@ -117,18 +122,18 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          return { content: `fetch failed for ${current.hostname}: ${detail}`, isError: true };
+          return { content: `fetch failed for ${current.hostname}: ${detail}`, isError: true, tier: 0 };
         }
 
         if (response.status >= 300 && response.status < 400) {
           const location = response.headers.get('location');
           if (!location) {
-            return { content: `redirect ${response.status} without a location`, isError: true };
+            return { content: `redirect ${response.status} without a location`, isError: true, tier: 0 };
           }
           try {
             current = new URL(location, current);
           } catch {
-            return { content: `redirect to an unparseable location: ${location}`, isError: true };
+            return { content: `redirect to an unparseable location: ${location}`, isError: true, tier: 0 };
           }
           continue;
         }
@@ -158,7 +163,7 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
           tier: 3,
         };
       }
-      return { content: `stopped after ${MAX_REDIRECTS} redirects`, isError: true };
+      return { content: `stopped after ${MAX_REDIRECTS} redirects`, isError: true, tier: 0 };
     },
   };
 }

@@ -108,14 +108,14 @@ export function makeProcessTools(deps: ProcessDeps = {}): RegisteredTool[] {
       handler: async (args) => {
         const parsed = listArgs.safeParse(args);
         if (!parsed.success) {
-          return { content: 'invalid arguments: grep must be a short string', isError: true };
+          return { content: 'invalid arguments: grep must be a short string', isError: true, tier: 0 };
         }
         let stdout: string;
         try {
           stdout = await psFn(PS_ARGV);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          return { content: `ps failed: ${detail}`, isError: true };
+          return { content: `ps failed: ${detail}`, isError: true, tier: 0 };
         }
         const needle = parsed.data.grep?.toLowerCase();
         const lines = stdout.split('\n').filter((l) => l.trim().length > 0);
@@ -127,12 +127,27 @@ export function makeProcessTools(deps: ProcessDeps = {}): RegisteredTool[] {
           matched.length > shown.length
             ? `\n…[${matched.length - shown.length} processi omessi — restringi con grep]`
             : '';
-        return { content: [header, ...shown].join('\n') + cut };
+        // Tier 1, the same tier a skill body carries, and for the same reason:
+        // this text is not the owner's words, but it is *the owner's machine
+        // describing itself*. `PS_ARGV` asks for `comm` and never `args`, so
+        // what comes back is the names of binaries someone had to install and
+        // start here — an attacker who can choose one has already executed code
+        // on the host, which is a different game and a lost one.
+        //
+        // Not `DISK_TIER`. The distinction is provenance, not squeamishness: a
+        // file lands in `~/Downloads` because the owner clicked a link, which
+        // costs an attacker nothing; a line in this listing costs them the host.
+        // Deliberately below the ceiling `sys.process.list` pins (1), so the
+        // typed read of the process table does not become a once-per-turn tool.
+        return { content: [header, ...shown].join('\n') + cut, tier: 1 };
       },
     },
     {
       capability: 'sys.process.kill',
       spec: processKillSpec,
+      // Tier 0 on every path: `process_kill` is a write. Every string it can
+      // return is one this file wrote — a refusal, an errno translated, or the
+      // receipt below. Nothing enters the turn, so nothing taints it.
       handler: (args) => {
         const parsed = killArgs.safeParse(args);
         if (!parsed.success) {
@@ -140,26 +155,34 @@ export function makeProcessTools(deps: ProcessDeps = {}): RegisteredTool[] {
           return {
             content: `invalid arguments: ${issue?.path.join('.') ?? '?'} — ${issue?.message ?? 'unparseable'}`,
             isError: true,
+            tier: 0,
           };
         }
         const { pid, signal } = parsed.data;
         if (pid === process.pid) {
-          return { content: `refused: ${pid} is the agent process itself`, isError: true };
+          return { content: `refused: ${pid} is the agent process itself`, isError: true, tier: 0 };
         }
         try {
           killFn(pid, `SIG${signal}`);
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
-          if (code === 'ESRCH') return { content: `no process with pid ${pid}`, isError: true };
+          if (code === 'ESRCH') return { content: `no process with pid ${pid}`, isError: true, tier: 0 };
           if (code === 'EPERM') {
-            return { content: `not permitted to signal pid ${pid} (another user's process)`, isError: true };
+            return {
+              content: `not permitted to signal pid ${pid} (another user's process)`,
+              isError: true,
+              tier: 0,
+            };
           }
           const detail = error instanceof Error ? error.message : String(error);
-          return { content: `kill failed: ${detail}`, isError: true };
+          return { content: `kill failed: ${detail}`, isError: true, tier: 0 };
         }
         // Delivery is not death: TERM can be caught or ignored. Say what was
         // done, not what we hope happened.
-        return { content: `SIG${signal} delivered to pid ${pid} — check with process_list whether it exited` };
+        return {
+          content: `SIG${signal} delivered to pid ${pid} — check with process_list whether it exited`,
+          tier: 0,
+        };
       },
     },
   ];

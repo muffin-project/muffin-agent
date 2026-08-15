@@ -79,7 +79,7 @@ function harness(script: ChatResult[]) {
       spec: { name: 'demo_write', description: 'w', inputSchema: { type: 'object', properties: {} } },
       handler: () => {
         writes.push('demo_write');
-        return { content: 'scritto' };
+        return { content: 'scritto', tier: 0 as const };
       },
     },
   ];
