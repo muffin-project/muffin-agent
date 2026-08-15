@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { platform, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
 import { connectServer } from '../../core/mcp/connect.js';
+import { probeSandbox } from '../../core/sandbox/probe.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
@@ -31,7 +32,15 @@ import { connectServer } from '../../core/mcp/connect.js';
  * suspended.
  */
 
-const onMac = platform() === 'darwin';
+/**
+ * The DoD line below — "un comando eseguito da CLI gira **dentro il sandbox**"
+ * — was gated on `platform() === 'darwin'`, so the acceptance of M3 was signed
+ * off on a platform that is not the one it ships to. Gate on the containment
+ * itself, not on the OS: this test needs a sandbox, and which mechanism
+ * provides it is not its business. With bubblewrap available (CI installs the
+ * AppArmor profile Ubuntu 24.04 needs) it now runs on Linux too.
+ */
+const contained = probeSandbox().available;
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-m3-accept-'));
@@ -164,7 +173,7 @@ describe('M3 acceptance — through the production runtime', () => {
     }
   }, 40_000);
 
-  it.runIf(onMac)('the shell tool the runtime registered contains a write outside the workspace', async () => {
+  it.runIf(contained)('the shell tool the runtime registered contains a write outside the workspace', async () => {
     // Production path: not the hand-built executor of executor.test, but the
     // shell tool buildRuntime wired, with the workspace as its scope.
     const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run');
