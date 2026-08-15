@@ -11,9 +11,11 @@
 
 **Obiettivo**: M5-bis (`M5-BIS.md`) ordinato per **irreversibilita**: forma del turno > permessi > schema > resto. Un flag CLI si cambia domani, la forma di un turno no.
 
-**Ogni giro, prima di scegliere**: aggiorna questo blocco e ripubblica la plancia (stesso URL). Se diverge da M5-BIS, ha ragione il file.
+**Ogni giro, prima di scegliere**: aggiorna questo blocco, ripubblica plancia e mappa (stessi URL). Se divergono da M5-BIS, ha ragione il file.
 
-**Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
+**Deleghe in volo**: record del turno (B2/B5) · estrazione `docs/blueprint/mappa/` x5.
+
+**Rework autorizzato** (owner, 15 ago): niente e pubblico, niente in prod, quindi la forma del CODICE si riscrive. Il DB dell'owner e quasi vuoto (20 episodi, 0 fatti/entita/job): anche lo schema si tocca **adesso**, non dopo.
 
 **Tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — il turno dev'essere sospendibile e ripristinabile.
 

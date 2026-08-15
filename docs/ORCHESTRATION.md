@@ -222,6 +222,31 @@ abbiamo scritto e non fatto. Sono **strutturalmente ciechi** a ciò che non
 abbiamo mai scritto — lo streaming non era «dichiarato e non collegato», era mai
 pensato. Quella categoria si trova solo guardando fuori, e vuole una passata sua.
 
+## 14. La mappa è una vista derivata, e le viste derivate marciscono
+
+Direttiva owner, 2026-08-15: *«ricordiamoci di aggiornare anche questo artefatto
+quando serve che modifichiamo qualcosa»*.
+
+Un diagramma dell'architettura è la forma di documentazione che **invecchia
+peggio**: descrive la parte del sistema che cambia di più, non ha compilatore, e
+sbaglia con autorevolezza — sembra vero proprio mentre smette di esserlo. Un
+promemoria («ricordati di aggiornarlo») è una regola che vive solo in prosa, e
+§13.2 dice già come finisce.
+
+Quindi la mappa **non si disegna a mano**:
+
+1. **I dati stanno nel repo**, non nell'artefatto: `docs/blueprint/mappa/*.json`.
+   Ogni voce porta un'ancora `file:riga` verso il codice che la giustifica.
+2. **L'artefatto è un renderer** su quei dati. Ridisegnarlo non è un lavoro di
+   memoria: si rigenera.
+3. **Le ancore sono testate.** `docs/blueprint/mappa/mappa.test.ts` verifica che
+   ogni ancora esista ancora e punti allo stesso testo. Quando il codice si
+   sposta, **fallisce la suite**, non l'artefatto in silenzio.
+
+Il costo di questa forma è che la mappa può coprire solo ciò che è ancorabile a
+codice vero, ed è precisamente il vincolo che si vuole: una casella senza ancora
+è una casella che non abbiamo il diritto di disegnare.
+
 ## 14. Si ripara alla radice, e la radice è quasi sempre una forma
 
 Direttiva owner, 2026-08-15: *«quando ci sono cose da fixxare, proviamo sempre a
