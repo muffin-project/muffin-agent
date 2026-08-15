@@ -1,6 +1,6 @@
 # Stato esecuzione blueprint Muffin
 
-> ⭐ **START HERE — handoff (leggi questo blocco per primo; sopravvive al compact). Aggiornato 2026-08-09.**
+> ⭐ **START HERE — handoff (leggi questo blocco per primo; sopravvive al compact). Aggiornato 2026-08-14.**
 
 **Dove siamo.** Il **substrato M0–M5 è costruito e testato** (cronaca sotto). Ma "cores pronti" **NON è** l'MVP: il criterio d'uscita del Gate 1 (`04-roadmap.md §I due gate`) è **"l'owner lo usa come agente quotidiano per due settimane consecutive senza tornare al vecchio, tranne i gruppi"** — una **soglia d'uso**, non una checklist di feature. Siamo nella **spinta MVP**: chiudere il divario "substrato costruito" → "usabile ogni giorno". Nessuna **decisione di design** grossa aperta — le direzioni le forza la ricerca (`knowledge/` + `research/`); le vere-owner sono poche (il carattere).
 
@@ -22,70 +22,69 @@ ancora il template vuoto: "Chi sei" / "Come ti comporti quando è difficile" /
 "Il limite che ti do io" nessuno può scriverle al posto tuo. Finché non lo
 plasmi "sa di mockup" → **NON è l'MVP**.
 
-**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
-dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
-usabile**. Cinque cose, tutte verificate sul codice:
-0. **Niente vive senza il terminale** → **ADR-0035** (direzione owner, 2026-08-11:
-   *"anche a noi serve un gateway sicuro, serve heartbeat… il concetto di
-   occupato, continuo, sempre attivo, sempre vivo"*). ADR-0022 aveva già deciso
-   la forma — *"un processo OS per il runtime (gateway, loop, memoria,
-   scheduler)"* — e ciò che esiste è un `setInterval` dentro `cli/repl.ts`:
-   **undicesima istanza della famiglia, e la più grossa**, perché non è un file
-   senza lettore, è la forma del runtime. I cinque vincoli di sicurezza (socket
-   locale, kernel unico punto di decisione, principal per ogni turno autonomo,
-   nessuna elevazione, visibile e ammazzabile) sono nell'ADR. Lo scheduler muore col REPL. Si legge nei
-   verbi: 31 dei 95 comandi di Hermes presuppongono un processo che gira
-   (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`); i
-   nostri 14 sono tutti "fai e esci". Per questo **"sei un agente continuo" non
-   va scritto nel prompt** — va reso vero. Serve un processo che vive senza il
-   terminale, più `heartbeat`/`queue`/`steer`/`undo`. Non i 95: la loro
-   cromatura è il "TROPPE cose" che l'owner rifiuta.
-1. **Il consolidamento non parte mai.** `ingestPending` ha un solo chiamante,
-   `muffin memory extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
-   La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
-   ⚠️ E servono **due** meccanismi, non uno: il vecchio non consolidava di notte,
-   estraeva **a ogni turno in asincrono** (latenza: minuti) e il dream faceva
-   manutenzione sopra. Un solo job notturno darebbe un Muffin che ti conosce con
-   24h di ritardo. **Priorità 1**: senza, memoria/importance/origin/assenza sono
-   inerti.
-2. **`thinking` dichiarato nei profili e mai passato al provider** (nono caso della
-   famiglia "dichiarato e non connesso").
-3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
-   dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
-4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la
-   ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
-5. **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
+**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11;
+dettaglio in `04-roadmap.md` §M5-bis, e il per-esteso dei punti chiusi in cronaca
+§"Il divario M5-bis"). M0-M5 è costruito e **non produce un agente usabile**.
+Cinque cose, tutte verificate sul codice:
+0. 🟡 **Niente vive senza il terminale** → **ADR-0035**. ✅ Il processo **c'è**
+   (`slice/gateway`): `muffin gateway run` possiede lo scheduler (il
+   `setInterval` è uscito da `cli/repl.ts`), SIGTERM/SIGUSR1 drenano, `sd_notify`
+   è no-op senza `NOTIFY_SOCKET`, due scheduler non girano mai. **Resta aperto**:
+   (a) `queue`/`steer`/`heartbeat`/`undo` — vogliono il protocollo sul socket,
+   non costruito; (b) la consegna remota; (c) **il criterio d'uscita dal lato di
+   chi lo usa**, da ADR-0035 §revisione 2026-08-14 — *un turno lungo torna entro
+   ~500 ms e consegna dopo*: `runTurn` è sincrono e il connettore lo attende, la
+   metà strutturale non esiste (quella cosmetica sì, `telegram/presence.ts`);
+   (d) **il budget per-job**, che entra in questa slice e non dopo — i cap oggi
+   sono solo globali (mese, giorno-per-tenant) e l'unico limite per-turno conta i
+   giri, non i token: un processo che vive toglie l'owner-che-guarda, ed è la
+   differenza fra un job rotto che costa €0,50 e uno che si mangia il mese.
+1. ✅ **Consolidamento — entrambi i meccanismi girano.** ADR-0038 il flusso
+   (coda d'inattività 20 s, tetto 12, misurati sul corpus vero) e **ADR-0040** lo
+   stock (drenaggio dell'arretrato, deduplica senza soglia, registro `review`
+   letto e risposto con `muffin memory review [keep <id>]`). Provati eseguendoli.
+   Dettaglio in cronaca §"Il divario M5-bis" e in `04-roadmap.md` §M5-bis.
+   ⛔ **Resta aperto**: **dream/compattazione** — non costruito perché manca il
+   *consumatore* (`profiles`/`digests`: zero lettori; prima il lettore, poi lo
+   scrittore) — e l'**audit dei predicati** a metà (l'invariante rileva, ma
+   proporre un merge vuole un giudizio di sinonimia: modello o vocabolario
+   chiuso, e li rifiutiamo entrambi). **`muffin run` headless non consolida**
+   (timer `unref`'d): limite dichiarato, ora meno caro perché il primo processo
+   di lunga vita drena tutto. **Rifiutato e non rimandato**: il decadimento della
+   confidenza (ADR-0040 §"Quello che NON è costruito").
+   🟡 **Decisione owner aperta**: se il tool `ricorda` **scrive o propone** —
+   cancella ADR-0032 §9, e nel vecchio quel percorso ha fatto il 9,7% dei fatti
+   **decadendo a zero in quattro mesi**.
+2. ✅ **`thinking` dichiarato nei profili e mai passato** — chiuso 2026-08-13
+   (`6d2cd21`). Non era un cablaggio ma una **migrazione ad `adaptive`**:
+   `{type:'enabled',budget_tokens}` è un 400 da 4.7 in poi. Nella stessa passata,
+   due difetti peggiori: i **blocchi di thinking venivano buttati via**
+   dall'adapter, e `temperature: 0` era cablato nel loop (400 su Opus 4.7+) e in
+   `core/memory/{extract,judge,rerank}.ts` **fuori** dal sistema dei profili.
+3. ✅ **Non era governabile da dentro** → **ADR-0036**, e la sua precondizione
+   bloccante (il tetto di spesa sigillato davvero) è **sciolta** il 2026-08-13
+   (**ADR-0039**): `core/rot/budgets.ts` è l'unico lettore, `config.budget` non
+   esiste più, e `denyRead` copre entrambi gli store di segreti più la `.env`
+   (prima `fs_read(".env")` restituiva la chiave in chiaro). Costruiti i tre
+   pezzi che l'ADR chiedeva: **`muffin config`** sola-lettura che deriva le
+   manopole dall'oggetto `Config` reale, **il primo avvio che dice cosa ha
+   dedotto**, **alias italiani selettivi** (`memoria/lavori/segreto`).
+   **Resta aperto**: nessuna superficie di scrittura conversazionale (non era lo
+   scopo — sola lettura per ADR-0036), e nessun tool in `agent/tools/` legge
+   ancora `listConfigKnobs`.
+4. ⛔ **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui
+   la ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
+5. ⛔ **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
    finto + smoke piccolo sul modello vero.
 
-**Confronto coi peer, fatto** (`research/confronto-harness.md`, quattro passate
-verificate su Hermes/OpenHands/Goose/Cline/Letta): la scommessa architetturale
-regge su cinque assi su sei, spesso validata dai loro stessi numeri; l'unico
-contraddetto è il resume (punto 4). Ne sono usciti ADR-0032/0033/0034 e
-l'emendamento a 0028 con la contro-posizione di Hermes #17459. **ADR-0032 è già
-emendato dall'owner**: memoria ibrida (il tool scrive il contenuto, l'harness
-governa il timing) con riconciliazione fra tool e pipeline.
-
-**Inventario vecchio-nuovo fatto** (`research/inventario-vecchio-nuovo.md`, 86
-righe con verdetto — 41% presente · 29% tolto di proposito · 23% manca e serve ·
-8% era slop). Il contro-numero che giustifica il tetto sui tool meglio di
-qualunque argomento: dei 47 tool del vecchio, **16 mai invocati** e **28 su 47
-meno di cinque volte in quattro mesi** — sei tool hanno fatto il lavoro.
-
-**Confronto con la consulenza esterna, fatto** (`research/confronto-gemini.md`,
-2026-08-14): una consulenza generica di design d'agente (Gemini 3.6 Flash, nove
-turni owner) confrontata riga per riga col codice. **Non sposta l'ordine di
-lavoro**: delle ~25 raccomandazioni, 14 descrivono cose già costruite (spesso
-più severe), 5 erano già decise contro con evidenza scritta, 2 sono sbagliate
-per la nostra forma (event bus / microservizi agentici — contro ADR-0022;
-classifier routing sui tool — due retrocessioni in casa), 4 sono buchi veri e
-piccoli (§M5-bis "Dal confronto esterno"). **Il contributo che vale non è una
-feature**: "voce e mani" applicato alla chat dà ad ADR-0035 il criterio d'uscita
-dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
-(→ ADR-0035 §revisione). Conferma esterna su due assi: niente critico LLM
-(=ADR-0034) e la corsia asincrona di estrazione fra i componenti fondamentali
-(=la nostra priorità 1, costruita e attaccata a niente). Mai nominati da lei:
-provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
-di trigger, Root of Trust, il costo della cache come vincolo di design.
+**Le tre ricerche di confronto, tutte fatte** (dettaglio in cronaca; nessuna
+sposta l'ordine di lavoro): **peer harness** — la scommessa regge su cinque assi
+su sei, l'unico contraddetto è il resume (punto 4); **inventario vecchio-nuovo**
+— dei 47 tool del vecchio **16 mai invocati** e 28 su 47 sotto le cinque
+chiamate in quattro mesi, sei tool hanno fatto il lavoro; **consulenza esterna**
+(`confronto-gemini.md`, 2026-08-14) — 14 raccomandazioni su ~25 descrivono cose
+già costruite, 4 sono buchi veri e piccoli, e il contributo che vale non è una
+feature ma il criterio d'uscita di ADR-0035 (punto 0c).
 
 **Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
 
@@ -267,6 +266,262 @@ Substrato già in piedi: principal `system:scheduler`, `quietHours` nel RoT (`de
    **Resta aperto**: l'epoch flip «so già chi sei» — togliere il primo-incontro
    dal prompt *owner* quando l'owner è ormai noto. È un secondo asse (il tempo,
    non il tenant) e non è in questa slice.
+
+## Il divario M5-bis: i cinque punti per esteso
+
+> Spostato qui dal blocco iniettato il 2026-08-14, **verbatim e senza tagli**,
+> per la stessa ragione della sezione sopra: il merge di `slice/gateway` con
+> `dev` ha riportato il blocco a **18.700 caratteri contro un budget di 9.875**,
+> quindi di nuovo troncato — e di nuovo la vittima era la coda, cioè la lista dei
+> file load-bearing. Il dettaglio dei punti **chiusi** è cronaca; nel blocco
+> resta ciò che è ancora aperto. Niente è stato cancellato.
+
+**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11 —
+dettaglio in `04-roadmap.md` §M5-bis). M0-M5 è costruito e **non produce un agente
+usabile**. Cinque cose, tutte verificate sul codice:
+0. **Niente vive senza il terminale** → **ADR-0035** (direzione owner, 2026-08-11:
+   *"anche a noi serve un gateway sicuro, serve heartbeat… il concetto di
+   occupato, continuo, sempre attivo, sempre vivo"*). ADR-0022 aveva già deciso
+   la forma — *"un processo OS per il runtime (gateway, loop, memoria,
+   scheduler)"* — e ciò che esiste è un `setInterval` dentro `cli/repl.ts`:
+   **undicesima istanza della famiglia, e la più grossa**, perché non è un file
+   senza lettore, è la forma del runtime. I cinque vincoli di sicurezza (socket
+   locale, kernel unico punto di decisione, principal per ogni turno autonomo,
+   nessuna elevazione, visibile e ammazzabile) sono nell'ADR. Lo scheduler muore col REPL. Si legge nei
+   verbi: 31 dei 95 comandi di Hermes presuppongono un processo che gira
+   (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`); i
+   nostri 14 sono tutti "fai e esci". Per questo **"sei un agente continuo" non
+   va scritto nel prompt** — va reso vero. Serve un processo che vive senza il
+   terminale, più `heartbeat`/`queue`/`steer`/`undo`. Non i 95: la loro
+   cromatura è il "TROPPE cose" che l'owner rifiuta.
+   ✅ **Il processo c'è** (`slice/gateway`, 2026-08-11, 655 test): `muffin
+   gateway run` possiede lo scheduler (il `setInterval` è uscito da
+   `cli/repl.ts`), `status`/`stop`/`install` e `doctor` lo vedono, SIGTERM e
+   SIGUSR1 drenano entro un budget, `sd_notify` (READY/WATCHDOG/STATUS) è no-op
+   senza `NOTIFY_SOCKET`. **Provato eseguendolo**: job creato → gateway avviato
+   senza REPL → fire a 24 s → `stop` che drena. Due scheduler non girano mai
+   (rivendicazione durevole in `gateway_lock`, letta dal REPL che cede il ticker
+   e lo dice); l'orizzonte è un **battito**, non un'ora, e un `kill -9` non
+   incastra il comando. **Resta**: `queue`/`steer`/`heartbeat`/`undo` (vogliono
+   il protocollo sul socket, non costruito), il trigger a soglia del punto 1 qui
+   sotto, la consegna remota. Dettaglio in `04-roadmap.md` §M5-bis punto 0.
+   *(Chiude anche il "da verificare prima del deploy VPS" in fondo a questo file:
+   sotto systemd stdin è `/dev/null` e il REPL uscirebbe subito — il gateway non
+   ha readline, quindi la modalità di servizio che mancava adesso esiste.)*
+1. 🟡 **Il consolidamento non partiva mai — ora parte, ma solo il primo dei due
+   meccanismi.** `ingestPending` aveva un solo chiamante, `muffin memory
+   extract`, a mano. **414 fatti nel vecchio contro 0 nel nuovo.**
+   La DoD di M5 lo richiedeva ed è **non soddisfatta**: M5 è stato chiuso senza.
+   ⚠️ E servono **due** meccanismi, non uno: il vecchio non consolidava di notte,
+   estraeva **a ogni turno in asincrono** e il dream faceva manutenzione sopra.
+   Un solo job notturno darebbe un Muffin che ti conosce con 24h di ritardo.
+   **Priorità 1**: senza, memoria/importance/origin/assenza sono inerti.
+
+   ⚠️ **Due correzioni dalla ricerca del 2026-08-13**
+   (`research/consolidamento-due-meccanismi.md`, misurate sui dati veri).
+   (a) La latenza del vecchio **non era «minuti»: era 11,8 s di mediana** su
+   2.264 item — la media a 48 s la trascina la coda. A dodici secondi il fatto è
+   a posto *prima del messaggio successivo della stessa conversazione*, che è un
+   prodotto diverso; un meccanismo che atterra a minuti sarebbe una regressione.
+   (b) **«I fatti restano a zero» dice meno del vero**: nessun altro percorso
+   indicizza un episodio, quindi finché non parte **il recall è solo-keyword per
+   tutta la vita dell'installazione** — la metà vettoriale di RRF non ha chi la
+   alimenti. Non manca un livello, ne mancano due.
+
+   ✅ **La fondazione è corretta** (`6ddba7c`, 2026-08-13, 102 test su
+   `core/memory`): l'episodio a contenuto vuoto non resta più dovuto per sempre
+   (bloccava il batch **riportando successo**); il marcatore è per-episodio e non
+   per-batch; due esecuzioni non estraggono più lo stesso insieme (lock di corsia
+   su `core/lock/durable.ts`, non copiato); le entità non si biforcano più su
+   `kind`; e il verdetto `review` del giudice — l'esito «decida un umano» — ha un
+   registro invece di morire su stderr.
+
+   ✅ **Il primo meccanismo esiste** (`slice/gateway`, 2026-08-13, **ADR-0038**,
+   751 test): **coda d'inattività a fronte discendente** armata dalla fine di ogni
+   turno (`LoopDeps.onTurnEnd`, il post-turn hook che mancava), con **tetto a
+   conteggio** come rete. Le due costanti sono **misurate sul corpus vero**
+   dell'owner (4.107 episodi, marzo→luglio), non prese da un peer: **20 s** perché
+   solo l'1,0% dei messaggi consecutivi dell'owner dista meno di 20 s e perché
+   ancorata alla risposta la coda fa **−26% di chiamate** contro il per-turno del
+   vecchio (che rendeva il 3,4%), mentre a 60 s si supererebbe la mediana di 56 s
+   fra risposta e messaggio dopo — cioè si perderebbe la proprietà che gli 11,8 s
+   compravano; **tetto 12** perché la sequenza più lunga senza pausa nel corpus è
+   7. Nella stessa slice: la **spesa della corsia light entra nel budget** (era
+   zero per `/spend` e per il cap — chiude anche il punto ⚠️ di M5-bis §7 sul
+   `temperature: 0` fuori dai profili), la **cucitura per-tenant è rifiutata con
+   due test** (solo host consolida: `extractFacts` deriva il parlante da `role`),
+   e la corsia **si vede** (`consolidation_runs` in `memory stats` e `doctor`).
+   **Provato eseguendolo**: dal REPL vero, turno → risposta subito → fatto in
+   memoria a **+20,0 s**; dal **gateway senza REPL**, job → estrazione a **+20,0
+   s**. E l'indice vettoriale è passato da vuoto a `5 chunk · 5 vettori, in sync`.
+
+   ✅ **Il secondo meccanismo esiste** (`slice/gateway`, 2026-08-14,
+   **ADR-0040**, 870 test): la manutenzione. La prima cosa che ha prodotto è una
+   correzione al nome — **«periodica» era sbagliato**. Elencando cosa dovesse
+   fare, ogni voce è risultata guidata dai **dati** e non dall'orologio: un
+   arretrato esiste o no, un duplicato esiste o no, una riga `review` è aperta o
+   è stata risolta. Niente in questo schema cambia perché è passato un giorno,
+   quindi un cron sarebbe un timer senza niente che dipenda dal tempo — e
+   nessuno dei dodici sistemi letti ne gira uno. Il grilletto resta la stessa
+   coda d'inattività, nel runtime.
+   La regola di costo che governa tutto: nel vecchio il dream era la **metà
+   piccola** (⬤ 100 report contro 2.438 righe di work queue, il 4%). Quindi
+   **la manutenzione non spende niente** — nessuna chiamata al modello, SQL su
+   righe già scritte. L'unica parte che chiama un modello è il drenaggio, e paga
+   estrazioni che la corsia viva avrebbe pagato comunque: il totale non cambia,
+   cambia *quando*.
+   - **Drenaggio.** Dopo una pagina **piena** che ha **fatto progresso**, la
+     corsia si ri-arma e prende la successiva, allo stesso passo della coda viva
+     (nessuna costante nuova: il tetto di costo diventa una proprietà della
+     forma). Perde sempre contro un turno. La condizione d'arresto è il
+     *progresso* (`marked > 0`), mai un conteggio di pendenti — un episodio che
+     fallisce l'estrazione in modo permanente resta in testa per sempre, e un
+     drenaggio guidato da `stats.pending` ripagherebbe quella pagina ogni venti
+     secondi: **lo stesso fallimento che ADR-0038 aveva già scartato**, entrato
+     da un'altra porta. E **non** si riordina al più-nuovo-per-primo, che è la
+     mossa ovvia: `reconcile` sceglie il candidato per `recorded_at`, quindi
+     estrarre fuori ordine farebbe **dis-correggere una correzione**.
+   - **Deduplica senza soglia.** Solo chiave esatta normalizzata (maiuscole,
+     spazi, punteggiatura finale): lo 0,85 del vecchio non porta fra embedder, e
+     la ricerca lo misura (99,00% di falsi positivi a un ingenuo 0,7 su due
+     modelli comuni). ⬤ E il corpus chiede esattamente questo gradino: sui
+     quattro mesi del vecchio i gruppi (soggetto, predicato) con più di un valore
+     attivo erano **2 su 308 fatti attivi**, e **tutti e due erano duplicati
+     esatti**. Si ritira con `supersede`, **mai DELETE** — e con `valid_to` non
+     toccato, perché un duplicato non ha mai smesso di essere vero: non era una
+     verità separata.
+   - **Il registro `review` letto e risposto.** `muffin memory review` +
+     `review keep <fact-id>`, più la riga in `memory stats`, in `doctor` e al
+     boot. «Aperta» è una **join** (entrambi i fatti ancora attivi), non una
+     colonna di stato: una domanda che la conversazione risolve da sola esce
+     dalla lista senza che nessuno scriva niente. Rispondere è un `supersede`, e
+     lo fa **l'owner** — ADR-0032 §9 resta dov'era.
+   **Provato eseguendolo**: 45 episodi di arretrato, un turno, poi silenzio →
+   `idle` a +20 s, `drain` a +44 s, `drain` a +64 s, gli episodi dovuti scesi a
+   **0**, e nessuna quarta pagina perché la terza era corta.
+   ⛔ **Resta aperto**: dream/compattazione (manca il *consumatore* —
+   `profiles`/`digests` hanno zero lettori) e l'audit dei predicati a metà.
+   **Rifiutato e non rimandato**: il decadimento della confidenza — nessun tasso
+   difendibile, ⬤ nessun lettore (l'unica soglia sulla confidenza è
+   `extract.ts:176`, *prima* della scrittura), e con un lettore sarebbe una
+   credenza irrecuperabile senza `expired_at` né `superseded_by`, cioè una
+   cancellazione senza traccia. Una **passata di scadenza** non è costruita
+   perché ⬤ non ha niente da scadere: `valid_to` è scritto solo da `supersede`,
+   che scrive anche `expired_at`. Limite dichiarato che resta: **`muffin run`
+   headless non consolida** (timer `unref`'d), ora meno caro perché il primo
+   processo di lunga vita drena tutto invece di una pagina.
+   Resta aperta e **è dell'owner** la terza decisione: se il tool
+   `ricorda` scrive o propone — cancella ADR-0032 §9, e nel vecchio quel percorso
+   ha fatto il 9,7% dei fatti **decadendo a zero in quattro mesi**.
+2. ✅ **`thinking` era dichiarato nei profili e mai passato** (nono caso della
+   famiglia). Chiuso il 2026-08-13 (`6d2cd21` + giro di judge), e il rimedio
+   scritto qui era **sbagliato**: passarlo com'era dichiarato avrebbe dato un 400
+   a ogni turno frontier, perché `{type:'enabled', budget_tokens}` è rifiutato da
+   4.7 in poi — cioè esattamente i glob di `frontier.json`. Era una migrazione ad
+   `adaptive`, non un cablaggio. Nella stessa passata sono usciti due difetti
+   peggiori: i **blocchi di thinking venivano buttati via** dall'adapter, quindi
+   dalla seconda iterazione di ogni turno con tool il ragionamento del modello era
+   perso (e con lui i cache hit che i doc attribuiscono proprio a quei blocchi); e
+   `temperature: 0` era cablato nel loop, che su Opus 4.7+ è un 400 dichiarato.
+   ✅ **Chiuso il 2026-08-13 (ADR-0038)**: `core/memory/{extract,judge,rerank}.ts`
+   cablavano `temperature: 0` **fuori** dal sistema dei profili — legale finché il
+   light è haiku 4.5, un 400 il giorno che `--light-model` punta a qualcosa 4.7+,
+   e nessuna modifica ai profili poteva ripararlo. Rimediato dal confine che il
+   punto 1 doveva costruire comunque per il budget
+   (`agent/providers/light-lane.ts`): la corsia light si costruisce dietro un
+   wrapper che fattura **e** applica il `sampling` del profilo del modello light.
+3. **Non è governabile da dentro**: 5 slash, nessun `muffin config`, nessuna
+   dashboard, settings a mano in JSON (alcuni nel RoT, quindi con reseal).
+   → **ADR-0036** decide dove passa la linea (sigillato = terminale, il resto lo
+   guida Muffin) e si dà una **precondizione bloccante**: niente superficie di
+   scrittura conversazionale finché il tetto di spesa non è sigillato davvero.
+   ✅ **Precondizione sciolta il 2026-08-13 (ADR-0039)** — e sono due difetti
+   della stessa forma, chiusi insieme. **(a)** `BudgetEngine` nasceva da
+   `config.budget`, **fuori dal manifest**, mentre il sigillato
+   `rot/budgets.json` portava gli stessi numeri per duplicazione: il sigillo
+   proteggeva una copia. Ora `core/rot/budgets.ts` è l'unico lettore,
+   `config.budget` **non esiste più** (`CONFIG_SCHEMA_VERSION` 2, migrazione in
+   memoria — rifiutare la versione vecchia avrebbe murato l'unica installazione
+   che esiste), e **l'insieme sigillato resta di cinque file**, quindi il
+   manifest reale non è invalidato. **(b)** `denyRead` nominava solo
+   `~/.muffin/secrets` mentre ADR-0030 metteva la chiave in una `.env` dentro
+   `root`, e `fs.read` (low, nessun `maxTaint`) ha tetto **3**: con un solo
+   risultato tier-3 in contesto, `fs_read(".env")` restituiva la chiave in
+   chiaro. La chiave si sposta in `$XDG_CONFIG_HOME/muffin/secrets/`
+   (`muffin secret set --persist`), `denyRead` copre entrambi gli store più la
+   `.env`, e il loop `uninstall && init` continua a ritrovarla. **La superficie
+   di scrittura conversazionale si può ora costruire.**
+
+   ✅ **I tre pezzi che l'ADR chiedeva, in ordine di priorità** (slice/gateway,
+   in lavorazione — non committato, 830 test contro 781 di partenza).
+   Dettaglio completo in `04-roadmap.md` §M5-bis punto 3; qui solo il
+   riassunto. **(a) `muffin config`**, sola lettura per costruzione
+   (`core/config/inventory.ts` + `cli/config.ts`): ogni manopola, valore,
+   file di origine, se sigillata — forma presa da `aws configure list` dopo
+   aver guardato anche `git config --list --show-origin` e `gh config list`
+   (`docs/PRACTICES.md` §3). La lista **deriva dall'oggetto `Config` reale**
+   invece di un elenco scritto a mano: provato aggiungendo `models.deep` a un
+   `config.json` senza toccare `inventory.ts` — compare da solo. Il
+   "sigillato" è un fatto sul file, non sul parse di oggi: provato rompendo
+   `rot/budgets.json` e vedendo il valore cadere sul compilato mentre la
+   colonna resta "sì". **(b) Il primo avvio dice cosa ha dedotto.**
+   L'inferenza del provider (`inferProvider`) **era già cablata dentro
+   `cmdInit` dal 2026-08-09** (`eb45b86`, quattro giorni prima di questa ADR)
+   — la frase dell'ADR e del mandato di questa slice sul default silenzioso
+   ad `anthropic` descriveva uno stato già superato, verificato leggendo il
+   codice prima di toccarlo. Quello che mancava davvero: un'inferenza
+   riuscita non lo diceva mai. Ora `chooseProvider`/`describeProviderChoice`
+   (`cli/onboarding.ts`) annunciano sempre la scelta. **Provato eseguendo il
+   binario reale** su una pty vera (`expect`, non solo i test): chiave
+   `sk-or-v1-…` incollata al primo avvio → `config.json` con
+   `provider.kind: "openai-compat"` e la riga *"dedotto dalla chiave"* nel
+   transcript, prima degli step di `runInit`. Trovato e chiuso nello stesso
+   giro: il controllo anti-token-Telegram era dentro
+   `if (apiKey && !providerFlag)`, quindi un `--provider` esplicito lo
+   bypassava. **(c) Alias italiani selettivi**: `memoria/lavori/segreto`,
+   esattamente i tre che l'ADR nomina, una mappa sola davanti allo switch.
+   **Scoped apposta**: la spazzata italiano copre `USAGE`, il primo avvio,
+   `muffin config`, gli errori top-level — non le sei `*_USAGE` dei
+   sotto-comandi né `cli/doctor.ts`, già miste da prima e ognuna con la
+   propria distesa di test da verificare prima di poter tradurre senza
+   romperli. **Resta aperto**: nessuna superficie di scrittura
+   conversazionale (non era lo scopo — sola lettura per ADR-0036), e nessun
+   tool in `agent/tools/` legge ancora `listConfigKnobs` — posizionata in
+   `core/` apposta perché possa, ma quel tool non esiste ancora.
+4. **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui la
+   ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
+5. **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
+   finto + smoke piccolo sul modello vero.
+
+**Confronto coi peer, fatto** (`research/confronto-harness.md`, quattro passate
+verificate su Hermes/OpenHands/Goose/Cline/Letta): la scommessa architetturale
+regge su cinque assi su sei, spesso validata dai loro stessi numeri; l'unico
+contraddetto è il resume (punto 4). Ne sono usciti ADR-0032/0033/0034 e
+l'emendamento a 0028 con la contro-posizione di Hermes #17459. **ADR-0032 è già
+emendato dall'owner**: memoria ibrida (il tool scrive il contenuto, l'harness
+governa il timing) con riconciliazione fra tool e pipeline.
+
+**Inventario vecchio-nuovo fatto** (`research/inventario-vecchio-nuovo.md`, 86
+righe con verdetto — 41% presente · 29% tolto di proposito · 23% manca e serve ·
+8% era slop). Il contro-numero che giustifica il tetto sui tool meglio di
+qualunque argomento: dei 47 tool del vecchio, **16 mai invocati** e **28 su 47
+meno di cinque volte in quattro mesi** — sei tool hanno fatto il lavoro.
+
+**Confronto con la consulenza esterna, fatto** (`research/confronto-gemini.md`,
+2026-08-14): una consulenza generica di design d'agente (Gemini 3.6 Flash, nove
+turni owner) confrontata riga per riga col codice. **Non sposta l'ordine di
+lavoro**: delle ~25 raccomandazioni, 14 descrivono cose già costruite (spesso
+più severe), 5 erano già decise contro con evidenza scritta, 2 sono sbagliate
+per la nostra forma (event bus / microservizi agentici — contro ADR-0022;
+classifier routing sui tool — due retrocessioni in casa), 4 sono buchi veri e
+piccoli (§M5-bis "Dal confronto esterno"). **Il contributo che vale non è una
+feature**: "voce e mani" applicato alla chat dà ad ADR-0035 il criterio d'uscita
+dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
+(→ ADR-0035 §revisione). Conferma esterna su due assi: niente critico LLM
+(=ADR-0034) e la corsia asincrona di estrazione fra i componenti fondamentali
+(=la nostra priorità 1, costruita e attaccata a niente). Mai nominati da lei:
+provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
+di trigger, Root of Trust, il costo della cache come vincolo di design.
 
 ## Sessioni 2026-08-09
 

@@ -9,17 +9,19 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: chiudere i buchi trovati dagli audit e portare la slice su `dev`.
+**Obiettivo**: M5-bis per intero (`M5-BIS.md`). Fondo = zero BLOCKER.
 
-**PR aperte**: #8 slice/gateway (23 commit) · #9 tre fix sicurezza su dev · #10 CI+template (verde).
+**Deleghe in volo**: gate1 x4 · reasoning-budget · superfici+streaming · confronto-permessi · documentazione.
 
-**Deleghe in volo**: sandbox-linux (opus) · audit-fix (sonnet) · ricerca-modelli (sonnet) · disegno-eventi (opus).
+**CODA — aggiunte dell'owner, non ancora iniziate.** Un suo messaggio si AGGIUNGE, non sostituisce l'obiettivo:
+1. Validare ogni affermazione dei doc fondazionali; quelle eseguibili diventano check (ORCHESTRATION §13).
+2. Passata *table stakes*: cosa hanno tutti gli agenti maturi e noi no — e' la categoria cieca agli audit interni (cosi e' sfuggito lo streaming).
+3. Fasce enterprise/consumer + qwen3.8 via Ollama.
+4. Eval del modello nuovo, DOPO il reasoning budget.
 
-**Decisioni dell'owner, aperte**: livello «chi è questa persona» a budget sopra il grafo · forma di MuffinBus e confine vault/workspace · lingua di README/CONTRIBUTING per l'open source · `ricorda` scrive o propone (ADR-0032 §9) · `identity.md` e il taglio di `persona.md` sono solo suoi.
+**Decisioni owner aperte**: scope di lettura del sandbox · spezzare `mcp.*` per-tool (entrambe in ricerca sui peer) · `ricorda` scrive o propone · lingua dei doc pubblici · `identity.md` e taglio `persona.md`.
 
-**Rischi noti**: il contenimento del sandbox è provato solo su macOS, non su Linux che è la produzione · `fs.write` rifiuta ogni draft (registro undo assente) · il binario che l'owner usa è del 2026-08-11 e non contiene niente di questa slice.
-
-**Prossima azione**: verificare le quattro deleghe quando rientrano, una per una, senza fidarsi del report.
+**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile · il kernel legge `reversible` solo dentro `case medium`, quindi irreversibile collassa su allow · `approve` e' cablato solo nel REPL.
 <!-- FINE BLOCCO -->
 
 ---
