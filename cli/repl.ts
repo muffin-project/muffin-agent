@@ -1,6 +1,11 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
-import { Scheduler, type Deliver, type ForegroundGate } from '../core/scheduler/scheduler.js';
+import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
+import { readGateway } from '../core/gateway/lock.js';
+import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
+import { reviewBootLine } from '../core/memory/maintenance.js';
+import type Database from 'better-sqlite3';
+import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
@@ -19,6 +24,51 @@ const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
 /spend   quanto hai speso questo mese
 /exit    esci (o Ctrl+D)`;
+
+/**
+ * The REPL's half of ADR-0035: *is the gateway the scheduler right now?*
+ *
+ * Re-read on every tick, never cached, and that is the entire fix. The claim
+ * used to be read once at startup, which made the answer true only for the
+ * instant the window opened. Two orderings break a boot-time answer, and both
+ * are ordinary:
+ *
+ *  - **REPL first, gateway second.** A terminal is open, `muffin gateway
+ *    install` finally runs, or systemd starts the unit at login a moment after
+ *    the shell. From that instant two tickers share one job store, which is the
+ *    thing this ADR exists to make impossible — and nothing was ever going to
+ *    notice, because nobody read the claim again.
+ *  - **The laptop lid.** A suspended gateway stops beating, so on wake its
+ *    claim is older than `STALE_AFTER_MS` and reads as dead to a REPL opened
+ *    right then — correctly, on the evidence available. Seconds later the
+ *    gateway resumes and beats, and the REPL has to give the store back.
+ *
+ * It announces on the **transition** and not on the state, so the boot line
+ * stays the only thing said at boot: `owned` starts as whatever the boot line
+ * reported. And it announces in both directions — a gateway that dies leaves
+ * this session scheduling again, and a REPL that silently resumed owning the
+ * jobs would be the same defect wearing the other hat.
+ */
+export function gatewayStandDown(
+  db: Database.Database,
+  say: (line: string) => void,
+  ownedAtBoot: boolean,
+): StandDown {
+  let owned = ownedAtBoot;
+  return () => {
+    const gateway = readGateway(db);
+    const now = gateway !== null;
+    if (now !== owned) {
+      owned = now;
+      say(
+        gateway
+          ? `scheduler: passato al gateway (pid ${gateway.pid}) — i job girano lì adesso, non più in questa finestra`
+          : `scheduler: il gateway non risponde più — i job tornano a girare in questa finestra`,
+      );
+    }
+    return now;
+  };
+}
 
 export async function runRepl(home = paths().home): Promise<number> {
   let runtime: Runtime;
@@ -50,11 +100,16 @@ export async function runRepl(home = paths().home): Promise<number> {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
 
+  // Only when there is something to decide — see `reviewBootLine`.
+  const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
+
   process.stderr.write(
     `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
+      `${consolidationBootLine()}\n` +
+      (review === null ? '' : `${review}\n`) +
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 
@@ -95,10 +150,10 @@ export async function runRepl(home = paths().home): Promise<number> {
     rl.prompt();
   });
 
-  // The scheduler runs in this same process (ADR-0022): a tick finds what is
-  // due and runs it as system:scheduler. Foreground wins — while an interactive
-  // turn holds the lane (`controller` set), a tick defers, and a job already
-  // running gets that turn's abort signal to yield.
+  // The scheduler runs here only when nothing else owns it (ADR-0035). A tick
+  // finds what is due and runs it as system:scheduler. Foreground wins — while
+  // an interactive turn holds the lane (`controller` set), a tick defers, and a
+  // job already running gets that turn's abort signal to yield.
   const foreground: ForegroundGate = {
     isActive: () => controller !== null,
     signal: () => controller?.signal,
@@ -115,13 +170,63 @@ export async function runRepl(home = paths().home): Promise<number> {
     process.stderr.write(`\n⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
     rl.prompt();
   };
-  const scheduler = new Scheduler(runtime.jobs, makeJobRunner(runtime.deps), deliver, foreground, (e) => {
-    if (e.kind === 'delivery_failed') {
-      process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
-    }
-  });
-  const ticker = setInterval(() => scheduler.tick(), 30_000);
+  /**
+   * Two schedulers must never run (ADR-0035).
+   *
+   * The gateway owns the ticker whenever it is up; this session ticks only
+   * while nobody has the claim. Both tickers on one job store would run the
+   * same job twice — the shape of Hermes #25517 that ADR-0022's corollary told
+   * us to design out rather than discover.
+   *
+   * **One mechanism decides, every tick.** There used to be two: a boot-time
+   * `readGateway` that decided whether to create the timer at all, plus nothing
+   * afterwards. So the timer existing was the answer, and the answer was frozen
+   * at the moment the window opened. Now the timer always exists and
+   * `gatewayStandDown` arbitrates each tick — which is also what lets this
+   * session pick the jobs back up when the gateway dies, instead of a terminal
+   * that has been open since before the crash sitting there scheduling nothing.
+   *
+   * The lock is read, never taken: a REPL that claimed it would stop the
+   * gateway from restarting after a crash while a terminal happened to be open.
+   * And a gateway killed with -9 does not wedge this forever — its claim goes
+   * stale after ten missed heartbeats and the tick after that runs jobs again.
+   */
+  const gateway = readGateway(runtime.db);
+  const standDown = gatewayStandDown(
+    runtime.db,
+    (line) => {
+      process.stderr.write(`\n${line}\n`);
+      rl.prompt();
+    },
+    gateway !== null,
+  );
+  const scheduler = new Scheduler(
+    runtime.jobs,
+    makeJobRunner(runtime.deps),
+    deliver,
+    foreground,
+    (e) => {
+      if (e.kind === 'delivery_failed') {
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      }
+    },
+    undefined,
+    standDown,
+  );
+  const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
+  // Says who owns it *now*, from the same read the ticker will redo. The line
+  // is allowed to become false — that is what the handover announcement is for.
+  process.stderr.write(
+    gateway === null
+      ? `scheduler: in questa sessione — i job girano finché la finestra è aperta\n`
+      : `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\n`,
+  );
+  // One tick now, not only on the interval — the gateway does the same and for
+  // the same reason (`service.ts`): a job that came due while nothing was
+  // running is the case `markRan`'s catch-up exists for, and waiting a whole
+  // interval to notice it is a job the owner watched not happen.
+  scheduler.tick();
 
   try {
     for (;;) {

@@ -69,13 +69,21 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
   // not on what the final text claims was done.
   const observe = (tool: RegisteredTool): RegisteredTool => ({
     ...tool,
-    handler: async (args) => {
+    // `ctx` forwarded, not dropped. A handler is `(args, ctx)` — the turn's
+    // tenant and principal — since the cross-tenant leak that introduced
+    // ToolContext; this wrapper still called the one-argument shape, so the
+    // eval was exercising a signature production does not have. Invisible
+    // because these six eval sources were typechecked by nothing.
+    handler: async (args, ctx) => {
       observed.push({ name: tool.spec.name, args: (args ?? {}) as Record<string, unknown> });
-      return tool.handler(args);
+      return tool.handler(args, ctx);
     },
   });
 
-  const tools: RegisteredTool[] = [
+  // Annotated here rather than on the `.map(observe)` result: the annotation on
+  // the mapped value never reaches the literal, so each `handler: (a) => …`
+  // below was an implicit `any` — the eval's own arguments went unchecked.
+  const declared: RegisteredTool[] = [
     { capability: 'fs.read', spec: fsToolSpecs[0]!, handler: (a) => ({ content: fsRead(scope, String((a as { path: string }).path)) }) },
     { capability: 'fs.list', spec: fsToolSpecs[1]!, handler: (a) => ({ content: fsList(scope, String((a as { path: string }).path)) }) },
     {
@@ -87,7 +95,8 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
       },
     },
     ...(scenario.extraTools ?? []),
-  ].map(observe);
+  ];
+  const tools: RegisteredTool[] = declared.map(observe);
 
   const db = new DatabaseCtor(join(home, 'muffin.db'));
   const budget = new BudgetEngine(db, { monthlyUsd: 5, perTenantDailyUsd: 5 });

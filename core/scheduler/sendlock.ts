@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
 
 /**
  * One proactive send at a time.
@@ -54,6 +55,14 @@ import type Database from 'better-sqlite3';
  * whatever its pid says. A proactive send is one model call, so an hour is
  * generous by two orders of magnitude, and it collapses the whole liveness
  * question into a clause the row already has the data for.
+ *
+ * ## Where the mechanism now lives
+ *
+ * The claim itself moved to `core/lock/durable.ts` when the gateway needed the
+ * same three properties (ADR-0035). This file keeps its table, its horizon and
+ * its wording; the transaction is shared. The schema below is unchanged and
+ * deliberately so — every installed home already has this table, and
+ * `CREATE TABLE IF NOT EXISTS` does not migrate.
  */
 
 /**
@@ -71,30 +80,30 @@ CREATE TABLE IF NOT EXISTS send_lock (
 );
 `;
 
-/** Taken, or refused with the reason and what to do — the shape `ConfigError` uses. */
-export type LockOutcome = { release: () => void } | { held: string; remedy: string };
-
-/**
- * Signal 0 sends nothing: it only asks whether that process still exists.
- * EPERM means it exists and belongs to another user — alive, and not ours to
- * take. Only ESRCH is proof the holder is gone.
- */
-export function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
+/** Re-exported: the send lock's callers have always imported both from here. */
+export { pidAlive, type LockOutcome };
 
 export class SendLock {
+  private readonly lock: DurableLock;
+
   constructor(
-    private readonly db: Database.Database,
+    db: Database.Database,
     /** Injected so a test can exercise dead, live and not-ours holders. */
-    private readonly alive: (pid: number) => boolean = pidAlive,
+    alive: (pid: number) => boolean = pidAlive,
   ) {
-    db.exec(SCHEMA);
+    this.lock = new DurableLock(
+      db,
+      {
+        table: 'send_lock',
+        schema: SCHEMA,
+        staleAfterMs: STALE_AFTER_MS,
+        refusal: (holder) => ({
+          held: `un altro invio proattivo è in corso (pid ${holder})`,
+          remedy: 'aspetta che finisca e riprova',
+        }),
+      },
+      alive,
+    );
   }
 
   /**
@@ -102,53 +111,15 @@ export class SendLock {
    * releasing sets `pid` to NULL, so "when was a send last attempted" survives.
    */
   acquire(now: Date, pid: number = process.pid): LockOutcome {
-    const claim = this.db.transaction((self: number, at: string): number | null => {
-      const row = this.db.prepare(`SELECT pid, taken_at AS takenAt FROM send_lock WHERE id = 1`).get() as
-        | { pid: number | null; takenAt: string | null }
-        | undefined;
-      const takenAt = row?.takenAt ? Date.parse(row.takenAt) : NaN;
-      const stale = Number.isFinite(takenAt) && Date.parse(at) - takenAt > STALE_AFTER_MS;
-      // A live holder is a holder, including when it is this pid. The tempting
-      // exemption — "a crashed earlier run of our own pid must not lock us out"
-      // — was written and removed: it cannot happen (a crashed process is not
-      // this one), and it silently permits two sends from *inside* one process,
-      // which is exactly what a scheduler calling this in-process would do. The
-      // case it was meant to cover, a pid reused after a wrap, is the documented
-      // failure direction: a refusal the owner can see, never a second message.
-      if (row?.pid != null && !stale && this.alive(row.pid)) return row.pid;
-      this.db
-        .prepare(
-          `INSERT INTO send_lock (id, pid, taken_at) VALUES (1, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET pid = excluded.pid, taken_at = excluded.taken_at`,
-        )
-        .run(self, at);
-      return null;
-    });
-
-    // `.immediate` and not the default deferred: a deferred transaction takes
-    // the write lock only at the INSERT, which puts the read and the claim back
-    // on either side of a window and rebuilds the bug.
-    const holder = claim.immediate(pid, now.toISOString()) as number | null;
-    if (holder !== null) {
-      return {
-        held: `un altro invio proattivo è in corso (pid ${holder})`,
-        remedy: 'aspetta che finisca e riprova',
-      };
-    }
-    return { release: () => this.release(pid) };
+    return this.lock.acquire(now, pid);
   }
 
-  private release(pid: number): void {
-    // Guarded on the pid: a release must never free a lock this run does not
-    // hold, which is what would happen after a takeover from a dead holder.
-    this.db.prepare(`UPDATE send_lock SET pid = NULL WHERE id = 1 AND pid = ?`).run(pid);
-  }
-
-  /** The current holder, or null. For tests and for `doctor`-style inspection. */
+  /**
+   * The pid on the row, as written. Deliberately *not* the liveness-judged
+   * holder: this is inspection, and a caller asking "who took it last" must not
+   * be handed a null just because the clock has moved past the horizon.
+   */
   holder(): number | null {
-    const row = this.db.prepare(`SELECT pid FROM send_lock WHERE id = 1`).get() as
-      | { pid: number | null }
-      | undefined;
-    return row?.pid ?? null;
+    return this.lock.recorded()?.pid ?? null;
   }
 }

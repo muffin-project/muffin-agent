@@ -15,3 +15,11 @@
 **Conseguenze.** Più facile: deploy, backup, debug e la promessa "un processo, un file di DB, un comando". Più difficile: il codice deve dichiarare esplicitamente cosa è batch e cosa è interattivo (non è più un dettaglio implementativo), e ogni job lungo deve saper essere interrotto e ripreso — un vincolo che ricade sul design dei job, non su quello del runtime. Resta accettato: un crash ferma tutto e systemd riavvia; il turno in corso si perde, la sessione no (il transcript è su disco).
 
 **Reversibilità.** Alta. Il gate di priorità e il worker-thread sono componenti interni: spostare il batch in un processo separato in futuro significa cambiare come si spawna il worker, non l'architettura — l'interfaccia ("esegui questo lavoro fuori dal path interattivo") è la stessa. Segnale che era sbagliata: latenza interattiva che degrada in modo misurabile durante i job notturni **nonostante** il gate, oppure un secondo consumatore del DB che nasce fuori dal runtime (una webapp, un secondo agente) — a quel punto il confine di processo diventa reale e va disegnato, non subìto.
+
+---
+
+## Nota di correzione (2026-08-11)
+
+Questo ADR dice *"con systemd a riavviare e il journal a raccontare cosa è successo"*. **Vero solo su Linux**, che è la produzione (VPS, direttiva owner) e non è la macchina di sviluppo dell'owner: su macOS l'equivalente è `launchd`. Corretto qui perché la riga viene letta come se la piattaforma fosse una sola.
+
+E la parte più importante: **la decisione di questo ADR — "un processo OS per il runtime (gateway, loop, memoria, scheduler)" — non è mai stata implementata.** Quello che esiste è `setInterval(() => scheduler.tick(), 30_000)` dentro `cli/repl.ts`: chiudi la finestra e non gira più niente. Nessun servizio, nessuna unit, nessun `daemon`. È l'undicesima istanza della famiglia "dichiarato e non connesso" e la più grossa, perché non è un file senza lettore — è la forma del runtime. **ADR-0035** è la metà mancante: come il processo vive, e cosa lo rende sicuro.

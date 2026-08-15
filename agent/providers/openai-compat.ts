@@ -17,8 +17,29 @@ import {
  * project cannot demand one vendor, and this is how you avoid it without
  * paying for a framework.
  *
- * What it does not carry: thinking budgets — that is why the Anthropic adapter
- * exists next to it rather than instead of it.
+ * What it does not carry: reasoning. Established rather than assumed
+ * (2026-08-13, ADR-0037) because the production install routes
+ * `anthropic/claude-sonnet-5` through here, so a wrong guess costs the owner
+ * and not a hypothetical user:
+ *
+ *  - OpenRouter *does* expose reasoning for that model — `reasoning`,
+ *    `include_reasoning` and `reasoning_effort` are all in its
+ *    `supported_parameters`, and it returns `reasoning` / `reasoning_details`
+ *    with the same "pass the sequence back unmodified during tool use" rule
+ *    Anthropic states natively.
+ *  - It is **opt-in**. Nothing here sends any of those parameters, so nothing
+ *    comes back, so nothing is being dropped today. The defect on this path is
+ *    latent, not active — which is a different sentence from "this path is
+ *    fine", and the difference is one request parameter away.
+ *  - The OpenAI SDK's own types have no `reasoning` field on the response
+ *    message (checked, v7.4.0), so turning it on is not a one-line change: it
+ *    needs a schema at the boundary (PRACTICES §4) and it costs reasoning
+ *    tokens that are not being billed now. That is a decision with a price, so
+ *    it is not smuggled into a correctness fix.
+ *
+ * `ChatCall.thinking` is therefore a declared no-op here (ADR-0008: degrade
+ * declaredly, never silently) — the profile can say `adaptive` for
+ * `anthropic/claude-sonnet-5` and this adapter cannot honour it.
  *
  * Prompt-cache breakpoints it DOES carry now, behind `explicitCache`, and the
  * history of that flag is the reason it exists. This file used to say
@@ -94,7 +115,13 @@ export class OpenAICompatProvider implements Provider {
         {
           model: call.model,
           max_tokens: call.maxOutputTokens,
-          temperature: call.temperature,
+          // Absent stays absent. Local servers want temperature 0 and get it;
+          // a gateway fronting a model that removed sampling gets no field at
+          // all rather than a `temperature: undefined` some strict parser will
+          // reject. (OpenRouter drops unsupported parameters instead of 400ing
+          // — `temperature` is not in claude-sonnet-5's supported_parameters
+          // there — but "the gateway forgives us" is not a contract.)
+          ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
           messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
           ...(call.tools && call.tools.length > 0
             ? {
@@ -131,6 +158,10 @@ export class OpenAICompatProvider implements Provider {
       return {
         text: text.length > 0 ? text : null,
         toolCalls,
+        // Empty, said out loud rather than omitted: this adapter never asks for
+        // reasoning, so there is never any to carry. If that changes, this is
+        // the line that has to change with it — see the header.
+        thinking: [],
         stopReason: mapStopReason(choice.finish_reason, toolCalls.length > 0),
         usage: {
           inputTokens: response.usage?.prompt_tokens ?? 0,
@@ -184,6 +215,14 @@ function flatten(block: ContentBlock): string {
   return block.type === 'text' ? block.text : '';
 }
 
+/**
+ * Thinking blocks are dropped here, and that is the correct behaviour rather
+ * than the same defect twice: this wire format has no slot for them, and a
+ * history that carries them came from another model — which the API's own rule
+ * says to strip on a model switch ("thinking blocks are tied to the model that
+ * produced them"). What would be wrong is dropping them on the *Anthropic*
+ * path, which is what ADR-0037 fixed.
+ */
 function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   const text = message.content.filter((b) => b.type === 'text').map(flatten).join('\n');
