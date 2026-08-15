@@ -1,0 +1,69 @@
+# Verifica automatica: typecheck + suite.
+#
+# Esiste per una ragione precisa, scritta in docs/ORCHESTRATION.md §3: «un
+# subagente che dice di aver fatto non è evidenza». Vale per gli umani quanto
+# per gli agenti — «i test passano» detto in una PR è un'affermazione, qui
+# diventa un fatto che qualcun altro ha eseguito.
+#
+# ## Il budget, e come non lo bruciamo
+#
+# Il repo oggi è privato: il piano Free dà 2.000 minuti/mese, e ogni minuto
+# speso è nostro. Da quando sarà pubblico i runner standard sono gratuiti e
+# illimitati, quindi questo file è tarato sul caso stretto e resterà valido
+# quando smetterà di esserlo. Le quattro scelte che tengono basso il conto:
+#
+#  1. `concurrency` con `cancel-in-progress`: tre push di fila su una PR fanno
+#     girare un run, non tre. È il risparmio più grosso e il più facile da
+#     dimenticare.
+#  2. Trigger su `pull_request` e sui push a `dev`/`main` soltanto. Senza il
+#     secondo vincolo ogni push a una slice pagherebbe **due** run (il push e
+#     la PR) per la stessa verifica.
+#  3. Solo `ubuntu-latest`. macOS conta 10× i minuti e Windows 2×, e non
+#     abbiamo ancora una ragione misurata per pagarli — la macchina di sviluppo
+#     è macOS e la produzione è una VPS Linux, quindi Linux è il lato che
+#     nessuno prova a mano.
+#  4. Un solo job. Spezzare typecheck e test in due job raddoppia il tempo di
+#     installazione delle dipendenze, che qui è la parte lenta (`better-sqlite3`
+#     è nativo).
+#
+# `timeout-minutes` non è cautela: è il tetto che impedisce a un test appeso di
+# mangiarsi il budget del mese mentre nessuno guarda.
+
+name: verifica
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verifica:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
+      # risolve le versioni da sé verifica un albero che nessuno ha in locale.
+      - run: npm ci
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      # Senza pipe, di proposito: `cmd | tail` riporta l'exit status di `tail`.
+      # È una regola di questo repo e vale a maggior ragione dove il verde è
+      # letto da una macchina.
+      - name: suite
+        run: npx vitest run --reporter=dot
