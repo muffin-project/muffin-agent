@@ -55,23 +55,49 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # I tre prerequisiti del sandbox su Linux, non uno. Letti nel sorgente di
+      # `@anthropic-ai/sandbox-runtime`, non ricordati:
+      # `checkDependenciesCommon` (sandbox-manager.js) pretende **ripgrep** —
+      # serve a espandere i glob dei deny-path in percorsi concreti per bwrap,
+      # ed è Linux-only perché i profili Seatbelt prendono le regex direttamente
+      # — e `checkLinuxDependencies` pretende **bwrap** e **socat**, quest'ultimo
+      # perché su Linux la rete si chiude con `--unshare-net` e l'unica uscita è
+      # un bridge socat verso il proxy di egress. Con uno solo dei tre,
+      # `SandboxManager.initialize` lancia «Sandbox dependencies not available»
+      # e il contenimento non parte affatto.
+      - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
-      # `bwrap` serve al sandbox su Linux, che è la piattaforma di produzione.
-      # Installarlo qui NON sblocca però i test di contenimento, e la prima
-      # versione di questa riga diceva il contrario: correzione in coda al file.
-      - name: bubblewrap (prerequisito del sandbox in produzione)
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-
       - run: npm ci
 
       - name: typecheck
         run: npx tsc --noEmit
 
+      # Il verdetto del probe in chiaro nel log, prima della suite. Questo file
+      # esiste già con una lezione in coda — «ho letto un log invece di fidarmi
+      # della spunta, e poi ho creduto alla mia prima spiegazione» — e questo
+      # step è quella lezione applicata a se stessa: se il contenimento non è
+      # disponibile su questo runner, il log lo dice con la sua ragione, invece
+      # di lasciarlo dedurre da un conteggio di test saltati.
+      - name: verdetto del probe (bwrap contiene davvero, qui?)
+        run: npx tsx -e "import('./core/sandbox/probe.js').then(m => console.log(JSON.stringify(m.probeSandbox(), null, 2)))"
+
       # Senza pipe, di proposito: `cmd | tail` riporta l'exit status di `tail`.
       # È una regola di questo repo e vale a maggior ragione dove il verde è
       # letto da una macchina.
+      #
+      # `MUFFIN_REQUIRE_SANDBOX=1` è il motivo per cui questo job può ancora
+      # dire qualcosa sul sandbox. Questo runner è l'unico Linux che tocchiamo,
+      # e sta al posto della VPS di produzione: qui un contenimento saltato è un
+      # difetto, non una proprietà della macchina. Senza la variabile il salto
+      # resta un salto (è il caso del portatile macOS su piattaforme che il
+      # sandbox non copre); con la variabile diventa rosso, ed è l'unica forma
+      # in cui «9 saltati» smette di leggersi come «9 passati».
       - name: suite
+        env:
+          MUFFIN_REQUIRE_SANDBOX: '1'
         run: npx vitest run --reporter=dot
 
 # ---------------------------------------------------------------------------
@@ -104,3 +130,25 @@ jobs:
 # ho letto un log invece di fidarmi della spunta — giusto — e poi ho creduto
 # alla mia prima spiegazione invece di verificarla. Il secondo passo vale
 # quanto il primo.
+#
+# ---------------------------------------------------------------------------
+# Seguito, 2026-08-15 (slice/sandbox-linux) — il buco sopra, chiuso
+#
+# Il riferimento `executor.test.ts:18` qui sopra è storico: quel gate non
+# esiste più. Il file ora decide con `gate`, che su macOS gira sempre e su
+# Linux gira quando il probe ha davvero contenuto qualcosa, e la suite di
+# contenimento è **una sola** per i due meccanismi — le stesse righe provano
+# Seatbelt e bubblewrap, perché due copie di una garanzia divergono.
+#
+# Le tre cose che questo job compra adesso e prima no:
+#
+#   1. i nove contenimenti girano su Linux, su questo runner;
+#   2. `core/sandbox/probe.test.ts` esiste, e prova il ramo Linux **anche da
+#      macOS** (os e child_process mockati): il rilevatore di root, l'ENOENT,
+#      il messaggio verbatim di Ubuntu 24.04, e che niente risponde
+#      «disponibile» senza un exit zero di bwrap;
+#   3. `MUFFIN_REQUIRE_SANDBOX=1` fa fallire il salto invece di contarlo.
+#
+# E l'apt-get non era un prerequisito, erano tre: senza `socat` e `ripgrep` la
+# libreria non inizializza affatto. La riga di prima era vera e incompleta —
+# che è il modo in cui questo file ha già sbagliato una volta.
