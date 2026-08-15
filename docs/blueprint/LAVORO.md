@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: chiudere i buchi trovati dagli audit e portare la slice su `dev`.
+**Obiettivo**: M5-bis per intero — la lista enumerata è `docs/blueprint/M5-BIS.md`, e il suo fondo è: righe ⛔ di §0/§1/§2/§3 verdi + le tre di §6 che sono dell'owner.
 
-**PR aperte**: #8 slice/gateway (23 commit) · #9 tre fix sicurezza su dev · #10 CI+template (verde).
+**Mergiate in dev**: #9 sicurezza · #10 CI · #11 stato del lavoro. **Aperte**: #8 slice/gateway (23 commit) · #12 disegno eventi.
 
-**Deleghe in volo**: sandbox-linux (opus) · audit-fix (sonnet) · ricerca-modelli (sonnet) · disegno-eventi (opus).
+**Deleghe in volo**: sandbox-linux · audit-fix · ricerca-modelli.
 
-**Decisioni dell'owner, aperte**: livello «chi è questa persona» a budget sopra il grafo · forma di MuffinBus e confine vault/workspace · lingua di README/CONTRIBUTING per l'open source · `ricorda` scrive o propone (ADR-0032 §9) · `identity.md` e il taglio di `persona.md` sono solo suoi.
+**Decisioni owner, aperte**: `fs.write` — registro di undo *oppure* `reversible:'no'`+ask (§1 di M5-BIS, pro e contro lì) · `ricorda` scrive o propone · lingua di README per l'open source · `identity.md` e il taglio di `persona.md`.
 
-**Rischi noti**: il contenimento del sandbox è provato solo su macOS, non su Linux che è la produzione · `fs.write` rifiuta ogni draft (registro undo assente) · il binario che l'owner usa è del 2026-08-11 e non contiene niente di questa slice.
+**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile — un kind nuovo rompe ogni install esistente, la novità va in `connector` · `PRACTICES` §13 vive solo su slice/gateway, chi lavora da dev non ce l'ha · il binario dell'owner è dell'11 agosto.
 
-**Prossima azione**: verificare le quattro deleghe quando rientrano, una per una, senza fidarsi del report.
+**Prossima azione**: verificare le tre deleghe al rientro, una per una.
 <!-- FINE BLOCCO -->
 
 ---
