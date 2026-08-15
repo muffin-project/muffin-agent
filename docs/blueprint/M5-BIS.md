@@ -34,11 +34,22 @@ vengono prima di quelle che sono **aggiunte di feature**, anche quando una
 feature si sente di più. Un turno che non sa sospendersi è una forma; un parser
 PDF è una feature. Il parser si aggiunge in qualunque momento; la forma no.
 
-**L'unica cosa che non gode di questa libertà sono i dati dell'owner.**
-`~/.muffin` ha 21 tabelle e memoria vera. Il codice si riscrive, lo schema si
-migra — e `episodes.kind` ha già dimostrato quanto costi (un `CHECK` a cinque
-valori che SQLite non altera: un `kind` nuovo funziona su un database fresco e
-rompe ogni installazione esistente).
+**E anche lo schema è ancora libero — misurato, non supposto.** Il primo taglio
+di questa sezione diceva che i dati dell'owner erano il vincolo che restava.
+⬤ Contato oggi sul suo `~/.muffin`: **20 episodi, 0 fatti, 0 entità, 0 job**, in
+una finestra 11→15 agosto. Sono quattro giorni di prove sull'onboarding — le
+tabelle esistono, la memoria no. Una migrazione che oggi costringesse a
+`uninstall && init` costerebbe all'owner venti messaggi.
+
+Quindi il vincolo non è «lo schema non si tocca»: è **«lo schema si tocca
+adesso»**. Il momento in cui i dati diventano preziosi è il **giorno 1 dei
+quattordici** — da lì una migrazione va progettata invece che eseguita, e
+`episodes.kind` mostra già il prezzo (un `CHECK` a cinque valori che SQLite non
+altera: un `kind` nuovo funziona su un database fresco e rompe ogni
+installazione con dentro qualcosa).
+
+Il che stringe la sequenza invece di allargarla: **ogni decisione di schema va
+chiusa prima del giorno 1**, non prima dell'open source.
 
 ## La regola delle tre risposte
 
