@@ -9,6 +9,7 @@ import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { MemoryStore } from '../core/memory/store.js';
 import type { RecallDeps } from '../core/memory/recall.js';
 import { SessionStore } from '../core/session/store.js';
+import { TurnStore } from '../core/turns/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -55,7 +56,7 @@ const callTool = (name: string, args: unknown): ChatResult => ({
 const decls: CapabilityDecl[] = [
   ...fsCapabilities,
   memoryCapability,
-  { id: 'demo.write', risk: 'medium', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: false },
+  { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
 ];
 
 function harness(script: ChatResult[]) {
@@ -97,6 +98,7 @@ function harness(script: ChatResult[]) {
     }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
+    turns: new TurnStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     memory: { store, recall: recallDeps },
