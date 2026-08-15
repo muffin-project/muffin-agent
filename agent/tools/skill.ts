@@ -23,6 +23,7 @@ export const skillCapability: CapabilityDecl = {
   id: 'skill.read',
   risk: 'low',
   reversible: 'yes',
+  rerunnable: true,
   maxTaint: 1,
   resourceKind: 'none',
   policyArgs: ['name'],

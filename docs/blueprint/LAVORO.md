@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis (`M5-BIS.md`) ordinato per **irreversibilita**: forma del turno > permessi > schema > resto. Un flag CLI si cambia domani, la forma di un turno no.
+**Obiettivo** (owner, `/goal`): Muffin regge **14 giorni**. Ogni pezzo verificato end-to-end, **anche i gia-fatti**. Soluzioni architetturali, mai tappabuchi. Ordine: irreversibilita — turno > permessi > superfici > schema.
 
-**Ogni giro, prima di scegliere**: aggiorna questo blocco e ripubblica la plancia (stesso URL). Se diverge da M5-BIS, ha ragione il file.
+**Inventario**: 24 righe mai verificate · 15 BLOCKER · 4 READY. Fondo: zero di entrambi.
 
-**Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
+**Deleghe in volo**: accettazione E4 (stato dell'inventario **derivato**) · turno sospeso B2-B5 · superfici+Discord B8 · taint in ingresso · documenti C7 · Hermes.
 
-**Tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — il turno dev'essere sospendibile e ripristinabile.
+**Ogni giro**: aggiorna questo blocco, ripubblica plancia e mappa, `node docs/blueprint/mappa/ancore.mjs` finche esce 0.
+
+**La critica di fondo**: le garanzie stanno sui chiamanti, non sui dati — `tier?` opzionale, redazione solo nel tracer, `markRan` cieco alla consegna. Dove una proprieta e' portante, l'assenza non dev'essere rappresentabile: vedi `rerunnable`.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
-
-**Trappole**: il kernel legge `reversible` solo in `case medium` — irreversibile collassa su allow · `approve` solo nel REPL · una base incompleta produce inventari falsi.
 <!-- FINE BLOCCO -->
 
 ---

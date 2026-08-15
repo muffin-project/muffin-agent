@@ -9,6 +9,7 @@ import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, DecisionRequest, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { TurnStore } from '../core/turns/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { absenceGoal, makeAbsenceComposer } from './observe-run.js';
 import type { LoopDeps, RegisteredTool } from './loop.js';
@@ -52,6 +53,7 @@ const decl: CapabilityDecl = {
   id: 'demo.read',
   risk: 'low',
   reversible: 'yes',
+  rerunnable: true,
   resourceKind: 'none',
   policyArgs: [],
   hostOnly: false,
@@ -108,6 +110,7 @@ function harness(
       },
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions,
+      turns: new TurnStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
       ...over,

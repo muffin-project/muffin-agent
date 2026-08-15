@@ -22,6 +22,9 @@ export const memoryCapability: CapabilityDecl = {
   id: 'memory.read',
   risk: 'low',
   reversible: 'yes',
+  // A read, and a read of our own store: running it twice returns the same
+  // rows or fresher ones, and changes nothing.
+  rerunnable: true,
   resourceKind: 'tenant',
   policyArgs: ['query'],
   // Not host-only: a group's agent may search that group's memory, and only

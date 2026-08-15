@@ -7,6 +7,7 @@ import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { TurnStore } from '../core/turns/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
@@ -69,8 +70,8 @@ const lastSaid = (call: ChatCall): string => {
 };
 
 const decls: CapabilityDecl[] = [
-  { id: 'demo.read', risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false },
-  { id: 'demo.write', risk: 'medium', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: true },
+  { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
 ];
 
 function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDeps> = {}) {
@@ -113,6 +114,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   ];
 
   const store = new SessionStore(home);
+  const turns = new TurnStore(new DatabaseCtor(':memory:'));
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -126,11 +128,12 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
+    turns,
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     ...overrides,
   };
-  return { deps: base, store, home, calls };
+  return { deps: base, store, turns, home, calls };
 }
 
 const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' }) => ({
@@ -195,10 +198,10 @@ describe('agent loop', () => {
       externalId: 'u9',
     };
     const hostDecl = (id: string): CapabilityDecl => ({
-      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: true,
+      id, risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true,
     });
     const openDecl = (id: string): CapabilityDecl => ({
-      id, risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false,
+      id, risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false,
     });
     const tool = (name: string, capability: string): RegisteredTool => ({
       capability,
@@ -388,6 +391,7 @@ describe('agent loop', () => {
       }),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
+      turns: new TurnStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'test', group: 'test in gruppo' },
     };
@@ -437,7 +441,7 @@ describe('agent loop', () => {
     // loop turned it into a tool error claiming it could not ask, which is a
     // failure the tool never had. Headless now exits on it, so a script can act.
     const asking: CapabilityDecl[] = [
-      { id: 'demo.ask', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: true },
+      { id: 'demo.ask', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
@@ -466,7 +470,7 @@ describe('agent loop', () => {
 
   it('runs the tool when the surface can ask and the owner says yes', async () => {
     const asking: CapabilityDecl[] = [
-      { id: 'demo.ask', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: true },
+      { id: 'demo.ask', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const asked: string[] = [];
     const ran: string[] = [];
@@ -512,7 +516,7 @@ describe('agent loop', () => {
     // The loop had no branch for it and fell through to the handler: the write
     // happened immediately, with no undo journal and no window.
     const undoable: CapabilityDecl[] = [
-      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', resourceKind: 'none', policyArgs: [], hostOnly: true },
+      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
@@ -1024,7 +1028,7 @@ describe('the loop hands the model its own reasoning back', () => {
         },
       ],
       capabilities: new Map([
-        ['demo.read', { id: 'demo.read', risk: 'low', reversible: 'yes', resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
+        ['demo.read', { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
       ]),
     });
     await runTurn(d, input(store));
