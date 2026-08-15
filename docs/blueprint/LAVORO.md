@@ -9,19 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis (`M5-BIS.md`) per **irreversibilita**: forma del turno > permessi > superfici > schema. Un flag CLI si cambia domani, la forma di un turno no.
+**Obiettivo** (owner, `/goal`): Muffin regge **14 giorni**. Ogni pezzo verificato end-to-end, **anche i gia-fatti**. Soluzioni architetturali, mai tappabuchi. Ordine: irreversibilita — turno > permessi > superfici > schema.
 
-**Ogni giro**: aggiorna questo blocco, ripubblica plancia e mappa (stessi URL), `node docs/blueprint/mappa/ancore.mjs` finche esce 0.
+**Inventario**: 24 righe mai verificate · 15 BLOCKER · 4 READY. Fondo: zero di entrambi.
 
-**Deleghe in volo**: documenti/PDF (C7) · taint in ingresso · superfici+Discord (B8).
+**Deleghe in volo**: accettazione E4 (stato dell'inventario **derivato**) · turno sospeso B2-B5 · superfici+Discord B8 · taint in ingresso · documenti C7 · Hermes.
 
-**Prossimo**: consumatori del record del turno (ADR-0042 costruito) — `wait`, `todo`, resume. Poi: doc Hermes da inglobare.
+**Ogni giro**: aggiorna questo blocco, ripubblica plancia e mappa, `node docs/blueprint/mappa/ancore.mjs` finche esce 0.
 
 **La critica di fondo**: le garanzie stanno sui chiamanti, non sui dati — `tier?` opzionale, redazione solo nel tracer, `markRan` cieco alla consegna. Dove una proprieta e' portante, l'assenza non dev'essere rappresentabile: vedi `rerunnable`.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
-
-**Trappole**: il kernel legge `reversible` solo in `case medium` · `approve` solo nel REPL.
 <!-- FINE BLOCCO -->
 
 ---
