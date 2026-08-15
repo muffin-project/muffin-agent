@@ -150,6 +150,25 @@ JSON (non YAML: parsing senza dipendenze, niente ambiguità di tipo; i commenti 
 - **Secrets**: default **file cifrato age** `~/.muffin/secrets/secrets.age` (portabile, headless-safe, uguale su macOS e Linux — il Keychain è opt-in perché su sessione SSH il dialog di sistema blocca, C6); passphrase chiesta a `init` e tenuta in memoria dal runtime, oppure chiave in `~/.muffin/secrets/key.txt` `0400` per l'avvio non presidiato (trade-off dichiarato). Riferimento in config: `"apiKey": "secret://anthropic_api_key"`.
 - **Directory (K5)**: non è XDG-multi-dir: è **una** cartella `~/.muffin/` (override `MUFFIN_HOME`). Il termine "XDG-compatibile" negli altri documenti va letto come "rispetta `XDG_CONFIG_HOME` se impostata per collocare la cartella", non come "sparge i dati in tre posti". Motivo: backup/export/cancellazione GDPR = un percorso.
 
+> **Emendamento 2026-08-13 (ADR-0039) — l'unica eccezione a K5, dichiarata.** Un
+> segreto può stare anche in `$XDG_CONFIG_HOME/muffin/secrets/<nome>` (dir
+> `0700`, file `0600`), e la risoluzione è una catena ordinata: prima
+> `$MUFFIN_HOME/secrets`, poi quella. È **opt-in per segreto**
+> (`muffin secret set NAME --persist`); il default resta dentro `~/.muffin`.
+> Perché l'eccezione regge il motivo di K5: ciò che finisce lì è una
+> **credenziale**, non dati personali dell'owner — memoria, vault, episodi e
+> trace restano tutti sotto un solo percorso, che è ciò che backup, export e
+> cancellazione GDPR devono coprire. E perché serve: la chiave dev deve
+> sopravvivere a `muffin uninstall` (ADR-0030) senza vivere nella working
+> directory, che è l'albero leggibile da `fs.read`. `muffin uninstall` **nomina**
+> il file che non ha cancellato, e `muffin doctor` nomina quale anello della
+> catena ha risposto — una catena muta è il modo in cui un'installazione che
+> crede di aver migrato la chiave continua a leggere quella vecchia.
+>
+> Resta vero il resto del punto Secrets qui sopra: il file cifrato **age** non è
+> stato costruito, oggi sono file in chiaro `0600`, ed è un divario dichiarato
+> (`core/config/config.ts`), non silenzioso.
+
 ## 6. Boot, init, doctor (C1, C2, C5)
 
 **`muffin init`** (idempotente, resumibile): 1) crea/verifica `~/.muffin/` e sottocartelle → 2) installa RoT dai default del repo + scrive manifest e anchor → 3) chiede provider/endpoint/chiave (unica parte interattiva) e scrive config+secret → 4) (opz.) `--hardened` crea l'utente di servizio → 5) crea `muffin.db` con lo schema minimo (budget/audit; le tabelle memoria arrivano con M2) → 6) esegue `doctor` e stampa il riepilogo. Interruzione a metà: rilanciare `init` riprende dallo step non completato (ogni step è verificabile e ripetibile); `--force` reinstalla il RoT.

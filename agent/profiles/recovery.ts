@@ -129,12 +129,21 @@ export function recoveryStep(strategy: RecoveryStrategy, ctx: RecoveryContext): 
      * instead of the task. Cheapest rung, and the one with no side effect on
      * the transcript.
      *
-     * Honest limit: the loop calls at temperature 0, so a bare re-ask only pays
-     * where the failure was non-deterministic — which is what "transient" means
-     * and is the common case on local servers (batching and KV-cache reuse make
-     * them non-reproducible in practice), but it is *not* a way out of a
-     * deterministic refusal. A profile that declares this first gets exactly
-     * one identical request; that is the profile's declaration, executed.
+     * Honest limit: this only pays where the failure was non-deterministic —
+     * it is not a way out of a genuinely deterministic refusal. That used to
+     * mean "every profile", because the loop hardcoded temperature 0; it does
+     * not any more (N1, judge, 2026-08-13; frontier.json is the one this
+     * comment forgot to catch up with). On a profile with `sampling:
+     * 'deterministic'` (`consumer-local`, `CONSERVATIVE`) it is still what it
+     * always was — a bare re-ask pays off on a local server whose batching or
+     * KV-cache reuse makes it non-reproducible in practice, not on a
+     * deterministic one. On `frontier` (`sampling: 'model-default'`, no
+     * temperature sent at all) there is no temperature-0 request for a resend
+     * to be byte-identical *to* — the model samples with its own defaults, so
+     * this step is a real retry there, not a rung kept for a case that cannot
+     * fire (frontier.json's own note: "retryOnce … finally does something").
+     * A profile that declares this step first gets exactly one such request;
+     * that is the profile's declaration, executed.
      *
      * Distinct from the transport retry in `agent/loop.ts`: that one answers a
      * 429 or a 502, waits with backoff, and is not a per-model crutch at all.

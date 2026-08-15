@@ -7,9 +7,55 @@ import type { AttributeValue } from './types.js';
  *
  * Two independent filters, because either alone leaks: field names catch
  * `apiKey`, value shapes catch a token that arrived in a field called `value`.
+ *
+ * That first sentence was false for as long as this file has existed, and said
+ * so in the one spelling it got wrong. The denylist was a regex requiring its
+ * keyword to sit against `_`, `.`, `-`, or an edge — so `api_key` was caught
+ * and **`apiKey` was not**, along with `authToken`, `accessToken`,
+ * `clientSecret` and ten more. Nothing was watching: `core/tracing/` shipped
+ * three modules and no test, and the value-shape net below was the only thing
+ * standing between a provider key in a camelCase argument and a JSONL that
+ * gets grepped and pasted into issues — a net that only knows seven shapes.
+ *
+ * The replacement splits the name into words instead of hunting for
+ * delimiters, because that is the actual question: *is one of these words a
+ * secret word?* Camel humps, snake, kebab and dots all segment; `monkey` and
+ * `tokenizer` still do not, which is the half a looser regex would have lost.
  */
 
-const SECRET_NAME = /(^|[_.-])(key|token|secret|password|passwd|credential|auth|bearer|cookie|session)([_.-]|$)/i;
+/** One word each, matched whole. `keyboard` is not a key. */
+const SECRET_WORDS = new Set([
+  'key',
+  'token',
+  'secret',
+  'password',
+  'passwd',
+  'credential',
+  'credentials',
+  'auth',
+  'bearer',
+  'cookie',
+  'session',
+]);
+
+/**
+ * `apiKeyRef` → `api key ref`. Two passes because the humps are not symmetric:
+ * the first splits `aB`, the second splits the tail of a run of capitals off
+ * the word it starts (`APIKey` → `API Key`), which is how acronym-prefixed
+ * field names actually arrive.
+ */
+function words(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter((word) => word !== '')
+    .map((word) => word.toLowerCase());
+}
+
+function isSecretName(name: string): boolean {
+  return words(name).some((word) => SECRET_WORDS.has(word));
+}
 
 /** Shapes of credentials common enough to be worth matching on sight. */
 const SECRET_VALUE_SHAPES: readonly RegExp[] = [
@@ -35,7 +81,7 @@ export function redactAttributes(
 ): Record<string, AttributeValue> {
   const out: Record<string, AttributeValue> = {};
   for (const [name, value] of Object.entries(attributes)) {
-    out[name] = SECRET_NAME.test(name)
+    out[name] = isSecretName(name)
       ? marker(typeof value === 'string' ? value.length : String(value).length)
       : redactValue(value);
   }

@@ -350,6 +350,146 @@ to stop exactly that. It strips comments now.
 *Found 11 August 2026 by grepping for the readers of every file in the seal —
 the one question none of the previous four rounds had asked in general.*
 
+## A test harness with a constraint nobody was told about
+
+`sendlock.test.ts` spawns two real processes to prove that `BEGIN IMMEDIATE`
+gives a single winner — the one assertion in that file that can tell the fix
+from a restatement of it. It spawned them with `node
+--experimental-transform-types`, and it worked for months.
+
+It worked because `core/scheduler/sendlock.ts` had **no runtime imports**. Node's
+own type stripping does not rewrite a `./x.js` specifier to `./x.ts`, so the
+first time that module imported anything at runtime — the claim moving to
+`core/lock/durable.ts` — the child died with `ERR_MODULE_NOT_FOUND` before
+printing `ready`, and the test failed as a **30-second timeout** rather than as
+an import error. The failure named the barrier, not the cause.
+
+Nothing declared the constraint. There was no comment on `sendlock.ts` saying
+"keep this import-free or a test in another file breaks", and no reason anyone
+would guess it. `--import tsx` resolves the specifiers and the harness stops
+caring what the module under test imports.
+
+> **A test that only passes because of a property nobody wrote down is a trap
+> with a delay on it — and the delay is measured in whoever touches that file
+> next.**
+
+*Found 11 August 2026, building the gateway (ADR-0035). Reproduced directly:
+`node --experimental-transform-types -e "import {SendLock} from './sendlock.ts'"`
+→ `Cannot find module '.../core/lock/durable.js'`.*
+
+## An exit code is half a contract, and the halves failed in opposite directions **(this build)**
+
+`muffin gateway stop` drained the turns in flight, released its claim, printed
+`gateway fermato`, and exited 0. The generated systemd unit carried
+`Restart=always` with `RestartPreventExitStatus=78`, and 0 is not 78 — so
+`RestartSec=5` later the gateway was back. **Stop did not stop**, on the Linux
+VPS that is production, and every layer of it was individually correct: the
+drain drained, the CLI reported truthfully what it had done, the unit restarted
+what had exited. Nothing in the repo held both halves at once.
+
+The macOS half failed the other way and for the same reason. The plist carried
+`KeepAlive = {SuccessfulExit: false}` — restart only on a non-zero exit — while
+`SIGUSR1`, the *drain-and-come-back* signal the ADR takes from Hermes, exited 0.
+So the one signal whose entire purpose is to restart the process left the agent
+**down**, silently, on the owner's own machine.
+
+Both were invisible to a reviewer reading either file. `service.ts` said "both
+supervisors restart on any exit; the distinction is for the person reading the
+log" — a sentence that was false in both directions, and the tests agreed with
+it: `unit.test.ts` asserted `toContain('Restart=always')` and
+`toContain('<key>KeepAlive</key>')`. Both strings were present the whole time.
+A string being present says nothing about what it does to a given exit code, and
+the exit code was the entire subject.
+
+> **When a behaviour is a contract between two artifacts, test the contract, not
+> either artifact: given this exit code, does the supervisor bring it back?**
+
+*Found 13 August 2026, reviewing `slice/gateway`. The replacement asserts the
+question directly, for 0, 1, 75, `EXIT_STOPPED` and `EXIT_PERMANENT`, on both
+platforms — and the property neither fix was allowed to cost is in the table
+too: a crash still restarts on both.*
+
+## A presumption you cannot execute is a dependency you should remove **(this build)**
+
+`Gateway.drain` cleared every timer, the watchdog ping included, and then waited
+up to `DRAIN_BUDGET_MS` — 60 s — against a declared `WatchdogSec` of 60 s. A
+drain systemd did not itself initiate (a `SIGUSR1` restart, or the `SIGTERM`
+that `muffin gateway stop` sends straight to the pid) therefore meant up to
+**90 seconds of watchdog silence against a 60-second deadline**: the supervisor
+killing a process in the middle of the graceful shutdown it was performing.
+
+It was probably fine. `notify.stopping()` sends `STOPPING=1` first, and systemd
+plausibly stops enforcing the watchdog once a service is stopping. But
+"plausibly" was the whole basis: `sd_notify(3)` documents `STOPPING=1` as *"the
+service is beginning its shutdown"* and says nothing about the watchdog, there
+is no systemd on the machine this was written on, and nothing in the repo
+recorded that the drain depended on the answer.
+
+The fix is not a comment explaining the risk. It is splitting the tick timer
+from the watchdog timer so the drain clears only the first — after which the
+question stops being load-bearing and it does not matter what the answer is.
+
+> **An assumption you cannot execute is not a risk to document. It is a
+> dependency to delete, and deleting it is usually cheaper than proving it.**
+
+*Found 13 August 2026, reviewing `slice/gateway`. The arithmetic is the whole
+finding: `DRAIN_BUDGET_MS` (60 000) ≥ `WATCHDOG_SEC × 1000` (60 000), asserted
+in `unit.test.ts` so neither constant can drift into the gap alone.*
+
+## A guard that survives every mutation is not a guard
+
+The consolidator shipped with two "one batch at a time" checks: one in `notify`
+(a turn arrived while a batch is running) and one in `fire` (the trailing edge
+expired while a batch is running). Both read as obviously correct. Running the
+mutation table for the slice showed that **deleting the first one broke no test
+and, on inspection, changed no outcome** — the second guard caught every path the
+first one covered, and the only difference the first made was to stop mid-batch
+turns from counting toward the ceiling, which is behaviour we did not want.
+
+The interesting part is not that a line was redundant. It is that the redundancy
+was invisible to review and visible to a five-minute mutation run — and that the
+run also found the *reachable* path neither guard had a test for: a hand-typed
+`muffin memory extract` racing an armed trailing edge in the same process. That
+test was written because the mutation survived, not because anyone thought of the
+case.
+
+> **Delete the guard your mutation table cannot kill, then go and test the path
+> it turns out you were actually defending.**
+
+*Found 13 August 2026, building ADR-0038. Seven mutations, one survivor, one
+deletion and one new test.*
+
+## An import is not a call, and the check that could not tell was the check
+
+`core/rot/readers.ts` verifies that every sealed file has a *real* reader by
+looking for two strings in the reader's source: the filename, and the function
+named in the allowlist. It already carried one scar about evidence — the source
+is stripped of comments, because a docstring saying "the first real reader of
+rot/policy.json" once satisfied the filename half while no line of code opened
+the file.
+
+The symbol half had the identical hole one layer down. Mutating `cli/observe.ts`
+to stop calling `loadSealedBudgets` — replacing the call with a hardcoded object,
+which is precisely the defect the invariant exists to catch — left the check
+**green**, because `import { loadSealedBudgets } from …` still contained the
+name. Measured both ways: green with the import line, red once imports are
+stripped too.
+
+The reason it matters more than a missing string: this was the mutation run for
+the slice that *closed* the budget defect. The invariant was being extended to
+name the three consumers of the sealed file, so that "someone loads it" could
+never again stand in for "the thing that spends money asks it" — and the
+extension would have shipped unable to detect exactly that.
+
+> **An import declares that a module may use a symbol. Only a call is evidence
+> that it does — and a check that accepts declarations is a check that will
+> accept the next docstring too.**
+
+*Found 13 August 2026, mutating ADR-0039. The fix is six lines
+(`withoutImports`), and the test that holds it uses an aliased import
+(`import { load as yamlLoad }`) as its fixture, because an alias is the honest
+shape of a name that is imported and never written again.*
+
 ## A row-by-row comparison compares the axis you were already thinking about **(this build)**
 
 The old-vs-new inventory graded 86 capabilities and got 85 of them right. The one
@@ -414,6 +554,66 @@ configuration value. Everything about it is documented, nothing about it is
 enforced against the content, and the part you lose is always the tail — which is
 where people put the pointers, because pointers feel like an appendix.
 
+**Postscript, one day later, and it is the real lesson.** The fix above was a
+rule in `PRACTICES.md` §7 and a one-off measurement. The next merge — a branch
+that had been adding to the block in parallel — put it at **18,700 characters**,
+worse than the state that prompted the fix, and truncated in the same place. The
+rule was correct, written down, and had been read; it lost to a three-way merge,
+which is the one editor that has never read anything.
+
+Note what the test file already contained: six sizes swept across the cap,
+including the exact 9,876-10,000 window that had been broken. Thorough about the
+mechanism, and silent about **our** block — the one input that ships. The test
+that now holds it runs the real hook against the real `STATE.md`, asserts the
+tail arrives, and keeps 250 characters of headroom so the next paragraph fails
+in CI rather than in a live session.
+
+> **A budget defended by a practice is defended against people. It is not
+> defended against a merge, a generated file, or anyone who did not read the
+> practice — and a test suite that covers the mechanism exhaustively can still
+> never once have looked at the input you actually ship.**
+
+*Found 14 August 2026, merging `origin/dev` into `slice/gateway`: both sides had
+added to the handoff, neither had made it smaller.*
+
+## The test broke because the thing it tests works **(this build)**
+
+`sendlock.test.ts` spawns two real processes to prove `BEGIN IMMEDIATE` yields a
+single holder. It is the only assertion in this repository that can tell the fix
+from a restatement of it: inside one process better-sqlite3 is synchronous, so
+`IMMEDIATE` and the default deferred look identical.
+
+Ten full-suite runs, one red: `expected [ 'got', 'got' ] to have a length of 1`.
+Two winners on the lock that exists to have exactly one — the shape of finding
+that stops a day, because the same file's own history says the harness is
+delicate and the same claim now guards the gateway, the scheduler and the ingest
+lane.
+
+It was not the lock. The winner wrote its answer and **exited immediately**.
+Under load the loser reached `heldBy` after the winner's pid was already gone,
+read it as dead — which is exactly what `pidAlive` is for — and correctly took
+over a free lock. Two `got`, produced by the takeover path working. The test
+that proves a mutual-exclusion property was being broken by a *different*
+correct property of the same mechanism, and the barrier the file already carried
+was two-thirds of the way there: the handshake makes both children exist, the
+hot spin makes them collide inside `acquire`, and nothing made the winner
+outlive the loser's inspection.
+
+Forced rather than argued, because a one-in-ten flake is not evidence of its own
+cause: a standalone script that makes the loser wait 400 ms produced `[got, got]`
+three times out of three with the old child, and `[got, refused]` three times out
+of three with a child that reports and waits. The children now hold until the
+parent kills them.
+
+> **A concurrency test is a claim about an interleaving, and the interleaving is
+> part of the test — not part of the environment. If nothing in the harness
+> *forces* the window you are asserting about, the suite is sampling the
+> scheduler, and the day it samples badly it will accuse the code.**
+
+*Found 14 August 2026, running the suite ten times for an unrelated reason. The
+cost of the wrong diagnosis is what makes this worth a page: the honest reading
+of that red is "the lock is broken", and it would have been wrong.*
+
 ## The pattern under all of them
 
 Almost none of these announced itself. The constraint executed successfully. The
@@ -440,3 +640,50 @@ than trusting the hash that maintains it; counts a test can assert are non-zero;
 and probes that execute the real thing as the real user. None of it is
 sophisticated. All of it exists because the alternative has already cost this
 project months.
+
+## A failure is not evidence of containment until the tool is seen succeeding **(this build)**
+
+The probe's macOS branch ran a `(deny default)` profile against `cat /etc/hosts`
+and read the non-zero exit as "the sandbox denied the read". It cannot be read
+that way, and the gap is not theoretical. Measured on macOS 15, 2026-08-15:
+
+```
+$ sandbox-exec -p '(version 1)(deny default)(allow no-such-primitive)' /bin/cat /etc/hosts
+sandbox-exec: unbound variable: no-such-primitive at <input string>, line 1, column 33
+$ echo $?
+65
+```
+
+A profile the OS refuses to *parse* fails exactly the way containment fails:
+non-zero exit, stderr matching neither `ENOENT` nor `not found`. So the day a
+macOS release drops one of the three primitives in `DENY_ALL`, the probe reports
+the sandbox as **available** on a host where nothing was ever contained, and
+`agent/runtime.ts` registers `shell_run` on the strength of it.
+
+This is the same shape as the incident two sections up, in the branch written to
+avoid it — and it survived because the branch had no test at all. `probe.ts` was
+the one module in `core/sandbox/` with zero coverage.
+
+**Instead:** the negative control needs a positive control. The probe now also
+runs the same binary under `(allow default)` and requires *that* to succeed;
+only then is the deny-profile failure evidence of containment rather than of a
+broken `sandbox-exec`. An experiment with one arm measures the apparatus.
+
+## A skip is only honest when something can make it fail
+
+`core/sandbox/executor.test.ts` gated nine containment tests on
+`platform() === 'darwin'`, with a correct reason written above the line: *"a
+skipped containment reported as passed is how the previous system shipped a
+no-op sandbox for two months"*. The reason was right and it changed nothing —
+CI on ubuntu-latest, with bubblewrap installed, reported **«10 test, 9 saltati»**
+and a green tick. The containment had never been executed on Linux, which is the
+platform of the production VPS, on any machine, ever.
+
+Nothing was broken, nothing was hidden, and no test could have failed. The skip
+was visible in the log to anyone who read the count instead of the tick.
+
+**Instead:** `MUFFIN_REQUIRE_SANDBOX=1`, set on the one Linux runner we have.
+Where a containment is supposed to be provable, its absence is a failing test
+carrying the probe's own reason; everywhere else the skip stays a skip and prints
+why. The prose was already correct — what it lacked was a mechanism, which is
+`docs/PRACTICES.md` §6 exactly.

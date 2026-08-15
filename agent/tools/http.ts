@@ -4,6 +4,7 @@ import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 import { hostAllowed, isForbiddenAddress, type EgressPolicy } from '../../core/net/egress.js';
 import { fence } from '../../core/memory/spotlight.js';
+import { extractMainContent, isHtmlContentType } from './extract.js';
 import type { RegisteredTool } from '../loop.js';
 
 /**
@@ -42,7 +43,9 @@ export const httpSpec: ToolSpec = {
   description:
     'Fetch a URL with GET. Only hosts on the egress allowlist are reachable without asking; ' +
     'redirects are re-checked against the same list and stop the request if they leave it. ' +
-    'The body is returned as untrusted text (fenced, tier 3), truncated with a marker when long.',
+    'An HTML page is reduced to its main content (as Markdown) before returning; other content ' +
+    'types (JSON, plain text, …) pass through unchanged. The body is untrusted text (fenced, ' +
+    'tier 3), truncated with a marker when long.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -62,11 +65,14 @@ const FETCH_TIMEOUT_MS = 15_000;
 export type HttpDeps = {
   fetchFn?: typeof fetch;
   lookupFn?: (hostname: string) => Promise<Array<{ address: string }>>;
+  /** Injectable for tests: extraction is real HTML parsing, not undici. */
+  extractFn?: (html: string, url: string) => Promise<string | null>;
 };
 
 export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): RegisteredTool {
   const fetchFn = deps.fetchFn ?? fetch;
   const lookupFn = deps.lookupFn ?? ((hostname: string) => dnsLookup(hostname, { all: true }));
+  const extractFn = deps.extractFn ?? extractMainContent;
 
   return {
     capability: httpCapability.id,
@@ -127,10 +133,27 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
           continue;
         }
 
-        const body = clipBody(await response.text());
+        const rawBody = await response.text();
+        const contentType = response.headers.get('content-type');
+        // Extraction only runs on confirmed HTML — a JSON/CSV/plain-text
+        // body must reach clipBody byte-identical. And it can never fail
+        // the fetch: whatever extractFn does (throws, hangs on garbage,
+        // whatever a future implementation might do), a page we cannot
+        // parse must still be readable, so any failure here just means
+        // clipBody sees the raw body instead — exactly as it did before
+        // this module existed.
+        let extracted: string | null = null;
+        if (isHtmlContentType(contentType)) {
+          try {
+            extracted = await extractFn(rawBody, current.href);
+          } catch {
+            extracted = null;
+          }
+        }
+        const body = clipBody(extracted ?? rawBody);
         const fenced = fence('web', body, `GET ${current.href} → ${response.status}`);
         return {
-          content: `${response.status} ${response.headers.get('content-type') ?? ''}\n${fenced.block}`,
+          content: `${response.status} ${contentType ?? ''}\n${fenced.block}`,
           ...(response.ok ? {} : { isError: true }),
           tier: 3,
         };

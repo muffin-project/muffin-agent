@@ -133,6 +133,49 @@ describe('policy kernel', () => {
     });
   });
 
+  it('keeps the whole outward namespace away from autonomous principals, not one id', () => {
+    // Threat model 03 §3: *"Le capability `outward.*` e `config.ratchet` sono
+    // escluse del tutto da `system@scheduler` a qualunque taint."* The
+    // namespace, with the star, is what the guarantee says.
+    //
+    // The lookup was `Set.has(capability)` against two exact strings, so the
+    // sentence was true of precisely the one id somebody had thought to list.
+    // `outward.send` does not exist as a declaration yet — the deny protected
+    // a capability nobody had built — and the first real one to ship under
+    // that prefix would have arrived unguarded, silently, because the deny it
+    // was supposed to inherit was spelled as its sibling's name.
+    //
+    // Measured before the fix: `outward.publish` for the scheduler → `ask`
+    // (queued for the owner), not `deny`. An ASK is not a DENY: it is a
+    // request the owner can approve at 2am for an action the threat model says
+    // must never be available to an autonomous principal at all.
+    const withSiblings = createDecide({
+      capabilities: new Map(
+        [
+          ...decls,
+          { id: 'outward.publish', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: false },
+          { id: 'outward.email.send', risk: 'medium', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: false },
+        ].map((d) => [d.id, d as CapabilityDecl]),
+      ),
+      matrix: POLICY_FLOOR,
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+
+    for (const capability of ['outward.send', 'outward.publish', 'outward.email.send']) {
+      for (const taint of [0, 1, 2, 3] as const) {
+        expect(withSiblings(req(scheduler, 'host', capability, taint)), `${capability} @ taint ${taint}`).toMatchObject({
+          effect: 'deny',
+          code: 'principal_forbidden',
+        });
+      }
+    }
+
+    // And the namespace is a namespace, not a prefix match on the string: a
+    // capability that merely starts with the same letters is not covered.
+    expect(withSiblings(req(scheduler, 'host', 'memory.read', 0)).effect).not.toBe('deny');
+  });
+
   it('asks before shell when the root of trust is only detected, not prevented', () => {
     expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'allow' });
     expect(kernel({ hardened: false })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
