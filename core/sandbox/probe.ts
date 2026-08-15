@@ -51,12 +51,19 @@ export function probeSandbox(): SandboxProbe {
  * and the branch that runs on the developer's own machine did not.
  */
 const DENY_ALL = '(version 1)(deny default)(allow process-fork)(allow sysctl-read)';
+/**
+ * The positive control. Not a containment test — it is the opposite, and that
+ * is the point: it is the run that must *succeed*, so that a failure of the
+ * deny profile can be read as containment rather than as a broken tool.
+ */
+const ALLOW_ALL = '(version 1)(allow default)';
 
 function probeSeatbelt(): SandboxProbe {
   // A file that certainly exists and that a contained process must not read.
   // `/etc/hosts` is world-readable, so success here means the sandbox is off.
   const forbidden = '/etc/hosts';
   let contained: boolean;
+  let denial = '';
   try {
     execFileSync('/usr/bin/sandbox-exec', ['-p', DENY_ALL, '/bin/cat', forbidden], {
       timeout: PROBE_TIMEOUT_MS,
@@ -75,17 +82,48 @@ function probeSeatbelt(): SandboxProbe {
       };
     }
     // The expected outcome: the profile refused the read, so the process died.
+    denial = detail;
     contained = true;
   }
 
-  if (contained) return { available: true, mechanism: 'seatbelt' };
-  return {
-    available: false,
-    mechanism: 'seatbelt',
-    reason: 'probe_failed',
-    detail: `a deny-all profile still let a process read ${forbidden}: the sandbox is not containing anything`,
-    remedy: 'check whether sandbox-exec is being intercepted or the profile is being ignored',
-  };
+  if (!contained) {
+    return {
+      available: false,
+      mechanism: 'seatbelt',
+      reason: 'probe_failed',
+      detail: `a deny-all profile still let a process read ${forbidden}: the sandbox is not containing anything`,
+      remedy: 'check whether sandbox-exec is being intercepted or the profile is being ignored',
+    };
+  }
+
+  // A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a
+  // profile sandbox-exec refuses to parse exits 65 with `unbound variable: …`,
+  // which matches neither ENOENT nor "not found" and lands in the branch above
+  // as "the profile refused the read". So the day a macOS release drops one of
+  // the three primitives in DENY_ALL, this function would report the sandbox
+  // available on a host where nothing was ever contained — this module's own
+  // incident, in the branch that runs on the developer's machine.
+  //
+  // The control: the same binary, a profile that must succeed. Failure here
+  // means sandbox-exec is broken, not that it contained us.
+  try {
+    execFileSync('/usr/bin/sandbox-exec', ['-p', ALLOW_ALL, '/usr/bin/true'], {
+      timeout: PROBE_TIMEOUT_MS,
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    return {
+      available: false,
+      mechanism: 'seatbelt',
+      reason: 'probe_failed',
+      detail:
+        `sandbox-exec failed on an allow-all profile too (${message(error)}), so its failure on ` +
+        `the deny-all profile (${denial}) is not evidence of containment`,
+      remedy: 'sandbox-exec itself is failing — check the profile syntax against this macOS release',
+    };
+  }
+
+  return { available: true, mechanism: 'seatbelt' };
 }
 
 function probeBubblewrap(): SandboxProbe {
