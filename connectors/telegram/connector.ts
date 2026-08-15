@@ -319,21 +319,61 @@ export class TelegramConnector {
         // and two chats never share one.
         session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
         text: arrival ? `${arrival}\n\n${incoming.text}`.trim() : incoming.text,
+        // Where the answer goes, on the record rather than only on this stack.
+        // Nothing reads it yet — the turn is still delivered from right here,
+        // below — and that is the point of writing it now: the day the lane
+        // delivers instead of this function, the address is already durable and
+        // this call site does not have to be reopened to put it there.
+        replyTo: {
+          chatId: incoming.chatId,
+          messageId: incoming.messageId,
+          ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
+        },
       });
 
-      const parts = renderForTelegram(result.text);
-      for (const [i, part] of parts.entries()) {
-        // The placeholder becomes the first part rather than sitting above it.
-        if (i === 0 && presence.editMessageId !== undefined) {
-          await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
-        } else {
-          await this.deps.api.sendMessage(incoming.chatId, part, {
-            ...(i === 0 ? { replyTo: incoming.messageId } : {}),
-          });
+      try {
+        const parts = renderForTelegram(result.text);
+        for (const [i, part] of parts.entries()) {
+          // The placeholder becomes the first part rather than sitting above it.
+          if (i === 0 && presence.editMessageId !== undefined) {
+            await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
+          } else {
+            await this.deps.api.sendMessage(incoming.chatId, part, {
+              ...(i === 0 ? { replyTo: incoming.messageId } : {}),
+            });
+          }
         }
+        this.recordDelivery(result.turnId, 'sent');
+      } catch (error) {
+        // The second outcome, kept apart from the first: the *turn* answered,
+        // the *delivery* did not. `core/scheduler/scheduler.ts:166-171` already
+        // paid for merging these — a failed delivery must never make work run
+        // again, because that doubles it. Rethrown unchanged, so the update
+        // stays pending exactly as before.
+        this.recordDelivery(result.turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
+        throw error;
       }
     } finally {
       await presence.stop();
+    }
+  }
+
+  /**
+   * Writes how the delivery went, and is not allowed to fail the delivery.
+   *
+   * The precedent is literal: `Scheduler.run` wraps `markRan` for exactly this,
+   * after a bookkeeping write against a closed database took the gateway down
+   * through an unhandled rejection. Here the stake is higher — throwing after a
+   * successful send would mark the update failed and send the whole answer a
+   * second time on the next drain.
+   */
+  private recordDelivery(turnId: string, delivery: 'sent' | `failed:${string}`): void {
+    try {
+      this.deps.loop.turns.delivered(turnId, delivery);
+    } catch (error) {
+      (this.deps.log ?? (() => {}))(
+        `telegram: consegna non registrata per il turno ${turnId.slice(0, 12)} — ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

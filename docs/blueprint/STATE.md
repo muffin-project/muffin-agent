@@ -72,8 +72,17 @@ Cinque cose, tutte verificate sul codice:
    **Resta aperto**: nessuna superficie di scrittura conversazionale (non era lo
    scopo — sola lettura per ADR-0036), e nessun tool in `agent/tools/` legge
    ancora `listConfigKnobs`.
-4. ⛔ **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui
+4. 🟡 **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui
    la ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
+   ✅ **Substrato costruito il 2026-08-15** (**ADR-0042**, disegno in
+   `research/turno-sospendibile.md`): un turno è una **riga durevole**
+   (`core/turns/store.ts`) — identità = trace id, **modello pinnato**, trascritto
+   intero, **taint come colonna** (derivarlo era una scalata di privilegio),
+   contatori, e **intento+esito per ogni tool call**: «fatta» e «forse fatta» ora
+   si distinguono, e `CapabilityDecl.rerunnable` **non** è `reversible`. Chi muore
+   a metà turno lascia una riga `interrupted`, nominata al boot e da `doctor`:
+   prima rifaceva il turno da capo, effetti compresi, in silenzio. ⛔ **Restano i
+   consumatori**: `wait` (B3), `todo` (B4), resume (B5), consegna (B2).
 5. ⛔ **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
    finto + smoke piccolo sul modello vero.
 
@@ -91,7 +100,7 @@ feature ma il criterio d'uscita di ADR-0035 (punto 0c).
 **File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
 - `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
 - `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
-- Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
+- Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/turns/store.ts` (il record del turno: identità, modello pinnato, taint, intento/esito per tool call) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
 
 ---
 

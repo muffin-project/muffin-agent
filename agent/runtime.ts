@@ -32,6 +32,7 @@ import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { JobStore } from '../core/scheduler/jobs.js';
+import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -178,6 +179,29 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   db.pragma('busy_timeout = 5000');
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
+  const turns = new TurnStore(db);
+
+  /**
+   * Turns that a dead process was holding, named at boot.
+   *
+   * This is the read half of the turn record, and it is on the real path
+   * because every surface builds a runtime: `muffin run`, the REPL and the
+   * gateway all print `bootLines` before their first turn. Without it the row
+   * would be written and consulted by nobody, which is this repo's signature
+   * defect and the reason the record exists in the first place.
+   *
+   * The concrete failure it makes visible is measured, not hypothetical: a
+   * process that dies inside `TelegramConnector.handle` leaves the update
+   * pending, and the restart re-runs the whole turn — **tool calls and their
+   * effects included** — with nothing anywhere saying that it did.
+   *
+   * It reclaims, it does not resume: rows go to `interrupted`, never to
+   * `runnable`. Promising a resume that does not exist would be worse than the
+   * silence it replaces.
+   */
+  const turnNotes = turns
+    .reclaim()
+    .map((t) => `! ${describeInterrupted(t)}`);
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
@@ -472,6 +496,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     consolidation,
     safeMode,
     bootLines: [
+      ...turnNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,
@@ -501,6 +526,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       capabilities,
       tracer,
       sessions: new SessionStore(home),
+      // On the same connection as everything else, for ADR-0022's reason: one
+      // process, one handle. It is also what lets a turn record and the update
+      // that produced it commit together the day the connector needs that.
+      turns,
       budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
       recordSpend,
       // The seam the loop never had. It is what turns "a turn ended" into "the
