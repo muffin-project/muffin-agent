@@ -1,0 +1,155 @@
+# Gate 1 — l'inventario che ha un fondo
+
+> Direttiva owner, 2026-08-15. Due frasi che governano tutto il resto:
+>
+> **«Non chiamerei ancora questo MVP.»** Abbiamo un **runtime funzionante**, non
+> un agente personale che possa sostituire quello che l'owner usa oggi. La
+> differenza non è retorica: un runtime lo provi, un agente personale ci vivi.
+>
+> **La domanda è binaria**: *«esiste qualcosa che mi impedirebbe concretamente
+> di vivere 14 giorni usando esclusivamente Muffin?»* Finché la risposta è sì,
+> quella cosa entra qui.
+
+## La regola delle tre risposte
+
+Ogni riga di questo inventario deve avere **una** di queste tre, e la quarta non
+esiste:
+
+- **READY** — implementata, cablata, provata, e il percorso reale ci arriva.
+- **FUORI DAL GATE 1** — deliberatamente non serve per i 14 giorni, **con la
+  ragione scritta**.
+- **BLOCKER** — impedisce i 14 giorni.
+
+> **«Non ci avevamo pensato» è la quarta categoria, ed è precisamente quella che
+> ci ha portati a M5-bis.** Se durante il lavoro emerge una lacuna nuova, non si
+> nasconde: si aggiunge qui.
+
+## Cosa significa «chiuso»
+
+Un test verde **non** è «chiuso». Chiuso è, per ogni voce:
+
+implementazione · unit test · **integration test** · **cablaggio in produzione**
+· **percorso di fallimento** · **scenario di accettazione reale** ·
+documentazione e `STATE.md` aggiornati.
+
+È la stessa disciplina del giudice di questo repo: non che il codice *sembri*
+corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
+
+---
+
+## L'inventario
+
+Stato: `READY` · `OUT` (fuori dal Gate 1, con ragione) · `BLOCKER` · `?` (non
+ancora verificato — **è un debito, non uno stato**).
+
+### A · Installazione e ciclo di vita → `gate1/a-installazione.md`
+
+| # | Area | Domanda Gate 1 | Stato |
+|---|---|---|---|
+| A1 | Boot | Muffin parte da solo e recupera lo stato? | ? |
+| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 template vuoto |
+| A3 | Persona | Il comportamento è definito? | BLOCKER 👤 manca il taglio dell'owner |
+| A4 | Config | Si configura senza toccare il codice? | ? |
+| A5 | Doctor | Individua **davvero** i problemi? | ? |
+| A6 | Upgrade | Aggiornare il codice non distrugge dati? | ? |
+| A7 | Migration | Lo schema evolve senza perdere memoria? | ? ⚠️ `episodes.kind` ha un CHECK non alterabile |
+| A8 | Backup | La memoria si salva e si ripristina? | ? |
+
+### B · Continuità del runtime → `gate1/b-continuita.md`
+
+| # | Area | Domanda Gate 1 | Stato |
+|---|---|---|---|
+| B1 | Conversation | CLI e Telegram condividono **davvero** sessione e memoria? | ? |
+| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — `runTurn` è sincrono |
+| B3 | Wait | Può aspettare **senza bloccare il runtime**? | BLOCKER — primitiva assente |
+| B4 | Todo | Mantiene lavoro multi-step persistente? | BLOCKER — tool assente |
+| B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume a grana di turno |
+| B6 | Retry | Se fallisce una tool call, recupera? | ? |
+| B7 | Scheduler | I job sopravvivono al riavvio? | ? |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | BLOCKER 🔧 in lavorazione |
+| B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
+| B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
+
+### C · Memoria e acquisizione → `gate1/c-memoria.md`
+
+| # | Area | Domanda Gate 1 | Stato |
+|---|---|---|---|
+| C1 | Memory write | Ogni informazione importante viene acquisita? | ? |
+| C2 | Extraction | L'estrazione è automatica? | READY (ADR-0038) |
+| C3 | Consolidation | Si consolida senza intervento? | READY (ADR-0040) |
+| C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
+| C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
+| C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
+| C7 | PDF | Acquisisce documenti utili? | BLOCKER — nessun parser |
+| C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
+
+### D · Capability e sicurezza → `gate1/d-capability.md`
+
+| # | Area | Domanda Gate 1 | Stato |
+|---|---|---|---|
+| D1 | File read | Legge file reali? | ? |
+| D2 | File write | Modifica file reali **in sicurezza**? | BLOCKER — rifiuta ogni draft |
+| D3 | Undo | Posso recuperare una modifica? | BLOCKER — registro assente |
+| D4 | Shell | Esegue comandi nel sandbox? | READY su macOS · ? su Linux 🔧 |
+| D5 | Process | Gestisce processi lunghi? | ? |
+| D6 | HTTP | Naviga secondo policy? | READY (estrazione in #8) |
+| D7 | Web search | Funziona end-to-end? | ? |
+| D8 | MCP | Gestisce drift e revoca? | ? — pinning solo all'attach |
+| D9 | Skills | Scopre e usa le skill? | ? |
+| D10 | Security | Nessuna capability escape? | ? |
+
+### E · Economia e osservabilità → `gate1/e-osservabilita.md`
+
+| # | Area | Domanda Gate 1 | Stato |
+|---|---|---|---|
+| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |
+| E2 | Cost | So quanto costa una giornata? | ? |
+| E3 | Tracing | Posso ricostruire cosa è successo? | ? |
+| E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
+| E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
+
+---
+
+## §1 · Il modello di reversibilità — la decisione sotto `fs.write`
+
+Non è una patch a `fs.write`. Direttiva owner: *«se ogni operazione
+potenzialmente distruttiva diventa "vuoi che scriva questo file?" ogni cinque
+minuti, l'agente diventa inutilizzabile»*.
+
+La forma richiesta è un **modello coerente con il kernel dei permessi**:
+
+```
+READ → IL MODELLO DECIDE → WRITE → UNDO RECORD → EXECUTE → TRACE
+```
+
+con quattro classi, non due:
+
+| Classe | Esito |
+|---|---|
+| reversibile | si esegue |
+| reversibile ma potenzialmente distruttivo | policy / undo |
+| irreversibile | ASK |
+| irreversibile **verso l'esterno** | ASK, o vietato |
+
+Oggi il kernel ne ha tre (`allow` / `draft` / `ask` / `deny`) e `draft` non è
+eseguibile da nessun percorso. Il disegno va fatto **dopo** aver letto ADR,
+threat model e i contratti di capability — non prima.
+
+## §2 · `wait` e `todo` sono primitive del runtime, non tool
+
+```
+WAIT → persisti lo stato → rilascia l'esecuzione → scheduler/evento → riprendi
+```
+
+Un `await sleep()` dentro il processo cognitivo **non** è `wait`: è una funzione
+async molto lunga, ed è precisamente la differenza fra un Muffin vivo e un
+Muffin lanciato da terminale. Stessa cosa per `todo`: il modello operativo non è
+`goal → turn → done` ma `goal → plan → todo{done|blocked|waiting|retry|pending}
+→ resume`.
+
+---
+
+**Il lavoro finisce quando l'inventario ha zero BLOCKER e ogni voce è READY o
+FUORI DAL GATE 1 con la ragione scritta.** Solo allora si propone il Gate 1 —
+e da lì lo sviluppo lo guidano i problemi che l'owner incontra vivendoci, non le
+feature immaginate davanti a una lavagna.
