@@ -43,20 +43,39 @@ describe('la mappa dell architettura', () => {
   });
 
   it('ogni ancora punta ancora al testo che aveva quando è stata scritta', () => {
-    // Il caso pericoloso: il file c'è, la riga c'è, ma il codice si è spostato di
-    // otto righe e ora l'ancora indica un'altra cosa. Il numero da solo non
-    // difende niente; il testo sì.
-    const sorgenti = references() as Map<string, Set<string>>;
+    // Il caso pericoloso: il file c'è, la riga c'è, ma il codice si è spostato e
+    // ora quella riga dice un'altra cosa. Il numero da solo non difende niente;
+    // il testo sì.
+    //
+    // Si controllano le coordinate REGISTRATE nell'ancora, non il numero scritto
+    // nella mappa: `ancore.mjs` insegue il codice che si sposta e aggiorna la
+    // riga tenendo il testo, quindi è lì che vive la verità. Confrontare col
+    // numero scritto in prosa farebbe fallire ogni refactor innocuo — e un test
+    // che grida a ogni refactor viene disattivato entro la settimana.
     const drifted: string[] = [];
     for (const [ref, atteso] of Object.entries(anchors)) {
-      const r = resolveRef(ref, [...(sorgenti.get(ref) ?? [])]) as { ok: boolean; path?: string; text?: string };
-      if (!r.ok) drifted.push(`${ref} — sparito`);
-      else if (r.path !== atteso.path) drifted.push(`${ref} — ora risolve a ${r.path}, non a ${atteso.path}`);
-      else if (r.text !== atteso.testo) {
-        drifted.push(`${ref}\n    atteso:  ${atteso.testo}\n    trovato: ${r.text}`);
+      const righe = readFileSync(join(MAPPA, '..', '..', '..', atteso.path), 'utf8').split('\n');
+      const trovato = righe[atteso.line - 1]?.trim();
+      if (trovato === undefined) drifted.push(`${ref} — ${atteso.path} non ha una riga ${atteso.line}`);
+      else if (trovato !== atteso.testo) {
+        drifted.push(`${ref} → ${atteso.path}:${atteso.line}\n    atteso:  ${atteso.testo}\n    trovato: ${trovato}`);
       }
     }
     expect(drifted).toEqual([]);
+  });
+
+  it('ogni riferimento risolve ancora allo stesso file', () => {
+    // Il numero di riga scritto in prosa può invecchiare senza danno; il file
+    // no. Un `mcp.ts:102` che comincia a risolversi in un altro `mcp.ts` è la
+    // mappa che parla di un pezzo di sistema mentre ne indica un altro.
+    const sorgenti = references() as Map<string, Set<string>>;
+    const spostati: string[] = [];
+    for (const [ref, atteso] of Object.entries(anchors)) {
+      const r = resolveRef(ref, [...(sorgenti.get(ref) ?? [])]) as { ok: boolean; path?: string };
+      if (!r.ok) spostati.push(`${ref} — non risolve più`);
+      else if (r.path !== atteso.path) spostati.push(`${ref} — ora è ${r.path}, non ${atteso.path}`);
+    }
+    expect(spostati).toEqual([]);
   });
 
   it('registra un ancoraggio per ogni riferimento citato — nessuna casella senza prova', () => {
