@@ -3,6 +3,7 @@ import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
+import type { TurnCounters, TurnStore } from '../core/turns/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { checkCompletion, completionNudge } from './completion.js';
@@ -180,6 +181,21 @@ export type LoopDeps = {
   tracer: Tracer;
   sessions: SessionStore;
   /**
+   * Where the turn lives while it is happening.
+   *
+   * **Required, and that is the decision.** Every other durable seam in this
+   * type is optional with a documented degradation, and every optional one has
+   * at some point been left unwired in production while the tests stayed green
+   * — `recordSpend` and `capabilities` both say so a few lines from here. A
+   * turn without a record is not a degraded turn: it is a turn that cannot be
+   * seen, resumed, or told apart from one that died mid-effect. So the type
+   * refuses it, and a construction site that forgets it fails to build rather
+   * than failing in six months on somebody's laptop.
+   *
+   * See `core/turns/store.ts` for the shape and why it is not the session file.
+   */
+  turns: TurnStore;
+  /**
    * Takes the tenant, and that is the whole fix: the signature used to be
    * `() => boolean`, so the per-tenant daily cap could not be consulted through
    * it even by someone trying. It was sealed, loaded, tested, reported healthy
@@ -258,12 +274,29 @@ export type TurnInput = {
   session: SessionRef;
   text: string;
   signal?: AbortSignal;
+  /**
+   * Where the answer has to go, for a surface that delivers **out of band**.
+   *
+   * Opaque here on purpose: the loop must not learn what a chat id is — that is
+   * the boundary the previous system lost when its gateway started building
+   * Telegram-shaped footers. Each surface owns the shape and validates its own.
+   * Absent means the caller of `runTurn` is holding the answer itself, and
+   * there is no second step that can fail.
+   */
+  replyTo?: Record<string, unknown> | undefined;
 };
 
 export type TurnResult = {
   text: string;
   iterations: number;
   traceId: string;
+  /**
+   * The turn's row, which is also `traceId` — one identity, so "what did it do"
+   * and "why did it do that" are a join rather than a correlation. Returned so
+   * a surface can record how the *delivery* went, which is a second outcome and
+   * never the same one as `stopped`.
+   */
+  turnId: string;
   stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   /** Present when `stopped` is 'ask': what the turn wanted permission for. */
@@ -286,6 +319,64 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   // gateway already resolved — the same two values the kernel decides on.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant);
   const turnClass = tenantClass(input.principal, input.tenant);
+
+  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  let spentUsd = 0;
+  const cap = iterationCap(deps.profile);
+  /**
+   * How far down the profile's declared cascade this turn has walked. An index,
+   * not a budget: attempt N runs strategy N.
+   */
+  let recoveriesUsed = 0;
+  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
+  let transportRetriesLeft = MAX_TRANSPORT_RETRIES;
+  let toolCallsMade = 0;
+  let nudgedForCompletion = false;
+  let iterations = 0;
+  const counters = (): TurnCounters => ({
+    iterations,
+    recoveriesUsed,
+    transportRetriesLeft,
+    toolCallsMade,
+    nudgedForCompletion,
+    usage,
+    spentUsd,
+  });
+
+  /**
+   * The record, before anything happens — and **not** inside a try.
+   *
+   * A row that cannot be written stops the turn here, with nothing done: no
+   * episode, no session line, no model call, no spend. That order is the whole
+   * point of the failure path. The alternative — start anyway and record later
+   * — is a log of what already happened, and the property being bought is that
+   * the row exists while the work is still owed.
+   *
+   * Above the episode write below it, deliberately, and the two are not in
+   * conflict: an owner's words that were never recorded are re-delivered by
+   * whatever surface still holds them (a Telegram update stays pending), while
+   * an episode written for a turn that never started is memory of something
+   * that did not happen.
+   *
+   * The transcript is empty here because it truly is: nothing has been
+   * assembled and nothing has been said. The first checkpoint, one iteration
+   * later, carries the assembled context.
+   */
+  deps.turns.create({
+    id: turn.traceId,
+    principal: input.principal,
+    tenant: input.tenant,
+    surface: input.surface,
+    sessionId: input.session.id,
+    // Pinned here and never re-derived: a resume onto a different model sends
+    // back thinking signatures it cannot read, and ADR-0037 records that this
+    // fails silently rather than loudly.
+    model: deps.model,
+    messages: [],
+    taint: snapshot.currentTaint(),
+    counters: counters(),
+    ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+  });
 
   // Evidence first: what was said is recorded before anything is generated, so
   // a crash mid-turn cannot lose the input that caused it.
@@ -354,22 +445,14 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     traceId: turn.traceId,
   });
 
-  const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-  let spentUsd = 0;
-  const cap = iterationCap(deps.profile);
-  /**
-   * How far down the profile's declared cascade this turn has walked. An index,
-   * not a budget: attempt N runs strategy N.
-   */
-  let recoveriesUsed = 0;
-  /** The other budget. See MAX_TRANSPORT_RETRIES for why it is not the same one. */
-  let transportRetriesLeft = MAX_TRANSPORT_RETRIES;
-  let toolCallsMade = 0;
-  let nudgedForCompletion = false;
-  let iterations = 0;
-
   try {
     while (iterations < cap) {
+      // Suspension point 1 (design §T3): nothing is in flight, so everything
+      // worth keeping is in the variables above. Written every iteration rather
+      // than only at the end, because the state this saves is the state a
+      // process that dies here would otherwise take with it — the transcript,
+      // the taint it has climbed to, and how much of each budget is spent.
+      checkpoint();
       if (deps.budgetExhausted(input.tenant)) {
         return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
       }
@@ -622,6 +705,11 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     );
   } catch (error) {
     turn.end({ error });
+    // Same reason `announceEnd` is repeated here: a provider that exhausted its
+    // retries never reaches `finish`, and a row left `running` by a turn that
+    // is definitely over would be reclaimed as *interrupted* — "we do not know
+    // whether it ran" — when we know exactly how it ended.
+    closeRecord('error');
     // A turn that threw still recorded the owner's words at the top of this
     // function, so they are still owed extraction. Announced here as well as in
     // `finish` because a provider that exhausted its retries never reaches
@@ -629,6 +717,49 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // is not a property anyone would have chosen.
     announceEnd('error');
     throw error;
+  }
+
+  /**
+   * The turn's state, saved at a point where nothing is in flight.
+   *
+   * Swallowed, and this is the one place in this file where swallowing is the
+   * right call — with the reason, because "caught and ignored" is how guards
+   * here have died before. A checkpoint that fails leaves the row **stale**,
+   * not wrong: the next one overwrites it, and a process that dies before then
+   * is reclaimed as interrupted, which is exactly what it was. Rethrowing would
+   * instead take down a turn that is still perfectly able to answer, over a
+   * write whose only job is to make a *future* failure cheaper. `Gateway.drain`
+   * closing the database under a long turn is not hypothetical — it is the
+   * measured crash in `core/scheduler/scheduler.ts:174-181`.
+   *
+   * The failure is on the span, so "the record stopped being written" is
+   * visible in a trace instead of being inferred from a stale row.
+   */
+  function checkpoint(): void {
+    try {
+      deps.turns.checkpoint(turn.traceId, { messages, taint: snapshot.currentTaint(), counters: counters() });
+    } catch (error) {
+      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** The single write that ends the row. Same swallow, same reason, one caveat. */
+  function closeRecord(outcome: TurnResult['stopped']): void {
+    try {
+      deps.turns.finish(turn.traceId, {
+        outcome,
+        messages,
+        taint: snapshot.currentTaint(),
+        counters: counters(),
+      });
+    } catch (error) {
+      // The caveat: unlike a checkpoint, nothing comes after this one. The row
+      // stays `running` and the next boot reclaims it as interrupted — a turn
+      // that answered, reported as "we cannot say". That is the safe direction
+      // of the two, and it is not silent: the attribute below is the trace's
+      // record that the outcome could not be written.
+      turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /**
@@ -686,12 +817,16 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     used: TurnResult['usage'],
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
+    // Before the span ends and before the hook fires: the row is the durable
+    // half, and a background lane must never be able to run while the record
+    // still says a live process is executing this turn.
+    closeRecord(stopped);
     span.end({ status: stopped === 'error' ? 'error' : 'ok' });
     // Last thing before the return, so the span is closed and the result is
     // built: the hook is not allowed to see a half-finished turn, and it is not
     // allowed to delay this return.
     announceEnd(stopped);
-    return { text, iterations: iters, traceId: span.traceId, stopped, usage: used };
+    return { text, iterations: iters, traceId: span.traceId, turnId: span.traceId, stopped, usage: used };
   }
 }
 
@@ -841,6 +976,32 @@ async function runTool(
       return assertNever(decision);
   }
 
+  /**
+   * Intent, written **before** the handler can touch the world.
+   *
+   * This is the half that does not exist today: the loop records the outcome
+   * afterwards (the session append below), so an invocation that started and
+   * died leaves no trace at all and a restart cannot tell "done" from "maybe
+   * done". Two rows make three states — intent+outcome is *done*, intent alone
+   * is *maybe done*, neither is *not started*.
+   *
+   * `rerunnable` is copied from the declaration as it reads right now, not
+   * looked up at resume time: what the code says six months from now is not
+   * what was true when the effect may have landed. Missing declarations answer
+   * `false`, which is the direction that does not re-send a message.
+   *
+   * Written after the kernel has ruled, because a denied call never reaches the
+   * world and an intent row for it would be a lie about what was attempted.
+   */
+  const decl = deps.capabilities?.get(capability);
+  recordIntent(deps, parent.traceId, span, {
+    callId: call.id,
+    tool: call.name,
+    capability,
+    rerunnable: decl?.rerunnable === true,
+    args,
+  });
+
   try {
     const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });
     // Unconditional. The `!== undefined` guard that used to stand here was the
@@ -848,6 +1009,19 @@ async function runTool(
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
     // that honestly reports 0 costs the turn nothing.
     snapshot.raiseTaint(outcome.tier);
+    // The outcome and the taint it dragged in, in one transaction: a tier-3
+    // result raises the turn's taint, and the two facts must not be able to
+    // land apart — a record that had read the web at a tier saying it had not
+    // is the privilege escalation this table exists to prevent.
+    //
+    // With `tier` required on `ToolOutcome` (ADR-0042) the row can no longer be
+    // written with the tier absent, which is the version of that same argument
+    // one level down: a resumed turn cannot inherit a provenance nobody stated.
+    recordOutcome(deps, parent.traceId, span, call.id, {
+      content: outcome.content,
+      isError: outcome.isError === true,
+      tier: outcome.tier,
+    });
     deps.sessions.append(input.session, {
       role: 'tool',
       content: outcome.content,
@@ -867,8 +1041,48 @@ async function runTool(
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
     const detail = error instanceof Error ? error.message : String(error);
+    // And an outcome all the same: a handler that threw *came back*, so the
+    // call is decided, not uncertain. Leaving the intent row open here would
+    // make every failed tool call look like one that might still have landed.
+    recordOutcome(deps, parent.traceId, span, call.id, { content: detail, isError: true, tier: undefined });
     span.end({ status: 'error', error: detail });
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
+  }
+}
+
+/**
+ * The two record writes, with their failure swallowed for the same reason
+ * `checkpoint` swallows its own: a tool that worked must not be turned into a
+ * failed turn by a bookkeeping write. What a lost write costs is stated where
+ * it lands — a missing intent row reads as "not started" (the resume calls the
+ * handler again, which for a non-re-runnable tool is the very thing the row
+ * exists to prevent), a missing outcome row reads as "maybe done" (the resume
+ * is too careful, which is the harmless direction).
+ */
+function recordIntent(
+  deps: LoopDeps,
+  turnId: string,
+  span: SpanHandle,
+  call: { callId: string; tool: string; capability: string; rerunnable: boolean; args: unknown },
+): void {
+  try {
+    deps.turns.startToolCall(turnId, call);
+  } catch (error) {
+    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function recordOutcome(
+  deps: LoopDeps,
+  turnId: string,
+  span: SpanHandle,
+  callId: string,
+  result: { content: string; isError: boolean; tier: TrustTier | undefined },
+): void {
+  try {
+    deps.turns.endToolCall(turnId, callId, result);
+  } catch (error) {
+    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
   }
 }
 

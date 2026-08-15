@@ -105,6 +105,7 @@ export const fsCapabilities: CapabilityDecl[] = [
     id: 'fs.read',
     risk: 'low',
     reversible: 'yes',
+    rerunnable: true,
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,
@@ -113,6 +114,7 @@ export const fsCapabilities: CapabilityDecl[] = [
     id: 'fs.list',
     risk: 'low',
     reversible: 'yes',
+    rerunnable: true,
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,
@@ -121,6 +123,13 @@ export const fsCapabilities: CapabilityDecl[] = [
     id: 'fs.write',
     risk: 'medium',
     reversible: 'undoable',
+    // The row that proves the two axes are independent: this write is NOT
+    // freely reversible (it needs an undo), and it IS re-runnable — the tool
+    // replaces a whole file, so the same bytes written twice give the same
+    // file. A resume that consulted `reversible` would refuse this one, which
+    // is the wrong answer in the safe direction and the reason for a second
+    // field rather than a reinterpretation of the first.
+    rerunnable: true,
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,

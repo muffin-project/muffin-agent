@@ -24,6 +24,7 @@ export const processCapabilities: CapabilityDecl[] = [
     id: 'sys.process.list',
     risk: 'low',
     reversible: 'yes',
+    rerunnable: true,
     maxTaint: 1,
     resourceKind: 'none',
     policyArgs: [],
@@ -33,6 +34,10 @@ export const processCapabilities: CapabilityDecl[] = [
     id: 'sys.process.kill',
     risk: 'high',
     reversible: 'no',
+    // A pid is not a stable name. Between the call that may have landed and the
+    // repeat, the number can belong to a different process — so the second
+    // signal is not "the same call again", it is a new one at a new target.
+    rerunnable: false,
     resourceKind: 'none',
     policyArgs: ['pid', 'signal'],
     hostOnly: true,

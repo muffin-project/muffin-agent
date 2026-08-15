@@ -31,6 +31,10 @@ export const httpCapability: CapabilityDecl = {
   id: 'sys.http',
   risk: 'medium',
   reversible: 'yes',
+  // True *because* the verb is fixed at GET, above. The day a body-carrying
+  // verb arrives it arrives as its own capability — and that capability
+  // answers this question with `false`, rather than this line being widened.
+  rerunnable: true,
   maxTaint: 3,
   resourceKind: 'url',
   policyArgs: ['url'],
