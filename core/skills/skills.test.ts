@@ -131,4 +131,18 @@ describe('skill_read', () => {
     expect(out.isError).toBe(true);
     expect(out.content).not.toContain('non leggermi');
   });
+
+  it('marks what it hands back as tier 1, so the turn stops being owner-authored', async () => {
+    // `agent/loop.ts` raises taint only when a tool result carries `tier`, and
+    // this handler carried none while its own docstring said tier 1. That gap
+    // reached a security decision: `core/policy/decide.ts` auto-allows
+    // `sys.shell` in hardened mode only at `taint === 0`, so a turn could read
+    // a skill body — instructions, deliberately — and still reach the shell
+    // without the owner being asked. Asserting the field itself, because the
+    // absent field is what the loop reads.
+    const home = homeWithSkill('brief-mattina', VALID);
+    const out = await toolFor(home).handler({ name: 'brief-mattina' }, ctx);
+    expect(out.content).toContain('Brief');
+    expect(out.tier).toBe(1);
+  });
 });

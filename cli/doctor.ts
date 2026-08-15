@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
-import { verify } from '../core/rot/verify.js';
+import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
@@ -112,12 +112,28 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     );
   }
 
+  // Both modes get an answer, and `hardened` gets its claim tested. Before
+  // this, `single-user` — the honest mode — was the only one that produced a
+  // line, and its remedy told the owner to run `--hardened`, which wrote a word
+  // into config.json, created no service user, and made the kernel *more*
+  // permissive. The one mode that could be a lie was the one nobody checked.
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
       'single-user: tampering is detected, not prevented — a process running as this user can undo the read-only bits',
-      'run `muffin init --hardened` on a machine where a dedicated service user is possible',
+      'prevention needs the RoT owned by another OS user; `--hardened` alone only records a claim',
     );
+  } else {
+    const hardening = hardeningHolds(home);
+    if (hardening.holds) {
+      ok('root of trust mode', 'hardened: this process cannot write the RoT — prevention, verified now');
+    } else {
+      fail(
+        'root of trust mode',
+        `hardened dichiarato, non vero: ${hardening.why}`,
+        'il kernel sta già trattando questa installazione come single-user; per la prevenzione vera il RoT deve appartenere a un altro utente OS, altrimenti metti `rot.mode` a "single-user" e togli la pretesa',
+      );
+    }
   }
 
   // Key presence only. A network call costs money and needs an explicit opt-in.
