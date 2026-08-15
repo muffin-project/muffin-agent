@@ -237,6 +237,8 @@ Tutti i messaggi di sistema sono distinguibili dalla voce dell'agente (D9): mai 
 
 **stdout/stderr (H3)**: stdout = solo la risposta finale (o JSON con `--json`); stderr = log, avvisi di sistema, prompt. **Sessione (H4)**: `muffin run` = thread effimero per invocazione (`--session <id>` per continuare); REPL = una sessione per lancio, `/new` per azzerare. **Ctrl+C (H5)**: primo = annulla il turno in corso (abort del `signal`, il REPL resta); secondo entro 2s = esce. **Librerie (H6, J-*)**: `commander` (CLI), `@inquirer/prompts` (init), `readline` nativo per il REPL v1 (Ink solo se il REPL cresce), `zod` (schemi), `@opentelemetry/api`+`sdk-trace-node` con exporter custom su file, `better-sqlite3` **già in M0** (budget e audit: J3), `@anthropic-ai/sdk` + `openai` per i due adapter, `age` via libreria JS per i secrets. Vietati: framework LLM/agentici, graph-engine, ORM.
 
+*(Aggiunte dopo M1, ciascuna con la sua ADR e ciascuna una libreria importata nel processo — mai un sottoprocesso, mai un servizio terzo che legga i dati dell'owner al posto nostro: `defuddle`+`linkedom`+`turndown` per l'estrazione HTML (ADR-0041), `unpdf` per i PDF (ADR-0042, zero dipendenze runtime, pdf.js di Mozilla sotto). Il DOCX **non** ha portato una libreria: `node:zlib` più un lettore di directory centrale ZIP in `core/documents/zip.ts`, perché la scelta standard — `mammoth` — costa dieci dipendenze runtime per una voce sola di un archivio.)*
+
 ## 11. Test (I1-I6)
 
 - **Framework**: `vitest`.
