@@ -233,7 +233,12 @@ export async function recall(
     for (const entity of deps.store.entitiesByName(tenantId, name, 3)) {
       if (seenEntities.has(entity.id)) continue;
       seenEntities.add(entity.id);
-      const facts = deps.store.activeFacts(tenantId, entity.id);
+      // "Who is my accountant" wants only what is true now; "who was my
+      // accountant" (--history) wants retired beliefs too — the whole reason
+      // `expired_at`/`superseded_by` retire a fact instead of deleting it.
+      const facts = options.includeHistory
+        ? deps.store.allFacts(tenantId, entity.id)
+        : deps.store.activeFacts(tenantId, entity.id);
       if (facts.length > 0 && !strategies.includes('graph')) strategies.push('graph');
       selectForExpansion(facts).forEach((fact, rank) => {
         fuse(`fact:${fact.id}`, {
@@ -244,7 +249,10 @@ export async function recall(
           source: describeTier(fact.trustTier, fact.recordedAt),
           score: 0,
           validFrom: fact.validFrom,
-          expired: false,
+          // `activeFacts` never returns a retired fact, so this reads false
+          // there regardless; `allFacts` can, which is the mark `--history`
+          // exists to show (`cli/memory.ts` prints "RITIRATO" from it).
+          expired: fact.expiredAt !== null,
           origin: fact.origin,
         }, rank);
       });

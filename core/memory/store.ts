@@ -374,6 +374,36 @@ export class MemoryStore {
   }
 
   /**
+   * `activeFacts`, without the `expired_at IS NULL` filter — every fact ever
+   * recorded for a subject, retired ones included. Ordered by recency like
+   * `activeFacts`, so `selectForExpansion`'s assumption (facts arrive newest
+   * first) holds for either method a caller passes it.
+   *
+   * The counterpart to `factHistory`: that one pins a single predicate and
+   * reads oldest-first for a "what did I think then" narrative; this one
+   * mirrors `activeFacts`' own shape (predicate optional, newest-first) for
+   * `recall`'s graph expansion, which does not know a predicate in advance.
+   */
+  allFacts(tenantId: string, subjectId: number, predicate?: string): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.subject_id = ?
+           AND (? IS NULL OR f.predicate = ?)
+         ORDER BY f.recorded_at DESC`,
+      )
+      .all(tenantId, subjectId, predicate ?? null, predicate ?? null) as Fact[];
+  }
+
+  /**
    * Every (subject, predicate) that currently holds **more than one** belief.
    *
    * The whole input of the maintenance sweep, and it is deliberately shaped as

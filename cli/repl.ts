@@ -26,6 +26,41 @@ const HELP = `/new     inizia una sessione nuova
 /exit    esci (o Ctrl+D)`;
 
 /**
+ * Delivery for the REPL's own scheduler, and the reason the remote branch
+ * throws rather than logging and moving on.
+ *
+ * Mirrors `cli/observe.ts`'s `printDeliver`: a remote channel is not wired
+ * yet (the M4 connect), so reporting it as delivered would let `markRan`
+ * advance the job regardless — turn paid, schedule moved — on evidence that
+ * was one stderr line nobody was necessarily reading. The scheduler already
+ * has a `delivery_failed` event for exactly this, with its own handler here
+ * and its own test (`core/scheduler/scheduler.test.ts`); it only fires if
+ * `deliver` actually throws, which this one silently did not.
+ *
+ * The text is still printed first, unconditionally: losing the message
+ * would be a worse bug than the one this fixes. `rl.prompt()` runs in
+ * `finally` so the terminal keeps prompting whether delivery succeeded or
+ * not — a thrown delivery must not leave the REPL looking hung.
+ *
+ * Extracted and exported so the throw can be tested directly, without
+ * driving the interactive stdin loop `runRepl` owns.
+ */
+export function makeReplDeliver(rl: { prompt: () => void }): Deliver {
+  return async (channel, text) => {
+    try {
+      if (channel === 'cli') {
+        process.stdout.write(`\n⏰ ${text}\n`);
+        return;
+      }
+      process.stderr.write(`\n⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
+      throw new Error(`consegna su "${channel}" non è cablata — il messaggio è qui sopra, non è stato inviato`);
+    } finally {
+      rl.prompt();
+    }
+  };
+}
+
+/**
  * The REPL's half of ADR-0035: *is the gateway the scheduler right now?*
  *
  * Re-read on every tick, never cached, and that is the entire fix. The claim
@@ -158,18 +193,7 @@ export async function runRepl(home = paths().home): Promise<number> {
     isActive: () => controller !== null,
     signal: () => controller?.signal,
   };
-  const deliver: Deliver = async (channel, text) => {
-    if (channel === 'cli') {
-      process.stdout.write(`\n⏰ ${text}\n`);
-      rl.prompt();
-      return;
-    }
-    // A remote surface is reached through its connector's send — the M4 connect,
-    // proven on a running bot. Until that is wired, a scheduled message for a
-    // remote channel surfaces here rather than vanishing.
-    process.stderr.write(`\n⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
-    rl.prompt();
-  };
+  const deliver: Deliver = makeReplDeliver(rl);
   /**
    * Two schedulers must never run (ADR-0035).
    *

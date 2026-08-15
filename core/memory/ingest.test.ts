@@ -427,6 +427,50 @@ describe('memory ingestion', () => {
     expect(store.activeFacts(HOST, me, 'date_of_birth')).toHaveLength(2);
   });
 
+  it('reports a judge that could not be reached, instead of absorbing it as silent coexist', async () => {
+    // The twin of "reports a judge that could not answer" above, but for the
+    // other failure shape: `judgeContradiction` doesn't answer badly, it
+    // throws — network, auth, a 5xx on the light provider. `reconcile`'s catch
+    // around that call inserted the fact and returned 'added' with nothing in
+    // `report.errors`, so this outcome was indistinguishable from an ordinary,
+    // considered 'coexist' — which is exactly what the comment beside the
+    // sibling branch (eight lines below the catch) says must not happen: "non
+    // è una decisione, e lasciare che ne sembri una...".
+    class ThrowsOnJudge extends Scripted {
+      override async chat(request?: ChatCall): Promise<ChatResult> {
+        const isJudgeCall = (request?.messages ?? []).some((m) =>
+          m.content.some((c) => c.type === 'text' && c.text.startsWith('Soggetto:')),
+        );
+        if (isJudgeCall) throw new Error('502 Bad Gateway');
+        return super.chat(request);
+      }
+    }
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-judge-throws-'));
+    const deps = {
+      store,
+      provider: new ThrowsOnJudge([
+        facts(fact('Giusto', 'date_of_birth', '1997-04-02')),
+        facts(fact('Giusto', 'date_of_birth', '1998-04-02')),
+      ]),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+    episode(store, 'a');
+    episode(store, 'b');
+    const report = await ingestPending(deps, HOST);
+
+    // The safe behaviour is unchanged: a judge that cannot be consulted must
+    // not retire anything, so both values still coexist.
+    expect(report.superseded).toBe(0);
+    const me = store.findEntity(HOST, 'Giusto')!;
+    expect(store.activeFacts(HOST, me, 'date_of_birth')).toHaveLength(2);
+    // What was missing: this must be reported, the same way the sibling
+    // failure (judge answered but badly) already is.
+    expect(report.errors.join(' ')).toMatch(/giudice/i);
+  });
+
   it('does not re-add something already known', async () => {
     const { store, deps } = harness([
       facts(fact('Giusto', 'lives_in', 'Cagliari')),
