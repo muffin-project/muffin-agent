@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis per intero — la lista enumerata è `docs/blueprint/M5-BIS.md`, e il suo fondo è: righe ⛔ di §0/§1/§2/§3 verdi + le tre di §6 che sono dell'owner.
+**Obiettivo**: M5-bis per intero. Inventario Gate 1: `docs/blueprint/M5-BIS.md`. Fondo = zero BLOCKER, ogni riga READY o FUORI-con-ragione.
 
-**Mergiate in dev**: #9 sicurezza · #10 CI · #11 stato del lavoro. **Aperte**: #8 slice/gateway (23 commit) · #12 disegno eventi.
+**Mergiate in dev**: #8 slice/gateway (24 commit) · #9 · #10 · #11. **Aperte**: #12 eventi · #14 audit-fix · #15 inventario · #16 modelli.
 
-**Deleghe in volo**: sandbox-linux · audit-fix · ricerca-modelli.
+**Deleghe in volo**: sandbox-linux · reversibilita · gate1 x4 (installazione, continuita, capability, memoria+osservabilita).
 
-**Decisioni owner, aperte**: `fs.write` — registro di undo *oppure* `reversible:'no'`+ask (§1 di M5-BIS, pro e contro lì) · `ricorda` scrive o propone · lingua di README per l'open source · `identity.md` e il taglio di `persona.md`.
+**Decisioni owner, aperte**: modello di reversibilita sotto `fs.write` · `ricorda` scrive o propone · lingua README open-source · `identity.md` e taglio `persona.md`.
 
-**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile — un kind nuovo rompe ogni install esistente, la novità va in `connector` · `PRACTICES` §13 vive solo su slice/gateway, chi lavora da dev non ce l'ha · il binario dell'owner è dell'11 agosto.
+**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile — la novita va in `connector` · `agent/loop.ts:379` cabla `maxOutputTokens: 4096` e `openai-compat` non manda mai un budget di reasoning e scarta `thinking: []` al ritorno: un modello che ragiona di default (qwen3.8, gemini 3.7, grok 4.6) paga il ragionamento e lo butta · lanciare agenti da una base incompleta produce inventari falsi.
 
-**Prossima azione**: verificare le tre deleghe al rientro, una per una.
+**Prossima azione**: verificare le sei deleghe al rientro col metro di ORCHESTRATION §11.
 <!-- FINE BLOCCO -->
 
 ---
