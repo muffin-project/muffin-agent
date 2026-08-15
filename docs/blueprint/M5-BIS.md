@@ -101,10 +101,10 @@ ancora verificato — **è un debito, non uno stato**).
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
 | B1 | Conversation | CLI e Telegram condividono **davvero** sessione e memoria? | ? |
-| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — `runTurn` è sincrono |
-| B3 | Wait | Può aspettare **senza bloccare il runtime**? | BLOCKER — primitiva assente |
+| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — `runTurn` è sincrono · substrato pronto 🧱 |
+| B3 | Wait | Può aspettare **senza bloccare il runtime**? | BLOCKER — primitiva assente · substrato pronto 🧱 |
 | B4 | Todo | Mantiene lavoro multi-step persistente? | BLOCKER — tool assente |
-| B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume a grana di turno |
+| B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume · substrato pronto 🧱, e un crash ora **si vede** |
 | B6 | Retry | Se fallisce una tool call, recupera? | ? |
 | B7 | Scheduler | I job sopravvivono al riavvio? | ? |
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | BLOCKER 🔧 in lavorazione |
@@ -112,6 +112,25 @@ ancora verificato — **è un debito, non uno stato**).
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
+
+> 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
+> `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
+> `research/turno-sospendibile.md`) ha costruito quello che B2, B3 e B5 vogliono
+> tutti e tre: **un turno è una riga durevole con un'identità** — `core/turns/`,
+> tabella `turns` — con modello pinnato, trascritto intero, **taint persistito**
+> (ricostruirlo dal principal era una scalata di privilegio) e **intento+esito
+> per ogni tool call**, che è ciò che distingue «fatta» da «forse fatta».
+> `CapabilityDecl.rerunnable` è il secondo asse, obbligatorio, e **non** è
+> `reversible`.
+>
+> Quello che l'owner vede oggi che prima non vedeva: un processo che muore a metà
+> turno lascia una riga `interrupted`, nominata al boot e da `muffin doctor`, con
+> **quali chiamate possono essere partite senza che si possa sapere**. Prima quel
+> caso rifaceva il turno da capo, effetti compresi, in silenzio.
+>
+> Quello che **non** è costruito, e per cui le tre righe restano BLOCKER: `wait`,
+> il resume vero, la consegna dalla corsia. Il record non li fa — li rende
+> costruibili senza riaprire il loop.
 
 > ⚠️ **B11 e B12 le ha trovate l'owner, non questo documento** — poche ore dopo
 > che era stato scritto per rendere impossibile esattamente questo: *«mi pare che

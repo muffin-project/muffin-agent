@@ -32,6 +32,11 @@ export function mcpCapabilityFor(server: string): CapabilityDecl {
     id: `mcp.${server}`,
     risk: 'medium',
     reversible: 'no',
+    // We do not own the semantics on the other side of the pipe, so a call that
+    // may have landed is never made twice. This is the value that must not
+    // become a per-server option later without the server telling us: a
+    // third-party tool declaring itself re-runnable is a claim we cannot check.
+    rerunnable: false,
     resourceKind: 'none',
     policyArgs: [],
     hostOnly: true,

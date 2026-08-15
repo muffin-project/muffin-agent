@@ -53,12 +53,24 @@ export const fsWriteCapability = {
   id: 'fs.write',
   risk: 'medium',                      // 'low' | 'medium' | 'high'
   reversible: 'undoable',              // 'yes' | 'undoable' (undo_log) | 'no'
+  rerunnable: true,                    // OBBLIGATORIO. Asse indipendente da `reversible`
   maxTaint: 0,                         // taint massimo del contesto ammesso
   resourceKind: 'path',
   policyArgs: ['path'],                // campi di args ispezionati dal kernel
   hostOnly: true,                      // mai raggiungibile da tenant remoti
 } as const satisfies CapabilityDecl;
 ```
+
+- **`rerunnable` non è `reversible`, e questa riga è normativa** (ADR-0042).
+  Risponde a una domanda diversa: *«questa chiamata si può rifare quando nessuno
+  sa se la prima è andata a segno?»*. `fs.write` è l'esempio che separa i due
+  assi — **non** liberamente reversibile (vuole un undo) e **sì** ri-eseguibile,
+  perché riscrivere gli stessi byte dà lo stesso file. Una mail non è né l'uno né
+  l'altro. È **obbligatorio** perché un tool che non risponde deve rompere la
+  build invece di ereditare un default sbagliato metà delle volte, e perché
+  aggiungerlo dopo vuole un audit di ogni server MCP collegato. Il consumatore è
+  il resume: una chiamata con l'intento registrato e nessun esito viene rifatta
+  **solo** se questo campo lo dice.
 
 ### PermissionSnapshot (A11)
 

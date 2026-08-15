@@ -1,0 +1,148 @@
+import DatabaseCtor from 'better-sqlite3';
+import type { Update } from '@grammyjs/types';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { runInit } from '../../cli/init.js';
+import { buildRuntime } from '../../agent/runtime.js';
+import type { LoopDeps } from '../../agent/loop.js';
+import type { ChatResult, Provider } from '../../agent/providers/types.js';
+import type { TurnRecord } from '../../core/turns/store.js';
+import { TelegramConnector, type TelegramConfig } from './connector.js';
+import type { TelegramApi } from './api.js';
+import { UpdateInbox } from './updates.js';
+
+/**
+ * The delivery outcome, from a real update off the wire.
+ *
+ * Two things are asserted here and nowhere else. The first is that the *turn*
+ * and the *delivery* end up as two answers on one row — the property
+ * `core/scheduler/scheduler.ts:166-171` already had to be taught once, where a
+ * failed delivery must never make finished work look unfinished, because that
+ * doubles it.
+ *
+ * The second is smaller and worse: that failing to *record* the delivery cannot
+ * fail the delivery. A throw after a successful send marks the update failed,
+ * and the next drain sends the owner the whole answer a second time.
+ */
+
+const OWNER = 4242;
+
+const privateMsg = (id: number): Update =>
+  ({
+    update_id: id,
+    message: {
+      message_id: id * 10,
+      date: 0,
+      chat: { id: OWNER, type: 'private' },
+      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      text: 'ciao',
+    },
+  }) as unknown as Update;
+
+const reply = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'test-model',
+});
+
+const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OWNER };
+
+function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: boolean } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-tgrec-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'muffin-tgrec-ws-'));
+  runInit({ home, apiKey: 'sk-tgrec-never-called' });
+  const runtime = buildRuntime(home, workspace);
+
+  const provider: Provider = { kind: 'openai-compat', chat: async () => reply('ecco la risposta') };
+  const turns = over.breakDeliveryRecord
+    ? Object.assign(Object.create(Object.getPrototypeOf(runtime.deps.turns) as object), runtime.deps.turns, {
+        delivered: () => {
+          throw new Error('database is not open');
+        },
+      })
+    : runtime.deps.turns;
+  const loop: LoopDeps = { ...runtime.deps, provider, turns };
+
+  const logged: string[] = [];
+  const api = {
+    sendMessage: over.send ?? (async () => ({}) as never),
+    editMessageText: async () => ({}) as never,
+    sendChatAction: async () => true,
+    sendMessageDraft: async () => true,
+  } as unknown as TelegramApi;
+
+  const inbox = new UpdateInbox(new DatabaseCtor(':memory:'));
+  const connector = new TelegramConnector({
+    loop,
+    sessions: runtime.deps.sessions,
+    inbox,
+    api,
+    config,
+    log: (line) => logged.push(line),
+  });
+
+  return {
+    connector,
+    inbox,
+    logged,
+    runtime,
+    /** The single turn the drain produced, read from the production store. */
+    row: (): TurnRecord | null => {
+      const id = (runtime.db.prepare(`SELECT id FROM turns LIMIT 1`).get() as { id: string } | undefined)?.id;
+      return id === undefined ? null : runtime.deps.turns.get(id);
+    },
+  };
+}
+
+async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
+  h.inbox.accept(updates, new Date().toISOString());
+  await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+}
+
+describe('a telegram turn records where the answer goes and whether it got there', () => {
+  it('writes the reply address on the row, and marks the delivery sent', async () => {
+    const h = harness();
+    await deliver(h, [privateMsg(1)]);
+    const row = h.row();
+    // The address is on the record and not only on the stack. Nothing reads it
+    // yet — this same function still delivers — and that is the point: the day
+    // the lane delivers instead, the address is already durable.
+    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10 });
+    expect(row?.outcome).toBe('answered');
+    expect(row?.delivery).toBe('sent');
+    h.runtime.close();
+  });
+
+  it('a failed send leaves the turn answered and the delivery failed — never both', async () => {
+    const h = harness({
+      send: async () => {
+        throw new Error('429 Too Many Requests');
+      },
+    });
+    await deliver(h, [privateMsg(1)]);
+    const row = h.row();
+    expect(row?.status).toBe('done');
+    expect(row?.outcome).toBe('answered');
+    expect(row?.delivery).toBe('failed:429 Too Many Requests');
+    // Unchanged behaviour on the update: it stays pending and is retried, which
+    // is what the inbox is for. The record does not take that over in this
+    // slice — it only stops the two outcomes from being one.
+    expect(h.inbox.pending()).toHaveLength(1);
+    h.runtime.close();
+  });
+
+  it('a delivery that cannot be recorded is still a delivery', async () => {
+    const h = harness({ breakDeliveryRecord: true });
+    await deliver(h, [privateMsg(1)]);
+    // The answer was sent. If the bookkeeping write were allowed to throw, the
+    // update would be marked failed and the owner would receive the same answer
+    // again on the next drain — a worse bug than the missing row.
+    expect(h.inbox.pending()).toEqual([]);
+    expect(h.logged.join('\n')).toContain('consegna non registrata');
+    h.runtime.close();
+  });
+});
