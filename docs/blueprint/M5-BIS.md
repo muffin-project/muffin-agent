@@ -112,6 +112,8 @@ ancora verificato — **è un debito, non uno stato**).
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
+| B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
+| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | BLOCKER 🔭 — `sendDocument` scritto, nessun chiamante |
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
 > `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
@@ -143,6 +145,21 @@ ancora verificato — **è un debito, non uno stato**).
 > lo è. Il punto è che una lacuna, quando qualcuno la vede, **entri**. Ricerca in
 > corso: `research/superfici-e-streaming.md`.
 
+> 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
+> `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
+> Hermes Agent letta contro il nostro codice. Sono **B13**, **B14**, **C9**,
+> **D11**, **E6**, ed esistono per la ragione scritta in `ORCHESTRATION.md` §13:
+> un audit che confronta il codice **coi nostri stessi documenti** è cieco a ciò
+> che non abbiamo mai pensato. B11 e B12 ci erano sfuggite così; queste cinque
+> sarebbero sfuggite allo stesso modo.
+>
+> Quel documento non aggiunge solo righe: **cambia la forma del rimedio** di
+> B2 (il turno non va reso asincrono — serve un canale di progresso ortogonale),
+> di B12 (`agent/context/compact.ts:90` cancella il payload *intero* mentre ogni
+> cap sotto è testa+coda — è un difetto, non una mancanza), di D2/D3 (*non
+> chiedere, fotografare*) e di E1 (contare l'atto patologico costa meno che
+> stimare i token). Il §5 di quel file elenca riga per riga cosa sposta.
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
@@ -155,6 +172,7 @@ ancora verificato — **è un debito, non uno stato**).
 | C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
 | C7 | PDF | Acquisisce documenti utili? | BLOCKER — nessun parser |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
+| C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
 
 ### D · Capability e sicurezza → `gate1/d-capability.md`
 
@@ -170,6 +188,7 @@ ancora verificato — **è un debito, non uno stato**).
 | D8 | MCP | Gestisce drift e revoca? | ? — pinning solo all'attach |
 | D9 | Skills | Scopre e usa le skill? | ? |
 | D10 | Security | Nessuna capability escape? | ? |
+| D11 | Checkpoint | Esiste uno **snapshot prima di ogni mutazione**, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
 
 ### E · Economia e osservabilità → `gate1/e-osservabilita.md`
 
@@ -180,6 +199,7 @@ ancora verificato — **è un debito, non uno stato**).
 | E3 | Tracing | Posso ricostruire cosa è successo? | ? |
 | E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
+| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 subagent? | ? 🔭 |
 
 ---
 
@@ -208,6 +228,18 @@ Oggi il kernel ne ha tre (`allow` / `draft` / `ask` / `deny`) e `draft` non è
 eseguibile da nessun percorso. Il disegno va fatto **dopo** aver letto ADR,
 threat model e i contratti di capability — non prima.
 
+> 🔭 **Un modello funzionante esiste già, fuori** — `research/hermes-documentazione.md`
+> §3.7 (2026-08-15). La forma è più semplice di come l'avevamo scritta:
+> **non chiedere, fotografare.** Snapshot in un repo git ombra condiviso *prima*
+> di ogni mutazione (file tool e comandi shell distruttivi), al massimo uno per
+> directory per turno, e il ripristino disfa **anche l'ultimo turno di
+> conversazione** — altrimenti il contesto dell'agente e il filesystem divergono.
+> La riga «reversibile ma potenzialmente distruttivo» smette così di collassare
+> su `allow`. Tre vincoli nostri da rispettare prima di adottarlo (dati solo in
+> `~/.muffin/`, la caduta dei commit sotto il cap va **dichiarata** e tracciata,
+> il kernel resta puro: il checkpoint è un *effetto* di `draft`, mai un ingresso
+> di `Decide`) sono scritti lì.
+
 ## §2 · `wait` e `todo` sono primitive del runtime, non tool
 
 ```
@@ -219,6 +251,35 @@ async molto lunga, ed è precisamente la differenza fra un Muffin vivo e un
 Muffin lanciato da terminale. Stessa cosa per `todo`: il modello operativo non è
 `goal → turn → done` ma `goal → plan → todo{done|blocked|waiting|retry|pending}
 → resume`.
+
+> 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
+> §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
+>
+> **Chi decide il `wait`.** Non il modello dentro il turno — lì la decisione è
+> tainted come tutto il resto e attaccabile per injection. Un giudice *fuori* dal
+> turno che legge il registro dei processi vivi (che è fatto nostro, non testo di
+> un terzo: `agent/tools/process.ts` esiste già e non è mai stato collegato a una
+> decisione di controllo) e restituisce `done | continue | wait`, con tre forme di
+> barriera: pid, sessione+pattern, tempo. **Fail-open**: giudice rotto ⇒
+> `continue`, e il freno vero resta il budget di turni.
+>
+> **Un invariante che non avevamo scritto.** *Una barriera scaduta non può mai
+> incastrare il loop*: pid già morto, pid che muore mentre si aspetta, scadenza
+> passata ⇒ la barriera si libera al controllo successivo. Lo stesso pattern del
+> lock del gateway (stale dopo 10 battiti, qualunque sia il pid) mai
+> generalizzato.
+>
+> **Dove vive la durevolezza.** Hermes divide: ciò che è legato a una sessione
+> persiste lo *stato* ma serve un processo vivo per *scattare*; ciò che deve
+> sopravvivere a tutto va nello scheduler. Per noi la divisione costa meno che
+> per loro, perché ADR-0035 ha già deciso che un processo che vive esiste — a
+> patto che un `waiting` orfano si veda al boot, come già fa la riga
+> `interrupted` di ADR-0042.
+>
+> E su `todo`: la loro risposta **non è un tool `todo`**. È un obiettivo
+> persistente + criteri aggiungibili a metà corsa + **gate deterministici** —
+> un comando che deve uscire 0 prima che un giudice venga anche solo chiamato.
+> Il pezzo che fa terminare il ciclo è il gate, non lo stato del todo.
 
 ---
 
