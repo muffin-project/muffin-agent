@@ -57,15 +57,10 @@ jobs:
 
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
-      # Senza questo il verde è vuoto proprio dove serve. Misurato al primo
-      # giro di questa CI: `core/sandbox/executor.test.ts` girava «10 test, 9
-      # saltati», perché i test si auto-saltano quando la sandbox non è
-      # disponibile — e il runner non ha `bwrap`. Il risultato era una spunta
-      # verde che non aveva provato il confine di sicurezza, sulla stessa
-      # piattaforma dove gira la produzione. È la forma esatta di fallimento che
-      # `cli/doctor.ts` documenta in testa: su un host precedente `bwrap` era in
-      # PATH e la sandbox non conteneva niente per due mesi.
-      - name: bubblewrap (la sandbox va provata, non saltata)
+      # `bwrap` serve al sandbox su Linux, che è la piattaforma di produzione.
+      # Installarlo qui NON sblocca però i test di contenimento, e la prima
+      # versione di questa riga diceva il contrario: correzione in coda al file.
+      - name: bubblewrap (prerequisito del sandbox in produzione)
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - run: npm ci
@@ -78,3 +73,34 @@ jobs:
       # letto da una macchina.
       - name: suite
         run: npx vitest run --reporter=dot
+
+# ---------------------------------------------------------------------------
+# Correzione, 2026-08-15, e il buco che ha scoperto
+#
+# Il primo giro di questa CI è passato verde con
+# `core/sandbox/executor.test.ts` a «10 test, 9 saltati». Ho dedotto che
+# mancasse `bwrap` sul runner e ho aggiunto l'apt-get sopra. **Sbagliato**: il
+# secondo giro, con bubblewrap installato, ha dato gli stessi 9 saltati.
+#
+# Il gate vero è `platform() === 'darwin'` (executor.test.ts:18). Quei nove
+# test provano `sandbox-exec` di macOS e si saltano ovunque altro **per
+# costruzione**, con una ragione scritta e giusta: *"a skipped containment
+# reported as passed is how the previous system shipped a no-op sandbox for two
+# months"*.
+#
+# Quindi il buco non è nella CI, ed è più grosso di quello che sembrava:
+#
+#   · il contenimento su **Linux** — la piattaforma della VPS di produzione —
+#     non è provato da nessun test, su nessuna macchina;
+#   · `core/sandbox/probe.ts` non ha **alcun** file di test, e su Linux è
+#     esattamente il codice che decide se il sandbox è disponibile.
+#
+# L'apt-get resta perché è un prerequisito reale — il giorno che esiste un test
+# di contenimento per Linux serve, e senza `bwrap` un `muffin doctor` su questo
+# runner mentirebbe. Ma non compra ciò che il commit precedente diceva di
+# comprare, e questo blocco esiste perché quella frase non resti in piedi.
+#
+# Lezione, ed è la stessa di ORCHESTRATION.md §3 rivolta contro chi scrive:
+# ho letto un log invece di fidarmi della spunta — giusto — e poi ho creduto
+# alla mia prima spiegazione invece di verificarla. Il secondo passo vale
+# quanto il primo.
