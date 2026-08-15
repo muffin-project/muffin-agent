@@ -114,6 +114,15 @@ export type ChunkOptions = {
   source: string;
   /** Overrides the filename in the context line when the document declares one. */
   title?: string | undefined;
+  /**
+   * A breadcrumb the caller already knows and the text cannot state — a PDF
+   * page number, say. Prepended to whatever headings the text declares, so a
+   * chunk from page 4 reads `[Contratto (inbox/x.pdf) › p. 4]` and a recalled
+   * fragment can be checked against the page it came from. Without it a PDF's
+   * chunks are all labelled with the same filename and nothing else, which is
+   * a citation that cannot be followed.
+   */
+  headings?: readonly string[] | undefined;
   target?: number;
   max?: number;
 };
@@ -123,14 +132,16 @@ export function chunkDocument(text: string, options: ChunkOptions): Chunk[] {
   const max = options.max ?? CHUNK_MAX;
   const { frontmatter, body } = stripFrontmatter(text);
   const title = options.title ?? titleFromFrontmatter(frontmatter) ?? undefined;
+  const outer = options.headings ?? [];
 
   const chunks: Chunk[] = [];
   for (const section of splitIntoSections(body)) {
+    const headings = [...outer, ...section.headings];
     for (const piece of splitToSize(section.body, target, max)) {
       chunks.push({
         body: piece,
-        headings: section.headings,
-        text: `${contextLine(options.source, title, section.headings)}\n\n${piece}`,
+        headings,
+        text: `${contextLine(options.source, title, headings)}\n\n${piece}`,
       });
     }
   }

@@ -1,0 +1,240 @@
+import DatabaseCtor from 'better-sqlite3';
+import type { Update } from '@grammyjs/types';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildRuntime } from '../../agent/runtime.js';
+import type { LoopDeps } from '../../agent/loop.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
+import { runInit } from '../../cli/init.js';
+import { paths } from '../../core/config/config.js';
+import { buildPdf, pagesWithoutText } from '../../core/documents/fixtures/pdf.js';
+import { TelegramConnector } from './connector.js';
+import type { TelegramApi } from './api.js';
+import { UpdateInbox } from './updates.js';
+
+/**
+ * The acceptance scenario, run the way the owner runs it: a PDF sent to the bot.
+ *
+ * `M5-BIS.md` C7 was `BLOCKER — nessun parser`, and the sentence under it is the
+ * one this file has to falsify: *"un PDF che arriva su Telegram viene salvato e
+ * mai indicizzato"*. Every layer below the connector is the production assembly
+ * — `buildRuntime`, the real vault, the real tools, the real kernel. Only the
+ * model and the network are replaced, because the alternative is a paid call and
+ * a download.
+ *
+ * Two properties, and they are the two halves of the owner's directive. The
+ * document goes in **whole**, so the last page is recallable; and the turn is
+ * handed a **compact view with a way back in**, so answering a question about
+ * page two does not cost eighty pages of context. A test for either one alone
+ * would pass on a design that gets the other backwards.
+ */
+
+const OWNER = 4242;
+const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+
+const CONTRATTO = buildPdf({
+  title: 'Contratto',
+  pages: [
+    ['Contratto di locazione', 'fra le parti sottoscritte'],
+    ['Canone mensile 850 euro', 'da versare entro il cinque'],
+    ['Recesso con preavviso di tre mesi'],
+  ],
+});
+
+const withDocument = (id: number, name: string): Update =>
+  ({
+    update_id: id,
+    message: {
+      message_id: id,
+      date: 0,
+      chat: { id: OWNER, type: 'private' },
+      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      caption: 'tieni questo',
+      document: { file_id: `f${id}`, file_unique_id: `u${id}`, file_name: name, file_size: 4096 },
+    },
+  }) as unknown as Update;
+
+const reply = (text: string): ChatResult => ({
+  text, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model',
+});
+const callDocumentRead = (args: Record<string, unknown>): ChatResult => ({
+  text: null,
+  toolCalls: [{ id: 'c1', name: 'document_read', args }],
+  stopReason: 'tool_use',
+  usage: USAGE,
+  model: 'test-model',
+});
+
+function harness(bytes: Buffer, script: ChatResult[] = []) {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-docarr-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'muffin-docarr-ws-'));
+  runInit({ home, apiKey: 'sk-docarr-never-called' });
+  const runtime = buildRuntime(home, workspace);
+  const vaultRoot = paths(home).vault;
+  mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
+
+  // The download, without the network. `downloadToVault` asks the API for a URL
+  // and then fetches it; both are stubbed and nothing else about the path is.
+  //
+  // Only that URL. Every other outbound call fails, which is not laziness — it
+  // is the ordinary state of a fresh install: no embedder is running, so
+  // `reindex` reaches one that refuses the connection. A stub that answered
+  // everything would have hidden the bug this test found, where a down embedder
+  // made the connector report `[allegato NON ricevuto]` over a document it had
+  // just indexed in full.
+  vi.stubGlobal('fetch', async (input: unknown) => {
+    if (String(input).includes('api.telegram.example')) return new Response(new Uint8Array(bytes));
+    throw new TypeError('fetch failed');
+  });
+
+  const seen: ChatCall[] = [];
+  let step = 0;
+  const provider: Provider = {
+    kind: 'openai-compat',
+    chat: async (call: ChatCall) => {
+      seen.push(call);
+      return script[step++] ?? reply('Ok.');
+    },
+  };
+
+  const api = {
+    fileUrl: async () => 'https://api.telegram.example/file/bot-token/documents/x.pdf',
+    sendMessage: async () => ({}) as never,
+    editMessageText: async () => ({}) as never,
+    sendChatAction: async () => true,
+    sendMessageDraft: async () => true,
+  } as unknown as TelegramApi;
+
+  const connector = new TelegramConnector({
+    loop: { ...runtime.deps, provider } satisfies LoopDeps,
+    sessions: runtime.deps.sessions,
+    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    api,
+    // Exactly the wiring `cli/surface.ts` builds, including the runtime's own
+    // vault — a connector indexing into a second root would produce documents
+    // `document_read` cannot open, and every assertion below would still pass
+    // if this test built its own.
+    vault: {
+      root: vaultRoot,
+      reindex: (defaultTier) =>
+        runtime.vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
+    },
+    config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
+  });
+
+  return { connector, seen, runtime };
+}
+
+async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
+  const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
+  inbox.accept(updates, new Date().toISOString());
+  await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+}
+
+/** Everything the model was actually shown this turn, tool results included. */
+const transcript = (call: ChatCall): string => JSON.stringify(call.messages);
+
+/**
+ * Only what a tool handed back.
+ *
+ * Separated from `transcript` on purpose: the turn's own recall also carries
+ * chunks of the same document, so asserting "the portion did not include page
+ * three" against the whole transcript would be asserting something about recall
+ * instead of about the drill-down.
+ */
+const toolResults = (call: ChatCall): string =>
+  JSON.stringify(
+    call.messages.flatMap((m) =>
+      Array.isArray(m.content) ? m.content.filter((c) => c.type === 'tool_result') : [],
+    ),
+  );
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('a PDF sent to the bot', () => {
+  it('is indexed whole — the last page answers a search, not only the first', async () => {
+    const h = harness(CONTRATTO);
+    try {
+      await deliver(h, [withDocument(1, 'contratto.pdf')]);
+
+      // Page three, and specifically as a **document** episode: the turn's own
+      // message quotes the index, so a search alone would match the outline and
+      // report success over a document that was never indexed. This asks for
+      // the chunk.
+      const store = h.runtime.memory.store;
+      const documentHits = (needle: string) =>
+        store
+          .searchEpisodes('host', needle)
+          .map((hit) => store.episodeById('host', hit.id))
+          .filter((e) => e?.kind === 'document');
+
+      expect(documentHits('preavviso')).toHaveLength(1);
+      expect(documentHits('preavviso')[0]?.content).toContain('p. 3');
+      expect(documentHits('Canone')).toHaveLength(1);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('hands the turn an index and the way back in, not eighty pages', async () => {
+    const h = harness(CONTRATTO);
+    try {
+      await deliver(h, [withDocument(2, 'contratto.pdf')]);
+      expect(h.seen).toHaveLength(1);
+
+      const text = transcript(h.seen[0]!);
+      expect(text).toContain('3 pagine');
+      expect(text).toContain('acquisito per intero');
+      expect(text).toContain('document_read');
+      // The caption is still a message: the file did not swallow what was said
+      // with it.
+      expect(text).toContain('tieni questo');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('lets the model open a page and get the document’s own words', async () => {
+    // The whole point of the pair. The first turn sees the index; the model asks
+    // for page two; what comes back is the text of page two, from the file.
+    const h = harness(CONTRATTO, [
+      callDocumentRead({ path: 'inbox/2026-08-15-3-contratto.pdf', da: 2 }),
+      reply('Il canone è 850 euro al mese.'),
+    ]);
+    try {
+      await deliver(h, [withDocument(3, 'contratto.pdf')]);
+      expect(h.seen.length).toBeGreaterThanOrEqual(2);
+
+      const returned = toolResults(h.seen[1]!);
+      expect(returned).toContain('Canone mensile 850 euro');
+      expect(returned).toContain('[p. 2]');
+      // The portion is the range asked for and nothing else. A drill-down that
+      // quietly returned the whole document would satisfy every other assertion
+      // here and cost exactly what the compact view exists to save.
+      expect(returned).not.toContain('preavviso di tre mesi');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('says a scan is a scan, in the turn, instead of pretending it read it', async () => {
+    // The failure path, on the real route. An extractor that returned the empty
+    // string here would produce "ricevuto e indicizzato" over a document with
+    // nothing in it, and the owner would find out by asking a question about it.
+    const h = harness(pagesWithoutText(5));
+    try {
+      await deliver(h, [withDocument(4, 'scansione.pdf')]);
+
+      const text = transcript(h.seen[0]!);
+      expect(text).toContain('non indicizzato');
+      expect(text).toContain('OCR');
+      expect(text).toContain('5 pagine');
+    } finally {
+      h.runtime.close();
+    }
+  });
+});
