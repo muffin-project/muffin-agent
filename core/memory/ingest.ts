@@ -265,7 +265,16 @@ async function reconcile(
     judgeSpan.end();
   } catch (error) {
     judgeSpan.end({ error });
-    // A broken judge must not be able to retire a belief.
+    // A broken judge must not be able to retire a belief — same rule as the
+    // low-confidence branch eight lines below, and reported the same way.
+    // Silently returning 'added' here made an unreachable judge (network,
+    // auth, a 5xx on the light provider) indistinguishable from an ordinary,
+    // considered 'coexist': not a decision, and looking like one is how "the
+    // memory just accumulates" becomes something nobody can explain.
+    report.errors.push(
+      `giudice non raggiungibile su ${fact.subject}/${fact.predicate}: ` +
+        `${error instanceof Error ? error.message : String(error)} — tengo entrambi i valori`,
+    );
     insert();
     return 'added';
   }
