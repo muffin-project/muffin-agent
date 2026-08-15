@@ -94,12 +94,42 @@ export type PolicyMatrix = {
 export const POLICY_FLOOR: PolicyMatrix = {
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
   /** No principal may ever exercise these at runtime, whatever the taint. */
-  neverAtRuntime: new Set<CapabilityId>(['rot.write']),
+  neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
-  forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'config.ratchet']),
+  forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),
   source: 'fallback',
   note: null,
 };
+
+/**
+ * Does a deny list cover this capability? Exact id, or a namespace entry.
+ *
+ * Both lists are quotations from the threat model, and one of them was
+ * mis-transcribed in the direction that matters. 03 §3 says *"le capability
+ * `outward.*` … sono escluse del tutto da `system@scheduler` a qualunque
+ * taint"* — the star is in the guarantee. The lists held bare ids and the
+ * lookup was `Set.has`, so the sentence was true of exactly the one id someone
+ * had thought to write down. Nothing was wrong today only because
+ * `outward.send` does not exist yet: the deny was guarding an unbuilt
+ * capability, and the first sibling to ship under that prefix
+ * (`outward.publish`, `outward.email.send`) would have arrived as an `ask` the
+ * owner can approve — for a class of action the threat model says an
+ * autonomous principal must never reach at all.
+ *
+ * A namespace entry is `prefix.*`, matched on dotted segments and never on raw
+ * string prefix: `outward.*` covers `outward.email.send` and does not cover a
+ * capability that merely begins with the same letters. `rot.*` is here for the
+ * same reason, one row up in the same table — *"Root of Trust | DENY a runtime
+ * per chiunque"* — where `rot.write` alone would let a `rot.reseal` through.
+ */
+export function denyListCovers(list: ReadonlySet<CapabilityId>, capability: CapabilityId): boolean {
+  if (list.has(capability)) return true;
+  const parts = capability.split('.');
+  for (let i = 1; i < parts.length; i += 1) {
+    if (list.has(`${parts.slice(0, i).join('.')}.*`)) return true;
+  }
+  return false;
+}
 
 const fallback = (note: string): PolicyMatrix => ({ ...POLICY_FLOOR, note });
 

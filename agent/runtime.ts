@@ -4,6 +4,7 @@ import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { mandatoryGuards } from '../core/rot/guards.js';
 import { createDecide } from '../core/policy/decide.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
@@ -240,7 +241,6 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // returned the provider key in plaintext. Not exploitable on the owner's
   // machine only because no `.env` existed yet — and ADR-0030 is the document
   // telling them to create one.
-  const secretPaths = [secretDir('home', home), secretDir('persistent', home)];
   // Named explicitly rather than by a "looks like a secret" heuristic. `.env` is
   // the one file inside `root` that a decision record instructs the owner to
   // fill with a key; a pattern over `*.pem`, `id_rsa`, `credentials` and the
@@ -248,12 +248,15 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // without being one. What makes the key safe is that it no longer has to be
   // here (`secretDir('persistent')`); this entry is the belt for the owner who
   // has not moved it yet.
-  const dotenv = join(cwd, '.env');
-  const scope: FsScope = {
-    root: cwd,
-    denyWrite: [p.rot, p.secrets, p.config],
-    denyRead: [...secretPaths, dotenv],
-  };
+  //
+  // The list itself moved to `core/rot/guards.ts`, because it was written out
+  // twice here — once for the fs tools, once for the sandbox — and both copies
+  // held three of the five categories the threat model requires. `.git/hooks`
+  // and the shell dotfiles were in neither, and both are the same escape: a
+  // contained write that becomes an uncontained execution the next time the
+  // owner commits, or opens a shell.
+  const guards = mandatoryGuards(home, cwd);
+  const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
   const tools: RegisteredTool[] = [
     {
       capability: 'fs.read',
@@ -290,13 +293,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // real containment on this host: absent sandbox → absent tool, declared in
   // doctor — never a silent unsandboxed run (ADR-0018 rule 5, tightened: v1 is
   // strict mode, the ask-gated escape hatch arrives as its own capability).
-  // Same list as the fs tools above, for the same reason: two deny-lists that
-  // drift are one deny-list plus a hole, and the sandbox is the layer that has
-  // to hold when the kernel is the thing that is wrong.
-  const executor = new SandboxExecutor({
-    denyWrite: [p.rot, p.secrets, p.config],
-    denyRead: [...secretPaths, dotenv],
-  });
+  // Literally the same `guards` object the fs tools got, which is what the
+  // comment here used to only ask for: "two deny-lists that drift are one
+  // deny-list plus a hole". They were two hand-written copies, and both were
+  // missing the same two categories — so the hole was in neither copy's
+  // divergence but in both of them agreeing on an incomplete list.
+  const executor = new SandboxExecutor(guards);
   if (executor.status().available) {
     tools.push(makeShellTool(executor, { root: cwd }));
   }
