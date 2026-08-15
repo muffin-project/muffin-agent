@@ -86,8 +86,13 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(why);
     expect(matrix.defaultMaxTaint).toEqual({ low: 3, medium: 1, high: 1 });
-    expect([...matrix.neverAtRuntime]).toEqual(['rot.write']);
-    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'config.ratchet']);
+    // The namespace entries joined the bare ids when the lookup learned to
+    // read them (`denyListCovers`): 03 §3 says `outward.*`, and the Root of
+    // Trust row says the RoT, not one verb of it. Both are tightenings — the
+    // literal list only ever grows in the deny direction, which is why this
+    // assertion stays literal.
+    expect([...matrix.neverAtRuntime]).toEqual(['rot.write', 'rot.*']);
+    expect([...matrix.forbiddenForSystem]).toEqual(['outward.send', 'outward.*', 'config.ratchet']);
   };
 
   it('an absent file degrades to the floor and says so', () => {
