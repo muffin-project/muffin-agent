@@ -10,6 +10,36 @@
 > di vivere 14 giorni usando esclusivamente Muffin?»* Finché la risposta è sì,
 > quella cosa entra qui.
 
+## La finestra si chiude, ed è questo che ordina il lavoro
+
+Direttiva owner, 2026-08-15: *«le "cose che non devono cambiare" possono ancora
+cambiare fino a quando non andiamo opensource, per questo importante partire
+dalle fondamenta e rendere muffin usabile per davvero, così da testarlo due
+settimane in prod»*.
+
+Quindi l'ordine non è una preferenza, è una **sequenza con una scadenza**:
+
+```
+fondamenta riscrivibili  →  usabile davvero  →  14 giorni d'uso  →  open source
+        ↑ siamo qui                                                    ↑ la finestra si chiude
+```
+
+Oggi cambiare la forma di un turno non rompe nessuno: niente è pubblico, niente
+è in produzione. Dopo, la stessa modifica rompe le installazioni di altri, e
+quello che oggi è una riscrittura di un pomeriggio diventa una migrazione con
+deprecazioni.
+
+**Conseguenza pratica sull'inventario**: le righe che sono **decisioni di forma**
+vengono prima di quelle che sono **aggiunte di feature**, anche quando una
+feature si sente di più. Un turno che non sa sospendersi è una forma; un parser
+PDF è una feature. Il parser si aggiunge in qualunque momento; la forma no.
+
+**L'unica cosa che non gode di questa libertà sono i dati dell'owner.**
+`~/.muffin` ha 21 tabelle e memoria vera. Il codice si riscrive, lo schema si
+migra — e `episodes.kind` ha già dimostrato quanto costi (un `CHECK` a cinque
+valori che SQLite non altera: un `kind` nuovo funziona su un database fresco e
+rompe ogni installazione esistente).
+
 ## La regola delle tre risposte
 
 Ogni riga di questo inventario deve avere **una** di queste tre, e la quarta non
