@@ -94,6 +94,44 @@ describe('the allowlist is checked against the code, not believed', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('a module that only imports the symbol is not a caller of it', () => {
+    // Found by mutating this slice, and it is the same hole as the docstring
+    // one above, one layer down. `cli/observe.ts` was rewritten to stop calling
+    // `loadSealedBudgets` — replaced by a hardcoded object, which is exactly the
+    // defect being guarded against — and the check stayed green, because
+    // `import { loadSealedBudgets } from …` still contained the name. An import
+    // says a module *may* use a symbol; only a call says it does.
+    //
+    // The fixture is an aliased import, which is the honest shape of a name that
+    // is imported and never written again: `core/skills/skills.ts` does
+    // `import { load as yamlLoad }`, so after comments and imports are stripped
+    // the bare word `load` is nowhere in it. (If someone adds a `loadFoo` there
+    // this goes red for the wrong reason — a false red, which is loud, and the
+    // side this file is deliberately wrong on.)
+    const dir = home();
+    const result = checkRotReaders(dir, [
+      { file: 'policy.json', readers: [{ module: 'core/skills/skills.ts', fn: 'load', indirect: true, why: 'imported, never called' }] },
+      ...ROT_READERS.filter((e) => e.file !== 'policy.json'),
+    ]);
+    expect(result.violations.map((v) => v.id)).toEqual(['reader_gone']);
+    expect(result.violations[0]?.sample.join(' ')).toContain('non chiama più load()');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an indirect reader still has to name its function, it just need not name the file', () => {
+    // The other half: `indirect` relaxes exactly one of the two claims. Without
+    // this, `indirect: true` would be a way to declare a reader that is never
+    // checked at all — a flag that turns the invariant off from inside the
+    // allowlist it is supposed to police.
+    const dir = home();
+    const clean = checkRotReaders(dir, [
+      { file: 'policy.json', readers: [{ module: 'agent/runtime.ts', fn: 'loadPolicyMatrix', indirect: true, why: 'really calls it' }] },
+      ...ROT_READERS.filter((e) => e.file !== 'policy.json'),
+    ]);
+    expect(clean.violations).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('an entry naming a module that is not there is not silently skipped', () => {
     const dir = home();
     const result = checkRotReaders(dir, [

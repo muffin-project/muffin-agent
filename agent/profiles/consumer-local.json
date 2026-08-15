@@ -5,6 +5,7 @@
   "maxToolsExposed": 10,
   "maxToolCallsPerTurn": 15,
   "thinking": "off",
+  "sampling": "deterministic",
   "recovery": ["nudge", "reinjectTools", "retryOnce", "strictJson"],
-  "notes": "The floor the harness is designed against: 10 tools, 15 sequential calls. Thinking off — its effect is model-specific and has regressed tool use before."
+  "notes": "The floor the harness is designed against: 10 tools, 15 sequential calls. Thinking off — its effect is model-specific and has regressed tool use before. These reach us through the openai-compat adapter, which carries neither knob: 'off' is a declared no-op there (ADR-0008), and it is written down so the day one of them arrives over the Anthropic adapter the intent is already stated. temperature 0 stays: a small model wanders without it."
 }

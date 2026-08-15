@@ -58,6 +58,19 @@ export type RotReaderRef = {
   fn: string;
   /** What that reader does with the file — one line, for whoever audits next. */
   why: string;
+  /**
+   * This module does not open the file; it calls the loader that does.
+   *
+   * The filename check is skipped for it, the symbol check is not — and the
+   * symbol is the half that matters here. A sealed file with one loader and
+   * three consumers looks perfectly healthy from the loader alone, which is the
+   * *field*-granularity version of the defect this whole file exists for:
+   * `budgets.json` had a declared reader for months while the two fields that
+   * cap spending were read by nobody, because the reader that existed only
+   * wanted the quiet hours. Naming the consumers makes a consumer that quietly
+   * stops calling the loader turn this red.
+   */
+  indirect?: true;
 };
 
 export type RotEntry = {
@@ -98,25 +111,39 @@ export const ROT_READERS: RotEntry[] = [
   },
   {
     file: 'budgets.json',
+    // Closed 2026-08-13 (ADR-0039). What stood here said `monthlyUsd` and
+    // `perTenantDailyUsd` were declared in this file and read by nobody —
+    // `BudgetEngine` was built from `config.budget` in config.json, outside the
+    // seal — so the file passed this invariant on the strength of its quiet
+    // hours while the caps it promised to protect bound nothing. `config.budget`
+    // no longer exists; `core/rot/budgets.ts` is the single reader and the three
+    // consumers below are listed so that "someone loads it" cannot again stand
+    // in for "the thing that spends money asks it".
     readers: [
       {
+        module: 'core/rot/budgets.ts',
+        fn: 'loadSealedBudgets',
+        why: 'the file itself: spend caps and quiet hours, parsed as two independent halves',
+      },
+      {
+        module: 'agent/runtime.ts',
+        fn: 'loadSealedBudgets',
+        why: 'the caps handed to BudgetEngine — the number the kernel checks before every non-trivial capability',
+        indirect: true,
+      },
+      {
         module: 'cli/observe.ts',
-        fn: 'ownerQuietHours',
-        why: 'quiet hours: the window in which proactive delivery stays silent',
+        fn: 'loadSealedBudgets',
+        why: 'the proactivity gate: the same caps, plus the window in which delivery stays silent',
+        indirect: true,
       },
       {
         module: 'cli/jobs.ts',
-        fn: 'ownerTimezone',
+        fn: 'loadSealedBudgets',
         why: 'quietHours.timezone, so a cron written as "8am" means the owner\'s 8am',
+        indirect: true,
       },
     ],
-    // Honest about the half that is still decorative: `monthlyUsd` and
-    // `perTenantDailyUsd` are declared here and NOT read — `BudgetEngine` is
-    // built from `config.budget` in config.json, which is outside the seal. The
-    // file therefore has a reader (this invariant passes) while two of its
-    // fields do not have one, which is the same defect at field granularity and
-    // is not this slice's to close. Recorded so the next reader finds it
-    // written down instead of discovering it.
   },
   {
     file: 'identity.md',
@@ -146,9 +173,32 @@ const SOURCE_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 function moduleSource(module: string): string | null {
   for (const candidate of [module, module.replace(/\.ts$/, '.js')]) {
     const full = join(SOURCE_ROOT, candidate);
-    if (existsSync(full)) return code(readFileSync(full, 'utf8'));
+    if (existsSync(full)) return withoutImports(code(readFileSync(full, 'utf8')));
   }
   return null;
+}
+
+/**
+ * Import statements removed, and this is the second time the same lesson has
+ * been learned in this file.
+ *
+ * `code()` exists because a *docstring* naming `policy.json` satisfied the
+ * filename half of the check while no line of code opened the file. The symbol
+ * half had the identical hole one layer down: mutating `cli/observe.ts` to stop
+ * calling `loadSealedBudgets` — replacing the call with a hardcoded object,
+ * which is exactly the shape of the defect — left the check green, because
+ * `import { loadSealedBudgets } from …` still contained the name. Measured:
+ * green with the import, red without it.
+ *
+ * An import declares that a module *may* use a symbol. The call is the evidence
+ * that it does, and evidence is the only thing this file is allowed to accept.
+ * Same asymmetry as `code()`: over-stripping costs a false red, which is loud;
+ * keeping a declaration costs a false green, which is what just happened.
+ */
+function withoutImports(source: string): string {
+  return source
+    .replace(/\bimport\b[^;]*?\bfrom\b\s*(['"])[^'"]*\1\s*;?/g, ' ')
+    .replace(/\bimport\s*(['"])[^'"]*\1\s*;?/g, ' ');
 }
 
 /**
@@ -257,12 +307,15 @@ export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READER
         continue;
       }
       // Two claims, both checkable: that the module still opens this file, and
-      // that the named function is still the one to look at.
+      // that the named function is still the one to look at. An `indirect`
+      // reader makes only the second claim — it reaches the file through the
+      // loader, so requiring it to name the file would force a decorative
+      // string into a module that has no business knowing the filename.
       const wanted = entry.file.endsWith('/') ? entry.file : basename(entry.file);
-      if (!source.includes(wanted)) {
+      if (reader.indirect !== true && !source.includes(wanted)) {
         broken.push(`${entry.file} → ${reader.module} non nomina più "${wanted}"`);
       } else if (!source.includes(reader.fn)) {
-        broken.push(`${entry.file} → ${reader.module} non ha più ${reader.fn}()`);
+        broken.push(`${entry.file} → ${reader.module} non chiama più ${reader.fn}()`);
       }
     }
   }

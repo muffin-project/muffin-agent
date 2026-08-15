@@ -22,6 +22,7 @@
     "core/**/*.ts",
     "agent/**/*.ts",
     "cli/**/*.ts",
+    "evals/**/*.ts",
     "**/*.test.ts",
     ".claude/hooks/**/*.ts"
   ]

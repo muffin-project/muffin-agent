@@ -3,10 +3,15 @@ import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
-import { loadConfig, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { readGateway } from '../core/gateway/lock.js';
+import { readConsolidation } from '../core/memory/consolidator.js';
+import { readOpenContradictions } from '../core/memory/maintenance.js';
+import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { loadSealedBudgets } from '../core/rot/budgets.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -30,7 +35,13 @@ export type Check = {
 
 export type DoctorReport = { checks: Check[]; exitCode: 0 | 1 | 2 };
 
-export function runDoctor(home = paths().home, options: { online?: boolean } = {}): DoctorReport {
+export type DoctorOptions = {
+  online?: boolean;
+  /** Test-only: overrides the shipped `agent/profiles/` directory. */
+  profilesDir?: string;
+};
+
+export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
@@ -46,8 +57,9 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
   ok('home', p.home);
 
   let config;
+  const configNotes: string[] = [];
   try {
-    config = loadConfig(home);
+    config = loadConfig(home, (line) => configNotes.push(line));
     // The cache dialect is inferred from the endpoint, and an inference the
     // owner cannot see is one they cannot correct: a miss pays full input
     // price on every turn, silently (ADR-0008 forbids exactly that shape).
@@ -62,6 +74,51 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     const e = error as ConfigError;
     fail('config', e.message, e.remedy ?? 'run `muffin init`');
     return report(checks);
+  }
+
+  // A migration that ran in memory and said nothing would be the same class of
+  // invisible fact as the cache dialect above: the file on disk still declares a
+  // `budget` that no longer does anything, and the owner has no way to learn
+  // that the number they raised last month stopped binding. Warn, not ok — there
+  // is something for them to do (or decide not to do).
+  for (const note of configNotes) {
+    warn('config migrata', note, 'la riscrittura avviene da sé alla prossima modifica di config.json');
+  }
+
+  // Which per-model profile `config.models.main` actually resolves to, and
+  // whether anything was dropped getting there. `profile.ts:109` and
+  // ADR-0037 both say a stale profile is "nominato in `doctor`" — that was
+  // false: the problems only ever reached `bootLines` (stderr at boot, via
+  // `agent/runtime.ts`), which `doctor` neither imported nor ran (D3, judge,
+  // 2026-08-13). `doctor` is where an owner looks when something is wrong,
+  // and a model silently falling back to the conservative floor — fewer
+  // tools, a shorter horizon, every crutch on, possibly a 400 on every turn
+  // (D4) — is exactly that class of thing.
+  const profileProblems: string[] = [];
+  const profiles = loadProfiles(options.profilesDir, (line) => profileProblems.push(line));
+  const resolvedProfile = selectProfile(config.models.main, profiles);
+  if (profileProblems.length === 0) {
+    ok('model profile', `${config.models.main} -> ${resolvedProfile.name}`);
+  } else if (resolvedProfile === CONSERVATIVE) {
+    // D4: a problem fired AND the configured model landed on the floor
+    // profile. Named with the cost, not just the fact — an owner reading
+    // this should not have to go read profile.ts to know what changed.
+    fail(
+      'model profile',
+      `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
+        `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
+        `${resolvedProfile.maxToolsExposed} tool esposti (orizzonte ${resolvedProfile.maxToolCallsPerTurn}), ` +
+        `stampelle [${resolvedProfile.recovery.join(', ')}]`,
+      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+    );
+  } else {
+    // Something is wrong but the model in use was not the one that paid for
+    // it — still worth a line, never a fail: the owner is not degraded today.
+    warn(
+      'model profile',
+      `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}"`,
+      'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
+    );
   }
 
   // Root of trust: integrity, and an honest statement of which guarantee the
@@ -136,13 +193,52 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
     }
   }
 
+  // The caps that bind, and which file they came from. Same shape of invisible
+  // fact as the policy matrix above and worse in consequence: for months the
+  // sealed `budgets.json` and the unsealed `config.json` carried identical
+  // numbers, so nothing anywhere distinguished "the seal is holding the cap"
+  // from "the seal is holding a copy of the cap".
+  const budgets = loadSealedBudgets(home);
+  if (budgets.capsSource === 'sealed') {
+    ok(
+      'tetto di spesa',
+      `rot/budgets.json — ${budgets.caps.monthlyUsd} USD/mese, ${budgets.caps.perTenantDailyUsd} USD/giorno per tenant`,
+    );
+  } else {
+    warn(
+      'tetto di spesa',
+      `valori compilati (${budgets.caps.monthlyUsd}/${budgets.caps.perTenantDailyUsd} USD) — ${budgets.notes.join(' · ')}`,
+      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+    );
+  }
+  if (budgets.quietSource === 'fallback') {
+    warn(
+      'quiet hours',
+      `finestra compilata ${budgets.quietHours.from}-${budgets.quietHours.to} ${budgets.quietHours.timezone} — ${budgets.notes.join(' · ')}`,
+      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+    );
+  }
+
   // Key presence only. A network call costs money and needs an explicit opt-in.
+  // *Which backend answered* is part of the check, not decoration: the read
+  // chain has two links now, and a chain that does not say which one spoke is
+  // how an install that believes it has moved its key keeps reading the old
+  // copy forever. Both locations are named when both exist, because that is the
+  // shadowing case and it is silent from every other angle.
   try {
     const key = readSecret(config.provider.apiKeyRef, home);
+    const where = locateSecretAll(config.provider.apiKeyRef, home);
+    const answered = where[0];
     if (key.length === 0) {
       fail('api key', 'secret file is empty', `write it with \`muffin secret set\``);
+    } else if (where.length > 1) {
+      warn(
+        'api key',
+        `${key.length} chars (mai stampata) — legge ${answered?.path}, ma esiste anche ${where[1]?.path}: la seconda non viene mai usata`,
+        'cancella la copia che non vuoi, così resta una sola chiave da ruotare',
+      );
     } else {
-      ok('api key', `${config.provider.apiKeyRef} present (${key.length} chars, never printed)`);
+      ok('api key', `${config.provider.apiKeyRef} (${answered?.backend}) — ${answered?.path}, ${key.length} chars, mai stampata`);
     }
   } catch (error) {
     const e = error as ConfigError;
@@ -195,6 +291,73 @@ export function runDoctor(home = paths().home, options: { online?: boolean } = {
       } else {
         ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
       }
+    }
+    // Has the memory lane ever run? Third of the same shape, and the one that
+    // was the whole defect: `ingestPending` had a single hand-typed caller, so
+    // an install could sit for weeks with 0 facts and nothing anywhere said
+    // why. Zero facts is also the *correct* state of a working lane on a quiet
+    // week — the measured yield is one fact per thirty turns — so the number
+    // that separates the two is the run count, not the fact count.
+    const consolidation = readConsolidation(db);
+    if (consolidation === null) {
+      warn(
+        'consolidamento',
+        'mai eseguito: gli episodi non diventano fatti e il recall resta solo-keyword',
+        'apri `muffin` (parte da solo a fine turno) oppure `muffin memory extract`',
+      );
+    } else {
+      const last = consolidation.last;
+      const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      if (last.outcome === 'budget') {
+        warn(
+          'consolidamento',
+          `fermo dal ${when}: budget mensile esaurito`,
+          // The cap moved into the seal, so the remedy moved with it: telling the
+          // owner to edit config.json would now send them to a field that no
+          // longer exists.
+          'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
+        );
+      } else {
+        ok(
+          'consolidamento',
+          `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
+            `${last.facts} fatti · ${consolidation.runs} run in totale`,
+        );
+      }
+    }
+
+    // The judge's "a human should decide" outcome, which had a durable register
+    // and no reader. Here rather than only in `memory stats` because this is the
+    // command an owner runs when something feels wrong, and an open contradiction
+    // is the one memory state that cannot resolve itself: both beliefs stay
+    // current, recall keeps returning both, and nothing in the lane will ever
+    // choose. Counted open — derived from the facts — not counted total, which on
+    // an append-only register only ever grows.
+    const open = readOpenContradictions(db, 'host');
+    if (open !== null && open > 0) {
+      warn(
+        'memoria da decidere',
+        `${open} contraddizioni aspettano te: due valori restano entrambi attivi finché non scegli`,
+        'run `muffin memory review`',
+      );
+    }
+
+    // Is anything running? Same shape of invisible fact as the cache dialect
+    // and the policy source above: with the scheduler moved out of the REPL
+    // (ADR-0035) a home with no gateway schedules *nothing*, and nothing in the
+    // agent's output says so — the jobs are still listed, they simply never
+    // fire. Constraint 5 of that ADR is "visibile e ammazzabile", and this is
+    // the visible half.
+    const gateway = readGateway(db);
+    if (gateway) {
+      const since = gateway.since.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}`);
+    } else {
+      warn(
+        'gateway',
+        'nessun processo attivo: i job schedulati girano solo mentre una sessione `muffin` è aperta',
+        'run `muffin gateway install` (o `muffin init`, che te lo propone)',
+      );
     }
     db.close();
   } catch (error) {

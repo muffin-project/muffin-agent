@@ -7,11 +7,13 @@ import { seal } from '../core/rot/verify.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
+  locateSecret,
   paths,
   saveConfig,
   writeSecret,
   type Config,
   type ProviderKind,
+  type SecretBackend,
 } from '../core/config/config.js';
 
 /**
@@ -33,6 +35,8 @@ export type InitOptions = {
   mainModel?: string;
   lightModel?: string;
   apiKey?: string;
+  /** Where `apiKey` is written. `persistent` survives `muffin uninstall`. */
+  secretBackend?: SecretBackend;
   hardened?: boolean;
   force?: boolean;
 };
@@ -70,10 +74,22 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // the env here too would silently resurrect a key cmdInit deliberately dropped.
   const apiKey = options.apiKey;
   if (apiKey) {
-    writeSecret('provider_api_key', apiKey, home);
-    step('api key', 'stored 0600 in secrets/provider_api_key');
+    const at = writeSecret('provider_api_key', apiKey, home, options.secretBackend ?? 'home');
+    step('api key', `stored 0600 in ${at}`);
   } else {
-    step('api key', 'missing — set MUFFIN_API_KEY or pass --api-key', false);
+    // The dev loop `muffin uninstall --yes && muffin init` wipes `home` and then
+    // arrives here with nothing. It used to be rescued by `MUFFIN_API_KEY` out of
+    // a `.env` in the working directory — a file the agent's own `fs_read` could
+    // open (ADR-0030's wart, closed by ADR-0039). The persistent store is the
+    // replacement, and it is found by *asking the chain*, never by copying the
+    // key into the home that is about to be wiped again: a second copy is how the
+    // budget cap ended up in two files.
+    const found = locateSecret('secret://provider_api_key', home);
+    if (found) {
+      step('api key', `già presente (${found.backend}): ${found.path}`);
+    } else {
+      step('api key', 'missing — set MUFFIN_API_KEY or pass --api-key', false);
+    }
   }
 
   const config: Config = {
