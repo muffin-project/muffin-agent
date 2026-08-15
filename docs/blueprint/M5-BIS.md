@@ -69,6 +69,19 @@ ancora verificato — **è un debito, non uno stato**).
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | BLOCKER 🔧 in lavorazione |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
+| B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
+| B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
+
+> ⚠️ **B11 e B12 le ha trovate l'owner, non questo documento** — poche ore dopo
+> che era stato scritto per rendere impossibile esattamente questo: *«mi pare che
+> ci siamo dimenticati lo streaming, inoltre anche i token limit dovrebbero
+> essere piu dinamici, oppure ancora meglio magari quando le cose sono troppo
+> grandi le manda come file del vault?»*.
+>
+> Restano marcate con la loro provenienza invece di essere assorbite in silenzio.
+> Il punto dell'inventario non è essere completo al primo colpo — nessuna lista
+> lo è. Il punto è che una lacuna, quando qualcuno la vede, **entri**. Ricerca in
+> corso: `research/superfici-e-streaming.md`.
 
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
