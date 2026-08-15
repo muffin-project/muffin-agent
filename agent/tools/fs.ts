@@ -32,6 +32,33 @@ export type FsScope = {
 };
 
 export const fsCapabilities: CapabilityDecl[] = [
+  /**
+   * `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —
+   * 3 in the shipped `rot/policy.json`. That was examined on its own merits
+   * (ADR-0039) and left alone, which is a decision and not an omission.
+   *
+   * **Why not 1.** `web_search` and `sys.http` both carry 3 with a recorded
+   * reason: the first result taints the turn to 3, so a lower ceiling would
+   * permit exactly one fetch per turn and deep research would be impossible.
+   * Reading a file is the same shape — *"leggi questa pagina e confrontala con
+   * i miei appunti"* is a normal owner turn, and at a ceiling of 1 the second
+   * half is refused. The cost is paid on every turn; the benefit is not what it
+   * looks like, because the read alone is not the leak: the bytes still have to
+   * leave, and the egress leg is separately gated (off-allowlist above taint 1
+   * is DENY, never ask, precisely so a poisoned context cannot nominate the
+   * destination). `hostOnly` already keeps group members out entirely.
+   *
+   * **The precondition that makes it true, stated so it can be falsified.** The
+   * ceiling is defensible because no secret is reachable inside `root`:
+   * `denyRead` covers both secret stores and the working-directory `.env`
+   * (`agent/runtime.ts`). If a secret ever becomes readable there again, this
+   * argument stops holding and the number has to be revisited — that, and not
+   * the taint value, is the thing to watch.
+   *
+   * Deliberately *not* pinned to 3 in the declaration: pinning would override an
+   * owner who lowered `defaultMaxTaint.low` in `rot/policy.json`, and the file's
+   * one legitimate direction is tightening (`core/policy/matrix.ts`).
+   */
   {
     id: 'fs.read',
     risk: 'low',

@@ -96,6 +96,13 @@ Regole: ogni cartella contiene i *propri* tipi, schema, prompt, test e un README
 - **NON include**: outward autonomo (mail a terzi ecc. — draft-only resta la regola), "iniziativa" senza trigger dichiarato.
 - **Dipendenze**: M1-M2. 
 - **DoD**: "ogni mattina alle 8 fammi il brief della giornata" da chat → job visibile in `muffin jobs`, arriva alle 8 sul canale scelto, sopravvive al riavvio; un trigger a soglia (N episodi non consolidati) fa partire il consolidamento da solo; un tentativo di armare un trigger da contenuto di gruppo viene rifiutato e loggato (test); il costo giornaliero dello scheduler è visibile e sotto il cap.
+  - ⚠️ **Nota (2026-08-13, ADR-0038)**: la clausola sul consolidamento è ora
+    soddisfatta, ma **non nella forma scritta qui**. Il grilletto primario è una
+    coda d'inattività, non una soglia a conteggio: la soglia è la *rete*, ed è
+    l'opzione che l'evidenza esterna sostiene di meno da sola
+    (`research/consolidamento-due-meccanismi.md` §Il grilletto). La riga resta
+    com'era scritta perché non si riscrive la storia; il rimedio vero è in
+    §M5-bis riga 1, dove è anche detto quale metà è ancora aperta.
 - **Config**: quiet hours/budget proattività — RoT default · owner via chat (ratchet: modifica con notify+undo) · default prudenti; canale di consegna default — owner · primo job · chiede.
 
 ### M5-bis — Il divario fra "M0-M5 costruito" e "usabile" *(aperto 2026-08-11, dall'uso mancato)*
@@ -128,6 +135,88 @@ loop rifiuta perché non esiste). **Non** i 95: `/skin`, `/timestamps`,
 `/statusbar`, `/redraw` sono la loro cromatura, ed è il "TROPPE cose" che
 l'owner rifiuta.
 
+✅ **Il processo è costruito** (`slice/gateway`, 2026-08-11, 655 test). `muffin
+gateway run` possiede lo scheduler — il `setInterval` è uscito da `cli/repl.ts`
+— e vive finché non gli si dice di smettere. Verificato eseguendolo: job creato,
+gateway avviato senza nessun REPL, **fire a 24 s** con consegna su stdout;
+`gateway status` e `doctor` lo vedono da un altro processo; `gateway stop` drena
+ed esce. Le parti che valgono più del comando:
+- **Due scheduler non girano mai.** Rivendicazione durevole in `gateway_lock`;
+  il REPL la *legge* e cede il ticker, dicendolo. Il meccanismo è quello del
+  `SendLock`, generalizzato in `core/lock/durable.ts` invece che copiato — con
+  una differenza che contava: l'orizzonte di scadenza è un **battito**, non
+  un'ora, perché un gateway tiene il lock per settimane e il silenzio non prova
+  niente su di lui. Un `kill -9` non incastra il comando: dopo dieci battiti
+  persi la rivendicazione è scaduta.
+- **Supervisione, non solo riavvio.** `READY=1` quando serve davvero,
+  `WATCHDOG=1` alla cadenza che dichiara `WATCHDOG_USEC`, `STATUS=` leggibile.
+  No-op senza `NOTIFY_SOCKET`, che è il caso di macOS.
+- **Un gateway ucciso non perde lavoro**: `markRan` è l'unica cosa che sposta il
+  prossimo fire, quindi un turno interrotto lascia il job **dovuto**. Asserito
+  contro lo store vero, non assunto.
+- `gateway install` genera unit systemd / plist launchd **ancorate a
+  `~/.muffin`**, mai al checkout (la cicatrice di Hermes), e `muffin init` ora
+  **lo propone** invece di lasciare un comando manuale — direttiva owner: *"non
+  lancerò mai quei comandi a mano."*
+
+⚠️ **Correzione (2026-08-13, dal giro di review su `slice/gateway`)**: cinque
+frasi qui sopra erano vere del meccanismo e false della garanzia. Corrette nel
+codice e scritte qui perché la riga sbagliata era quella che sembrava più solida.
+
+- **"Due scheduler non girano mai" era un assoluto, e non lo è.** Il REPL
+  leggeva la rivendicazione **una volta sola, all'avvio**: nell'ordine
+  REPL-prima-gateway-poi (una finestra aperta, poi `gateway install`, oppure
+  systemd che arriva alla unit un attimo dopo la shell) i due ticker
+  convivevano, e nessuno se ne sarebbe accorto. Stesso difetto al risveglio dal
+  sonno del laptop, dove la rivendicazione di un gateway *vivo* si legge scaduta
+  a un REPL aperto in quell'istante. Ora la domanda si rifà **a ogni tick**
+  (`standDown`), in tutte e due le direzioni: il REPL cede e lo dice, e se il
+  gateway muore riprende e lo dice. **La finestra residua, detta onesta**: il
+  controllo si ripete anche subito prima della consegna, quindi per una *consegna
+  doppia* la finestra è sotto il millisecondo; per un'*esecuzione doppia* è
+  lunga quanto un turno, perché due processi possono aver girato lo stesso goal
+  prima che il secondo controllo scatti. Sono soldi, non correttezza, e chiuderla
+  richiederebbe di rivendicare il fire *prima* di eseguirlo — cosa che ADR-0035
+  rifiuta, perché `markRan` unico scrittore di `next_fire_at` è ciò che fa sì che
+  un gateway ucciso non perda lavoro.
+- **`STATUS=` leggibile non era cablato.** Era scritto, testato due volte e
+  chiamato da niente: lo stato vivo finiva solo nella riga SQLite, e
+  `systemctl status` mostrava la riga dell'avvio per tutta la vita del processo.
+  Ora viaggia sul ping del watchdog (`WATCHDOG=1\nSTATUS=…`, un datagram, zero
+  spawn in più).
+- **`gateway stop` non fermava niente.** Il drenaggio usciva 0 e
+  `Restart=always` lo riportava su dopo 5 s — sulla VPS Linux che è la
+  produzione. Su launchd il difetto era speculare: `SuccessfulExit: false`
+  riavviava solo su uscita ≠ 0, quindi il riavvio drenante da SIGUSR1 usciva 0 e
+  l'agente **restava giù**. Ora SIGUSR1 esce 0 e SIGTERM esce 143, che la unit
+  nomina in `RestartPreventExitStatus`; launchd va a `KeepAlive` incondizionato.
+  La proprietà tenuta ferma in tutte e due: **un crash riavvia sempre.**
+- **Il watchdog taceva proprio durante il drenaggio.** `drain` azzerava tutti i
+  timer, incluso il ping, e poi aspettava fino a 60 s contro un `WatchdogSec` di
+  60. Si presumeva che `STOPPING=1` sospendesse il watchdog: presunzione non
+  verificabile qui (non c'è systemd su questa macchina) e non documentata in
+  `sd_notify(3)`. Tolta la dipendenza invece che documentata: il ping vive
+  quanto il drenaggio.
+- **`Type=notify` senza `systemd-notify` sulla macchina non degrada: non
+  parte.** `READY=1` non arriva mai, systemd uccide a `TimeoutStartSec` (90 s) e
+  `Restart=always` ci riprova per sempre senza mai toccare il rate limit (cinque
+  avvii in dieci secondi è impossibile se ognuno dura un minuto e mezzo).
+  `gateway install` su linux ora controlla il PATH e in assenza emette
+  `Type=exec` più l'avviso che il watchdog è spento.
+
+⛔ **Resta aperto, e sono le cose che il processo ora rende scrivibili**:
+`queue`/`steer` e il concetto di "occupato" (serve il protocollo client/server
+sul socket unix, non costruito); `heartbeat`; `undo`; ~~il trigger sul
+consolidamento~~ (chiuso il 2026-08-13, ADR-0038 — e la risposta a "il gateway è
+il posto dove va" si è rivelata **no, non solo**: il grilletto vive nel runtime,
+quindi ce l'ha ogni processo che esegue turni, perché darlo al solo gateway
+lascerebbe a zero fatti chi non ha installato la unit); la consegna remota su una
+surface (un job per canale remoto emerge ancora nel log invece di arrivare). E un
+limite dichiarato:
+il `ForegroundGate` del gateway è `ALWAYS_IDLE`, perché senza terminale non c'è
+un foreground — quando un turno di surface saprà dire "l'owner sta parlando", è
+lì che si innesta.
+
 **1. Il consolidamento non parte mai — e la DoD di M5 lo richiedeva.** `ingestPending`
 (episodi → fatti) ha **un solo chiamante: `muffin memory extract`, a mano**. Nessun
 job, nessun trigger a soglia. Quindi la memoria **non si riempie da sola**: anche
@@ -149,15 +238,262 @@ job notturno produrrebbe un Muffin che ti conosce con 24 ore di ritardo: servono
 → **priorità 1**: senza questo, tutto il lavoro su memoria, importance, origin e
 assenza è inerte.
 
-**2. `thinking` è dichiarato e mai passato.** I profili per-modello hanno
-`thinking: 'off' | 'allowed'`, l'adapter Anthropic sa spedirlo — e il loop non lo
-passa al provider. Nono caso della famiglia "dichiarato e non connesso".
+✅ **Primo meccanismo costruito — l'estrazione per-turno asincrona**
+(`slice/gateway`, 2026-08-13, **ADR-0038**, 751 test). Il grilletto è una **coda
+d'inattività a fronte discendente** armata dalla fine di ogni turno
+(`LoopDeps.onTurnEnd`, che non esisteva), con un **tetto a conteggio** come rete.
+Le due costanti sono misurate sul corpus vero dell'owner (4.107 episodi,
+2026-03-16 → 2026-07-18), non prese da un peer — i valori del campo (15-60 min)
+rispondono a *"la sessione è finita"*, che non è la nostra domanda:
+- **20 s di coda**: l'1,0% dei messaggi consecutivi dell'owner dista meno di 20 s
+  (quindi un turno su cento paga una chiamata in più); ancorata alla risposta, la
+  coda fa scattare **1.326 batch per 1.793 turni = −26% di chiamate** contro il
+  per-turno del vecchio, che rendeva il 3,4%. A 30 s si risparmierebbe un altro
+  3,3% pagando il 50% di latenza; a 60 s si supera la **mediana di 56 s** fra
+  risposta e messaggio successivo, cioè si perde la proprietà che gli 11,8 s del
+  vecchio compravano — il fatto a posto *prima del messaggio dopo*.
+- **tetto 12 turni**: alla coda di 20 s la sequenza più lunga senza pausa nel
+  corpus è **7** (p90 2, p99 4). Dodici è una rete che su quattro mesi di traffico
+  vero non sarebbe mai scattata.
+
+Nella stessa slice, e non come contorno: la **spesa della corsia light entra nel
+budget** (era zero per `/spend`, per il cap mensile e per il ramo
+`budget_exhausted` del kernel — inaccettabile per una corsia che ora gira da
+sola), il che **chiude anche il punto 7 qui sotto**; la **cucitura per-tenant è
+rifiutata esplicitamente e con due test** (solo il tenant host consolida, perché
+`extractFacts` deriva `speakerName` da `role`); `{kind:'system',
+source:'consolidation'}` ha finalmente un produttore e `ProactiveKind =
+'consolidation'` è **cancellato** (il consolidamento non parla, quindi non
+appartiene all'insieme chiuso di ciò che fa parlare per primo); e la corsia si
+**vede** — `consolidation_runs` letta da `muffin memory stats` e `muffin doctor`,
+più una riga al boot, perché zero fatti è anche l'output corretto di una corsia
+sana e il numero che distingue è quello dei run.
+
+**Provato eseguendolo**, due volte e su una home vera: dal REPL, turno →
+risposta consegnata subito → estrazione a **+20,010 s** → `owner lives_in
+Cagliari` in `facts` (batch 321 ms); dal **gateway senza nessun REPL aperto**, un
+job spara → estrazione a **+20,003 s**. E l'indice vettoriale è passato da vuoto a
+`5 chunk · 5 vettori, in sync` — la seconda metà del difetto, quella che la
+ricerca aveva trovato e questa riga non diceva.
+
+✅ **Secondo meccanismo costruito — la manutenzione** (`slice/gateway`,
+2026-08-14, **ADR-0040**, 870 test). Tre pezzi, e la prima cosa che ha prodotto è
+una correzione al nome: **«periodica» era sbagliato.** Elencando cosa dovesse
+fare, ogni voce si è rivelata guidata dai **dati** e non dall'orologio — un
+arretrato esiste o no, un duplicato esiste o no, una riga `review` è aperta o è
+stata risolta; niente in questo schema cambia perché è passato un giorno. Quindi
+niente cron (e nessuno dei dodici sistemi letti ne gira uno): il grilletto resta
+la stessa coda d'inattività, nel runtime.
+
+La regola di costo che governa tutto: nel vecchio il dream era la **metà piccola**
+— ⬤ 100 report contro 2.438 righe di work queue, il 4%. Quindi **la manutenzione
+non spende niente**: nessuna chiamata al modello, è SQL su righe già scritte.
+L'unica parte che chiama un modello è il drenaggio, e paga estrazioni che la
+corsia viva avrebbe pagato comunque — il totale non cambia, cambia quando.
+
+- **Drenaggio dell'arretrato.** Dopo una pagina **piena** che ha **fatto
+  progresso**, la corsia si ri-arma e prende la successiva, allo stesso passo
+  della coda viva (nessuna costante nuova: il tetto di costo diventa così una
+  proprietà della forma). Perde sempre contro un turno. La condizione d'arresto è
+  il *progresso* (`marked > 0`), mai un conteggio di pendenti: un episodio che
+  fallisce l'estrazione in modo permanente resta in testa per sempre, e un
+  drenaggio guidato da `stats.pending` ripagherebbe quella pagina ogni venti
+  secondi — lo stesso fallimento che ADR-0038 aveva già scartato, da un'altra
+  porta. **Non** si riordina al più-nuovo-per-primo: `reconcile` sceglie il
+  candidato per `recorded_at`, quindi estrarre fuori ordine farebbe
+  **dis-correggere una correzione**.
+- **Deduplica senza soglia.** Solo chiave esatta normalizzata (maiuscole, spazi,
+  punteggiatura finale) — lo 0,85 del vecchio non porta fra embedder e la ricerca
+  lo misura (99,00% di falsi positivi a 0,7 su due modelli comuni). ⬤ E il corpus
+  chiede esattamente questo gradino: sui quattro mesi del vecchio i gruppi
+  (soggetto, predicato) con più di un valore attivo erano **2 su 308 fatti**, e
+  **tutti e due erano duplicati esatti**. Si ritira con `supersede`, mai DELETE —
+  e con `valid_to` **non toccato**, perché un duplicato non ha mai smesso di
+  essere vero: non era una verità separata.
+- **Il registro `review` si legge e si risponde.** `muffin memory review` +
+  `review keep <fact-id>`, più la riga in `memory stats`, in `doctor` e al boot.
+  «Aperta» è una **join** (entrambi i fatti ancora attivi), non una colonna di
+  stato — così una domanda che la conversazione risolve da sola esce dalla lista
+  senza che nessuno scriva niente. Rispondere è un `supersede`, ed è **l'owner**
+  a farlo: ADR-0032 §9 resta dov'era.
+
+⛔ **Resta aperto, e va detto**: **dream/compattazione** (non costruito, e la
+ragione è che manca il *consumatore* — `profiles` e `digests` hanno zero lettori:
+prima il lettore, poi lo scrittore); **l'audit dei predicati** a metà (l'invariante
+`predicate_vocabulary` rileva, ma proporre un merge vuole un giudizio di
+sinonimia, cioè una chiamata al modello — contro la regola di costo — o un
+vocabolario chiuso, contro ADR-0032). **Il decadimento della confidenza è
+rifiutato**, non rimandato: non c'è un tasso difendibile, ⬤ l'unica soglia sulla
+confidenza in tutto il repo è `extract.ts:176` *prima* della scrittura (quindi
+sarebbe una mutazione senza lettore), e il giorno che un lettore ci fosse una
+credenza scivolata sotto soglia diventerebbe irrecuperabile **senza `expired_at`
+né `superseded_by`**: una cancellazione senza traccia. Una **passata di scadenza**
+non è costruita perché ⬤ non ha niente da scadere: `valid_to` è scritto solo da
+`supersede`, che scrive anche `expired_at`, quindi «vero-finito ma ancora
+creduto» non è rappresentabile oggi. Più il limite dichiarato che resta: **`muffin
+run` headless non consolida** (timer `unref`'d) — ma ora costa meno, perché il
+primo processo di lunga vita **drena tutto** invece di prendere una pagina sola.
+
+**2. ~~`thinking` è dichiarato e mai passato~~ — chiuso (ADR-0037, poi la sua
+correzione lo stesso giorno).** Il rimedio scritto qui era sbagliato nella
+direzione: la riga sopra diceva "il loop non lo passa", ma passarlo nella
+forma che allora esisteva (`{type:'enabled', budget_tokens}`) sarebbe stato un
+400 su ogni modello frontier, non un fix — il vero difetto era la *forma*
+della richiesta, e sulla stessa riga del loop c'era un secondo hardcode
+(`temperature: 0`) anch'esso un 400 sull'installazione di default
+(`claude-sonnet-5`). ADR-0037 ha corretto entrambi: `thinking: 'adaptive' |
+'off'` sul wire, `sampling` per-profilo. La correzione trovata nello stesso
+giro di review ha chiuso il seguito: un terzo valore `thinking: 'unset'` per i
+modelli senza uno switch di disabilitazione noto (Claude Fable 5 e Claude
+Mythos 5 rifiutano `{type:'disabled'}` sempre — tabella per-modello, letta
+2026-08-13); `claude-opus-4-7` e `claude-opus-4-8` aggiunti ai glob di
+`frontier.json` (prima cadevano su CONSERVATIVE → `temperature: 0` → 400 ogni
+turno); e `muffin doctor` che ora chiama `loadProfiles` lui stesso e nomina
+sia il profilo scartato sia — quando la risoluzione ricade su CONSERVATIVE —
+cosa costa la ricaduta, cosa che prima raggiungeva solo `bootLines` (stderr al
+boot).
 
 **3. Muffin non è governabile da dentro.** Cinque slash nel REPL (`/exit /help
 /new /session /spend`), nessun `muffin config`, nessuna dashboard: provider,
 modelli, budget, quiet hours si cambiano **editando JSON a mano**, e quelli nel
 RoT vogliono pure il reseal. L'owner non sa cosa può regolare perché non c'è un
-posto dove chiederlo.
+posto dove chiederlo. → **ADR-0036** (dove passa la linea: sigillato = terminale,
+tutto il resto lo guida Muffin).
+
+✅ **La precondizione bloccante di ADR-0036 è chiusa** (`slice/gateway`,
+2026-08-13, **ADR-0039**, 781 test). Erano **due difetti con la stessa forma** —
+una protezione che nomina un file mentre la cosa protetta vive in un altro — e si
+sono chiusi insieme perché la risposta è la stessa: spostare il confine dov'è il
+dato.
+
+- **Il sigillo proteggeva una copia.** `BudgetEngine` nasceva da `config.budget`,
+  fuori dal manifest, mentre il sigillato `rot/budgets.json` portava gli stessi
+  numeri per duplicazione: comportamento corretto, garanzia inesistente.
+  Trovato da ADR-0028 il 2026-08-10 e lasciato aperto due volte. Ora
+  `core/rot/budgets.ts` è l'unico lettore e **`config.budget` non esiste più**.
+  Provato eseguendo, nelle due direzioni che contano: tetto sigillato a 0 → il
+  turno si ferma a «Budget esaurito» con **0 passaggi**, cioè prima di qualunque
+  chiamata al modello; lo stesso 0 (o un 999999) scritto in `config.json` → non
+  cambia niente. **L'insieme sigillato resta di cinque file**: il manifest
+  dell'owner non è invalidato e `rot verify` esce 0 prima e dopo.
+- **La migrazione era la parte difficile.** `CONFIG_SCHEMA_VERSION` passa a 2, e
+  `loadConfig` — che rifiutava qualunque versione non fosse l'attuale — ora ha
+  una scala di migrazioni **in memoria**: un loader che riscrive il file che gli
+  è stato chiesto di leggere è una corsa fra il gateway e un REPL, e `saveConfig`
+  aggiorna comunque il file alla prima modifica. I numeri vecchi **non** vengono
+  copiati nel file sigillato (sarebbe il buco stesso): la nota li dice, con il
+  comando, nei `bootLines` e come check `config migrata` in `doctor`.
+- **L'agente poteva leggere la chiave dell'owner con un tool dichiarato.**
+  `denyRead` nominava solo `~/.muffin/secrets`, ma `root` è la cwd e ADR-0030
+  *richiede* che sia il repo, dov'è la `.env` con la chiave; `fs.read` è low
+  senza `maxTaint`, quindi tetto 3. Con un solo risultato tier-3 in contesto —
+  fetch-then-act, `03 §2` — `fs_read(".env")` restituiva la chiave in chiaro.
+  Riprodotto: rimessa la `denyRead` di prima, il transcript del modello contiene
+  la chiave due volte. Chiuso da entrambi i lati: la chiave si sposta in
+  `$XDG_CONFIG_HOME/muffin/secrets/` (`muffin secret set --persist`, dir 0700 /
+  file 0600, fuori da `MUFFIN_HOME` **e** dal repo, quindi il loop
+  `uninstall && init` continua a ritrovarla) e `denyRead` copre ora entrambi gli
+  store più la `.env`.
+- **`fs.read` resta a `maxTaint` 3**, esaminato e non stretto per riflesso: lo
+  stesso argomento di `web_search` (a tetto 1 si leggerebbe *un* file per turno
+  dopo una ricerca) più il fatto che la lettura non è la fuga — la gamba egress è
+  gated a parte. La precondizione che lo rende vero è scritta sulla
+  dichiarazione: vale *perché* dentro `root` non c'è nessun segreto raggiungibile.
+- **Trovato mutando, e vale più della slice**: l'invariante «ogni file sigillato
+  ha un lettore vero» accettava un `import` come prova di un uso. Togliere la
+  chiamata a `loadSealedBudgets` da `cli/observe.ts` lasciava il check **verde**,
+  perché il nome era ancora nella riga di import. Stessa forma della cicatrice che
+  quel file già portava (una docstring che valeva come lettore). Ora gli import
+  sono strippati come i commenti, i tre consumatori sono elencati come `indirect`,
+  e c'è il test permanente. Lezione in `docs/lessons.md`.
+
+⛔ **Resta aperto, dalla stessa slice**: `rot verify` **non distingue** «un file
+sigillato è cambiato» (attacco) da «l'insieme sigillato ha cambiato forma» (un
+upgrade che porta un file nuovo) — entrambi arrivano come `files_diverged … 
+(untracked)`. Oggi non ha grilletto, perché ADR-0039 ha scelto apposta la forma
+che *non* tocca l'insieme sigillato; il costo dell'assenza si paga il giorno che
+un upgrade aggiunge davvero un file a `defaults/rot/`, e quel giorno l'owner vede
+un'installazione che sembra manomessa. Va costruito **prima** di quella slice, non
+durante.
+
+✅ **I tre pezzi che ADR-0036 chiedeva, in ordine di priorità dichiarato**
+(slice/gateway, in lavorazione — non committato, 830 test contro i 781 di
+partenza).
+
+- **`muffin config`, sola lettura** (`core/config/inventory.ts` +
+  `cli/config.ts`). Ogni manopola: valore, file di origine, se è sigillata.
+  Guardati prima i tre strumenti che l'ADR nomina (`docs/PRACTICES.md` §3) —
+  `git config --list --show-origin` (valore + origine, nessun asse
+  "sigillato"), `gh config list` (bare key=value, nessuna origine), `aws
+  configure list` (Name/Value/Type/Location, verificato solo per
+  documentazione: `aws` non è installato su questa macchina) — e scelta la
+  forma di `aws`, con "Type" sostituito da "Sigillato", l'unica colonna che
+  nessuno dei tre doveva rispondere e per cui questo comando esiste. La lista
+  **deriva dallo schema dove è pratico farlo**: cammina l'oggetto `Config`
+  restituito da `loadConfig` — che *è* `z.infer<ConfigSchema>` — invece di un
+  elenco scritto a mano campo per campo. Provato: `models.deep` scritto a
+  mano in un `config.json` compare nella lista senza toccare
+  `inventory.ts`. **Scartata l'introspezione diretta dello schema zod**
+  (probe fatto contro la 4.4.3 installata): raggiungibile solo via
+  `_zod.def`, un interno con underscore senza precedenti nel resto del repo e
+  nessuna garanzia fra un patch e l'altro di zod — costruirci sopra avrebbe
+  scambiato una lista scritta a mano che invecchia con un'API privata che si
+  rompe. Il "sigillato" è un fatto sul **file**, non sul parse di oggi:
+  provato spezzando `rot/budgets.json` e vedendo il valore cadere sul
+  compilato mentre la colonna sigillato resta "sì".
+- **Il primo avvio dice cosa ha dedotto.** L'inferenza del provider
+  (`cli/onboarding.ts`, `inferProvider`) **era già cablata dentro `cmdInit`
+  dal 2026-08-09** (`eb45b86`, quattro giorni prima che ADR-0036 fosse
+  scritta) — la frase sia dell'ADR sia del mandato di questa slice
+  («`options.provider ?? 'anthropic'` scrive anthropic anche a chi ha una
+  chiave OpenRouter») descrive uno stato già superato, verificato leggendo il
+  codice riga per riga prima di toccarlo. Quello che restava davvero:
+  **un'inferenza riuscita non lo diceva mai** — un avviso esisteva solo
+  quando falliva, silenzio quando andava bene. `chooseProvider` +
+  `describeProviderChoice` (`cli/onboarding.ts`) uniscono la decisione in un
+  solo posto e la annunciano sempre, es. *"✓ provider openai-compat
+  (https://openrouter.ai/api/v1) — dedotto dalla chiave (sk-or-…)"*. **Provato
+  eseguendo il binario reale** su una pty vera (`expect`, non solo i test):
+  `MUFFIN_HOME` vuoto, "Lo configuro ora?" → sì, incolla una chiave
+  `sk-or-v1-…`, e il transcript mostra la riga sopra prima degli step di
+  `runInit`; `config.json` risultante ha `provider.kind: "openai-compat"`.
+  **Trovato un secondo difetto, minore, rifattorizzando**: il controllo "sembra
+  un token Telegram" viveva dentro `if (apiKey && !providerFlag)`, quindi un
+  `--provider` esplicito lo bypassava — un token di bot incollato insieme a
+  `--provider anthropic` finiva salvato come chiave del modello. Ora
+  incondizionato; test verificato fallire senza (nessun file di chiave dopo
+  l'incollata, con la vecchia guardia).
+- **Alias italiani selettivi.** Una mappa in testa a `main()`,
+  `memoria→memory · lavori→jobs · segreto→secret` — esattamente i tre che
+  l'ADR nomina, nessuno in più. `muffin memoria` e `muffin memory` producono
+  output byte-identico (stesso ramo: la mappa risolve solo il nome del
+  comando, prima dello switch); `memorie` — quasi giusto — resta "comando
+  sconosciuto", a provare che la mappa non fa fuzzy match.
+
+⚠️ **La spazzata italiano è deliberatamente parziale — il mandato la chiedeva
+scoped, non totale.** Tradotti: `USAGE` di `cli/main.ts`, `firstRun`,
+`cmdInit`, `offerGateway`, `cmdUninstall`, l'errore top-level (`unknown
+command:` → `comando sconosciuto:`), e `muffin config` (nativo italiano fin
+dall'inizio). **Lasciati fuori apposta**, e il motivo: le sei costanti
+`*_USAGE` di `cli/{memory,vault,surface,mcp,jobs,gateway}.ts`,
+`cmdRot`/`cmdSecret`/`cmdTrace`/`cmdRun` dentro `cli/main.ts`, e
+`cli/doctor.ts` sono già oggi mescolate inglese/italiano — la deriva che
+l'ADR nomina, circa 280 stringhe — e ognuna richiederebbe il proprio giro di
+audit sui test che ne dipendono prima di poter tradurre senza rompere
+un'asserzione: esattamente il costo che il mandato segnalava come rischio
+reale di uno spazzata totale. Restano per una prossima passata, elencate qui
+perché "trovato e non scritto" (`docs/PRACTICES.md` §12).
+
+⛔ **Resta aperto.** Nessuna superficie di scrittura conversazionale — non
+richiesta da questa slice (ADR-0036: *"`muffin config` è sola lettura, e
+questo è il punto"*), ma è la ragione per cui l'onboarding guidato-da-Muffin
+resta *"una sezione di prompt"*, non un meccanismo (`STATE.md`, voce 3). E
+nessun tool in `agent/tools/` legge ancora `listConfigKnobs` — la funzione
+vive apposta in `core/config/inventory.ts` e non in `cli/`, perché un tool
+futuro possa importarla senza dipendere da `cli/` (verificato: nessun file di
+*produzione* sotto `agent/` importa da `cli/` oggi — solo i fixture dei test,
+via `runInit`, che è un pattern diverso e già stabilito), ma quel tool non è
+ancora costruito.
 
 **4. Niente resume a grana di turno, e niente retry sul percorso lungo.** L'unico
 asse su cui la ricerca peer ha dato torto a noi (`research/confronto-harness.md`
@@ -181,6 +517,21 @@ classe accanto a owner/group (l'asse è stabile per turno, costa una entry di
 cache) oppure una riga nel messaggio (la mossa di Hermes: ciò che varia per turno
 esce dal prompt). Da ADR.
 
+**7. ~~La lane `light` non consulta mai un profilo~~ — chiuso (ADR-0038).**
+`core/memory/extract.ts:157`, `judge.ts:135` e `rerank.ts:84` fissano
+`temperature: 0` fuori dal sistema dei profili, con lo stesso hardcode che
+ADR-0037 ha tolto dal loop principale: legale solo finché il light di default è
+haiku 4.5, un **400 su ogni consolidamento** il giorno che `--light-model` punta
+a un 4.7+, e nessuna modifica ai profili poteva ripararlo. Chiuso dal confine che
+la riga 1 doveva costruire comunque per il budget
+(`agent/providers/light-lane.ts`): la corsia light si costruisce dietro un
+wrapper che fattura la chiamata **e** applica il `sampling` del profilo risolto
+per il modello light. I tre letterali restano dove sono e continuano a dire ciò
+che dicono — *questo lavoro vuole determinismo* — e il confine è dove quella
+richiesta incontra ciò che il modello accetta. Wrapper e non tre parametri: il
+difetto di questo repo non è una riga sbagliata, è un meccanismo che il quarto
+chiamante non sa di dover raggiungere.
+
 **Dall'inventario vecchio-nuovo** (`research/inventario-vecchio-nuovo.md`, 86
 righe con verdetto: 41% presente, 29% tolto di proposito, 23% manca e serve, 8%
 era slop). Le MANCA-SERVE che non sono già qui sopra:
@@ -203,15 +554,49 @@ quattro erano già dentro `inventario-vecchio-nuovo.md §8` e uno no, e perché
 essere stati ritrovati da fuori, senza vedere il codice, dice che sono i buchi
 che si vedono usando:
 
-- **A · il fetch non estrae il testo.** `agent/tools/http.ts:130` restituisce il
-  corpo **grezzo** (HTML compreso) e `:169` lo tronca head 40k + tail 10k — cioè
-  butta il `<body>` e tiene `<head>` e footer. Sono ~12k token di cui forse 800
-  di testo, in un turno con un tetto di 4096 in uscita. **Regressione rispetto al
-  vecchio**, che aveva Readability; l'inventario aveva marcato la riga "PRESENTE,
-  più stretto" guardando la sicurezza (vera e migliore: SSRF su ogni hop) e
-  mancando la resa — corretto lì. Rimedio: estrazione **locale** davanti a
-  `clipBody` (non Firecrawl/Jina: sarebbero un endpoint terzo che legge la pagina
-  al posto nostro). Il taint non cambia — pulire non è fidarsi.
+- ~~**A · il fetch non estrae il testo.**~~ — chiuso (2026-08-14, ADR-0041).
+  `agent/tools/http.ts:130` restituiva il corpo **grezzo** (HTML compreso) e `:169`
+  lo troncava head 40k + tail 10k — cioè buttava il `<body>` e teneva `<head>` e
+  footer. Erano ~12k token di cui forse 800 di testo, in un turno con un tetto di
+  4096 in uscita. **Regressione rispetto al vecchio**, che aveva Readability;
+  l'inventario aveva marcato la riga "PRESENTE, più stretto" guardando la sicurezza
+  (vera e migliore: SSRF su ogni hop) e mancando la resa — corretto lì.
+
+  ✅ **Estrazione locale davanti a `clipBody`**, come `research/recupero-dal-web.md`
+  aveva già misurato: `defuddle` su `linkedom`, importato come libreria
+  (`defuddle/node`), mai come sottoprocesso né come servizio terzo (Firecrawl/Jina
+  avrebbero letto la pagina al posto nostro). Nuovo modulo
+  `agent/tools/extract.ts`: gate sul `content-type` della risposta (solo
+  `text/html`/`application/xhtml+xml` passano dall'estrattore — un corpo JSON, testo
+  puro o CSV attraversa `clipBody` byte-identico, testato); mai un fallimento
+  dell'estrazione che fa fallire il fetch (Defuddle che lancia, che non trova nulla,
+  o che restituisce qualcosa di implausibilmente piccolo contro un input sostanziale
+  ricade sul corpo grezzo, tutti e tre testati con fixture che falliscono
+  l'estrazione); `clipBody` resta, invariato, la rete finale — ora quasi sempre
+  inerte. Il taint non cambia, `sys.http` non cambia: pulire non è fidarsi, cambia
+  solo quanto testo entra nel recinto.
+
+  ⬤ **Misurato su due pagine vere** (`curl`, nessuna chiave, nessuna chiamata a
+  pagamento): Wikipedia "Web scraping" 50.049/14.012 token oggi (già troncato) →
+  41.696/10.268 estratti (**−26,7%**); un capitolo della documentazione Python
+  73.085 caratteri (mai troncato, sotto i 50k) 14.561 token oggi → 14.435/3.734
+  estratti (**−74,4%**). Numeri più bassi delle quattro pagine di
+  `recupero-dal-web.md` (61-96%) perché quella pagina Wikipedia porta 41 note a piè
+  di pagina che sono contenuto vero, non uno scarto di estrazione — ispezionato
+  direttamente, nessun testo di navigazione o banner nel risultato.
+
+  **La correzione che la ricerca non aveva**: `turndown` — richiesto per
+  `{markdown: true}` — non è evitabile con `--omit=optional` come la ricerca aveva
+  assunto: `defuddle/node` lo richiede a livello di modulo, non solo quando
+  l'opzione è usata, e lo stesso vale per `mathml-to-latex` (richiesto dal supporto
+  matematico, sempre caricato). Il secondo motore DOM (`@mixmark-io/domino`, 8,8 MB,
+  dietro `turndown`) che la ricerca pensava di evitare **non si evita**: 20 pacchetti
+  / 20 MB misurati, non i 19/9,8 MB scritti lì (dettaglio e correzione appesa a
+  `recupero-dal-web.md`, mai riscritta in loco). Gap A si chiude quindi a **13
+  dipendenze runtime, non 11**: `defuddle`, `linkedom`, `turndown`,
+  `mathml-to-latex` tutte dichiarate esplicitamente in `package.json` — non lasciate
+  come installazioni transitive non dichiarate, perché un pacchetto che il codice
+  richiede davvero all'import non è, in nessun senso che conti qui, opzionale.
 - **B · non si può navigare la storia.** `memory_search` prende **solo una
   query**: niente `date_range`, niente `surface`, niente vicinato. È il caso
   d'uso letterale dell'owner (*"navigare i messaggi anche tra più surface"*) e i

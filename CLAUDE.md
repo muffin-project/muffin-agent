@@ -27,6 +27,7 @@ day".
 | Threat model — kernel, taint, sandbox | `docs/blueprint/03-threat-model.md` |
 | Cognitive corpus — read before designing an organ | `docs/blueprint/knowledge/` |
 | How to work here (triggers, not wishes) | `docs/PRACTICES.md` · `AGENTS.md` |
+| How the work is **decided and verified** — the control loop, when to stop and ask, why a subagent's word is not evidence | `docs/ORCHESTRATION.md` |
 | The bet · how decisions are made · what broke | `docs/THESIS.md` · `docs/DESIGN-PRINCIPLES.md` · `docs/lessons.md` |
 | Curated scientific/cognitive foundations | `docs/foundations/` |
 

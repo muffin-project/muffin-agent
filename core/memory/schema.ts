@@ -126,6 +126,27 @@ CREATE TABLE IF NOT EXISTS facts (
 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(tenant_id, subject_id, predicate);
 CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(tenant_id, expired_at);
 
+-- ---------- graph addendum: the judge's "ask a human" outcome ---------------
+-- Not plane 3: this is not reconstructible from the episodes, so it is not
+-- droppable the way profiles/digests are. It is the durable home for the two
+-- things that used to go only to process.stderr and vanish — the judge's
+-- review verdict (judge.ts) and any error the pipeline could not act on.
+-- Append-only like the rest of the store: no resolved_at, no status column.
+-- A register that tracked whether a human had looked yet would be the
+-- workflow engine this was explicitly asked not to become.
+CREATE TABLE IF NOT EXISTS memory_review (
+  id                INTEGER PRIMARY KEY,
+  tenant_id         TEXT    NOT NULL,
+  kind              TEXT    NOT NULL CHECK (kind IN ('contradiction','error')),
+  subject           TEXT,
+  predicate         TEXT,
+  existing_fact_id  INTEGER REFERENCES facts(id),
+  incoming_fact_id  INTEGER REFERENCES facts(id),
+  detail            TEXT    NOT NULL,
+  created_at        TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_review_tenant ON memory_review(tenant_id, created_at);
+
 -- ---------- plane 3: derived (droppable) -------------------------------------
 CREATE TABLE IF NOT EXISTS profiles (
   entity_id     INTEGER PRIMARY KEY REFERENCES entities(id),
@@ -194,3 +215,14 @@ export const IMPORTANCE_CHARGED = 2;
 
 /** Bumped when the extraction pipeline changes in a way that warrants a replay. */
 export const EXTRACTION_VERSION = 1;
+
+/**
+ * `contradiction` is the judge's own `review` verdict (judge.ts): two facts
+ * looked like they might conflict and the judge would not guess. `error` is
+ * everything the pipeline could not act on — a failed extraction, a judge
+ * that returned nothing usable, an embedder that is down. Both used to be
+ * strings on `IngestReport`, printed to stderr by the one caller that existed
+ * and lost the moment a second caller (a scheduler) did not print them.
+ */
+export const REVIEW_KINDS = ['contradiction', 'error'] as const;
+export type ReviewKind = (typeof REVIEW_KINDS)[number];

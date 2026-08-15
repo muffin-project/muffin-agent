@@ -37,6 +37,40 @@ export type RecoveryStrategy =
   /** Prose where a call was needed: a two-option contract, no third shape. */
   | 'strictJson';
 
+/**
+ * What the loop asks the provider for. Two fields, both of them corrections.
+ *
+ * `thinking` was `'allowed' | 'off'` — a permission with no unit, and a wrong
+ * one for every model this file's shipped profiles match. There is nothing to
+ * permit: on the 5-series thinking is **on unless you disable it**, so `'off'`
+ * that sends no field is a declaration the request contradicts, and `'allowed'`
+ * described a budget the API deleted. `'adaptive'`, `'off'` and `'unset'` are
+ * the three modes that exist now (ADR-0037, and its correction the same day):
+ *
+ * - `'adaptive'` → `{type:'adaptive'}`.
+ * - `'off'` → `{type:'disabled'}` — **only where the model actually has a
+ *   disable switch.** Claude Sonnet 5 and Claude Opus 5 (at `effort` high or
+ *   below — nothing here sends `effort`, so this holds today, but the coupling
+ *   is not enforced) do; Claude Fable 5 and Claude Mythos 5 do not — thinking
+ *   is always on there and the API 400s on `{type:"enabled"}` **and**
+ *   `{type:"disabled"}` alike (per-model table, read 2026-08-13). Sending
+ *   `'off'` to one of those is not a degradation, it is a 400 every turn.
+ * - `'unset'` → the field is **omitted**, not sent as `undefined`. The one
+ *   value proven safe on every model, because it is what every model accepted
+ *   before this field existed at all: for a model with a disable switch it
+ *   behaves however that model defaults (usually thinking on, on current
+ *   models); for one without, it is the only legal way to ask for "no
+ *   configuration" instead of a request the model rejects outright. This is
+ *   also ADR-0037's own reversibility plan ("`thinking` assente resta una
+ *   forma valida") — before this value existed, no profile could reach that
+ *   branch, because the loop passed the field unconditionally.
+ *
+ * `sampling` exists because `temperature: 0` was hardcoded in the loop and is a
+ * **400** on Opus 4.7 and later — including `claude-sonnet-5`, which is what
+ * `muffin init` writes on a default install. It is per-model data, so it lives
+ * here for the same reason `thinking` does: never as `if (model === ...)` in
+ * the loop.
+ */
 export type Profile = {
   schemaVersion: 1;
   name: string;
@@ -44,7 +78,12 @@ export type Profile = {
   match: string[];
   maxToolsExposed: number;
   maxToolCallsPerTurn: number;
-  thinking: 'allowed' | 'off';
+  thinking: 'adaptive' | 'off' | 'unset';
+  /**
+   * `'deterministic'` sends `temperature: 0`; `'model-default'` sends no
+   * sampling parameter at all, because the model rejects one.
+   */
+  sampling: 'deterministic' | 'model-default';
   recovery: RecoveryStrategy[];
   notes: string;
 };
@@ -56,7 +95,21 @@ export const CONSERVATIVE: Profile = {
   match: ['*'],
   maxToolsExposed: 10,
   maxToolCallsPerTurn: 15,
+  // Not 'unset': the same "loud failure names the parameter" argument the
+  // sampling comment below makes applies here too, and symmetrically — an
+  // unrecognised id is still more likely to be an old or local model (which
+  // 'off' has always suited: before ADR-0037 it sent nothing, which is legal
+  // everywhere) than one of the two named models that reject a disable switch
+  // outright. 'unset' exists for a profile author who *knows* their model is
+  // one of those (Claude Fable 5, Claude Mythos 5 — always-on thinking, 400 on
+  // both `"enabled"` and `"disabled"`); CONSERVATIVE does not get to guess it.
   thinking: 'off',
+  // Cautious means "what every model before 4.7 accepted", not "what the newest
+  // one wants": an unknown model is far more likely to be a local one that
+  // wanders without temperature 0 than a frontier one that refuses it. A model
+  // that refuses it fails loudly with a 400 naming the parameter, which is the
+  // right kind of wrong for an unrecognised id.
+  sampling: 'deterministic',
   recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson'],
   notes: 'Unknown model: the capability floor, with every crutch enabled.',
 };
@@ -78,7 +131,18 @@ const ProfileSchema = z.object({
   match: z.array(z.string().min(1)).min(1),
   maxToolsExposed: z.number().int().positive(),
   maxToolCallsPerTurn: z.number().int().positive(),
-  thinking: z.enum(['off', 'allowed']),
+  // No `'allowed'` alias. A third-party profile still saying it is dropped at
+  // the boundary and named in `doctor`, which is the point: the word described
+  // a budget that no longer exists, and keeping it working would keep it true.
+  // 'unset' added alongside 'off': the wire mapping for "off" — {type:
+  // 'disabled'} — is a 400 on a model with no disable switch (Fable 5, Mythos
+  // 5), so a profile targeting one needs a value that omits the field instead
+  // of guessing wrong (ADR-0037's correction, same day).
+  thinking: z.enum(['off', 'adaptive', 'unset']),
+  // Defaulted, not required, and the default is what the loop hardcoded before
+  // this field existed — so a profile written against the old schema keeps
+  // exactly the behaviour it had instead of silently acquiring a new one.
+  sampling: z.enum(['deterministic', 'model-default']).default('deterministic'),
   recovery: z.array(z.enum(['nudge', 'reinjectTools', 'retryOnce', 'strictJson'])),
   notes: z.string().default(''),
 });
@@ -99,7 +163,16 @@ export function loadProfiles(dir?: string, onProblem?: (line: string) => void): 
     if (!parsed.success) {
       // Dropped and said, never half-loaded: a profile with one bad strategy
       // name would otherwise select normally and detonate mid-recovery.
-      onProblem?.(`profilo ${f} scartato: ${parsed.error.issues[0]?.message ?? 'schema non valido'}`);
+      //
+      // D4 (judge, 2026-08-13): this used to say only the zod message —
+      // `Invalid option: expected one of "off"|"adaptive"` — which names
+      // neither the field nor the file well enough to act on at 2am. The
+      // issue carries its own path; not reading it was the whole defect.
+      const issue = parsed.error.issues[0];
+      const path = issue?.path.join('.');
+      onProblem?.(
+        `profilo ${f} scartato${path ? ` (campo "${path}")` : ''}: ${issue?.message ?? 'schema non valido'}`,
+      );
       continue;
     }
     out.push(parsed.data);

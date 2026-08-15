@@ -1,4 +1,155 @@
+# Come si orchestra questo lavoro
 
+> Direttiva owner, 2026-08-15. Nasce da due conversazioni esterne che l'owner ha
+> portato come fonte (un'analisi del prompt d'orchestrazione, e una lettura della
+> documentazione di Hermes Agent) più il modo in cui questo repo ha effettivamente
+> lavorato negli ultimi giorni. Non è una lista di buone intenzioni: ogni regola
+> qui sotto esiste perché la sua assenza è già costata qualcosa, e dove è costata
+> è scritto.
+>
+> `PRACTICES.md` dice **come si scrive**. Questo file dice **come si decide e chi
+> verifica**. `AGENTS.md` dice cosa non si tocca.
+
+## 1. Il loop è un control loop, non un task loop
+
+La forma sbagliata, e quella in cui si scivola da soli:
+
+> leggo → credo di aver capito → faccio → i test passano → prossimo task
+
+La forma giusta ha uno stadio che quella non ha: **ricostruire lo stato prima di
+scegliere l'obiettivo**, e **aggiornarlo dopo**.
+
+```
+OSSERVA → RICOSTRUISCI LO STATO → SCEGLI L'OBIETTIVO → CERCA I BIVI
+   → RICERCA → PIANIFICA → DELEGA → IMPLEMENTA → VERIFICA
+   → INTEGRA → AGGIORNA LO STATO → OSSERVA
+```
+
+«Cerca i bivi» sta **prima** della ricerca di proposito: una decisione trovata a
+implementazione fatta è una decisione già presa da sé.
+
+## 2. Le classi di decisione, e dove ci si ferma
+
+L'errore da evitare è duplice, e i due estremi sono ugualmente inutili: l'agente
+paralizzato che chiede conferma per rinominare una variabile, e l'agente cowboy
+che sceglie da solo la forma dei dati.
+
+| Classe | Cosa fa l'orchestratore |
+|---|---|
+| Banale · implementazione locale | decide e procede |
+| Architetturale **reversibile** | propone, e procede se il rischio è basso — dicendo che l'ha fatto |
+| Architetturale **irreversibile** | **si ferma** |
+| Prodotto (cosa deve fare, per chi) | **si ferma** |
+| Sicurezza · privacy | **si ferma** |
+| Modello dati (schema, formati, migrazioni) | **si ferma** |
+
+**Fermarsi non è chiedere «cosa vuoi fare?».** È portare il bivio già istruito:
+le opzioni, i pro e i contro di ciascuna, la raccomandazione con la sua ragione,
+e la domanda esatta a cui serve risposta. Scaricare la scelta addosso all'owner
+senza averla analizzata è lavoro non fatto, non collaborazione.
+
+## 3. Un subagente che dice di aver fatto non è evidenza
+
+Questa è la regola che questo repo paga più spesso. I subagenti sono **worker**:
+l'orchestratore definisce il compito, loro producono, **l'orchestratore
+verifica**. Non a campione — sulle affermazioni che reggono la conclusione.
+
+Evidenza è: il codice che c'è · un test che passa **e che è stato visto fallire
+prima del fix** · il comportamento eseguito · il diff letto · `tsc` e la suite
+lanciati da chi riferisce · il numero prodotto nello stesso respiro in cui si
+scrive.
+
+Non è evidenza: un riassunto, una spunta, «tutti i test passano» senza il
+comando, un `file:riga` ricordato invece che aperto.
+
+E vale anche al contrario: quando un subagente riferisce un difetto, si verifica
+prima di crederci. In questa slice un agente ha riportato due vincitori su un
+lock — sembrava un bug di concorrenza gravissimo, era il suo harness di test.
+
+## 4. Le PR sono checkpoint epistemici
+
+Non «faccio tutto e poi te lo mostro», ma:
+
+```
+obiettivo → PR → verifica → merge → aggiorna lo stato → obiettivo successivo
+```
+
+Una PR per cosa, con una definizione di completamento **verificabile**. Non si
+scrive «abbiamo implementato memoria, eventi e workspace»: si scrive quali PR,
+e ognuna sopravvive da sola alla domanda «è vero?».
+
+## 5. Lo stato dell'orchestratore, non solo quello del progetto
+
+`STATE.md` dice dov'è il *progetto*. Dopo trenta iterazioni serve anche dov'è
+*chi lo sta guidando*: comprensione attuale · obiettivo attuale · decisioni
+aperte · domande all'owner · PR attive · deleghe in volo · stato della verifica
+· rischi noti · prossima azione consigliata.
+
+Senza, il loop diventa un narratore con la memoria confusa: sa di aver fatto
+molto e non sa più cosa regge.
+
+## 6. Repo navigabile da umani **e** da agenti
+
+Non sono lo stesso problema. Un umano naviga per concetti, gerarchie, nomi
+familiari, intuizione. Un agente naviga per segnali strutturali: riferimenti
+espliciti, indici, entry point, percorsi deterministici, metadati.
+
+> **La repo non va progettata perché l'agente la legga tutta. Va progettata
+> perché sappia cosa leggere, in che ordine, e perché.**
+
+Due vincoli che si tengono a vicenda: *human-readable* non implica
+*agent-navigable*, e *agent-navigable* non deve diventare *human-hostile*. Niente
+cartella `AI_DOCS/` parallela — il livello di navigazione per agenti si ottiene
+con manifest, indici, riferimenti bidirezionali e entry point **dentro** la
+struttura vera (`CLAUDE.md`, `AGENTS.md`, `STATE.md`, gli ADR), non accanto.
+
+Il criterio di qualità è misurabile: quanto ci mette un umano — e quanto ci mette
+un agente — a ricostruire il contesto che serve per fare correttamente una data
+operazione.
+
+## 7. Sapere quando non fare niente
+
+Vale per l'agente che stiamo costruendo e per l'orchestratore che lo costruisce.
+
+> **Un agente continuo non è quello che fa sempre qualcosa. È quello che sa
+> quando non fare nulla.**
+
+Ogni evento passa da: serve un'azione? serve ricordare? serve toccare il
+workspace? serve coinvolgere l'owner? **oppure si ignora** — e ignorare è un
+esito legittimo, non un fallimento. In codice questa proprietà esiste già ed è
+`decideProactive` (`core/scheduler/proactivity.ts`), col suo insieme **chiuso** di
+trigger. Qualunque spina degli eventi nasca dopo, quel cancello resta.
+
+## 8. Gli eval rispondono a una domanda sola
+
+Non «quanti benchmark mettiamo nel README», ma **«sta migliorando?»**. Quindi
+pochi, concreti, e soprattutto **di regressione**: la stessa suite prima e dopo,
+e la capacità di dire *questa modifica ha peggiorato X*.
+
+Le domande che meritano un eval, in ordine di quanto sono nostre: cosa va
+ricordato di un dialogo · cosa va ripescato dato un contesto · dove va
+un'informazione (memoria, workspace, contesto, tool) · quale tool serve · dato
+un evento, agire/ricordare/ignorare · l'obiettivo è stato davvero completato.
+
+## 9. Il modello si sceglie per la task, e la scelta si misura
+
+Non si fissa oggi una matrice modello→task. La regola è: il modello di un
+sotto-compito si sceglie per **natura, complessità, rischio e costo**, e quando
+il dubbio sulla qualità relativa è reale si fa un **eval comparativo piccolo**
+prima di standardizzare.
+
+La separazione che resta ferma è un'altra, e non è sui nomi dei modelli:
+**orchestratore ≠ worker ≠ verificatore**. L'orchestratore non è il modello che
+sa fare tutto meglio; è quello che ha la responsabilità di decidere cosa va
+fatto, come si verifica, e quando fermarsi a chiedere.
+
+## 10. La ricerca cita, e la citazione impedisce di rifarla
+
+Ogni affermazione che viene da fuori porta la fonte primaria e **perché ci
+interessa**, non solo il titolo. Serve a una cosa concreta: che la ricerca
+successiva possa dire *«quel paper lo stiamo già considerando, ecco dove»*
+invece di ripartire. Il formato e le due zone stanno in `PRACTICES.md` §13; qui
+si aggiunge solo l'obbligo della citazione puntuale e del *perché*.
 ## 11. Cosa significa «chiuso»
 
 Direttiva owner, 2026-08-15, e sostituisce ogni uso più permissivo della parola

@@ -5,14 +5,17 @@
     "*claude-sonnet-5*",
     "*claude-opus-5*",
     "*claude-fable-5*",
+    "*claude-opus-4-7*",
+    "*claude-opus-4-8*",
     "gpt-5*"
   ],
   "maxToolsExposed": 24,
   "maxToolCallsPerTurn": 30,
-  "thinking": "allowed",
+  "thinking": "adaptive",
+  "sampling": "model-default",
   "recovery": [
     "nudge",
     "retryOnce"
   ],
-  "notes": "No crutches beyond a nudge and one retry. If this profile ever needs more, the loop has a bug \u2014 do not paper over it here. Note on retryOnce: at temperature 0 it re-sends a byte-identical request \u2014 it only pays where the failure was non-deterministic (provider-side sampling variance, transient serving glitches). If it never fires usefully, the honest edit is [\"nudge\"], not a bigger cascade."
+  "notes": "No crutches beyond a nudge and one retry. If this profile ever needs more, the loop has a bug — do not paper over it here. thinking=adaptive is what claude-sonnet-5 and claude-opus-5 already do when asked for nothing, so declaring it changes no spend for them. claude-opus-4-7 and claude-opus-4-8 default thinking OFF, unlike the rest of this file's globs — matching them here is a real, deliberate spend increase (ADR-0037 named this trade before any profile made it; N4, 2026-08-13, is the profile making it, because the alternative was CONSERVATIVE + temperature:0 + a 400 on every turn, which is worse). claude-fable-5 cannot be told 'off' at all: its thinking is always on and the API 400s on both {type:'enabled'} and {type:'disabled'} alike — a profile that must omit the field for a model like that says thinking='unset', never 'off'. claude-mythos-5 shares Fable 5's spec and pricing but is invite-only (Project Glasswing, no self-serve access, read 2026-08-13) — deliberately not matched here since almost no install can reach it; add it, and re-verify its request shape first, if that changes. sampling=model-default because temperature is a 400 on every Claude glob above (Opus 4.7 and later, and Sonnet 5, all removed it) — which also un-breaks retryOnce: at the model's own temperature a resend is no longer byte-identical, so the step finally does something."
 }
