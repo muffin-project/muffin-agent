@@ -14,6 +14,14 @@ import type Database from 'better-sqlite3';
  * have let it eat the whole month before tripping.
  */
 
+/**
+ * The owner's own tenant. Spelled here rather than imported from
+ * `agent/context/assemble.ts`: `core/` does not depend on `agent/`, and the
+ * string is a contract in `core/policy/types.ts` (`'host' | group:… |
+ * community:…`), not a detail of prompt assembly.
+ */
+const HOST_TENANT = 'host';
+
 export type BudgetCaps = {
   /** USD per calendar month, across everything. */
   monthlyUsd: number;
@@ -100,7 +108,24 @@ export class BudgetEngine {
     return this.monthToDateUsd() >= this.caps.monthlyUsd;
   }
 
+  /**
+   * The daily cap, and it does not apply to the owner — deliberately.
+   *
+   * The docstring at the top of this file says what the cap is for in one
+   * sentence: *"the per-tenant daily cap protects against a group that starts
+   * talking to itself"*, and *"groups are the noisy ones"*. Applied to `host`
+   * as well, the same number becomes a ceiling on the owner's own working day:
+   * two dollars is roughly fifteen frontier turns, so the cap written to stop
+   * an echo loop would instead stop the owner by mid-morning — and Gate 1 is
+   * measured in days of ordinary use. The monthly cap is the owner's ceiling.
+   *
+   * This is the one interpretive choice in wiring the cap up, so it is written
+   * here rather than left in a commit message: the sealed number means "per
+   * *remote* tenant per day". Widening it to the owner is a one-line change and
+   * a reseal, and it should be a decision, not a side effect.
+   */
   tenantExhausted(tenant: string): boolean {
+    if (tenant === HOST_TENANT) return false;
     return this.tenantTodayUsd(tenant) >= this.caps.perTenantDailyUsd;
   }
 

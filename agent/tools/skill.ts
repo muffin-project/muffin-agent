@@ -94,7 +94,20 @@ export function makeSkillTool(skills: readonly SkillInfo[]): RegisteredTool {
           isError: true,
         };
       }
-      return { content: content.toString('utf8') };
+      // `tier: 1`, which this file's own docstring has claimed since it was
+      // written and which the return value did not carry. The omission was not
+      // cosmetic: `agent/loop.ts` raises the turn's taint only when `tier` is
+      // present, so a skill body — text this file classifies as *instructions*,
+      // by design — entered context leaving taint at 0. And taint 0 is exactly
+      // the condition `core/policy/decide.ts` requires to auto-allow `sys.shell`
+      // in hardened mode, so a turn could read instructions and then reach the
+      // shell without the owner being asked once.
+      //
+      // Tier 1 and not 3, and not fenced: these are owner-installed and
+      // owner-audited files, not somebody else's web page. The point is that
+      // "the owner wrote every word in this context" stops being true, which is
+      // the question the shell gate is actually asking.
+      return { content: content.toString('utf8'), tier: 1 };
     },
   };
 }

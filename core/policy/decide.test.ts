@@ -138,6 +138,39 @@ describe('policy kernel', () => {
     expect(kernel({ hardened: false })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
   });
 
+  it('asks the budget about the turnic tenant, not just about the wallet', () => {
+    // The gate used to be nullary — `budgetExhausted()` — so the per-tenant
+    // daily cap was not merely unwired, it was **unaskable** through this
+    // interface. It was sealed in rot/budgets.json, loaded, unit-tested, and
+    // reported by `doctor` as an active ceiling, and no caller could reach it.
+    // A group could therefore spend the entire monthly pool at forty times its
+    // own stated limit, starving the owner for the rest of the month — which is
+    // the documented $47-in-twenty-minutes echo loop `budget.ts` was written
+    // against.
+    //
+    // Asserting the tenant *arrives* rather than asserting a number: the
+    // arithmetic has its own tests, and what broke here was the plumbing.
+    const seen: string[] = [];
+    const perTenant = kernel({
+      budgetExhausted: (tenant: string) => {
+        seen.push(tenant);
+        return tenant === 'group:telegram:42';
+      },
+    });
+
+    // `sys.http` because a member can reach it (not `hostOnly`) and it is
+    // medium risk, so it passes the principal and taint gates and arrives at
+    // the budget — which is checked before the egress branch, so this is the
+    // budget's verdict and not the allowlist's.
+    expect(perTenant(req(member, 'group:telegram:42', 'sys.http', 0))).toMatchObject({
+      effect: 'deny',
+      code: 'budget_exhausted',
+    });
+    expect(perTenant(req(owner, 'host', 'fs.write', 0))).not.toMatchObject({ code: 'budget_exhausted' });
+    expect(seen).toContain('group:telegram:42');
+    expect(seen).toContain('host');
+  });
+
   it('stops spending before the action, not after', () => {
     const broke = kernel({ budgetExhausted: () => true });
     expect(broke(req(owner, 'host', 'fs.write', 0))).toMatchObject({
