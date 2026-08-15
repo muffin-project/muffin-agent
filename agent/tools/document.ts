@@ -35,6 +35,10 @@ export const documentCapability: CapabilityDecl = {
   reversible: 'yes',
   resourceKind: 'tenant',
   policyArgs: ['path'],
+  // Rerunnable: reading a stored slice of an already-indexed document is a pure
+  // read of local state. A resumed turn that re-issues it gets the same bytes
+  // or a refusal if the document was retired meanwhile — never a second effect.
+  rerunnable: true,
   // Not host-only, and the store is what makes that safe: the lookup is scoped
   // to the turn's tenant, so a group's agent can only reach a document indexed
   // for that group.
