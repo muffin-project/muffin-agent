@@ -9,19 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis per intero (`M5-BIS.md`). Fondo = zero BLOCKER.
+**Obiettivo**: M5-bis (`M5-BIS.md`), ordinato per **irreversibilita**: prima cio che non si potra piu cambiare. Forma del turno > modello dei permessi > schema > tutto il resto. Un flag CLI si cambia domani, la forma di un turno no.
 
-**Deleghe in volo**: gate1 x4 · reasoning-budget · superfici+streaming · confronto-permessi · documentazione.
+**A ogni giro del loop, prima di scegliere l'obiettivo**: aggiorna questo blocco E ripubblica la plancia (scratchpad/plancia.html, stesso URL). Se plancia e M5-BIS divergono ha ragione il file.
 
-**CODA — aggiunte dell'owner, non ancora iniziate.** Un suo messaggio si AGGIUNGE, non sostituisce l'obiettivo:
-1. Validare ogni affermazione dei doc fondazionali; quelle eseguibili diventano check (ORCHESTRATION §13).
-2. Passata *table stakes*: cosa hanno tutti gli agenti maturi e noi no — e' la categoria cieca agli audit interni (cosi e' sfuggito lo streaming).
-3. Fasce enterprise/consumer + qwen3.8 via Ollama.
-4. Eval del modello nuovo, DOPO il reasoning budget.
+**Deleghe in volo**: gate1 x4 · reasoning-budget · superfici+streaming · confronto-permessi · documentazione · radice-Deliver · turno-sospendibile.
 
-**Decisioni owner aperte**: scope di lettura del sandbox · spezzare `mcp.*` per-tool (entrambe in ricerca sui peer) · `ricorda` scrive o propone · lingua dei doc pubblici · `identity.md` e taglio `persona.md`.
+**La tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — un turno dev'essere sospendibile e ripristinabile. Se e vera, costruirle separate darebbe tre meccanismi che non compongono.
 
-**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile · il kernel legge `reversible` solo dentro `case medium`, quindi irreversibile collassa su allow · `approve` e' cablato solo nel REPL.
+**Decisioni owner aperte**: scope di lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity.md e persona.md.
+
+**Trappole note**: `episodes.kind` CHECK non alterabile · il kernel legge `reversible` solo in `case medium`, irreversibile collassa su allow · `approve` cablato solo nel REPL · una base incompleta produce inventari falsi.
 <!-- FINE BLOCCO -->
 
 ---
