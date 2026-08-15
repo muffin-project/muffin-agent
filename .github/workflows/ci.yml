@@ -57,6 +57,17 @@ jobs:
 
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
+      # Senza questo il verde è vuoto proprio dove serve. Misurato al primo
+      # giro di questa CI: `core/sandbox/executor.test.ts` girava «10 test, 9
+      # saltati», perché i test si auto-saltano quando la sandbox non è
+      # disponibile — e il runner non ha `bwrap`. Il risultato era una spunta
+      # verde che non aveva provato il confine di sicurezza, sulla stessa
+      # piattaforma dove gira la produzione. È la forma esatta di fallimento che
+      # `cli/doctor.ts` documenta in testa: su un host precedente `bwrap` era in
+      # PATH e la sandbox non conteneva niente per due mesi.
+      - name: bubblewrap (la sandbox va provata, non saltata)
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - run: npm ci
 
       - name: typecheck
