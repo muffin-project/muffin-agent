@@ -554,15 +554,49 @@ quattro erano già dentro `inventario-vecchio-nuovo.md §8` e uno no, e perché
 essere stati ritrovati da fuori, senza vedere il codice, dice che sono i buchi
 che si vedono usando:
 
-- **A · il fetch non estrae il testo.** `agent/tools/http.ts:130` restituisce il
-  corpo **grezzo** (HTML compreso) e `:169` lo tronca head 40k + tail 10k — cioè
-  butta il `<body>` e tiene `<head>` e footer. Sono ~12k token di cui forse 800
-  di testo, in un turno con un tetto di 4096 in uscita. **Regressione rispetto al
-  vecchio**, che aveva Readability; l'inventario aveva marcato la riga "PRESENTE,
-  più stretto" guardando la sicurezza (vera e migliore: SSRF su ogni hop) e
-  mancando la resa — corretto lì. Rimedio: estrazione **locale** davanti a
-  `clipBody` (non Firecrawl/Jina: sarebbero un endpoint terzo che legge la pagina
-  al posto nostro). Il taint non cambia — pulire non è fidarsi.
+- ~~**A · il fetch non estrae il testo.**~~ — chiuso (2026-08-14, ADR-0041).
+  `agent/tools/http.ts:130` restituiva il corpo **grezzo** (HTML compreso) e `:169`
+  lo troncava head 40k + tail 10k — cioè buttava il `<body>` e teneva `<head>` e
+  footer. Erano ~12k token di cui forse 800 di testo, in un turno con un tetto di
+  4096 in uscita. **Regressione rispetto al vecchio**, che aveva Readability;
+  l'inventario aveva marcato la riga "PRESENTE, più stretto" guardando la sicurezza
+  (vera e migliore: SSRF su ogni hop) e mancando la resa — corretto lì.
+
+  ✅ **Estrazione locale davanti a `clipBody`**, come `research/recupero-dal-web.md`
+  aveva già misurato: `defuddle` su `linkedom`, importato come libreria
+  (`defuddle/node`), mai come sottoprocesso né come servizio terzo (Firecrawl/Jina
+  avrebbero letto la pagina al posto nostro). Nuovo modulo
+  `agent/tools/extract.ts`: gate sul `content-type` della risposta (solo
+  `text/html`/`application/xhtml+xml` passano dall'estrattore — un corpo JSON, testo
+  puro o CSV attraversa `clipBody` byte-identico, testato); mai un fallimento
+  dell'estrazione che fa fallire il fetch (Defuddle che lancia, che non trova nulla,
+  o che restituisce qualcosa di implausibilmente piccolo contro un input sostanziale
+  ricade sul corpo grezzo, tutti e tre testati con fixture che falliscono
+  l'estrazione); `clipBody` resta, invariato, la rete finale — ora quasi sempre
+  inerte. Il taint non cambia, `sys.http` non cambia: pulire non è fidarsi, cambia
+  solo quanto testo entra nel recinto.
+
+  ⬤ **Misurato su due pagine vere** (`curl`, nessuna chiave, nessuna chiamata a
+  pagamento): Wikipedia "Web scraping" 50.049/14.012 token oggi (già troncato) →
+  41.696/10.268 estratti (**−26,7%**); un capitolo della documentazione Python
+  73.085 caratteri (mai troncato, sotto i 50k) 14.561 token oggi → 14.435/3.734
+  estratti (**−74,4%**). Numeri più bassi delle quattro pagine di
+  `recupero-dal-web.md` (61-96%) perché quella pagina Wikipedia porta 41 note a piè
+  di pagina che sono contenuto vero, non uno scarto di estrazione — ispezionato
+  direttamente, nessun testo di navigazione o banner nel risultato.
+
+  **La correzione che la ricerca non aveva**: `turndown` — richiesto per
+  `{markdown: true}` — non è evitabile con `--omit=optional` come la ricerca aveva
+  assunto: `defuddle/node` lo richiede a livello di modulo, non solo quando
+  l'opzione è usata, e lo stesso vale per `mathml-to-latex` (richiesto dal supporto
+  matematico, sempre caricato). Il secondo motore DOM (`@mixmark-io/domino`, 8,8 MB,
+  dietro `turndown`) che la ricerca pensava di evitare **non si evita**: 20 pacchetti
+  / 20 MB misurati, non i 19/9,8 MB scritti lì (dettaglio e correzione appesa a
+  `recupero-dal-web.md`, mai riscritta in loco). Gap A si chiude quindi a **13
+  dipendenze runtime, non 11**: `defuddle`, `linkedom`, `turndown`,
+  `mathml-to-latex` tutte dichiarate esplicitamente in `package.json` — non lasciate
+  come installazioni transitive non dichiarate, perché un pacchetto che il codice
+  richiede davvero all'import non è, in nessun senso che conti qui, opzionale.
 - **B · non si può navigare la storia.** `memory_search` prende **solo una
   query**: niente `date_range`, niente `surface`, niente vicinato. È il caso
   d'uso letterale dell'owner (*"navigare i messaggi anche tra più surface"*) e i
