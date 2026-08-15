@@ -153,7 +153,7 @@ ancora verificato — **è un debito, non uno stato**).
 | C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
 | C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
-| C7 | PDF | Acquisisce documenti utili? | READY (ADR-0042) ⚠️ niente OCR |
+| C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
 
 > **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
@@ -171,7 +171,7 @@ ancora verificato — **è un debito, non uno stato**).
 > mai indicizzato come documento vuoto. L'OCR resta fuori scopo — quando entrerà,
 > è una riga nuova di questo inventario, non una correzione silenziosa di questa.
 > Insieme all'OCR resta fuori la **struttura visiva**: due colonne e le celle di
-> una tabella arrivano come testo di seguito (misurato in ADR-0042), il contenuto
+> una tabella arrivano come testo di seguito (misurato in ADR-0043), il contenuto
 > tutto, la forma no.
 
 ### D · Capability e sicurezza → `gate1/d-capability.md`

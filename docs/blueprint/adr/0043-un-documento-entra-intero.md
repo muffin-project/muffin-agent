@@ -1,4 +1,4 @@
-# ADR-0042 — Un documento entra intero, e si compatta dopo — mai al posto
+# ADR-0043 — Un documento entra intero, e si compatta dopo — mai al posto
 
 **Stato:** accettato · 2026-08-15 · chiude `M5-BIS.md` C7 (*«PDF | Acquisisce
 documenti utili? | BLOCKER — nessun parser»*)
