@@ -49,6 +49,10 @@ export const searchCapability: CapabilityDecl = {
   id: 'sys.search',
   risk: 'medium',
   reversible: 'yes',
+  // Safe to repeat, and not free to repeat: a second query is a second billed
+  // request. That is money, not correctness, and this field answers the
+  // correctness question — the cost of a resume is the budget's problem.
+  rerunnable: true,
   maxTaint: 3,
   resourceKind: 'none',
   policyArgs: ['query'],
