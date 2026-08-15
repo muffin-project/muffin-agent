@@ -531,6 +531,43 @@ describe('agent loop', () => {
     await runTurn(d, input(store));
     expect(ran).toEqual([]);
   });
+
+  it('refuses a policy verdict it does not recognise, instead of falling through to execution', async () => {
+    // Same shape as the `draft` bug just above, one union member further out.
+    // `runTool`'s gate used to be a chain of `if`s for the effects that must
+    // NOT run the tool (deny/draft/ask); whatever was left fell through to
+    // the handler. That "whatever is left" was `allow` in practice, but the
+    // chain never checked for `allow` — it only checked for the other three —
+    // so the fall-through really meant "anything I do not have a branch for",
+    // and `draft` was that exact fall-through once (ADR-0022's undo model
+    // landed after this file did). The union can grow again without every
+    // caller growing with it: `decide` is dependency-injected (`LoopDeps`),
+    // so a kernel and a loop built from different commits — a rolling
+    // deploy, or a decision replayed from a persisted record after a schema
+    // change — can disagree about its members without either side lying.
+    // The cast through `unknown` below stands in for that disagreement.
+    //
+    // `runTool` now switches exhaustively and refuses via `assertNever` in
+    // `default`, so the turn throws instead of executing — asserted here as
+    // a rejection, not a quiet return, because a caller that swallowed this
+    // throw would recreate the exact bug the switch exists to prevent.
+    const ran: string[] = [];
+    const { deps: d, store } = deps([callTool('demo_unknown'), answer('ok')], {
+      decide: (() => ({ effect: 'quarantine' })) as unknown as LoopDeps['decide'],
+      tools: [
+        {
+          capability: 'demo.unknown',
+          spec: { name: 'demo_unknown', description: 'u', inputSchema: { type: 'object', properties: {} } },
+          handler: () => {
+            ran.push('demo_unknown');
+            return { content: 'eseguito' };
+          },
+        },
+      ],
+    });
+    await expect(runTurn(d, input(store))).rejects.toThrow(/unreachable/);
+    expect(ran).toEqual([]);
+  });
 });
 
 /**
