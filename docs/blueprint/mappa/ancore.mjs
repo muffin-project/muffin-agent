@@ -49,7 +49,6 @@ export function mapFiles() {
     .map((f) => join(MAPPA, f));
 }
 
-/** Tutti i riferimenti citati dalla mappa, deduplicati e ordinati. */
 /**
  * La cartella di casa di ogni sezione della mappa.
  *
@@ -158,9 +157,37 @@ export function resolveRef(ref, sezioni = []) {
   return { ok: true, path, line, text: lines[line - 1].trim() };
 }
 
-function build() {
+/**
+ * Cerca il testo registrato altrove nel file.
+ *
+ * È la differenza fra due cose che un numero di riga confonde: **il codice si è
+ * spostato** — un import aggiunto sopra, e trecento ancore scendono di una riga
+ * — e **il codice è cambiato**. La prima si insegue senza pensarci; la seconda
+ * vuole che qualcuno riguardi la mappa. Senza questa distinzione la cura per
+ * l'allarme sarebbe rigenerare, cioè riancorare in silenzio a qualunque cosa si
+ * trovi lì adesso: l'allarme si spegnerebbe da solo e la mappa mentirebbe con
+ * la stessa faccia sicura di prima.
+ */
+function ritrova(path, testo) {
+  if (!testo) return [];
+  const righe = readFileSync(join(REPO, path), 'utf8').split('\n');
+  const trovate = [];
+  for (let i = 0; i < righe.length; i++) if (righe[i].trim() === testo) trovate.push(i + 1);
+  return trovate;
+}
+
+function build({ riancora = false } = {}) {
+  let precedenti = {};
+  try {
+    precedenti = JSON.parse(readFileSync(OUT, 'utf8'));
+  } catch {
+    /* prima esecuzione */
+  }
   const anchors = {};
   const broken = [];
+  const seguite = [];
+  const generiche = [];
+  const daRivedere = [];
   for (const [ref, sezioni] of references()) {
     // Risolto una sezione alla volta: se due sezioni intendono file diversi con
     // la stessa scrittura, l'ancora non esiste — e va detto, non scelto.
@@ -174,16 +201,48 @@ function build() {
       continue;
     }
     const r = [...esiti.values()][0];
-    if (r.ok) anchors[ref] = { path: r.path, line: r.line, testo: r.text };
-    else broken.push(`${ref} — ${r.reason}`);
+    if (!r.ok) {
+      broken.push(`${ref} — ${r.reason}`);
+      continue;
+    }
+    const prima = precedenti[ref];
+    if (!prima || prima.path !== r.path || prima.testo === r.text) {
+      anchors[ref] = { path: r.path, line: r.line, testo: r.text };
+      continue;
+    }
+    const altrove = ritrova(r.path, prima.testo);
+    if (altrove.length === 1) {
+      anchors[ref] = { path: r.path, line: altrove[0], testo: prima.testo };
+      seguite.push(`${ref} → :${altrove[0]}`);
+    } else if (altrove.length > 1) {
+      // Testo generico — `{`, `} catch (error) {`, `throw error;` — che ricorre
+      // più volte nel file: non identifica niente, e la sua riga è indicativa
+      // per costruzione. Si prende l'occorrenza più vicina e non si fallisce:
+      // il segnale che conta è **zero** occorrenze, cioè il testo registrato
+      // non esiste più. Far fallire anche questo caso avrebbe insegnato a
+      // rigenerare per far tacere l'allarme, che è il modo in cui un controllo
+      // muore.
+      const vicina = altrove.reduce((a, b) => (Math.abs(b - prima.line) < Math.abs(a - prima.line) ? b : a));
+      anchors[ref] = { path: r.path, line: vicina, testo: prima.testo };
+      generiche.push(`${ref} → :${vicina}`);
+    } else if (riancora) {
+      anchors[ref] = { path: r.path, line: r.line, testo: r.text };
+      seguite.push(`${ref} riancorata a mano`);
+    } else {
+      anchors[ref] = prima;
+      daRivedere.push(`${ref}\n    registrato: ${prima.testo}\n    ora a riga ${r.line}: ${r.text}`);
+    }
   }
-  return { anchors, broken };
+  return { anchors, broken, seguite, generiche, daRivedere };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { anchors, broken } = build();
+  const riancora = process.argv.includes('--riancora');
+  const { anchors, broken, seguite, generiche, daRivedere } = build({ riancora });
   const next = `${JSON.stringify(anchors, null, 2)}\n`;
-  if (process.argv.includes('--check')) {
+  const check = process.argv.includes('--check');
+
+  if (check) {
     let current = '';
     try {
       current = readFileSync(OUT, 'utf8');
@@ -199,9 +258,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     writeFileSync(OUT, next);
     console.log(`${Object.keys(anchors).length} ancore scritte in ancore.json`);
   }
+
+  if (seguite.length) console.log(`${seguite.length} ancore hanno seguito il codice che si è spostato`);
+  if (generiche.length) console.log(`${generiche.length} ancore su righe generiche, riportate all'occorrenza più vicina`);
   if (broken.length) {
     console.error(`\n${broken.length} riferimenti rotti nella mappa:`);
     for (const b of broken) console.error(`  ${b}`);
-    process.exit(1);
   }
+  if (daRivedere.length) {
+    console.error(`\n${daRivedere.length} ancore puntano a codice CAMBIATO, non spostato.`);
+    console.error('La mappa dice ancora la cosa di prima: rileggi quelle voci, poi `--riancora`.\n');
+    for (const d of daRivedere) console.error(`  ${d}`);
+  }
+  if (broken.length || daRivedere.length) process.exit(1);
 }
