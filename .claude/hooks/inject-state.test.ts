@@ -77,20 +77,33 @@ describe('inject-state hook', () => {
     expect(context).not.toMatch(/blocco troncato/);
   });
 
-  it('fits the real STATE.md, whole, with room to grow', () => {
+  it('fits the real STATE.md and the real LAVORO.md, both whole', () => {
     // Every test above proves the mechanism handles a block of size N. None of
-    // them ever looked at OUR block, and that is the gap the mechanism cannot
+    // them ever looked at OUR blocks, and that is the gap the mechanism cannot
     // see: it truncated the real handoff twice — at 16,716 characters and again
     // at 18,700 after a merge — announcing it correctly both times while the
-    // tail, which is where the load-bearing file list lives, stopped arriving
-    // for weeks. The cap is not the failure. Nobody comparing what went in
-    // against what came out is the failure, so this is the comparison, run.
+    // tail, which is where the load-bearing file list lives, stopped arriving.
+    //
+    // Both blocks are asserted in one test on purpose: they compete for a
+    // single cap, so checking them separately would let one quietly starve the
+    // other, which is exactly how the handoff was lost.
     const context = contextOf(execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }));
     expect(context).not.toMatch(/blocco troncato/);
-    // The block ends with the list; if that arrives, everything before it did.
-    expect(context).toMatch(/File load-bearing/);
-    // Headroom, so the next paragraph fails here rather than in a live session.
+    expect(context).toMatch(/File load-bearing/); // the handoff's last line
+    expect(context).toMatch(/Deleghe in volo/); // the work state arrived too
     expect(context.length).toBeLessThanOrEqual(MAX - 250);
+  });
+
+  it('loses the work state rather than the handoff when LAVORO.md is malformed', () => {
+    // Fail-soft in the direction that matters. A LAVORO.md that is absent, or
+    // present without its markers, must cost the work state and never the
+    // handoff — the reverse arrangement would let a stray edit to a small file
+    // take out the block this hook exists for.
+    const home = homeWithBlock(300);
+    writeFileSync(join(home, 'docs', 'blueprint', 'LAVORO.md'), 'niente marcatori qui\n');
+    const context = contextOf(run(home).stdout);
+    expect(context).toMatch(/START HERE/);
+    expect(context).not.toMatch(/LAVORO\.md/);
   });
 
   it('stays silent rather than failing when there is nothing to inject', () => {

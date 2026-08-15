@@ -35,6 +35,34 @@ import { readFileSync } from 'node:fs';
 const STATE = new URL('../../docs/blueprint/STATE.md', import.meta.url);
 
 /**
+ * The *work* state, as opposed to the *project* state.
+ *
+ * STATE.md says where the project is. This says where whoever is driving it is:
+ * current objective, open decisions, PRs, delegations in flight. It exists
+ * because its absence had a measured symptom — the owner's words, after a day
+ * of it: *"ogni cosa non sembra considerare tutto il resto"*.
+ *
+ * The mechanism of the failure is worth naming, because it is not carelessness.
+ * A long conversation does not lose the list of open work gradually; it reduces
+ * it to "the last thing we discussed". From there every message reads as an
+ * isolated imperative and gets executed on its own — the task loop that
+ * `docs/ORCHESTRATION.md` §1 forbids, arrived at by memory decay rather than by
+ * choice. `ORCHESTRATION.md` §5 asked for this file and the file did not exist:
+ * declared and not connected, the defect this repo keeps finding elsewhere.
+ */
+const WORK = new URL('../../docs/blueprint/LAVORO.md', import.meta.url);
+
+/**
+ * Reserved for the work block, and reserved rather than left over on purpose:
+ * it is the half that kept being lost, so it does not get to be the half that
+ * gets squeezed. STATE.md keeps its own truncation marker for the remainder.
+ */
+const WORK_RESERVE = 1_200;
+
+const WORK_START = '<!-- INIZIO BLOCCO -->';
+const WORK_END = '<!-- FINE BLOCCO -->';
+
+/**
  * The documented cap on hook output. Past it, Claude Code replaces the whole
  * string with a preview and a file path — which turns the handoff back into a
  * pointer to STATE.md, the exact failure this hook exists to close.
@@ -53,6 +81,10 @@ const PREAMBLE =
 
 const CUT_MARKER = '\n\n[…blocco troncato: leggi docs/blueprint/STATE.md]';
 
+const WORK_PREAMBLE =
+  'Stato del lavoro in corso (docs/blueprint/LAVORO.md). Va aggiornato a ogni ' +
+  'iterazione, PRIMA di scegliere il prossimo obiettivo:\n\n';
+
 let text;
 try {
   text = readFileSync(STATE, 'utf8');
@@ -68,9 +100,24 @@ if (start === -1) process.exit(0);
 const rule = text.indexOf('\n---', start);
 let block = (rule === -1 ? text.slice(start) : text.slice(start, rule)).trim();
 
-// Measured against the emitted string. Say it was cut: a silently truncated
-// handoff reads as a complete one.
-const budget = MAX - PREAMBLE.length;
+// The work block, read the same fail-soft way: a missing or malformed LAVORO.md
+// costs the work state, never the handoff.
+let work = '';
+try {
+  const raw = readFileSync(WORK, 'utf8');
+  const from = raw.indexOf(WORK_START);
+  const to = raw.indexOf(WORK_END, from);
+  if (from !== -1 && to !== -1) work = raw.slice(from + WORK_START.length, to).trim();
+} catch {
+  work = '';
+}
+if (work.length > WORK_RESERVE) work = work.slice(0, WORK_RESERVE - CUT_MARKER.length) + CUT_MARKER;
+
+const workOut = work.length > 0 ? `${WORK_PREAMBLE}${work}\n\n` : '';
+
+// Measured against the emitted string, which is what the cap applies to. The
+// work block is subtracted first: it is reserved, not leftover.
+const budget = MAX - PREAMBLE.length - workOut.length;
 if (block.length > budget) {
   block = block.slice(0, budget - CUT_MARKER.length) + CUT_MARKER;
 }
@@ -79,7 +126,7 @@ process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: PREAMBLE + block,
+      additionalContext: workOut + PREAMBLE + block,
     },
   }),
 );
