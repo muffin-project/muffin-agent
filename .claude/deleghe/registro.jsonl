@@ -8,3 +8,5 @@
 {"id":"a147b2d590f993238","slug":"morto-reasoning-budget","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.336Z"}
 {"id":"a1c0162e0e40dcd9c","slug":"morto-confronto-permessi","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.382Z"}
 {"id":"a08590b1dde1ed4eb","slug":"morto-gate1-b","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.427Z"}
+{"id":"aa7fa13c7a7732204","slug":"taint-in-ingresso","cosa":"leggere un file non alza il taint","quando":"2026-08-15T20:50:19.425Z"}
+{"id":"ae14fe916b0f84a37","slug":"superfici-discord","cosa":"contratto di superficie + Discord + consegna che non mente","quando":"2026-08-15T20:50:19.515Z"}
