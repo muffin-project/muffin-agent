@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 import {
   annotateSandboxFailures,
@@ -10,6 +10,7 @@ import {
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
+import { DISK_TIER } from './fs.js';
 
 /**
  * shell_run — the one contained command tool.
@@ -90,6 +91,9 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
         return {
           content: `invalid arguments: ${issue?.path.join('.') ?? '?'} — ${issue?.message ?? 'unparseable'}`,
           isError: true,
+          // Nothing ran, so nothing came back. The command never reached the
+          // sandbox and this string is ours.
+          tier: 0,
         };
       }
 
@@ -100,7 +104,7 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
       const cwd = resolve(scope.root, parsed.data.cwd ?? '.');
       const escape = relative(scope.root, cwd);
       if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
-        return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true };
+        return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true, tier: 0 };
       }
 
       const result = await executor.run({
@@ -115,11 +119,31 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
   };
 }
 
-/** Turn a contained run into a model-facing result: header, stdout, annotated stderr. */
+/**
+ * Turn a contained run into a model-facing result: header, stdout, annotated
+ * stderr.
+ *
+ * **`DISK_TIER`, the same constant `fs_read` uses, and not a coincidence.**
+ * `shell_run` has no network, so what its stdout can carry is the disk — `cat
+ * ~/Downloads/nota.md` is `fs_read` with a different door, and a door that did
+ * not taint was a door around the one that did. The tier is on the output, not
+ * on the act: the command the model chose is not the danger, the bytes coming
+ * back are.
+ *
+ * The cost is real and belongs in the same breath: `sys.shell` inherits
+ * `defaultMaxTaint.high` = 1, so **the second `shell_run` of a turn is now a
+ * `taint_exceeded` deny**, and so is a `shell_run` after any `fs_read`. That is
+ * threat model §3 row "Shell / filesystem host / processi · taint 2 · DENY —
+ * nessun percorso" applied to a turn that has read unprovenanced bytes, and it
+ * is the line ADR-0042 hands to the owner to contradict: the counter-move, if
+ * he wants it, is `maxTaint: 2` on `sys.shell` (which keeps shell an ASK and
+ * leaves egress shut), and that is an amendment to the threat model, not a
+ * default anyone should change in passing.
+ */
 export function formatExecOutcome(
   command: string,
   result: ExecResult,
-): { content: string; isError?: true } {
+): { content: string; isError?: true; tier: TrustTier } {
   const stderr = annotateSandboxFailures(command, result.stderr);
   const header = result.timedOut
     ? `killed at ${result.durationMs}ms: the command did not complete — nothing after this ran`
@@ -130,5 +154,6 @@ export function formatExecOutcome(
   return {
     content: parts.join('\n'),
     ...(result.code !== 0 || result.timedOut ? { isError: true as const } : {}),
+    tier: DISK_TIER,
   };
 }

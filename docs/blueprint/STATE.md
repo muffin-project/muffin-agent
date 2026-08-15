@@ -523,6 +523,28 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
 
+**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0042,
+88 file / 996 test). Il taint del turno saliva in un punto solo del loop, e quel
+punto leggeva un campo **opzionale**: `if (outcome.tier !== undefined)`. Chi non
+lo dichiarava — `fs_read`, `fs_list`, `shell_run`, `process_list` — portava byte
+di qualcun altro dentro il turno **lasciando il taint a zero**. Non un dettaglio:
+il docstring di `fs.read` argomenta il proprio soffitto alto appoggiandosi
+all'egress gate, che legge quel taint, quindi *la difesa citata nel file non
+poteva scattare*. Catena misurata prima del fix: `fs_read` di un file con
+istruzioni iniettate → taint 0 → `http_get` fuori allowlist → **ask** → owner
+approva → fetch. Dopo: **deny/resource_denied**, e l'owner non viene nemmeno
+messo nella posizione di dire sì. Due metà: `tier` **obbligatorio** su
+`ToolOutcome` (un tool nuovo non compila se non risponde alla domanda — il
+guardiano è `tsc`, che gira in CI) e `DISK_TIER = 2` per tutto ciò che entra dal
+disco, `shell_run` compreso perché `cat` è `fs_read` da un'altra porta. Costo
+misurato ed esplicito: **un turno che ha letto dal disco non agisce più
+sull'host** — shell, skill, process, mcp diventano `taint_exceeded`. Trovato
+girando un'affermazione **già marcata VERIFICATA**: era vera, e nessuno aveva
+fatto la sua negativa (`validazione-contratti.md` §6, addendum). Non chiuso, e
+nominato nell'ADR: il contenuto di `fs_read` **non è recintato** come quello di
+http/mcp, e la replica dell'agente entra in memoria a `trustTier: 0` anche quando
+il turno era a 2 (`agent/loop.ts:550-559`).
+
 ## Sessioni 2026-08-09
 
 **Sessione 2026-08-09 (questo giro).** `muffin` è un **comando installabile** (bin+dist+`install.sh` collision-safe Mint, `LICENSE` MIT); **onboarding** (init interattivo, inferenza provider dal prefisso chiave, first-run, guardia bot-token, `muffin uninstall`); **dev-setup** (`.env` caricata dalla CWD via `process.loadEnvFile` nativo, `MUFFIN_HOME` dev/prod); pushato **privato**. **Knowledge base cognitiva** creata (`knowledge/`, il corpus del vecchio che il blueprint aveva perso). **MVP #1** (recall) chiuso. Ricerche persistite: `research/{system-prompt-architecture,capability-surface,eu-ai-act-gdpr,onboarding-first-run,local-dev-setup}.md`. ADR nuovi: 0026-0030. **EU AI Act** (research): fuori-scope come deployer per uso personale, Art.50 coperto da HITL, serve avvocato pre-rilascio-pubblico.
@@ -531,6 +553,19 @@ di trigger, Root of Trust, il costo della cache come vincolo di design.
 
 ## Aperto (owner)
 
+0. **Il costo di ADR-0042, una riga sola, e serve il tuo sì o il tuo no.** Dopo un
+   `fs_read`, `shell_run` nello stesso turno è **deny/taint_exceeded** — non un
+   ask: un rifiuto. Vale anche per il secondo `shell_run` di fila. *«Leggi il
+   file e poi lancia i test»* si spezza a metà. È la riga del threat model §3
+   («Shell / filesystem host / processi · taint 2 · DENY — nessun percorso»)
+   applicata a un turno che ha ingoiato byte senza provenienza, ed è coerente;
+   ma è anche la cosa che si sente ogni giorno. Se dici no, la contropartita
+   **non** è togliere il tier alla lettura (riaprirebbe la catena di
+   esfiltrazione): è `maxTaint: 2` su `sys.shell`, che lascia shell un ASK e
+   lascia l'egress chiuso — e che **emenda il threat model**, quindi lo decidi
+   tu. Costo misurato in `agent/tools/shell.test.ts` §«il costo, dichiarato come
+   test». Tocca anche la decisione aperta «scope lettura sandbox», che questa
+   ADR non chiude.
 1. **Approvazione delle 45+ assunzioni** in `08-assunzioni.md`.
 2. **Modello consumer di riferimento**: rivalutare **a metà agosto** se escono i pesi di Qwen 3.8 (27B); altrimenti eval breve tra Qwen3.6-27B/35B-A3B, GPT-OSS-20b e l'incumbent Gemma-4. Budget contenuto per direttiva owner.
 3. **Push/PR**: tutto è committato solo in locale, su entrambi i repo.

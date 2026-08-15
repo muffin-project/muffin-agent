@@ -131,8 +131,29 @@ export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutco
 export type ToolOutcome = {
   content: string;
   isError?: boolean;
-  /** Tier of whatever this result dragged in. Web and third-party tools are 3. */
-  tier?: TrustTier;
+  /**
+   * Tier of whatever this result dragged into the turn. Web and third-party
+   * tools are 3; the local filesystem is 2 (ADR-0042); a result made only of
+   * the tool's own words — *"wrote 41 bytes"*, *"invalid arguments"* — is 0.
+   *
+   * **Required, and that is the fix.** It was `tier?`, and `runTool` raised the
+   * turn's taint only when the field was present, so *not answering* the
+   * provenance question meant "this context is as clean as when the owner
+   * typed". Four tools never answered — `fs_read`, `fs_list`, `shell_run`,
+   * `process_list` — and every one of them carries bytes somebody else wrote.
+   * The consequence was not local: `core/policy/decide.ts` reads the turn's
+   * taint to decide egress, so a turn could swallow an injected file and still
+   * reach an off-allowlist host as an `ask` the owner might approve.
+   *
+   * Optional-with-a-safe-default was the other candidate and is weaker in the
+   * way that matters: it makes the omission harmless *today* without making it
+   * visible, and `agent/tools/skill.ts:97-110` is the record of how long an
+   * invisible omission survives here — months, in a file whose own docstring
+   * claimed the missing value. A required field is the same guarantee
+   * `assertNever` gives the decision switch below: the day a new tool arrives,
+   * the compiler asks it where its bytes came from.
+   */
+  tier: TrustTier;
 };
 
 export type RegisteredTool = {
@@ -822,7 +843,11 @@ async function runTool(
 
   try {
     const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });
-    if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);
+    // Unconditional. The `!== undefined` guard that used to stand here was the
+    // whole defect: it turned "this tool said nothing about provenance" into
+    // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
+    // that honestly reports 0 costs the turn nothing.
+    snapshot.raiseTaint(outcome.tier);
     deps.sessions.append(input.session, {
       role: 'tool',
       content: outcome.content,

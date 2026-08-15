@@ -80,9 +80,14 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     {
       capability: 'demo.read',
       spec: { name: 'demo_read', description: 'read', inputSchema: { type: 'object', properties: {} } },
+      // `tier: 0` on the fakes in this file, deliberately: these tools exist to
+      // exercise sequencing, caps and recovery, and a tier they do not need
+      // would make every one of those tests also a taint test by accident.
+      // `demo_web` below is the one that carries provenance, because that is
+      // what it is for.
       handler: (args) => {
         calls.push(`demo_read:${JSON.stringify(args)}`);
-        return { content: 'letto' };
+        return { content: 'letto', tier: 0 as const };
       },
     },
     {
@@ -95,7 +100,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
       spec: { name: 'demo_write', description: 'write', inputSchema: { type: 'object', properties: {} } },
       handler: () => {
         calls.push('demo_write');
-        return { content: 'scritto' };
+        return { content: 'scritto', tier: 0 as const };
       },
     },
     {
@@ -198,7 +203,7 @@ describe('agent loop', () => {
     const tool = (name: string, capability: string): RegisteredTool => ({
       capability,
       spec: { name, description: name, inputSchema: { type: 'object', properties: {} } },
-      handler: () => ({ content: 'ok' }),
+      handler: () => ({ content: 'ok', tier: 0 as const }),
     });
     const provider = new ScriptedProvider([answer('ciao')]);
     const { deps: d, store } = deps([], {
@@ -372,7 +377,7 @@ describe('agent loop', () => {
         {
           capability: 'demo.read',
           spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
-          handler: () => ({ content: big }),
+          handler: () => ({ content: big, tier: 0 as const }),
         },
       ],
       decide: createDecide({
@@ -448,7 +453,7 @@ describe('agent loop', () => {
           spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
           handler: () => {
             ran.push('demo_ask');
-            return { content: 'fatto' };
+            return { content: 'fatto', tier: 0 as const };
           },
         },
       ],
@@ -483,7 +488,7 @@ describe('agent loop', () => {
             spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
             handler: () => {
               ran.push('demo_ask');
-              return { content: 'fatto' };
+              return { content: 'fatto', tier: 0 as const };
             },
           },
         ],
@@ -523,7 +528,7 @@ describe('agent loop', () => {
           spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
           handler: () => {
             ran.push('demo_draft');
-            return { content: 'scritto davvero' };
+            return { content: 'scritto davvero', tier: 0 as const };
           },
         },
       ],
@@ -560,7 +565,7 @@ describe('agent loop', () => {
           spec: { name: 'demo_unknown', description: 'u', inputSchema: { type: 'object', properties: {} } },
           handler: () => {
             ran.push('demo_unknown');
-            return { content: 'eseguito' };
+            return { content: 'eseguito', tier: 0 as const };
           },
         },
       ],
@@ -1015,7 +1020,7 @@ describe('the loop hands the model its own reasoning back', () => {
         {
           capability: 'demo.read',
           spec: { name: 'demo_big', description: 'big', inputSchema: { type: 'object', properties: {} } },
-          handler: () => ({ content: big }),
+          handler: () => ({ content: big, tier: 0 as const }),
         },
       ],
       capabilities: new Map([

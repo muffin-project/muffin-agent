@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { runTurn, type RegisteredTool } from '../../agent/loop.js';
 import { loadProfiles, selectProfile } from '../../agent/profiles/profile.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
-import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from '../../agent/tools/fs.js';
+import { fsCapabilities, makeFsTools, type FsScope } from '../../agent/tools/fs.js';
 import { BudgetEngine } from '../../core/budget/budget.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
@@ -80,22 +80,11 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
     },
   });
 
-  // Annotated here rather than on the `.map(observe)` result: the annotation on
-  // the mapped value never reaches the literal, so each `handler: (a) => …`
-  // below was an implicit `any` — the eval's own arguments went unchecked.
-  const declared: RegisteredTool[] = [
-    { capability: 'fs.read', spec: fsToolSpecs[0]!, handler: (a) => ({ content: fsRead(scope, String((a as { path: string }).path)) }) },
-    { capability: 'fs.list', spec: fsToolSpecs[1]!, handler: (a) => ({ content: fsList(scope, String((a as { path: string }).path)) }) },
-    {
-      capability: 'fs.write',
-      spec: fsToolSpecs[2]!,
-      handler: (a) => {
-        const x = a as { path: string; content: string };
-        return { content: fsWrite(scope, String(x.path), String(x.content ?? '')) };
-      },
-    },
-    ...(scenario.extraTools ?? []),
-  ];
+  // The same factory production wires (`agent/runtime.ts`), not a second copy of
+  // the three handlers. The copy was here, and it was already one field behind:
+  // an eval that runs tools production does not have measures a floor nobody
+  // ships.
+  const declared: RegisteredTool[] = [...makeFsTools(scope), ...(scenario.extraTools ?? [])];
   const tools: RegisteredTool[] = declared.map(observe);
 
   const db = new DatabaseCtor(join(home, 'muffin.db'));

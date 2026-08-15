@@ -17,7 +17,7 @@ import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from './tools/fs.js';
+import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
@@ -258,24 +258,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const guards = mandatoryGuards(home, cwd);
   const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
   const tools: RegisteredTool[] = [
-    {
-      capability: 'fs.read',
-      spec: fsToolSpecs[0]!,
-      handler: (args) => ({ content: fsRead(scope, String((args as { path: string }).path)) }),
-    },
-    {
-      capability: 'fs.list',
-      spec: fsToolSpecs[1]!,
-      handler: (args) => ({ content: fsList(scope, String((args as { path: string }).path)) }),
-    },
-    {
-      capability: 'fs.write',
-      spec: fsToolSpecs[2]!,
-      handler: (args) => {
-        const a = args as { path: string; content: string };
-        return { content: fsWrite(scope, String(a.path), String(a.content ?? '')) };
-      },
-    },
+    ...makeFsTools(scope),
     {
       capability: memoryCapability.id,
       spec: memorySearchSpec,
