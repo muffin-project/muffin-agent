@@ -10,6 +10,47 @@
 > di vivere 14 giorni usando esclusivamente Muffin?»* Finché la risposta è sì,
 > quella cosa entra qui.
 
+## La finestra si chiude, ed è questo che ordina il lavoro
+
+Direttiva owner, 2026-08-15: *«le "cose che non devono cambiare" possono ancora
+cambiare fino a quando non andiamo opensource, per questo importante partire
+dalle fondamenta e rendere muffin usabile per davvero, così da testarlo due
+settimane in prod»*.
+
+Quindi l'ordine non è una preferenza, è una **sequenza con una scadenza**:
+
+```
+fondamenta riscrivibili  →  usabile davvero  →  14 giorni d'uso  →  open source
+        ↑ siamo qui                                                    ↑ la finestra si chiude
+```
+
+Oggi cambiare la forma di un turno non rompe nessuno: niente è pubblico, niente
+è in produzione. Dopo, la stessa modifica rompe le installazioni di altri, e
+quello che oggi è una riscrittura di un pomeriggio diventa una migrazione con
+deprecazioni.
+
+**Conseguenza pratica sull'inventario**: le righe che sono **decisioni di forma**
+vengono prima di quelle che sono **aggiunte di feature**, anche quando una
+feature si sente di più. Un turno che non sa sospendersi è una forma; un parser
+PDF è una feature. Il parser si aggiunge in qualunque momento; la forma no.
+
+**E anche lo schema è ancora libero — misurato, non supposto.** Il primo taglio
+di questa sezione diceva che i dati dell'owner erano il vincolo che restava.
+⬤ Contato oggi sul suo `~/.muffin`: **20 episodi, 0 fatti, 0 entità, 0 job**, in
+una finestra 11→15 agosto. Sono quattro giorni di prove sull'onboarding — le
+tabelle esistono, la memoria no. Una migrazione che oggi costringesse a
+`uninstall && init` costerebbe all'owner venti messaggi.
+
+Quindi il vincolo non è «lo schema non si tocca»: è **«lo schema si tocca
+adesso»**. Il momento in cui i dati diventano preziosi è il **giorno 1 dei
+quattordici** — da lì una migrazione va progettata invece che eseguita, e
+`episodes.kind` mostra già il prezzo (un `CHECK` a cinque valori che SQLite non
+altera: un `kind` nuovo funziona su un database fresco e rompe ogni
+installazione con dentro qualcosa).
+
+Il che stringe la sequenza invece di allargarla: **ogni decisione di schema va
+chiusa prima del giorno 1**, non prima dell'open source.
+
 ## La regola delle tre risposte
 
 Ogni riga di questo inventario deve avere **una** di queste tre, e la quarta non
