@@ -9,17 +9,19 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-15
 
-**Obiettivo**: M5-bis per intero. Inventario Gate 1: `docs/blueprint/M5-BIS.md`. Fondo = zero BLOCKER, ogni riga READY o FUORI-con-ragione.
+**Obiettivo**: M5-bis per intero (`M5-BIS.md`). Fondo = zero BLOCKER.
 
-**Mergiate in dev**: #8 slice/gateway (24 commit) · #9 · #10 · #11. **Aperte**: #12 eventi · #14 audit-fix · #15 inventario · #16 modelli.
+**Deleghe in volo**: gate1 x4 · reasoning-budget · superfici+streaming · confronto-permessi · documentazione.
 
-**Deleghe in volo**: sandbox-linux · reversibilita · gate1 x4 (installazione, continuita, capability, memoria+osservabilita).
+**CODA — aggiunte dell'owner, non ancora iniziate.** Un suo messaggio si AGGIUNGE, non sostituisce l'obiettivo:
+1. Validare ogni affermazione dei doc fondazionali; quelle eseguibili diventano check (ORCHESTRATION §13).
+2. Passata *table stakes*: cosa hanno tutti gli agenti maturi e noi no — e' la categoria cieca agli audit interni (cosi e' sfuggito lo streaming).
+3. Fasce enterprise/consumer + qwen3.8 via Ollama.
+4. Eval del modello nuovo, DOPO il reasoning budget.
 
-**Decisioni owner, aperte**: modello di reversibilita sotto `fs.write` · `ricorda` scrive o propone · lingua README open-source · `identity.md` e taglio `persona.md`.
+**Decisioni owner aperte**: scope di lettura del sandbox · spezzare `mcp.*` per-tool (entrambe in ricerca sui peer) · `ricorda` scrive o propone · lingua dei doc pubblici · `identity.md` e taglio `persona.md`.
 
-**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile — la novita va in `connector` · `agent/loop.ts:379` cabla `maxOutputTokens: 4096` e `openai-compat` non manda mai un budget di reasoning e scarta `thinking: []` al ritorno: un modello che ragiona di default (qwen3.8, gemini 3.7, grok 4.6) paga il ragionamento e lo butta · lanciare agenti da una base incompleta produce inventari falsi.
-
-**Prossima azione**: verificare le sei deleghe al rientro col metro di ORCHESTRATION §11.
+**Trappole note**: `episodes.kind` ha un CHECK a 5 valori non alterabile · il kernel legge `reversible` solo dentro `case medium`, quindi irreversibile collassa su allow · `approve` e' cablato solo nel REPL.
 <!-- FINE BLOCCO -->
 
 ---

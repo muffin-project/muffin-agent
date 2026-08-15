@@ -188,3 +188,36 @@ di tre risposte**: `READY`, `FUORI DALLO SCOPO` con la ragione scritta, o
 > una lacuna nuova non si nasconde, si aggiunge.
 
 L'inventario vivo è `docs/blueprint/M5-BIS.md`.
+## 13. Un documento fondazionale è un insieme di affermazioni, e le affermazioni si controllano
+
+Direttiva owner, 2026-08-15: *«dovremo controllare ogni singola cosetta messa in
+questi file fondamentali e validarla… non possiamo continuare a trovare cose
+nuove solo perché le noto io, che agentic codebase sarebbe altrimenti?»*
+
+`09-contratti-m0-m1.md` è **normativo**. `03-threat-model.md` dichiara
+**garanzie**. `STATE.md` dice cosa è **costruito**. Ognuna di quelle righe è o
+vera o falsa del codice — e oggi la deriva si trova per caso.
+
+**Non è un'idea nuova: qui esiste già in tre punti, e non è mai stata
+generalizzata.** `core/rot/readers.ts` dimostra che ogni file sigillato ha un
+lettore, e `doctor` lo esegue. `.claude/hooks/inject-state.test.ts` verifica che
+il handoff **vero** entri nel budget vero. `core/memory/invariants.ts` controlla
+proprietà del grafo. Tre invarianti che *girano*. Tutto il resto è sulla fiducia.
+
+La regola, quindi:
+
+1. **Ogni affermazione portante ha uno stato**: *verificata* (con la prova),
+   *derivata* (drift trovato, lavoro aperto), *non verificabile* (e allora dice
+   perché).
+2. **Se un'affermazione può eseguire, deve eseguire.** Un test, un controllo di
+   `doctor`, un invariante. Una regola che vive solo in prosa perde contro un
+   merge — misurato: il budget del blocco iniettato era scritto in `PRACTICES`
+   §7 ed è stato sforato il giorno dopo da un merge a tre vie.
+3. **Ciò che non può eseguire ha una cadenza di ri-validazione**, non una data di
+   scrittura.
+
+E il limite da nominare, perché è quello che ha prodotto la direttiva: gli audit
+interni confrontano il codice **con i nostri stessi documenti**. Trovano ciò che
+abbiamo scritto e non fatto. Sono **strutturalmente ciechi** a ciò che non
+abbiamo mai scritto — lo streaming non era «dichiarato e non collegato», era mai
+pensato. Quella categoria si trova solo guardando fuori, e vuole una passata sua.
