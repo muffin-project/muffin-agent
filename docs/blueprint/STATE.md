@@ -532,7 +532,7 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
 
-**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0042,
+**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0044,
 88 file / 996 test). Il taint del turno saliva in un punto solo del loop, e quel
 punto leggeva un campo **opzionale**: `if (outcome.tier !== undefined)`. Chi non
 lo dichiarava — `fs_read`, `fs_list`, `shell_run`, `process_list` — portava byte
@@ -552,7 +552,7 @@ girando un'affermazione **già marcata VERIFICATA**: era vera, e nessuno aveva
 fatto la sua negativa (`validazione-contratti.md` §6, addendum). Non chiuso, e
 nominato nell'ADR: il contenuto di `fs_read` **non è recintato** come quello di
 http/mcp, e la replica dell'agente entra in memoria a `trustTier: 0` anche quando
-il turno era a 2 (`agent/loop.ts:550-559`).
+il turno era a 2 (`agent/loop.ts:633-642`).
 
 ## Sessioni 2026-08-09
 
@@ -562,7 +562,7 @@ il turno era a 2 (`agent/loop.ts:550-559`).
 
 ## Aperto (owner)
 
-0. **Il costo di ADR-0042, una riga sola, e serve il tuo sì o il tuo no.** Dopo un
+0. **Il costo di ADR-0044, una riga sola, e serve il tuo sì o il tuo no.** Dopo un
    `fs_read`, `shell_run` nello stesso turno è **deny/taint_exceeded** — non un
    ask: un rifiuto. Vale anche per il secondo `shell_run` di fila. *«Leggi il
    file e poi lancia i test»* si spezza a metà. È la riga del threat model §3

@@ -134,7 +134,7 @@ export type ToolOutcome = {
   isError?: boolean;
   /**
    * Tier of whatever this result dragged into the turn. Web and third-party
-   * tools are 3; the local filesystem is 2 (ADR-0042); a result made only of
+   * tools are 3; the local filesystem is 2 (ADR-0044); a result made only of
    * the tool's own words — *"wrote 41 bytes"*, *"invalid arguments"* — is 0.
    *
    * **Required, and that is the fix.** It was `tier?`, and `runTool` raised the
@@ -1014,7 +1014,7 @@ async function runTool(
     // land apart — a record that had read the web at a tier saying it had not
     // is the privilege escalation this table exists to prevent.
     //
-    // With `tier` required on `ToolOutcome` (ADR-0042) the row can no longer be
+    // With `tier` required on `ToolOutcome` (ADR-0044) the row can no longer be
     // written with the tier absent, which is the version of that same argument
     // one level down: a resumed turn cannot inherit a provenance nobody stated.
     recordOutcome(deps, parent.traceId, span, call.id, {

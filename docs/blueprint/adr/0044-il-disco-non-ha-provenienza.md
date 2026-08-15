@@ -1,4 +1,4 @@
-# ADR-0042 — Il disco non ha provenienza: leggere un file sporca il turno
+# ADR-0044 — Il disco non ha provenienza: leggere un file sporca il turno
 
 **Stato:** accettato · 2026-08-15 · chiude la domanda negativa lasciata aperta da
 `validazione-contratti.md` §5 («il tier di un file su disco», VAGA) · **apre una
@@ -136,7 +136,7 @@ byte non fidati. Il costo è reale, non è un effetto collaterale: è la regola.
   è il turno, non la sessione). Un file letto ieri non sporca oggi. È deliberato
   e va saputo.
 - **La replica dell'agente entra in memoria a `trustTier: 0`** anche quando il
-  turno era a 2: `agent/loop.ts:550-559` scrive un letterale, non il taint del
+  turno era a 2: `agent/loop.ts:633-642` scrive un letterale, non il taint del
   turno. È la regola di `03:22` — *«qualunque testo derivato porta il tier
   massimo delle proprie fonti»* — non applicata al percorso di scrittura, quindi
   un file avvelenato **riassunto** dall'agente può rientrare domani come fatto

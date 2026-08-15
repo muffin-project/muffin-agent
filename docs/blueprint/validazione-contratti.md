@@ -20,7 +20,7 @@ cadenza:           ogni gate (le righe senza controllo eseguibile), oppure alla
                    prima PR che tocca i file qui sopra.
 estende:           docs/ORCHESTRATION.md §13
 
-rivalidato:        2026-08-15 — `slice/taint-in-ingresso` (ADR-0042) tocca
+rivalidato:        2026-08-15 — `slice/taint-in-ingresso` (ADR-0044) tocca
                    `agent/loop.ts` e `agent/runtime.ts`, cioè la condizione che
                    questo file si dichiara da solo. Righe riscritte: §1.3 (le due
                    sul taint) e §5 (il tier di un file su disco). Base rimisurata
@@ -29,9 +29,9 @@ rivalidato:        2026-08-15 — `slice/taint-in-ingresso` (ADR-0042) tocca
                    `npx vitest run`  → exit 0, 88 file, 996 passati, 1 skipped
                    Le altre righe VERIFICATA di §1.3 sono state rilette contro il
                    codice nuovo, non ricopiate: `raiseTaint` alza soltanto e
-                   svuota la cache (`agent/loop.ts:967-972`), la chiave di
-                   memoizzazione include il taint (`:975`), il recall resta
-                   piegato nel pre-loop (`:320-321`).
+                   svuota la cache (`agent/loop.ts:1181-1186`), la chiave di
+                   memoizzazione include il taint (`:1189`), il recall resta
+                   piegato nel pre-loop (`:411-412`).
 ```
 
 > **Cos'è.** `09-contratti-m0-m1.md` si dichiara **normativo**; `03-threat-model.md`
@@ -64,7 +64,7 @@ vere del codice che nessun documento dice — il re-seal silenzioso di `init`, e
 **ciò che entrava nel turno senza dichiarare un tier** (§1.3), che non era una
 riga sbagliata ma una riga assente. Le vaghe scendono da 14 a 13 perché una di
 esse — il tier di un file su disco — è stata decisa e scritta, non riformulata:
-ADR-0042.)*
+ADR-0044.)*
 
 Le vaghe sono contate a parte perché **non sono un quarto stato**: sono un
 ritrovamento. Un contratto che non si può violare non è un contratto, e sono
@@ -116,8 +116,8 @@ Prima, perché una garanzia falsa qui vale più di dieci righe di deriva altrove
 | affermazione | dove | stato | prova |
 |---|---|---|---|
 | «Il taint è ricalcolato a ogni `decide()`, mai congelato» | `03:21` | **VERIFICATA** | `agent/loop.ts:903-908`: `raiseTaint` alza e **svuota la cache** delle decisioni; la chiave di memoizzazione include il taint (`:911`). Firma in `core/policy/types.ts:104-117`. |
-| «Un tool result tier-3 ricevuto a metà turno alza il taint … è il pattern fetch-then-act» | `03:21` | **VERIFICATA — e per mesi vera e fuorviante** | Oggi: `agent/loop.ts:850` `snapshot.raiseTaint(outcome.tier)`, incondizionato, con `tier` obbligatorio su `ToolOutcome` (`loop.ts:131-157`, il campo a `:156`). Chi dichiara il tier: **tutti**, perché il tipo non ammette altro. Fino a ADR-0042 la riga era `if (outcome.tier !== undefined)` e l'affermazione restava vera **della sola metà positiva**: era il controllo giusto sui cinque tool che un tier lo dichiaravano. Il registro l'ha marcata verificata e si è fermato lì — la lezione di metodo sta nella riga sotto, che nessuno aveva scritto. |
-| *(la domanda negativa, che nessuno aveva fatto)* **«che cosa entra nel turno SENZA tier?»** | — | **RITROVAMENTO → CHIUSO** | Era: `fs_read`, `fs_list`, `shell_run`, `process_list`, `process_kill` — cioè ogni percorso che porta nel turno byte scritti da qualcun altro sul disco. Misurato su `dev` @ a3754c4: `fs_read` di un file con istruzioni iniettate → taint 0 → `http_get` fuori allowlist → `ask` → owner approva → **fetch eseguito**. Il docstring di `fs.read` argomentava il proprio soffitto 3 appoggiandosi a quel cancello, che non poteva scattare. Chiuso in questa PR: ADR-0042, `DISK_TIER` (`agent/tools/fs.ts`), `tier` obbligatorio, test `agent/read-then-egress.test.ts` (catena) e `agent/runtime-wiring.test.ts` §«the tier of a file read reaches the kernel» (stessa catena sul runtime vero). **Metodo:** una riga VERIFICATA controlla ciò che il documento dice; non controlla ciò di cui il documento tace. Il complemento di un'affermazione va cercato a mano, e questo registro ora ne ha uno. |
+| «Un tool result tier-3 ricevuto a metà turno alza il taint … è il pattern fetch-then-act» | `03:21` | **VERIFICATA — e per mesi vera e fuorviante** | Oggi: `agent/loop.ts:1011` `snapshot.raiseTaint(outcome.tier)`, incondizionato, con `tier` obbligatorio su `ToolOutcome` (`loop.ts:131-158`, il campo a `:157`). Chi dichiara il tier: **tutti**, perché il tipo non ammette altro. Fino a ADR-0044 la riga era `if (outcome.tier !== undefined)` e l'affermazione restava vera **della sola metà positiva**: era il controllo giusto sui cinque tool che un tier lo dichiaravano. Il registro l'ha marcata verificata e si è fermato lì — la lezione di metodo sta nella riga sotto, che nessuno aveva scritto. |
+| *(la domanda negativa, che nessuno aveva fatto)* **«che cosa entra nel turno SENZA tier?»** | — | **RITROVAMENTO → CHIUSO** | Era: `fs_read`, `fs_list`, `shell_run`, `process_list`, `process_kill` — cioè ogni percorso che porta nel turno byte scritti da qualcun altro sul disco. Misurato su `dev` @ a3754c4: `fs_read` di un file con istruzioni iniettate → taint 0 → `http_get` fuori allowlist → `ask` → owner approva → **fetch eseguito**. Il docstring di `fs.read` argomentava il proprio soffitto 3 appoggiandosi a quel cancello, che non poteva scattare. Chiuso in questa PR: ADR-0044, `DISK_TIER` (`agent/tools/fs.ts`), `tier` obbligatorio, test `agent/read-then-egress.test.ts` (catena) e `agent/runtime-wiring.test.ts` §«the tier of a file read reaches the kernel» (stessa catena sul runtime vero). **Metodo:** una riga VERIFICATA controlla ciò che il documento dice; non controlla ciò di cui il documento tace. Il complemento di un'affermazione va cercato a mano, e questo registro ora ne ha uno. |
 | «recall→azione: il kernel legge il taint prima di eseguire» | `03:20` | **VERIFICATA** | `agent/loop.ts:299-300` — il taint del recall è piegato nello snapshot **nel pre-loop**, prima che il modello veda qualcosa. È la chiusura del remember-then-act, e il commento a `:285-288` la nomina. |
 | «Lo scope è **il turno** (non la sessione)» | `03:21` | **VERIFICATA** | `makeSnapshot` è chiamata una volta per turno (`agent/loop.ts:266`) e il taint riparte dal principal (`:897`). |
 | «`fs.read` … il tier di un file su disco» | `03:20` | **VAGA → RISOLTA** | Era vaga perché il documento definiva la scala su *chi ha parlato* e non assegnava alcun tier al filesystem locale, e `fs.read` infatti non dichiarava `tier:`. Il registro la classificò «difendibile ma non derivata da una regola scritta» — e non chiese se l'assenza fosse **sfruttabile**, che era la domanda. Ora la regola è scritta (`03:20`, ultima frase) e eseguita: `DISK_TIER = 2` in `agent/tools/fs.ts`, asserito in `agent/tools/fs.test.ts` §«what a filesystem tool says about where its bytes came from». |
@@ -394,7 +394,7 @@ violare non è un contratto.
 | «Stato del turno: **in RAM** in M1» | `09:201` | Nessuna osservazione la renderebbe falsa — qualunque locale non persistito la soddisfa. Verifica banalmente e non vincola niente. |
 | «**entrambi i modelli di riferimento**» | `09:123` | I modelli di riferimento non sono fissati in codice, config o CI. Finché una coppia non è appuntata da qualche parte di eseguibile, «il floor passa» non ha valore di verità. |
 | **N=10 / X=15** a livello di installazione | `09:117-118` | Il documento non dice **quali profili** debbano onorarli. `frontier.json` li supera, legalmente, e nessuna regola scritta è violata. |
-| ~~il **tier di un file su disco**~~ — **uscita da questa lista** | `03:20` | Era qui perché la scala era definita su chi ha parlato e il filesystem non aveva un tier assegnato. Ed era la voce più cara dell'elenco: non era solo invalidabile, era **sfruttabile**, e questo registro l'ha catalogata come imprecisione di prosa. `03:20` ora assegna il tier (2, ADR-0042) e il codice lo produce. Resta come promemoria di metodo: «vaga» e «innocua» non sono sinonimi. |
+| ~~il **tier di un file su disco**~~ — **uscita da questa lista** | `03:20` | Era qui perché la scala era definita su chi ha parlato e il filesystem non aveva un tier assegnato. Ed era la voce più cara dell'elenco: non era solo invalidabile, era **sfruttabile**, e questo registro l'ha catalogata come imprecisione di prosa. `03:20` ora assegna il tier (2, ADR-0044) e il codice lo produce. Resta come promemoria di metodo: «vaga» e «innocua» non sono sinonimi. |
 
 ---
 

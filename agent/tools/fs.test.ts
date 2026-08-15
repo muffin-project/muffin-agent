@@ -137,7 +137,7 @@ describe('filesystem primitives', () => {
 });
 
 /**
- * Provenance, at the door where the bytes come in (ADR-0042).
+ * Provenance, at the door where the bytes come in (ADR-0044).
  *
  * The functions above answer "may this path be touched?". These three answer
  * the question that had no answer at all: *whose words are these?* — which the
