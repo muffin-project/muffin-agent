@@ -1,4 +1,4 @@
-import type { PolicyMatrix } from './matrix.js';
+import { denyListCovers, type PolicyMatrix } from './matrix.js';
 import type {
   CapabilityDecl,
   CapabilityId,
@@ -108,7 +108,7 @@ export function createDecide(ctx: PolicyContext): Decide {
       };
     }
 
-    if (ctx.matrix.neverAtRuntime.has(capability)) {
+    if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {
       return {
         effect: 'deny',
         code: 'rot_violation',
@@ -129,7 +129,7 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 
-    if (principal.kind === 'system' && ctx.matrix.forbiddenForSystem.has(capability)) {
+    if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' };
     }
 
