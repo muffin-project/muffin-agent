@@ -134,8 +134,26 @@ ancora verificato — **è un debito, non uno stato**).
 | C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
 | C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
-| C7 | PDF | Acquisisce documenti utili? | BLOCKER — nessun parser |
+| C7 | PDF | Acquisisce documenti utili? | READY (ADR-0042) ⚠️ niente OCR |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
+
+> **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
+> piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
+> percorso vero ci arriva: allegato Telegram → `vault/inbox/` → reindex →
+> episodi `kind='document'`. Il turno riceve una **vista compatta** — indice
+> delle pagine + `document_read` per riaprirne una dal file — invece del
+> documento intero. Provato end-to-end in
+> `connectors/telegram/document-arrival.test.ts` con PDF veri costruiti byte per
+> byte, e le stesse dieci asserzioni falliscono se si spegne il parser.
+>
+> ⚠️ **Il limite, dichiarato invece che scoperto dopo.** Un PDF di sole
+> scansioni non ha testo da estrarre: **fallisce in modo esplicito** («PDF senza
+> testo selezionabile: N pagine di sola immagine… qui non c'è OCR») e non viene
+> mai indicizzato come documento vuoto. L'OCR resta fuori scopo — quando entrerà,
+> è una riga nuova di questo inventario, non una correzione silenziosa di questa.
+> Insieme all'OCR resta fuori la **struttura visiva**: due colonne e le celle di
+> una tabella arrivano come testo di seguito (misurato in ADR-0042), il contenuto
+> tutto, la forma no.
 
 ### D · Capability e sicurezza → `gate1/d-capability.md`
 
