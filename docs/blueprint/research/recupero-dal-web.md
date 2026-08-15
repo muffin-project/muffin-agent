@@ -161,6 +161,88 @@ Two realistic combined stacks, measured together (a shared `linkedom` counted on
 
 `package.json` at the repository root declares 9 runtime dependencies today (`@anthropic-ai/sandbox-runtime`, `@anthropic-ai/sdk`, `@modelcontextprotocol/client`, `better-sqlite3`, `cron-parser`, `js-yaml`, `openai`, `sqlite-vec`, `zod`). ⬤ `.claude/hooks/guard-new-dep.mjs` blocks `npm install <pkg>` for any package not already declared there, with an explicit override (`MUFFIN_DEP_OK=1`) for a deliberate addition. Adding `defuddle` and `linkedom` brings the count to 11.
 
+### Addendum (2026-08-14, gap A implementation) — the optionalDependencies premise does not hold
+
+This section corrects a claim in §"Dependency weight" above. It does not replace that
+section (docs/PRACTICES.md §13.3: a correction is a new section that cites the old
+one, never a silent in-place edit). The line it corrects: *"`defuddle`'s `markdown:
+true` option produces Markdown directly from the same `linkedom` document the
+extraction step already parsed, without a second DOM engine."* That line assumed
+`turndown` — the one dependency needed for Markdown conversion — stays uninstalled
+under `--omit=optional` without breaking anything else. It does not.
+
+`defuddle@0.19.2`'s package.json lists four `optionalDependencies`: `linkedom`,
+`mathml-to-latex`, `temml`, `turndown`. Only one of the three non-`linkedom` entries
+is optional in practice. ⬤ Traced in the installed package's own `dist/` (not
+inferred from the README): `dist/node.js` — the `defuddle/node` entry point this
+project imports — has an unconditional, module-scope `require("./markdown")`.
+`dist/markdown.js` has an unconditional, module-scope `require("turndown")`.
+Importing `defuddle/node` throws `Cannot find module 'turndown'` under
+`--omit=optional`, before any option object is ever read — `{markdown: false}` fails
+exactly like `{markdown: true}`, because the failure is at import time, not call
+time. ⬤
+
+`mathml-to-latex` fails the same way through a second, independent path. ⬤
+`dist/elements/math.js` unconditionally re-exports `dist/elements/math.full.js`,
+and that module has an unconditional, module-scope `require("mathml-to-latex")`.
+This module loads on every `defuddle/node` import — the README's "core bundle
+doesn't include MathML/LaTeX fallbacks, the full bundle does" distinction does not
+hold for the shipped 0.19.2 `dist/`. Verified by import, not by reading alone: a
+bare `import('defuddle/node')` with only `linkedom` + `defuddle --omit=optional`
+installed throws `Cannot find module 'mathml-to-latex'` before `Cannot find module
+'turndown'` is even reached, because `math.full.js` loads earlier in the require
+graph than `markdown.js`. ⬤
+
+`temml` is the one entry that is genuinely optional. ⬤ Its only reference in the
+`dist/` is inside `math.full.js`, guarded by a `try`/`catch` and reached only when
+an element carries LaTeX with no existing MathML — `require('temml')` runs, if at
+all, well after import, inside a call already wrapped for failure. Confirmed by
+running `defuddle/node` with `linkedom` + `defuddle` + `turndown` +
+`mathml-to-latex` installed and `temml` absent: import succeeds, and `{markdown:
+true}` extraction succeeds on real pages (below). ⬤
+
+Corrected install footprint, same method as the original table (`npm install` into
+an empty project outside the repository, deleted after measurement, `MUFFIN_DEP_OK=1`
+used only there): `linkedom` + `defuddle --omit=optional` + `turndown` +
+`mathml-to-latex`, `temml` the only omission — **20 packages, 20 MB**, roughly
+double the 9.8 MB this document originally reported for "extract and convert in one
+call." ⬤ `@mixmark-io/domino` — the second independent DOM engine this document's
+original recommendation said Defuddle's Markdown path avoids — **is** present, at
+8.8 MB, because `turndown` depends on it and `turndown` is not avoidable. The
+footprint argument for preferring Defuddle's built-in Markdown conversion over
+`readability` + `turndown` (§"Estrazione: il buco è reale…") does not hold on the
+numbers as originally stated.
+
+It does not change which option to pick, because the second DOM engine turns out to
+be unavoidable either way: any use of `defuddle/node` — Markdown output or not —
+already pays for `turndown` and `@mixmark-io/domino` merely by importing the module,
+non-optionally, in the version published today. Given that cost is already paid,
+Markdown output over plain-extracted-HTML is free on top of it and strictly more
+useful to a model reading the result (headings, lists, links stay legible instead of
+surviving as raw tags or disappearing under a naive tag-strip). The implementation
+therefore keeps `{markdown: true}`. What changes is the dependency count this closes
+gap A at: **13 runtime dependencies, not 11** — `defuddle`, `linkedom`, `turndown`
+and `mathml-to-latex` all declared directly in `package.json`, not left as
+undeclared transitive installs, because a package this project's code paths
+genuinely require at import time is not, in any sense that matters here, optional.
+See ADR-0041.
+
+Measured on two real pages (`curl`, public, no authentication; `gpt-tokenizer`
+`cl100k_base`, same approximation caveat as the original table), with this stack —
+linkedom 0.18.13, defuddle 0.19.2, turndown 7.2.4, mathml-to-latex 1.8.0:
+
+| Page | Raw HTML (chars) | `http_get` today (chars / tokens) | Defuddle+linkedom, Markdown (chars / tokens) | Reduction |
+|---|---:|---:|---:|---:|
+| Wikipedia, "Web scraping" | 239,574 | 50,049 / 14,012 (clipped) | 41,696 / 10,268 | 26.7% |
+| Python docs, tutorial §3 | 73,085 | 50,048 / 14,561 (clipped) | 14,435 / 3,734 | 74.4% |
+
+⬤ Both figures measured in this session against the actual shipped `agent/tools/extract.ts`
+logic (same thresholds, same `clipBody`), scratch directory deleted afterward. The
+Wikipedia figure is a smaller reduction than any of the four pages in the original
+table: the article's own reference list runs to 41 footnotes and is legitimately part
+of the content Defuddle keeps, not a extraction failure — inspected directly, no
+navigation or banner text present in the output.
+
 ### Invocation: the evidence, labeled
 
 | Source | Finding | Label |
