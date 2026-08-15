@@ -66,7 +66,7 @@ describe('process_list', () => {
     expect(out.isError).toBe(true);
     expect(out.content).toContain('ps failed');
     // Nothing arrived, so nothing taints. Stated, not omitted: an unstated tier
-    // used to mean this and also meant "nobody asked" (ADR-0042).
+    // used to mean this and also meant "nobody asked" (ADR-0044).
     expect(out.tier).toBe(0);
   });
 

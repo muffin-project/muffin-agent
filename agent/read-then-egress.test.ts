@@ -1,3 +1,4 @@
+import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { TurnStore } from '../core/turns/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool, type ToolOutcome } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -133,6 +135,7 @@ function harness(script: ChatResult[]) {
     }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
+    turns: new TurnStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     // The owner at 2am, who says yes. This is the point of the whole slice: a
     // gate that degrades to "ask the human" is a gate a poisoned context can
@@ -213,7 +216,7 @@ describe('the price of the same rule, through the same turn', () => {
    * ask the owner could approve.
    *
    * It is a test and not a comment because a cost nobody measured is a cost
-   * somebody removes quietly. ADR-0042 hands this exact line to the owner: if he
+   * somebody removes quietly. ADR-0044 hands this exact line to the owner: if he
    * wants the second half of *"leggi il file e poi lancia i test"* back, the
    * move is `maxTaint: 2` on `sys.shell` and an amendment to threat model §3 —
    * not a default softened in passing.

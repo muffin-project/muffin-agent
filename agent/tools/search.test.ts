@@ -90,7 +90,7 @@ describe('web_search', () => {
     // The assertion below moved from `toBeUndefined()` to `toBe(0)` and that is
     // the whole slice in one line: "clean" and "unstated" used to be the same
     // value, and the loop could not tell a tool that had answered from one that
-    // had never been asked (ADR-0042).
+    // had never been asked (ADR-0044).
     const tool = makeSearchTool({
       id: 'fake',
       endpoint: 'https://example.invalid/search',

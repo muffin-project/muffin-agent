@@ -126,7 +126,13 @@ const input = (sessions: SessionStore, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const readTool = (name = 'demo_read', handler: RegisteredTool['handler'] = () => ({ content: 'letto' })): RegisteredTool => ({
+const readTool = (
+  name = 'demo_read',
+  // `tier: 0` on the fakes: these tools exist to exercise the turn record, and a
+  // tier they do not need would make every one of these also a taint test.
+  // `demo_web` below is the one that carries provenance, because that is its job.
+  handler: RegisteredTool['handler'] = () => ({ content: 'letto', tier: 0 as const }),
+): RegisteredTool => ({
   capability: 'demo.read',
   spec: { name, description: 'r', inputSchema: { type: 'object', properties: {} } },
   handler,
@@ -237,7 +243,7 @@ describe('a tool call is recorded in two halves', () => {
             // Read from inside the handler: this is the instant a real crash
             // lands, and the point is that the row already exists by then.
             openWhileRunning = h.calls();
-            return { content: 'inviato' };
+            return { content: 'inviato', tier: 0 as const };
           },
         },
       ],
@@ -277,7 +283,7 @@ describe('a tool call is recorded in two halves', () => {
           // Not in the declaration map at all, so the kernel denies it.
           capability: 'demo.unknown',
           spec: { name: 'demo_hidden', description: 'x', inputSchema: { type: 'object', properties: {} } },
-          handler: () => ({ content: 'mai' }),
+          handler: () => ({ content: 'mai', tier: 0 as const }),
         },
       ],
     });
@@ -319,7 +325,7 @@ describe('when the record cannot be written', () => {
         readTool('demo_read', () => {
           // Everything durable is gone from here on, the record included.
           db.close();
-          return { content: 'letto' };
+          return { content: 'letto', tier: 0 as const };
         }),
       ],
     });

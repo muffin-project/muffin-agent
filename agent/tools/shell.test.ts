@@ -136,7 +136,7 @@ describe('shell_run argument boundary', () => {
 /**
  * `shell_run` has no network, so what its output can carry is the disk — and
  * `cat ~/Downloads/nota.md` is `fs_read` through another door. A door that did
- * not taint was a way around the one that did (ADR-0042).
+ * not taint was a way around the one that did (ADR-0044).
  */
 describe('what a command hands back is disk content', () => {
   const root = join(tmpdir(), 'muffin-shell-root');
@@ -161,7 +161,7 @@ describe('what a command hands back is disk content', () => {
     // deliberate act with this test in the diff. `sys.shell` inherits
     // `defaultMaxTaint.high` = 1, and one run leaves the turn at DISK_TIER = 2.
     //
-    // **This is the line ADR-0042 asks the owner to contradict.** If a turn must
+    // **This is the line ADR-0044 asks the owner to contradict.** If a turn must
     // be able to run two commands, the counter-move is `maxTaint: 2` on
     // `sys.shell` — which keeps shell an ASK and leaves egress shut — and it
     // amends threat model §3, row "Shell / filesystem host / processi".

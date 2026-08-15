@@ -139,7 +139,7 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
  * `taint_exceeded` deny**, and so is a `shell_run` after any `fs_read`. That is
  * threat model §3 row "Shell / filesystem host / processi · taint 2 · DENY —
  * nessun percorso" applied to a turn that has read unprovenanced bytes, and it
- * is the line ADR-0042 hands to the owner to contradict: the counter-move, if
+ * is the line ADR-0044 hands to the owner to contradict: the counter-move, if
  * he wants it, is `maxTaint: 2` on `sys.shell` (which keeps shell an ASK and
  * leaves egress shut), and that is an amendment to the threat model, not a
  * default anyone should change in passing.

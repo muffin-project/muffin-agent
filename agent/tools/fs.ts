@@ -33,7 +33,7 @@ export type FsScope = {
 };
 
 /**
- * The tier of anything read off the local disk. ADR-0042.
+ * The tier of anything read off the local disk. ADR-0044.
  *
  * **2, because the filesystem has no provenance.** The scale is defined on who
  * spoke (0 owner · 1 confirmed contacts · 2 group and strangers · 3 web and
@@ -79,7 +79,7 @@ export const fsCapabilities: CapabilityDecl[] = [
    * every read taints the turn to `DISK_TIER`, which is what a turn that has
    * swallowed unprovenanced bytes actually is.
    *
-   * **The half of this argument that was fiction until ADR-0042, named so it
+   * **The half of this argument that was fiction until ADR-0044, named so it
    * does not become fiction again.** The sentence used to be *"the read alone
    * is not the leak: the bytes still have to leave, and the egress leg is
    * separately gated — off-allowlist above taint 1 is DENY, never ask"*. True
