@@ -68,6 +68,37 @@ jobs:
       - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
         run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
 
+      # Il quarto prerequisito, e non lo sapevamo perché non l'avevamo mai
+      # misurato. Primo giro di questa PR, dal log del probe su ubuntu-latest:
+      #
+      #   "reason": "userns_denied",
+      #   "detail": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted"
+      #
+      # È **verbatim** il messaggio della VPS di produzione nella nota di campo
+      # 2026-08-04 di ADR-0018. Il runner è Ubuntu 24.04 e porta lo stesso
+      # `kernel.apparmor_restrict_unprivileged_userns=1`: senza questo step
+      # `bwrap` è installato, in PATH, e non contiene niente — cioè la CI
+      # riproduce esattamente la configurazione in cui il sandbox del vecchio
+      # Muffin è stato un no-op per due mesi.
+      #
+      # Il rimedio è quello che il probe stesso stampa, ed è quello applicato
+      # alla VPS: un profilo AppArmor dedicato a `bwrap` che concede `userns`.
+      # Non il sysctl, che allargherebbe il permesso a tutta la macchina — su
+      # un runner effimero sarebbe innocuo, ma allora la CI proverebbe il
+      # contenimento in una configurazione che la produzione non ha.
+      - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+        run: |
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
       - run: npm ci
