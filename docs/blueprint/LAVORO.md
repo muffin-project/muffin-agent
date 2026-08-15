@@ -15,7 +15,7 @@
 
 **Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
 
-**Tesi in verifica**: B2+B3+B5 non sono tre feature ma una proprieta — il turno dev'essere sospendibile e ripristinabile.
+**Prossimo**: i consumatori del record del turno (ADR-0042, gia costruito) — `wait`, `todo`, resume, consegna dalla corsia.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
 

@@ -8,6 +8,7 @@ import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { describeInterrupted, readTurnHealth } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
@@ -340,6 +341,27 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         `${open} contraddizioni aspettano te: due valori restano entrambi attivi finché non scegli`,
         'run `muffin memory review`',
       );
+    }
+
+    // Turns that a dead process was holding. `buildRuntime` announces these at
+    // boot, but a boot line scrolls past and this is the command an owner runs
+    // when something feels wrong — and "the answer never came and nobody said
+    // why" is exactly that feeling. Reported, never repaired: there is no
+    // resume, so the honest output is what is unknown and who has to check it.
+    const turns = readTurnHealth(db);
+    if (turns === null) {
+      // Not a warning. The table is created by the first runtime that opens
+      // this home, so its absence means "no turn has run here yet", which on a
+      // fresh install is the correct state and not a problem to report.
+      ok('turni', 'nessun turno registrato su questa home');
+    } else if (turns.interrupted.length > 0) {
+      warn(
+        'turni',
+        `${turns.total} registrati · ${turns.interrupted.length} interrotti — ${describeInterrupted(turns.interrupted[0]!)}`,
+        'non esiste ancora un resume: se una di quelle chiamate aveva effetti sul mondo, controllali a mano',
+      );
+    } else {
+      ok('turni', `${turns.total} registrati · nessuno interrotto`);
     }
 
     // Is anything running? Same shape of invisible fact as the cache dialect

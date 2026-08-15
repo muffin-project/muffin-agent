@@ -4,12 +4,12 @@ import { POLICY_FLOOR } from './matrix.js';
 import type { CapabilityDecl, CapabilityId, Principal } from './types.js';
 
 const decls: CapabilityDecl[] = [
-  { id: 'memory.read', risk: 'low', reversible: 'yes', resourceKind: 'tenant', policyArgs: [], hostOnly: false },
-  { id: 'fs.write', risk: 'medium', reversible: 'undoable', resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
-  { id: 'sys.shell', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
-  { id: 'sys.http', risk: 'medium', reversible: 'yes', maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
-  { id: 'outward.send', risk: 'high', reversible: 'no', resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
-  { id: 'rot.write', risk: 'high', reversible: 'no', resourceKind: 'path', policyArgs: [], hostOnly: true },
+  { id: 'memory.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'tenant', policyArgs: [], hostOnly: false },
+  { id: 'fs.write', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+  { id: 'sys.shell', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
+  { id: 'sys.http', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
+  { id: 'outward.send', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
+  { id: 'rot.write', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'path', policyArgs: [], hostOnly: true },
 ];
 
 function kernel(overrides: Partial<PolicyContext> = {}) {
@@ -153,8 +153,8 @@ describe('policy kernel', () => {
       capabilities: new Map(
         [
           ...decls,
-          { id: 'outward.publish', risk: 'high', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: false },
-          { id: 'outward.email.send', risk: 'medium', reversible: 'no', resourceKind: 'none', policyArgs: [], hostOnly: false },
+          { id: 'outward.publish', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+          { id: 'outward.email.send', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
         ].map((d) => [d.id, d as CapabilityDecl]),
       ),
       matrix: POLICY_FLOOR,
