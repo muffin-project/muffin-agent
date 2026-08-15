@@ -640,3 +640,50 @@ than trusting the hash that maintains it; counts a test can assert are non-zero;
 and probes that execute the real thing as the real user. None of it is
 sophisticated. All of it exists because the alternative has already cost this
 project months.
+
+## A failure is not evidence of containment until the tool is seen succeeding **(this build)**
+
+The probe's macOS branch ran a `(deny default)` profile against `cat /etc/hosts`
+and read the non-zero exit as "the sandbox denied the read". It cannot be read
+that way, and the gap is not theoretical. Measured on macOS 15, 2026-08-15:
+
+```
+$ sandbox-exec -p '(version 1)(deny default)(allow no-such-primitive)' /bin/cat /etc/hosts
+sandbox-exec: unbound variable: no-such-primitive at <input string>, line 1, column 33
+$ echo $?
+65
+```
+
+A profile the OS refuses to *parse* fails exactly the way containment fails:
+non-zero exit, stderr matching neither `ENOENT` nor `not found`. So the day a
+macOS release drops one of the three primitives in `DENY_ALL`, the probe reports
+the sandbox as **available** on a host where nothing was ever contained, and
+`agent/runtime.ts` registers `shell_run` on the strength of it.
+
+This is the same shape as the incident two sections up, in the branch written to
+avoid it — and it survived because the branch had no test at all. `probe.ts` was
+the one module in `core/sandbox/` with zero coverage.
+
+**Instead:** the negative control needs a positive control. The probe now also
+runs the same binary under `(allow default)` and requires *that* to succeed;
+only then is the deny-profile failure evidence of containment rather than of a
+broken `sandbox-exec`. An experiment with one arm measures the apparatus.
+
+## A skip is only honest when something can make it fail
+
+`core/sandbox/executor.test.ts` gated nine containment tests on
+`platform() === 'darwin'`, with a correct reason written above the line: *"a
+skipped containment reported as passed is how the previous system shipped a
+no-op sandbox for two months"*. The reason was right and it changed nothing —
+CI on ubuntu-latest, with bubblewrap installed, reported **«10 test, 9 saltati»**
+and a green tick. The containment had never been executed on Linux, which is the
+platform of the production VPS, on any machine, ever.
+
+Nothing was broken, nothing was hidden, and no test could have failed. The skip
+was visible in the log to anyone who read the count instead of the tick.
+
+**Instead:** `MUFFIN_REQUIRE_SANDBOX=1`, set on the one Linux runner we have.
+Where a containment is supposed to be provable, its absence is a failing test
+carrying the probe's own reason; everywhere else the skip stays a skip and prints
+why. The prose was already correct — what it lacked was a mechanism, which is
+`docs/PRACTICES.md` §6 exactly.
