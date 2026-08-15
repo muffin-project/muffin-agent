@@ -33,6 +33,10 @@ export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
   risk: 'high',
   reversible: 'no',
+  // A command is an arbitrary program: it may have sent something, moved
+  // something, or charged something. The sandbox bounds where it can write, not
+  // whether running it twice means doing it twice.
+  rerunnable: false,
   resourceKind: 'none',
   policyArgs: ['command'],
   hostOnly: true,

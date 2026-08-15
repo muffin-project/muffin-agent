@@ -81,6 +81,28 @@ export type CapabilityDecl = {
   readonly id: CapabilityId;
   readonly risk: RiskClass;
   readonly reversible: Reversibility;
+  /**
+   * May this call be made a second time when nobody can say whether the first
+   * one landed?
+   *
+   * **Not the same question as `reversible`, and the two axes are independent.**
+   * `fs.write` is `undoable` and re-running it is harmless — writing the same
+   * bytes twice gives the same file. Sending a message is neither reversible
+   * nor re-runnable — it gives two messages. A design that reused `reversible`
+   * to decide would refuse a resume that was safe, and would have nothing at
+   * all to say about an `outward.send` someone later declared `undoable`.
+   *
+   * Required, not optional, and that is the point: a tool arriving without an
+   * answer breaks the build instead of inheriting a default that is wrong half
+   * the time. Adding this after five MCP servers are attached means auditing
+   * every one of them — the design (`research/turno-sospendibile.md` §Domanda 6)
+   * rates it among the two most expensive things to get wrong here.
+   *
+   * The consumer is a resume: a call with an intent row and no outcome row is
+   * re-executed only when this says so. Nothing resumes yet — the declaration
+   * is made now because it is the half that cannot be added cheaply later.
+   */
+  readonly rerunnable: boolean;
   /** Omitted when it equals the default for the risk class. */
   readonly maxTaint?: TrustTier;
   readonly resourceKind: Resource['kind'];
