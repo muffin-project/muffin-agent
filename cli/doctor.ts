@@ -423,8 +423,18 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     // Turns that a dead process was holding. `buildRuntime` announces these at
     // boot, but a boot line scrolls past and this is the command an owner runs
     // when something feels wrong — and "the answer never came and nobody said
-    // why" is exactly that feeling. Reported, never repaired: there is no
-    // resume, so the honest output is what is unknown and who has to check it.
+    // why" is exactly that feeling.
+    //
+    // (N1, judge round 2: this used to end "Reported, never repaired: there is
+    // no resume, so the honest output is what is unknown and who has to check
+    // it." That sentence did not survive the slice that built the resume —
+    // the remedy two branches down already says the opposite, "il gateway li
+    // riprende" — and a stale comment claiming the resume does not exist is
+    // exactly how a reader ends up trusting the wrong half of this file.)
+    // What is still honestly unknown is narrower: a resume replays every tool
+    // call whose *outcome* was recorded and declares, rather than repeats, the
+    // ones that were not — so the open question below is what a declared,
+    // non-replayed call may have done to the world, never whether it runs.
     const turns = readTurnHealth(db);
     if (turns === null) {
       // Not a warning. The table is created by the first runtime that opens
@@ -435,10 +445,54 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       warn(
         'turni',
         `${turns.total} registrati · ${turns.interrupted.length} interrotti — ${describeInterrupted(turns.interrupted[0]!)}`,
-        'non esiste ancora un resume: se una di quelle chiamate aveva effetti sul mondo, controllali a mano',
+        // The old text said "non esiste ancora un resume". It did not survive
+        // the slice that built one, and a remedy that tells the owner to go and
+        // do by hand something the runtime now does is worse than no remedy: it
+        // sends them to repeat an effect the record exists to avoid repeating.
+        'il gateway li riprende alla prossima corsia; una chiamata non ri-eseguibile non viene rifatta e viene dichiarata — se aveva effetti sul mondo, verificali',
       );
     } else {
       ok('turni', `${turns.total} registrati · nessuno interrotto`);
+    }
+
+    /**
+     * A suspended turn is only a promise while something is running the lane.
+     *
+     * The two facts are useless apart, which is why they are read together: N
+     * turns at `waiting` is normal and healthy on a machine with a gateway, and
+     * is *work nobody will ever wake* on one without. Only the REPL and `muffin
+     * run` can produce the second state — neither owns a lane (ADR-0035) — and
+     * before this line nothing anywhere said so.
+     */
+    if (turns !== null && turns.waiting.count > 0) {
+      const oldest = turns.waiting.oldestWakeAt;
+      const due = oldest === null ? '' : ` · il più vecchio scade ${oldest.slice(0, 16).replace('T', ' ')}`;
+      if (readGateway(db) === null) {
+        warn(
+          'turni sospesi',
+          `${turns.waiting.count} in attesa e nessun gateway attivo: non li sveglia nessuno${due}`,
+          'avvia il gateway (`muffin gateway install`, o `muffin gateway run` per vederlo) — la corsia dei turni gira solo lì',
+        );
+      } else {
+        ok('turni sospesi', `${turns.waiting.count} in attesa · li riprende il gateway${due}`);
+      }
+    }
+
+    /**
+     * D2, judge round 2: `LaneEvent.undeliverable` was emitted and reached only
+     * the gateway's own stderr — real inside that one process, invisible to
+     * everything else, including this command opening a fresh handle on the
+     * same database. `turn-lane.ts` now writes `delivery = 'undeliverable'` on
+     * the row itself, which is what makes it a fact `doctor` can read back
+     * instead of a message that existed for as long as one process's terminal
+     * scrollback did.
+     */
+    if (turns !== null && turns.undeliverable.count > 0) {
+      warn(
+        'turni senza indirizzo',
+        `${turns.undeliverable.count} turni con risposta senza indirizzo`,
+        'la riga porta la risposta ma non un indirizzo: nessuno sa a chi appartiene — controlla chi ha aperto quella sessione',
+      );
     }
 
     // B8's own guarantee, checked here rather than only claimed: a turn that

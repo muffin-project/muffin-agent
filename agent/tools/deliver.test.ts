@@ -3,8 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec } from '../../core/surface/types.js';
+import { toolContext } from '../fixtures/tool-context.js';
 import type { FsScope } from './fs.js';
 import { makeSendFileTool } from './deliver.js';
+
+/**
+ * `ToolContext` for this file's one variable — `replyChannel` — over the
+ * fixture's stable defaults for everything `send_file` does not touch
+ * (`turnId`, `sessionId`, `taint`, `suspend`).
+ */
+const ctx = (replyChannel: string | null) => toolContext({ replyChannel });
 
 /**
  * `send_file` — the model-facing caller B14 was missing.
@@ -35,15 +43,15 @@ function harness(over: { deliverFile?: (channel: string, file: FileSpec) => Prom
 describe('send_file', () => {
   it('routes to the exact channel the turn arrived on, not a fixed or guessed one', async () => {
     const h = harness();
-    await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'telegram:555' });
-    await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'discord:777' });
+    await h.tool.handler({ path: 'report.pdf' }, ctx('telegram:555'));
+    await h.tool.handler({ path: 'report.pdf' }, ctx('discord:777'));
 
     expect(h.calls.map((c) => c.channel)).toEqual(['telegram:555', 'discord:777']);
   });
 
   it('sends the resolved absolute path and the plain filename, never the raw model-supplied string as the filename', async () => {
     const h = harness();
-    await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' });
+    await h.tool.handler({ path: 'report.pdf' }, ctx('cli'));
 
     // Compared against the resolved realpath, not the raw mkdtempSync path:
     // `resolveInScope` follows symlinks on purpose (`fs.ts`'s containment
@@ -55,7 +63,7 @@ describe('send_file', () => {
 
   it('refuses with no channel to reach, and does not call deliverFile at all', async () => {
     const h = harness();
-    const outcome = await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: null });
+    const outcome = await h.tool.handler({ path: 'report.pdf' }, ctx(null));
 
     expect(outcome.isError).toBe(true);
     expect(outcome.content).not.toMatch(/inviato/); // never claims success
@@ -64,7 +72,7 @@ describe('send_file', () => {
 
   it('refuses a path outside the vault scope, and does not call deliverFile at all', async () => {
     const h = harness();
-    const outcome = await h.tool.handler({ path: '../../etc/passwd' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' });
+    const outcome = await h.tool.handler({ path: '../../etc/passwd' }, ctx('cli'));
 
     expect(outcome.isError).toBe(true);
     expect(h.calls).toHaveLength(0);
@@ -75,7 +83,7 @@ describe('send_file', () => {
     // it to text: DeliveryOutcome is a value the tool must pass through
     // honestly, not an outcome it is free to reinterpret.
     const h = harness({ deliverFile: async () => notDelivered('discord ha rifiutato: 413') });
-    const outcome = await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'discord:1' });
+    const outcome = await h.tool.handler({ path: 'report.pdf' }, ctx('discord:1'));
 
     expect(outcome.isError).toBe(true);
     expect(outcome.content).toContain('413');
@@ -84,7 +92,7 @@ describe('send_file', () => {
 
   it('a successful delivery says so, naming the file', async () => {
     const h = harness();
-    const outcome = await h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' });
+    const outcome = await h.tool.handler({ path: 'report.pdf' }, ctx('cli'));
 
     expect(outcome.isError).toBeUndefined();
     expect(outcome.content).toContain('report.pdf');
@@ -92,7 +100,7 @@ describe('send_file', () => {
 
   it('rejects malformed arguments before touching the filesystem or the registry', async () => {
     const h = harness();
-    const outcome = await h.tool.handler({}, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' });
+    const outcome = await h.tool.handler({}, ctx('cli'));
 
     expect(outcome.isError).toBe(true);
     expect(h.calls).toHaveLength(0);
@@ -101,9 +109,9 @@ describe('send_file', () => {
   it('every outcome states tier 0 — its own words and an echo of the caller-supplied path, never file content', async () => {
     const h = harness();
     const results = await Promise.all([
-      h.tool.handler({ path: 'report.pdf' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' }),
-      h.tool.handler({}, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' }),
-      h.tool.handler({ path: '../escape' }, { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' }, replyChannel: 'cli' }),
+      h.tool.handler({ path: 'report.pdf' }, ctx('cli')),
+      h.tool.handler({}, ctx('cli')),
+      h.tool.handler({ path: '../escape' }, ctx('cli')),
     ]);
     for (const r of results) expect(r.tier).toBe(0);
   });

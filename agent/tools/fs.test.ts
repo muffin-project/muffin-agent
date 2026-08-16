@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { toolContext } from '../fixtures/tool-context.js';
 import {
   DISK_TIER,
   PathDenied,
@@ -217,10 +218,7 @@ describe('a directory entry the OS refuses to stat', () => {
  * kernel reads as the turn's taint on every decision that follows.
  */
 describe('what a filesystem tool says about where its bytes came from', () => {
-  const ctx = {
-    tenant: 'host',
-    principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-  } as const;
+  const ctx = toolContext();
   const byName = (scope: FsScope, name: string) =>
     makeFsTools(scope).find((t) => t.spec.name === name)!;
 

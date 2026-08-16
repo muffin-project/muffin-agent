@@ -20,6 +20,7 @@ import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -133,6 +134,7 @@ function harness(script: ChatResult[]) {
     tracer,
     sessions: new SessionStore(home),
     turns: new TurnStore(db),
+    todos: new TodoStore(db),
     budgetExhausted: () => budget.exhausted(),
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     memory: { store, recall },

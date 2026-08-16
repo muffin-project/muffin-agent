@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
+import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
 import { connectServer } from '../../core/mcp/connect.js';
@@ -179,10 +180,7 @@ describe('M3 acceptance — through the production runtime', () => {
     const shell = runtime.deps.tools.find((t) => t.spec.name === 'shell_run');
     expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
     const escape = join(home, 'ESCAPED.txt');
-    const out = await shell!.handler(
-      { command: `echo pwned > '${escape}'` },
-      { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } },
-    );
+    const out = await shell!.handler({ command: `echo pwned > '${escape}'` }, toolContext());
     expect(out.isError).toBe(true);
     expect(existsSync(escape)).toBe(false);
   }, 20_000);
