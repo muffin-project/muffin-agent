@@ -210,3 +210,70 @@ describe('durability — a message survives a failure mid-turn', () => {
     expect(pending[0]?.messageId).toBe('1');
   });
 });
+
+describe('concurrency — two dispatches close together (D2)', () => {
+  it('does not double-answer when a second dispatch arrives mid-turn', async () => {
+    // Reproduces the race directly: `onDispatch` calls `void this.drain()`
+    // on every new arrival with nothing awaiting it. Without a guard, two
+    // messages a few milliseconds apart start two concurrent walks of
+    // `inbox.pending()` — the first message is still mid-turn (not yet
+    // `markProcessed`) when the second walk reads the table, so it processes
+    // the same row a second time in parallel with the first: 3 turns for 2
+    // messages, one of them answered twice.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-discord-concurrency-'));
+    const inbox = new DiscordInbox(new DatabaseCtor(':memory:'));
+    const sent: { channelId: string; text: string }[] = [];
+    let turns = 0;
+    const loop = {
+      provider: {
+        kind: 'openai-compat' as const,
+        chat: async () => {
+          turns += 1;
+          // Long enough that a second dispatch 5ms later still lands mid-turn —
+          // the exact window the judge measured against the unguarded code.
+          await new Promise((r) => setTimeout(r, 60));
+          return {
+            text: 'fatto',
+            toolCalls: [],
+            stopReason: 'end' as const,
+            usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            model: 't',
+          };
+        },
+      },
+      profile: CONSERVATIVE,
+      model: 't',
+      tools: [],
+      decide: () => ({ effect: 'allow' as const }),
+      tracer: { start: () => ({ traceId: 't', setAttributes: () => {}, end: () => {} }) },
+      sessions: new SessionStore(home),
+      turns: { create: () => {}, delivered: () => {} },
+      budgetExhausted: () => false,
+      systemPrompts: { owner: 'x', group: 'x' },
+    } as unknown as LoopDeps;
+    const api = {
+      sendMessage: async (channelId: string, text: string) => {
+        sent.push({ channelId, text });
+        return {} as never;
+      },
+      typing: async () => undefined,
+    } as unknown as DiscordApi;
+    const connector = new DiscordConnector({ loop, sessions: loop.sessions, inbox, api, config: { token: 't', ownerUserId: OWNER } });
+    const drain = () => (connector as unknown as { drain: () => Promise<void> }).drain();
+
+    const msg1: DiscordMessage = { id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'uno' };
+    const msg2: DiscordMessage = { id: '2', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'due' };
+
+    inbox.accept(msg1.id, msg1, new Date().toISOString());
+    const p1 = drain(); // exactly what onDispatch does: fire-and-forget on a new arrival
+    await new Promise((r) => setTimeout(r, 5)); // the 5ms gap the judge measured
+    inbox.accept(msg2.id, msg2, new Date().toISOString());
+    const p2 = drain(); // arrives while p1 is still mid-turn on msg1
+
+    await Promise.all([p1, p2]);
+
+    expect(turns).toBe(2); // not 3 — msg1 is never re-entered by the second call
+    expect(sent).toHaveLength(2); // neither message answered twice
+    expect(inbox.pending()).toHaveLength(0); // both settled, nothing stranded
+  });
+});
