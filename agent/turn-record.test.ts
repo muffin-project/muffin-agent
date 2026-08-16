@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
-import type { CapabilityDecl, Principal } from '../core/policy/types.js';
+import type { CapabilityDecl, Principal, TrustTier } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -67,7 +67,7 @@ const decls: CapabilityDecl[] = [
 ];
 
 type TurnRow = { id: string; status: string; model: string; taint: number; turn_outcome: string | null };
-type CallRow = { call_id: string; tool: string; rerunnable: number; ended_at: string | null };
+type CallRow = { call_id: string; tool: string; rerunnable: number; ended_at: string | null; tier: number | null };
 
 type Harness = {
   deps: LoopDeps;
@@ -112,7 +112,7 @@ function harness(
     provider,
     rows: () => db.prepare(`SELECT id, status, model, taint, turn_outcome FROM turns`).all() as TurnRow[],
     calls: () =>
-      db.prepare(`SELECT call_id, tool, rerunnable, ended_at FROM turn_tool_calls`).all() as CallRow[],
+      db.prepare(`SELECT call_id, tool, rerunnable, ended_at, tier FROM turn_tool_calls`).all() as CallRow[],
   };
 }
 
@@ -132,12 +132,16 @@ const readTool = (
   // tier they do not need would make every one of these also a taint test.
   // `demo_web` below is the one that carries provenance, because that is its job.
   handler: RegisteredTool['handler'] = () => ({ content: 'letto', tier: 0 as const }),
+  // `throwTier: 0` by default: every caller but one only exercises the return
+  // path, where `tier` above already does the work. The one that throws
+  // (`'closes when the handler throws'` below) passes a distinct value
+  // explicitly, so asserting it there cannot pass by coincidence with a
+  // mutation that collapses the recorded tier to a literal `0`.
+  throwTier: TrustTier = 0,
 ): RegisteredTool => ({
   capability: 'demo.read',
   spec: { name, description: 'r', inputSchema: { type: 'object', properties: {} } },
-  // `throwTier: 0`: the one caller that passes a throwing handler (`'closes
-  // when the handler throws'` below) throws only this file's own literal.
-  throwTier: 0,
+  throwTier,
   handler,
 });
 
@@ -266,18 +270,26 @@ describe('a tool call is recorded in two halves', () => {
     expect(h.calls()[0]?.ended_at).not.toBeNull();
   });
 
-  it('closes when the handler throws — a call that came back is decided', async () => {
+  it('closes when the handler throws — a call that came back is decided, and its tier is not lost', async () => {
     const h = harness([callTool('demo_read'), answer('fatto')], {
       tools: [
-        readTool('demo_read', () => {
-          throw new Error('il tool è esploso');
-        }),
+        readTool(
+          'demo_read',
+          () => {
+            throw new Error('il tool è esploso');
+          },
+          3, // distinct from every other tier in this file, on purpose
+        ),
       ],
     });
     const result = await runTurn(h.deps, input(h.sessions));
     // Otherwise every failed tool call would look like one that might still
     // have landed, and the "maybe" set would be noise instead of a signal.
     expect(h.deps.turns.uncertainCalls(result.turnId)).toEqual([]);
+    // `agent/loop.ts`'s catch records `tier: tool.throwTier` on this same row
+    // (ADR-0044) — nothing in this file read the column back before, so a
+    // mutation collapsing that write to a literal `0` left the suite green.
+    expect(h.calls()[0]).toMatchObject({ tool: 'demo_read', tier: 3 });
   });
 
   it('a call the kernel refused leaves no intent row: it never reached the world', async () => {
