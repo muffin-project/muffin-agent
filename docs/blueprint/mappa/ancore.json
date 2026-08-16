@@ -601,27 +601,27 @@
   },
   "agent/tools/memory.ts:16": {
     "path": "agent/tools/memory.ts",
-    "line": 16,
+    "line": 22,
     "testo": "* It reads the tenant of the turn, never a tenant of its own choosing: the"
   },
   "agent/tools/memory.ts:21": {
     "path": "agent/tools/memory.ts",
-    "line": 21,
+    "line": 27,
     "testo": "export const memoryCapability: CapabilityDecl = {"
   },
   "agent/tools/memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 28,
+    "line": 34,
     "testo": "resourceKind: 'tenant',"
   },
   "agent/tools/memory.ts:32": {
     "path": "agent/tools/memory.ts",
-    "line": 35,
+    "line": 58,
     "testo": "export const memorySearchSpec: ToolSpec = {"
   },
   "agent/tools/memory.ts:90": {
     "path": "agent/tools/memory.ts",
-    "line": 93,
+    "line": 210,
     "testo": "// The turn inherits the worst source it just pulled in, exactly as the"
   },
   "agent/tools/process.ts:130": {
@@ -821,132 +821,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 101,
+    "line": 102,
     "testo": "memoria: 'memory',"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 159,
+    "line": 160,
     "testo": "case 'run':"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 161,
+    "line": 162,
     "testo": "case 'repl':"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 163,
+    "line": 164,
     "testo": "case 'init':"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 165,
+    "line": 166,
     "testo": "case 'config':"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 167,
+    "line": 168,
     "testo": "case 'doctor':"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 169,
+    "line": 170,
     "testo": "case 'rot':"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 171,
+    "line": 172,
     "testo": "case 'uninstall':"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
-    "line": 173,
+    "line": 174,
     "testo": "case 'memory':"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 175,
+    "line": 176,
     "testo": "case 'vault':"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 177,
+    "line": 178,
     "testo": "case 'surface':"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 179,
+    "line": 180,
     "testo": "case 'mcp':"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 181,
+    "line": 182,
     "testo": "case 'jobs':"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 183,
+    "line": 184,
     "testo": "case 'gateway':"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 185,
+    "line": 186,
     "testo": "case 'observe':"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 187,
+    "line": 188,
     "testo": "case 'secret':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 189,
+    "line": 190,
     "testo": "case 'trace':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 191,
+    "line": 192,
     "testo": "case undefined: {"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 198,
+    "line": 199,
     "testo": "case '--help':"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 202,
+    "line": 203,
     "testo": "case '--version':"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 245,
+    "line": 246,
     "testo": "let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 258,
+    "line": 259,
     "testo": "if (apiKey && looksLikeTelegramToken(apiKey)) {"
   },
   "cli/main.ts:296": {
     "path": "cli/main.ts",
-    "line": 296,
+    "line": 297,
     "testo": "await offerGateway();"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 297,
+    "line": 298,
     "testo": "process.stderr.write(`\\nOra: muffin doctor\\n`);"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 317,
+    "line": 318,
     "testo": "async function offerGateway(): Promise<void> {"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 340,
+    "line": 341,
     "testo": "async function firstRun(): Promise<number> {"
   },
   "cli/mcp.ts:142": {
@@ -971,12 +971,12 @@
   },
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
-    "line": 175,
+    "line": 223,
     "testo": "export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {"
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 256,
+    "line": 304,
     "testo": "export function cmdMemoryReview(home: string): number {"
   },
   "cli/memory.ts:27": {
@@ -986,7 +986,7 @@
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 326,
+    "line": 374,
     "testo": "const answered = resolveContradiction(store, TENANT, factId, new Date());"
   },
   "cli/observe.ts:62": {
@@ -1491,12 +1491,12 @@
   },
   "core/memory/recall.ts:120": {
     "path": "core/memory/recall.ts",
-    "line": 120,
+    "line": 329,
     "testo": "export function selectForExpansion(facts: Fact[]): Fact[] {"
   },
   "core/memory/recall.ts:160": {
     "path": "core/memory/recall.ts",
-    "line": 160,
+    "line": 369,
     "testo": "export async function recall("
   },
   "core/memory/recall.ts:178": {
@@ -1506,42 +1506,42 @@
   },
   "core/memory/recall.ts:192": {
     "path": "core/memory/recall.ts",
-    "line": 192,
+    "line": 433,
     "testo": "if (deps.vectors) {"
   },
   "core/memory/recall.ts:194": {
     "path": "core/memory/recall.ts",
-    "line": 194,
+    "line": 435,
     "testo": "const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);"
   },
   "core/memory/recall.ts:230": {
     "path": "core/memory/recall.ts",
-    "line": 230,
+    "line": 510,
     "testo": "const entityNames = extractCandidateNames(query);"
   },
   "core/memory/recall.ts:269": {
     "path": "core/memory/recall.ts",
-    "line": 269,
+    "line": 586,
     "testo": "if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {"
   },
   "core/memory/recall.ts:284": {
     "path": "core/memory/recall.ts",
-    "line": 284,
+    "line": 665,
     "testo": "export function renderForPrompt(result: RecallResult): string {"
   },
   "core/memory/recall.ts:307": {
     "path": "core/memory/recall.ts",
-    "line": 307,
+    "line": 708,
     "testo": "export function recallTaint(result: RecallResult): TrustTier {"
   },
   "core/memory/recall.ts:76": {
     "path": "core/memory/recall.ts",
-    "line": 76,
+    "line": 266,
     "testo": "/** Names the halves that actually ran, so a degraded recall is never silent. */"
   },
   "core/memory/recall.ts:81": {
     "path": "core/memory/recall.ts",
-    "line": 81,
+    "line": 279,
     "testo": "const K = 60;"
   },
   "core/memory/rerank.ts:47": {
@@ -1586,27 +1586,27 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 147,
+    "line": 186,
     "testo": "const seed = db.prepare("
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 162,
+    "line": 201,
     "testo": "addEpisode(input: EpisodeInput): number {"
   },
   "core/memory/store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 179,
+    "line": 218,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "core/memory/store.ts:198": {
     "path": "core/memory/store.ts",
-    "line": 198,
+    "line": 237,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 256,
+    "line": 295,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
@@ -1621,12 +1621,12 @@
   },
   "core/memory/store.ts:592": {
     "path": "core/memory/store.ts",
-    "line": 592,
+    "line": 829,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
   "core/memory/store.ts:709": {
     "path": "core/memory/store.ts",
-    "line": 709,
+    "line": 958,
     "testo": "episodeById(tenantId: string, id: number): Episode | null {"
   },
   "core/memory/vectors.ts:106": {
@@ -2156,7 +2156,7 @@
   },
   "docs/blueprint/M5-BIS.md:219": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 236,
+    "line": 275,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
@@ -2451,17 +2451,17 @@
   },
   "memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 28,
+    "line": 34,
     "testo": "resourceKind: 'tenant',"
   },
   "memory.ts:29": {
     "path": "agent/tools/memory.ts",
-    "line": 32,
+    "line": 38,
     "testo": "hostOnly: false,"
   },
   "memory.ts:48": {
     "path": "agent/tools/memory.ts",
-    "line": 51,
+    "line": 112,
     "testo": "export async function searchMemory("
   },
   "pricing.ts:43": {
@@ -2536,7 +2536,7 @@
   },
   "recall.ts:166": {
     "path": "core/memory/recall.ts",
-    "line": 166,
+    "line": 375,
     "testo": "const limit = options.limit ?? 8;"
   },
   "recall.ts:19": {
@@ -2551,17 +2551,17 @@
   },
   "recall.ts:223": {
     "path": "core/memory/recall.ts",
-    "line": 223,
+    "line": 503,
     "testo": "strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);"
   },
   "recall.ts:271": {
     "path": "core/memory/recall.ts",
-    "line": 271,
+    "line": 588,
     "testo": "strategies.push(`rerank(${deps.reranker.id})`);"
   },
   "recall.ts:289": {
     "path": "core/memory/recall.ts",
-    "line": 289,
+    "line": 670,
     "testo": "// Only inferred is marked. Labelling `said` too would put a word in front"
   },
   "recall.ts:293": {
@@ -2571,12 +2571,12 @@
   },
   "recall.ts:323": {
     "path": "core/memory/recall.ts",
-    "line": 323,
+    "line": 750,
     "testo": "function extractCandidateNames(query: string): string[] {"
   },
   "recall.ts:93": {
     "path": "core/memory/recall.ts",
-    "line": 93,
+    "line": 85,
     "testo": "/**"
   },
   "redact.ts:11": {
@@ -2716,17 +2716,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 116,
+    "line": 155,
     "testo": "export const OPEN_CONTRADICTION_FROM = `FROM memory_review r"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 147,
+    "line": 186,
     "testo": "const seed = db.prepare("
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 179,
+    "line": 218,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "store.ts:21": {
@@ -2736,17 +2736,17 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 228,
+    "line": 267,
     "testo": "findEntity(tenantId: string, name: string, kind?: string): number | null {"
   },
   "store.ts:333": {
     "path": "core/memory/store.ts",
-    "line": 333,
+    "line": 336,
     "testo": "/**"
   },
   "store.ts:657": {
     "path": "core/memory/store.ts",
-    "line": 657,
+    "line": 903,
     "testo": "provenanceOf("
   },
   "tracer.ts:94": {
