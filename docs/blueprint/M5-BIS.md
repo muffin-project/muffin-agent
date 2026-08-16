@@ -246,9 +246,50 @@ ancora verificato — **è un debito, non uno stato**).
 | E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |
 | E2 | Cost | So quanto costa una giornata? | ? |
 | E3 | Tracing | Posso ricostruire cosa è successo? | ? |
-| E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
+| E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
 | E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | ? 🔭 |
+
+> **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**
+> `evals/acceptance/` lancia `muffin` come **processo vero** (`node --import tsx
+> cli/main.ts`, mai `runTurn()` con dipendenze finte) contro un `$HOME`
+> temporaneo, parlando con un provider HTTP finto e deterministico
+> (`evals/acceptance/provider.ts` — nessuna chiave, nessuna chiamata a
+> pagamento). Lo stato delle **altre** righe di questo inventario è **derivato**,
+> non scritto a mano: `npx tsx evals/acceptance/report.ts` legge questo stesso
+> file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
+> stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
+> e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
+> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
+> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
+> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
+> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
+> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
+> passi identici a quelli verificati in locale) ma **non ancora eseguito su
+> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
+> anche sul branch di default, quindi la prima corsa reale sarà al merge su
+> `dev`.
+>
+> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
+> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
+> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
+> decisione owner ancora aperta su §1, D10 taint→egress →
+> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
+> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
+> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
+> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
+> verificato il rosso, ripristinato — non solo scritto a supporre che
+> avrebbero funzionato.
+>
+> **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
+> corsa invece di nasconderlo: cinque righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (C2, C3, C7, D4, D6) — nessuna era nella lista
+> minima del mandato di questa slice, e chiuderle resta un lavoro futuro, non
+> silenzioso. C8 (audio) è marcata `non provabile qui` col motivo scritto
+> (richiede una trascrizione reale, vietata dalla proprietà "non costa niente"
+> di questa suite). **E4 READY vuol dire "la primitiva esiste, gira contro il
+> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
+> "l'inventario è coperto".**
 
 ---
 

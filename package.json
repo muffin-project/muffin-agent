@@ -17,6 +17,8 @@
     "build": "tsc --noEmit",
     "compile": "tsc -p tsconfig.build.json && rm -rf dist/defaults && cp -R defaults dist/defaults && cp agent/profiles/*.json dist/agent/profiles/",
     "test": "vitest run",
+    "test:acceptance": "vitest run --config vitest.acceptance.config.ts",
+    "acceptance:report": "tsx evals/acceptance/report.ts",
     "prepare": "npm run compile"
   },
   "devDependencies": {
