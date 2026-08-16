@@ -599,39 +599,29 @@
     "line": 98,
     "testo": "for (const def of connection.tools) {"
   },
-  "agent/tools/memory.ts:112": {
+  "agent/tools/memory.ts:16": {
     "path": "agent/tools/memory.ts",
-    "line": 112,
-    "testo": "export async function searchMemory("
-  },
-  "agent/tools/memory.ts:145": {
-    "path": "agent/tools/memory.ts",
-    "line": 145,
-    "testo": "const asOfRaw = raw.as_of as string | undefined;"
+    "line": 16,
+    "testo": "* It reads the tenant of the turn, never a tenant of its own choosing: the"
   },
   "agent/tools/memory.ts:21": {
     "path": "agent/tools/memory.ts",
-    "line": 27,
+    "line": 21,
     "testo": "export const memoryCapability: CapabilityDecl = {"
-  },
-  "agent/tools/memory.ts:22": {
-    "path": "agent/tools/memory.ts",
-    "line": 22,
-    "testo": "* It reads the tenant of the turn, never a tenant of its own choosing: the"
   },
   "agent/tools/memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 34,
+    "line": 28,
     "testo": "resourceKind: 'tenant',"
   },
   "agent/tools/memory.ts:32": {
     "path": "agent/tools/memory.ts",
-    "line": 58,
+    "line": 35,
     "testo": "export const memorySearchSpec: ToolSpec = {"
   },
   "agent/tools/memory.ts:90": {
     "path": "agent/tools/memory.ts",
-    "line": 210,
+    "line": 93,
     "testo": "// The turn inherits the worst source it just pulled in, exactly as the"
   },
   "agent/tools/process.ts:130": {
@@ -831,138 +821,133 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 102,
+    "line": 101,
     "testo": "memoria: 'memory',"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 160,
+    "line": 159,
     "testo": "case 'run':"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 162,
+    "line": 161,
     "testo": "case 'repl':"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 164,
+    "line": 163,
     "testo": "case 'init':"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 166,
+    "line": 165,
     "testo": "case 'config':"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 168,
+    "line": 167,
     "testo": "case 'doctor':"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 170,
+    "line": 169,
     "testo": "case 'rot':"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 172,
+    "line": 171,
     "testo": "case 'uninstall':"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
-    "line": 174,
+    "line": 173,
     "testo": "case 'memory':"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 176,
+    "line": 175,
     "testo": "case 'vault':"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 178,
+    "line": 177,
     "testo": "case 'surface':"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 180,
+    "line": 179,
     "testo": "case 'mcp':"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 182,
+    "line": 181,
     "testo": "case 'jobs':"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 184,
+    "line": 183,
     "testo": "case 'gateway':"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 186,
+    "line": 185,
     "testo": "case 'observe':"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 188,
+    "line": 187,
     "testo": "case 'secret':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 190,
+    "line": 189,
     "testo": "case 'trace':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 192,
+    "line": 191,
     "testo": "case undefined: {"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 199,
+    "line": 198,
     "testo": "case '--help':"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 203,
+    "line": 202,
     "testo": "case '--version':"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 246,
+    "line": 245,
     "testo": "let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 259,
+    "line": 258,
     "testo": "if (apiKey && looksLikeTelegramToken(apiKey)) {"
   },
   "cli/main.ts:296": {
     "path": "cli/main.ts",
-    "line": 297,
+    "line": 296,
     "testo": "await offerGateway();"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 298,
+    "line": 297,
     "testo": "process.stderr.write(`\\nOra: muffin doctor\\n`);"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 318,
+    "line": 317,
     "testo": "async function offerGateway(): Promise<void> {"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 341,
+    "line": 340,
     "testo": "async function firstRun(): Promise<number> {"
-  },
-  "cli/main.ts:505": {
-    "path": "cli/main.ts",
-    "line": 505,
-    "testo": "const asOf = normaliseDate(values['as-of'], 'end');"
   },
   "cli/mcp.ts:142": {
     "path": "cli/mcp.ts",
@@ -986,12 +971,12 @@
   },
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
-    "line": 223,
+    "line": 175,
     "testo": "export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {"
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 304,
+    "line": 256,
     "testo": "export function cmdMemoryReview(home: string): number {"
   },
   "cli/memory.ts:27": {
@@ -1001,7 +986,7 @@
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 374,
+    "line": 326,
     "testo": "const answered = resolveContradiction(store, TENANT, factId, new Date());"
   },
   "cli/observe.ts:62": {
@@ -1504,80 +1489,60 @@
     "line": 212,
     "testo": "export function openContradictions(store: MemoryStore, tenantId: string, limit = 50): OpenContradiction[] {"
   },
-  "core/memory/recall.ts:108": {
+  "core/memory/recall.ts:120": {
     "path": "core/memory/recall.ts",
-    "line": 108,
-    "testo": "export function normaliseDate(raw: string | undefined, edge: 'start' | 'end'): string | undefined {"
+    "line": 120,
+    "testo": "export function selectForExpansion(facts: Fact[]): Fact[] {"
   },
-  "core/memory/recall.ts:266": {
+  "core/memory/recall.ts:160": {
     "path": "core/memory/recall.ts",
-    "line": 266,
-    "testo": "/** Names the halves that actually ran, so a degraded recall is never silent. */"
-  },
-  "core/memory/recall.ts:279": {
-    "path": "core/memory/recall.ts",
-    "line": 279,
-    "testo": "const K = 60;"
-  },
-  "core/memory/recall.ts:302": {
-    "path": "core/memory/recall.ts",
-    "line": 302,
-    "testo": "/**"
-  },
-  "core/memory/recall.ts:369": {
-    "path": "core/memory/recall.ts",
-    "line": 369,
+    "line": 160,
     "testo": "export async function recall("
   },
-  "core/memory/recall.ts:396": {
+  "core/memory/recall.ts:178": {
     "path": "core/memory/recall.ts",
-    "line": 396,
-    "testo": "// --- half one: exact words -------------------------------------------------"
+    "line": 178,
+    "testo": "const textHits = deps.store.searchEpisodes(tenantId, query, limit * 2);"
   },
-  "core/memory/recall.ts:428": {
+  "core/memory/recall.ts:192": {
     "path": "core/memory/recall.ts",
-    "line": 428,
-    "testo": "...(hit.supersededAt === null ? {} : { expired: true }),"
+    "line": 192,
+    "testo": "if (deps.vectors) {"
   },
-  "core/memory/recall.ts:432": {
+  "core/memory/recall.ts:194": {
     "path": "core/memory/recall.ts",
-    "line": 432,
-    "testo": "// --- half two: meaning -----------------------------------------------------"
-  },
-  "core/memory/recall.ts:435": {
-    "path": "core/memory/recall.ts",
-    "line": 435,
+    "line": 194,
     "testo": "const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);"
   },
-  "core/memory/recall.ts:441": {
+  "core/memory/recall.ts:230": {
     "path": "core/memory/recall.ts",
-    "line": 441,
-    "testo": "if (hit.kind === 'fact') {"
+    "line": 230,
+    "testo": "const entityNames = extractCandidateNames(query);"
   },
-  "core/memory/recall.ts:527": {
+  "core/memory/recall.ts:269": {
     "path": "core/memory/recall.ts",
-    "line": 527,
-    "testo": "when === undefined"
-  },
-  "core/memory/recall.ts:586": {
-    "path": "core/memory/recall.ts",
-    "line": 586,
+    "line": 269,
     "testo": "if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {"
   },
-  "core/memory/recall.ts:593": {
+  "core/memory/recall.ts:284": {
     "path": "core/memory/recall.ts",
-    "line": 593,
-    "testo": "// --- the neighbourhood, after the cut and never inside it ------------------"
-  },
-  "core/memory/recall.ts:665": {
-    "path": "core/memory/recall.ts",
-    "line": 665,
+    "line": 284,
     "testo": "export function renderForPrompt(result: RecallResult): string {"
   },
-  "core/memory/recall.ts:708": {
+  "core/memory/recall.ts:307": {
     "path": "core/memory/recall.ts",
-    "line": 708,
+    "line": 307,
     "testo": "export function recallTaint(result: RecallResult): TrustTier {"
+  },
+  "core/memory/recall.ts:76": {
+    "path": "core/memory/recall.ts",
+    "line": 76,
+    "testo": "/** Names the halves that actually ran, so a degraded recall is never silent. */"
+  },
+  "core/memory/recall.ts:81": {
+    "path": "core/memory/recall.ts",
+    "line": 81,
+    "testo": "const K = 60;"
   },
   "core/memory/rerank.ts:47": {
     "path": "core/memory/rerank.ts",
@@ -1621,32 +1586,27 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 186,
+    "line": 147,
     "testo": "const seed = db.prepare("
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 201,
+    "line": 162,
     "testo": "addEpisode(input: EpisodeInput): number {"
   },
-  "core/memory/store.ts:218": {
+  "core/memory/store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 218,
+    "line": 179,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
-  "core/memory/store.ts:237": {
+  "core/memory/store.ts:198": {
     "path": "core/memory/store.ts",
-    "line": 237,
+    "line": 198,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 295,
-    "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
-  },
-  "core/memory/store.ts:295": {
-    "path": "core/memory/store.ts",
-    "line": 295,
+    "line": 256,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
@@ -1654,40 +1614,20 @@
     "line": 38,
     "testo": "export type FactInput = {"
   },
-  "core/memory/store.ts:503": {
+  "core/memory/store.ts:484": {
     "path": "core/memory/store.ts",
-    "line": 503,
-    "testo": "/**"
+    "line": 484,
+    "testo": "searchEpisodes(tenantId: string, query: string, limit = 10): { id: number; content: string; createdAt: string; trustTier: TrustTier }[] {"
   },
-  "core/memory/store.ts:572": {
+  "core/memory/store.ts:592": {
     "path": "core/memory/store.ts",
-    "line": 572,
-    "testo": "/**"
-  },
-  "core/memory/store.ts:610": {
-    "path": "core/memory/store.ts",
-    "line": 610,
-    "testo": "FROM facts f"
-  },
-  "core/memory/store.ts:637": {
-    "path": "core/memory/store.ts",
-    "line": 637,
-    "testo": "searchEpisodes("
-  },
-  "core/memory/store.ts:700": {
-    "path": "core/memory/store.ts",
-    "line": 700,
-    "testo": "episodeNeighbourhood("
-  },
-  "core/memory/store.ts:829": {
-    "path": "core/memory/store.ts",
-    "line": 829,
+    "line": 592,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
-  "core/memory/store.ts:958": {
+  "core/memory/store.ts:709": {
     "path": "core/memory/store.ts",
-    "line": 958,
-    "testo": "f.superseded_by AS supersededBy"
+    "line": 724,
+    "testo": "episodeById(tenantId: string, id: number): Episode | null {"
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
@@ -2216,7 +2156,7 @@
   },
   "docs/blueprint/M5-BIS.md:219": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 275,
+    "line": 246,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
@@ -2511,17 +2451,17 @@
   },
   "memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 34,
+    "line": 28,
     "testo": "resourceKind: 'tenant',"
   },
   "memory.ts:29": {
     "path": "agent/tools/memory.ts",
-    "line": 38,
+    "line": 32,
     "testo": "hostOnly: false,"
   },
   "memory.ts:48": {
     "path": "agent/tools/memory.ts",
-    "line": 112,
+    "line": 51,
     "testo": "export async function searchMemory("
   },
   "pricing.ts:43": {
@@ -2594,60 +2534,50 @@
     "line": 204,
     "testo": "/**"
   },
-  "recall.ts:17": {
+  "recall.ts:166": {
     "path": "core/memory/recall.ts",
-    "line": 17,
-    "testo": "* Then one hop on the graph: whatever entity the retrieved text is about, its"
+    "line": 166,
+    "testo": "const limit = options.limit ?? 8;"
   },
-  "recall.ts:290": {
+  "recall.ts:19": {
     "path": "core/memory/recall.ts",
-    "line": 290,
-    "testo": "* model-typed. Fixed at the primitive instead of at each boundary so a third"
+    "line": 19,
+    "testo": "* expansion on a comparable system cost 44 points on BEAM, and cleverness on a"
+  },
+  "recall.ts:200": {
+    "path": "core/memory/recall.ts",
+    "line": 200,
+    "testo": "// The tier comes from the source row, never from the fact that a vector"
+  },
+  "recall.ts:223": {
+    "path": "core/memory/recall.ts",
+    "line": 223,
+    "testo": "strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);"
+  },
+  "recall.ts:271": {
+    "path": "core/memory/recall.ts",
+    "line": 271,
+    "testo": "strategies.push(`rerank(${deps.reranker.id})`);"
+  },
+  "recall.ts:289": {
+    "path": "core/memory/recall.ts",
+    "line": 289,
+    "testo": "// Only inferred is marked. Labelling `said` too would put a word in front"
   },
   "recall.ts:293": {
     "path": "core/memory/recall.ts",
     "line": 293,
-    "testo": "const MAX_NEIGHBOURS = 5;"
+    "testo": "`${item.text.replace(/\\s+/g, ' ').slice(0, 400)}`,"
   },
-  "recall.ts:302": {
+  "recall.ts:323": {
     "path": "core/memory/recall.ts",
-    "line": 302,
-    "testo": "/**"
-  },
-  "recall.ts:375": {
-    "path": "core/memory/recall.ts",
-    "line": 375,
-    "testo": "const limit = options.limit ?? 8;"
-  },
-  "recall.ts:503": {
-    "path": "core/memory/recall.ts",
-    "line": 503,
-    "testo": "strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);"
-  },
-  "recall.ts:588": {
-    "path": "core/memory/recall.ts",
-    "line": 588,
-    "testo": "strategies.push(`rerank(${deps.reranker.id})`);"
-  },
-  "recall.ts:655": {
-    "path": "core/memory/recall.ts",
-    "line": 655,
-    "testo": "function successorOf(store: MemoryStore, tenantId: string, fact: Fact): Fact | null {"
-  },
-  "recall.ts:675": {
-    "path": "core/memory/recall.ts",
-    "line": 675,
-    "testo": "`${item.text.replace(/\\s+/g, ' ').slice(0, 400)}` +"
-  },
-  "recall.ts:731": {
-    "path": "core/memory/recall.ts",
-    "line": 731,
-    "testo": "function temporalLabel(item: RecallItem): string {"
-  },
-  "recall.ts:750": {
-    "path": "core/memory/recall.ts",
-    "line": 750,
+    "line": 323,
     "testo": "function extractCandidateNames(query: string): string[] {"
+  },
+  "recall.ts:93": {
+    "path": "core/memory/recall.ts",
+    "line": 93,
+    "testo": "/**"
   },
   "redact.ts:11": {
     "path": "core/tracing/redact.ts",
@@ -2786,17 +2716,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 155,
+    "line": 116,
     "testo": "export const OPEN_CONTRADICTION_FROM = `FROM memory_review r"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 186,
+    "line": 147,
     "testo": "const seed = db.prepare("
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 218,
+    "line": 179,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "store.ts:21": {
@@ -2806,28 +2736,18 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 267,
+    "line": 228,
     "testo": "findEntity(tenantId: string, name: string, kind?: string): number | null {"
   },
-  "store.ts:503": {
+  "store.ts:333": {
     "path": "core/memory/store.ts",
-    "line": 503,
+    "line": 333,
     "testo": "/**"
   },
-  "store.ts:740": {
+  "store.ts:657": {
     "path": "core/memory/store.ts",
-    "line": 740,
-    "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
-  },
-  "store.ts:903": {
-    "path": "core/memory/store.ts",
-    "line": 903,
-    "testo": "* Where a recalled chunk came from and how much it is worth."
-  },
-  "store.ts:935": {
-    "path": "core/memory/store.ts",
-    "line": 935,
-    "testo": "// recall has nothing else to read it from. Without it an inferred"
+    "line": 672,
+    "testo": "provenanceOf("
   },
   "tracer.ts:94": {
     "path": "core/tracing/tracer.ts",
