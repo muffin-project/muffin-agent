@@ -153,15 +153,20 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
  * on the act: the command the model chose is not the danger, the bytes coming
  * back are.
  *
- * The cost is real and belongs in the same breath: `sys.shell` inherits
- * `defaultMaxTaint.high` = 1, so **the second `shell_run` of a turn is now a
- * `taint_exceeded` deny**, and so is a `shell_run` after any `fs_read`. That is
- * threat model §3 row "Shell / filesystem host / processi · taint 2 · DENY —
- * nessun percorso" applied to a turn that has read unprovenanced bytes, and it
- * is the line ADR-0044 hands to the owner to contradict: the counter-move, if
- * he wants it, is `maxTaint: 2` on `sys.shell` (which keeps shell an ASK and
- * leaves egress shut), and that is an amendment to the threat model, not a
- * default anyone should change in passing.
+ * **The cost, as it stands after the owner's decision (ADR-0044 §Revisione
+ * 2026-08-16), not the verdict that decision replaced.** `sys.shell` pins
+ * `maxTaint: 2` (`shellCapability` above) instead of inheriting
+ * `defaultMaxTaint.high` = 1, so one read (`DISK_TIER` = 2) downgrades
+ * `shell_run` to an **`ask`**, not the flat `deny/taint_exceeded` this file
+ * used to describe — that is what keeps *"leggi il file e poi lancia i
+ * test"* completable with the owner's yes. The floor stays real: the hardened
+ * auto-allow still requires `taint === 0` (`core/policy/decide.ts`), which a
+ * turn that has read anything never reaches at `maxTaint: 2` any more than at
+ * 1, and a turn at taint 3 — a web/search/mcp result, the one case that still
+ * reaches the ceiling — is still a flat `deny/taint_exceeded`: this widened
+ * the ceiling by exactly one step, not to the top of the scale. Asserted as a
+ * cost, not just a non-regression, in `agent/tools/shell.test.ts` §"the cost,
+ * stated as a test".
  */
 export function formatExecOutcome(
   command: string,

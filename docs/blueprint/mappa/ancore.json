@@ -501,22 +501,22 @@
   },
   "agent/tools/fs.ts:324": {
     "path": "agent/tools/fs.ts",
-    "line": 324,
+    "line": 339,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:326": {
     "path": "agent/tools/fs.ts",
-    "line": 326,
+    "line": 341,
     "testo": "{"
   },
   "agent/tools/fs.ts:340": {
     "path": "agent/tools/fs.ts",
-    "line": 340,
+    "line": 341,
     "testo": "{"
   },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
-    "line": 360,
+    "line": 355,
     "testo": "{"
   },
   "agent/tools/fs.ts:62": {
