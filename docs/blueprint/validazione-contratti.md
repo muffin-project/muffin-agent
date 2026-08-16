@@ -32,6 +32,24 @@ rivalidato:        2026-08-15 — `slice/taint-in-ingresso` (ADR-0044) tocca
                    svuota la cache (`agent/loop.ts:1181-1186`), la chiave di
                    memoizzazione include il taint (`:1189`), il recall resta
                    piegato nel pre-loop (`:411-412`).
+
+rivalidato:        2026-08-16 — giro 2 del judge su PR #28: `throwTier`
+                   obbligatorio su `RegisteredTool`, il catch di `runTool` in
+                   `agent/loop.ts` recintato+tainted, `agent/tools/mcp.ts`
+                   recinta il proprio errore di connessione, `sys.shell` a
+                   `maxTaint: 2` (decisione owner). Tocca di nuovo
+                   `agent/loop.ts`/`agent/runtime.ts` — stessa condizione di
+                   sopra — e in più un merge di `origin/dev` (PR #39 e altre)
+                   nello stesso worktree, che da solo già invaliderebbe la base
+                   precedente per la regola scritta sopra. Riga riscritta: §1.3
+                   (shell/filesystem — `ASK`, non più `DENY`, a taint 2). Base
+                   rimisurata nel worktree DOPO il merge, senza pipe:
+                   `npx tsc --noEmit` → exit 0
+                   `npx vitest run`  → exit 0, 101 file, 1118 passati, 1 skipped
+                   Il salto nei totali (88→101 file, 996→1118 test) viene in
+                   massima parte dal merge di `origin/dev`, non da questa slice
+                   da sola — i due non sono confrontabili come "prima/dopo" di
+                   un fix.
 ```
 
 > **Cos'è.** `09-contratti-m0-m1.md` si dichiara **normativo**; `03-threat-model.md`
