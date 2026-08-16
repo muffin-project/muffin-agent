@@ -25,8 +25,8 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
 - A2/A3: `identity.md` è template e manca il taglio persona dell'owner (suoi).
 - B2: turno lungo su Telegram — una chiamata (`enqueueTurn` nel connector); per
-  decisione owner si chiude **al test di prod**. B3/B4/B5 sono in `dev` con
-  #41 (in merge). B8/B14 sono READY con #42.
+  decisione owner si chiude **al test di prod**. B3/B4/B5 sono READY con #41,
+  B8/B14 con #42, C4/C6 con #35, E4 con #40.
 - B15/B16: binding owner nel RoT e envelope tipizzato universale. Metà fatta
   con #42 (`identify()` unica su Telegram e Discord, DM-only su `channel_type`);
   decisione owner: il pairing scrive e **sigilla da solo** il binding.
@@ -44,16 +44,16 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 - Circa trenta righe `?`: da chiudere una alla volta con uno scenario
   dell'harness di accettazione (E4, READY, job CI verde su `dev`).
 
-**Non integrato.** Solo `slice/turno-sospeso` (PR #41, ultime due correzioni:
-corsia unica del modello obbligatoria, «risposta senza indirizzo» persistita).
-Nessun lavoro vale READY prima di integration test, wiring di produzione,
+**Non integrato.** Nessuna slice: le quattro morte il 15/08 sono tutte in `dev`
+(#35, #40, #41, #42). Prossimo checkpoint: `dev`→`main` con verifica integrata
+nuova, così l'owner prova Muffin. Nessun lavoro vale READY prima di integration test, wiring di produzione,
 failure path, scenario reale, documenti/stato e percorso di chiusura di
 `ORCHESTRATION.md` §11.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Il 16/08 sono entrate in `dev` **PR #28/#29/#35/#36/#37/#39/#40/#42/#43** (oltre
+Il 16/08 sono entrate in `dev` **PR #28/#29/#35/#36/#37/#39/#40/#41/#42/#43** (oltre
 a #30–#34 e a **#32** `dev`→`main` della notte). Metodo corretto dopo la
 giornata: le quattro slice-epic (4–5k righe) hanno richiesto 2–3 giri di judge
 ciascuna e conflitti a ogni merge sui file generati della mappa; da qui in poi
