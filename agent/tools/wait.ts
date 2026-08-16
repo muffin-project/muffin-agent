@@ -54,6 +54,34 @@ export const waitCapability: CapabilityDecl = {
    */
   risk: 'medium',
   /**
+   * **`3`, and it has to be stated** — the class default would make this tool
+   * unusable in the one case it exists for.
+   *
+   * `defaultMaxTaint.medium` is 1 (`core/policy/matrix.ts`), so without this
+   * line the canonical wait — *"leggi la pagina, aspetta un'ora, ricontrolla"* —
+   * is denied `taint_exceeded` the moment the page is read. The agent would be
+   * able to wait only about things it had not looked at, which is close to
+   * never, and the failure would arrive as a refusal the owner reads as a bug.
+   *
+   * Raising the ceiling here is safe for a reason specific to this capability
+   * rather than as a general leniency, and the reason is the whole argument:
+   *
+   *  - **it exports nothing.** No bytes leave the process, no message is sent,
+   *    no file is written. It sets two columns on our own row.
+   *  - **it arms nothing outward.** The only barrier it can request is "has
+   *    this local pid exited" — a *read* of the host's own process table.
+   *  - **waiting buys the turn no privilege.** The resumed turn restores its
+   *    taint from the record (ADR-0042), so it comes back exactly as tainted as
+   *    it went to sleep. If suspension laundered taint this ceiling would be
+   *    the wrong call; it is precisely because it does not that this is safe.
+   *
+   * The risk class stays `medium`, because that answers a different question —
+   * what the call *commits* (a row, a context, a resumed prefix nothing meters
+   * yet). Taint ceiling and risk class are two axes and this tool sits at
+   * different points on each. See ADR-0047.
+   */
+  maxTaint: 3,
+  /**
    * `'yes'`: nothing landed in the world, and the barrier can be cleared by
    * finishing the turn. There is no state outside our own database to undo.
    */

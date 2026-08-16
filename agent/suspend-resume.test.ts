@@ -334,21 +334,64 @@ describe('e poi torna', () => {
 });
 
 describe('la taint viene dalla riga, non dal principal', () => {
-  it('un turno che aveva letto il web riprende sporco', async () => {
+  /**
+   * The assertion is on what the resumed turn is **allowed to do**, not on what
+   * the row says.
+   *
+   * The first version of this test read `turns.get(id).taint` after the resume
+   * and called it proof. It was not: that column is written by `endToolCall`
+   * with `max()`, so it says 3 whether or not the resume ever restored
+   * anything — and mutating `makeSnapshot(…, record.taint)` to
+   * `makeSnapshot(…, 0)` left the whole suite green. A test that survives the
+   * removal of the thing it is named after is measuring something else.
+   *
+   * So the resumed turn calls a capability whose ceiling is **below** the taint
+   * it climbed to. If the snapshot came back off the row, the kernel refuses it
+   * `taint_exceeded`. If it were rebuilt from the principal, the same call is
+   * allowed — which is the fetch-then-act pattern reopened by a new door, and
+   * it fails loudly here instead of quietly in production.
+   */
+  it('il turno ripreso GIRA alla taint che aveva raggiunto, e il kernel lo dimostra', async () => {
     const w = world([
       call('http_get', {}, 'h1'),
       call('wait', { seconds: 3600 }, 'w1'),
-      answer('fatto'),
+      // …resume happens here…
+      call('http_get', {}, 'h2'),
+      answer('non posso più leggere: sono sporco da prima di addormentarmi'),
     ]);
+
     const first = await runTurn(w.deps, start(w));
-    // Tier 3 landed on the row, not only in a closure that died with the turn.
+    // The wait really armed — without this the rest would be asserting about a
+    // turn that simply ran to the end.
+    expect(first.stopped).toBe('suspended');
+    expect(w.turns.get(first.turnId)?.status).toBe('waiting');
     expect(w.turns.get(first.turnId)?.taint).toBe(3);
 
-    await resumeTurn(w.deps, first.turnId);
-    // Still 3 after the resume. Rebuilding it from the principal would have
-    // restarted at 0 a turn that had already read the web — the fetch-then-act
-    // pattern the kernel exists to close, reopened by a new door.
-    expect(w.turns.get(first.turnId)?.taint).toBe(3);
+    const resumed = await resumeTurn(w.deps, first.turnId);
+    expect('why' in resumed).toBe(false);
+
+    // 1. The kernel's own answer, on the resumed turn's second fetch. `net.http`
+    //    is medium risk with no `maxTaint`, so its ceiling is 1: at taint 3 this
+    //    is a refusal, at taint 0 it is an allow.
+    const afterWaking = prompt(w.provider.seen[w.provider.seen.length - 1]);
+    expect(afterWaking).toMatch(/Rifiutato dal kernel dei permessi \(taint_exceeded\)/);
+
+    // 2. And the value the turn reports, which is the same snapshot read from
+    //    the other end.
+    expect(!('why' in resumed) && resumed.taint).toBe(3);
+  });
+
+  it('un turno pulito che riprende resta pulito — il ripristino non sporca per sicurezza', async () => {
+    // The other direction. Without it the assertion above would pass on a
+    // resume that simply started everything at tier 3.
+    const w = world([call('wait', { seconds: 3600 }, 'w1'), call('http_get', {}, 'h1'), answer('letto')]);
+    const first = await runTurn(w.deps, start(w));
+    expect(first.stopped).toBe('suspended');
+
+    const resumed = await resumeTurn(w.deps, first.turnId);
+    expect(!('why' in resumed) && resumed.stopped).toBe('answered');
+    // The fetch went through, so the resumed turn really was at 0 when it ran.
+    expect(prompt(w.provider.seen[w.provider.seen.length - 1])).toContain('la pagina dice X');
   });
 });
 

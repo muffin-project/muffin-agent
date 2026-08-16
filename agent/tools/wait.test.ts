@@ -120,6 +120,34 @@ describe('cosa dichiara al kernel e alla registrazione degli esiti', () => {
     expect(new Set(barriers.map((b) => JSON.stringify(b))).size).toBe(1);
   });
 
+  it('il kernel lo permette a ogni taint, perché il caso canonico parte da una pagina letta', () => {
+    /**
+     * The regression this pins: `defaultMaxTaint.medium` is 1, so without an
+     * explicit `maxTaint` the sequence this tool exists for — read a page, wait
+     * an hour, check again — is denied `taint_exceeded` at the first step.
+     *
+     * All four tiers, not just 3: a ceiling that happened to allow 3 while
+     * denying 2 would be a different bug wearing the same green tick.
+     */
+    const decide = createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map([[waitCapability.id, waitCapability]]),
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+    for (const taint of [0, 1, 2, 3] as const) {
+      const decision = decide({
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        tenant: 'host',
+        capability: waitCapability.id,
+        resource: { kind: 'none' },
+        args: {},
+        taint,
+      });
+      expect(decision.effect, `taint ${taint}`).toBe('allow');
+    }
+  });
+
   it('il kernel lo nega a un membro di gruppo, non solo il menu', () => {
     // `hostOnly` is a fail-closed answer to a question the threat model has not
     // examined: a tier-2 member arming a persistent wait. `visibleTools` keeps
