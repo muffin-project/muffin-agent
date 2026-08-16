@@ -1126,7 +1126,7 @@
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
-    "line": 139,
+    "line": 164,
     "testo": "export class DiscordConnector {"
   },
   "connectors/telegram/connector.ts:153": {
@@ -1866,7 +1866,7 @@
   },
   "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 240,
+    "line": 244,
     "testo": "private settle(job: Job, outcome: JobOutcome, delivery: DeliveryOutcome): void {"
   },
   "core/session/store.ts:35": {
@@ -2156,7 +2156,7 @@
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 253,
+    "line": 260,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
