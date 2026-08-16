@@ -226,6 +226,20 @@ export type UncertainCall = {
   startedAt: string;
 };
 
+/**
+ * What `doctor` and the boot sequence ask about the table.
+ *
+ * Two different questions, kept apart because their remedies are: an
+ * *interrupted* turn is a thing that already went wrong and may have left
+ * effects, a *waiting* one is a promise that only comes true if some process is
+ * running the lane.
+ */
+export type TurnHealth = {
+  total: number;
+  waiting: { count: number; oldestWakeAt: string | null };
+  interrupted: InterruptedTurn[];
+};
+
 /** An interrupted turn, with everything needed to say what may have happened. */
 export type InterruptedTurn = {
   id: string;
@@ -381,6 +395,7 @@ export class TurnStore {
   private readonly openCallsStmt: Database.Statement;
   private readonly interruptedStmt: Database.Statement;
   private readonly countStmt: Database.Statement;
+  private readonly waitingStmt: Database.Statement;
   private readonly claimStmt: Database.Statement;
   private readonly suspendStmt: Database.Statement;
   private readonly dueStmt: Database.Statement;
@@ -455,6 +470,19 @@ export class TurnStore {
        ORDER BY updated_at DESC`,
     );
     this.countStmt = db.prepare(`SELECT count(*) AS n FROM turns`);
+    /**
+     * Suspended turns, and the one that has been owed longest.
+     *
+     * `health` used to count only `interrupted`, so a turn suspended from the
+     * REPL or from `muffin run` — neither of which owns a lane — sat at
+     * `waiting` for ever and **nothing said so**. That is the failure this whole
+     * inventory exists to stop shipping: a mechanism that works, a row that is
+     * correct, and no path by which an owner ever learns the wake-up is owed to
+     * a process that is not running.
+     */
+    this.waitingStmt = db.prepare(
+      `SELECT count(*) AS n, min(wake_at) AS oldest FROM turns WHERE status = 'waiting'`,
+    );
 
     /**
      * The claim, as one statement.
@@ -830,7 +858,7 @@ export class TurnStore {
    * month would sit in `doctor` for ever, next to one from ten minutes ago that
    * actually wants looking at.
    */
-  health(options: { now?: Date; windowMs?: number } = {}): { total: number; interrupted: InterruptedTurn[] } {
+  health(options: { now?: Date; windowMs?: number } = {}): TurnHealth {
     const now = options.now ?? this.clock();
     const since = options.windowMs === undefined ? '' : new Date(now.getTime() - options.windowMs).toISOString();
     const total = (this.countStmt.get() as { n: number }).n;
@@ -849,8 +877,13 @@ export class TurnStore {
     const abandoned = rows.filter(
       (r) => r.status === 'interrupted' || heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
     );
+    const waiting = this.waitingStmt.get() as { n: number; oldest: string | null };
     return {
       total,
+      // Not windowed, unlike `interrupted`: a crash from last month is old news,
+      // but a turn still suspended from last month is a turn still owed — the
+      // window would hide exactly the worst case.
+      waiting: { count: waiting.n, oldestWakeAt: waiting.oldest },
       interrupted: abandoned.map((r) => ({
         id: r.id,
         surface: r.surface,
@@ -902,7 +935,7 @@ export function describeInterrupted(turn: InterruptedTurn): string {
 export function readTurnHealth(
   db: Database.Database,
   windowMs: number = DOCTOR_WINDOW_MS,
-): { total: number; interrupted: InterruptedTurn[] } | null {
+): TurnHealth | null {
   try {
     db.prepare(`SELECT 1 FROM turns LIMIT 1`).get();
   } catch {
