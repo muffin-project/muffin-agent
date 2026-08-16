@@ -748,3 +748,46 @@ When `gh pr list` failed, an empty PR list meant every registered branch became
 with PR numbers and remote state. Anything ancestry cannot settle during a
 GitHub outage enters a separate `SCONOSCIUTE` section that explicitly forbids
 resume until verification; it never enters `APERTE`.
+
+## A guarantee that holds on two paths and not the third is not a guarantee **(this build)**
+
+Recall finds a fact two ways: a one-hop graph expansion from a matched entity,
+and a semantic match against the vector index. Making `--history` and
+`asOf` correctly exclude, include and label a superseded fact touched only the
+graph path — because that is the path the bug report and the acceptance
+scenario were both written against. The vector half kept calling
+`provenanceOf`, a method with no notion of `expired_at` at all, and fused
+every semantic hit with no `expired` field, ever, on any path, under any
+option.
+
+Nothing re-embeds a fact when it is superseded, so its old text stays in
+`chunks_vec` and stays semantically findable forever. A combinatorial sweep
+over `asOf`/`surface`/`since`/`until`/`neighbours` (60 combinations) returned
+the retired fact looking active in all 60 before the fix, 0 after — not a
+narrow edge case, the default behaviour of the half that answers a paraphrase.
+The same shape a few lines away would have made the fix in the graph hop look
+complete: `--history` would have worked, `muffin memory search "chi era Marco"`
+would have worked, and a semantically-phrased question against the same data
+would have quietly answered with a belief that had already been retired.
+
+**Instead:** the vector half now reads a fact through `factById` (the same
+full row the graph hop reads) rather than through a second, narrower
+provenance query, and gates on `expiredAt`/`includeSuperseded` with the exact
+same `successorOf` helper the graph hop calls — one rule, read from two call
+sites, instead of two copies that could drift. The regression test was run
+against the original vector-half code with the gate temporarily removed and
+confirmed to fail before being restored (`core/memory/recall.test.ts`, "does
+not let a superseded fact surface through the semantic half either").
+
+## Cleanup after a merge is conditional on the merge, not on the intent to merge
+
+`gh pr merge 39` failed (the map file had been regenerated on both sides), the
+failure was printed, and the next command in the same script still deleted the
+branch — locally and on `origin`. GitHub then closed the PR because its head no
+longer existed. The commit was recovered from the object store and the branch
+re-pushed, so nothing was lost; the PR had to be reopened by hand.
+
+**Instead:** delete a branch only after reading `mergedAt` for that PR (or
+`git merge-base --is-ancestor`), never in the same breath as the merge command.
+The rule was already written for the reverse case (`cmd | tail` hides the exit
+status): the mistake here was acting on the *plan* rather than on the *state*.

@@ -162,10 +162,16 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
   return {
     capability: searchCapability.id,
     spec: searchSpec,
+    // `throwTier: 0` — `backend.search()` is wrapped in its own `try`/`catch`
+    // two lines down and never escapes this handler. `tavilyBackend`'s own
+    // throws (`tavily ${status}…`, `risposta non riconosciuta: …`) carry a
+    // status code and our own schema-mismatch text, never the response body —
+    // the actual snippets only ever leave through the fenced, tier-3 `return`.
+    throwTier: 0,
     handler: async (args) => {
       const parsed = searchArgs.safeParse(args);
       if (!parsed.success) {
-        return { content: 'invalid arguments: query is required (max 400 chars)', isError: true };
+        return { content: 'invalid arguments: query is required (max 400 chars)', isError: true, tier: 0 };
       }
 
       let hits: SearchHit[];
@@ -173,10 +179,15 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
         hits = await backend.search(parsed.data.query, AbortSignal.timeout(FETCH_TIMEOUT_MS));
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        // No tier on an error: nothing from the provider reached us, so there is
-        // nothing to be tainted by, and raising taint on a failure would silently
-        // narrow what the rest of the turn is allowed to do.
-        return { content: `ricerca fallita (${backend.id}): ${detail}`, isError: true };
+        // `tier: 0` on an error: nothing from the provider reached us, so there
+        // is nothing to be tainted by, and raising taint on a failure would
+        // silently narrow what the rest of the turn is allowed to do.
+        //
+        // This used to be *no* tier at all, and it meant the same thing only by
+        // accident — the loop treated "unstated" and "clean" as one value. Now
+        // it is the answer to a question the type asks, which is the difference
+        // between a decision and a gap that happens to be harmless here.
+        return { content: `ricerca fallita (${backend.id}): ${detail}`, isError: true, tier: 0 };
       }
 
       if (hits.length === 0) {

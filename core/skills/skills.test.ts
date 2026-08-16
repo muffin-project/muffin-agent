@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { makeSkillTool } from '../../agent/tools/skill.js';
 import { discoverSkills, parseSkill, skillsPromptSection } from './skills.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
+const ctx = toolContext();
 
 function homeWithSkill(name: string, content: string): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-skills-'));

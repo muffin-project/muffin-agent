@@ -90,6 +90,24 @@ describe('memory store', () => {
     expect(hits[0]?.content).toContain('Serra');
   });
 
+  it("U2: factsAsOf never returns another tenant's facts, even handed its raw subject id directly", () => {
+    // Defence in depth, deliberately not routed through `entitiesByName` —
+    // that method already filters by tenant, so a test built on it would
+    // never notice `factsAsOf` losing its own `f.tenant_id = ?` clause. The
+    // raw id is what a caller with a bug somewhere else could still hand in,
+    // and this method's own WHERE clause has to be the line that holds anyway.
+    const s = store();
+    const groupSubject = s.upsertEntity(GROUP, 'Marco', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, GROUP, 'nota di gruppo');
+    s.addFact({
+      tenantId: GROUP, subjectId: groupSubject, predicate: 'claims', objectValue: 'IBAN XX',
+      episodeId: ep, trustTier: 2, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+    });
+
+    const leaked = s.factsAsOf(HOST, groupSubject, '2026-08-04T10:00:00Z');
+    expect(leaked).toHaveLength(0);
+  });
+
   it('accumulates set-valued predicates instead of expiring the previous one', () => {
     // The exact regression the old system had: a second interest silently
     // retired the first. Accumulating wrongly is visible; deleting wrongly is not.
@@ -296,5 +314,35 @@ describe('memory store', () => {
       EXTRACTION_VERSION,
     );
     expect(s.stats(HOST).pending).toBe(0);
+  });
+
+  it('attribuisce a un file del vault il tier della sua prova peggiore, non della migliore', () => {
+    // A document is only as trustworthy as its worst chunk. `min()` reported the
+    // opposite — a tier-3 web import sitting next to one owner-grade chunk was
+    // displayed as tier 0 — and the whole point of the tier is that it never
+    // rises. `maxTierForContent` and `recallTaint` already take the maximum for
+    // exactly this reason; this aggregate was the one place that disagreed.
+    const s = store();
+    const chunk = (tier: 0 | 1 | 2 | 3, content: string) =>
+      s.addEpisode({
+        tenantId: HOST,
+        connector: 'vault',
+        threadKey: 'note.md',
+        role: 'user',
+        kind: 'document',
+        content,
+        vaultPath: 'note.md',
+        trustTier: tier,
+        createdAt: '2026-08-04T10:00:00Z',
+      });
+    // Mixed live chunks under one path are reachable: `reindex` writes the new
+    // chunks inside the loop and only supersedes the old ones after it, so a
+    // crash in between leaves both generations live under the same file.
+    chunk(0, 'scritto da me');
+    chunk(3, 'incollato dal web');
+
+    const row = s.vaultPaths(HOST).find((v) => v.vaultPath === 'note.md');
+    expect(row?.chunks).toBe(2);
+    expect(row?.trustTier).toBe(3);
   });
 });

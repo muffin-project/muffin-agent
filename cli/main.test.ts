@@ -245,3 +245,108 @@ describe('muffin memory review — the register the owner can finally act on', (
     expect(after.out).toContain('niente da decidere');
   });
 });
+
+describe('muffin memory search — the temporal boundary is checked before anything opens', () => {
+  /**
+   * The three failure paths of C4/C6, through the real argv. All three are
+   * rejected before `cmdMemorySearch` ever calls `buildRuntime`, which is what
+   * makes them testable without a provider or an embedder: a home that was
+   * never even `init`-ed proves the point on its own — if the check reached
+   * the runtime, spawning against an un-initialised home would fail for an
+   * unrelated reason (no config) and these tests would be exercising the wrong
+   * failure.
+   */
+  it('rejects an unreadable --as-of instead of silently searching without it', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--as-of', 'not-a-date']);
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('non è una data leggibile');
+  });
+
+  it('rejects --since after --until — a window that cannot contain anything', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
+      'memory', 'search', 'test', '--since', '2026-08-01', '--until', '2026-01-01',
+    ]);
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('non può contenere niente');
+  });
+
+  it('rejects an --as-of that has not happened yet', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--as-of', '2099-01-01']);
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('nel futuro');
+  });
+
+  it('does not reject --history even though EVERY_INSTANT sorts after any date lexicographically', () => {
+    // 'all' > any ISO date string under a naive `>` comparison ('a' > '2' in
+    // ASCII) — the same risk `checkTemporalWindow`'s unit tests cover, checked
+    // again here at the boundary that actually calls it from argv.
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memory', 'search', 'test', '--history']);
+    // Never 78: an un-initialised home fails later, trying to open the
+    // runtime — the one failure mode this test must not produce is the
+    // temporal-boundary rejection.
+    expect(r.code).not.toBe(78);
+  });
+});
+
+describe('muffin memory search — --surface and --around actually reach a result', () => {
+  /**
+   * U1's other half. The tests above prove three ways argv gets rejected
+   * *before* `cmdMemorySearch` calls `buildRuntime`; none of them prove a
+   * flag that argv accepts ever arrives at a real result. `--surface` and
+   * `--around` are parsed into `values` two subcommand-switch cases up
+   * (`cmdMemory`'s `search` branch, `cli/main.ts`) and folded into the options
+   * object `cmdMemorySearch` receives — a step no unit test reaches, because
+   * `cli/memory.test.ts` calls `cmdMemorySearch` directly and skips exactly
+   * this argv-to-options translation.
+   */
+  it('--surface reaches recall through the real binary, not just through cmdMemorySearch directly', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-surface']).code).toBe(0);
+
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    const store = new MemoryStore(db);
+    store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    store.addEpisode({
+      tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    db.close();
+
+    const r = muffin(env, ['memory', 'search', 'promemoria', '--surface', 'telegram']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('da telegram');
+    expect(r.out).not.toContain('dal terminale');
+  });
+
+  it('--around reaches recall through the real binary, attaching the surrounding messages', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-around']).code).toBe(0);
+
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    const store = new MemoryStore(db);
+    const fill = (content: string, minute: number) =>
+      store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+      });
+    fill('un messaggio prima', 1);
+    const anchor = fill('il codice segreto è ZK-9', 2);
+    fill('un messaggio dopo', 3);
+    db.close();
+
+    const r = muffin(env, ['memory', 'search', 'codice segreto', '--around', '1']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`intorno a #${anchor}`);
+    expect(r.out).toContain('un messaggio prima');
+    expect(r.out).toContain('un messaggio dopo');
+  });
+});

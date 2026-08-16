@@ -2,9 +2,11 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { DELIVERED } from '../../core/surface/types.js';
 import { runInit } from '../../cli/init.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { Scheduler, type JobOutcome } from '../../core/scheduler/scheduler.js';
+import { ModelLane } from '../../core/turns/model-lane.js';
 
 /**
  * The scheduler, driven through the runtime's OWN job store — the production
@@ -30,10 +32,18 @@ describe('scheduler acceptance — the runtime job store is real and drivable', 
     expect(runtime.jobs.list().map((j) => j.id)).toEqual([job.id]);
 
     const delivered: Array<[string, string]> = [];
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'ecco il brief' }));
-    const sched = new Scheduler(runtime.jobs, runJob, async (ch, text) => {
-      delivered.push([ch, text]);
-    });
+    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'ecco il brief', turnId: 'turn-test' }));
+    const sched = new Scheduler(
+      runtime.jobs,
+      runJob,
+      async (ch, text) => (delivered.push([ch, text]), DELIVERED),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     // Fire time for '* * * * *' from now is within a minute; drive due directly.
     sched.tick(new Date(job.nextFireAt.getTime() + 1000));

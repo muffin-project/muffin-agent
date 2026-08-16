@@ -23,37 +23,54 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
 **Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario completo):
 
-- A2/A3: `identity.md` è template e manca il taglio persona dell'owner.
-- B2–B5: turno lungo, `wait`, `todo`, resume e budget per-job. Il record durevole
-  esiste; i consumer sono nel worktree sporco `slice/turno-sospeso`.
-- B8/B14: delivery remota e allegati prodotti; lavoro sporco in
-  `slice/superfici`.
-- B15/B16: binding owner nel RoT e envelope tipizzato universale non esistono.
-  Telegram prova `from.id`+privato contro impersonazione, ma conserva il binding
-  nella config ordinaria e non tipizza ogni metadata/multimodale.
-- C4/C6: recall storico e grafo temporale (`slice/memoria-nel-tempo`, sporco).
-- C8: audio senza trascrizione. E4: acceptance harness (`slice/accettazione`,
-  sporco). Gli altri `?` restano debito anche quando non sono blocker nominati.
+- A2/A3: `identity.md` è template e manca il taglio persona dell'owner (suoi).
+- B2: turno lungo su Telegram — una chiamata (`enqueueTurn` nel connector); per
+  decisione owner si chiude **al test di prod**. B3/B4/B5 sono READY con #41,
+  B8/B14 con #42, C4/C6 con #35, E4 con #40.
+- B15/B16: binding owner nel RoT e envelope tipizzato universale. Metà fatta
+  con #42 (`identify()` unica su Telegram e Discord, DM-only su `channel_type`);
+  decisione owner: il pairing scrive e **sigilla da solo** il binding.
+- C8: audio — decisione owner: se il modello ha la capability, audio diretto;
+  altrimenti trascrizione locale con whisper/faster-whisper; fornitore per
+  capability scelto dalla CLI (`muffin provider set audio …`), senza plugin.
+- D2/D3/D11: scrittura file, undo, checkpoint — decisione owner: **quattro
+  classi + journal per turno** (copia prima della mutazione in
+  `~/.muffin/undo/<turno>/`, undo che riallinea filesystem e turno); vault
+  resta append-only.
+- D12 (nuova): l'ASK deve mostrare l'azione specifica (comando, URL, pid) e il
+  perché del taint. E1: budget per-job (testato, dinamico).
+- A9 (nuova): `muffin init --local` riusa i segreti persistiti per
+  un'installazione pulita di prova.
+- Circa trenta righe `?`: da chiudere una alla volta con uno scenario
+  dell'harness di accettazione (E4, READY, job CI verde su `dev`).
 
-**Non integrato.** Oltre ai quattro worktree sopra, i branch puliti
-`slice/hermes` e `slice/taint-in-ingresso` non sono fusi in `dev`. Nessun lavoro
-vale READY prima di integration test, wiring di produzione, failure path,
-scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
+**Non integrato.** Nessuna slice: le quattro morte il 15/08 sono tutte in `dev`
+(#35, #40, #41, #42). Prossimo checkpoint: `dev`→`main` con verifica integrata
+nuova, così l'owner prova Muffin. Nessun lavoro vale READY prima di integration test, wiring di produzione,
+failure path, scenario reale, documenti/stato e percorso di chiusura di
+`ORCHESTRATION.md` §11.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Integrate: **PR #30/#31/#33** in `dev`. **PR #32** `dev`→`main` ha ricevuto
-`ADJUST` sul delta completo. Le cinque correzioni viaggiano nella
-**PR #34** `slice/adjust-main-promotion`→`dev`. Il primo judge della PR ha
-trovato un residuo cross-tenant: il tenant era propagato, ma l'arrivo chiamava
-il full scan del vault condiviso. La head usa ora `reindexPath` e una fixture con
-host + due gruppi; richiede CI verde e un judge nuovo prima del merge. Solo dopo
-PR #32 riceve una verifica integrata nuova.
+Il 16/08 sono entrate in `dev` **PR #28/#29/#35/#36/#37/#39/#40/#41/#42/#43** (oltre
+a #30–#34 e a **#32** `dev`→`main` della notte). Metodo corretto dopo la
+giornata: le quattro slice-epic (4–5k righe) hanno richiesto 2–3 giri di judge
+ciascuna e conflitti a ogni merge sui file generati della mappa; da qui in poi
+**una slice = una riga di M5-BIS, ≤ ~500 righe, un judge sonnet, tetto due
+giri, una alla volta**; la meccanica (merge, rigenerazioni, correzioni da una
+riga, stato) la fa l'orchestratore. `dev`→`main` va promossa con una verifica
+integrata nuova.
 
-**Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
-modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
-identity/persona. Le decisioni sicurezza 0045/0046 sono invece ratificate.
+**Decisioni owner del 16/08.** Reversibilità: quattro classi + journal per turno
+(sopra). Audio: whisper/faster-whisper locale, fornitore per capability da CLI.
+`sys.shell` dopo una lettura: **ASK**, non deny (`maxTaint: 2`, ADR-0044
+§Revisione). Prompt: tutti i prompt puro-Muffin in `defaults/prompts/*.md`
+importati; `identity.md`/`voice.md` restano in `~/.muffin/` (identity nel RoT) —
+da capire meglio quali, per ora ok. Ancora aperte: scope lettura sandbox ·
+`mcp.*` per-tool · `ricorda` scrive o propone · lingua docs pubblici. Richiesta:
+audit dei comandi CLI e degli slash (tenere/modificare/eliminare, mancanti,
+tenant sugli slash: alcuni solo owner).
 
 **File load-bearing — LEGGI PRIMA di lavorare:**
 
@@ -497,6 +514,55 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
 
+**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0044;
+numeri di quel giorno, pre-merge: 88 file / 996 test). Il taint del turno saliva
+in un punto solo del loop, e quel punto leggeva un campo **opzionale**:
+`if (outcome.tier !== undefined)`. Chi non lo dichiarava — `fs_read`, `fs_list`,
+`shell_run`, `process_list` — portava byte di qualcun altro dentro il turno
+**lasciando il taint a zero**. Non un dettaglio: il docstring di `fs.read`
+argomenta il proprio soffitto alto appoggiandosi all'egress gate, che legge quel
+taint, quindi *la difesa citata nel file non poteva scattare*. Catena misurata
+prima del fix: `fs_read` di un file con istruzioni iniettate → taint 0 →
+`http_get` fuori allowlist → **ask** → owner approva → fetch. Dopo: **deny/
+resource_denied**, e l'owner non viene nemmeno messo nella posizione di dire sì.
+Due metà: `tier` **obbligatorio** su `ToolOutcome` (un tool nuovo non compila se
+non risponde alla domanda — il guardiano è `tsc`, che gira in CI) e
+`DISK_TIER = 2` per tutto ciò che entra dal disco, `shell_run` compreso perché
+`cat` è `fs_read` da un'altra porta. Trovato girando un'affermazione **già
+marcata VERIFICATA**: era vera, e nessuno aveva fatto la sua negativa
+(`validazione-contratti.md` §6, addendum).
+
+**Giro 2 (judge su PR #28, 2026-08-16) — la stessa domanda sul percorso di
+fallimento.** `tier` obbligatorio chiudeva solo il `return` di un handler; il
+`catch` di `runTool` restava esattamente al difetto originale — testo non
+recintato in sessione, `raiseTaint` mai chiamato, `tier: undefined` nel record.
+Porta reale trovata dal judge: `agent/tools/mcp.ts`, `connection.call` →
+`client.callTool`, lascia passare un `McpError` non catturato il cui `message` è
+testo del SERVER terzo — un server compromesso lanciava invece di rispondere, e
+una chiamata fallita costava zero (a differenza di una riuscita, che chiude
+l'egress al soffitto), quindi era ripetibile all'infinito. Chiuso: `throwTier:
+TrustTier` obbligatorio su `RegisteredTool` (0 dove il throw è provabilmente
+nostro, verificato per ognuno; 3 per `mcp.*`), il catch di `runTool` alza il
+taint per `tool.throwTier` invece di niente, `mcp.ts` recinta il proprio errore
+di connessione nello stesso `try`/`catch` di `http.ts`/`search.ts`. Nella stessa
+sessione, decisione owner sulla riga aperta dall'ADR: `sys.shell` passa a
+`maxTaint: 2` — dopo una lettura `shell_run` torna `ask` (non più `deny/
+taint_exceeded`), l'auto-allow resta irraggiungibile (richiede taint 0),
+l'egress resta chiuso; *"leggi il file e poi lancia i test"* torna completabile
+con un sì. Emendamento registrato in riga in `03-threat-model.md` §3 e come
+`## Revisione — 2026-08-16` in ADR-0044, non una riscrittura. Numeri dopo il
+giro 2, DOPO aver mergiato `origin/dev` (PR #39 e altre, nello stesso worktree —
+il salto nei totali viene per lo più da lì): 101 file / 1118 test, `npx tsc
+--noEmit` exit 0.
+
+Non chiuso, e nominato nel corpo PR: il contenuto di `fs_read` **non è
+recintato**, né sul successo né sul fallimento — solo il taint difende il kernel
+lì; l'`ask` del kernel non mostra il dettaglio dell'azione (comando/URL/pid),
+follow-up dichiarato per la slice successiva. **Chiuso da #39** (mergiata in
+`dev` mentre questa PR era in revisione): la replica dell'agente entrava in
+memoria a `trustTier: 0` anche quando il turno era a 2 — ora scrive
+`snapshot.currentTaint()`.
+
 ## Sessione 2026-08-16 — l'unità è l'agente continuo
 
 La conversazione owner su Muffin e Hermes è stata riletta come critica di
@@ -582,6 +648,19 @@ cablaggio di produzione torna alla scansione completa.
 
 ## Aperto (owner)
 
+0. **Il costo di ADR-0044, una riga sola, e serve il tuo sì o il tuo no.** Dopo un
+   `fs_read`, `shell_run` nello stesso turno è **deny/taint_exceeded** — non un
+   ask: un rifiuto. Vale anche per il secondo `shell_run` di fila. *«Leggi il
+   file e poi lancia i test»* si spezza a metà. È la riga del threat model §3
+   («Shell / filesystem host / processi · taint 2 · DENY — nessun percorso»)
+   applicata a un turno che ha ingoiato byte senza provenienza, ed è coerente;
+   ma è anche la cosa che si sente ogni giorno. Se dici no, la contropartita
+   **non** è togliere il tier alla lettura (riaprirebbe la catena di
+   esfiltrazione): è `maxTaint: 2` su `sys.shell`, che lascia shell un ASK e
+   lascia l'egress chiuso — e che **emenda il threat model**, quindi lo decidi
+   tu. Costo misurato in `agent/tools/shell.test.ts` §«il costo, dichiarato come
+   test». Tocca anche la decisione aperta «scope lettura sandbox», che questa
+   ADR non chiude.
 1. **Approvazione delle 45+ assunzioni** in `08-assunzioni.md`.
 2. **Modello consumer di riferimento**: rivalutare **a metà agosto** se escono i pesi di Qwen 3.8 (27B); altrimenti eval breve tra Qwen3.6-27B/35B-A3B, GPT-OSS-20b e l'incumbent Gemma-4. Budget contenuto per direttiva owner.
 3. **Push/PR**: tutto è committato solo in locale, su entrambi i repo.

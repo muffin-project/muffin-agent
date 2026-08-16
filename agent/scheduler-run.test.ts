@@ -8,12 +8,22 @@ const base: TurnResult = {
   traceId: 't',
   turnId: 't',
   stopped: 'answered',
+  // Nothing here reads it — `jobOutcomeFromTurn` maps a stop reason to a
+  // message. Present because the type requires it, and the type requires it so
+  // that a caller writing something derived from a turn cannot forget to ask.
+  taint: 0,
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 };
 
 describe('jobOutcomeFromTurn', () => {
-  it('an answered turn delivers its text as is', () => {
-    expect(jobOutcomeFromTurn({ ...base, text: 'ecco il brief' })).toEqual({ stopped: 'answered', text: 'ecco il brief' });
+  it('an answered turn delivers its text as is, carrying the row it wrote', () => {
+    // `turnId` is what lets the scheduler settle the *delivery* onto the same
+    // record as the turn — the two outcomes ADR-0042 keeps in two columns.
+    expect(jobOutcomeFromTurn({ ...base, text: 'ecco il brief' })).toEqual({
+      stopped: 'answered',
+      text: 'ecco il brief',
+      turnId: 't',
+    });
   });
 
   it('a queued ASK is turned into a message the owner can act on', () => {
@@ -45,6 +55,7 @@ describe('jobOutcomeFromTurn', () => {
     expect(jobOutcomeFromTurn({ ...base, stopped: 'error', text: 'qualcosa è rotto' })).toEqual({
       stopped: 'error',
       text: 'qualcosa è rotto',
+      turnId: 't',
     });
     expect(jobOutcomeFromTurn({ ...base, stopped: 'budget', text: 'cap raggiunto' }).stopped).toBe('budget');
   });

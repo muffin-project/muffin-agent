@@ -13,6 +13,7 @@ import type { LoopDeps } from '../agent/loop.js';
 import type { ChatResult, Provider } from '../agent/providers/types.js';
 import { seal } from '../core/rot/verify.js';
 import { runInit } from './init.js';
+import { DELIVERED, notDelivered } from '../core/surface/types.js';
 import { cmdObserve } from './observe.js';
 
 /**
@@ -185,7 +186,7 @@ describe('muffin observe', () => {
     const delivered: string[] = [];
 
     // No `deps`: if this path touched the model it could not even build a turn.
-    const code = await cmdObserve(home, [], { now: NOW, deliver: async (_c, t) => void delivered.push(t) });
+    const code = await cmdObserve(home, [], { now: NOW, deliver: async (_c, t) => (delivered.push(t), DELIVERED) });
 
     const text = out.join('');
     expect(code).toBe(0);
@@ -207,7 +208,7 @@ describe('muffin observe', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: { ...runtime.deps, provider: new Scripted(['da quanto non tocchi la tesi?']) },
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(code).toBe(0);
       expect(delivered).toEqual(['da quanto non tocchi la tesi?']);
@@ -228,7 +229,7 @@ describe('muffin observe', () => {
         cmdObserve(home, ['--send'], {
           now: NOW,
           deps: { ...runtime.deps, provider: new Scripted(['primo', 'secondo']) },
-          deliver: async (_c, t) => void delivered.push(t),
+          deliver: async (_c, t) => (delivered.push(t), DELIVERED),
         });
       await send();
       await send();
@@ -291,7 +292,7 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NIGHT,
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(delivered).toEqual([]);
       // A defer that burns the anchor is a permanent silence about that entity.
@@ -324,7 +325,7 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW, // midday: the only reason to stay quiet is the budget
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(delivered).toEqual([]);
       expect(firedAnchors(home)).toEqual([]);
@@ -346,7 +347,7 @@ describe('muffin observe · the gate rules, and delivery obeys', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (c) => void channels.push(c),
+        deliver: async (c) => (channels.push(c), DELIVERED),
       });
       expect(code).toBe(0);
       expect(channels).toEqual(['telegram']);
@@ -476,7 +477,7 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NIGHT,
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(code).toBe(0);
       expect(err.join('')).toContain(note);
@@ -510,7 +511,7 @@ describe('muffin observe · quiet hours come from the RoT', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW, // 13:00 in Rome: inside the file's window, outside the fallback's
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(code).toBe(0);
       expect(delivered).toEqual([]);
@@ -543,7 +544,7 @@ describe('muffin observe --send · one at a time', () => {
     const delivered: string[] = [];
     try {
       const send = () =>
-        cmdObserve(home, ['--send'], { now: NOW, deps: rt.deps, deliver: async (_c, t) => void delivered.push(t) });
+        cmdObserve(home, ['--send'], { now: NOW, deps: rt.deps, deliver: async (_c, t) => (delivered.push(t), DELIVERED) });
       const codes = (await Promise.all([send(), send()])).sort((a, b) => a - b);
 
       expect(delivered).toEqual(['primo']);
@@ -572,7 +573,7 @@ describe('muffin observe --send · one at a time', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(delivered).toEqual([]);
       expect(firedAnchors(home)).toEqual([]);
@@ -595,7 +596,7 @@ describe('muffin observe --send · one at a time', () => {
       const code = await cmdObserve(home, ['--send'], {
         now: NOW,
         deps: rt.deps,
-        deliver: async (_c, t) => void delivered.push(t),
+        deliver: async (_c, t) => (delivered.push(t), DELIVERED),
       });
       expect(code).toBe(0);
       expect(delivered).toEqual(['da quanto non tocchi la tesi?']);
