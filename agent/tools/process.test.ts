@@ -65,6 +65,48 @@ describe('process_list', () => {
     const out = await list.handler({}, ctx);
     expect(out.isError).toBe(true);
     expect(out.content).toContain('ps failed');
+    // Nothing arrived, so nothing taints. Stated, not omitted: an unstated tier
+    // used to mean this and also meant "nobody asked" (ADR-0044).
+    expect(out.tier).toBe(0);
+  });
+
+  it('a listing is tier 1 — the machine describing itself, not the owner speaking', async () => {
+    // 1 and not 0, because these are not the owner's words: `ps` reports the
+    // names of binaries somebody installed and started. 1 and not `DISK_TIER`,
+    // because getting a chosen string in here costs an attacker code execution
+    // on the host, while getting one into `~/Downloads` costs them an email.
+    //
+    // The number matters beyond bookkeeping: `sys.process.list` pins
+    // `maxTaint: 1`, so a tier of 2 would make listing processes a
+    // once-per-turn tool — the shape `agent/tools/search.ts` already refused
+    // for `web_search`.
+    const { list } = fakeTools();
+    const first = await list.handler({}, ctx);
+    expect(first.tier).toBe(1);
+
+    const decide = createDecide({
+      capabilities: new Map(processCapabilities.map((c) => [c.id, c])),
+      matrix: POLICY_FLOOR,
+      budgetExhausted: () => false,
+      hardened: true,
+    });
+    expect(
+      decide({
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        tenant: 'host',
+        capability: 'sys.process.list',
+        resource: { kind: 'none' },
+        args: {},
+        taint: first.tier,
+      }).effect,
+    ).toBe('allow');
+  });
+
+  it('a kill reports only its own words, and says so', async () => {
+    const { kill } = fakeTools();
+    const out = await kill.handler({ pid: 512 }, ctx);
+    expect(out.content).toContain('delivered to pid 512');
+    expect(out.tier).toBe(0);
   });
 });
 

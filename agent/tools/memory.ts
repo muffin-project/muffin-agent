@@ -116,7 +116,10 @@ export async function searchMemory(
 ): Promise<ToolOutcome> {
   const raw = (args ?? {}) as RawArgs;
   if (typeof raw.query !== 'string' || raw.query.trim() === '') {
-    return { content: 'memory_search richiede "query" non vuota.', isError: true };
+    // `tier: 0` — this is Muffin's own validation message, never a byte an
+    // attacker chose (`ToolOutcome.tier` is required for exactly this reason,
+    // `agent/loop.ts`'s doc comment on the field).
+    return { content: 'memory_search richiede "query" non vuota.', isError: true, tier: 0 };
   }
   const query = raw.query;
 
@@ -132,14 +135,14 @@ export async function searchMemory(
     ['until', raw.until],
   ] as const) {
     if (value !== undefined && typeof value !== 'string') {
-      return { content: `memory_search: "${field}" deve essere una stringa.`, isError: true };
+      return { content: `memory_search: "${field}" deve essere una stringa.`, isError: true, tier: 0 };
     }
   }
   if (raw.history !== undefined && typeof raw.history !== 'boolean') {
-    return { content: 'memory_search: "history" deve essere booleano.', isError: true };
+    return { content: 'memory_search: "history" deve essere booleano.', isError: true, tier: 0 };
   }
   if (raw.around !== undefined && typeof raw.around !== 'number') {
-    return { content: 'memory_search: "around" deve essere un numero.', isError: true };
+    return { content: 'memory_search: "around" deve essere un numero.', isError: true, tier: 0 };
   }
 
   const asOfRaw = raw.as_of as string | undefined;
@@ -157,6 +160,7 @@ export async function searchMemory(
       return {
         content: `memory_search: "${field}" = "${value}" non è una data leggibile (usa YYYY-MM o YYYY-MM-DD).`,
         isError: true,
+        tier: 0,
       };
     }
   }
@@ -167,12 +171,14 @@ export async function searchMemory(
     return {
       content: 'memory_search: "since" è dopo "until" — quella finestra non può contenere niente.',
       isError: true,
+      tier: 0,
     };
   }
   if (windowError === 'future-asof') {
     return {
       content: 'memory_search: "as_of" è nel futuro — posso raccontare solo cosa credevo, non cosa crederò.',
       isError: true,
+      tier: 0,
     };
   }
 
@@ -193,6 +199,10 @@ export async function searchMemory(
     // tell "I have no memory of this" apart from "the tool broke".
     return {
       content: `Nessun ricordo per "${query}". Strategie usate: ${result.strategies.join(', ')}.`,
+      // No memory came back, so nothing came in. The max below is over an empty
+      // set and would say 0 anyway; saying it here keeps the two paths from
+      // being read as one having been forgotten.
+      tier: 0,
     };
   }
 
