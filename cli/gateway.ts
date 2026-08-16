@@ -9,7 +9,7 @@ import { makeJobRunner } from '../agent/scheduler-run.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
-import { Gateway, EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
+import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
@@ -293,7 +293,27 @@ function currentLauncher(): { argv: string[]; warning: string | null } {
  * The process. Invoked by the supervisor, and by `muffin gateway run` when the
  * owner wants to watch it in a terminal.
  */
-export async function cmdGatewayRun(home = paths().home): Promise<number> {
+export async function cmdGatewayRun(
+  home = paths().home,
+  /**
+   * Test-only seam into the one `Gateway` this function builds for real.
+   *
+   * `core/gateway/service.test.ts` drives `Gateway` directly with a fake
+   * `signals`/`tickMs`/`sleep`, and that is real coverage of the class — but
+   * nothing exercised *this* assembly: whether `cmdGatewayRun` actually threads
+   * `recordDelivery` into the `Scheduler` it builds, and the `SurfaceRegistry`
+   * from `connectSurfaces` into the `deliver` the scheduler calls. A day-one
+   * regression there (drop the last constructor argument, say) would compile,
+   * every existing test would stay green, and a job on any real surface would
+   * go back to advancing its schedule on a delivery nobody recorded — silently,
+   * because nothing here called it. Verified: commenting out that argument left
+   * `cli/gateway.test.ts` and `core/gateway/service.test.ts` fully green.
+   */
+  gatewayOverrides: Pick<
+    GatewayDeps,
+    'signals' | 'tickMs' | 'sleep' | 'now' | 'pid' | 'drainBudgetMs'
+  > = {},
+): Promise<number> {
   let runtime;
   try {
     runtime = buildRuntime(home);
@@ -350,6 +370,7 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
 
   let stopSurfaces: (() => void) | null = null;
   const gateway = new Gateway({
+    ...gatewayOverrides,
     lock,
     notify,
     scheduler,

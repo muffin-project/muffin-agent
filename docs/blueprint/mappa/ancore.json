@@ -752,31 +752,31 @@
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
     "line": 296,
-    "testo": "export async function cmdGatewayRun(home = paths().home): Promise<number> {"
+    "testo": "export async function cmdGatewayRun("
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 299,
+    "line": 319,
     "testo": "runtime = buildRuntime(home);"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 388,
+    "line": 409,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 400,
+    "line": 421,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 381,
+    "line": 402,
     "testo": "const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 388,
+    "line": 409,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:81": {

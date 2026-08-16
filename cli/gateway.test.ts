@@ -1,16 +1,18 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
 import { gatewayStandDown } from './repl.js';
-import { stopCaveat } from './gateway.js';
+import { cmdGatewayRun, stopCaveat } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -181,6 +183,93 @@ describe('two schedulers must never run', () => {
     expect(row.last_run_at).toBeNull();
     expect(Date.parse(row.next_fire_at)).toBeLessThan(Date.now());
     expect(r.code).toBe(0);
+  });
+});
+
+/**
+ * `cmdGatewayRun`'s own assembly — the one thing none of the tests above
+ * reaches.
+ *
+ * Every test up to here either spawns `muffin gateway run` and asserts on the
+ * lock/lease (never a due job actually settling), or drives `Gateway` in
+ * isolation with a hand-built `Scheduler` (`core/gateway/service.test.ts` —
+ * real coverage of the *class*, but of a `Scheduler` that test constructs
+ * itself). Nothing exercised whether `cmdGatewayRun` threads
+ * `runtime.deps.turns.delivered` into the `Scheduler` it builds, or the
+ * `SurfaceRegistry` from `connectSurfaces` into the `deliver` the scheduler
+ * calls — the exact wiring `docs/blueprint/M5-BIS.md` B8 is about. Checked by
+ * hand first: commenting out the `recordDelivery` argument in `cli/gateway.ts`
+ * left every other test in this file and in `core/gateway/service.test.ts`
+ * green.
+ *
+ * Getting a due job through a real model call needs a real `Provider`, and
+ * `buildRuntime` only ever constructs one from config — there is no seam to
+ * hand it a fake in-process. So this drives the actual seam that exists: an
+ * `openai-compat` `baseUrl` pointed at a local HTTP server that speaks just
+ * enough of the Chat Completions shape to answer. No token spent, no network
+ * beyond localhost.
+ */
+function fakeCompletionsServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: 'fake-1',
+            model: 'fake',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+        );
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+      resolve({
+        url: `http://127.0.0.1:${addr.port}/v1`,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
+describe("cmdGatewayRun's own assembly", () => {
+  it('records a real delivery onto the turn it just ran, through the actual production wiring', async () => {
+    const fake = await fakeCompletionsServer();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-wiring-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      // Poll for the fire rather than a fixed sleep: the tick is 5ms but the
+      // real HTTP round trip to `fake` is not free, and a flat sleep either
+      // wastes time or races it.
+      const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+      try {
+        await vi.waitFor(
+          () => {
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            expect(row?.delivery).toBe('sent');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+      } finally {
+        db.close();
+      }
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
   });
 });
 
