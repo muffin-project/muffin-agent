@@ -11,9 +11,9 @@
 
 **Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Ordine: turno > permessi > superficie privata > memoria > acceptance.
 
-**Inventario**: `M5-BIS.md` autoritativo. Oggi: E4, C4/C6, B8/B14, taint (#28) READY. Restano ~30 `?`: uno scenario ciascuno.
+**Inventario**: `M5-BIS.md` autoritativo. Oggi: E4, C4/C6, B3/B4/B5, B8/B14, taint (#28) READY. Restano ~30 `?`: uno scenario ciascuno.
 
-**Non integrato**: solo #41 turno sospeso (ultime 2 correzioni). Poi `dev`→`main` con verifica nuova.
+**Non integrato**: nessuna slice (#35/#40/#41/#42 in dev). Ora `dev`→`main` con verifica integrata, poi l'owner prova.
 
 **Metodo (16/08 sera)**: una slice = una riga, ≤500 righe, un judge sonnet, 2 giri max, una alla volta; meccanica all'orchestratore.
 
