@@ -17,7 +17,7 @@ import {
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
-import { normaliseDate } from '../core/memory/recall.js';
+import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
@@ -514,6 +514,21 @@ async function cmdMemory(argv: string[]): Promise<number> {
         process.stderr.write(`${flag}: "${raw}" non è una data leggibile (usa 2026-05 o 2026-05-14)\n`);
         return 78;
       }
+    }
+    // Semantic checks, once every raw string has already parsed: a window that
+    // can never contain anything, and an instant that has not happened yet.
+    // Both would otherwise reach `recall()` and come back with either zero rows
+    // (indistinguishable from amnesia) or today's facts (a prediction wearing a
+    // memory's clothes) — `--history` resolves to `EVERY_INSTANT` here only to
+    // keep that value out of the future check, which exempts it by name.
+    const windowError = checkTemporalWindow({ asOf: asOf ?? (values.history ? EVERY_INSTANT : undefined), since, until });
+    if (windowError === 'empty-window') {
+      process.stderr.write(`--since è dopo --until: quella finestra non può contenere niente\n`);
+      return 78;
+    }
+    if (windowError === 'future-asof') {
+      process.stderr.write(`--as-of è nel futuro: posso raccontare solo cosa credevo, non cosa crederò\n`);
+      return 78;
     }
     return cmdMemorySearch(home, query, {
       ...(values.n ? { limit: Number(values.n) } : {}),

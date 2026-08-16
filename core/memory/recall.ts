@@ -138,6 +138,45 @@ export function normaliseDate(raw: string | undefined, edge: 'start' | 'end'): s
 }
 
 /**
+ * Why a resolved temporal window cannot be searched, checked once every raw
+ * string has already parsed cleanly through `normaliseDate`. Shared by every
+ * boundary — CLI flags, tool arguments — so the two failure modes read the
+ * same from a terminal and from the model, and so a third caller inherits the
+ * check instead of having to remember to repeat it.
+ *
+ * Two modes, and both are "wrong request", never "no memory of this":
+ *
+ *   empty-window   `since` sits after `until`. No episode's `created_at` can
+ *                   ever be inside both bounds, so the query is not merely
+ *                   unlucky, it is unsatisfiable by construction — and running
+ *                   it anyway would return zero rows indistinguishable from
+ *                   genuine amnesia, which is exactly the failure
+ *                   `normaliseDate`'s own doc comment refuses to risk for a
+ *                   single malformed date.
+ *   future-asof     the graph is asked what it believed at an instant that
+ *                    has not happened. `factsAsOf` would answer anyway —
+ *                    nothing can have expired past "now" yet, so it would
+ *                    silently return today's facts — which is a prediction
+ *                    wearing a memory's clothes. `EVERY_INSTANT` is exempt
+ *                    on purpose: "all of history" is not a single instant
+ *                    that can be in the future.
+ */
+export type TemporalWindowError = 'empty-window' | 'future-asof';
+
+export function checkTemporalWindow(
+  resolved: { asOf?: string | undefined; since?: string | undefined; until?: string | undefined },
+  now: string = new Date().toISOString(),
+): TemporalWindowError | null {
+  if (resolved.since !== undefined && resolved.until !== undefined && resolved.since > resolved.until) {
+    return 'empty-window';
+  }
+  if (resolved.asOf !== undefined && resolved.asOf !== EVERY_INSTANT && resolved.asOf > now) {
+    return 'future-asof';
+  }
+  return null;
+}
+
+/**
  * What a recall could not answer, said out loud instead of left silent.
  *
  * The failure this exists to stop is specific: asked *"who was my contact in
@@ -241,6 +280,17 @@ const K = 60;
 
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
+
+/**
+ * Ceiling on `RecallOptions.neighbours`, enforced here rather than trusted to
+ * every caller. `episodeNeighbourhood`'s own `LIMIT k` has no other bound, so
+ * an unclamped value from a tool argument the model controls would let one
+ * call pull an unbounded slice of a thread into context — the same shape as
+ * `limit`, except `limit` is owner-typed at a terminal and this is
+ * model-typed. Fixed at the primitive instead of at each boundary so a third
+ * caller inherits the cap instead of having to remember it.
+ */
+const MAX_NEIGHBOURS = 5;
 
 /**
  * At most one of those slots may be taken by importance rather than recency.
@@ -388,24 +438,63 @@ export async function recall(
       // a caller reading `strategies` cannot otherwise tell them apart.
       strategies.push('vector');
       vectorHits.forEach((hit, rank) => {
-        // The tier comes from the source row, never from the fact that a vector
-        // matched. Hardcoding zero here laundered every semantically-recalled
-        // chunk into owner-grade evidence — and paraphrase is precisely what
-        // reaches the model through this half rather than through full text, so
-        // the anti-poisoning defence was open on its most likely path.
+        if (hit.kind === 'fact') {
+          // A superseded belief stays embedded forever — nothing re-embeds on
+          // supersede — so paraphrase can match its old text years later. The
+          // text half and the graph hop both learned to gate this on
+          // `includeSuperseded`; the semantic half never did, which made it the
+          // one door a retired belief could still walk back through, unmarked,
+          // in the *default* search — not only under `--history`. Reading the
+          // full row rather than extending `provenanceOf` a second time also
+          // buys the exact same successor rule the graph hop uses, instead of a
+          // second, divergent copy of it.
+          const fact = deps.store.factById(tenantId, hit.sourceId);
+          if (!fact) return;
+          if (fact.expiredAt !== null && !includeSuperseded) return;
+          const successor = successorOf(deps.store, tenantId, fact);
+          fuse(`fact:${fact.id}`, {
+            kind: 'fact',
+            id: fact.id,
+            text: hit.text,
+            trustTier: fact.trustTier,
+            source: describeTier(fact.trustTier, fact.recordedAt),
+            score: 0,
+            validFrom: fact.validFrom,
+            validTo: fact.validTo,
+            expired: fact.expiredAt !== null,
+            ...(fact.origin === 'inferred' ? { origin: fact.origin } : {}),
+            ...(successor ? { replacedBy: { id: successor.id, text: factText(successor) } } : {}),
+          }, rank);
+          return;
+        }
+        // Episode. Provenance carries `connector`/`supersededAt` for the same
+        // reason it carries `trust_tier`: the vector index stores text and a
+        // source id, nothing else, so this is the only place the semantic half
+        // can learn either. Both the retirement gate and the (surface,
+        // date_range) navigation filter of `02-ontologia.md` §9 apply here too
+        // — a filter that only the text half honoured would be a guarantee that
+        // reads as absolute and holds for one of two paths into the same list.
         const provenance = deps.store.provenanceOf(tenantId, hit.kind, hit.sourceId);
-        fuse(`${hit.kind}:${hit.sourceId}`, {
-          kind: hit.kind,
+        // `connector` is a defensive narrowing, not a real branch: every
+        // episode row carries one (`NOT NULL` in the schema), and the only way
+        // it is absent here is `provenanceOf` having read the fact-shaped row —
+        // which cannot happen on this path, since `hit.kind === 'fact'` already
+        // returned above.
+        if (!provenance || provenance.connector === undefined) return;
+        const connector = provenance.connector;
+        if (provenance.supersededAt != null && !includeSuperseded) return;
+        if (options.surface !== undefined && connector !== options.surface) return;
+        if (options.since !== undefined && provenance.createdAt < options.since) return;
+        if (options.until !== undefined && provenance.createdAt > options.until) return;
+        fuse(`episode:${hit.sourceId}`, {
+          kind: 'episode',
           id: hit.sourceId,
           text: hit.text,
-          trustTier: provenance?.trustTier ?? 3,
-          source: provenance ? describeTier(provenance.trustTier, provenance.createdAt) : 'fonte ignota',
+          trustTier: provenance.trustTier,
+          source: describeTier(provenance.trustTier, provenance.createdAt, connector),
           score: 0,
-          // Paraphrase is precisely what reaches the model through this half
-          // rather than through full text, so an unmarked inference is most
-          // likely to arrive here — and this half runs first, so the object it
-          // inserts is the one the fusion keeps.
-          ...(provenance?.origin ? { origin: provenance.origin } : {}),
+          surface: connector,
+          ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
       });
     } catch (error) {
@@ -465,13 +554,7 @@ export async function recall(
       }
 
       selectForExpansion(facts).forEach((fact, rank) => {
-        const successor =
-          // Only a real replacement, never a deduplicated twin — see
-          // `RecallItem.replacedBy` for why `valid_to` and not `expired_at` is
-          // the discriminant.
-          fact.supersededBy !== null && fact.validTo !== null
-            ? deps.store.factById(tenantId, fact.supersededBy)
-            : null;
+        const successor = successorOf(deps.store, tenantId, fact);
         fuse(`fact:${fact.id}`, {
           kind: 'fact',
           id: fact.id,
@@ -514,11 +597,14 @@ export async function recall(
   // candidates. What it does carry is its own `trust_tier`, and that is the
   // whole of the taint rule for this primitive: `recallTaint` takes the maximum
   // over the items, so a window that reaches into a group raises this turn to
-  // the group's tier. Five messages before and five after, inside a group, are
-  // ten more chances for an injection to arrive at the tier of whoever
-  // searched — collapsing the window into the anchor's tier is exactly that
-  // hole, and it stays closed here by construction rather than by a check.
-  const k = options.neighbours ?? 0;
+  // the group's tier. At most `MAX_NEIGHBOURS` messages before and after, inside
+  // a group, are that many more chances for an injection to arrive at the tier
+  // of whoever searched — collapsing the window into the anchor's tier is
+  // exactly that hole, and it stays closed here by construction rather than by
+  // a check. The count itself is clamped, not just described as small: an
+  // unbounded `neighbours` from a tool argument the model controls would make
+  // "small" a comment instead of a property.
+  const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);
   if (k > 0) {
     strategies.push(`vicinato(${k})`);
     const already = new Set(kept.map((i) => `${i.kind}:${i.id}`));
@@ -552,6 +638,22 @@ export async function recall(
 /** One fact as a line: subject, predicate, object. Written once, read by four callers. */
 function factText(fact: Fact): string {
   return `${fact.subjectName} — ${fact.predicate} — ${fact.objectValue ?? fact.objectName ?? ''}`;
+}
+
+/**
+ * What replaced `fact`, if anything really did — the one rule, read by both
+ * the places a superseded fact can reach recall (the graph hop and the vector
+ * half), so the discriminant cannot drift between the two.
+ *
+ * Gated on `validTo`, never on `expiredAt`: `supersede` is called from the
+ * judge, when a belief was actually replaced (it closes world time), and from
+ * the duplicate sweep, which passes `validTo: null` explicitly because a
+ * duplicate was never a separate truth (`store.ts` supersede). Both set
+ * `expiredAt` and `supersededBy`. Keying on `expiredAt` alone would report
+ * dedup bookkeeping as a change of mind.
+ */
+function successorOf(store: MemoryStore, tenantId: string, fact: Fact): Fact | null {
+  return fact.supersededBy !== null && fact.validTo !== null ? store.factById(tenantId, fact.supersededBy) : null;
 }
 
 /**

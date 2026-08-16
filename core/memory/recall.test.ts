@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Embedder } from './embed.js';
-import { EVERY_INSTANT, recall, recallTaint, renderForPrompt } from './recall.js';
+import { checkTemporalWindow, EVERY_INSTANT, recall, recallTaint, renderForPrompt } from './recall.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
 
@@ -408,5 +408,321 @@ describe('recall', () => {
     });
     expect(result.items.some((i) => i.kind === 'episode' && i.id === current)).toBe(false);
     expect(result.items.some((i) => i.kind === 'episode' && i.id === prior)).toBe(true);
+  });
+
+  it('answers who X was on a past date, not who X is now — "chi era X a maggio"', async () => {
+    // The acceptance scenario C6 exists to close. Anna is recorded in June,
+    // replaced by Bruno in August; asked about May, the honest answer is Anna —
+    // not because she was already known then, but because nothing had stopped
+    // being true of her yet (`factsAsOf`'s own doc comment walks this exact
+    // pair). Asked about a date after the change, the answer flips.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note aziendali');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'work_contact', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    const anna = store.addFact({ ...base, objectValue: 'Anna', recordedAt: '2026-06-01T10:00:00Z' });
+    const bruno = store.addFact({ ...base, objectValue: 'Bruno', recordedAt: '2026-08-01T10:00:00Z' });
+    store.supersede(HOST, anna, bruno, '2026-08-01T10:00:00Z');
+
+    const may = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-05-15T00:00:00.000Z',
+    });
+    const mayText = may.items.filter((i) => i.kind === 'fact' && /work_contact/.test(i.text)).map((f) => f.text).join(' ');
+    expect(mayText).toContain('Anna');
+    expect(mayText).not.toContain('Bruno');
+
+    const august = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-08-15T00:00:00.000Z',
+    });
+    const augustText = august.items.filter((i) => i.kind === 'fact' && /work_contact/.test(i.text)).map((f) => f.text).join(' ');
+    expect(augustText).toContain('Bruno');
+    expect(augustText).not.toContain('Anna');
+  });
+
+  it('says it does not know, with the nearest thing on record, instead of answering with today', async () => {
+    // The failure this exists to stop: an entity the graph knows about, asked
+    // about an instant before anything on record — silence here used to mean
+    // "today's belief with no mark on it".
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note aziendali');
+    store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'work_contact', objectValue: 'Anna',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-06-01T10:00:00Z',
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]?.entity).toBe('Giusto');
+    expect(result.gaps[0]?.nearest?.text).toContain('Anna');
+
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('lacuna');
+    expect(rendered).toContain('non rispondere con quello che vale oggi');
+  });
+
+  it('filters episodes to a date window', async () => {
+    const { store, vectors } = harness();
+    const early = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria vecchio', trustTier: 0, createdAt: '2026-01-01T10:00:00Z',
+    });
+    const inWindow = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria giusto', trustTier: 0, createdAt: '2026-06-15T10:00:00Z',
+    });
+    const late = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria nuovo', trustTier: 0, createdAt: '2026-12-01T10:00:00Z',
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'promemoria', {
+      since: '2026-03-01T00:00:00.000Z',
+      until: '2026-09-01T00:00:00.000Z',
+    });
+    const ids = result.items.filter((i) => i.kind === 'episode').map((i) => i.id);
+    expect(ids).toContain(inWindow);
+    expect(ids).not.toContain(early);
+    expect(ids).not.toContain(late);
+    expect(result.strategies.some((s) => s.startsWith('filtro('))).toBe(true);
+  });
+
+  it('filters the semantic half by surface too, not only full text', async () => {
+    // The vector index has no notion of `--surface` on its own; the fix this
+    // guards is in `recall()`'s vector branch reading `connector` back from
+    // `provenanceOf` and dropping the mismatch, not in the index itself.
+    const { store, vectors } = harness();
+    const cliEp = episode(store, 'nota', 0);
+    const tgEp = store.addEpisode({
+      tenantId: HOST, connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'nota', trustTier: 2, createdAt: NOW,
+    });
+    // Identical indexed text on both, so only the surface filter — not the
+    // embedding itself — can tell them apart; neither episode's own content
+    // ("nota") shares a word with the query, so full text cannot find either.
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: cliEp, text: 'il weekend di vela' }], NOW);
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: tgEp, text: 'il weekend di vela' }], NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'vela', { surface: 'telegram' });
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.id === tgEp)).toBe(true);
+    expect(result.items.some((i) => i.id === cliEp)).toBe(false);
+  });
+
+  it('does not let a superseded fact surface through the semantic half either', async () => {
+    // The vector index never re-embeds on supersede, so the retired text stays
+    // findable by meaning forever. The text half and the graph hop both gate on
+    // `includeSuperseded`; before this fix the semantic half did not, which made
+    // it the one door a retired belief could still walk back through unmarked —
+    // in the *default* search, not only under `--history`.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'mood', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const old = store.addFact({ ...base, objectValue: 'sotto pressione' });
+    const current = store.addFact({ ...base, objectValue: 'sereno' });
+    await vectors!.index(HOST, [{ kind: 'fact', sourceId: old, text: 'Giusto mood sotto pressione' }], NOW);
+    store.supersede(HOST, old, current, NOW);
+
+    // No shared word with "sotto pressione ultimamente" in any episode's own
+    // text and no capitalised word for the graph hop to key on: only the vector
+    // half, matching by meaning, can retrieve this fact at all.
+    const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente');
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.kind === 'fact' && i.id === old)).toBe(false);
+  });
+
+  it('brings the same retired fact back through the semantic half, marked, once history is asked for', async () => {
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'mood', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const old = store.addFact({ ...base, objectValue: 'sotto pressione' });
+    const current = store.addFact({ ...base, objectValue: 'sereno' });
+    await vectors!.index(HOST, [{ kind: 'fact', sourceId: old, text: 'Giusto mood sotto pressione' }], NOW);
+    store.supersede(HOST, old, current, NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente', { asOf: EVERY_INSTANT });
+    const hit = result.items.find((i) => i.kind === 'fact' && i.id === old);
+    expect(hit?.expired).toBe(true);
+    expect(hit?.replacedBy?.text).toContain('sereno');
+  });
+
+  it('carries the K episodes before and after a match, from its own thread and reading order', async () => {
+    const { store, vectors } = harness(false);
+    const fill = (label: string, minute: number, threadKey = 't') =>
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey, role: 'user',
+        kind: 'message', content: label, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+      });
+    const twoBefore = fill('due prima', 1);
+    const oneBefore = fill('una prima', 2);
+    const anchor = fill('il codice segreto è ZK-9', 3);
+    const oneAfter = fill('una dopo', 4);
+    const twoAfter = fill('due dopo', 5);
+    // Same instant, different thread: must never be treated as a neighbour.
+    const otherThread = fill('non è vicino', 3, 'other-thread');
+
+    const result = await recall({ store, vectors }, HOST, 'codice segreto', { neighbours: 2 });
+    const neighbours = result.items.filter((i) => i.neighbourOf === anchor);
+    expect(neighbours.map((i) => i.id)).toEqual([twoBefore, oneBefore, oneAfter, twoAfter]);
+    expect(neighbours.map((i) => i.text)).toEqual(['due prima', 'una prima', 'una dopo', 'due dopo']);
+    expect(neighbours.some((i) => i.id === otherThread)).toBe(false);
+  });
+
+  it('clamps an oversized neighbours request instead of pulling an unbounded slice of a thread', async () => {
+    // `RecallOptions.neighbours` is a tool argument the model controls; an
+    // unclamped value would let one call pull an unbounded slice of a thread
+    // into context. The cap lives in `recall()` itself (`MAX_NEIGHBOURS`), so
+    // this is a wiring test for the primitive, not for either boundary.
+    const { store, vectors } = harness(false);
+    const anchor = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'ancora qui il codice segreto', trustTier: 0, createdAt: '2026-08-01T10:06:00Z',
+    });
+    for (let i = 0; i < 12; i++) {
+      if (i === 6) continue;
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `riempitivo ${i}`, trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'codice segreto', { neighbours: 1000 });
+    expect(result.strategies).toContain('vicinato(5)');
+    const neighbourCount = result.items.filter((i) => i.neighbourOf === anchor).length;
+    expect(neighbourCount).toBeLessThanOrEqual(10);
+  });
+
+  it('never lets the neighbourhood reach across a tenant boundary', async () => {
+    const { store, vectors } = harness(false);
+    const mine = episode(store, 'il mio codice è ZK-1');
+    // Same connector and thread key by coincidence must not be enough: a
+    // different tenant's episode must never be adjacent to this one.
+    store.addEpisode({
+      tenantId: 'group:telegram:9', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'vicino di un altro tenant', trustTier: 2, createdAt: NOW,
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'il mio codice', { neighbours: 2 });
+    expect(result.items.some((i) => i.id === mine)).toBe(true);
+    expect(result.items.map((i) => i.text).join(' ')).not.toContain('altro tenant');
+  });
+});
+
+describe('checkTemporalWindow', () => {
+  const NOW_ISO = '2026-08-16T12:00:00.000Z';
+
+  it('accepts a normal, past window and an as-of no later than now', () => {
+    expect(
+      checkTemporalWindow({ since: '2026-01-01T00:00:00.000Z', until: '2026-02-01T00:00:00.000Z' }, NOW_ISO),
+    ).toBeNull();
+    expect(checkTemporalWindow({ asOf: NOW_ISO }, NOW_ISO)).toBeNull();
+  });
+
+  it('rejects since after until — a window that cannot contain anything', () => {
+    expect(
+      checkTemporalWindow({ since: '2026-06-01T00:00:00.000Z', until: '2026-01-01T00:00:00.000Z' }, NOW_ISO),
+    ).toBe('empty-window');
+  });
+
+  it('rejects an as-of that has not happened yet', () => {
+    expect(checkTemporalWindow({ asOf: '2027-01-01T00:00:00.000Z' }, NOW_ISO)).toBe('future-asof');
+  });
+
+  it('never flags EVERY_INSTANT as a future date', () => {
+    // 'all' sorts after any ISO date string lexicographically ('a' > '2' in
+    // ASCII) — a naive `asOf > now` string comparison would reject `--history`
+    // itself, which is exactly the sentinel this exemption exists to protect.
+    expect(checkTemporalWindow({ asOf: EVERY_INSTANT }, NOW_ISO)).toBeNull();
+  });
+
+  it('does not reject a since/until that simply has not happened yet — that is empty evidence, not a wrong request', () => {
+    expect(checkTemporalWindow({ since: '2027-01-01T00:00:00.000Z' }, NOW_ISO)).toBeNull();
+  });
+});
+
+describe('invariant: a retired fact never comes back looking active', () => {
+  it('holds across every combination of asOf, surface, since/until and neighbours', async () => {
+    // The minimum measure PRACTICES §5 and the mandate both ask for: not one
+    // scenario, but a sweep over the parameter space, on both halves that can
+    // return a fact (graph hop and semantic match).
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due episodi su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    const retired = store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
+    const active = store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+    store.supersede(HOST, retired, active, '2026-08-01T10:00:00Z');
+    await vectors!.index(
+      HOST,
+      [
+        { kind: 'fact' as const, sourceId: retired, text: 'Giusto accountant Marco' },
+        { kind: 'fact' as const, sourceId: active, text: 'Giusto accountant Lucia' },
+      ],
+      NOW,
+    );
+
+    const asOfValues: (string | undefined)[] = [
+      undefined,
+      EVERY_INSTANT,
+      '2026-05-01T00:00:00.000Z',
+      '2026-07-01T00:00:00.000Z',
+      '2026-09-01T00:00:00.000Z',
+    ];
+    const surfaces: (string | undefined)[] = [undefined, 'cli', 'telegram'];
+    const windows: [string | undefined, string | undefined][] = [
+      [undefined, undefined],
+      ['2026-01-01T00:00:00.000Z', '2026-12-31T00:00:00.000Z'],
+    ];
+    const neighboursValues = [0, 2];
+
+    let combinations = 0;
+    let sawRetiredAsActive = 0;
+    let sawRetiredCorrectlyMarked = 0;
+    for (const asOf of asOfValues) {
+      for (const surface of surfaces) {
+        for (const [since, until] of windows) {
+          for (const neighbours of neighboursValues) {
+            const result = await recall({ store, vectors }, HOST, 'Giusto accountant Marco Lucia', {
+              ...(asOf === undefined ? {} : { asOf }),
+              ...(surface === undefined ? {} : { surface }),
+              ...(since === undefined ? {} : { since }),
+              ...(until === undefined ? {} : { until }),
+              ...(neighbours === 0 ? {} : { neighbours }),
+            });
+            combinations++;
+            const retiredHit = result.items.find((i) => i.kind === 'fact' && i.id === retired);
+            if (retiredHit) {
+              if (retiredHit.expired) sawRetiredCorrectlyMarked++;
+              else sawRetiredAsActive++;
+            }
+          }
+        }
+      }
+    }
+
+    expect(combinations).toBe(asOfValues.length * surfaces.length * windows.length * neighboursValues.length);
+    // The property itself: never once, across every combination, does the
+    // retired fact come back looking current.
+    expect(sawRetiredAsActive).toBe(0);
+    // And the property was actually exercised — a sweep that never returns the
+    // retired fact at all would make the assertion above vacuous.
+    expect(sawRetiredCorrectlyMarked).toBeGreaterThan(0);
   });
 });
