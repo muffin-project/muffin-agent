@@ -890,19 +890,31 @@ export class MemoryStore {
    * The vector index stores text and a source id, not a tier — so without this
    * the fusion had nothing to read and used a constant, which turned every
    * semantic hit into owner-grade evidence regardless of who wrote it.
+   *
+   * `connector` and `supersededAt` exist for the same reason `trust_tier` does:
+   * the semantic half is the other place a retired episode can surface, and
+   * before these two fields it had no way to know it was retired at all — a
+   * withdrawn message or an edited vault note, once embedded, kept matching by
+   * meaning forever, unmarked, in the one recall path `--history` was never
+   * wired to. `searchEpisodes` (the text half) always had `superseded_at` to
+   * read; the vector half had nothing, which is the same "declared and
+   * connected to nothing" shape as the tier bug this method already fixed once.
    */
   provenanceOf(
     tenantId: string,
     kind: 'episode' | 'fact',
     sourceId: number,
-  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin } | null {
+  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin; connector?: string; supersededAt?: string | null } | null {
     const row =
       kind === 'episode'
         ? (this.db
             .prepare(
-              `SELECT trust_tier AS trustTier, created_at AS createdAt FROM episodes WHERE tenant_id = ? AND id = ?`,
+              `SELECT trust_tier AS trustTier, created_at AS createdAt, connector, superseded_at AS supersededAt
+               FROM episodes WHERE tenant_id = ? AND id = ?`,
             )
-            .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined)
+            .get(tenantId, sourceId) as
+            | { trustTier: TrustTier; createdAt: string; connector: string; supersededAt: string | null }
+            | undefined)
         : // `origin` comes back here for the same reason `trust_tier` does: the
           // vector index stores text and a source id, so the semantic half of
           // recall has nothing else to read it from. Without it an inferred
