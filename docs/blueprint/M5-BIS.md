@@ -172,6 +172,16 @@ ancora verificato — **è un debito, non uno stato**).
 > che obblighi ogni futura surface a fare lo stesso e che impedisca a bio,
 > filename, metadata, OCR o trascrizioni di entrare come stringhe senza fonte.
 
+> 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
+> `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
+> Hermes Agent letta contro il nostro codice. Quel documento non aggiunge solo
+> righe: **cambia la forma del rimedio** di B2 (il turno non va reso asincrono
+> — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`
+> cancella il payload *intero* mentre ogni cap sotto è testa+coda — è un difetto,
+> non una mancanza), di D2/D3 (*non chiedere, fotografare*) e di E1 (contare
+> l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
+> riga per riga cosa sposta.
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
@@ -275,9 +285,50 @@ ancora verificato — **è un debito, non uno stato**).
 | E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |
 | E2 | Cost | So quanto costa una giornata? | ? |
 | E3 | Tracing | Posso ricostruire cosa è successo? | ? |
-| E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
+| E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
 | E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | ? 🔭 |
+
+> **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**
+> `evals/acceptance/` lancia `muffin` come **processo vero** (`node --import tsx
+> cli/main.ts`, mai `runTurn()` con dipendenze finte) contro un `$HOME`
+> temporaneo, parlando con un provider HTTP finto e deterministico
+> (`evals/acceptance/provider.ts` — nessuna chiave, nessuna chiamata a
+> pagamento). Lo stato delle **altre** righe di questo inventario è **derivato**,
+> non scritto a mano: `npx tsx evals/acceptance/report.ts` legge questo stesso
+> file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
+> stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
+> e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
+> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
+> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
+> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
+> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
+> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
+> passi identici a quelli verificati in locale) ma **non ancora eseguito su
+> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
+> anche sul branch di default, quindi la prima corsa reale sarà al merge su
+> `dev`.
+>
+> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
+> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
+> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
+> decisione owner ancora aperta su §1, D10 taint→egress →
+> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
+> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
+> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
+> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
+> verificato il rosso, ripristinato — non solo scritto a supporre che
+> avrebbero funzionato.
+>
+> **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
+> corsa invece di nasconderlo: cinque righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (C2, C3, C7, D4, D6) — nessuna era nella lista
+> minima del mandato di questa slice, e chiuderle resta un lavoro futuro, non
+> silenzioso. C8 (audio) è marcata `non provabile qui` col motivo scritto
+> (richiede una trascrizione reale, vietata dalla proprietà "non costa niente"
+> di questa suite). **E4 READY vuol dire "la primitiva esiste, gira contro il
+> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
+> "l'inventario è coperto".**
 
 ---
 
@@ -332,6 +383,35 @@ letto dal turno successivo e accompagnato da un criterio deterministico di
 completamento. Il worktree `slice/turno-sospeso` contiene un'implementazione in
 corso, non committata: finché non passa integrazione, cablaggio e accettazione,
 B2–B5 restano BLOCKER.
+
+> 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
+> §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
+>
+> **Chi decide il `wait`.** Non il modello dentro il turno — lì la decisione è
+> tainted come tutto il resto e attaccabile per injection. Un giudice *fuori* dal
+> turno che legge il registro dei processi vivi (che è fatto nostro, non testo di
+> un terzo: `agent/tools/process.ts` esiste già e non è mai stato collegato a una
+> decisione di controllo) e restituisce `done | continue | wait`, con tre forme di
+> barriera: pid, sessione+pattern, tempo. **Fail-open**: giudice rotto ⇒
+> `continue`, e il freno vero resta il budget di turni.
+>
+> **Un invariante che non avevamo scritto.** *Una barriera scaduta non può mai
+> incastrare il loop*: pid già morto, pid che muore mentre si aspetta, scadenza
+> passata ⇒ la barriera si libera al controllo successivo. Lo stesso pattern del
+> lock del gateway (stale dopo 10 battiti, qualunque sia il pid) mai
+> generalizzato.
+>
+> **Dove vive la durevolezza.** Hermes divide: ciò che è legato a una sessione
+> persiste lo *stato* ma serve un processo vivo per *scattare*; ciò che deve
+> sopravvivere a tutto va nello scheduler. Per noi la divisione costa meno che
+> per loro, perché ADR-0035 ha già deciso che un processo che vive esiste — a
+> patto che un `waiting` orfano si veda al boot, come già fa la riga
+> `interrupted` di ADR-0042.
+>
+> E su `todo`: la loro risposta **non è un tool `todo`**. È un obiettivo
+> persistente + criteri aggiungibili a metà corsa + **gate deterministici** —
+> un comando che deve uscire 0 prima che un giudice venga anche solo chiamato.
+> Il pezzo che fa terminare il ciclo è il gate, non lo stato del todo.
 
 ## §3 · La direzione oltre il Gate 1 non allarga il Gate 1
 
