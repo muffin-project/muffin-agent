@@ -98,7 +98,7 @@
       "file": "cli/main.ts:177-178,584-595 -> cli/surface.ts",
       "what": "Abilita o disabilita le superfici (cli fissa, telegram opzionale).",
       "wired": true,
-      "note": "Le superfici possibili sono hardcoded ['cli','telegram'] in cli/surface.ts:44 — nessun registro dinamico. `enable telegram` avvia il pairing, non solo il flag."
+      "note": "`muffin surface list` elenca ancora un set hardcoded (cli/surface.ts:47), ma la consegna passa da un `SurfaceRegistry` vero (core/surface/registry.ts) costruito da `connectSurfaces` (cli/surface.ts:205) — non piu' tre `Deliver` indipendenti che potevano disaccordare. `enable telegram` avvia il pairing, non solo il flag."
     },
     {
       "cmd": "muffin mcp",
@@ -143,7 +143,7 @@
       "file": "cli/main.ts:185-186 -> cli/observe.ts:91",
       "what": "Mostra cosa direbbe il gate di proattivita'; --send lo fa parlare.",
       "wired": true,
-      "note": "Senza --send e' puro dry-run (nessun costo). Con --send su canale non 'cli' la delivery lancia e l'ancora resta aperta (cli/observe.ts:62-69)."
+      "note": "Senza --send e' puro dry-run (nessun costo, nessuna superficie connessa). Con --send la delivery passa dallo stesso SurfaceRegistry di REPL/gateway (cli/observe.ts:67); un canale non consegnato torna {delivered:false} e l'ancora resta aperta, non lancia piu' un'eccezione."
     },
     {
       "cmd": "muffin secret",
@@ -184,12 +184,12 @@
     }
   ],
   "process": {
-    "start": "cli/gateway.ts:294 (cmdGatewayRun) -> core/gateway/service.ts:332 (Gateway.serve)",
+    "start": "cli/gateway.ts:296 (cmdGatewayRun) -> core/gateway/service.ts:332 (Gateway.serve)",
     "owns": [
       "il lock singleton gateway_lock (core/gateway/lock.ts:63)",
       "lo scheduler — un tick ogni 30s, un job alla volta (core/gateway/service.ts:57,221-231)",
-      "le superfici abilitate, oggi telegram (cli/gateway.ts:359, cli/surface.ts:187)",
-      "le connessioni MCP allowlistate (cli/gateway.ts:363, agent/runtime.ts:525)",
+      "le superfici abilitate, oggi telegram, attraverso il SurfaceRegistry che connectSurfaces costruisce (cli/gateway.ts:381, cli/surface.ts:199)",
+      "le connessioni MCP allowlistate (cli/gateway.ts:388, agent/runtime.ts:525)",
       "il watchdog sd_notify verso systemd/launchd (core/gateway/notify.ts:105, core/gateway/service.ts:264-266)"
     ],
     "signals": [
@@ -545,9 +545,9 @@
       "why_it_matters": "L'owner non ha modo di interagire con un turno gia' in corso nel gateway (accodare un messaggio, fargli cambiare rotta, sapere se e' occupato) — l'unico controllo esterno rimasto e' SIGTERM/SIGUSR1, un'accetta non un dialogo."
     },
     {
-      "what": "La consegna a un canale diverso da 'cli' non e' cablata, e il comportamento diverge tra REPL/observe (lanciano un errore) e gateway (logga soltanto) mentre markRan avanza comunque il prossimo orario in entrambi i casi",
-      "evidence": "cli/repl.ts:48-61; cli/observe.ts:62-69; cli/gateway.ts:397-403; core/scheduler/scheduler.ts:168-172,182-187 (markRan gira anche dopo un deliver fallito)",
-      "why_it_matters": "Un job schedulato su Telegram (o qualsiasi canale non-cli) paga il turno, avanza comunque alla prossima esecuzione, e nel processo gateway — che non ha terminale — il testo finisce solo in un log che nessuno guarda per definizione."
+      "what": "CHIUSO (era: consegna non cablata su canali non-cli, markRan cieco all'esito). `Deliver` ora ritorna `DeliveryOutcome` (`{delivered:true}` o `{delivered:false, why}`) invece di `Promise<void>`, e `Scheduler.settle` e' l'unico chiamante di `markRan`: scrive l'esito sulla riga del turno (`core/turns/store.ts` `delivered`/`undelivered`) prima di avanzare la schedulazione, per ogni superficie nel registro",
+      "evidence": "core/surface/types.ts (DeliveryOutcome, Surface); core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:240 (settle), :268 (l'unico markRan); cli/repl.ts, cli/gateway.ts, cli/observe.ts costruiscono tutti il deliver dallo stesso registry invece di tre implementazioni proprie",
+      "why_it_matters": "Un job la cui consegna fallisce non puo' piu' risultare 'eseguito': `muffin doctor`/`TurnStore.undelivered()` lo rende visibile invece di un log che nessuno guarda per definizione. Resta un buco reale: nessun chiamante di produzione usa ancora `SurfaceRegistry.deliverFile` per un file prodotto nel vault (M5-BIS B14) finche' `agent/tools/deliver.ts` non e' cablato — vedi il gap sul connector telegram."
     },
     {
       "what": "Skills malformate sono dichiarate 'reported at boot and in doctor' ma doctor non le controlla mai",
