@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Embedder } from './embed.js';
+import { sweepDuplicates } from './maintenance.js';
 import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
@@ -557,6 +558,39 @@ describe('recall', () => {
     const hit = result.items.find((i) => i.kind === 'fact' && i.id === old);
     expect(hit?.expired).toBe(true);
     expect(hit?.replacedBy?.text).toContain('sereno');
+  });
+
+  it('labels a fact retired by the duplicate sweep as a duplicate, never as "was true before"', async () => {
+    // D4: `expired_at` alone conflates two different reasons a fact is
+    // retired. `supersede` is called from the judge, closing world time
+    // (`validTo` set) — and from `sweepDuplicates`, which passes `validTo:
+    // null` on purpose, because a duplicate was never a separate truth
+    // (`store.ts` supersede's own doc comment). Rendering both the same way
+    // tells the owner a dedup merge was a change of mind, and under `as-of`
+    // the duplicate row is often the only line left standing.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due letture dello stesso fatto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'lives_in', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const dup = store.addFact({ ...base, objectValue: 'Cagliari' });
+    store.addFact({ ...base, objectValue: 'Cagliari' }); // exact duplicate: the sweep retires one
+    sweepDuplicates(store, HOST, new Date(NOW));
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto', { asOf: EVERY_INSTANT });
+    // Non-vacuous: the retired row actually reached recall, marked expired,
+    // with the `validTo: null` the sweep wrote.
+    const dupItem = result.items.find((i) => i.kind === 'fact' && i.id === dup);
+    expect(dupItem?.expired).toBe(true);
+    expect(dupItem?.validTo ?? null).toBeNull();
+
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('riga ritirata (duplicato)');
+    // The old label is still correct for a real supersede — nothing in this
+    // fixture is one, so it must not appear at all here.
+    expect(rendered).not.toContain('non più attuale — era vero prima');
   });
 
   it('carries the K episodes before and after a match, from its own thread and reading order', async () => {
