@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseMessage, principalFor, type ConnectorDeps, DiscordConnector } from './connector.js';
 import { DiscordInbox } from './inbox.js';
+import { runInit } from '../../cli/init.js';
+import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
+import type { Provider } from '../../agent/providers/types.js';
 import { CONSERVATIVE } from '../../agent/profiles/profile.js';
 import { SessionStore } from '../../core/session/store.js';
 import type { DiscordApi, DiscordMessage } from './api.js';
@@ -320,5 +323,48 @@ describe('boundary — a malformed payload never reaches the model (U1)', () => 
     await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 
     expect(h.sent).toEqual([{ channelId: '42', text: 'fatto' }]);
+  });
+});
+
+describe('a discord turn records the SurfaceRegistry address (#41 stitching)', () => {
+  it('writes channel: "discord:<channelId>" onto the durable replyTo', async () => {
+    // The Discord half of connectors/telegram/turn-record.test.ts's own
+    // assertion: `replyTo` used to carry Discord's own addressing
+    // (channelId/messageId) with nothing saying which SurfaceRegistry entry
+    // a future lane should deliver through. Real runtime, real turns table —
+    // reads the row back, not the value handed to runTurn.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-discord-turnrec-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-discord-turnrec-ws-'));
+    runInit({ home, apiKey: 'sk-discordrec-never-called' });
+    const runtime = buildRuntime(home, workspace);
+    const provider: Provider = {
+      kind: 'openai-compat',
+      chat: async () => ({
+        text: 'ecco la risposta',
+        toolCalls: [],
+        stopReason: 'end' as const,
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'test-model',
+      }),
+    };
+    const loop: LoopDeps = { ...runtime.deps, provider };
+    const api = { sendMessage: async () => ({}) as never, typing: async () => undefined } as unknown as DiscordApi;
+    const inbox = new DiscordInbox(new DatabaseCtor(':memory:'));
+    const connector = new DiscordConnector({
+      loop,
+      sessions: runtime.deps.sessions,
+      inbox,
+      api,
+      config: { token: 't', ownerUserId: OWNER },
+    });
+
+    const raw: DiscordMessage = { id: '1', channel_id: '555', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
+    inbox.accept(raw.id, raw, new Date().toISOString());
+    await (connector as unknown as { drain: () => Promise<void> }).drain();
+
+    const id = (runtime.db.prepare(`SELECT id FROM turns LIMIT 1`).get() as { id: string } | undefined)?.id;
+    const row = id === undefined ? null : runtime.deps.turns.get(id);
+    expect(row?.replyTo).toMatchObject({ channelId: '555', messageId: '1', channel: 'discord:555' });
+    runtime.close();
   });
 });

@@ -349,7 +349,13 @@ export class DiscordConnector {
         surface: 'discord',
         session: this.deps.sessions.open(`discord:${incoming.channelId}`),
         text: arrival ? `${arrival}\n\n${incoming.text}`.trim() : incoming.text,
-        replyTo: { channelId: incoming.channelId, messageId: incoming.messageId },
+        // `channel` added for #41's lane (turno sospeso): the durable
+        // `replyTo` used to carry only Discord's own addressing
+        // (`channelId`/`messageId`), with nothing telling a future reader
+        // which `SurfaceRegistry` address to deliver through — the same
+        // field `agent/scheduler-run.ts`'s `makeJobRunner` already writes
+        // for a scheduled job's `replyTo`.
+        replyTo: { channelId: incoming.channelId, messageId: incoming.messageId, channel: `discord:${incoming.channelId}` },
         replyChannel: `discord:${incoming.channelId}`,
       });
 
