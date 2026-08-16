@@ -138,3 +138,4 @@
 {"id":"a2e0ee68fb905b26d","chiuso":"slice/memoria-nel-tempo mergiata (#35, 637ddaa): C4/C6 READY","quando":"2026-08-16T17:17:56.828Z"}
 {"id":"a1da470ff738402d4","chiuso":"correzioni ADJUST giro 2 su #41 fatte (c98974f): modelLane obbligatoria + scenario concorrenza, undeliverable persistito, MAX_OPEN_TODOS, ADR §2, commento; due merge di dev (#42 con 17 conflitti e 3 bug reali corretti, #35); 118 file/1334 test, acceptance 16/16; mergiata 472f43e","quando":"2026-08-16T18:30:13.974Z"}
 {"id":"a04547d6043e92677","chiuso":"slice/turno-sospeso mergiata (#41, 472f43e): B3/B4/B5 READY, B2 resta al test di prod","quando":"2026-08-16T18:30:14.020Z"}
+{"id":"a4a47ee626b579606","slug":"judge-pr44-dev-main","cosa":"judge integrato (sonnet) della promozione dev→main #44: cuciture #41×#42, throwTier ovunque, todo taint × memoria, accettazione, suite intera, giro reale con provider finto","quando":"2026-08-16T20:32:17.454Z"}
