@@ -433,11 +433,21 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     // `busy` is the lane lock refusing a second extraction, which is the
     // opposite of a failure. Green, but the word has to appear: zero episodi and
     // zero fatti with no explanation is the shape this whole block distrusts.
+    //
+    // `errors: 1`, not 0: in production a lock refusal always carries one row
+    // in `report.errors` — `ingest.ts`'s `acquireIngestLock` rejection pushes
+    // its own message there so the caller can see why nothing ran
+    // (`core/memory/ingest.ts` §busy) — and `consolidator.ts` writes that count
+    // straight into `errors` regardless of outcome. Seeding 0 here hid the
+    // defect: a lock refusal is not a per-episode extraction failure, so it
+    // must never earn the "N falliti, riprovati al prossimo giro" suffix that
+    // means exactly that on a `ran` row.
     const dir = home();
-    seedRun(dir, 'busy', 0, { episodes: 0, facts: 0 });
+    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0 });
     const c = check(dir, 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('busy');
+    expect(c?.detail).not.toContain('falliti');
     rmSync(dir, { recursive: true, force: true });
   });
 });
