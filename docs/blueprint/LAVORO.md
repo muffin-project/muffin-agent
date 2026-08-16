@@ -17,9 +17,9 @@
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: PR **#30** (`slice/agente-continuo`→`dev`), correzioni ADJUST
-verificate; attende un judge nuovo. Niente merge prima di `MERGE`; `main`
-richiede prova separata.
+**Checkpoint**: PR **#30** integrata in `dev` dopo CI verde e judge `MERGE`;
+build e suite sull'insieme integrato verdi. L'eventuale `dev`→`main` richiede un
+checkpoint e un judge separati.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 

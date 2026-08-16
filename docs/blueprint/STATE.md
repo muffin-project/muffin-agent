@@ -37,8 +37,9 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Attiva: **PR #30**, `slice/agente-continuo`→`dev`; le correzioni chieste dal
-primo judge `ADJUST` sono verificate e serve un nuovo verdetto terminale.
+Integrata: **PR #30** in `dev`, dopo CI verde e secondo judge `MERGE`. Il
+passaggio `dev`→`main`, se aperto, è un checkpoint nuovo e non eredita quel
+verdetto.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -542,8 +543,12 @@ judge ha restituito `ADJUST`: CI descritta falsamente, stato legato a un hash
 volatile, prova anti-impersonazione solo isolata e fonte ADR non persistita. La
 correzione aggiunge la prova sul percorso inbox → connector → loop e riallinea i
 documenti. Il test nuovo diventa rosso mutando `from.id` in `chat.id`; dopo il
-ripristino, build, 31 test mirati e suite completa sono verdi. Un judge nuovo
-deve ancora emettere il verdetto terminale.
+ripristino, build, 31 test mirati e suite completa sono verdi. Il secondo judge
+ha emesso `MERGE` senza defect o garanzie non provate; CI verde e PR fusa in
+`dev`. Build e suite sono poi tornate verdi sul worktree integrato. Quel
+worktree contiene `.codex/` non tracciata, che duplica due suite di hook: il run
+integrato conta quindi 98 file e 1.103 passati, mentre il tree Git pulito e
+byte-identico al merge ne conta 96 e 1.075; in entrambi resta 1 saltato.
 
 ## Sessioni 2026-08-09
 
