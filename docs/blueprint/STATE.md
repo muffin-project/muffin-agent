@@ -8,6 +8,12 @@ quando l'owner usa Muffin per **14 giorni consecutivi** senza tornare al vecchio
 `~/dev/muffin-agent`; il vecchio `~/dev/Muffin` resta solo produzione fino al
 cutover. Il dettaglio del chiuso è nella cronaca sotto; qui resta l'aperto.
 
+**Sequenza operativa.** Prima si raggiunge **DAY-1 READY**: zero BLOCKER e zero
+`?` in M5-bis, installazione reale, stato recuperabile. Poi partono i 14 giorni;
+fix e build continuano, mentre gruppi/M6/M7 avanzano in parallelo. I gruppi si
+riattivano dopo la finestra, ma ogni primitiva costruita prima resta
+tenant/surface-agnostic: single-user è un default, non un hardcode.
+
 **Direzione (ADR-0045/0046).** Un solo agente continuo attraversa modello,
 sessione e device: fare · capire · essere presente. Evidence, beliefs, world
 state e work state sono piani distinti. Le surface sono porte: owner solo da
@@ -38,9 +44,9 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
 Integrate: **PR #30/#31/#33** in `dev`. **PR #32** `dev`→`main` ha ricevuto
-`ADJUST` sul delta completo: isolamento tenant degli allegati, bound e parti
-DOCX, symlink rileggibili e stato deleghe senza GitHub sono in correzione su
-`slice/adjust-main-promotion`. Serviranno CI e judge nuovi.
+`ADJUST` sul delta completo. Le cinque correzioni viaggiano nella draft
+**PR #34** `slice/adjust-main-promotion`→`dev`; richiede CI verde e un judge
+nuovo prima del merge. Solo dopo PR #32 riceve una verifica integrata nuova.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·

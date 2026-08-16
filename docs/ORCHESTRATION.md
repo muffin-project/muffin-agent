@@ -267,7 +267,7 @@ Il costo di questa forma è che la mappa può coprire solo ciò che è ancorabil
 codice vero, ed è precisamente il vincolo che si vuole: una casella senza ancora
 è una casella che non abbiamo il diritto di disegnare.
 
-## 14. Si ripara alla radice, e la radice è quasi sempre una forma
+## 15. Si ripara alla radice, e la radice è quasi sempre una forma
 
 Direttiva owner, 2026-08-15: *«quando ci sono cose da fixxare, proviamo sempre a
 fixxare alla radice, magari sono scelte sbagliate, o cose del genere, cerchiamo
@@ -307,3 +307,32 @@ E il corollario che questo repo paga più spesso: preferire la forma che
 **fallisce da sola** — un `switch` esaustivo, un tipo che obbliga il chiamante a
 gestire l'esito, un sink obbligatorio nella firma — a quella che dipende dal
 fatto che qualcuno si ricordi.
+
+## 16. Una slice locale deve restare vera per il progetto intero
+
+Direttiva owner, 2026-08-16: ogni pezzo costruito deve considerare il progetto
+intero. Il difetto da impedire non è soltanto l'hardcode letterale. È una
+garanzia progettata sul caso che si ha davanti — `host`, chat privata, Telegram,
+un provider, una macchina — e poi presentata come primitiva generale.
+
+Prima del piano, l'orchestratore fa una **passata d'impatto**:
+
+1. nomina tutti i produttori e consumer del contratto che cambia;
+2. cerca la stessa primitiva nel repo, nei branch e nei worktree non integrati;
+3. segue almeno un percorso di produzione e il suo failure path da capo a capo;
+4. verifica quali contratti, ADR, inventario, mappa e handoff devono cambiare;
+5. distingue il default operativo da un invariante architetturale.
+
+Il criterio non è «nessuna costante»: magic number e default legittimi
+esistono. È **nessuna decisione locale travestita da forma universale**. Tenant,
+principal, surface, provider, capability, budget e provenienza viaggiano come
+tipi o configurazione quando possono variare. Il single-user è la prima
+configurazione della forma multi-surface, non un percorso host-only da
+generalizzare dopo. I gruppi possono essere attivati dopo i quattordici giorni;
+la possibilità di isolarli non può essere aggiunta dopo senza riscrivere ciò
+che nel frattempo ha accumulato dati.
+
+Il judge attacca anche questa proprietà: muta il valore oggi dominante, prova
+un secondo tenant/surface/provider quando pertinente e cerca consumer non
+toccati dal diff. Se il test passa solo perché ogni fixture usa lo stesso caso,
+non è una prova di generalità.
