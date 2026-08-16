@@ -9,19 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-16
 
-**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Fix/build continuano; la forma resta tenant/surface-agnostic. Ordine: turno > permessi > superficie privata > memoria > acceptance.
+**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Ordine: turno > permessi > superficie privata > memoria > acceptance.
 
-**Inventario**: `M5-BIS.md` è autoritativo. DAY-1 parte a zero BLOCKER e zero `?`; niente conteggi copiati che possono invecchiare.
+**Inventario**: `M5-BIS.md` autoritativo. Oggi: E4, C4/C6, B8/B14, taint (#28) READY. Restano ~30 `?`: uno scenario ciascuno.
 
-**Non integrato**: WIP pushato sui branch — turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 · accettazione E4 (deleghe in volo: `deleghe.mjs riprendi`) · PR #28 taint, #29 Hermes. Mai READY prima dell'acceptance.
+**Non integrato**: solo #41 turno sospeso (ultime 2 correzioni). Poi `dev`→`main` con verifica nuova.
 
-**Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
+**Metodo (16/08 sera)**: una slice = una riga, ≤500 righe, un judge sonnet, 2 giri max, una alla volta; meccanica all'orchestratore.
 
-**Checkpoint**: #32 `dev`→`main` mergiata. #28/#29 riallineate → judge → merge. Tre fix chip (doctor esiti · vault `max` · reply-taint) in slice proprie. Poi turno-sospeso sopra #28.
+**Prossime slice**: A9 `init --local` · D12 «l'ASK dice cosa» · D2/D3/D11 journal per turno · prompt in `defaults/prompts/` · audit CLI+slash · C8 whisper · E1 budget per-job.
 
-**Critica**: una garanzia è obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
-
-**Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
+**Decisioni owner prese**: reversibilità (4 classi+journal) · audio (whisper) · shell dopo lettura = ASK · prompt in .md. **Aperte**: sandbox scope · `mcp.*` per-tool · `ricorda` · lingua doc.
 <!-- FINE BLOCCO -->
 
 ---

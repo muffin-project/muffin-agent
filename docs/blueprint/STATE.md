@@ -23,43 +23,54 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
 **Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario completo):
 
-- A2/A3: `identity.md` è template e manca il taglio persona dell'owner.
-- B2–B5: turno lungo, `wait`, `todo`, resume e budget per-job. Il record durevole
-  esiste; i consumer sono WIP sul branch `slice/turno-sospeso`.
-- B8/B14: delivery remota e allegati prodotti; WIP sul branch `slice/superfici`.
-- B15/B16: binding owner nel RoT e envelope tipizzato universale non esistono.
-  Telegram prova `from.id`+privato contro impersonazione, ma conserva il binding
-  nella config ordinaria e non tipizza ogni metadata/multimodale.
-- C4/C6: recall storico e grafo temporale (WIP su `slice/memoria-nel-tempo`).
-- C8: audio senza trascrizione. E4: acceptance harness (WIP su
-  `slice/accettazione`). Gli altri `?` restano debito anche quando non sono
-  blocker nominati.
+- A2/A3: `identity.md` è template e manca il taglio persona dell'owner (suoi).
+- B2: turno lungo su Telegram — una chiamata (`enqueueTurn` nel connector); per
+  decisione owner si chiude **al test di prod**. B3/B4/B5 sono in `dev` con
+  #41 (in merge). B8/B14 sono READY con #42.
+- B15/B16: binding owner nel RoT e envelope tipizzato universale. Metà fatta
+  con #42 (`identify()` unica su Telegram e Discord, DM-only su `channel_type`);
+  decisione owner: il pairing scrive e **sigilla da solo** il binding.
+- C8: audio — decisione owner: se il modello ha la capability, audio diretto;
+  altrimenti trascrizione locale con whisper/faster-whisper; fornitore per
+  capability scelto dalla CLI (`muffin provider set audio …`), senza plugin.
+- D2/D3/D11: scrittura file, undo, checkpoint — decisione owner: **quattro
+  classi + journal per turno** (copia prima della mutazione in
+  `~/.muffin/undo/<turno>/`, undo che riallinea filesystem e turno); vault
+  resta append-only.
+- D12 (nuova): l'ASK deve mostrare l'azione specifica (comando, URL, pid) e il
+  perché del taint. E1: budget per-job (testato, dinamico).
+- A9 (nuova): `muffin init --local` riusa i segreti persistiti per
+  un'installazione pulita di prova.
+- Circa trenta righe `?`: da chiudere una alla volta con uno scenario
+  dell'harness di accettazione (E4, READY, job CI verde su `dev`).
 
-**Non integrato.** Le quattro slice morte per limite di sessione (turno sospeso,
-superfici, memoria nel tempo, accettazione) non vivono più solo nei worktree: il
-loro lavoro è committato come WIP — non verificato, non integrabile così com'è —
-e pushato sui rispettivi branch; `.claude/deleghe.mjs riprendi` deriva branch,
-PR e delega che li sta riprendendo. `slice/hermes` (PR #29) e
-`slice/taint-in-ingresso` (PR #28) sono aperte verso `dev`. Nessun lavoro vale
-READY prima di integration test, wiring di produzione, failure path, scenario
-reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
+**Non integrato.** Solo `slice/turno-sospeso` (PR #41, ultime due correzioni:
+corsia unica del modello obbligatoria, «risposta senza indirizzo» persistita).
+Nessun lavoro vale READY prima di integration test, wiring di produzione,
+failure path, scenario reale, documenti/stato e percorso di chiusura di
+`ORCHESTRATION.md` §11.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Integrate in `dev`: **PR #30/#31/#33/#34**; **PR #32** `dev`→`main` è
-**mergiata** (`main` = `dev` più il merge). Aperte: **#28** e **#29**, entrambe
-in conflitto con `dev` dopo #30–#34 — riallineate, poi judge nuovo. Dei sei
-worktree lasciati dai chip dell'owner, tre fix erano bug vivi su `dev` e
-diventano slice proprie con la loro mutazione provata (`doctor` che piegava
-`error` su `ok`; `vaultPaths` che aggregava il tier con `min` invece di `max`;
-la risposta dell'agente salvata a `trustTier 0` dopo un turno sporco); tre sono
-scartati con motivo (superati da ADR-0039 e da `slice/superfici`, o sottoinsieme
-di un altro) e archiviati come commit sui loro branch `claude/*`.
+Il 16/08 sono entrate in `dev` **PR #28/#29/#35/#36/#37/#39/#40/#42/#43** (oltre
+a #30–#34 e a **#32** `dev`→`main` della notte). Metodo corretto dopo la
+giornata: le quattro slice-epic (4–5k righe) hanno richiesto 2–3 giri di judge
+ciascuna e conflitti a ogni merge sui file generati della mappa; da qui in poi
+**una slice = una riga di M5-BIS, ≤ ~500 righe, un judge sonnet, tetto due
+giri, una alla volta**; la meccanica (merge, rigenerazioni, correzioni da una
+riga, stato) la fa l'orchestratore. `dev`→`main` va promossa con una verifica
+integrata nuova.
 
-**Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
-modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
-identity/persona. Le decisioni sicurezza 0045/0046 sono invece ratificate.
+**Decisioni owner del 16/08.** Reversibilità: quattro classi + journal per turno
+(sopra). Audio: whisper/faster-whisper locale, fornitore per capability da CLI.
+`sys.shell` dopo una lettura: **ASK**, non deny (`maxTaint: 2`, ADR-0044
+§Revisione). Prompt: tutti i prompt puro-Muffin in `defaults/prompts/*.md`
+importati; `identity.md`/`voice.md` restano in `~/.muffin/` (identity nel RoT) —
+da capire meglio quali, per ora ok. Ancora aperte: scope lettura sandbox ·
+`mcp.*` per-tool · `ricorda` scrive o propone · lingua docs pubblici. Richiesta:
+audit dei comandi CLI e degli slash (tenere/modificare/eliminare, mancanti,
+tenant sugli slash: alcuni solo owner).
 
 **File load-bearing — LEGGI PRIMA di lavorare:**
 

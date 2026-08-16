@@ -2211,7 +2211,7 @@
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 253,
+    "line": 254,
     "testo": "> **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel"
   },
   "executor.ts:112": {
