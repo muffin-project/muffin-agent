@@ -6,6 +6,7 @@ Refactor da zero di Muffin, prodotto in tre fasi (ricerca parallela → sintesi 
 
 | File | Cosa contiene | Quando serve |
 |---|---|---|
+| `../THESIS.md` + `../foundations/VISION.md` | La scommessa e la nord-stella: un agente continuo, tre assi, molte superfici | Prima di cambiare direzione di prodotto |
 | `BRIEF.md` | Il mandato originale verbatim + Addendum owner №1 | Contesto di tutto |
 | **`00-findings.md`** | Fase A: 12 finding, inventario keep/change/kill, prior art, standard, memoria, modelli | **Da qui** |
 | `01-verdetti.md` | Verdetti su tutte le ipotesi di Livello 1 (V1-V13), nome, criterio di successo | Perché le scelte |
@@ -18,7 +19,7 @@ Refactor da zero di Muffin, prodotto in tre fasi (ricerca parallela → sintesi 
 | `08-assunzioni.md` | 39 scelte implicite da approvare esplicitamente | Revisione owner |
 | **`09-contratti-m0-m1.md`** | **Normativo**: tipi, formati file, numeri del floor, boot, errori, CLI, dipendenze | **Per implementare** |
 | `10-risoluzioni-fase-c.md` | Verdetti sulle 3 critiche ostili + la decisione che resta all'owner | Cosa è cambiato e perché |
-| `adr/0001-0035` | Una decisione per file: contesto, alternative scartate, conseguenze, **reversibilità** | Quando una scelta va rimessa in discussione |
+| `adr/0001-0043`, `0045-0046` | Decisioni integrate: contesto, alternative, conseguenze, **reversibilità**. ADR-0044 resta su `slice/taint-in-ingresso` finché quella slice non viene fusa | Quando una scelta va rimessa in discussione |
 | `research/a1-a6`, `b1-b3` | Evidenza grezza di Fase A/D con fonte (inventario, prior art, standard, memoria, modelli, sandbox; runtime, multimodale, media) | Verificare un claim |
 | `research/` (il resto) | Ricerche nate durante il building, una per domanda: confronto coi peer, inventario vecchio-nuovo, **confronto con la consulenza esterna**, superficie capability, architettura del system prompt, proattività, salienza e fusione, caching per-connector, benchmark, EU AI Act, onboarding, dev-setup | Prima di progettare l'organo di cui parlano |
 | `knowledge/` | Il corpus cognitivo — cosa abbiamo capito noi e perché, con VIVO/SUPERATO in testa a ogni voce | **Prima di progettare un organo cognitivo** (memoria, proattività, specchio, retrieval) |

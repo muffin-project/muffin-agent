@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildPdf, pagesWithoutText } from '../documents/fixtures/pdf.js';
 import type { Embedder } from '../memory/embed.js';
 import { MemoryStore } from '../memory/store.js';
 import { VectorIndex } from '../memory/vectors.js';
@@ -63,6 +64,23 @@ describe('vault', () => {
     await f.vault.reindex(HOST, { now: NOW });
     const second = await f.vault.reindex(HOST, { now: NOW });
     expect(second).toMatchObject({ unchanged: 1, added: 0, updated: 0, chunks: 0 });
+  });
+
+  it('indexes one named path without granting that tenant the rest of the vault', async () => {
+    const f = fixture();
+    write(f.root, 'private.md', '# Private\n\nOWNERONLY\n');
+    write(f.root, 'existing.md', '# Existing\n\nSTILLTHERE\n');
+    write(f.root, 'incoming.md', '# Incoming\n\nGROUPONLY\n');
+    await f.vault.reindexPath('group:telegram:7', 'existing.md', { now: NOW });
+
+    const report = await f.vault.reindexPath('group:telegram:7', 'incoming.md', { now: NOW });
+
+    expect(report).toMatchObject({ scanned: 1, added: 1, removed: 0 });
+    expect(f.store.searchEpisodes('group:telegram:7', 'GROUPONLY')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'STILLTHERE')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'OWNERONLY')).toHaveLength(0);
+    expect(await f.vault.reindexPath('group:telegram:7', '../private.md', { now: NOW }))
+      .toMatchObject({ scanned: 0, added: 0, skipped: [{ path: '../private.md' }] });
   });
 
   it('actually reindexes a changed file — the failure every comparable system has', async () => {
@@ -138,18 +156,18 @@ describe('vault', () => {
     const f = fixture();
     write(f.root, 'a.md', '# A\n\ntesto\n');
     await f.vault.reindex(HOST, { now: NOW });
-    expect(f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [], orphaned: [] });
+    expect(await f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [], orphaned: [] });
 
     // Three ways an index goes wrong, all silent without this check.
     write(f.root, 'b.md', '# B\n\nmai indicizzato\n');           // never indexed
     write(f.root, 'a.md', '# A\n\ncambiato fuori da Muffin\n');  // changed behind our back
-    const audit = f.vault.audit(HOST);
+    const audit = await f.vault.audit(HOST);
     expect(audit.missing).toEqual(['b.md']);
     expect(audit.stale).toEqual(['a.md']);
 
     rmSync(join(f.root, 'a.md'));
     rmSync(join(f.root, 'b.md'));
-    expect(f.vault.audit(HOST).orphaned).toEqual(['a.md']);
+    expect((await f.vault.audit(HOST)).orphaned).toEqual(['a.md']);
   });
 
   it('never indexes a dotfile, and says it did not', async () => {
@@ -180,21 +198,21 @@ describe('vault', () => {
     expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('nascosto');
   });
 
-  it('follows a symlinked note — the ordinary setup, not an edge case', async () => {
-    // A vault whose notes live elsewhere and are linked in is how people use
-    // this. `Dirent.isFile()` is false for a link, so the previous version
-    // dropped them without a word — and `audit()` shared the blind spot,
-    // reporting "aligned" over a vault it could not see.
+  it('refuses an external symlink instead of indexing a source document_read cannot reopen', async () => {
+    // Indexing this used to advertise a working way back into the note while
+    // Vault.document correctly refused the external realpath. Following it at
+    // read time would be worse: the link can be retargeted after indexing.
     const f = fixture();
     mkdirSync(join(f.root, '..', 'obsidian'), { recursive: true });
     writeFileSync(join(f.root, '..', 'obsidian', 'diario.md'), '# Diario\n\nil ritrovo è al porto\n');
     symlinkSync(join(f.root, '..', 'obsidian', 'diario.md'), join(f.root, 'diario.md'));
 
     const report = await f.vault.reindex(HOST, { now: NOW });
-    expect(report.scanned).toBe(1);
-    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(1);
-    // And the audit agrees with the reindex, because both enumerate the same way.
-    expect(f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [] });
+    expect(report.scanned).toBe(0);
+    expect(report.skipped.find((s) => s.path === 'diario.md')?.why).toContain('link esterno');
+    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(0);
+    expect(await f.vault.document(HOST, 'diario.md')).toBeNull();
+    expect(await f.vault.audit(HOST)).toMatchObject({ files: 0, indexed: 0, missing: [], stale: [] });
   });
 
   it('does not launder the tier when a file is renamed', async () => {
@@ -220,5 +238,136 @@ describe('vault', () => {
     write(f.root, 'vero.md', '# sì\n\ntesto\n');
     const report = await f.vault.reindex(HOST, { now: NOW });
     expect(report.scanned).toBe(1);
+  });
+});
+
+/**
+ * M5-bis C7. Until this, a PDF dropped in the vault was recorded as *"non è
+ * testo — serve un estrattore"*: the bytes were kept and not one word of them
+ * was ever recallable. These are the properties that make the row `READY`
+ * rather than merely "there is a parser now".
+ */
+describe('a PDF in the vault', () => {
+  const CONTRATTO = buildPdf({
+    title: 'Contratto',
+    pages: [
+      ['Contratto di locazione', 'Le parti convengono quanto segue.'],
+      ['Canone mensile 850 euro'],
+      ['Recesso con preavviso di tre mesi'],
+    ],
+  });
+
+  it('goes in whole — the last page is recallable, not just the first', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.added).toBe(1);
+    // Page three, the one a truncating intake loses without a word.
+    expect(f.store.searchEpisodes(HOST, 'preavviso')).toHaveLength(1);
+    expect(f.store.searchEpisodes(HOST, 'Canone')).toHaveLength(1);
+    expect(report.documents).toMatchObject([{ path: 'contratto.pdf', format: 'pdf', parts: 3 }]);
+  });
+
+  it('gives every chunk the page it came from, so a citation can be checked', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
+    await f.vault.reindex(HOST, { now: NOW });
+
+    const hit = f.store.searchEpisodes(HOST, 'preavviso')[0]!;
+    expect(f.store.episodeById(HOST, hit.id)?.content).toContain('p. 3');
+    expect(f.store.episodeById(HOST, hit.id)?.content).toContain('Contratto');
+  });
+
+  it('carries the compact view on the report, for the surface that announces it', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    const outline = report.documents[0]!.outline;
+    expect(outline).toContain('3 pagine');
+    expect(outline).toContain('document_read');
+  });
+
+  it('refuses a scan out loud, and does not index it as an empty document', async () => {
+    // The failure that looks like success: pages exist, characters do not. An
+    // extractor that returned "" here would file the document as read.
+    const f = fixture();
+    writeFileSync(join(f.root, 'scansione.pdf'), pagesWithoutText(3));
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.added).toBe(0);
+    expect(f.store.episodesForVaultPath(HOST, 'scansione.pdf')).toHaveLength(0);
+    const why = report.skipped.find((s) => s.path === 'scansione.pdf')?.why ?? '';
+    expect(why).toContain('OCR');
+    expect(why).toContain('3 pagine');
+  });
+
+  it('does not re-parse an unchanged document, and does not call it drift', async () => {
+    // Full maintenance scans still need to make "has this changed" cheap. File
+    // arrivals use reindexPath and never enumerate the other forty-nine.
+    const f = fixture();
+    writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
+    await f.vault.reindex(HOST, { now: NOW });
+
+    const second = await f.vault.reindex(HOST, { now: NOW });
+    expect(second).toMatchObject({ unchanged: 1, added: 0, updated: 0, chunks: 0 });
+    expect(second.documents).toHaveLength(0);
+    expect(await f.vault.audit(HOST)).toMatchObject({ missing: [], stale: [], orphaned: [] });
+  });
+
+  it('does not report a scan as drift for ever', async () => {
+    // A hash cannot tell "nobody indexed this" from "there is nothing here to
+    // index". Reporting the second as drift would give `doctor` a permanent
+    // complaint whose stated remedy — reindex — cannot fix it.
+    const f = fixture();
+    writeFileSync(join(f.root, 'scansione.pdf'), pagesWithoutText(2));
+    await f.vault.reindex(HOST, { now: NOW });
+    expect(await f.vault.audit(HOST)).toMatchObject({ missing: [], stale: [] });
+  });
+
+  it('reindexes a document whose bytes changed', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
+    await f.vault.reindex(HOST, { now: NOW });
+
+    writeFileSync(join(f.root, 'contratto.pdf'), buildPdf({ pages: [['Canone mensile 900 euro']] }));
+    expect(await f.vault.audit(HOST)).toMatchObject({ stale: ['contratto.pdf'] });
+    const report = await f.vault.reindex(HOST, { now: NOW });
+    expect(report.updated).toBe(1);
+    expect(f.store.searchEpisodes(HOST, '900')).toHaveLength(1);
+    // Nothing is deleted: "what did that document say in May" stays answerable.
+    expect(f.store.searchEpisodes(HOST, '850')).toHaveLength(0);
+  });
+});
+
+describe('reading a document back', () => {
+  it('hands over the file text, not a reassembly of chunks', async () => {
+    const f = fixture();
+    writeFileSync(f.root + '/relazione.pdf', buildPdf({ pages: [['prima'], ['seconda']] }));
+    await f.vault.reindex(HOST, { now: NOW });
+
+    const doc = await f.vault.document(HOST, 'relazione.pdf');
+    expect(doc?.pages).toHaveLength(2);
+    // The stored chunks carry a context line the document does not contain.
+    // Reading through the file is what keeps that out of a quoted portion.
+    expect(doc?.text).not.toContain('relazione.pdf');
+    expect(doc?.pages[1]).toContain('seconda');
+  });
+
+  it('answers nothing for a tenant that does not have it', async () => {
+    // The whole tenant check for the drill-down tool. A group turn naming a host
+    // document must not be able to open it.
+    const f = fixture();
+    writeFileSync(f.root + '/privato.pdf', buildPdf({ pages: [['riservato']] }));
+    await f.vault.reindex(HOST, { now: NOW });
+
+    expect(await f.vault.document('group:telegram:-100', 'privato.pdf')).toBeNull();
+  });
+
+  it('refuses a path that climbs out of the vault', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, '..', 'segreto.md'), '# fuori dal vault\n\nchiave\n');
+    expect(await f.vault.document(HOST, '../segreto.md')).toBeNull();
   });
 });

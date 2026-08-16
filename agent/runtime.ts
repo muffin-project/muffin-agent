@@ -18,7 +18,9 @@ import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
+import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
+import { Vault } from '../core/vault/vault.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
@@ -65,6 +67,12 @@ export type Runtime = {
    */
   light: { provider: Provider; model: string };
   memory: { store: MemoryStore; recall: RecallDeps };
+  /**
+   * The document store behind memory. Exposed so a surface indexes into the
+   * same root the `document_read` tool reads from — two roots is a bug that
+   * presents as "the document is not in my memory".
+   */
+  vault: Vault;
   budget: BudgetEngine;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
@@ -252,6 +260,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     reranker: new LlmReranker(light, config.models.light),
   };
 
+  // One vault per runtime, shared by the tool that reads documents and by the
+  // surfaces that put them there. Built here rather than in each caller so the
+  // drill-down and the connector cannot end up pointed at different roots —
+  // which would fail as "document not found" and look like a tenant problem.
+  const vault = new Vault(memoryStore, p.vault);
+
   // Writes are scoped to the working directory, and the root of trust is never
   // writable from a tool whatever the scope says.
   //
@@ -294,6 +308,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // the answer was anchored to anything.
       keepResult: true,
     },
+    // The other half of "a document enters whole": the vault stores every page
+    // and the model is handed an index, so it needs a door back to the text.
+    // An index with no door is a summary with extra steps.
+    makeDocumentTool(vault, memoryStore),
   ];
 
   // The hands of M3. The shell tool is registered only when the probe proved a
@@ -380,6 +398,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     [
       ...fsCapabilities,
       memoryCapability,
+      documentCapability,
       shellCapability,
       httpCapability,
       ...processCapabilities,
@@ -478,6 +497,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     },
     light: { provider: light, model: config.models.light },
     memory: { store: memoryStore, recall: recallDeps },
+    vault,
     deps: {
       provider,
       profile,
