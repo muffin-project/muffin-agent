@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import { DELIVERED } from '../surface/types.js';
 import { JobStore } from '../scheduler/jobs.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { createNotifier } from './notify.js';
@@ -19,7 +20,7 @@ import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
 
 function harness(
   over: {
-    runJob?: () => Promise<{ stopped: 'answered'; text: string }>;
+    runJob?: () => Promise<{ stopped: 'answered'; text: string; turnId: string | null }>;
     tickMs?: number;
     /** Pass an array to make it supervised: every datagram lands here. */
     sent?: string[];
@@ -52,10 +53,8 @@ function harness(
 
   const scheduler = new Scheduler(
     jobs,
-    over.runJob ?? (async () => ({ stopped: 'answered', text: 'fatto' })),
-    async (_channel, text) => {
-      delivered.push(text);
-    },
+    over.runJob ?? (async () => ({ stopped: 'answered', text: 'fatto', turnId: 'turn-test' })),
+    async (_channel, text) => (delivered.push(text), DELIVERED),
   );
 
   const sent = over.sent;
@@ -179,7 +178,7 @@ describe('a drain does not lose work', () => {
     const h = harness({
       runJob: async () => {
         await inFlight;
-        return { stopped: 'answered', text: 'fatto' };
+        return { stopped: 'answered', text: 'fatto', turnId: 'turn-test' };
       },
     });
     dueJob(h);
@@ -313,7 +312,7 @@ describe('supervision hooks', () => {
       // A supervisor that is listening, faked at the transport so no systemd is
       // involved: the module under test is the cadence, not the socket.
       notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p)),
-      scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}),
+      scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '', turnId: 'turn-test' }), async () => DELIVERED),
       jobs,
       close: () => {},
       log: () => {},

@@ -110,8 +110,11 @@ describe('a telegram turn records where the answer goes and whether it got there
     const row = h.row();
     // The address is on the record and not only on the stack. Nothing reads it
     // yet — this same function still delivers — and that is the point: the day
-    // the lane delivers instead, the address is already durable.
-    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10 });
+    // the lane delivers instead, the address is already durable. `channel` is
+    // the SurfaceRegistry address that day's lane (#41, turno sospeso) needs —
+    // without it the row has Telegram's own addressing but nothing saying
+    // which registry entry to deliver through.
+    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10, channel: `telegram:${OWNER}` });
     expect(row?.outcome).toBe('answered');
     expect(row?.delivery).toBe('sent');
     h.runtime.close();

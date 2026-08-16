@@ -90,6 +90,26 @@ export const ConfigSchema = z.object({
           .optional(),
       })
       .optional(),
+    /**
+     * Same shape as `telegram`, one field different: `ownerUserId` is a
+     * **string**, never `z.number()`. A Discord snowflake is a 64-bit id — real
+     * ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one
+     * through `z.number()` would silently round it, and a config file is
+     * exactly the hand-edited, JSON-serialised path where that rounding is
+     * invisible until the id it produces never matches anyone.
+     */
+    discord: z
+      .object({
+        ownerUserId: z.string().regex(/^[0-9]+$/).optional(),
+        pairing: z
+          .object({
+            hash: z.string().min(1),
+            expiresAt: z.string().min(1),
+            attempts: z.number().int().nonnegative(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
 });
 
