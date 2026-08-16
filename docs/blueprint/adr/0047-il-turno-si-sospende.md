@@ -79,6 +79,15 @@ La classe di rischio resta `medium`, perché risponde a un'altra domanda: cosa l
 chiamata **impegna** (una riga, un contesto, un prefisso ririmandato che nessun
 contatore misura ancora). Tetto di taint e classe di rischio sono due assi.
 
+**Il tetto alzato vale solo per l'host** (N2, judge giro 2). `wait` dichiara
+`hostOnly: true` (`agent/tools/wait.ts`): un membro di gruppo a tier 2 che arma
+un'attesa persistente è una superficie che il threat model non ha ancora
+esaminato, quindi resta fail-closed — il kernel rifiuta un membro qui
+(`decide.ts`) e `visibleTools` toglie il tool dal suo menu, non solo dal
+risultato. La domanda resta aperta per quando i gruppi si attivano: *se* e a
+quale tetto un `wait` di gruppo debba essere permesso non è deciso da questa
+ADR.
+
 > **Principio, dall'owner (2026-08-16):** un tetto che rende inusabile la
 > capability nel suo caso canonico non è una difesa, è un difetto. La direzione
 > è l'usabilità reale — mai «chiedi ogni cinque minuti», che è il modo in cui un
