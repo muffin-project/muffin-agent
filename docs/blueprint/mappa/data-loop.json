@@ -234,7 +234,7 @@
       "title": "Handler eseguito, risultato accodato, il loop riparte",
       "file": "agent/loop.ts:823-847, 592",
       "what": "Su allow (o ask approvato), l'handler del tool gira con {tenant, principal} presi dal turno reale (mai cablati alla registrazione); il suo esito puo' alzare la taint dello snapshot (es. tier 3 per risultati web/terze parti); il risultato viene accodato al log della sessione e alla lista tool_result del turno. Dopo che tutte le chiamate del batch sono finite, i risultati vengono accodati come un unico messaggio utente e il loop itera di nuovo.",
-      "taint": "puo' salire fino a 3 se outcome.tier lo dice — loop.ts:825, 134-136",
+      "taint": "sale sempre a outcome.tier, che ogni tool DEVE dichiarare (campo obbligatorio, ADR-0044): 3 web/mcp, 2 disco (fs_read, fs_list, stdout di shell_run), 1 process_list e skill_read, 0 quando il risultato sono parole del tool — loop.ts:825, 134-136",
       "branches": [
         {
           "cond": "AbortSignal scatta tra una tool call e l'altra dentro un batch",
