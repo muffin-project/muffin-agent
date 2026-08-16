@@ -1,0 +1,164 @@
+import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { TurnStore } from '../../core/turns/store.js';
+import { MAX_SUSPENDED_PER_TENANT, MAX_WAIT_MS, MIN_WAIT_MS, parseWait } from '../../core/turns/wait.js';
+import type { RegisteredTool } from '../loop.js';
+import type { ToolSpec } from '../providers/types.js';
+
+/**
+ * `wait` — the door onto a runtime primitive, not a tool that sleeps.
+ *
+ * The handler does not block, does not `setTimeout`, and does not return late.
+ * It validates the request, checks the ceiling and **arms a barrier on the
+ * turn**; the loop honours it at its next suspension point, persists the
+ * record and returns. That ordering is the whole difference between this and
+ * `await sleep()`: the runtime is released, and a process that dies during the
+ * wait loses nothing, because the wait is a row and not a stack frame.
+ *
+ * ## Why the barrier is armed rather than thrown
+ *
+ * A model emits several tool calls in one turn. Suspending from inside the
+ * handler — by throwing, the way `ApprovalRequired` does — would leave the
+ * calls after it in the batch with a `tool_use` block and no `tool_result`,
+ * which is a malformed request the next provider call rejects. So the barrier
+ * is honoured **between iterations**, after the batch completes: every call
+ * gets its result, and the suspension happens at the point the design already
+ * proved was clean (`research/turno-sospendibile.md` §T3, suspension point 1).
+ *
+ * It is also the semantics the prior art converged on independently: Hermes's
+ * `/goal wait` is *a barrier on the next turn*, and ADR-0035 describes `steer`
+ * as injecting after the next tool call without interrupting. Something that
+ * has to stop **now** is not `wait` — it is `abort`, which already exists
+ * (`input.signal`) and already has the right promise: the work stays owed.
+ */
+
+/**
+ * `tier: 0`, and the reason is written rather than left to the default.
+ *
+ * This tool brings no bytes in from anywhere: it reads a number the model
+ * already had and writes two columns of our own row. Declared explicitly
+ * because `ToolOutcome.tier` is on its way to being mandatory
+ * (`slice/taint-in-ingresso`), and a tool whose tier is absent because nobody
+ * thought about it is indistinguishable, at the merge, from one whose tier is
+ * absent because it is genuinely zero.
+ */
+const CLEAN: 0 = 0;
+
+export const waitCapability: CapabilityDecl = {
+  id: 'turn.wait',
+  /**
+   * `medium`, not `low`. A wait costs nothing at the moment it is armed and
+   * something real afterwards: it holds a row and its whole context, and every
+   * resume re-sends the prefix — a turn that waits ten times pays ten prefixes,
+   * and the per-turn budget that would measure that does not exist yet
+   * (`M5-BIS.md` E1). Rated for what it commits to, not for what it does.
+   */
+  risk: 'medium',
+  /**
+   * `'yes'`: nothing landed in the world, and the barrier can be cleared by
+   * finishing the turn. There is no state outside our own database to undo.
+   */
+  reversible: 'yes',
+  /**
+   * **Re-runnable, and the argument is not "it is harmless".**
+   *
+   * Arming a wait twice does not produce two waits: `suspend` writes `wake_at`
+   * and `wait_for` on one row, so the second call overwrites the first. The
+   * observable effect of one call and of two identical calls is the same row
+   * in the same state — which is the actual test for re-runnability
+   * (`fs.write` passes it, sending a message does not).
+   *
+   * The one asymmetry, stated because it is the sort of thing that gets
+   * discovered later: a *re-run* re-computes the deadline from the new `now`,
+   * so a wait that is re-armed after a crash ends later than the original
+   * would have. It ends, and it ends within the same bound, which is what the
+   * declaration promises.
+   */
+  rerunnable: true,
+  resourceKind: 'none',
+  policyArgs: ['seconds', 'untilProcessExits'],
+  /**
+   * Host only, and this is a fail-closed answer to an open question rather
+   * than a considered permission.
+   *
+   * The design records it as unresolved: *"Se il `wait` di un turno di gruppo
+   * debba essere permesso affatto"* — a tier-2 member who can arm a persistent
+   * wait is a surface the threat model has not examined. Until it is examined,
+   * the answer that cannot be wrong is no. The kernel refuses a member here
+   * (`decide.ts`) and `visibleTools` keeps it off their menu, so a group turn
+   * neither sees it nor could use it.
+   */
+  hostOnly: true,
+};
+
+export const waitSpec: ToolSpec = {
+  name: 'wait',
+  description:
+    'Suspend this turn and come back later. The turn is persisted and the runtime is released — ' +
+    'this is not a sleep, and nothing runs in the meantime. `seconds` is required and is the deadline ' +
+    `(min ${MIN_WAIT_MS / 1000}s, max ${MAX_WAIT_MS / 1000}s). Optionally also wait for a process to exit ` +
+    'with `until_process_exits`; whichever happens first wakes the turn, and you are told which. ' +
+    'Use it when the answer depends on something that has not happened yet. Do not use it to pace ' +
+    'yourself: if you can do the work now, do it now.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      seconds: {
+        type: 'number',
+        description: `Deadline in seconds. Required. Between ${MIN_WAIT_MS / 1000} and ${MAX_WAIT_MS / 1000}.`,
+      },
+      until_process_exits: {
+        type: 'number',
+        description: 'Optional pid > 1. Wakes as soon as that process is gone, or at the deadline.',
+      },
+      why: { type: 'string', description: 'One line: what you are waiting for. Shown to the owner.' },
+    },
+    required: ['seconds'],
+  },
+};
+
+/**
+ * The tool, over the store it needs for one thing only: counting.
+ *
+ * The ceiling has to be checked against the database — it is "how many rows is
+ * this tenant already holding" — and the kernel cannot do it, because
+ * `decide` is synchronous and pure by contract and may not read. So it is
+ * enforced here, at the boundary, and the refusal names the number: a limit
+ * that fails without saying which one it was is a limit debugged by reading
+ * source.
+ */
+export function makeWaitTool(turns: Pick<TurnStore, 'countSuspended'>, now: () => Date = () => new Date()): RegisteredTool {
+  return {
+    capability: waitCapability.id,
+    spec: waitSpec,
+    handler: (args, ctx) => {
+      const a = (args ?? {}) as { seconds?: unknown; until_process_exits?: unknown; why?: unknown };
+      const parsed = parseWait(
+        { seconds: a.seconds, untilProcessExits: a.until_process_exits },
+        now(),
+      );
+      if (!parsed.ok) return { content: `wait rifiutato: ${parsed.why}`, isError: true, tier: CLEAN };
+
+      const held = turns.countSuspended(ctx.tenant);
+      if (held >= MAX_SUSPENDED_PER_TENANT) {
+        return {
+          content:
+            `wait rifiutato: ci sono già ${held} turni sospesi su questo tenant, il tetto è ` +
+            `${MAX_SUSPENDED_PER_TENANT}. Chiudine uno prima di aprirne un altro, o finisci senza aspettare.`,
+          isError: true,
+          tier: CLEAN,
+        };
+      }
+
+      // Armed, not executed. The loop reads the barrier at its next suspension
+      // point; nothing here waits, and the text below is what the model sees in
+      // the transcript *before* the suspension, so it must not claim the wait
+      // is over.
+      ctx.suspend(parsed.spec);
+      const until = parsed.spec.waitFor === null ? '' : ` o finché il processo ${parsed.spec.waitFor.pid} non esce`;
+      return {
+        content: `Attesa armata fino a ${parsed.spec.wakeAt}${until}. Il turno si sospende qui e riprende da solo.`,
+        tier: CLEAN,
+      };
+    },
+  };
+}
