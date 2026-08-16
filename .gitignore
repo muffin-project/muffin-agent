@@ -3,6 +3,10 @@ dist/
 *.log
 .DS_Store
 
+# Local generated knowledge graph. The persistent outputs are useful across
+# sessions, but they are machine-specific build artefacts, not source.
+graphify-out/
+
 # Secrets & local env (hardened before first publish)
 .env
 .env.*
@@ -23,3 +27,8 @@ secrets/
 # cannot be committed by accident.
 zz-*
 *.probe.ts
+
+# I digest delle deleghe si rigenerano da `node .claude/deleghe.mjs raccogli`.
+# Il registro NO: e' l'intento con cui una delega e' partita, e se si perde
+# restano transcript anonimi — che e' esattamente il buco che il registro chiude.
+.claude/deleghe/*.md

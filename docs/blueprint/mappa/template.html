@@ -1,0 +1,879 @@
+<title>Muffin, dentro</title>
+<style>
+  /* ---------------------------------------------------------------------
+     Un taccuino di ingegneria: prosa in un serif da lettura, strumenti in
+     monospazio. Il colore porta una sola informazione — il taint, cioè quanto
+     un turno si è sporcato — e sale dal grigio-ardesia all'argilla. Il viola,
+     che non sta su quella scala, è riservato a ciò che NON esiste: dichiarato
+     e non collegato. È l'unica cosa che questo repo teme davvero.
+     --------------------------------------------------------------------- */
+  :root {
+    --fondo: #eae7df;
+    --carta: #f5f3ee;
+    --carta2: #dfdbd1;
+    --inchiostro: #17191c;
+    --sordo: #6b6e68;
+    --linea: #cfcabf;
+    --linea-forte: #b3ada0;
+    --accento: #97590a;
+    --accento-tenue: #f0e2cc;
+    --t0: #4f7280;
+    --t1: #9a6f16;
+    --t2: #a44f26;
+    --t3: #8b3128;
+    --assenza: #64499a;
+    --assenza-tenue: #e7e0f2;
+    --ok: #3a6a45;
+    --ombra: 0 1px 2px rgb(23 25 28 / 8%), 0 8px 24px rgb(23 25 28 / 6%);
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Charter, Georgia, serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #14171a;
+      --carta: #1b1f24;
+      --carta2: #242a31;
+      --inchiostro: #e7e4dd;
+      --sordo: #969a96;
+      --linea: #2e353d;
+      --linea-forte: #414a54;
+      --accento: #dfa249;
+      --accento-tenue: #33291a;
+      --t0: #74a0b2;
+      --t1: #d4a43c;
+      --t2: #d9793e;
+      --t3: #d75b4a;
+      --assenza: #a98ce0;
+      --assenza-tenue: #272042;
+      --ok: #67ab76;
+      --ombra: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 28px rgb(0 0 0 / 28%);
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #14171a;
+    --carta: #1b1f24;
+    --carta2: #242a31;
+    --inchiostro: #e7e4dd;
+    --sordo: #969a96;
+    --linea: #2e353d;
+    --linea-forte: #414a54;
+    --accento: #dfa249;
+    --accento-tenue: #33291a;
+    --t0: #74a0b2;
+    --t1: #d4a43c;
+    --t2: #d9793e;
+    --t3: #d75b4a;
+    --assenza: #a98ce0;
+    --assenza-tenue: #272042;
+    --ok: #67ab76;
+    --ombra: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 28px rgb(0 0 0 / 28%);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--inchiostro);
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { text-wrap: balance; margin: 0; letter-spacing: -0.015em; }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accento); outline-offset: 2px; border-radius: 3px; }
+
+  .etichetta {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--sordo);
+  }
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+
+  /* --- impalcatura --------------------------------------------------- */
+  #app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+  .rail {
+    border-right: 1px solid var(--linea);
+    background: var(--carta);
+    padding: 22px 0 40px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .marchio { padding: 0 20px 18px; }
+  .marchio b { font-size: 19px; font-weight: 600; display: block; letter-spacing: -0.02em; }
+  .marchio span { font-size: 12.5px; color: var(--sordo); }
+  .voce {
+    display: flex; align-items: baseline; gap: 9px;
+    width: 100%; padding: 7px 20px; text-align: left;
+    border-left: 2px solid transparent; color: var(--sordo);
+  }
+  .voce:hover { color: var(--inchiostro); background: var(--carta2); }
+  .voce[aria-current="true"] { color: var(--inchiostro); border-left-color: var(--accento); background: var(--carta2); }
+  .voce b { font-weight: 600; font-size: 14.5px; }
+  .voce i { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--sordo); margin-left: auto; }
+
+  .strumenti { margin-top: auto; padding: 16px 20px 0; display: grid; gap: 10px; }
+  .cerca {
+    width: 100%; padding: 7px 10px; font-family: var(--mono); font-size: 12px;
+    background: var(--fondo); color: var(--inchiostro);
+    border: 1px solid var(--linea-forte); border-radius: 5px;
+  }
+  .interruttore { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--sordo); }
+  .interruttore input { accent-color: var(--assenza); }
+
+  main { min-width: 0; padding: 34px 40px 120px; max-width: 1180px; }
+  .cappello { margin-bottom: 30px; }
+  .cappello h2 { font-size: 30px; font-weight: 600; margin-bottom: 6px; }
+  .cappello p { max-width: 64ch; color: var(--sordo); margin: 0; }
+  .cappello p strong { color: var(--inchiostro); font-weight: 600; }
+
+  section { margin-bottom: 46px; }
+  section > h3 {
+    font-size: 12px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--sordo); font-weight: 500;
+    padding-bottom: 7px; margin-bottom: 18px; border-bottom: 1px solid var(--linea);
+  }
+  .nota { max-width: 64ch; color: var(--sordo); font-size: 14.5px; margin: -6px 0 18px; }
+
+  /* --- tela dei grafi ------------------------------------------------ */
+  .tela { position: relative; overflow-x: auto; padding-bottom: 8px; }
+  .tela-int { position: relative; }
+  .tela svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+  .arco { fill: none; stroke: var(--linea-forte); stroke-width: 1.5px; }
+  .arco.ramo { stroke-dasharray: 3 3; stroke: var(--sordo); opacity: 0.75; }
+  .arco.ritorno { stroke: var(--accento); stroke-width: 1.5px; stroke-dasharray: 5 3; }
+  .arco.morto { stroke: var(--assenza); stroke-dasharray: 2 4; }
+
+  .nodo {
+    position: absolute; text-align: left;
+    background: var(--carta); border: 1px solid var(--linea-forte); border-radius: 6px;
+    padding: 9px 11px; box-shadow: var(--ombra); overflow: hidden;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .nodo:hover, .nodo:focus-visible { transform: translateY(-1px); border-color: var(--accento); z-index: 3; }
+  .nodo .n { font-family: var(--mono); font-size: 9.5px; color: var(--sordo); letter-spacing: 0.08em; }
+  .nodo .t { font-weight: 600; font-size: 13.5px; line-height: 1.3; margin: 1px 0 3px; }
+  .nodo .s { font-size: 11.5px; color: var(--sordo); line-height: 1.35; }
+  .nodo.ramo { background: var(--carta2); box-shadow: none; border-style: dashed; }
+  .nodo.ramo .t { font-weight: 500; font-size: 12px; }
+  .nodo.spenta { border-color: var(--assenza); background: var(--assenza-tenue); }
+  .nodo.attivo { border-color: var(--accento); box-shadow: 0 0 0 2px var(--accento-tenue), var(--ombra); }
+  .nodo .barra { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  .nodo.pad { padding-left: 14px; }
+
+  .smorza { opacity: 0.22; filter: saturate(0.3); }
+  .evidenzia { box-shadow: 0 0 0 2px var(--accento), var(--ombra); }
+
+  /* --- griglie e schede ---------------------------------------------- */
+  .griglia { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); }
+  .griglia.larga { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .scheda {
+    position: relative; text-align: left; width: 100%;
+    background: var(--carta); border: 1px solid var(--linea); border-radius: 7px;
+    padding: 12px 13px 12px 16px; box-shadow: var(--ombra);
+    transition: border-color 0.12s ease, transform 0.12s ease;
+  }
+  .scheda:hover, .scheda:focus-visible { border-color: var(--accento); transform: translateY(-1px); }
+  .scheda .barra { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 7px 0 0 7px; }
+  .scheda h4 { margin: 0 0 3px; font-size: 14.5px; font-weight: 600; font-family: var(--mono); letter-spacing: -0.01em; }
+  .scheda p { margin: 0; font-size: 12.5px; color: var(--sordo); line-height: 1.4; }
+  .scheda .riga { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+
+  .gettone {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 3px;
+    border: 1px solid var(--linea-forte); color: var(--sordo); background: var(--fondo);
+  }
+  .gettone.pieno { color: var(--carta); border-color: transparent; }
+  .gettone.vuoto { border-style: dashed; border-color: var(--assenza); color: var(--assenza); }
+
+  /* --- tabella dei verdetti ------------------------------------------ */
+  .verdetti { display: grid; gap: 8px; }
+  .verdetto {
+    display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; align-items: start;
+    padding: 11px 13px; background: var(--carta); border: 1px solid var(--linea); border-radius: 6px;
+    text-align: left; width: 100%;
+  }
+  .verdetto:hover { border-color: var(--accento); }
+  .verdetto .esito { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; padding-top: 2px; }
+  .verdetto q { font-style: italic; display: block; margin-bottom: 3px; }
+  .verdetto small { color: var(--sordo); font-size: 12px; }
+
+  /* --- cassetto ------------------------------------------------------- */
+  #velo {
+    position: fixed; inset: 0; background: rgb(0 0 0 / 34%);
+    opacity: 0; pointer-events: none; transition: opacity 0.18s ease; z-index: 40;
+  }
+  #velo.su { opacity: 1; pointer-events: auto; }
+  #cassetto {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 92vw); z-index: 50;
+    background: var(--carta); border-left: 1px solid var(--linea-forte);
+    transform: translateX(101%); transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
+    overflow-y: auto; padding: 22px 24px 60px; box-shadow: -12px 0 40px rgb(0 0 0 / 12%);
+  }
+  #cassetto.su { transform: none; }
+  #cassetto h3 { font-size: 21px; font-weight: 600; margin-bottom: 4px; font-family: var(--mono); letter-spacing: -0.02em; }
+  #cassetto .occhiello { margin-bottom: 14px; }
+  #cassetto p { font-size: 14.5px; line-height: 1.55; }
+  #cassetto .chiudi { position: absolute; top: 14px; right: 16px; font-size: 20px; color: var(--sordo); line-height: 1; }
+  .campo { margin: 14px 0; }
+  .campo > .etichetta { display: block; margin-bottom: 4px; }
+  .campo p { margin: 0; }
+
+  .ancora {
+    display: block; width: 100%; text-align: left; font-family: var(--mono); font-size: 11.5px;
+    padding: 7px 9px; margin-top: 5px; border-radius: 5px;
+    background: var(--fondo); border: 1px solid var(--linea); color: var(--accento);
+  }
+  .ancora:hover { border-color: var(--accento); }
+  .ancora .sorgente {
+    display: block; margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--linea-forte);
+    color: var(--sordo); white-space: pre-wrap; word-break: break-word; font-size: 11px;
+  }
+
+  .vuoto { color: var(--sordo); font-size: 13.5px; font-style: italic; }
+  .legenda { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 20px; }
+  .legenda span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--sordo); }
+  .pallino { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  .prosa { max-width: 66ch; }
+  .prosa p { margin: 0 0 12px; }
+
+  @media (max-width: 880px) {
+    #app { grid-template-columns: 1fr; }
+    .rail {
+      position: static; height: auto; flex-direction: row; align-items: center;
+      overflow-x: auto; padding: 10px 12px; gap: 2px; border-right: none; border-bottom: 1px solid var(--linea);
+    }
+    .marchio, .strumenti { display: none; }
+    .voce { width: auto; white-space: nowrap; padding: 6px 12px; border-left: none; border-bottom: 2px solid transparent; }
+    .voce[aria-current="true"] { border-bottom-color: var(--accento); }
+    .voce i { display: none; }
+    main { padding: 22px 18px 90px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div id="app">
+  <aside class="rail">
+    <div class="marchio">
+      <b>Muffin, dentro</b>
+      <span id="sottotitolo"></span>
+    </div>
+    <nav id="indice"></nav>
+    <div class="strumenti">
+      <input id="cerca" class="cerca" type="search" placeholder="cerca: tool, file, tabella…" aria-label="Cerca nella mappa" />
+      <label class="interruttore"><input id="soloBuchi" type="checkbox" /> mostra solo ciò che manca</label>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="nulla" hidden style="position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:30;background:var(--carta);border:1px solid var(--linea-forte);border-radius:7px;padding:9px 14px;box-shadow:var(--ombra);font-size:13px">
+  Niente in questa vista. <span id="altrove"></span>
+</div>
+<div id="velo"></div>
+<aside id="cassetto" role="dialog" aria-modal="false" aria-label="Dettaglio"><button class="chiudi" aria-label="Chiudi">×</button><div id="cassettoInt"></div></aside>
+
+<script>/*__DATI__*/</script>
+<script>
+(() => {
+  const D = window.MAPPA;
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const el = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstElementChild; };
+
+  /* Il taint è l'unica scala di colore della pagina: sale e non scende mai. */
+  const TONO = { 0: 'var(--t0)', 1: 'var(--t1)', 2: 'var(--t2)', 3: 'var(--t3)' };
+  const RISCHIO = { low: 'var(--t0)', medium: 'var(--t1)', high: 'var(--t3)' };
+  const tierDa = (s) => { const m = /tier\s*([0-3])|\b([0-3])\b/i.exec(String(s ?? '')); return m ? Number(m[1] ?? m[2]) : null; };
+
+  /* --- ancore: ogni riferimento file:riga diventa una prova apribile ---- */
+  const RIF = /([\w./@-]+\.(?:ts|tsx|mjs|js|md|json|sql|yml|yaml|sh)):(\d+)(?:-(\d+))?/g;
+  function ancore(testo) {
+    if (!testo) return '';
+    const viste = new Set();
+    let out = '';
+    for (const m of String(testo).matchAll(RIF)) {
+      const chiave = `${m[1]}:${m[2]}`;
+      if (viste.has(chiave)) continue;
+      viste.add(chiave);
+      const a = D.ancore[chiave];
+      const dove = a ? `${a.path}:${a.line}${m[3] ? '-' + m[3] : ''}` : chiave;
+      out += `<button class="ancora" data-copia="${esc(dove)}">${esc(dove)}${a ? `<span class="sorgente">${esc(a.testo)}</span>` : ''}</button>`;
+    }
+    return out;
+  }
+
+  /* --- cassetto -------------------------------------------------------- */
+  const cassetto = document.getElementById('cassetto');
+  const velo = document.getElementById('velo');
+  const dentro = document.getElementById('cassettoInt');
+  let ultimoFuoco = null;
+
+  function apri(titolo, occhiello, campi) {
+    ultimoFuoco = document.activeElement;
+    // Un campo vale se ha testo **oppure** un'ancora: il campo «codice» porta
+    // solo riferimenti, ed è quello che rende questa pagina verificabile invece
+    // che affermativa. Scartarlo perché il testo è vuoto toglieva la prova da
+    // ogni scheda della mappa.
+    const righe = campi
+      .filter((c) => c && (c.v || c.rif))
+      .map((c) => ({ ...c, ancore: c.rif ? ancore(c.rif) : '' }))
+      .filter((c) => c.v || c.ancore);
+    dentro.innerHTML =
+      `<div class="occhiello etichetta">${esc(occhiello)}</div><h3>${esc(titolo)}</h3>` +
+      righe.map((c) =>
+        `<div class="campo"><span class="etichetta">${esc(c.k)}</span>${c.v ? (c.grezzo ? c.v : `<p>${esc(c.v)}</p>`) : ''}${c.ancore}</div>`
+      ).join('');
+    cassetto.classList.add('su');
+    velo.classList.add('su');
+    cassetto.querySelector('.chiudi').focus();
+  }
+  function chiudi() {
+    cassetto.classList.remove('su');
+    velo.classList.remove('su');
+    if (ultimoFuoco) ultimoFuoco.focus();
+  }
+  velo.onclick = chiudi;
+  cassetto.querySelector('.chiudi').onclick = chiudi;
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') chiudi(); });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.ancora');
+    if (b && navigator.clipboard) navigator.clipboard.writeText(b.dataset.copia).catch(() => {});
+  });
+
+  /* --- disegno del grafo ------------------------------------------------
+     Nodi come div assoluti sopra un livello SVG che disegna solo gli archi:
+     il testo resta selezionabile e nitido, le curve restano curve.          */
+  function grafo(nodi, archi, larghezza, altezza) {
+    const t = el(`<div class="tela"><div class="tela-int" style="width:${larghezza}px;height:${altezza}px"><svg width="${larghezza}" height="${altezza}"></svg></div></div>`);
+    const int = t.firstElementChild;
+    const svg = int.querySelector('svg');
+    const mappaNodi = new Map(nodi.map((n) => [n.id, n]));
+    const d = [];
+    for (const a of archi) {
+      const s = mappaNodi.get(a.da), e = mappaNodi.get(a.a);
+      if (!s || !e) continue;
+      const sx = a.lato === 'destra' ? s.x + s.w : s.x + s.w / 2;
+      const sy = a.lato === 'destra' ? s.y + s.h / 2 : s.y + s.h;
+      const ex = a.lato === 'destra' ? e.x : e.x + e.w / 2;
+      const ey = a.lato === 'destra' ? e.y + e.h / 2 : e.y;
+      const path = a.lato === 'destra'
+        ? `M${sx},${sy} C${sx + 42},${sy} ${ex - 42},${ey} ${ex},${ey}`
+        : a.arco
+          ? `M${sx},${sy} C${sx - 120},${sy + 30} ${ex - 120},${ey - 30} ${ex},${ey}`
+          : `M${sx},${sy} L${ex},${ey}`;
+      d.push(`<path class="arco ${esc(a.tipo ?? '')}" d="${path}" marker-end="url(#p-${esc(a.tipo ?? 'n')})"></path>`);
+    }
+    const punte = ['n', 'ramo', 'ritorno', 'morto'].map((k) => {
+      const c = k === 'ritorno' ? 'var(--accento)' : k === 'morto' ? 'var(--assenza)' : k === 'ramo' ? 'var(--sordo)' : 'var(--linea-forte)';
+      return `<marker id="p-${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="${c}"></path></marker>`;
+    }).join('');
+    svg.innerHTML = `<defs>${punte}</defs>${d.join('')}`;
+    for (const n of nodi) {
+      const b = el(
+        `<button class="nodo ${n.classe ?? ''} ${n.tono ? 'pad' : ''}" style="left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px" data-cerca="${esc(n.cerca ?? n.titolo)}" data-buco="${n.buco ? 1 : 0}">
+           ${n.tono ? `<span class="barra" style="background:${n.tono}"></span>` : ''}
+           ${n.n ? `<span class="n">${esc(n.n)}</span>` : ''}
+           <div class="t">${esc(n.titolo)}</div>
+           ${n.sotto ? `<div class="s">${esc(n.sotto)}</div>` : ''}
+         </button>`
+      );
+      b.onclick = () => { document.querySelectorAll('.nodo.attivo').forEach((x) => x.classList.remove('attivo')); b.classList.add('attivo'); n.apri(); };
+      int.appendChild(b);
+    }
+    return t;
+  }
+
+  function scheda({ titolo, sotto, tono, gettoni = [], buco, cerca, apri: onOpen }) {
+    const b = el(
+      `<button class="scheda" data-cerca="${esc(cerca ?? titolo)}" data-buco="${buco ? 1 : 0}">
+         ${tono ? `<span class="barra" style="background:${tono}"></span>` : ''}
+         <h4>${esc(titolo)}</h4>
+         ${sotto ? `<p>${esc(sotto)}</p>` : ''}
+         ${gettoni.length ? `<div class="riga">${gettoni.join('')}</div>` : ''}
+       </button>`
+    );
+    b.onclick = onOpen;
+    return b;
+  }
+  const gettone = (t, colore, vuoto) =>
+    `<span class="gettone ${colore ? 'pieno' : ''} ${vuoto ? 'vuoto' : ''}" ${colore ? `style="background:${colore}"` : ''}>${esc(t)}</span>`;
+
+  function sezione(titolo, nota, corpo) {
+    const s = el(`<section><h3>${esc(titolo)}</h3>${nota ? `<p class="nota">${esc(nota)}</p>` : ''}</section>`);
+    (Array.isArray(corpo) ? corpo : [corpo]).forEach((c) => c && s.appendChild(c));
+    return s;
+  }
+  const griglia = (figli, larga) => { const g = el(`<div class="griglia ${larga ? 'larga' : ''}"></div>`); figli.forEach((f) => g.appendChild(f)); return g; };
+
+  /* ====================================================================
+     LE VISTE
+     ==================================================================== */
+  const viste = {};
+
+  /* --- 1. il percorso di un messaggio ---------------------------------- */
+  viste.percorso = () => {
+    const f = document.createDocumentFragment();
+    f.appendChild(el(`<div class="cappello">
+      <h2>Il percorso di un messaggio</h2>
+      <p>Dai <strong>${D.loop.entrypoints.length} ingressi</strong> alla risposta, ${D.loop.steps.length} passi reali del codice. La spina scende; i rami tratteggiati sono le uscite anticipate — un rifiuto, un errore, un tetto raggiunto. La freccia ocra che risale è il ciclo delle tool call.</p>
+    </div>`));
+
+    f.appendChild(sezione('Da dove entra', null, griglia(D.loop.entrypoints.map((e) =>
+      scheda({
+        titolo: e.surface, sotto: e.note, tono: 'var(--t0)', cerca: e.surface + ' ' + e.fn,
+        gettoni: [gettone(e.fn)],
+        apri: () => apri(e.surface, 'ingresso', [{ k: 'funzione', v: e.fn }, { k: 'nota', v: e.note }, { k: 'codice', v: '', grezzo: true, rif: e.file }]),
+      })
+    ))));
+
+    // Spina verticale, rami a destra. L'altezza di ogni passo dipende da
+    // quanti rami porta: così un passo con tre uscite non si accavalla.
+    const SX = 20, W = 300, RW = 268, RX = SX + W + 96;
+    const nodi = [], archi = [];
+    let y = 10;
+    const yDi = new Map();
+    D.loop.steps.forEach((s, i) => {
+      const rami = s.branches ?? [];
+      const h = 82;
+      nodi.push({
+        id: s.id, x: SX, y, w: W, h, n: String(s.n).padStart(2, '0'), titolo: s.title,
+        sotto: (s.what ?? '').slice(0, 96) + ((s.what ?? '').length > 96 ? '…' : ''),
+        tono: TONO[tierDa(s.taint) ?? 0] ?? 'var(--linea-forte)',
+        cerca: [s.title, s.what, s.file].join(' '),
+        apri: () => apri(s.title, `passo ${s.n} · ${s.id}`, [
+          { k: 'cosa succede', v: s.what },
+          { k: 'taint', v: s.taint },
+          rami.length ? { k: 'diramazioni', grezzo: true, v: rami.map((r) => `<p><b>se</b> ${esc(r.cond)}<br><span class="mono">→ ${esc(r.goto)}</span> — ${esc(r.note ?? '')}</p>`).join('') } : null,
+          { k: 'codice', v: '', grezzo: true, rif: s.file },
+        ]),
+      });
+      yDi.set(s.id, y);
+      let ry = y + 4;
+      rami.forEach((r, j) => {
+        const id = `${s.id}~${j}`;
+        nodi.push({
+          id, x: RX, y: ry, w: RW, h: 62, classe: 'ramo',
+          titolo: r.cond.length > 62 ? r.cond.slice(0, 60) + '…' : r.cond,
+          sotto: `→ ${r.goto}`, cerca: [r.cond, r.note, r.goto].join(' '),
+          buco: /manca|non esiste|mai|silenzio|vanish/i.test(r.note ?? ''),
+          apri: () => apri(r.cond, `diramazione da ${s.id}`, [{ k: 'porta a', v: r.goto }, { k: 'nota', v: r.note }, { k: 'codice', v: '', grezzo: true, rif: r.note }]),
+        });
+        archi.push({ da: s.id, a: id, lato: 'destra', tipo: 'ramo' });
+        if (r.goto && r.goto !== 'exit' && yDi.has(r.goto)) archi.push({ da: id, a: r.goto, tipo: 'ritorno', arco: true });
+        ry += 70;
+      });
+      const prossimo = D.loop.steps[i + 1];
+      if (prossimo) archi.push({ da: s.id, a: prossimo.id });
+      y += Math.max(h + 26, rami.length * 70 + 20);
+    });
+    f.appendChild(sezione('La spina', 'Ogni nodo si apre: cosa fa, che taint porta, e la riga di codice che lo prova.', grafo(nodi, archi, RX + RW + 30, y + 20)));
+
+    const c = D.loop.context;
+    f.appendChild(sezione('Cosa vede il modello', `Assemblato da ${c.assembleFn}. ${c.totalBudget ?? ''}`, griglia(c.blocks.map((b) =>
+      scheda({ titolo: b.name, sotto: b.budget ? `tetto: ${b.budget}` : 'senza tetto', tono: 'var(--t0)', cerca: b.name + ' ' + b.source, apri: () => apri(b.name, 'blocco di contesto', [{ k: 'tetto', v: b.budget ?? 'nessuno' }, { k: 'codice', v: '', grezzo: true, rif: b.source }]) })
+    ))));
+
+    const s = D.loop.streaming;
+    f.appendChild(sezione('Streaming', null, griglia([
+      scheda({ titolo: 'ChatCall.stream', sotto: s.verdict, tono: 'var(--assenza)', buco: !s.consumed, gettoni: [gettone('dichiarato'), gettone(s.consumed ? 'letto' : 'mai letto', null, !s.consumed)], cerca: 'streaming stream', apri: () => apri('streaming', 'dichiarato e non collegato', [{ k: 'verdetto', v: s.verdict }, { k: 'dichiarato in', v: '', grezzo: true, rif: s.declared }, { k: 'consumato da', v: s.consumed ?? 'nessuno' }]) }),
+      ...D.loop.providers.map((p) => scheda({ titolo: p.name, sotto: p.wired ? 'cablato' : 'non cablato', tono: p.wired ? 'var(--ok)' : 'var(--assenza)', buco: !p.wired, cerca: p.name, apri: () => apri(p.name, 'provider', [{ k: 'cablato', v: p.wired ? 'sì' : 'no' }, { k: 'codice', v: '', grezzo: true, rif: p.file }]) })),
+    ])));
+
+    f.appendChild(sezione('Quando il turno finisce male', null, griglia(D.loop.failurePaths.map((p) =>
+      scheda({ titolo: p.what, sotto: p.consequence, tono: 'var(--t3)', buco: true, cerca: p.what + ' ' + p.consequence, apri: () => apri(p.what, 'percorso di fallimento', [{ k: 'conseguenza', v: p.consequence }, { k: 'codice', v: '', grezzo: true, rif: p.evidence }]) })
+    ), true)));
+    return f;
+  };
+
+  /* --- 2. i tool -------------------------------------------------------- */
+  viste.tool = () => {
+    const f = document.createDocumentFragment();
+    const bloccati = D.tools.tools.filter((t) => /draft|rifiut|refus|mai/i.test(t.onDeny ?? '') && /undoable/.test(String(t.reversible)));
+    f.appendChild(el(`<div class="cappello">
+      <h2>I tool</h2>
+      <p><strong>${D.tools.tools.length} tool</strong> per <strong>${D.tools.capabilities.length} capability</strong>. La barra a sinistra è il rischio dichiarato; il gettone <em>tier</em> è quanto il risultato sporca il turno. Un bordo viola vuol dire che quel percorso non esegue.</p>
+    </div>`));
+
+    f.appendChild(el(`<div class="legenda">
+      <span><i class="pallino" style="background:var(--t0)"></i> rischio basso</span>
+      <span><i class="pallino" style="background:var(--t1)"></i> medio</span>
+      <span><i class="pallino" style="background:var(--t3)"></i> alto</span>
+      <span><i class="pallino" style="background:var(--assenza)"></i> dichiarato e non eseguibile</span>
+    </div>`));
+
+    f.appendChild(sezione('Il banco', `Registrati in ${D.tools.registry.file}. ${D.tools.registry.note}`, griglia(D.tools.tools.map((t) => {
+      const tier = tierDa(t.taintOut);
+      const morto = !t.wired || /mai|non esiste|rifiut/i.test(t.wiredNote ?? '');
+      const b = scheda({
+        titolo: t.name, sotto: t.oneLine, tono: RISCHIO[t.risk] ?? 'var(--linea-forte)',
+        buco: morto, cerca: [t.name, t.capability, t.oneLine, t.taintOut].join(' '),
+        gettoni: [
+          gettone(t.capability),
+          tier !== null ? gettone(`tier ${tier}`, TONO[tier]) : gettone('nessun tier', null, true),
+          t.maxTaint !== null && t.maxTaint !== undefined ? gettone(`max ${t.maxTaint}`) : '',
+          morto ? gettone('non esegue', null, true) : '',
+        ].filter(Boolean),
+        apri: () => apri(t.name, `capability ${t.capability}`, [
+          { k: 'cosa fa', v: t.oneLine },
+          { k: 'parametri', v: (t.params ?? []).join(' · ') },
+          { k: 'rischio · reversibilità · tetto di taint', v: `${t.risk} · ${t.reversible} · ${t.maxTaint ?? 'ereditato'}` },
+          { k: 'taint che produce', v: t.taintOut, rif: t.taintOut },
+          { k: 'quando la policy rifiuta', v: t.onDeny, rif: t.onDeny },
+          t.wiredNote ? { k: 'cablaggio', v: t.wiredNote, rif: t.wiredNote } : null,
+          { k: 'codice', v: '', grezzo: true, rif: t.file },
+        ]),
+      });
+      if (morto) b.classList.add('nodo', 'spenta');
+      return b;
+    }), true)));
+
+    if (bloccati.length) {
+      f.appendChild(sezione('La primitiva che non scrive mai', 'Il kernel risponde `draft` per ogni capability medium+undoable; il loop rifiuta ogni `draft` perché il registro di undo non esiste. Le due decisioni sono corrette da sole.', griglia(bloccati.map((t) =>
+        scheda({ titolo: t.name, sotto: t.onDeny, tono: 'var(--assenza)', buco: true, cerca: t.name + ' draft', apri: () => apri(t.name, 'catena morta', [{ k: 'esito', v: t.onDeny, rif: t.onDeny }, { k: 'codice', v: '', grezzo: true, rif: t.file }]) })
+      ), true)));
+    }
+
+    f.appendChild(sezione('Le capability dichiarate', null, griglia(D.tools.capabilities.map((c) =>
+      scheda({
+        titolo: c.id, sotto: c.note, tono: RISCHIO[c.risk] ?? 'var(--linea-forte)', buco: !c.hasTool,
+        cerca: c.id + ' ' + c.note,
+        gettoni: [gettone(c.risk, RISCHIO[c.risk]), gettone(String(c.reversible)), c.hasTool ? '' : gettone('senza tool', null, true)].filter(Boolean),
+        apri: () => apri(c.id, 'capability', [{ k: 'rischio', v: c.risk }, { k: 'reversibilità', v: String(c.reversible) }, { k: 'tetto di taint', v: String(c.maxTaint ?? 'ereditato') }, { k: 'nota', v: c.note }, { k: 'codice', v: '', grezzo: true, rif: c.file }]),
+      })
+    ))));
+    return f;
+  };
+
+  /* --- 3. il kernel ----------------------------------------------------- */
+  viste.kernel = () => {
+    const f = document.createDocumentFragment();
+    const k = D.policy.kernel;
+    f.appendChild(el(`<div class="cappello">
+      <h2>Il kernel dei permessi</h2>
+      <p><strong>${k.fn}()</strong> è puro, sincrono e totale: stesse premesse, stessa risposta, sempre. Applica <strong>${D.policy.decisionOrder.length} regole in ordine</strong> e ne esce con uno di quattro esiti. L'ordine è la sicurezza: la prima regola che scatta decide.</p>
+    </div>`));
+
+    // La scala: ogni regola cade nella successiva se non scatta.
+    const W = 470, H = 66;
+    const nodi = [], archi = [];
+    let y = 6;
+    D.policy.decisionOrder.forEach((r, i) => {
+      const id = 'r' + r.n;
+      nodi.push({
+        id, x: 16, y, w: W, h: H, n: String(r.n).padStart(2, '0'), titolo: r.rule,
+        sotto: `→ ${r.outcome}`, tono: /deny/i.test(r.outcome) ? 'var(--t3)' : /ask/i.test(r.outcome) ? 'var(--t1)' : /draft/i.test(r.outcome) ? 'var(--assenza)' : 'var(--t0)',
+        cerca: [r.rule, r.outcome, r.file].join(' '),
+        apri: () => apri(r.rule, `regola ${r.n} di ${D.policy.decisionOrder.length}`, [{ k: 'esito', v: r.outcome }, { k: 'codice', v: '', grezzo: true, rif: r.file }]),
+      });
+      const p = D.policy.decisionOrder[i + 1];
+      if (p) archi.push({ da: id, a: 'r' + p.n });
+      y += H + 20;
+    });
+    f.appendChild(sezione('L\'ordine delle regole', 'Si legge dall\'alto: se una regola non scatta, il caso cade in quella sotto.', grafo(nodi, archi, W + 40, y)));
+
+    f.appendChild(sezione('I quattro esiti', 'Un esito che nessuno esegue è peggio di un esito assente: il kernel ha già deciso e il chiamante non lo sa.', griglia(k.effects.map((e) => {
+      const morto = /nobody/i.test(e.whoConsumes ?? '');
+      return scheda({
+        titolo: e.effect, sotto: e.meaning, tono: morto ? 'var(--assenza)' : 'var(--t0)', buco: morto,
+        gettoni: [morto ? gettone('nessuno lo esegue', null, true) : gettone('eseguito')],
+        cerca: e.effect + ' ' + e.meaning,
+        apri: () => apri(e.effect, 'esito del kernel', [{ k: 'significa', v: e.meaning }, { k: 'chi lo esegue', v: e.whoConsumes, rif: e.whoConsumes }]),
+      });
+    }))));
+
+    f.appendChild(sezione('La scala del taint', `Sale e non scende mai. ${D.policy.taint.maxTaintDefaults ?? ''}`, griglia(D.policy.taint.tiers.map((t) =>
+      scheda({ titolo: `tier ${t.tier} — ${t.name}`, sotto: t.meaning, tono: TONO[t.tier], cerca: 'taint tier ' + t.tier + ' ' + t.name, apri: () => apri(`tier ${t.tier} · ${t.name}`, 'taint', [{ k: 'significa', v: t.meaning }, { k: 'da dove arriva', v: (t.sources ?? []).join(' · '), rif: (t.sources ?? []).join(' ') }]) })
+    ))));
+
+    f.appendChild(sezione('I percorsi negati', D.policy.denyPathsSummary, griglia(D.policy.denyPaths.map((p) =>
+      scheda({ titolo: p.pattern, sotto: p.note, tono: p.enforced ? 'var(--t3)' : 'var(--assenza)', buco: !p.enforced, gettoni: [gettone(p.enforced ? 'applicato' : 'solo dichiarato', null, !p.enforced)], cerca: p.pattern + ' ' + p.note, apri: () => apri(p.pattern, 'deny path', [{ k: 'nota', v: p.note }, { k: 'applicato', v: p.enforced ? 'sì' : 'no' }, { k: 'codice', v: '', grezzo: true, rif: p.file }]) })
+    ), true)));
+
+    f.appendChild(sezione('Le superfici che tengono', null, griglia(D.policy.surfaces.map((s) =>
+      scheda({ titolo: s.name, sotto: s.guards, tono: s.gap ? 'var(--t2)' : 'var(--ok)', buco: !!s.gap, gettoni: [s.gap ? gettone('con un buco', null, true) : gettone('regge', 'var(--ok)')], cerca: [s.name, s.guards, s.gap].join(' '), apri: () => apri(s.name, 'superficie di sicurezza', [{ k: 'protegge', v: s.guards }, { k: 'cosa tiene davvero', v: s.holds }, { k: 'buco', v: s.gap ?? 'nessuno trovato' }, { k: 'codice', v: '', grezzo: true, rif: s.file }]) })
+    ), true)));
+
+    const V = { HOLDS: 'var(--ok)', PARTIAL: 'var(--t1)', BROKEN: 'var(--t3)' };
+    const cv = el('<div class="verdetti"></div>');
+    D.policy.claimedVsReal.forEach((c) => {
+      const b = el(`<button class="verdetto" data-cerca="${esc(c.claim + ' ' + c.real)}" data-buco="${c.verdict === 'HOLDS' ? 0 : 1}">
+        <span class="esito" style="color:${V[c.verdict] ?? 'var(--sordo)'}">${esc(c.verdict)}</span>
+        <span><q>${esc(c.claim)}</q><small>${esc(c.real)}</small></span></button>`);
+      b.onclick = () => apri(c.claim, `garanzia dichiarata · ${c.verdict}`, [{ k: 'dove è scritta', v: c.doc, rif: c.doc }, { k: 'cosa fa il codice', v: c.real }, { k: 'prova', v: '', grezzo: true, rif: c.evidence }]);
+      cv.appendChild(b);
+    });
+    f.appendChild(sezione('Dichiarato contro reale', 'Ogni riga del threat model è vera o falsa del codice. Queste sono state controllate una per una.', cv));
+    return f;
+  };
+
+  /* --- 4. la memoria ---------------------------------------------------- */
+  viste.memoria = () => {
+    const f = document.createDocumentFragment();
+    const m = D.memory;
+    f.appendChild(el(`<div class="cappello">
+      <h2>La memoria</h2>
+      <p><strong>${m.schema.tables.length} tabelle</strong> su tre piani. L'evidenza è ciò che è successo e non si tocca; il grafo è ciò che se ne deduce; il derivato si può buttare e ricostruire. Le tabelle viola non hanno né chi scrive né chi legge.</p>
+    </div>`));
+
+    const PIANO = { evidence: 'var(--t0)', graph: 'var(--t1)', derived: 'var(--sordo)', control: 'var(--linea-forte)' };
+    f.appendChild(sezione('I tre piani', null, griglia(m.planes.map((p) =>
+      scheda({
+        titolo: p.name, sotto: p.what, tono: PIANO[p.name] ?? 'var(--t0)',
+        gettoni: [gettone(`${p.tables.length} tabelle`), p.rebuildable ? gettone('ricostruibile') : gettone('non ricostruibile', 'var(--t3)')],
+        cerca: p.name + ' ' + p.what,
+        apri: () => apri(p.name, 'piano di memoria', [{ k: 'cos\'è', v: p.what }, { k: 'tabelle', v: p.tables.join(' · ') }, { k: 'chi scrive', v: (p.writtenBy ?? []).join(' · '), rif: (p.writtenBy ?? []).join(' ') }, { k: 'chi legge', v: (p.readBy ?? []).join(' · '), rif: (p.readBy ?? []).join(' ') }]),
+      })
+    ))));
+
+    f.appendChild(sezione('Le tabelle', `Schema in ${m.schema.file}.`, griglia(m.schema.tables.map((t) => {
+      const orfana = /zero (writer|reader)|nessun/i.test(t.rowsMeaning ?? '');
+      return scheda({
+        titolo: t.name, sotto: t.rowsMeaning, tono: orfana ? 'var(--assenza)' : PIANO[t.plane] ?? 'var(--t0)', buco: orfana,
+        gettoni: [gettone(t.plane, PIANO[t.plane]), t.droppable ? gettone('buttabile') : '', (t.constraints ?? []).length ? gettone(`${t.constraints.length} vincoli`) : ''].filter(Boolean),
+        cerca: [t.name, t.plane, t.rowsMeaning, (t.columns ?? []).join(' ')].join(' '),
+        apri: () => apri(t.name, `piano ${t.plane}`, [
+          { k: 'cosa contiene', v: t.rowsMeaning },
+          { k: 'colonne', grezzo: true, v: `<p class="mono" style="font-size:12px">${(t.columns ?? []).map(esc).join('<br>')}</p>` },
+          (t.constraints ?? []).length ? { k: 'vincoli', grezzo: true, v: (t.constraints ?? []).map((c) => `<p>${esc(c)}</p>`).join('') } : null,
+          { k: 'si può buttare', v: t.droppable ? 'sì — si ricostruisce' : 'no — è la fonte' },
+        ]),
+      });
+    }), true)));
+
+    const flusso = (titolo, nota, passi) => {
+      const W = 250, H = 74, COL = 3;
+      const nodi = [], archi = [];
+      passi.forEach((p, i) => {
+        const id = 'p' + i;
+        nodi.push({
+          id, x: 12 + (i % COL) * (W + 56), y: 8 + Math.floor(i / COL) * (H + 44), w: W, h: H,
+          n: String(p.n).padStart(2, '0'), titolo: p.stage, sotto: (p.what ?? '').slice(0, 72) + ((p.what ?? '').length > 72 ? '…' : ''),
+          tono: 'var(--t0)', cerca: [p.stage, p.what, p.note].join(' '),
+          apri: () => apri(p.stage, `passo ${p.n}`, [{ k: 'cosa fa', v: p.what }, p.note ? { k: 'nota', v: p.note } : null, { k: 'codice', v: '', grezzo: true, rif: p.file }]),
+        });
+        if (i) archi.push({ da: 'p' + (i - 1), a: id, lato: (i % COL) === 0 ? undefined : 'destra' });
+      });
+      const righe = Math.ceil(passi.length / COL);
+      return sezione(titolo, nota, grafo(nodi, archi, 12 + COL * (W + 56), righe * (H + 44) + 20));
+    };
+    f.appendChild(flusso('Come una cosa entra', 'Dal messaggio all\'episodio ai fatti nel grafo.', m.writePath));
+    f.appendChild(flusso('Come una cosa torna', m.recallPath.map((p) => p.note).filter(Boolean)[0] ?? null, m.recallPath));
+
+    f.appendChild(sezione('Il consolidamento', null, griglia((m.consolidation.mechanisms ?? []).map((c) =>
+      scheda({ titolo: c.name, sotto: c.trigger, tono: 'var(--t1)', gettoni: [gettone(c.adr), gettone(c.cost)], cerca: [c.name, c.adr, c.trigger].join(' '), apri: () => apri(c.name, c.adr, [{ k: 'quando parte', v: c.trigger }, { k: 'costo', v: c.cost }, { k: 'codice', v: '', grezzo: true, rif: c.file }]) })
+    ))));
+
+    f.appendChild(sezione('Ciò che non è costruito', 'Con la ragione scritta accanto: un buco dichiarato è lavoro rimandato, un buco taciuto è un difetto.', griglia(m.notBuilt.map((n) =>
+      scheda({ titolo: n.what, sotto: n.why, tono: 'var(--assenza)', buco: true, cerca: n.what + ' ' + n.why, apri: () => apri(n.what, 'non costruito', [{ k: 'perché', v: n.why }, { k: 'dove è detto', v: '', grezzo: true, rif: n.evidence }]) })
+    ), true)));
+    return f;
+  };
+
+  /* --- 5. le superfici -------------------------------------------------- */
+  viste.superfici = () => {
+    const f = document.createDocumentFragment();
+    const s = D.surfaces;
+    f.appendChild(el(`<div class="cappello">
+      <h2>Le superfici</h2>
+      <p>Ciò che l'owner tocca: <strong>${s.cli.length} comandi</strong>, il processo sempre acceso, le skill e i server MCP. È qui che Muffin smette di essere una libreria e diventa una cosa che si usa.</p>
+    </div>`));
+
+    // L'albero dei comandi: radice `muffin`, un ramo per comando.
+    const cmds = s.cli.filter((c) => !/^--/.test(c.cmd));
+    const RW = 210, RH = 62, COL = 4;
+    const nodi = [{ id: 'root', x: 12, y: 8, w: 150, h: 50, titolo: 'muffin', sotto: 'il binario', tono: 'var(--accento)', cerca: 'muffin cli', apri: () => apri('muffin', 'radice', [{ k: 'comandi', v: `${cmds.length} comandi, ${cmds.reduce((a, c) => a + (c.sub?.length ?? 0), 0)} sottocomandi` }]) }];
+    const archi = [];
+    cmds.forEach((c, i) => {
+      const id = 'c' + i;
+      nodi.push({
+        id, x: 12 + (i % COL) * (RW + 26), y: 92 + Math.floor(i / COL) * (RH + 22), w: RW, h: RH,
+        titolo: c.cmd.replace(/^muffin /, ''), sotto: c.what, tono: c.wired ? 'var(--t0)' : 'var(--assenza)',
+        buco: !c.wired, cerca: [c.cmd, c.what, (c.sub ?? []).join(' ')].join(' '),
+        apri: () => apri(c.cmd, 'comando', [{ k: 'cosa fa', v: c.what }, (c.sub ?? []).length ? { k: 'sottocomandi', v: c.sub.join(' · ') } : null, c.note ? { k: 'nota', v: c.note, rif: c.note } : null, { k: 'codice', v: '', grezzo: true, rif: c.file }]),
+      });
+      if (i < COL) archi.push({ da: 'root', a: id, lato: 'destra' });
+    });
+    f.appendChild(sezione('I comandi', 'Letti dal parser, non dai nomi dei file. Viola = non cablato.', grafo(nodi, archi, 12 + COL * (RW + 26), 92 + Math.ceil(cmds.length / COL) * (RH + 22) + 10)));
+
+    const p = s.process;
+    f.appendChild(sezione('Il processo che vive', `Possiede: ${(p.owns ?? []).join(' · ')}.`, griglia([
+      ...(p.signals ?? []).map((sg) => scheda({ titolo: sg.sig, sotto: sg.behaviour, tono: 'var(--t0)', cerca: sg.sig + ' ' + sg.behaviour, apri: () => apri(sg.sig, 'segnale', [{ k: 'cosa fa', v: sg.behaviour }, { k: 'codice', v: '', grezzo: true, rif: sg.file }]) })),
+      scheda({ titolo: 'istanza unica', sotto: p.singleInstance?.how, tono: 'var(--ok)', cerca: 'lock istanza unica', apri: () => apri('istanza unica', 'processo', [{ k: 'come', v: p.singleInstance?.how }, { k: 'codice', v: '', grezzo: true, rif: p.singleInstance?.file }]) }),
+      scheda({
+        titolo: 'socket di controllo', sotto: p.socket?.protocol === 'built' ? 'protocollo presente' : 'protocollo non costruito',
+        tono: p.socket?.protocol === 'built' ? 'var(--ok)' : 'var(--assenza)', buco: p.socket?.protocol !== 'built',
+        gettoni: (p.socket?.commandsPlanned ?? []).map((c) => gettone(c, null, !(p.socket?.commandsReal ?? []).includes(c))),
+        cerca: 'socket queue steer heartbeat undo',
+        apri: () => apri('socket di controllo', 'previsto e non costruito', [{ k: 'previsti', v: (p.socket?.commandsPlanned ?? []).join(' · ') }, { k: 'esistenti', v: (p.socket?.commandsReal ?? []).join(' · ') || 'nessuno' }, { k: 'dove è detto', v: '', grezzo: true, rif: p.socket?.file }]),
+      }),
+    ], true)));
+
+    const cicloVista = (titolo, nota, passi, prosa) => {
+      const W = 232, H = 70, COL = 4;
+      const nodi = [], archi = [];
+      passi.forEach((st, i) => {
+        const id = 'x' + i;
+        nodi.push({
+          id, x: 12 + (i % COL) * (W + 44), y: 8 + Math.floor(i / COL) * (H + 40), w: W, h: H,
+          n: String(st.n).padStart(2, '0'), titolo: st.stage, sotto: (st.what ?? '').slice(0, 70) + ((st.what ?? '').length > 70 ? '…' : ''),
+          tono: 'var(--t0)', cerca: [st.stage, st.what].join(' '),
+          apri: () => apri(st.stage, `passo ${st.n}`, [{ k: 'cosa fa', v: st.what }, { k: 'codice', v: '', grezzo: true, rif: st.file }]),
+        });
+        if (i) archi.push({ da: 'x' + (i - 1), a: id, lato: (i % COL) === 0 ? undefined : 'destra' });
+      });
+      const sec = sezione(titolo, nota, grafo(nodi, archi, 12 + COL * (W + 44), Math.ceil(passi.length / COL) * (H + 40) + 20));
+      if (prosa) sec.appendChild(el(`<div class="prosa" style="margin-top:18px"><p>${esc(prosa)}</p></div>`));
+      return sec;
+    };
+    f.appendChild(cicloVista('Cosa succede quando parte una skill', `Scoperte in ${s.skills.discovery?.where}. Taint: ${s.skills.taint}`, s.skills.lifecycle, s.skills.whatHappensWhenOneRuns));
+    f.appendChild(cicloVista('Un server MCP, dall\'aggancio alla revoca', `${s.mcp.capabilityMapping} · trasporti: ${(s.mcp.transport ?? []).join(', ')}`, s.mcp.lifecycle, s.mcp.pinning?.gap ? `Pinning: ${s.mcp.pinning.what} — ${s.mcp.pinning.gap}` : null));
+    f.appendChild(cicloVista('Il primo avvio', null, s.onboarding, null));
+
+    f.appendChild(sezione('I connettori', null, griglia(s.connectors.map((c) =>
+      scheda({ titolo: c.name, sotto: (c.handles ?? []).join(' · '), tono: (c.gaps ?? []).length ? 'var(--t2)' : 'var(--ok)', buco: (c.gaps ?? []).length > 0, cerca: c.name + ' ' + (c.handles ?? []).join(' '), apri: () => apri(c.name, 'connettore', [{ k: 'gestisce', v: (c.handles ?? []).join(' · ') }, { k: 'buchi', grezzo: true, v: (c.gaps ?? []).map((g) => `<p>${esc(g)}</p>`).join('') || '<p>nessuno</p>' }, { k: 'codice', v: '', grezzo: true, rif: c.file }]) })
+    ), true)));
+    return f;
+  };
+
+  /* --- 6. i buchi ------------------------------------------------------- */
+  viste.buchi = () => {
+    const f = document.createDocumentFragment();
+    const tutti = [
+      ...D.loop.gaps.map((g) => ({ ...g, dove: 'percorso' })),
+      ...D.tools.gaps.map((g) => ({ ...g, dove: 'tool' })),
+      ...D.policy.gaps.map((g) => ({ ...g, dove: 'kernel' })),
+      ...D.memory.gaps.map((g) => ({ ...g, dove: 'memoria' })),
+      ...D.surfaces.gaps.map((g) => ({ ...g, dove: 'superfici' })),
+    ];
+    const rotte = D.policy.claimedVsReal.filter((c) => c.verdict !== 'HOLDS');
+    f.appendChild(el(`<div class="cappello">
+      <h2>Ciò che manca</h2>
+      <p><strong>${tutti.length} lacune</strong> trovate leggendo il codice, più <strong>${rotte.length} garanzie</strong> dichiarate nel threat model che il codice mantiene solo in parte. Nessuna è una supposizione: ognuna porta la riga che la prova.</p>
+    </div>`));
+    f.appendChild(sezione('Le lacune', 'Ordinate per area. Un buco con la ragione scritta è lavoro rimandato; senza, è un difetto.', griglia(tutti.map((g) =>
+      scheda({ titolo: g.what, sotto: g.why_it_matters, tono: 'var(--assenza)', buco: true, gettoni: [gettone(g.dove)], cerca: [g.what, g.why_it_matters, g.dove].join(' '), apri: () => apri(g.what, `lacuna · ${g.dove}`, [{ k: 'perché conta', v: g.why_it_matters }, { k: 'prova', v: '', grezzo: true, rif: g.evidence }]) })
+    ), true)));
+    return f;
+  };
+
+  /* --- 0. apertura ------------------------------------------------------ */
+  viste.apertura = () => {
+    const f = document.createDocumentFragment();
+    const buchi = D.loop.gaps.length + D.tools.gaps.length + D.policy.gaps.length + D.memory.gaps.length + D.surfaces.gaps.length;
+    f.appendChild(el(`<div class="cappello">
+      <h2>Muffin, dentro</h2>
+      <p>Un agente personale che gira su una macchina sola e ricorda. Questa mappa non è disegnata a mano: è <strong>estratta dal codice</strong> — ${Object.keys(D.ancore).length} ancore <code>file:riga</code>, ognuna verificata da un test che fallisce se il codice si sposta.</p>
+    </div>`));
+
+    f.appendChild(el(`<div class="prosa">
+      <p>Muffin ha una forma precisa. Un <strong>kernel dei permessi</strong> puro decide ogni azione prima che accada, e non può essere convinto: non parla col modello. Una <strong>scala di contaminazione</strong> a quattro gradini segue ogni turno — sale quando entrano byte da fuori e non scende mai, così un turno che ha letto il web non può poi nominare la destinazione a cui scrivere. Una <strong>memoria a tre piani</strong> tiene separato ciò che è successo da ciò che se ne deduce, perché il secondo si può sbagliare e va potuto rifare.</p>
+      <p>Il resto della mappa mostra come questo si traduce in codice vero, comprese le parti dove non ci si traduce ancora: <strong>${buchi} lacune</strong>, ognuna con la riga che la prova. Sono in viola ovunque compaiano.</p>
+    </div>`));
+
+    const conte = [
+      { t: `${D.loop.steps.length} passi`, s: 'dal messaggio alla risposta', v: 'percorso' },
+      { t: `${D.tools.tools.length} tool`, s: `per ${D.tools.capabilities.length} capability`, v: 'tool' },
+      { t: `${D.policy.decisionOrder.length} regole`, s: 'nel kernel, in ordine', v: 'kernel' },
+      { t: `${D.memory.schema.tables.length} tabelle`, s: 'su tre piani', v: 'memoria' },
+      { t: `${D.surfaces.cli.length} comandi`, s: 'più il processo sempre acceso', v: 'superfici' },
+      { t: `${buchi} lacune`, s: 'con la prova accanto', v: 'buchi' },
+    ];
+    f.appendChild(sezione('Da dove vuoi partire', null, griglia(conte.map((c) =>
+      scheda({ titolo: c.t, sotto: c.s, tono: c.v === 'buchi' ? 'var(--assenza)' : 'var(--accento)', cerca: c.t, apri: () => vai(c.v) })
+    ))));
+    return f;
+  };
+
+  /* --- navigazione ------------------------------------------------------ */
+  const SEZIONI = [
+    ['apertura', 'Apertura', ''],
+    ['percorso', 'Il percorso', String(D.loop.steps.length)],
+    ['tool', 'I tool', String(D.tools.tools.length)],
+    ['kernel', 'Il kernel', String(D.policy.decisionOrder.length)],
+    ['memoria', 'La memoria', String(D.memory.schema.tables.length)],
+    ['superfici', 'Le superfici', String(D.surfaces.cli.length)],
+    ['buchi', 'Ciò che manca', String(D.loop.gaps.length + D.tools.gaps.length + D.policy.gaps.length + D.memory.gaps.length + D.surfaces.gaps.length)],
+  ];
+  const main = document.getElementById('main');
+  const indice = document.getElementById('indice');
+  document.getElementById('sottotitolo').textContent = `mappa estratta dal codice · ${D.generato}`;
+
+  let corrente = null;
+  function vai(id) {
+    corrente = id;
+    main.replaceChildren(viste[id]());
+    indice.querySelectorAll('.voce').forEach((v) => v.setAttribute('aria-current', String(v.dataset.id === id)));
+    main.scrollIntoView({ block: 'start', behavior: 'auto' });
+    window.scrollTo(0, 0);
+    filtra();
+  }
+  SEZIONI.forEach(([id, nome, conto]) => {
+    const b = el(`<button class="voce" data-id="${id}"><b>${esc(nome)}</b><i>${esc(conto)}</i></button>`);
+    b.onclick = () => vai(id);
+    indice.appendChild(b);
+  });
+
+  /* --- filtro: cerca + solo-buchi ---------------------------------------- */
+  const cerca = document.getElementById('cerca');
+  const soloBuchi = document.getElementById('soloBuchi');
+  function filtra() {
+    const q = cerca.value.trim().toLowerCase();
+    const soli = soloBuchi.checked;
+    let visti = 0;
+    main.querySelectorAll('[data-cerca]').forEach((n) => {
+      const testo = (n.dataset.cerca || '').toLowerCase();
+      const okQ = !q || testo.includes(q);
+      const okB = !soli || n.dataset.buco === '1';
+      if (okQ && okB) visti++;
+      n.classList.toggle('smorza', !(okQ && okB));
+      n.classList.toggle('evidenzia', !!q && okQ && okB);
+    });
+    // Il filtro agisce sulla vista aperta: senza questo avviso, una ricerca
+    // fatta nella sezione sbagliata sembra dire «non esiste».
+    document.getElementById('nulla').hidden = visti > 0 || (!q && !soli);
+    const altrove = q ? SEZIONI.filter(([id]) => id !== corrente && conta(id, q, soli)) : [];
+    document.getElementById('altrove').innerHTML = altrove.length
+      ? 'ma c\'è in: ' + altrove.map(([id, nome]) => `<button class="gettone" data-vai="${id}">${esc(nome)}</button>`).join(' ')
+      : '';
+  }
+  /**
+   * Quante corrispondenze avrebbe un'altra vista, senza aprirla.
+   *
+   * L'indice si costruisce una volta per vista e poi resta: ricostruire sei
+   * viste a ogni tasto premuto rendeva la ricerca visibilmente lenta con questi
+   * dati, ed è una lentezza che cresce col repo.
+   */
+  const indici = new Map();
+  function conta(id, q, soli) {
+    if (!indici.has(id)) {
+      const tmp = document.createElement('div');
+      tmp.appendChild(viste[id]());
+      indici.set(id, [...tmp.querySelectorAll('[data-cerca]')].map((n) => ({
+        t: (n.dataset.cerca || '').toLowerCase(),
+        b: n.dataset.buco === '1',
+      })));
+    }
+    return indici.get(id).filter((x) => (!q || x.t.includes(q)) && (!soli || x.b)).length;
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-vai]');
+    if (b) vai(b.dataset.vai);
+  });
+  cerca.oninput = filtra;
+  soloBuchi.onchange = filtra;
+
+  vai('apertura');
+})();
+</script>

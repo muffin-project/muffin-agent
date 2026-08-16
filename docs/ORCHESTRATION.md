@@ -78,6 +78,18 @@ Una PR per cosa, con una definizione di completamento **verificabile**. Non si
 scrive «abbiamo implementato memoria, eventi e workspace»: si scrive quali PR,
 e ognuna sopravvive da sola alla domanda «è vero?».
 
+Il checkpoint comincia prima del merge. Appena scope e decisione sono stabili si
+apre una **draft PR**; dopo ogni unità raggiungibile e verificata si fa un commit
+coerente e si aggiorna lo stato, così un compact o un esperimento successivo non
+è l'unico posto in cui il lavoro esiste. La PR diventa reviewable soltanto con
+build, suite, failure path, accettazione dovuta e viste derivate aggiornate.
+
+I quattro checkpoint normativi — decisione, meccanismo raggiunto, slice
+verificata, integrazione — sono in `BRANCHING.md`. Il merge in `dev` richiede il
+verdetto terminale del judge; `dev`→`main` richiede una nuova verifica
+dell'insieme. Frequenza non sostituisce evidenza: commit e PR sono continui,
+merge solo ai checkpoint dichiarati.
+
 ## 5. Lo stato dell'orchestratore, non solo quello del progetto
 
 `STATE.md` dice dov'è il *progetto*. Dopo trenta iterazioni serve anche dov'è
@@ -119,6 +131,14 @@ workspace? serve coinvolgere l'owner? **oppure si ignora** — e ignorare è un
 esito legittimo, non un fallimento. In codice questa proprietà esiste già ed è
 `decideProactive` (`core/scheduler/proactivity.ts`), col suo insieme **chiuso** di
 trigger. Qualunque spina degli eventi nasca dopo, quel cancello resta.
+
+ADR-0045 rende esplicito che questa è la terza dimensione del prodotto:
+**presenza**, accanto a fare e capire. Non introduce un altro loop cognitivo.
+Richiede che il control loop sappia produrre anche `wait`, `defer`, `ignore`,
+`ask`, `refuse`, `revise`, `abandon` e `cancel`, con stato durevole quando resta
+qualcosa dovuto. E richiede di non confondere ciò che è successo (evidenza), ciò
+che Muffin crede, ciò che vale adesso nel mondo e ciò che il lavoro sta ancora
+aspettando: quattro domande diverse, non un blob chiamato “contesto”.
 
 ## 8. Gli eval rispondono a una domanda sola
 
@@ -222,7 +242,32 @@ abbiamo scritto e non fatto. Sono **strutturalmente ciechi** a ciò che non
 abbiamo mai scritto — lo streaming non era «dichiarato e non collegato», era mai
 pensato. Quella categoria si trova solo guardando fuori, e vuole una passata sua.
 
-## 14. Si ripara alla radice, e la radice è quasi sempre una forma
+## 14. La mappa è una vista derivata, e le viste derivate marciscono
+
+Direttiva owner, 2026-08-15: *«ricordiamoci di aggiornare anche questo artefatto
+quando serve che modifichiamo qualcosa»*.
+
+Un diagramma dell'architettura è la forma di documentazione che **invecchia
+peggio**: descrive la parte del sistema che cambia di più, non ha compilatore, e
+sbaglia con autorevolezza — sembra vero proprio mentre smette di esserlo. Un
+promemoria («ricordati di aggiornarlo») è una regola che vive solo in prosa, e
+§13.2 dice già come finisce.
+
+Quindi la mappa **non si disegna a mano**:
+
+1. **I dati stanno nel repo**, non nell'artefatto: `docs/blueprint/mappa/*.json`.
+   Ogni voce porta un'ancora `file:riga` verso il codice che la giustifica.
+2. **L'artefatto è un renderer** su quei dati. Ridisegnarlo non è un lavoro di
+   memoria: si rigenera.
+3. **Le ancore sono testate.** `docs/blueprint/mappa/mappa.test.ts` verifica che
+   ogni ancora esista ancora e punti allo stesso testo. Quando il codice si
+   sposta, **fallisce la suite**, non l'artefatto in silenzio.
+
+Il costo di questa forma è che la mappa può coprire solo ciò che è ancorabile a
+codice vero, ed è precisamente il vincolo che si vuole: una casella senza ancora
+è una casella che non abbiamo il diritto di disegnare.
+
+## 15. Si ripara alla radice, e la radice è quasi sempre una forma
 
 Direttiva owner, 2026-08-15: *«quando ci sono cose da fixxare, proviamo sempre a
 fixxare alla radice, magari sono scelte sbagliate, o cose del genere, cerchiamo
@@ -262,3 +307,32 @@ E il corollario che questo repo paga più spesso: preferire la forma che
 **fallisce da sola** — un `switch` esaustivo, un tipo che obbliga il chiamante a
 gestire l'esito, un sink obbligatorio nella firma — a quella che dipende dal
 fatto che qualcuno si ricordi.
+
+## 16. Una slice locale deve restare vera per il progetto intero
+
+Direttiva owner, 2026-08-16: ogni pezzo costruito deve considerare il progetto
+intero. Il difetto da impedire non è soltanto l'hardcode letterale. È una
+garanzia progettata sul caso che si ha davanti — `host`, chat privata, Telegram,
+un provider, una macchina — e poi presentata come primitiva generale.
+
+Prima del piano, l'orchestratore fa una **passata d'impatto**:
+
+1. nomina tutti i produttori e consumer del contratto che cambia;
+2. cerca la stessa primitiva nel repo, nei branch e nei worktree non integrati;
+3. segue almeno un percorso di produzione e il suo failure path da capo a capo;
+4. verifica quali contratti, ADR, inventario, mappa e handoff devono cambiare;
+5. distingue il default operativo da un invariante architetturale.
+
+Il criterio non è «nessuna costante»: magic number e default legittimi
+esistono. È **nessuna decisione locale travestita da forma universale**. Tenant,
+principal, surface, provider, capability, budget e provenienza viaggiano come
+tipi o configurazione quando possono variare. Il single-user è la prima
+configurazione della forma multi-surface, non un percorso host-only da
+generalizzare dopo. I gruppi possono essere attivati dopo i quattordici giorni;
+la possibilità di isolarli non può essere aggiunta dopo senza riscrivere ciò
+che nel frattempo ha accumulato dati.
+
+Il judge attacca anche questa proprietà: muta il valore oggi dominante, prova
+un secondo tenant/surface/provider quando pertinente e cerca consumer non
+toccati dal diff. Se il test passa solo perché ogni fixture usa lo stesso caso,
+non è una prova di generalità.

@@ -87,7 +87,7 @@ describe('who is speaking', () => {
     expect(tenant).not.toBe('host');
   });
 
-  it('identifies by user id, never by name', () => {
+  it('identifies by authenticated sender id, never by name', () => {
     // A display name is chosen by whoever holds the account.
     const impostor = {
       update_id: 5,

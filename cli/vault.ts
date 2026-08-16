@@ -40,7 +40,15 @@ export async function cmdVaultReindex(home: string, tier: TrustTier): Promise<nu
         `${report.unchanged} invariati · ${report.removed} spariti\n` +
         `${report.chunks} chunk scritti · ${report.indexed} vettori\n`,
     );
+    // Named one by one, with how much text came out: "3 nuovi" does not say
+    // whether the 80-page PDF was read or was a scan that yielded nothing.
+    for (const d of report.documents) {
+      process.stdout.write(
+        `  ${d.path} — ${d.format}, ${d.parts} parti, ${d.chars.toLocaleString('it-IT')} caratteri\n`,
+      );
+    }
     for (const s of report.skipped) process.stderr.write(`  saltato ${s.path} — ${s.why}\n`);
+    for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
     return 0;
   } finally {
     runtime.close();
@@ -61,7 +69,10 @@ export async function cmdVaultAdd(home: string, source: string, tier: TrustTier)
       return 1;
     }
     copyFileSync(from, target);
-    const report = await vault.reindex(TENANT, { defaultTier: tier, vectors: runtime.memory.recall.vectors });
+    const report = await vault.reindexPath(TENANT, basename(from), {
+      defaultTier: tier,
+      vectors: runtime.memory.recall.vectors,
+    });
     const skipped = report.skipped.find((s) => s.path === basename(from));
     if (skipped) {
       process.stderr.write(`copiato ma non indicizzato — ${skipped.why}\n`);
@@ -99,7 +110,7 @@ export async function cmdVaultLs(home: string): Promise<number> {
 export async function cmdVaultCheck(home: string): Promise<number> {
   const { runtime, vault } = await open(home);
   try {
-    const audit = vault.audit(TENANT);
+    const audit = await vault.audit(TENANT);
     process.stdout.write(`${audit.files} file leggibili sul disco · ${audit.indexed} indicizzati\n`);
     for (const p of audit.missing) process.stdout.write(`  ! sul disco, non indicizzato   ${p}\n`);
     for (const p of audit.stale) process.stdout.write(`  ! indice stantio               ${p}\n`);

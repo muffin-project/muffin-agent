@@ -1,0 +1,27 @@
+{"id":"a2c4b7c7d8071e26f","slug":"mappa-tools","cosa":"estrazione inventario tool + capability","quando":"2026-08-15T20:26:09.008Z"}
+{"id":"a5231b59f886c9e8d","slug":"mappa-loop","cosa":"estrazione percorso di esecuzione del turno","quando":"2026-08-15T20:26:09.057Z"}
+{"id":"a4ba815ad13547579","slug":"mappa-policy","cosa":"estrazione kernel permessi + superfici di sicurezza","quando":"2026-08-15T20:26:09.103Z"}
+{"id":"a0cdda42ae2ba8dff","slug":"mappa-memoria","cosa":"estrazione tre piani di memoria","quando":"2026-08-15T20:26:09.149Z"}
+{"id":"ae108f830791618c5","slug":"mappa-superfici","cosa":"estrazione CLI, processo, skill, MCP","quando":"2026-08-15T20:26:09.198Z"}
+{"id":"a49b7c31bf6fff494","slug":"documenti-pdf","cosa":"C7: parser documenti, niente troncamento","quando":"2026-08-15T20:26:09.246Z"}
+{"id":"ad9e1722815e2ba5d","slug":"turno-record","cosa":"B2/B5: record durevole del turno","quando":"2026-08-15T20:26:09.291Z"}
+{"id":"a147b2d590f993238","slug":"morto-reasoning-budget","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.336Z"}
+{"id":"a1c0162e0e40dcd9c","slug":"morto-confronto-permessi","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.382Z"}
+{"id":"a08590b1dde1ed4eb","slug":"morto-gate1-b","cosa":"MORTO con la sessione precedente","quando":"2026-08-15T20:26:09.427Z"}
+{"id":"aa7fa13c7a7732204","slug":"taint-in-ingresso","cosa":"leggere un file non alza il taint","quando":"2026-08-15T20:50:19.425Z"}
+{"id":"ae14fe916b0f84a37","slug":"superfici-discord","cosa":"contratto di superficie + Discord + consegna che non mente","quando":"2026-08-15T20:50:19.515Z"}
+{"id":"a47ba5e273f35b9eb","slug":"hermes-doc","cosa":"leggere TUTTA la doc Hermes e confrontarla con noi","quando":"2026-08-15T20:54:24.711Z"}
+{"id":"acf9ffdddf9b1676c","slug":"accettazione","cosa":"E4: armatura degli scenari end-to-end, stato inventario derivato","quando":"2026-08-15T20:59:00.121Z"}
+{"id":"a04547d6043e92677","slug":"turno-sospeso","cosa":"B2/B3/B4/B5: wait, todo, resume","quando":"2026-08-15T20:59:00.165Z"}
+{"id":"a2e0ee68fb905b26d","slug":"memoria-nel-tempo","cosa":"C4/C6: richiamo con storia e vicinato temporale","quando":"2026-08-15T21:00:55.341Z"}
+{"id":"task_74b3bb59","slug":"vaultpaths-taint","cosa":"chip owner: vaultPaths aggrega il tier con min() invece di max()","quando":"2026-08-15T21:07:49.543Z"}
+{"id":"task_4a02f3ea","slug":"risposta-tier0","cosa":"chip owner: la risposta dell'agente si salva a trustTier 0 dopo un turno sporco","quando":"2026-08-15T21:07:49.886Z"}
+{"id":"a49b7c31bf6fff494","branch":"slice/documenti","quando":"2026-08-15T21:08:39.395Z"}
+{"id":"ad9e1722815e2ba5d","branch":"slice/turno-record","quando":"2026-08-15T21:08:39.505Z"}
+{"id":"ae14fe916b0f84a37","branch":"slice/superfici","quando":"2026-08-15T21:08:39.611Z"}
+{"id":"a47ba5e273f35b9eb","branch":"slice/hermes","quando":"2026-08-15T21:08:39.703Z"}
+{"id":"acf9ffdddf9b1676c","branch":"slice/accettazione","quando":"2026-08-15T21:08:39.794Z"}
+{"id":"a04547d6043e92677","branch":"slice/turno-sospeso","quando":"2026-08-15T21:08:39.889Z"}
+{"id":"a2e0ee68fb905b26d","branch":"slice/memoria-nel-tempo","quando":"2026-08-15T21:08:39.972Z"}
+{"id":"ae14fe916b0f84a37","slug":"superfici-discord","cosa":"B8: contratto di superficie, Discord, consegna che non mente","quando":"2026-08-15T21:09:13.089Z"}
+{"id":"a49b7c31bf6fff494","slug":"documenti-pdf","cosa":"C7: parser documenti, niente troncamento","quando":"2026-08-15T21:09:13.138Z"}

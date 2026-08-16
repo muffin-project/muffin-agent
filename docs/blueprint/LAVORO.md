@@ -7,19 +7,23 @@
 > l'obiettivo successivo.
 
 <!-- INIZIO BLOCCO -->
-**Aggiornato**: 2026-08-15
+**Aggiornato**: 2026-08-16
 
-**Obiettivo**: M5-bis (`M5-BIS.md`) ordinato per **irreversibilita**: forma del turno > permessi > schema > resto. Un flag CLI si cambia domani, la forma di un turno no.
+**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Fix/build continuano; la forma resta tenant/surface-agnostic. Ordine: turno > permessi > superficie privata > memoria > acceptance.
 
-**Ogni giro, prima di scegliere**: aggiorna questo blocco e ripubblica la plancia (stesso URL). Se diverge da M5-BIS, ha ragione il file.
+**Inventario**: `M5-BIS.md` è autoritativo. DAY-1 parte a zero BLOCKER e zero `?`; niente conteggi copiati che possono invecchiare.
 
-**Rework autorizzato** (owner, 15 ago): niente e pubblico e niente e in prod, quindi la forma del CODICE si puo riscrivere. I DATI dell'owner no: 21 tabelle vere, e `episodes.kind` ha un CHECK non alterabile.
+**Non integrato**: accettazione E4 · turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 (worktree) · taint/Hermes (branch). Mai READY prima dell'accettazione.
 
-**Prossimo**: i consumatori del record del turno (ADR-0042, gia costruito) — `wait`, `todo`, resume, consegna dalla corsia.
+**Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
+
+**Checkpoint**: PR #32 `dev`→`main` è `ADJUST`. PR #34 corregge anche il
+full-scan cross-tenant con `reindexPath` e fixture host+due gruppi: CI+judge,
+merge, poi judge nuovo su #32.
+
+**Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
-
-**Trappole**: il kernel legge `reversible` solo in `case medium` — irreversibile collassa su allow · `approve` solo nel REPL · una base incompleta produce inventari falsi.
 <!-- FINE BLOCCO -->
 
 ---
