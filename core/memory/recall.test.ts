@@ -826,11 +826,22 @@ describe('invariant: a retired fact never comes back looking active', () => {
     const retired = store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
     const active = store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
     store.supersede(HOST, retired, active, '2026-08-01T10:00:00Z');
+    // N1: episodes too, not only facts — the two are marked by different
+    // columns (`superseded_at` vs. `expired_at`) and gated by separate code
+    // in `recall()`, so a sweep that only ever seeded a fact could not have
+    // caught a regression specific to the episode path.
+    const retiredEpisode = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 'sweep-retired', role: 'user',
+      kind: 'message', content: 'vecchia nota: Giusto accountant Marco Lucia', trustTier: 0,
+      createdAt: '2026-06-01T10:00:00Z',
+    });
+    store.supersedeEpisodes(HOST, [retiredEpisode], '2026-08-01T10:00:00Z');
     await vectors!.index(
       HOST,
       [
         { kind: 'fact' as const, sourceId: retired, text: 'Giusto accountant Marco' },
         { kind: 'fact' as const, sourceId: active, text: 'Giusto accountant Lucia' },
+        { kind: 'episode' as const, sourceId: retiredEpisode, text: 'vecchia nota: Giusto accountant Marco Lucia' },
       ],
       NOW,
     );
@@ -852,6 +863,13 @@ describe('invariant: a retired fact never comes back looking active', () => {
     let combinations = 0;
     let sawRetiredAsActive = 0;
     let sawRetiredCorrectlyMarked = 0;
+    // N1: the sweep used to measure only the *label* on a returned row — a
+    // regression that let a retired item back into an ordinary "now" search,
+    // correctly marked `expired`, would have counted as a pass here. Presence
+    // is its own property: under the default instant (`asOf === undefined`,
+    // no history asked for) a retired row must not come back at all, marked
+    // or not.
+    let sawRetiredWhenNotAsked = 0;
     for (const asOf of asOfValues) {
       for (const surface of surfaces) {
         for (const [since, until] of windows) {
@@ -864,10 +882,13 @@ describe('invariant: a retired fact never comes back looking active', () => {
               ...(neighbours === 0 ? {} : { neighbours }),
             });
             combinations++;
-            const retiredHit = result.items.find((i) => i.kind === 'fact' && i.id === retired);
-            if (retiredHit) {
-              if (retiredHit.expired) sawRetiredCorrectlyMarked++;
+            const retiredFactHit = result.items.find((i) => i.kind === 'fact' && i.id === retired);
+            const retiredEpisodeHit = result.items.find((i) => i.kind === 'episode' && i.id === retiredEpisode);
+            for (const hit of [retiredFactHit, retiredEpisodeHit]) {
+              if (!hit) continue;
+              if (hit.expired) sawRetiredCorrectlyMarked++;
               else sawRetiredAsActive++;
+              if (asOf === undefined) sawRetiredWhenNotAsked++;
             }
           }
         }
@@ -875,11 +896,13 @@ describe('invariant: a retired fact never comes back looking active', () => {
     }
 
     expect(combinations).toBe(asOfValues.length * surfaces.length * windows.length * neighboursValues.length);
-    // The property itself: never once, across every combination, does the
-    // retired fact come back looking current.
+    // The property itself: never once, across every combination, does a
+    // retired fact or episode come back looking current.
     expect(sawRetiredAsActive).toBe(0);
-    // And the property was actually exercised — a sweep that never returns the
-    // retired fact at all would make the assertion above vacuous.
+    // Nor does either come back at all when history was never asked for.
+    expect(sawRetiredWhenNotAsked).toBe(0);
+    // And the property was actually exercised — a sweep that never returns
+    // either retired row at all would make the assertions above vacuous.
     expect(sawRetiredCorrectlyMarked).toBeGreaterThan(0);
   });
 });
