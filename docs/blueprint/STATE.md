@@ -497,27 +497,54 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
 
-**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0044,
-88 file / 996 test). Il taint del turno saliva in un punto solo del loop, e quel
-punto leggeva un campo **opzionale**: `if (outcome.tier !== undefined)`. Chi non
-lo dichiarava — `fs_read`, `fs_list`, `shell_run`, `process_list` — portava byte
-di qualcun altro dentro il turno **lasciando il taint a zero**. Non un dettaglio:
-il docstring di `fs.read` argomenta il proprio soffitto alto appoggiandosi
-all'egress gate, che legge quel taint, quindi *la difesa citata nel file non
-poteva scattare*. Catena misurata prima del fix: `fs_read` di un file con
-istruzioni iniettate → taint 0 → `http_get` fuori allowlist → **ask** → owner
-approva → fetch. Dopo: **deny/resource_denied**, e l'owner non viene nemmeno
-messo nella posizione di dire sì. Due metà: `tier` **obbligatorio** su
-`ToolOutcome` (un tool nuovo non compila se non risponde alla domanda — il
-guardiano è `tsc`, che gira in CI) e `DISK_TIER = 2` per tutto ciò che entra dal
-disco, `shell_run` compreso perché `cat` è `fs_read` da un'altra porta. Costo
-misurato ed esplicito: **un turno che ha letto dal disco non agisce più
-sull'host** — shell, skill, process, mcp diventano `taint_exceeded`. Trovato
-girando un'affermazione **già marcata VERIFICATA**: era vera, e nessuno aveva
-fatto la sua negativa (`validazione-contratti.md` §6, addendum). Non chiuso, e
-nominato nell'ADR: il contenuto di `fs_read` **non è recintato** come quello di
-http/mcp, e la replica dell'agente entra in memoria a `trustTier: 0` anche quando
-il turno era a 2 (`agent/loop.ts:633-642`).
+**Taint in ingresso — chiuso** (2026-08-15, `slice/taint-in-ingresso`, ADR-0044;
+numeri di quel giorno, pre-merge: 88 file / 996 test). Il taint del turno saliva
+in un punto solo del loop, e quel punto leggeva un campo **opzionale**:
+`if (outcome.tier !== undefined)`. Chi non lo dichiarava — `fs_read`, `fs_list`,
+`shell_run`, `process_list` — portava byte di qualcun altro dentro il turno
+**lasciando il taint a zero**. Non un dettaglio: il docstring di `fs.read`
+argomenta il proprio soffitto alto appoggiandosi all'egress gate, che legge quel
+taint, quindi *la difesa citata nel file non poteva scattare*. Catena misurata
+prima del fix: `fs_read` di un file con istruzioni iniettate → taint 0 →
+`http_get` fuori allowlist → **ask** → owner approva → fetch. Dopo: **deny/
+resource_denied**, e l'owner non viene nemmeno messo nella posizione di dire sì.
+Due metà: `tier` **obbligatorio** su `ToolOutcome` (un tool nuovo non compila se
+non risponde alla domanda — il guardiano è `tsc`, che gira in CI) e
+`DISK_TIER = 2` per tutto ciò che entra dal disco, `shell_run` compreso perché
+`cat` è `fs_read` da un'altra porta. Trovato girando un'affermazione **già
+marcata VERIFICATA**: era vera, e nessuno aveva fatto la sua negativa
+(`validazione-contratti.md` §6, addendum).
+
+**Giro 2 (judge su PR #28, 2026-08-16) — la stessa domanda sul percorso di
+fallimento.** `tier` obbligatorio chiudeva solo il `return` di un handler; il
+`catch` di `runTool` restava esattamente al difetto originale — testo non
+recintato in sessione, `raiseTaint` mai chiamato, `tier: undefined` nel record.
+Porta reale trovata dal judge: `agent/tools/mcp.ts`, `connection.call` →
+`client.callTool`, lascia passare un `McpError` non catturato il cui `message` è
+testo del SERVER terzo — un server compromesso lanciava invece di rispondere, e
+una chiamata fallita costava zero (a differenza di una riuscita, che chiude
+l'egress al soffitto), quindi era ripetibile all'infinito. Chiuso: `throwTier:
+TrustTier` obbligatorio su `RegisteredTool` (0 dove il throw è provabilmente
+nostro, verificato per ognuno; 3 per `mcp.*`), il catch di `runTool` alza il
+taint per `tool.throwTier` invece di niente, `mcp.ts` recinta il proprio errore
+di connessione nello stesso `try`/`catch` di `http.ts`/`search.ts`. Nella stessa
+sessione, decisione owner sulla riga aperta dall'ADR: `sys.shell` passa a
+`maxTaint: 2` — dopo una lettura `shell_run` torna `ask` (non più `deny/
+taint_exceeded`), l'auto-allow resta irraggiungibile (richiede taint 0),
+l'egress resta chiuso; *"leggi il file e poi lancia i test"* torna completabile
+con un sì. Emendamento registrato in riga in `03-threat-model.md` §3 e come
+`## Revisione — 2026-08-16` in ADR-0044, non una riscrittura. Numeri dopo il
+giro 2, DOPO aver mergiato `origin/dev` (PR #39 e altre, nello stesso worktree —
+il salto nei totali viene per lo più da lì): 101 file / 1118 test, `npx tsc
+--noEmit` exit 0.
+
+Non chiuso, e nominato nel corpo PR: il contenuto di `fs_read` **non è
+recintato**, né sul successo né sul fallimento — solo il taint difende il kernel
+lì; l'`ask` del kernel non mostra il dettaglio dell'azione (comando/URL/pid),
+follow-up dichiarato per la slice successiva. **Chiuso da #39** (mergiata in
+`dev` mentre questa PR era in revisione): la replica dell'agente entrava in
+memoria a `trustTier: 0` anche quando il turno era a 2 — ora scrive
+`snapshot.currentTaint()`.
 
 ## Sessione 2026-08-16 — l'unità è l'agente continuo
 

@@ -148,7 +148,7 @@ export type ToolOutcome = {
    *
    * Optional-with-a-safe-default was the other candidate and is weaker in the
    * way that matters: it makes the omission harmless *today* without making it
-   * visible, and `agent/tools/skill.ts:97-110` is the record of how long an
+   * visible, and `agent/tools/skill.ts:114-121` is the record of how long an
    * invisible omission survives here — months, in a file whose own docstring
    * claimed the missing value. A required field is the same guarantee
    * `assertNever` gives the decision switch below: the day a new tool arrives,
