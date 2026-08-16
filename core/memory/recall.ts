@@ -684,7 +684,11 @@ export async function recall(
 
   // The hard backstop: ranked results occupy the front of `kept` and
   // neighbours were appended after them, so a cut here drops context before it
-  // ever drops something that actually matched the query.
+  // ever drops something that actually matched the query. A cut that fires is
+  // exactly the case `strategies` exists to report: a recall that came back
+  // worse than it looks has to say so, the same rule `vector-non-configurato`
+  // already follows.
+  if (kept.length > MAX_CONTEXT_ITEMS) strategies.push(`tetto(${MAX_CONTEXT_ITEMS})`);
   return { items: kept.slice(0, MAX_CONTEXT_ITEMS), strategies, gaps };
 }
 

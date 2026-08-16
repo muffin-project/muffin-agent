@@ -1571,12 +1571,12 @@
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 718,
+    "line": 722,
     "testo": "export function renderForPrompt(result: RecallResult): string {"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 761,
+    "line": 765,
     "testo": "export function recallTaint(result: RecallResult): TrustTier {"
   },
   "core/memory/rerank.ts:47": {
@@ -2631,22 +2631,22 @@
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 708,
+    "line": 712,
     "testo": "function successorOf(store: MemoryStore, tenantId: string, fact: Fact): Fact | null {"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 728,
+    "line": 732,
     "testo": "`${item.text.replace(/\\s+/g, ' ').slice(0, 400)}` +"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 784,
+    "line": 788,
     "testo": "function temporalLabel(item: RecallItem): string {"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 815,
+    "line": 819,
     "testo": "function extractCandidateNames(query: string): string[] {"
   },
   "redact.ts:11": {

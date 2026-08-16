@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Embedder } from './embed.js';
 import { sweepDuplicates } from './maintenance.js';
 import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
@@ -738,6 +738,26 @@ describe('recall', () => {
     expect(result.items.some((i) => i.neighbourOf !== undefined)).toBe(true);
   });
 
+  it('names the cap in strategies when the cut actually fires', async () => {
+    // The clamp test above proves the cut with the neighbourhood mechanism;
+    // this one proves it on `limit` alone, so the label is not accidentally
+    // coupled to `neighbours`. A recall that comes back smaller than what
+    // actually matched has to say so — the same rule that already puts
+    // `vector-non-configurato` in `strategies` rather than leaving it silent.
+    const { store, vectors } = harness(false);
+    for (let m = 0; m < 50; m++) {
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: 'regata di stamattina', trustTier: 0,
+        createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+      });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 100 });
+    expect(result.items.length).toBe(MAX_CONTEXT_ITEMS);
+    expect(result.strategies).toContain(`tetto(${MAX_CONTEXT_ITEMS})`);
+  });
+
   it('gives a neighbourhood to only the first few ranked episodes, not every one', async () => {
     // The other half of D2, isolated from the size clamp above: kept sits at
     // 6 items and each neighbourhood adds at most 2, so the total (18) never
@@ -904,5 +924,35 @@ describe('invariant: a retired fact never comes back looking active', () => {
     // And the property was actually exercised — a sweep that never returns
     // either retired row at all would make the assertions above vacuous.
     expect(sawRetiredCorrectlyMarked).toBeGreaterThan(0);
+  });
+});
+
+describe('the default turn pays no temporal-gate cost', () => {
+  it('never calls factsAsOf or episodeNeighbourhood when asOf and neighbours are both absent', async () => {
+    // The PR body claims this by hand ("Turno DEFAULT ... zero costo
+    // aggiunto"), probed once and never proven by a test that could go red —
+    // this is that test. `asOf === undefined` already has its own branch in
+    // the graph hop (`activeFacts`, never `factsAsOf`), and `neighbours`
+    // defaults to 0, which short-circuits the neighbourhood block before it
+    // ever calls the store. An ordinary "now" turn — the one every turn
+    // takes — must never pay for either primitive.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'Giusto accountant Lucia');
+    store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const factsAsOfSpy = vi.spyOn(store, 'factsAsOf');
+    const neighbourhoodSpy = vi.spyOn(store, 'episodeNeighbourhood');
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto accountant Lucia', {});
+
+    // The path was actually exercised, not vacuously empty — otherwise zero
+    // calls would prove nothing.
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(factsAsOfSpy).not.toHaveBeenCalled();
+    expect(neighbourhoodSpy).not.toHaveBeenCalled();
   });
 });
