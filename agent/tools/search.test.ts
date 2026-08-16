@@ -86,6 +86,11 @@ describe('web_search', () => {
     // Nothing from the provider arrived, so there is nothing to be tainted by.
     // Raising taint on a failure would silently narrow what the rest of the turn
     // is allowed to do, for no evidence at all.
+    //
+    // The assertion below moved from `toBeUndefined()` to `toBe(0)` and that is
+    // the whole slice in one line: "clean" and "unstated" used to be the same
+    // value, and the loop could not tell a tool that had answered from one that
+    // had never been asked (ADR-0044).
     const tool = makeSearchTool({
       id: 'fake',
       endpoint: 'https://example.invalid/search',
@@ -96,7 +101,7 @@ describe('web_search', () => {
     const out = await call(tool, { query: 'x' });
 
     expect(out.isError).toBe(true);
-    expect(out.tier).toBeUndefined();
+    expect(out.tier).toBe(0);
     expect(out.content).toContain('401');
   });
 

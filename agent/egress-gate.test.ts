@@ -85,6 +85,7 @@ function harness(allowHost: boolean) {
         fetched.push(String((args as { url: string }).url));
         return { content: 'body', tier: 3 as const };
       },
+      throwTier: 0,
     },
   ];
 

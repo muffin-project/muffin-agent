@@ -58,7 +58,11 @@ function decoyTools(names: string[]): RegisteredTool[] {
       description: `Strumento ausiliario "${name}", non pertinente ai compiti di questa sessione.`,
       inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
     },
-    handler: () => ({ content: `${name}: nessun risultato.` }),
+    // Never called by design (that is what the scenario checks), and never
+    // throws either — `throwTier: 0` is this fake's own honest floor, same as
+    // its declared `tier`.
+    throwTier: 0,
+    handler: () => ({ content: `${name}: nessun risultato.`, tier: 0 }),
   }));
 }
 
@@ -141,6 +145,10 @@ export const SCENARIOS: Scenario[] = [
             required: ['date'],
           },
         },
+        // This fake never throws — every failure mode below is a returned
+        // `isError` outcome, which is the point of the scenario (recovering
+        // from a *reported* failure, not an exception).
+        throwTier: 0,
         handler: (() => {
           // The failure has to be unavoidable, not hoped for. A first attempt
           // that fails only when the model formats the date badly measures
@@ -154,12 +162,17 @@ export const SCENARIOS: Scenario[] = [
               return {
                 content: 'Errore temporaneo: servizio non raggiungibile (503). Riprova la stessa richiesta.',
                 isError: true,
+                tier: 0,
               };
             }
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-              return { content: `Errore: date="${date}" non è ISO. Usa YYYY-MM-DD.`, isError: true };
+              return { content: `Errore: date="${date}" non è ISO. Usa YYYY-MM-DD.`, isError: true, tier: 0 };
             }
-            return { content: `Report ${date}: fatturato 12400 euro, ordini 87.` };
+            // A fake, but faithful where it costs nothing: this stands in for a
+            // report fetched from somewhere else, and a floor eval that runs
+            // tools cleaner than production measures a floor production has not
+            // got.
+            return { content: `Report ${date}: fatturato 12400 euro, ordini 87.`, tier: 3 };
           };
         })(),
       },
