@@ -90,8 +90,8 @@
       "n": 5,
       "id": "recall",
       "title": "Il recupero di memoria gira e puo' alzare la taint",
-      "file": "agent/loop.ts:289-314; core/memory/recall.ts:160-276",
-      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita', limitato a 8 elementi di default (recall.ts:166), poi eventualmente re-ranka. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:293), recintato come contesto a bassa autorita'. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
+      "file": "agent/loop.ts:289-314; core/memory/recall.ts:369-643",
+      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita' (quest'ultimo su tre selettori — ora, storia, o un istante passato via asOf — mai un quarto), limitato a 8 elementi di default (recall.ts:375), poi eventualmente re-ranka e attacca il vicinato in coda. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:675), recintato come contesto a bassa autorita'; una domanda temporale a cui il grafo non arriva rientra come lacuna esplicita, mai come il presente. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
       "taint": "puo' salire fino al trustTier massimo tra gli elementi recuperati (0-3) — loop.ts:299-300",
       "branches": [
         {
@@ -360,8 +360,8 @@
       },
       {
         "name": "memoria recuperata (recall)",
-        "source": "core/memory/recall.ts:160-276, invocato da agent/loop.ts:289-314",
-        "budget": "8 elementi di default (recall.ts:166), ognuno troncato a 400 caratteri nel rendering (recall.ts:293)"
+        "source": "core/memory/recall.ts:369-643, invocato da agent/loop.ts:289-314",
+        "budget": "8 elementi di default (recall.ts:375), ognuno troncato a 400 caratteri nel rendering (recall.ts:675)"
       },
       {
         "name": "messaggio utente corrente",
