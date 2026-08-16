@@ -124,7 +124,7 @@ decisione è tainted come tutto il resto del turno ed è soggetta a
 prompt-injection; se la mettiamo in un giudice che legge il registro dei
 processi — che è **fatto nostro**, non testo di un terzo — la decisione esce dal
 turno e diventa osservabile. Noi il registro dei processi ce l'abbiamo già
-(`agent/tools/process.ts:43,56` — `process_list` / `process_kill`); non l'abbiamo
+(`agent/tools/process.ts:47-48,60-61` — `process_list` / `process_kill`); non l'abbiamo
 mai collegato a una decisione di controllo.
 
 **Cosa costa.** Il pezzo di controllo, non il pezzo cognitivo. Un modulo che,
@@ -589,7 +589,7 @@ chiavi e modificarla è routine. E ammettono il perimetro:
 > sandbox a hostile or compromised agent.»* — stessa pagina, stessa data.
 
 **Noi.** Un kernel **puro e sincrono**, e il tipo lo dice:
-`core/policy/types.ts:94-97` — *«Synchronous and pure: no I/O, no network, no
+`core/policy/types.ts:117-120` — *«Synchronous and pure: no I/O, no network, no
 await»*, `Decide = (req: DecisionRequest) => Decision`. Quattro effetti
 (`types.ts:56-60`: `allow` / `ask` / `draft` / `deny`), otto codici di rifiuto
 (`types.ts:46-54`), una procedura ordinata di dieci passi
@@ -831,7 +831,7 @@ giornaliero per-tenant di 2 USD (`defaults/rot/budgets.json:4-5`, e il commento
 dice che il file è l'unica sorgente dei cap — `config.budget` non esiste più,
 ADR-0039), letti dal kernel come predicato puro
 (`core/policy/decide.ts:145`, `budgetExhausted`), con il turno che si ferma con
-`stopped: 'budget'` (`agent/loop.ts:435`). E un dettaglio che è meglio del loro:
+`stopped: 'budget'` (`agent/loop.ts:436`). E un dettaglio che è meglio del loro:
 **un modello sconosciuto viene fatturato alla tariffa più cara che conosciamo**
 (`core/budget/pricing.ts:43` — `UNKNOWN: { inputPerMTok: 15, outputPerMTok: 75 }`),
 cioè si sbaglia in modo caro invece che gratis. L'owner è esente dal cap
@@ -905,7 +905,7 @@ in `~/.muffin/`, la RoT che può solo stringersi** — e ogni idea che li viola 
 rifiutata per iscritto, adesso, così non torna.
 
 **1 · `approvals.mode: smart` — un LLM dentro la decisione di permesso.**
-Rifiutato. `Decide` è dichiarato puro e sincrono (`core/policy/types.ts:94-97`)
+Rifiutato. `Decide` è dichiarato puro e sincrono (`core/policy/types.ts:117-120`)
 e questa non è una comodità implementativa: è ciò che rende la decisione non
 attaccabile per prompt-injection e riproducibile in un test. Un giudice LLM può
 stare **fuori** dal kernel (è precisamente ciò che propongo in §2.1 per `wait`,
