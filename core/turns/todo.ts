@@ -29,6 +29,7 @@ import type { TrustTier } from '../policy/types.js';
  *
  * ## The five states are closed, and the `CHECK` is why they are all here now
  *
+ * ADR-0047 §3 records the cost of the sixth one, and when it stops being free.
  * Same trap as `episodes.kind` and `turns.status`: SQLite cannot alter a
  * `CHECK`, so a sixth state after day 1 of the fourteen costs a table rebuild.
  * The five come from M5-BIS verbatim, and there is deliberately **no**

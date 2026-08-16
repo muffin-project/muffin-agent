@@ -113,8 +113,8 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
       return 3;
     case 'suspended':
       /**
-       * Its own code, because a script that cannot tell this from `answered`
-       * will print an empty string and call it a result.
+       * Its own code (ADR-0047 §7), because a script that cannot tell this from
+       * `answered` will print an empty string and call it a result.
        *
        * Nothing was lost: the row is `waiting` and durable, and the gateway's
        * lane resumes it at the deadline — in *that* process, not this one, which

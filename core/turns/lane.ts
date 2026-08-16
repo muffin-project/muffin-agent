@@ -14,6 +14,8 @@ import { decodeWaitFor, satisfied } from './wait.js';
  * existed nothing ever read it — the exact shape `AGENTS.md` opens by naming, a
  * mechanism with a schema, passing tests and no caller.
  *
+ * ADR-0047 §6 records the shape and why the model lane is one token.
+ *
  * ## Why it is a sibling of `Scheduler` and not a method on it
  *
  * They tick on the same timer and share the model lane — literally, through one
