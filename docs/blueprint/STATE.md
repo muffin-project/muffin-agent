@@ -1,106 +1,56 @@
 # Stato esecuzione blueprint Muffin
 
-> ⭐ **START HERE — handoff (leggi questo blocco per primo; sopravvive al compact). Aggiornato 2026-08-14.**
+> ⭐ **START HERE — handoff (sopravvive al compact). Aggiornato 2026-08-16.**
 
-**Dove siamo.** Il **substrato M0–M5 è costruito e testato** (cronaca sotto). Ma "cores pronti" **NON è** l'MVP: il criterio d'uscita del Gate 1 (`04-roadmap.md §I due gate`) è **"l'owner lo usa come agente quotidiano per due settimane consecutive senza tornare al vecchio, tranne i gruppi"** — una **soglia d'uso**, non una checklist di feature. Siamo nella **spinta MVP**: chiudere il divario "substrato costruito" → "usabile ogni giorno". Nessuna **decisione di design** grossa aperta — le direzioni le forza la ricerca (`knowledge/` + `research/`); le vere-owner sono poche (il carattere).
+**Dove siamo.** M0–M5 è substrato costruito, non MVP. Gate 1 si chiude solo
+quando l'owner usa Muffin per **14 giorni consecutivi** senza tornare al vecchio
+(gruppi esclusi), non quando una checklist sembra piena. Repo autoritativa:
+`~/dev/muffin-agent`; il vecchio `~/dev/Muffin` resta solo produzione fino al
+cutover. Il dettaglio del chiuso è nella cronaca sotto; qui resta l'aperto.
 
-**Il codice** vive in **`~/dev/muffin-agent`** (repo separato, pushato **PRIVATO**: github.com/GiustoPiedimonte/muffin-agent).
+**Direzione (ADR-0045/0046).** Un solo agente continuo attraversa modello,
+sessione e device: fare · capire · essere presente. Evidence, beliefs, world
+state e work state sono piani distinti. Le surface sono porte: owner solo da
+subject-id stabile autenticato e binding protetto; ogni campo model-visible è
+contenuto parsato con provenienza/taint e resta potenzialmente iniettato.
+L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
-**✅ CONSOLIDATO (2026-08-09, `e034853`, ADR-0031).** Design/blueprint/research/knowledge/STATE/workflow sono TUTTI qui in `muffin-agent` — repo unico (anche per l'open-source: un `git clone` e hai tutto). **Questo file è la fonte autoritativa** (`muffin-agent/docs/blueprint/STATE.md`): edita QUI. Il vecchio repo `~/dev/Muffin` è solo il **vecchio muffin (produzione)** fino al cutover — mai scrivere lì.
+**Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario completo):
 
-**La spinta MVP — sei punti, cinque chiusi.** Per esteso, verbatim, in cronaca
-§"La spinta MVP: i sei punti per esteso": recall-polish · memoria-che-ti-conosce
-(`importance`/`origin`, e `importance` **non** entra in RRF) · una capability
-agente (`web_search` solo-snippet — e cablandola si è scoperto che l'allowlist
-egress non era mai entrata in funzione) · spina osservante (la manopola è
-**alpha**, non "media×3") · contesto per-tenant (`agent/context/assemble.ts`).
+- A2/A3: `identity.md` è template e manca il taglio persona dell'owner.
+- B2–B5: turno lungo, `wait`, `todo`, resume e budget per-job. Il record durevole
+  esiste; i consumer sono nel worktree sporco `slice/turno-sospeso`.
+- B8/B14: delivery remota e allegati prodotti; lavoro sporco in
+  `slice/superfici`.
+- B15/B16: binding owner nel RoT e envelope tipizzato universale non esistono.
+  Telegram prova `from.id`+privato contro impersonazione, ma conserva il binding
+  nella config ordinaria e non tipizza ogni metadata/multimodale.
+- C4/C6: recall storico e grafo temporale (`slice/memoria-nel-tempo`, sporco).
+- C8: audio senza trascrizione. E4: acceptance harness (`slice/accettazione`,
+  sporco). Gli altri `?` restano debito anche quando non sono blocker nominati.
 
-🟡 **Il sesto è l'unico aperto, ED È TUO: persona + onboarding.** Cablato —
-`voice.md` entra nel prompt, i commenti rivolti a te non finiscono dentro
-l'identità. **Manca il tuo taglio** su `defaults/persona.md`, e `identity.md` è
-ancora il template vuoto: "Chi sei" / "Come ti comporti quando è difficile" /
-"Il limite che ti do io" nessuno può scriverle al posto tuo. Finché non lo
-plasmi "sa di mockup" → **NON è l'MVP**.
+**Non integrato.** Oltre ai quattro worktree sopra, i branch puliti
+`slice/hermes` e `slice/taint-in-ingresso` non sono fusi in `dev`. Nessun lavoro
+vale READY prima di integration test, wiring di produzione, failure path,
+scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
 
-**⛔ IL DIVARIO, e perché il Gate 1 è ancora a zero giorni** (aperto 2026-08-11;
-dettaglio in `04-roadmap.md` §M5-bis, e il per-esteso dei punti chiusi in cronaca
-§"Il divario M5-bis"). M0-M5 è costruito e **non produce un agente usabile**.
-Cinque cose, tutte verificate sul codice:
-0. 🟡 **Niente vive senza il terminale** → **ADR-0035**. ✅ Il processo **c'è**
-   (`slice/gateway`): `muffin gateway run` possiede lo scheduler (il
-   `setInterval` è uscito da `cli/repl.ts`), SIGTERM/SIGUSR1 drenano, `sd_notify`
-   è no-op senza `NOTIFY_SOCKET`, due scheduler non girano mai. **Resta aperto**:
-   (a) `queue`/`steer`/`heartbeat`/`undo` — vogliono il protocollo sul socket,
-   non costruito; (b) la consegna remota; (c) **il criterio d'uscita dal lato di
-   chi lo usa**, da ADR-0035 §revisione 2026-08-14 — *un turno lungo torna entro
-   ~500 ms e consegna dopo*: `runTurn` è sincrono e il connettore lo attende, la
-   metà strutturale non esiste (quella cosmetica sì, `telegram/presence.ts`);
-   (d) **il budget per-job**, che entra in questa slice e non dopo — i cap oggi
-   sono solo globali (mese, giorno-per-tenant) e l'unico limite per-turno conta i
-   giri, non i token: un processo che vive toglie l'owner-che-guarda, ed è la
-   differenza fra un job rotto che costa €0,50 e uno che si mangia il mese.
-1. ✅ **Consolidamento — entrambi i meccanismi girano.** ADR-0038 il flusso
-   (coda d'inattività 20 s, tetto 12, misurati sul corpus vero) e **ADR-0040** lo
-   stock (drenaggio dell'arretrato, deduplica senza soglia, registro `review`
-   letto e risposto con `muffin memory review [keep <id>]`). Provati eseguendoli.
-   Dettaglio in cronaca §"Il divario M5-bis" e in `04-roadmap.md` §M5-bis.
-   ⛔ **Resta aperto**: **dream/compattazione** — non costruito perché manca il
-   *consumatore* (`profiles`/`digests`: zero lettori; prima il lettore, poi lo
-   scrittore) — e l'**audit dei predicati** a metà (l'invariante rileva, ma
-   proporre un merge vuole un giudizio di sinonimia: modello o vocabolario
-   chiuso, e li rifiutiamo entrambi). **`muffin run` headless non consolida**
-   (timer `unref`'d): limite dichiarato, ora meno caro perché il primo processo
-   di lunga vita drena tutto. **Rifiutato e non rimandato**: il decadimento della
-   confidenza (ADR-0040 §"Quello che NON è costruito").
-   🟡 **Decisione owner aperta**: se il tool `ricorda` **scrive o propone** —
-   cancella ADR-0032 §9, e nel vecchio quel percorso ha fatto il 9,7% dei fatti
-   **decadendo a zero in quattro mesi**.
-2. ✅ **`thinking` dichiarato nei profili e mai passato** — chiuso 2026-08-13
-   (`6d2cd21`). Non era un cablaggio ma una **migrazione ad `adaptive`**:
-   `{type:'enabled',budget_tokens}` è un 400 da 4.7 in poi. Nella stessa passata,
-   due difetti peggiori: i **blocchi di thinking venivano buttati via**
-   dall'adapter, e `temperature: 0` era cablato nel loop (400 su Opus 4.7+) e in
-   `core/memory/{extract,judge,rerank}.ts` **fuori** dal sistema dei profili.
-3. ✅ **Non era governabile da dentro** → **ADR-0036**, e la sua precondizione
-   bloccante (il tetto di spesa sigillato davvero) è **sciolta** il 2026-08-13
-   (**ADR-0039**): `core/rot/budgets.ts` è l'unico lettore, `config.budget` non
-   esiste più, e `denyRead` copre entrambi gli store di segreti più la `.env`
-   (prima `fs_read(".env")` restituiva la chiave in chiaro). Costruiti i tre
-   pezzi che l'ADR chiedeva: **`muffin config`** sola-lettura che deriva le
-   manopole dall'oggetto `Config` reale, **il primo avvio che dice cosa ha
-   dedotto**, **alias italiani selettivi** (`memoria/lavori/segreto`).
-   **Resta aperto**: nessuna superficie di scrittura conversazionale (non era lo
-   scopo — sola lettura per ADR-0036), e nessun tool in `agent/tools/` legge
-   ancora `listConfigKnobs`.
-4. 🟡 **Niente resume a grana di turno né retry sul lungo** — l'unico asse su cui
-   la ricerca peer ci dà torto (`research/confronto-harness.md` §2.3).
-   ✅ **Substrato costruito il 2026-08-15** (**ADR-0042**, disegno in
-   `research/turno-sospendibile.md`): un turno è una **riga durevole**
-   (`core/turns/store.ts`) — identità = trace id, **modello pinnato**, trascritto
-   intero, **taint come colonna** (derivarlo era una scalata di privilegio),
-   contatori, e **intento+esito per ogni tool call**: «fatta» e «forse fatta» ora
-   si distinguono, e `CapabilityDecl.rerunnable` **non** è `reversible`. Chi muore
-   a metà turno lascia una riga `interrupted`, nominata al boot e da `doctor`:
-   prima rifaceva il turno da capo, effetti compresi, in silenzio. ⛔ **Restano i
-   consumatori**: `wait` (B3), `todo` (B4), resume (B5), consegna (B2).
-5. ⛔ **Nessun eval d'accettazione a costo quasi zero** — end-to-end con provider
-   finto + smoke piccolo sul modello vero.
+**Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
+→ commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
+integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
 
-**Le tre ricerche di confronto, tutte fatte** (dettaglio in cronaca; nessuna
-sposta l'ordine di lavoro): **peer harness** — la scommessa regge su cinque assi
-su sei, l'unico contraddetto è il resume (punto 4); **inventario vecchio-nuovo**
-— dei 47 tool del vecchio **16 mai invocati** e 28 su 47 sotto le cinque
-chiamate in quattro mesi, sei tool hanno fatto il lavoro; **consulenza esterna**
-(`confronto-gemini.md`, 2026-08-14) — 14 raccomandazioni su ~25 descrivono cose
-già costruite, 4 sono buchi veri e piccoli, e il contributo che vale non è una
-feature ma il criterio d'uscita di ADR-0035 (punto 0c).
+**Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
+modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
+identity/persona. Le decisioni sicurezza 0045/0046 sono invece ratificate.
 
-**Casi d'uso → primitive**: `12-casi-uso-primitive.md` — venti casi d'uso dell'owner tradotti in **sette** primitive, il disegno del cron-a-predicato, e il buco del threat model che le sorgenti-in-ingresso aprono (una mail avvelenata alle 7 non è coperta da niente oggi).
+**File load-bearing — LEGGI PRIMA di lavorare:**
 
-**File load-bearing — LEGGI PRIMA di lavorare** (la cura al "non avere i file"):
-- `STATE.md` (questo) · `04-roadmap.md` (i due gate + albero + slice) · `03-threat-model.md` (RoT, kernel, taint).
-- `knowledge/README.md` (7 criteri neuro + regola "principio→primitiva, non modulo") · `knowledge/03-observing-spine.md` · `knowledge/04-learn-from-absence.md`.
-- Nel codice: `~/dev/muffin-agent/CLAUDE.md` (START HERE del repo) · `agent/loop.ts` (motore) · `core/turns/store.ts` (il record del turno: identità, modello pinnato, taint, intento/esito per tool call) · `core/memory/{recall,store,extract}.ts` · `core/policy/{decide,types}.ts`.
+- `STATE.md`, `LAVORO.md`, `04-roadmap.md`, `M5-BIS.md`, `03-threat-model.md`,
+  `09-contratti-m0-m1.md`, `BRANCHING.md`, `ORCHESTRATION.md`, `JUDGE.md`.
+- `knowledge/README.md`, `knowledge/03-observing-spine.md`,
+  `knowledge/04-learn-from-absence.md`.
+- Codice: `agent/loop.ts`, `agent/runtime.ts`, `core/turns/store.ts`,
+  `core/memory/{recall,store,extract}.ts`, `core/policy/{decide,types}.ts`,
+  `connectors/telegram/connector.ts`.
 
 ---
 
@@ -533,6 +483,56 @@ dal lato dell'esperienza — *un turno lungo torna entro 500ms e consegna dopo*
 (=la nostra priorità 1, costruita e attaccata a niente). Mai nominati da lei:
 provenienza/taint, multi-tenancy, bi-temporalità, rug-pull MCP, insieme chiuso
 di trigger, Root of Trust, il costo della cache come vincolo di design.
+
+## Sessione 2026-08-16 — l'unità è l'agente continuo
+
+La conversazione owner su Muffin e Hermes è stata riletta come critica di
+prodotto, non come istruzione da eseguire. **ADR-0045** fissa la decisione:
+modello, chat, app e device sono harness/surface; l'unità persistente è un solo
+agente con tre assi — fare, capire, essere presente. La misura si sposta dalla
+parità di feature alla sostituzione verificata di un'interfaccia diretta.
+
+Il giro ha letto anche ciò che non è in `dev`: branch puliti `slice/hermes` e
+`slice/taint-in-ingresso`, più i worktree sporchi di turno sospeso, superfici,
+memoria temporale e acceptance. Conseguenza: i documenti possono registrare la
+direzione e le dipendenze, ma non attribuire a `dev` meccanismi che vivono solo
+in quei worktree. Il codice di `agent/loop.ts` non è stato duplicato in questa
+slice: `slice/turno-sospeso` lo sta già riscrivendo e resta il luogo che deve
+provare B2–B5.
+
+Aggiornati `THESIS.md`, `DESIGN-PRINCIPLES.md`, `foundations/VISION.md`,
+`ORCHESTRATION.md`, roadmap, inventario e stato. `foundations/INVARIANTS.md` e
+`UNDERSTANDING.md` sono ora marcati esplicitamente come corpus ereditato, per
+non scambiare claim del vecchio Muffin per garanzie del runtime corrente.
+
+La direttiva successiva dell'owner è fissata in **ADR-0046**. L'autorità di una
+surface deriva solo da un subject-id stabile autenticato e da un binding
+protetto; nomi, bio, username, stanze, foto e contenuto non eleggono l'owner.
+Ogni campo model-visible — inclusi metadata, immagini, OCR, audio e derivati —
+attraversa un parser tipizzato con provenienza e taint. Parsing non equivale a
+fiducia. L'inventario aggiunge B15/B16 come blocker: Telegram prova già
+`from.id` contro l'impersonazione, ma il binding è ancora config ordinaria e
+l'envelope universale non esiste.
+
+La stessa sessione ha reso esplicito il ritmo di integrazione in
+`BRANCHING.md` e `ORCHESTRATION.md`: commit recuperabili per unità verificabile,
+draft PR quando la decisione è fissata, review al checkpoint completo, merge in
+`dev` solo dopo verdetto terminale e verifica separata prima di `main`.
+
+**Verifica del checkpoint.** `npm run build` è verde. `npm test`, eseguito fuori
+dal sandbox Codex perché Seatbelt deve poter applicare davvero i profili macOS,
+chiude **96 file: 1.074 test passati, 1 saltato, 0 falliti**. La prima esecuzione
+ha trovato un fixture PDF legato al giorno di calendario: il tool chiedeva il
+path del 15 agosto mentre il connector lo nominava col giorno corrente. Il test
+ora pinna l'orologio del connector e torna verde sul percorso di produzione.
+Mappa e handoff sono nuovamente eseguibili: 565 ancore verificate; i blocchi
+iniettati misurano 3.038 (`STATE`) e 1.047 (`LAVORO`) caratteri, senza taglio.
+
+Graphify ha prodotto localmente il grafo usato per interrogare relazioni fra
+loop, turn store, gateway, policy, memory e surface; gli artefatti generati sono
+ignorati da git. Il report non è un certificato: segnala 553 archi con endpoint
+non risolto, quindi il grafo resta utile per navigazione ma non autorizza claim
+di copertura completa.
 
 ## Sessioni 2026-08-09
 

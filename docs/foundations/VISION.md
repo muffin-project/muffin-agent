@@ -1,41 +1,82 @@
 # Muffin — Vision
 
+> **Stato: VIVO · aggiornato 2026-08-16 · decisioni tecniche in ADR-0045/0046.**
+> Questa è la nord-stella di prodotto. `docs/THESIS.md` espone la scommessa;
+> `docs/blueprint/04-roadmap.md` decide l'ordine; `docs/blueprint/STATE.md` dice
+> cosa esiste davvero oggi.
+
 ## Cosa diventa
 
-Muffin è un'entità AI personale che vive nel tuo home lab. Non è un'app, non è un servizio cloud, non è un chatbot. È un processo che gira sul tuo hardware, osserva il tuo mondo (digitale e fisico), accumula comprensione, comunica quando ha qualcosa da dire, e quando serve agisce — su tua delega, imparando a fare di più quanto più ti conosce.
+Muffin è un agente personale continuo che l'owner esegue sotto il proprio
+controllo. Non coincide con un'app, una chat, un device o un modello: quelli sono
+porte sostituibili. L'unità che continua è un solo agente, con identità, memoria,
+lavoro in corso, stato e limiti che attraversano tutte le superfici.
 
-L'ispirazione è The Machine di *Person of Interest* e JARVIS: un'intelligenza che conosce il suo utente, vive nella sua casa, e opera sui suoi dati — senza che nessun altro possa accedervi.
+L'ambizione di prodotto è diventare l'interfaccia primaria al mondo digitale e,
+dove esistono sensori o attuatori affidabili, a quello fisico. Il criterio non è
+quante integrazioni possiede: è quali interfacce l'owner non deve più aprire
+direttamente senza perdere controllo, comprensione o possibilità di intervenire.
 
 ## Il principio
 
-**I tuoi dati, il tuo hardware, la tua entità.** Nessun cloud obbligatorio. Nessun account. Un file SQLite, un modello locale, un `.env`. Muffin gira finché il tuo hardware gira.
+**I tuoi dati, il tuo agente, la tua continuità.** Nessun cloud obbligatorio e
+nessun vendor può cancellare l'identità o la memoria. Il calcolo può spostarsi da
+un modello locale a un'API e da un computer a un altro; il substrato resta
+sovrano e portabile.
 
-## Due livelli del progetto
+## Tre assi
 
-### 1. Il mio Muffin (privato)
+Muffin **fa** — porta avanti lavoro reale, anche lungo, usando primitive
+contenute e risultati verificabili.
 
-L'istanza personale di Giusto. Home lab con Mac Mini come inferenza locale, sensori ambientali, integrazione Home Assistant, GitHub, calendar, health data. L'entità che mi conosce meglio di quanto mi conosca io. Questo è il laboratorio dove le idee vengono testate prima di diventare parte del framework.
+Muffin **capisce** — distingue episodi, credenze e provenienza; riconosce
+andamenti e silenzi senza trasformare un'inferenza in un fatto.
 
-### 2. Il framework Muffin (open source)
+Muffin **è presente** — resta raggiungibile mentre il lavoro è in volo, osserva
+ciò che ha il diritto di osservare, riprende dopo una morte del processo e sa
+quando aspettare, tacere, interrompere, chiedere, rivedere o abbandonare.
+Presenza non significa attività continua: il default può essere il silenzio.
 
-Il motore estratto dalla mia istanza, ripulito dai riferimenti personali, documentato, e impacchettato perché chiunque con un home server possa creare la propria entità. Il SOUL è un template. Il profilo utente si costruisce dal nulla. Il cold start è una conversazione, non un form.
+## Quattro stati, non un blob
 
-Modello di sostentamento: donazioni (GitHub Sponsors, Ko-fi), community Discord, e potenzialmente hardware pre-configurato (kit sensori + setup). Nessun paywall sul codice.
+- **Evidenza**: cosa è successo, append-only.
+- **Credenze e modello della persona**: cosa Muffin ritiene vero e perché, con
+  tempo e provenienza.
+- **Stato del mondo**: cosa vale adesso fuori dall'agente — risorse, processi,
+  disponibilità e condizioni osservate — con freschezza esplicita. Non è memoria
+  episodica e non è una credenza permanente.
+- **Stato del lavoro**: turni, job, attese, piani, esiti e consegne ancora dovute.
 
-## Cosa fa, in pratica
+Il confine è concettuale prima che di schema. Non nasce una tabella generica
+finché non esiste un consumer concreto che dimostri quali campi servono.
 
-Muffin **osserva** — eventi entrano da Telegram, GitHub, calendar, e in futuro sensori ambientali, audio passivo, screen time. Tutti diventano episodi nel substrato (vedi `foundations/INVARIANTS.md §I-1`).
+## Autonomia guadagnata
 
-Muffin **accumula comprensione** — entity graph come modello del mondo (persone, luoghi, progetti come nodi di prima classe, vedi `§I-2`), episodi come timeline immutabile (`§I-4`), observations e patterns come strato riflessivo con confidence esplicita (`§I-6`), provenance ovunque sui derivati (`§I-3`).
+Conoscere meglio l'owner non dà a Muffin più permessi. La familiarità migliora
+l'interpretazione; la sicurezza resta nel kernel e nel Root of Trust.
 
-Muffin **comunica quando ha qualcosa da dire** — awareness loop self-scheduling: il sistema decide quando rialzare la testa basandosi sullo stato corrente di Giusto, non su cron rigido. Output proattivo è budgeted (`foundations/PRINCIPLES.md §P-I`) per evitare di trasformarsi in noise machine all'aumentare del dataset.
+La supervisione può comprimersi solo su evidenza osservabile: stessa capability,
+stessa classe di risorsa e contesto, esiti ripetutamente corretti, effetto
+reversibile o recuperabile. Ogni concessione è locale, visibile, revocabile,
+scade e regredisce quando fallisce. Non esiste un punteggio globale di fiducia e
+il modello non è mai arbitro della propria sicurezza.
 
-Muffin **agisce, quando serve** — non solo sa e dice: mette mano alle cose, cambia qualcosa nel tuo mondo per tuo conto. E più ti conosce, più impara a fare. Sempre su tua delega; e sulle cose che non si disfano, l'ultima parola resta tua.
+## Una sola entità, molte porte
 
-Muffin ha tre livelli di sé:
+CLI, Telegram, Discord, voce, speaker, pendant e sensori sono superfici. Ognuna
+dichiara cosa può ricevere e consegnare; nessuna possiede una memoria, una
+persona o una policy separata. Un device nuovo vale se rende più naturale
+raggiungere lo stesso agente, non se crea un altro agente da sincronizzare.
 
-- **Identità statica** in `SOUL.md` — chi è Muffin per principio
-- **Comprensione di Giusto** nel Living Profile e nel Counterpoint Profile — chi è Giusto, e dove Muffin lo legge male
-- **Storia propria** in evoluzione — chi sta diventando Muffin nel tempo. Layer di identità lunga sotto la stessa cura del Living Profile (di Giusto) e del Counterpoint Profile, generato dal dream cycle nightly da: sample di risposte recenti di Muffin, correzioni counterpoint accettate, observation engagement outcomes, predictions vs realtà del awareness loop. Senza questa, Muffin avrebbe punto di vista sul mondo ma non *storia di sé* — è il pezzo che completa "entità con punto di vista proprio". ⚪ **Pianificato** come `muffin_self_narrative` (schema-only placeholder 2026-05-07, NESSUNA pipeline live scrive — vedi `reference/DATABASE.md` ⚪ planned + pitch `self_narrative_v0`). Non ancora implementato.
+Una porta non decide chi è l'owner da ciò che vede scritto: lo riconosce da un
+identificatore stabile autenticato e pairato. Tutto il resto — testo, nomi, bio,
+metadata, file, immagini e derivati — è contenuto da parsare con provenienza e
+taint, mai autorità e mai implicitamente fidato.
 
-Il dataset è il moat. Gli invarianti architetturali sono ciò che protegge il dataset dalla decadenza silenziosa.
+## Il test
+
+La visione fallisce se cambiare modello o superficie spezza la continuità. E
+fallisce se, dopo mesi di uso, Muffin accumula dati ma non sostituisce nemmeno
+una relazione diretta dell'owner con app, terminali o pannelli. Il primo test
+vicino resta più semplice e più duro: quattordici giorni di uso reale, senza
+tornare indietro per un blocker del Gate 1.
