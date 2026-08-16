@@ -703,6 +703,28 @@ export function readTurnHealth(
 }
 
 /**
+ * `undelivered()`'s own half of the pair above — same shape, same reason:
+ * `doctor` opens a read-only handle and has no runtime to hold a `TurnStore`.
+ *
+ * D3 (judge, PR #42): this method had zero callers and zero tests until
+ * `cli/doctor.ts` read it here — B8's own guarantee ("un job che dice
+ * «inviato» è arrivato") was checkable in principle and unchecked in
+ * practice, the exact shape `AGENTS.md` names: a mechanism with a schema and
+ * no caller.
+ */
+export function readUndelivered(
+  db: Database.Database,
+  windowMs: number = DOCTOR_WINDOW_MS,
+): UndeliveredTurn[] | null {
+  try {
+    db.prepare(`SELECT 1 FROM turns LIMIT 1`).get();
+  } catch {
+    return null;
+  }
+  return new TurnStore(db).undelivered({ windowMs });
+}
+
+/**
  * How far back a diagnosis looks for an interrupted turn.
  *
  * A day, because that is the horizon on which "something went wrong and I do

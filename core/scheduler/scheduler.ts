@@ -234,8 +234,12 @@ export class Scheduler {
    * re-firing doubles the spend to re-send text that is sitting in
    * `outcome.text`. That was already the rule and it stays; what was missing was
    * anywhere that recorded the failure, so "il job dice inviato" was
-   * unfalsifiable. Now the turn's row carries `failed:<why>` and
-   * `muffin doctor` reads it (`core/turns/store.ts`, `undelivered`).
+   * unfalsifiable. Now the turn's row carries `failed:<why>`, and it is read
+   * back by `core/turns/store.ts`'s `TurnStore.undelivered()` (through the
+   * `readUndelivered` wrapper, the same shape as `readTurnHealth`) — wired
+   * into the "consegne" check in `cli/doctor.ts`, not merely declared as a
+   * capability nothing calls (D3, judge, PR #42: this method had zero
+   * callers and zero tests until that wiring existed).
    */
   private settle(job: Job, outcome: JobOutcome, delivery: DeliveryOutcome): void {
     // Before `markRan`, so a crash between the two leaves a fire that has not
