@@ -8,6 +8,7 @@ import { paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { gatewayStandDown } from './repl.js';
 import { stopCaveat } from './gateway.js';
 import { runInit } from './init.js';
@@ -217,6 +218,7 @@ describe('the claim can change under a REPL that is already ticking', () => {
       (e) => w.events.push(e),
       undefined,
       standDown,
+      new ModelLane(),
     );
 
     // Nobody owns it: this session is the scheduler, and behaves like one.
@@ -299,6 +301,7 @@ describe('the claim can change under a REPL that is already ticking', () => {
       (e) => w.events.push(e),
       undefined,
       gatewayStandDown(w.db, (l) => w.said.push(l), false),
+      new ModelLane(),
     );
 
     sched.tick(); // nobody owns it yet — the turn starts

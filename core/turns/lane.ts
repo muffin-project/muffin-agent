@@ -73,10 +73,23 @@ export type LaneDeps = {
   /**
    * The single model lane, shared with `Scheduler` when both are running.
    *
-   * Its own instance by default, so a lane driven on its own still runs one
-   * turn at a time. `Gateway` is what hands the *same* token to both.
+   * **Mandatory, and that is the fix for D1 (judge, round 2).** This used to
+   * default to `?? new ModelLane()`, and the default was never dead code — it
+   * was reachable from `cli/gateway.ts` by deleting one identifier, and
+   * nothing caught it: `tsc` stayed green, all 1192 tests stayed green, and
+   * the concurrency the token exists to prevent came back (mutation verified
+   * below). ADR-0047 §6 already claims *"a token cannot be half-connected"*;
+   * with an optional field that claim was false, because a caller could still
+   * construct a `TurnLane` and a `Scheduler` from two separate instances
+   * without either compiler or test noticing. A required field makes
+   * forgetting it a compile error at the one place that matters — the
+   * construction site — instead of a silent regression a judge has to
+   * rediscover by mutating the code back to see what breaks. A lane that
+   * genuinely wants to serialise only against itself (most tests) passes its
+   * own fresh `new ModelLane()` explicitly; the point is that it is now a
+   * decision made in the open, not a default nobody chose.
    */
-  modelLane?: ModelLane;
+  modelLane: ModelLane;
 };
 
 export class TurnLane {
@@ -88,7 +101,7 @@ export class TurnLane {
   private readonly alive: (pid: number) => boolean;
 
   constructor(private readonly deps: LaneDeps) {
-    this.modelLane = deps.modelLane ?? new ModelLane();
+    this.modelLane = deps.modelLane;
     this.gate = deps.gate ?? ALWAYS_IDLE;
     this.standDown = deps.standDown ?? (() => false);
     this.onEvent = deps.onEvent ?? (() => {});

@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { TurnLane } from '../core/turns/lane.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
 import { buildRuntime } from './runtime.js';
 import type { LoopDeps } from './loop.js';
@@ -213,6 +214,7 @@ describe('accettazione · ucciso a metà turno, riprende al riavvio', () => {
       run: makeLaneRunner(deps, async (turn, text) => {
         delivered.push({ turn, text });
       }),
+      modelLane: new ModelLane(),
     });
     lane.tick();
     await settle(lane);

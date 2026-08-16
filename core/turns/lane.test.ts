@@ -64,6 +64,10 @@ function world(over: { alive?: (pid: number) => boolean } = {}) {
       return { stopped: 'answered' as const };
     },
     onEvent: (e) => events.push(e),
+    // A fresh token: this lane's own concurrency-with-itself is what these
+    // cases exercise, not sharing with a scheduler — that has its own describe
+    // block below.
+    modelLane: new ModelLane(),
     ...(over.alive ? { alive: over.alive } : {}),
   });
 
@@ -238,6 +242,7 @@ describe('una corsia sola, e non si incastra', () => {
         throw new Error('il turno è esploso');
       },
       onEvent: (e) => events.push(e),
+      modelLane: new ModelLane(),
     });
     store.enqueue(spec('t-boom'));
     lane.tick();
@@ -254,6 +259,7 @@ describe('una corsia sola, e non si incastra', () => {
       turns: store,
       run: async (id) => (ran.push(id), { stopped: 'answered' as const }),
       standDown: () => true,
+      modelLane: new ModelLane(),
     });
     store.enqueue(spec('t-theirs'));
     lane.tick();
@@ -268,6 +274,7 @@ describe('una corsia sola, e non si incastra', () => {
       turns: store,
       run: async (id) => (ran.push(id), { stopped: 'answered' as const }),
       gate: { isActive: () => true, signal: () => undefined },
+      modelLane: new ModelLane(),
     });
     store.enqueue(spec('t-later'));
     lane.tick();

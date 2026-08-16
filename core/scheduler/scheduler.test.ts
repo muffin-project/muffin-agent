@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { JobStore, type Job } from './jobs.js';
 import { Scheduler, type ForegroundGate, type JobOutcome, type SchedulerEvent } from './scheduler.js';
+import { ModelLane } from '../turns/model-lane.js';
 
 const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' };
 const flush = () => new Promise((r) => setImmediate(r));
@@ -29,7 +30,7 @@ describe('Scheduler.tick', () => {
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => {});
     const runJob = vi.fn(async (j: Job): Promise<JobOutcome> => ({ stopped: 'answered', text: `ecco il brief per ${j.id}` }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -46,7 +47,7 @@ describe('Scheduler.tick', () => {
     const { store, clock, set } = storeWith();
     set(new Date('2026-06-15T05:59:00Z'));
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x' }));
-    const sched = new Scheduler(store, runJob, async () => {}, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, async () => {}, undefined, () => {}, clock, undefined, new ModelLane());
     sched.tick();
     await flush();
     expect(runJob).not.toHaveBeenCalled();
@@ -62,7 +63,7 @@ describe('Scheduler.tick', () => {
       return { stopped: 'answered', text: 'done' };
     });
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, async () => {}, undefined, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, async () => {}, undefined, (e) => events.push(e), clock, undefined, new ModelLane());
 
     sched.tick(); // launches the run, stays in flight
     await flush();
@@ -82,7 +83,7 @@ describe('Scheduler.tick', () => {
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x' }));
     const events: SchedulerEvent[] = [];
     const busy: ForegroundGate = { isActive: () => true, signal: () => undefined };
-    const sched = new Scheduler(store, runJob, async () => {}, busy, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, async () => {}, busy, (e) => events.push(e), clock, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -98,7 +99,7 @@ describe('Scheduler.tick', () => {
     const deliver = vi.fn(async () => {});
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'aborted', text: '' }));
     const before = store.get(job.id)!.nextFireAt.toISOString();
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -112,7 +113,7 @@ describe('Scheduler.tick', () => {
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => {});
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'ask', text: 'serve la tua conferma per X' }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -128,7 +129,7 @@ describe('Scheduler.tick', () => {
     });
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x' }));
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, deliver, undefined, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, new ModelLane());
 
     sched.tick();
     await flush();

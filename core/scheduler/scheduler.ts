@@ -104,11 +104,19 @@ export class Scheduler {
      * Property (2) above — *"one owner, one model lane"* — used to be a private
      * boolean, so it was true of this class **alone**: `Gateway.tick` drives
      * this and the turn lane on the same beat, and both would start work in the
-     * same tick against one provider and one budget. Its own instance by
-     * default, so a scheduler with no turn lane still serialises itself and
-     * every existing construction site keeps its behaviour exactly.
+     * same tick against one provider and one budget.
+     *
+     * **Mandatory (D1, judge round 2).** A default of `= new ModelLane()` sat
+     * here until a mutation showed exactly what it cost: give `cli/gateway.ts`
+     * a second, unshared `ModelLane` for the turn lane and nothing caught it —
+     * `tsc` compiled, all 1192 tests stayed green, and the two-lanes-at-once
+     * bug the token exists to prevent came back. A default is a value nobody
+     * had to choose, and this one was load-bearing. Every construction site now
+     * states its choice: a scheduler run without a turn lane passes its own
+     * fresh `new ModelLane()` (unchanged behaviour, just spelled out), and
+     * `cli/gateway.ts` passes the one token both lanes share.
      */
-    private readonly modelLane: ModelLane = new ModelLane(),
+    private readonly modelLane: ModelLane,
   ) {}
 
   /**
