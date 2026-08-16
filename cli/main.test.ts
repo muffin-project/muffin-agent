@@ -291,3 +291,62 @@ describe('muffin memory search — the temporal boundary is checked before anyth
     expect(r.code).not.toBe(78);
   });
 });
+
+describe('muffin memory search — --surface and --around actually reach a result', () => {
+  /**
+   * U1's other half. The tests above prove three ways argv gets rejected
+   * *before* `cmdMemorySearch` calls `buildRuntime`; none of them prove a
+   * flag that argv accepts ever arrives at a real result. `--surface` and
+   * `--around` are parsed into `values` two subcommand-switch cases up
+   * (`cmdMemory`'s `search` branch, `cli/main.ts`) and folded into the options
+   * object `cmdMemorySearch` receives — a step no unit test reaches, because
+   * `cli/memory.test.ts` calls `cmdMemorySearch` directly and skips exactly
+   * this argv-to-options translation.
+   */
+  it('--surface reaches recall through the real binary, not just through cmdMemorySearch directly', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-surface']).code).toBe(0);
+
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    const store = new MemoryStore(db);
+    store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    store.addEpisode({
+      tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    db.close();
+
+    const r = muffin(env, ['memory', 'search', 'promemoria', '--surface', 'telegram']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('da telegram');
+    expect(r.out).not.toContain('dal terminale');
+  });
+
+  it('--around reaches recall through the real binary, attaching the surrounding messages', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-around']).code).toBe(0);
+
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    const store = new MemoryStore(db);
+    const fill = (content: string, minute: number) =>
+      store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+      });
+    fill('un messaggio prima', 1);
+    const anchor = fill('il codice segreto è ZK-9', 2);
+    fill('un messaggio dopo', 3);
+    db.close();
+
+    const r = muffin(env, ['memory', 'search', 'codice segreto', '--around', '1']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`intorno a #${anchor}`);
+    expect(r.out).toContain('un messaggio prima');
+    expect(r.out).toContain('un messaggio dopo');
+  });
+});
