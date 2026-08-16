@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { ExecResult } from '../../core/sandbox/executor.js';
+import { toolContext } from '../fixtures/tool-context.js';
 import { makeShellTool, shellCapability } from './shell.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
+const ctx = toolContext();
 
 function fakeExec(result?: Partial<ExecResult>) {
   const calls: unknown[] = [];

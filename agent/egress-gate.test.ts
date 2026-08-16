@@ -8,6 +8,7 @@ import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import DatabaseCtor from 'better-sqlite3';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -107,6 +108,7 @@ function harness(allowHost: boolean) {
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns: new TurnStore(new DatabaseCtor(':memory:')),
+    todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
   };

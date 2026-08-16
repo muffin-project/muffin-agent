@@ -29,6 +29,23 @@ import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
  * an ASK — is tested without a model.
  */
 export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
+  /**
+   * A job's turn may now suspend, and that is neither an answer nor a failure.
+   *
+   * The row is `waiting`, the lane owns it, and it will come back and deliver
+   * on its own. The text is written even though `Scheduler` does not deliver it
+   * (see the guard there), because the day something does deliver it the string
+   * must already be true rather than empty — an empty answer sent to the owner
+   * reads as a job that produced nothing.
+   */
+  if (result.stopped === 'suspended') {
+    return {
+      stopped: 'suspended',
+      text:
+        `Il job si è sospeso fino a ${result.suspendedUntil?.wakeAt ?? '?'}: ` +
+        `il turno resta registrato e riprende da solo.`,
+    };
+  }
   if (result.stopped === 'ask' && result.pending) {
     const on = result.pending.resource ? ` su ${result.pending.resource}` : '';
     return {

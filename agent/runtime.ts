@@ -33,6 +33,9 @@ import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { TurnStore, describeInterrupted } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
+import { makeTodoTool, todoCapability } from './tools/todo.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -180,6 +183,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);
+  // The plan, on the same connection as everything else (ADR-0022). Built here
+  // rather than inside the loop because two things read it — the tool that
+  // writes rows and `buildContext`, which shows them back on every turn — and a
+  // second handle would let those two disagree about what is open.
+  const todos = new TodoStore(db);
 
   /**
    * Turns that a dead process was holding, named at boot.
@@ -329,6 +337,23 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
     makeDocumentTool(vault, memoryStore),
+    /**
+     * The two runtime primitives (M5-BIS §2), registered unconditionally.
+     *
+     * Neither is optional on any install: they need no key, no probe and no
+     * daemon — a database is the whole dependency, and this runtime already has
+     * one open. Registered *here*, in the base list, and not behind a config
+     * flag, because a `wait` that exists on some surfaces and not others is a
+     * model that learns to suspend and then, on the surface that lacks it,
+     * silently does something else instead.
+     *
+     * `wait` gets the store for one purpose only — counting how many turns this
+     * tenant already holds suspended — and cannot suspend anything by itself:
+     * it arms a barrier on the turn's context and the loop honours it. See
+     * `agent/tools/wait.ts`.
+     */
+    makeWaitTool(turns),
+    makeTodoTool(todos),
   ];
 
   // The hands of M3. The shell tool is registered only when the probe proved a
@@ -420,6 +445,13 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
+      // Declared next to the tools above, in the same commit: a tool whose
+      // capability the kernel has never heard of is refused `no_capability` on
+      // its first call, and a capability with no tool is dead weight. The pair
+      // is what `register` keeps together for MCP, and this list is where the
+      // built-ins get the same treatment.
+      waitCapability,
+      todoCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
@@ -530,6 +562,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // process, one handle. It is also what lets a turn record and the update
       // that produced it commit together the day the connector needs that.
       turns,
+      // The read half of `todo`. Required by `LoopDeps` on purpose: this is the
+      // seam that makes the plan a mechanism, and a surface that forgot it would
+      // keep writing rows nobody is shown.
+      todos,
       budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
       recordSpend,
       // The seam the loop never had. It is what turns "a turn ended" into "the

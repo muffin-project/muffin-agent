@@ -53,7 +53,7 @@
       "title": "Principal e tenant risolti",
       "file": "connectors/telegram/connector.ts:148-165; cli/repl.ts:289; cli/run.ts:66",
       "what": "Chi parla decide il tenant, mai il contenuto del messaggio. Telegram mappa il mittente a owner (chat privata + id utente combaciante) o a member di un tenant per-gruppo (principalFor). La CLI usa sempre {kind:'owner', connector:'cli', externalId:'local'}. Lo scheduler usa {kind:'system', source:'scheduler'}.",
-      "taint": "fissa la base della taint del turno: owner/system=0, member=2 (assegnata poi in loop.ts:936)",
+      "taint": "fissa la base della taint del turno: owner/system=0, member=2 — scritta nella colonna `taint` del record alla creazione (loop.ts:449) e da li' letta a ogni ripresa",
       "branches": [
         {
           "cond": "Telegram: installazione non ancora accoppiata e il messaggio sembra un codice di pairing",
@@ -68,7 +68,7 @@
       "title": "runTurn apre span e snapshot",
       "file": "agent/loop.ts:252-267",
       "what": "runTurn apre uno span di trace 'muffin.turn', costruisce il PermissionSnapshot per-turno (taint iniziale 0 o 2 da principal.kind) e calcola tenantClass (owner|group), che sceglie quale system prompt ricevera' questo turno.",
-      "taint": "0 (owner/system) o 2 (member) — loop.ts:936",
+      "taint": "letta dal record, mai riderivata dal principal: makeSnapshot parte da record.taint (loop.ts:594, 1742). Su un turno fresco vale 0 (owner/system) o 2 (member); su una ripresa vale la taint a cui quel turno era gia' salito",
       "branches": []
     },
     {
@@ -232,9 +232,9 @@
       "n": 13,
       "id": "tool-executes",
       "title": "Handler eseguito, risultato accodato, il loop riparte",
-      "file": "agent/loop.ts:823-847, 592",
-      "what": "Su allow (o ask approvato), l'handler del tool gira con {tenant, principal} presi dal turno reale (mai cablati alla registrazione); il suo esito puo' alzare la taint dello snapshot (es. tier 3 per risultati web/terze parti); il risultato viene accodato al log della sessione e alla lista tool_result del turno. Dopo che tutte le chiamate del batch sono finite, i risultati vengono accodati come un unico messaggio utente e il loop itera di nuovo.",
-      "taint": "puo' salire fino a 3 se outcome.tier lo dice — loop.ts:825, 134-136",
+      "file": "agent/loop.ts:1546-1583",
+      "what": "Su allow (o ask approvato), l'handler del tool gira con un ToolContext preso dal turno reale (mai cablato alla registrazione): tenant, principal, turnId, sessionId e suspend (loop.ts:1547); il suo esito puo' alzare la taint dello snapshot (es. tier 3 per risultati web/terze parti); il risultato viene accodato al log della sessione e alla lista tool_result del turno. Dopo che tutte le chiamate del batch sono finite, i risultati vengono accodati come un unico messaggio utente e il loop itera di nuovo.",
+      "taint": "puo' salire fino a 3 se outcome.tier lo dice — loop.ts:1548",
       "branches": [
         {
           "cond": "AbortSignal scatta tra una tool call e l'altra dentro un batch",

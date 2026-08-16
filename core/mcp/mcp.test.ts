@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../policy/decide.js';
 import { POLICY_FLOOR } from '../policy/matrix.js';
+import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { buildMcpTools, mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { connectServer } from './connect.js';
 import {
@@ -161,10 +162,7 @@ describe('against a real stdio server', () => {
       expect(tool.capability).toBe('mcp.echo');
       // the third-party description travels fenced, never bare
       expect(tool.spec.description).toMatch(/<<<mcpdesc_[0-9a-f]+/);
-      const out = await tool.handler({ message: 'x' }, {
-        tenant: 'host',
-        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-      });
+      const out = await tool.handler({ message: 'x' }, toolContext());
       expect(out.tier).toBe(3);
       expect(out.content).toMatch(/<<<mcp_[0-9a-f]+/);
       expect(out.content).toContain('echo:x');

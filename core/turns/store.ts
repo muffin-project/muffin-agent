@@ -126,6 +126,24 @@ export type TurnCounters = {
    * value for it.
    */
   resumes: number;
+  /**
+   * Whether the deterministic preamble has already run for this row.
+   *
+   * The preamble is not idempotent: it writes the user episode, calls recall
+   * and appends the user line to the session file. A resumed turn that ran it
+   * again would duplicate the owner's words in memory and in the transcript,
+   * and — worse — would *rebuild* the transcript from the session file,
+   * throwing away the half-answered tool batch the crash left behind, which is
+   * the one thing `reconcile` needs to repair anything.
+   *
+   * It is also what makes `enqueueTurn` legal: a connector writes a row whose
+   * transcript is only the owner's words and returns in milliseconds, and this
+   * flag is how the lane knows the expensive half is still owed. Read
+   * defensively for the same reason `resumes` is — rows written by the slice
+   * before this field have no value for it, and `undefined` must read as "not
+   * built yet" rather than as `NaN`-shaped nonsense.
+   */
+  contextBuilt: boolean;
 };
 
 /**
@@ -139,7 +157,11 @@ export type TurnCounters = {
  */
 function toCounters(raw: string): TurnCounters {
   const parsed = JSON.parse(raw) as TurnCounters;
-  return { ...parsed, resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0 };
+  return {
+    ...parsed,
+    resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0,
+    contextBuilt: parsed.contextBuilt === true,
+  };
 }
 
 export type TurnRecord = {

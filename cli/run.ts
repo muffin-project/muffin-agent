@@ -20,8 +20,8 @@ export type RunOptions = {
   home?: string;
 };
 
-/** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap */
-export type RunExit = 0 | 1 | 3 | 4 | 5;
+/** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap · 6 suspended */
+export type RunExit = 0 | 1 | 3 | 4 | 5 | 6;
 
 export async function runHeadless(options: RunOptions): Promise<RunExit> {
   const home = options.home ?? paths().home;
@@ -111,6 +111,22 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
           ` — rilancia in \`muffin\` interattivo per decidere\n`,
       );
       return 3;
+    case 'suspended':
+      /**
+       * Its own code, because a script that cannot tell this from `answered`
+       * will print an empty string and call it a result.
+       *
+       * Nothing was lost: the row is `waiting` and durable, and the gateway's
+       * lane resumes it at the deadline — in *that* process, not this one, which
+       * is exiting. Said out loud with the turn id, because a headless caller
+       * with no gateway running has a turn that will sit there until one is, and
+       * silence would make that look like an answer that never came.
+       */
+      process.stderr.write(
+        `turno sospeso fino a ${result.suspendedUntil?.wakeAt ?? '?'} — riprende dalla corsia del gateway ` +
+          `(\`muffin gateway run\`), turno ${result.turnId.slice(0, 12)}\n`,
+      );
+      return 6;
     case 'aborted':
       process.stderr.write(`interrotto dopo ${options.timeoutSeconds}s\n`);
       return 1;

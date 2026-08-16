@@ -440,7 +440,10 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
 
-  return drive(deps, record, turn, { ...(input.signal ? { signal: input.signal } : {}) });
+  return drive(deps, record, turn, {
+    session: input.session,
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
 }
 
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
@@ -548,14 +551,32 @@ async function drive(
   deps: LoopDeps,
   record: TurnRecord,
   turn: SpanHandle,
-  options: { signal?: AbortSignal | undefined; resumed?: boolean; wokenFromWait?: boolean } = {},
+  options: {
+    signal?: AbortSignal | undefined;
+    resumed?: boolean;
+    wokenFromWait?: boolean;
+    /** The ref the caller already opened. Absent on a resume — see `input.session`. */
+    session?: SessionRef | undefined;
+  } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const input: TurnInput = {
     principal: record.principal,
     tenant: record.tenant,
     surface: record.surface,
-    session: { id: record.sessionId } as SessionRef,
+    /**
+     * The caller's own ref when there is one, reopened from the id when there
+     * is not — and **never** rebuilt by hand.
+     *
+     * A `SessionRef` is `{ id, file }` and only `SessionStore.open` knows the
+     * second half. This line used to be `{ id: record.sessionId } as
+     * SessionRef`: a cast, which is a claim and not a check, and the claim was
+     * false — every `sessions.append` in the turn then wrote to `undefined` and
+     * threw. A resume has no caller holding a ref, so it derives one; a fresh
+     * turn passes the ref it already opened, which is the stronger of the two
+     * because it cannot disagree with the caller about where the transcript is.
+     */
+    session: options.session ?? deps.sessions.open(record.sessionId),
     text: lastUserText(record.messages),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
@@ -607,6 +628,26 @@ async function drive(
    * rather than thrown.
    */
   let barrier: WaitSpec | null = null;
+
+  /**
+   * What every handler is told about the turn it is running in — built once,
+   * because the barrier has to be the same object across the whole turn.
+   *
+   * Declared **here**, above every use, and not next to the closures at the
+   * bottom of this function: `const` is not hoisted the way a `function`
+   * declaration is, so a copy sitting after the loop would sit in its temporal
+   * dead zone for the entire turn and throw `ReferenceError` on the first tool
+   * call. The build said so; the runtime would have said so on message one.
+   */
+  const toolContext: ToolContext = {
+    tenant: input.tenant,
+    principal: input.principal,
+    turnId: record.id,
+    sessionId: input.session.id,
+    suspend: (spec) => {
+      barrier = spec;
+    },
+  };
 
   const messages: Message[] = [...record.messages];
 
@@ -1016,20 +1057,6 @@ async function drive(
       turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
     }
   }
-
-  /**
-   * What every handler is told about the turn it is running in — built once,
-   * because the barrier has to be the same object across the whole turn.
-   */
-  const toolContext: ToolContext = {
-    tenant: input.tenant,
-    principal: input.principal,
-    turnId: record.id,
-    sessionId: input.session.id,
-    suspend: (spec) => {
-      barrier = spec;
-    },
-  };
 
   /**
    * The turn releases the runtime. **Not** an ending — see `TurnStopped`.
