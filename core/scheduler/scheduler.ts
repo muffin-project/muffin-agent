@@ -1,3 +1,4 @@
+import { LANE_JOBS, ModelLane } from '../turns/model-lane.js';
 import type { TurnStopped } from '../turns/store.js';
 import type { Job, JobStore } from './jobs.js';
 
@@ -89,8 +90,6 @@ export type SchedulerEvent =
   | { kind: 'not_recorded'; job: Job; error: string };
 
 export class Scheduler {
-  private running = false;
-
   constructor(
     private readonly store: JobStore,
     private readonly runJob: RunJob,
@@ -99,6 +98,17 @@ export class Scheduler {
     private readonly onEvent: (e: SchedulerEvent) => void = () => {},
     private readonly clock: () => Date = () => new Date(),
     private readonly standDown: StandDown = () => false,
+    /**
+     * The single model lane, shared with `TurnLane` when both are running.
+     *
+     * Property (2) above — *"one owner, one model lane"* — used to be a private
+     * boolean, so it was true of this class **alone**: `Gateway.tick` drives
+     * this and the turn lane on the same beat, and both would start work in the
+     * same tick against one provider and one budget. Its own instance by
+     * default, so a scheduler with no turn lane still serialises itself and
+     * every existing construction site keeps its behaviour exactly.
+     */
+    private readonly modelLane: ModelLane = new ModelLane(),
   ) {}
 
   /**
@@ -113,7 +123,9 @@ export class Scheduler {
       this.onEvent({ kind: 'deferred', reason: 'handover' });
       return;
     }
-    if (this.running) {
+    // Asked of the shared lane, not of a flag of our own: the thing that must
+    // not happen twice is a *model call*, and the turn lane makes them too.
+    if (this.modelLane.busy()) {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;
     }
@@ -124,9 +136,14 @@ export class Scheduler {
     const [job] = this.store.due(now);
     if (!job) return;
 
-    this.running = true;
+    if (this.modelLane.take(LANE_JOBS) !== null) {
+      // Somebody took it between the check above and here. Impossible on one
+      // event loop today, and cheap insurance against the day it is not.
+      this.onEvent({ kind: 'deferred', reason: 'in_flight' });
+      return;
+    }
     void this.run(job).finally(() => {
-      this.running = false;
+      this.modelLane.release(LANE_JOBS);
     });
   }
 
@@ -215,8 +232,12 @@ export class Scheduler {
     }
   }
 
-  /** True while a job is in flight — for a caller that wants to drain on shutdown. */
+  /**
+   * True while **this** lane holds the model — not merely while the model is
+   * busy. `Gateway` asks both lanes and ORs the answers, so a shared "is anyone
+   * working" here would make each lane report the other's work as its own.
+   */
   isRunning(): boolean {
-    return this.running;
+    return this.modelLane.heldBy() === LANE_JOBS;
   }
 }

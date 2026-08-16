@@ -8,6 +8,7 @@ import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type LaneDeliver } from '../agent/turn-lane.js';
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
@@ -312,6 +313,16 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
 
   const lock = new GatewayLock(runtime.db);
   const notify = createNotifier();
+  /**
+   * One model lane for the two things that use the model.
+   *
+   * Constructed **here**, where both are built, because this is the only place
+   * that knows they run on the same beat: `Gateway.tick` drives the scheduler
+   * and then the turn lane, and with a private flag each they would both start
+   * work in the same tick against one provider and one budget — while both
+   * files documented that they could not. One token cannot be half-connected.
+   */
+  const modelLane = new ModelLane();
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps),
@@ -326,6 +337,9 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
       }
     },
+    undefined,
+    undefined,
+    modelLane,
   );
 
   /**
@@ -362,6 +376,9 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
     turns: runtime.deps.turns,
     run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text), laneLog),
     onEvent: laneLog,
+    // The same token the scheduler got, which is the whole point of building it
+    // above rather than letting each lane default to its own.
+    modelLane,
   });
 
   let stopSurfaces: (() => void) | null = null;
