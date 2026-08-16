@@ -16,6 +16,9 @@ import { pidAlive } from '../lock/durable.js';
  * runtime, and the difference is exactly the one between a Muffin that lives
  * and a Muffin launched from a terminal. Nothing in this file sleeps.
  *
+ * The bounds below are ADR-0047 §1, which also records why each number is
+ * what it is rather than a preference.
+ *
  * Two barriers, both persisted, both bounded:
  *
  *  - **a time** — `wake_at`, and it is mandatory. A job with no stop condition

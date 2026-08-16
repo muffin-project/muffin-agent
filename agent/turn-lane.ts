@@ -11,7 +11,7 @@ import { resumeTurn, type LoopDeps } from './loop.js';
  * `core/scheduler/scheduler.ts`, and for the same reason: the lane must not
  * learn what a chat id is, and the loop must not learn what a lane is.
  *
- * ## The delivery seam, named
+ * ## The delivery seam, named (ADR-0047 §Reversibilità)
  *
  * `deliver` is where the second half of B2 attaches — *"un turno lungo torna
  * entro ~500 ms e consegna dopo"*. The address is already durable: the Telegram

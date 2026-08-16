@@ -361,8 +361,8 @@ export type TurnResult = {
 /**
  * How many times a row may be picked back up before we stop trying.
  *
- * Three, and the bound exists because the failure it guards is one this record
- * makes *more* likely, not less: a turn whose resume kills the process would be
+ * Three (ADR-0047 §1), and the bound exists because the failure it guards is
+ * one this record makes *more* likely, not less: a turn whose resume kills the process would be
  * retried by every boot for ever, and the process that dies is never the one
  * that can count. Three is enough to survive a laptop closing, a `systemctl
  * restart` and one genuine crash; a fourth attempt is evidence about the turn,
