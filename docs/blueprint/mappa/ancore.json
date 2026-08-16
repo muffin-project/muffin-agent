@@ -41,13 +41,13 @@
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1112,
-    "testo": "// Same reason `announceEnd` is repeated here: a provider that exhausted its"
+    "line": 1088,
+    "testo": "const stop = finish("
   },
   "agent/loop.ts:1546": {
     "path": "agent/loop.ts",
-    "line": 1570,
-    "testo": "// as it once handed `draft` the write. `assertNever` in `default` turns that"
+    "line": 1546,
+    "testo": "// was waiting for the other, so an empty allowlist permitted every public"
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
@@ -141,8 +141,8 @@
   },
   "agent/loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 459,
-    "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
+    "line": 449,
+    "testo": "* `enqueueTurn` writes, so a crash between this line and the first checkpoint"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
@@ -1146,7 +1146,7 @@
   },
   "cli/surface.ts:209": {
     "path": "cli/surface.ts",
-    "line": 223,
+    "line": 231,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:44": {
@@ -1901,7 +1901,7 @@
   },
   "core/scheduler/scheduler.ts:168": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 212,
+    "line": 153,
     "testo": "try {"
   },
   "core/session/store.ts:35": {
@@ -1961,8 +1961,8 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 111,
-    "testo": "tick(now: Date = this.clock()): void {"
+    "line": 86,
+    "testo": "private readonly onEvent: (e: LaneEvent) => void;"
   },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
@@ -2196,7 +2196,7 @@
   },
   "docs/blueprint/M5-BIS.md:219": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 264,
+    "line": 274,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
@@ -2306,18 +2306,18 @@
   },
   "loop.ts:1547": {
     "path": "agent/loop.ts",
-    "line": 1571,
-    "testo": "// into a compile error the day the union grows, instead of a silent allow"
+    "line": 1547,
+    "testo": "// host — verified against the assembled runtime before this line existed."
   },
   "loop.ts:1548": {
     "path": "agent/loop.ts",
-    "line": 1572,
-    "testo": "// the day someone forgets this file exists — the same guarantee"
+    "line": 1548,
+    "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1663,
-    "testo": "// is the privilege escalation this table exists to prevent."
+    "line": 1639,
+    "testo": "*"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
@@ -2356,8 +2356,8 @@
   },
   "loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 459,
-    "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
+    "line": 449,
+    "testo": "* `enqueueTurn` writes, so a crash between this line and the first checkpoint"
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
@@ -2391,8 +2391,8 @@
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 604,
-    "testo": "signal?: AbortSignal | undefined;"
+    "line": 594,
+    "testo": "* One body for a fresh turn and for a resumed one, because two would drift and"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
@@ -2651,7 +2651,7 @@
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 441,
+    "line": 425,
     "testo": "searchNotes.push("
   },
   "runtime.ts:384": {

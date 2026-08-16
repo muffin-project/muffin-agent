@@ -198,6 +198,14 @@ export function connectSurfaces(
    * ask a stack frame where the answer goes. This map is filled by whichever
    * surfaces actually came up, so a turn addressed to a surface that failed to
    * connect is reported as undeliverable rather than sent nowhere.
+   *
+   * **Temporary, and it knows it.** `slice/superfici` brings a real registry
+   * (`core/surface/registry.ts`) that is this lookup plus the address types and
+   * the delivery outcome. This map is deliberately not collapsed into it here —
+   * two slices editing one send is a merge war rather than a suture — and is to
+   * be absorbed into `SurfaceRegistry` when that lands. Written down because a
+   * duplicate that nobody labels as duplicate is how two registries end up
+   * disagreeing about which surfaces exist.
    */
   const doors = new Map<string, (replyTo: Record<string, unknown>, text: string) => Promise<void>>();
 
