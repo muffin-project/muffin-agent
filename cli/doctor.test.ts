@@ -202,6 +202,8 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       nudgedForCompletion: false,
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
       spentUsd: 0,
+      resumes: 0,
+      contextBuilt: false,
     };
     // A turn created with a `replyTo` starts `delivery: 'pending'`
     // (core/turns/store.ts `create`) — exactly what a process dying between
@@ -241,6 +243,8 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       nudgedForCompletion: false,
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
       spentUsd: 0,
+      resumes: 0,
+      contextBuilt: false,
     };
     store.create({
       id: 'turn-settled-1',
@@ -387,6 +391,59 @@ describe('doctor names the memory questions waiting on the owner', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('1 contraddizioni');
     expect(c?.remedy).toContain('muffin memory review');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor names turns whose answer has nowhere to go', () => {
+  /**
+   * D2, judge round 2: `LaneEvent.undeliverable` was emitted but reached only
+   * the stderr of whichever process resumed the turn — invisible to `doctor`,
+   * which opens its own handle on the same database and never saw the event.
+   * `agent/turn-lane.ts` now writes `delivery = 'undeliverable'` on the row
+   * itself, which is what this check reads back. The mutation that proves it
+   * is load-bearing: deleting that write leaves this warn permanently absent.
+   */
+  const seedUndeliverable = (dir: string): void => {
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    store.create({
+      id: 'turn-undeliverable',
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 's1',
+      model: 'claude-opus-5',
+      messages: [],
+      taint: 0,
+      counters: {
+        iterations: 0,
+        recoveriesUsed: 0,
+        transportRetriesLeft: 2,
+        toolCallsMade: 0,
+        nudgedForCompletion: false,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
+      },
+    });
+    store.delivered('turn-undeliverable', 'undeliverable');
+    db.close();
+  };
+
+  it('says nothing on an install where every answer had somewhere to go', () => {
+    const dir = home();
+    expect(check(dir, 'turni senza indirizzo')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns, and names the count, when one is stranded', () => {
+    const dir = home();
+    seedUndeliverable(dir);
+    const c = check(dir, 'turni senza indirizzo');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 turni con risposta senza indirizzo');
     rmSync(dir, { recursive: true, force: true });
   });
 });

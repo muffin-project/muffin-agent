@@ -12,6 +12,7 @@ import type { RecallDeps } from '../core/memory/recall.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -135,6 +136,7 @@ function harness(script: ChatResult[]) {
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns: new TurnStore(new DatabaseCtor(':memory:')),
+    todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     memory: { store, recall: recallDeps },

@@ -110,10 +110,10 @@ ancora verificato — **è un debito, non uno stato**).
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
 | B1 | Conversation | CLI e Telegram condividono **davvero** sessione e memoria? | ? |
-| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — `runTurn` è sincrono · substrato pronto 🧱 |
-| B3 | Wait | Può aspettare **senza bloccare il runtime**? | BLOCKER — primitiva assente · substrato pronto 🧱 |
-| B4 | Todo | Mantiene lavoro multi-step persistente? | BLOCKER — tool assente |
-| B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume · substrato pronto 🧱, e un crash ora **si vede** |
+| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — meccanismo costruito e provato end-to-end, resta **una chiamata** nel connettore 🪡 |
+| B3 | Wait | Può aspettare **senza bloccare il runtime**? | READY — `wait` sospende la riga e RILASCIA il runtime; la corsia del gateway la risveglia, e `doctor` avverte se non ne gira nessuna |
+| B4 | Todo | Mantiene lavoro multi-step persistente? | READY — tabella `todos` con `tier`, letta nel contesto di **ogni** turno della sessione |
+| B5 | Resume | Se muore a metà, riprende? | READY — accettazione: processo vero ucciso con SIGKILL a metà turno, riprende al riavvio |
 | B6 | Retry | Se fallisce una tool call, recupera? | ? |
 | B7 | Scheduler | I job sopravvivono al riavvio? | ? |
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
@@ -141,9 +141,37 @@ ancora verificato — **è un debito, non uno stato**).
 > **quali chiamate possono essere partite senza che si possa sapere**. Prima quel
 > caso rifaceva il turno da capo, effetti compresi, in silenzio.
 >
-> Quello che **non** è costruito, e per cui le tre righe restano BLOCKER: `wait`,
-> il resume vero, la consegna dalla corsia. Il record non li fa — li rende
-> costruibili senza riaprire il loop.
+> **Aggiornamento 2026-08-16 — `slice/turno-sospeso` (PR #41).** I consumatori
+> ci sono: `wait` sospende davvero (la riga va a `waiting`, la rivendicazione si
+> rilascia, `runTurn` **ritorna**), `todo` sopravvive al riavvio ed è letto nel
+> contesto di ogni turno, il resume riprende dalla riga — taint compresa — e la
+> corsia (`core/turns/lane.ts`) batte sul tick del gateway. B3, B4 e B5 sono
+> READY; **B2 resta BLOCKER** e per una ragione sola, scritta sotto. Le decisioni
+> che scriverli ha costretto a prendere sono in **ADR-0047**, con l'emendamento
+> in coda ad ADR-0042.
+>
+> Due cose rendono onesti quei READY, e sono arrivate dal judge:
+>
+> - **B3** — un turno sospeso da una superficie *senza corsia* (REPL, `muffin
+>   run`) restava `waiting` per sempre senza che nessuno lo dicesse. Adesso
+>   `health()` conta anche i sospesi e `doctor` li accoppia allo stato del
+>   gateway: «3 turni sospesi e nessun gateway: non li sveglia nessuno». Un
+>   `wait` che nessuno risveglia non è un wait.
+> - **B4** — un piano scritto da un turno a tier 3 tornava al turno dopo a tier
+>   0, incorniciato come intenzione dell'agente. La riga porta il `tier` di chi
+>   l'ha scritta, `max()`-ato, e il loop alza lo snapshot prima di mostrarlo.
+>   Una tabella che lava la taint non è memoria di lavoro, è un canale.
+>
+> 🪡 **Cosa manca a B2, esattamente.** Il meccanismo è intero e provato
+> end-to-end (`agent/lane-wiring.test.ts`): `enqueueTurn` scrive la riga
+> **senza nessuna chiamata al modello**, la corsia la esegue e la risposta arriva
+> all'indirizzo scritto sulla riga. Quello che resta è **una chiamata** in
+> `connectors/telegram/connector.ts` `handle()`: `await runTurn(...)` diventa
+> `enqueueTurn(...)`. Non è stata cambiata qui di proposito — `slice/superfici`
+> sta riscrivendo `Deliver` e la resa in-band, e due slice che modificano lo
+> stesso invio sono una guerra di merge invece di una cucitura. La porta della
+> corsia esiste già e non va toccata: `TelegramConnector.deliverTo`, additiva,
+> che valida da sé la forma del proprio `replyTo`.
 
 > ⚠️ **B11 e B12 le ha trovate l'owner, non questo documento** — poche ore dopo
 > che era stato scritto per rendere impossibile esattamente questo: *«mi pare che
@@ -394,9 +422,16 @@ Muffin lanciato da terminale. Stessa cosa per `todo`: il modello operativo non �
 Il lavoro non si chiude aggiungendo due tool al menu. `wait` deve avere una
 barriera durevole con scadenza che non può incastrare il loop; `todo` deve essere
 letto dal turno successivo e accompagnato da un criterio deterministico di
-completamento. Il worktree `slice/turno-sospeso` contiene un'implementazione in
-corso, non committata: finché non passa integrazione, cablaggio e accettazione,
-B2–B5 restano BLOCKER.
+completamento.
+
+**Fatto (PR #41).** La barriera è `wake_at` + `wait_for`, entrambe persistite:
+la scadenza è obbligatoria — un'attesa senza scadenza è silenziosa e nessuno la
+vede — con un pavimento di 60s (sotto il battito del runtime non è un'attesa, è
+un `sleep` dentro un tool), un tetto di 7 giorni e un massimo di 8 turni sospesi
+per tenant. Il criterio di completamento dei `todo` è una query sulle righe, mai
+il modello che si dichiara finito: **finito = nessun passo `pending` o `retry`**,
+e la frase è scritta nel contesto perché è l'unico posto dove il modello legge
+del piano.
 
 > 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
 > §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:

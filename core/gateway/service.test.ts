@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../surface/types.js';
 import { JobStore } from '../scheduler/jobs.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import { ModelLane } from '../turns/model-lane.js';
 import { createNotifier } from './notify.js';
 import { GatewayLock, readGateway } from './lock.js';
 import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
@@ -24,6 +25,8 @@ function harness(
     tickMs?: number;
     /** Pass an array to make it supervised: every datagram lands here. */
     sent?: string[];
+    /** A lane whose `isRunning` this test drives — for the drain that waits on it. */
+    turnLane?: { tick: () => void; isRunning: () => boolean };
   } = {},
 ) {
   const db = new DatabaseCtor(':memory:');
@@ -55,6 +58,12 @@ function harness(
     jobs,
     over.runJob ?? (async () => ({ stopped: 'answered', text: 'fatto', turnId: 'turn-test' })),
     async (_channel, text) => (delivered.push(text), DELIVERED),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    new ModelLane(),
   );
 
   const sent = over.sent;
@@ -66,6 +75,12 @@ function harness(
       ? createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p))
       : createNotifier({}, () => {}),
     scheduler,
+    // A lane with nothing in it, so this file keeps testing the lifecycle it is
+    // about. `turnLane` is required on `GatewayDeps` — an optional one is one an
+    // assembly forgets, and a forgotten lane means every suspended turn on that
+    // install sleeps for ever with nobody looking. `gateway-lane.test.ts` is
+    // where the real one is driven.
+    turnLane: over.turnLane ?? { tick: () => {}, isRunning: () => false },
     jobs,
     close: () => {
       closed += 1;
@@ -312,7 +327,18 @@ describe('supervision hooks', () => {
       // A supervisor that is listening, faked at the transport so no systemd is
       // involved: the module under test is the cadence, not the socket.
       notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p)),
-      scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '', turnId: 'turn-test' }), async () => DELIVERED),
+      scheduler: new Scheduler(
+        jobs,
+        async () => ({ stopped: 'answered', text: '', turnId: 'turn-test' }),
+        async () => DELIVERED,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new ModelLane(),
+      ),
+      turnLane: { tick: () => {}, isRunning: () => false },
       jobs,
       close: () => {},
       log: () => {},

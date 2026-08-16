@@ -140,3 +140,201 @@ describe('acceptance · B · continuità del runtime', () => {
     30_000,
   );
 });
+
+/**
+ * B3 · B4 · B5 — the suspendable turn, from outside the process.
+ *
+ * `slice/turno-sospeso` proves each of these with unit and wiring tests. What
+ * those cannot show is the property an owner actually cares about, which is
+ * about **processes**: that `muffin run` comes back instead of holding the
+ * terminal for an hour, that a plan crosses a process boundary on its own, and
+ * that a Muffin killed mid-sentence finishes the sentence after a restart.
+ */
+describe('acceptance · B · il turno sospendibile', () => {
+  scenario(
+    'B3',
+    async () => {
+      const inst = await install({
+        // Ask to wait an hour. Nothing else is scripted: if the process held
+        // the runtime the way `await sleep()` would, this scenario would time
+        // out rather than fail — which is itself the assertion.
+        main: [{ tool: { name: 'wait', args: { seconds: 3600, why: 'aspetto il backup' } } }],
+      });
+      try {
+        const started = Date.now();
+        const run = await inst.muffin(['run', '--session', 'wait-1', '--timeout', '25', 'controlla fra un’ora']);
+        const elapsed = Date.now() - started;
+
+        // Exit 6 is "suspended", and it has its own code precisely so a script
+        // cannot mistake an empty answer for a real one.
+        if (run.code !== 6) throw new Error(`atteso exit 6 (sospeso), ricevuto ${run.code}\n${run.err}`);
+        // The process is back. An hour-long wait that held the runtime would
+        // still be here; the boot of a node+tsx child is seconds, so anything
+        // under a minute proves the wait is a row and not a stack frame.
+        if (elapsed > 60_000) throw new Error(`il processo ha tenuto il runtime per ${elapsed}ms`);
+        if (!/sospeso fino a/.test(run.err)) {
+          throw new Error(`non ha detto fino a quando aspetta:\n${run.err}`);
+        }
+
+        const row = inst.db((db) =>
+          db.prepare(`SELECT status, wake_at, claimed_by, turn_outcome FROM turns`).get() as
+            | { status: string; wake_at: string | null; claimed_by: number | null; turn_outcome: string | null }
+            | undefined,
+        );
+        if (row?.status !== 'waiting') throw new Error(`la riga dice ${row?.status ?? 'niente'}, non waiting`);
+        if (row.wake_at === null) throw new Error('sospeso senza scadenza: non lo sveglierebbe nessuno');
+        // The claim is released in the same write. A suspended row that kept a
+        // pid would be reclaimed as *interrupted* the moment that process
+        // exited — every wait outliving its process reported as a crash.
+        if (row.claimed_by !== null) throw new Error(`la riga tiene ancora il pid ${row.claimed_by}`);
+        // And it is not an ending: nothing wrote an outcome.
+        if (row.turn_outcome !== null) throw new Error(`un turno sospeso non è finito, ma dice ${row.turn_outcome}`);
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  scenario(
+    'B4',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'todo', args: { action: 'plan', items: ['leggere il contratto', 'rispondere a Marco'] } } },
+          { text: 'ho scritto il piano' },
+          { text: 'eccomi' },
+        ],
+      });
+      try {
+        const first = await inst.muffin(['run', '--session', 'piano-1', '--timeout', '25', 'organizzati']);
+        if (first.code !== 0) throw new Error(`primo processo: exit ${first.code}\n${first.err}`);
+
+        // A second, unrelated process. Nothing survives between them but the
+        // files under `inst.home` and the `--session` id — which is the whole
+        // claim: a plan that died with the process that wrote it is not a plan.
+        const second = await inst.muffin(['run', '--session', 'piano-1', '--timeout', '25', 'a che punto sei?']);
+        if (second.code !== 0) throw new Error(`secondo processo: exit ${second.code}\n${second.err}`);
+
+        const sent = inst.provider.main().at(-1);
+        if (!sent) throw new Error('il secondo processo non ha mai chiamato il modello');
+        // Shown **unasked**: the second process never called `todo list`, and
+        // the plan is in front of the model anyway. A plan the model has to
+        // remember to ask for is one it forgets the moment its own earlier
+        // prose is compacted.
+        for (const step of ['leggere il contratto', 'rispondere a Marco']) {
+          if (!sent.transcript.includes(step)) {
+            throw new Error(`il passo "${step}" non è nel contesto del secondo processo:\n${sent.transcript}`);
+          }
+        }
+        // The deterministic completion criterion travels with it — M5-BIS §2
+        // asks for one, and this is the only place the model reads about it.
+        if (!/nessun passo/.test(sent.transcript)) {
+          throw new Error(`il criterio di completamento non è nel contesto:\n${sent.transcript}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  scenario(
+    'B5',
+    async () => {
+      const inst = await install({
+        // Enough round trips that the turn is demonstrably mid-flight while the
+        // row says `running`: each `todo` call is a full trip to the provider
+        // and back. The kill lands inside that window.
+        main: [
+          { tool: { name: 'todo', args: { action: 'plan', items: ['passo uno'] } } },
+          { tool: { name: 'todo', args: { action: 'list' } } },
+          { tool: { name: 'todo', args: { action: 'list' } } },
+          { tool: { name: 'todo', args: { action: 'list' } } },
+          { text: 'ecco la risposta dopo la ripresa' },
+        ],
+      });
+      try {
+        const victim = inst.spawnRaw(['run', '--session', 'crash-1', '--timeout', '60', 'fai il lavoro lungo']);
+        // Wait until the row exists and is claimed — that is "the turn really
+        // started", written by production code before the first model call.
+        const turnId = await pollFor(() =>
+          // `turns` is created by the first runtime that opens this home — the
+          // victim itself — so the first few polls legitimately race the table
+          // into existence. Absent and empty are the same answer here: not yet.
+          tolerating(() =>
+            inst.db((db) => {
+              const row = db.prepare(`SELECT id FROM turns WHERE status = 'running'`).get() as
+                | { id: string }
+                | undefined;
+              return row?.id;
+            }),
+          ),
+        );
+        // SIGKILL: no handler, no `finally`, no flush. The row and the intent
+        // record have to be enough on their own.
+        victim.kill();
+        await victim.exited;
+
+        // What the owner does first: open a terminal and ask. `doctor` only
+        // **reads** — marking is `reclaim`'s job and belongs to a process that
+        // opens the home for work, not to a diagnosis — so the row still says
+        // `running` here and is reported as interrupted anyway, because one
+        // liveness rule (`heldBy`) answers for both.
+        const doctor = await inst.muffin(['doctor']);
+        if (!/interrott/.test(doctor.out)) {
+          throw new Error(`doctor non nomina il turno interrotto:\n${doctor.out}`);
+        }
+        if (!doctor.out.includes(turnId.slice(0, 12))) {
+          throw new Error(`doctor non dice QUALE turno:\n${doctor.out}`);
+        }
+
+        // And the gateway — the process that owns the lane — marks it and
+        // finishes it.
+        const gw = await inst.gateway();
+        try {
+          await pollFor(
+            () =>
+              tolerating(() =>
+                inst.db((db) => {
+                  const row = db.prepare(`SELECT status FROM turns WHERE id = ?`).get(turnId) as { status: string };
+                  return row.status === 'done' ? row.status : undefined;
+                }),
+              ),
+            20_000,
+          );
+        } finally {
+          await gw.stop();
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    90_000,
+  );
+});
+
+/**
+ * A read that may legitimately be too early. Distinct from `pollFor` because
+ * only the *caller* knows whether a missing table means "not yet" or "broken",
+ * and swallowing that inside the poller would hide a real schema failure as a
+ * timeout.
+ */
+function tolerating<T>(read: () => T | undefined): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Polls a read until it answers, or gives up loudly rather than hanging. */
+async function pollFor<T>(read: () => T | undefined, timeoutMs = 20_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = read();
+    if (value !== undefined) return value;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`niente entro ${timeoutMs}ms`);
+}

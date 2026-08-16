@@ -47,6 +47,9 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
   verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
+  verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
+  verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
+  verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
   rosso(
     'B8',
     'delivery: a job whose remote delivery is not actually wired is still marked as run',

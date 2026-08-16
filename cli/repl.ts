@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
@@ -242,7 +243,13 @@ export async function runRepl(home = paths().home): Promise<number> {
     },
     undefined,
     standDown,
+    // The outcome lands on the turn's row, same as `cli/gateway.ts`.
     (turnId, state) => runtime.deps.turns.delivered(turnId, state),
+    // The REPL owns no `TurnLane` (ADR-0035: it cedes turns to the gateway),
+    // so there is nothing to share this token with — a fresh instance still
+    // serialises this scheduler against itself, which is the whole property
+    // this session needs.
+    new ModelLane(),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
@@ -307,7 +314,23 @@ export async function runRepl(home = paths().home): Promise<number> {
           replyChannel: 'cli',
         });
         process.stdout.write(`\n${result.text}\n\n`);
-        if (result.stopped !== 'answered') {
+        if (result.stopped === 'suspended') {
+          /**
+           * A suspended turn prints nothing above (its text is empty), so
+           * without this line the terminal shows a blank answer and the word
+           * "suspended" — which reads as a failure.
+           *
+           * It says who is going to finish it, because in this process the
+           * answer is *nobody*: the REPL stands down for the gateway (ADR-0035)
+           * and deliberately runs no turn lane, so a wait armed here is owed a
+           * `muffin gateway run`. Telling the owner that is the difference
+           * between a turn that is waiting and a turn that is lost.
+           */
+          process.stderr.write(
+            `(sospeso fino a ${result.suspendedUntil?.wakeAt ?? '?'} — riprende dalla corsia del gateway; ` +
+              `turno ${result.turnId.slice(0, 12)})\n`,
+          );
+        } else if (result.stopped !== 'answered') {
           process.stderr.write(`(${result.stopped} dopo ${result.iterations} passaggi)\n`);
         }
       } catch (error) {

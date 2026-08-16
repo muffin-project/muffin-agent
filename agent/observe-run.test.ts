@@ -10,6 +10,7 @@ import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, DecisionRequest, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { absenceGoal, makeAbsenceComposer } from './observe-run.js';
 import type { LoopDeps, RegisteredTool } from './loop.js';
@@ -112,6 +113,7 @@ function harness(
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions,
       turns: new TurnStore(new DatabaseCtor(':memory:')),
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
       ...over,
