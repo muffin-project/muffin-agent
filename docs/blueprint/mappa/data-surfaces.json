@@ -96,9 +96,9 @@
         "disable"
       ],
       "file": "cli/main.ts:177-178,584-595 -> cli/surface.ts",
-      "what": "Abilita o disabilita le superfici (cli fissa, telegram opzionale).",
+      "what": "Abilita o disabilita le superfici (cli fissa, telegram e discord opzionali).",
       "wired": true,
-      "note": "Le superfici possibili sono hardcoded ['cli','telegram'] in cli/surface.ts:44 — nessun registro dinamico. `enable telegram` avvia il pairing, non solo il flag."
+      "note": "`muffin surface list` elenca ancora un set hardcoded (cli/surface.ts:52), ma la consegna passa da un `SurfaceRegistry` vero (core/surface/registry.ts) costruito da `connectSurfaces` (cli/surface.ts:291) — non piu' tre `Deliver` indipendenti che potevano disaccordare. `enable telegram`/`enable discord` avviano il pairing, non solo il flag."
     },
     {
       "cmd": "muffin mcp",
@@ -143,7 +143,7 @@
       "file": "cli/main.ts:185-186 -> cli/observe.ts:91",
       "what": "Mostra cosa direbbe il gate di proattivita'; --send lo fa parlare.",
       "wired": true,
-      "note": "Senza --send e' puro dry-run (nessun costo). Con --send su canale non 'cli' la delivery lancia e l'ancora resta aperta (cli/observe.ts:62-69)."
+      "note": "Senza --send e' puro dry-run (nessun costo, nessuna superficie connessa). Con --send la delivery passa dallo stesso SurfaceRegistry di REPL/gateway (cli/observe.ts:67); un canale non consegnato torna {delivered:false} e l'ancora resta aperta, non lancia piu' un'eccezione."
     },
     {
       "cmd": "muffin secret",
@@ -184,12 +184,12 @@
     }
   ],
   "process": {
-    "start": "cli/gateway.ts:294 (cmdGatewayRun) -> core/gateway/service.ts:332 (Gateway.serve)",
+    "start": "cli/gateway.ts:296 (cmdGatewayRun) -> core/gateway/service.ts:332 (Gateway.serve)",
     "owns": [
       "il lock singleton gateway_lock (core/gateway/lock.ts:63)",
       "lo scheduler — un tick ogni 30s, un job alla volta (core/gateway/service.ts:57,221-231)",
-      "le superfici abilitate, oggi telegram (cli/gateway.ts:359, cli/surface.ts:187)",
-      "le connessioni MCP allowlistate (cli/gateway.ts:363, agent/runtime.ts:525)",
+      "le superfici abilitate, oggi telegram, attraverso il SurfaceRegistry che connectSurfaces costruisce (cli/gateway.ts:381, cli/surface.ts:199)",
+      "le connessioni MCP allowlistate (cli/gateway.ts:388, agent/runtime.ts:525)",
       "il watchdog sd_notify verso systemd/launchd (core/gateway/notify.ts:105, core/gateway/service.ts:264-266)"
     ],
     "signals": [
@@ -359,17 +359,32 @@
   "connectors": [
     {
       "name": "telegram",
-      "file": "connectors/telegram/connector.ts:167",
+      "file": "connectors/telegram/connector.ts:165",
       "handles": [
         "text (message.text o .caption)",
-        "file (document/audio/voice/video -> vault, indicizzato prima che il turno giri)",
+        "file (document/audio/voice/video -> vault, indicizzato prima che il turno giri, tramite reindexPath scoperto sul tenant di chi ha inviato)",
         "image (photo, prende la size piu' grande)",
-        "errors (retry su 429/5xx con retry_after, backoff su 409 'altro poller attivo', un update fallito resta pending e riprovato al prossimo drain)"
+        "attachment in uscita: sendDocument (media.ts) ha ora un chiamante reale — telegramSurface.deliverFile (connectors/telegram/surface.ts), raggiunto sia da send_file (agent/tools/deliver.ts) sia da un job schedulato",
+        "errors (retry su 429/5xx con retry_after, backoff su 409 'altro poller attivo', un update fallito resta pending e riprovato al prossimo drain; una consegna fallita torna {delivered:false,why} invece di un'eccezione)"
       ],
       "gaps": [
-        "sendDocument (invio file in uscita) e' scritto e testato ma non ha ancora un chiamante in produzione — nessuna azione outward lo richiama (connectors/telegram/media.ts:154-161)",
-        "il connector risponde solo a messaggi in arrivo: l'output di un job schedulato su channel='telegram' non passa mai da qui, perche' Deliver per canali non-cli non e' cablata a livello di scheduler/gateway (vedi gaps generali)",
-        "l'intera superficie e' on/off (muffin surface enable/disable telegram): non esiste un modo per abilitarla per un singolo gruppo o disabilitare un gruppo specifico"
+        "l'intera superficie e' on/off (muffin surface enable/disable telegram): non esiste un modo per abilitarla per un singolo gruppo o disabilitare un gruppo specifico",
+        "send_file e' hostOnly: un member non puo' ricevere un file prodotto nel proprio turno — il vault e' una directory fisica condivisa fra tenant e l'egress non ha ancora lo stesso scoping per-tenant che C7 ha costruito per l'ingresso (agent/tools/deliver.ts, vedi il suo stesso docstring)"
+      ]
+    },
+    {
+      "name": "discord",
+      "file": "connectors/discord/connector.ts:139",
+      "handles": [
+        "text (message.content, DM soltanto — channel_type deve essere 1; guild_id presente o channel_type assente rifiutano il messaggio, fail-closed, D1)",
+        "file (il primo attachment del messaggio -> vault, indicizzato prima che il turno giri, stesso reindexPath scoperto per tenant di Telegram)",
+        "attachment in uscita: discordSurface.deliverFile (connectors/discord/surface.ts), stessa astrazione di Telegram",
+        "errors (close-code table completa da docs.discord.com, nextAction() in gateway.ts; 4004/4010-4014 non riprovano mai — sono config, non rete; un heartbeat senza ACK chiude e riconnette da solo)"
+      ],
+      "gaps": [
+        "DM-only per questa slice: nessun supporto guild (decisione presa e reversibile, vedi il docstring di DiscordConnector.run)",
+        "nessun probe live contro un vero bot Discord in questa slice (niente token speso) — il gateway e' verificato con un socket finto (gateway.test.ts) che prova lo state machine, non il framing WebSocket reale ne' il comportamento dal vivo di Resume",
+        "send_file e' hostOnly, stessa ragione di Telegram"
       ]
     }
   ],
@@ -435,6 +450,12 @@
         "key": "surfaces.telegram",
         "default": "(non configurata)",
         "where": "core/config/inventory.ts:55"
+      },
+      {
+        "key": "surfaces.discord",
+        "default": "(non configurata)",
+        "note": "ownerUserId e' una stringa (snowflake), mai un number — z.number() perderebbe precisione oltre 2^53",
+        "where": "core/config/config.ts:96-105"
       },
       {
         "key": "budgets.monthlyUsd",
@@ -545,9 +566,9 @@
       "why_it_matters": "L'owner non ha modo di interagire con un turno gia' in corso nel gateway (accodare un messaggio, fargli cambiare rotta, sapere se e' occupato) — l'unico controllo esterno rimasto e' SIGTERM/SIGUSR1, un'accetta non un dialogo."
     },
     {
-      "what": "La consegna a un canale diverso da 'cli' non e' cablata, e il comportamento diverge tra REPL/observe (lanciano un errore) e gateway (logga soltanto) mentre markRan avanza comunque il prossimo orario in entrambi i casi",
-      "evidence": "cli/repl.ts:48-61; cli/observe.ts:62-69; cli/gateway.ts:397-403; core/scheduler/scheduler.ts:168-172,182-187 (markRan gira anche dopo un deliver fallito)",
-      "why_it_matters": "Un job schedulato su Telegram (o qualsiasi canale non-cli) paga il turno, avanza comunque alla prossima esecuzione, e nel processo gateway — che non ha terminale — il testo finisce solo in un log che nessuno guarda per definizione."
+      "what": "CHIUSO (era: consegna non cablata su canali non-cli, markRan cieco all'esito). `Deliver` ora ritorna `DeliveryOutcome` (`{delivered:true}` o `{delivered:false, why}`) invece di `Promise<void>`, e `Scheduler.settle` e' l'unico chiamante di `markRan`: scrive l'esito sulla riga del turno (`core/turns/store.ts` `delivered`/`undelivered`) prima di avanzare la schedulazione, per ogni superficie nel registro",
+      "evidence": "core/surface/types.ts (DeliveryOutcome, Surface); core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:240 (settle), :268 (l'unico markRan); cli/repl.ts, cli/gateway.ts, cli/observe.ts costruiscono tutti il deliver dallo stesso registry invece di tre implementazioni proprie; core/turns/store.ts (readUndelivered) cablato nel check 'consegne' di cli/doctor.ts (D3, judge PR #42, 2026-08-16 — undelivered() aveva zero chiamanti e zero test prima di questo)",
+      "why_it_matters": "Un job la cui consegna fallisce non puo' piu' risultare 'eseguito': `muffin doctor` legge davvero `TurnStore.undelivered()` ora (check 'consegne'), non solo lo dichiara — warn con quanti turni e il piu' vecchio. B14 (allegato prodotto) e' READY per l'owner da questa stessa slice, non piu' un buco: vedi la riga 'discord' sotto per il suo stato."
     },
     {
       "what": "Skills malformate sono dichiarate 'reported at boot and in doctor' ma doctor non le controlla mai",
@@ -566,7 +587,7 @@
     },
     {
       "what": "I tetti di spesa sono solo globali/per-tenant-giorno: non esiste un limite per singolo job basato sui token",
-      "evidence": "docs/blueprint/M5-BIS.md:219; docs/blueprint/04-roadmap.md:613-617; defaults/rot/budgets.json ha solo monthlyUsd e perTenantDailyUsd",
+      "evidence": "docs/blueprint/M5-BIS.md:253; docs/blueprint/04-roadmap.md:613-617; defaults/rot/budgets.json ha solo monthlyUsd e perTenantDailyUsd",
       "why_it_matters": "Un processo che vive senza un owner davanti allo schermo puo' trasformare un job rotto in un ciclo che spende l'intero budget del mese prima che il cap mensile se ne accorga."
     },
     {
