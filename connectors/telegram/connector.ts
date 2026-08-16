@@ -68,7 +68,14 @@ export type ConnectorDeps = {
    * plainly that it cannot keep files — a degradation the owner can see rather
    * than a silent one.
    */
-  vault?: { root: string; reindex: (defaultTier: TrustTier) => Promise<{ skipped: { path: string; why: string }[] }> };
+  vault?: {
+    root: string;
+    reindexPath: (tenantId: string, vaultPath: string, defaultTier: TrustTier) => Promise<{
+      skipped: { path: string; why: string }[];
+      /** What went in, and the compact view of each. See `core/vault/vault.ts`. */
+      documents: { path: string; outline: string }[];
+    }>;
+  };
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -301,7 +308,7 @@ export class TelegramConnector {
       // A failed download does not fail the turn: the message still deserves an
       // answer, and an honest one says the file did not arrive.
       const arrival = incoming.attachment
-        ? await this.ingest(incoming, incoming.attachment, principal.kind === 'owner' ? 0 : 2)
+        ? await this.ingest(incoming, incoming.attachment, tenant, principal.kind === 'owner' ? 0 : 2)
         : null;
 
       const result = await runTurn(this.deps.loop, {
@@ -379,11 +386,23 @@ export class TelegramConnector {
    * runs, and the agent knows it does not have the file. Saying "ricevuto" about
    * something that is not there is the failure this project keeps naming.
    *
+   * For a document the line is not a line, it is the **compact view**: what the
+   * document is, that all of it is in memory, an index of its pages, and the
+   * call that reads one of them back. Handing over eighty pages of a PDF to
+   * answer "quanto è l'affitto?" is the cost this avoids; handing over a
+   * summary instead of the document is the failure it avoids. The vault builds
+   * it — this file renders what it is given and knows nothing about PDFs.
+   *
    * The tier is the sender's: a document from a group member is tier-2 evidence
    * and stays tier-2 through reindexing, which the vault enforces by content
    * hash rather than by path.
    */
-  private async ingest(incoming: Incoming, spec: MediaSpec, tier: TrustTier): Promise<string> {
+  private async ingest(
+    incoming: Incoming,
+    spec: MediaSpec,
+    tenantId: string,
+    tier: TrustTier,
+  ): Promise<string> {
     if (!this.deps.vault) return `[allegato ricevuto ma il vault non è configurato: ${spec.originalName}]`;
     try {
       const saved = await downloadToVault(
@@ -393,10 +412,17 @@ export class TelegramConnector {
         incoming.updateId,
         this.now(),
       );
-      const report = await this.deps.vault.reindex(tier);
+      // The tenant resolved from the authenticated sender travels with the
+      // bytes. Using a surface-wide `host` here indexed group documents into
+      // the owner's private memory, then made document_read fail in the group.
+      const report = await this.deps.vault.reindexPath(tenantId, saved.vaultPath, tier);
       const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
       if (skipped) {
         return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;
+      }
+      const document = report.documents.find((d) => d.path === saved.vaultPath);
+      if (document) {
+        return `[documento acquisito]\n${document.outline}`;
       }
       return `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]`;
     } catch (error) {

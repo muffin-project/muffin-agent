@@ -1,5 +1,11 @@
 # Muffin — UNDERSTANDING.md
 
+> **Stato: CORPUS EREDITATO.** Le dimensioni cognitive restano una lente; la
+> formula a somma pesata e i riferimenti al vecchio schema non sono il disegno
+> corrente. La curatela viva è `docs/blueprint/knowledge/01-understanding.md`.
+> In particolare, “come sta ora?” non è uno store generico di world state:
+> ADR-0045 separa evidenza, credenze, stato del mondo e stato del lavoro.
+
 Questo documento contiene il principio **epistemologico** alla base di Muffin — cosa significa "capire" oltre che "ricordare", e come tradurlo in formule concrete di peso e selezione. Esiste accanto a `THESIS.md` (principi strategici: in che gioco giochiamo, come è il moat), `PRINCIPLES.md` (principi metodologici di design: come ragionare sul sistema) e `VISION.md` (nord-stella di prodotto). I quattro doc si leggono insieme come fondamenta.
 
 ---
