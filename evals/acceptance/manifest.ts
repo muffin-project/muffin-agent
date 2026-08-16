@@ -59,11 +59,14 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   rosso(
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
-    '`cli/memory search --history` sets `includeHistory`, which only reaches the one-hop graph ' +
-      'expansion inside core/memory/recall.ts — the primary FTS5/vector retrieval paths that surface ' +
-      'a fact by content never see it, so a superseded belief not already linked to a named entity ' +
-      'stays unfindable regardless of the flag',
-    'slice/memoria-nel-tempo',
+    'the fixture writes both facts straight through `store.addFact`/`store.supersede`, skipping the ' +
+      'backlog indexing in core/memory/ingest.ts — so nothing here is ever embedded and the semantic ' +
+      'half has nothing to find; `searchEpisodes` (the text half) only ever returns episodes, never ' +
+      'facts, flag or no flag; and the query "ristorante preferito" carries no capitalised word for ' +
+      '`extractCandidateNames` to pick up, so the one-hop graph expansion never fires either — none of ' +
+      'the three retrieval paths reaches this fact, so even the active belief ("da Luigi") never turns ' +
+      'up before --history is even asked',
+    'evals/acceptance/scenarios/c-memory.accept.ts (harness fixture — no slice scheduled yet)',
   ),
   verde('D2', 'file write: asking to write a file gets an honest refusal, not a silent no-op'),
   rosso(
