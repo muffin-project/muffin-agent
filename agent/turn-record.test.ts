@@ -135,6 +135,9 @@ const readTool = (
 ): RegisteredTool => ({
   capability: 'demo.read',
   spec: { name, description: 'r', inputSchema: { type: 'object', properties: {} } },
+  // `throwTier: 0`: the one caller that passes a throwing handler (`'closes
+  // when the handler throws'` below) throws only this file's own literal.
+  throwTier: 0,
   handler,
 });
 
@@ -239,6 +242,7 @@ describe('a tool call is recorded in two halves', () => {
         {
           capability: 'demo.send',
           spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
           handler: () => {
             // Read from inside the handler: this is the instant a real crash
             // lands, and the point is that the row already exists by then.
@@ -283,6 +287,7 @@ describe('a tool call is recorded in two halves', () => {
           // Not in the declaration map at all, so the kernel denies it.
           capability: 'demo.unknown',
           spec: { name: 'demo_hidden', description: 'x', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
           handler: () => ({ content: 'mai', tier: 0 as const }),
         },
       ],

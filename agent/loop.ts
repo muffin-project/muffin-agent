@@ -1070,10 +1070,19 @@ async function runTool(
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
     const detail = error instanceof Error ? error.message : String(error);
+    // Unconditional, and the same call the success path makes a few lines up
+    // — a judge's round-1 finding was that this branch never raised taint at
+    // all, so a handler that threw was invisible to the ledger no matter whose
+    // words `detail` carried. `tool.throwTier` is this tool's own declared
+    // answer for its failure exit, the same way `outcome.tier` is its answer
+    // for success; neither is guessed here.
+    snapshot.raiseTaint(tool.throwTier);
     // And an outcome all the same: a handler that threw *came back*, so the
     // call is decided, not uncertain. Leaving the intent row open here would
     // make every failed tool call look like one that might still have landed.
-    recordOutcome(deps, parent.traceId, span, call.id, { content: detail, isError: true, tier: undefined });
+    // `tier: tool.throwTier`, never `undefined` — the record and the taint it
+    // produced must agree, exactly as ADR-0044 requires of the success path.
+    recordOutcome(deps, parent.traceId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
   }
@@ -1106,7 +1115,10 @@ function recordOutcome(
   turnId: string,
   span: SpanHandle,
   callId: string,
-  result: { content: string; isError: boolean; tier: TrustTier | undefined },
+  // `tier` is never `undefined` at either call site any more (ADR-0044's own
+  // field on success, `throwTier` on the catch path below) — narrowed to match
+  // so a third call site could not reintroduce the omission silently.
+  result: { content: string; isError: boolean; tier: TrustTier },
 ): void {
   try {
     deps.turns.endToolCall(turnId, callId, result);

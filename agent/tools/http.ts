@@ -85,6 +85,15 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
     // on the only one where one does. Not a formality: raising the taint on a
     // refusal would let a failed fetch quietly narrow what the rest of the turn
     // may do, and leaving it unstated is what this slice exists to end.
+    //
+    // `throwTier: 0`. Every `await` that touches the remote side (`fetchFn`,
+    // `addressVeto`'s `lookupFn`) is wrapped in its own `try`/`catch` and
+    // returned as a normal `tier: 0` outcome, never re-thrown; `extractFn` is
+    // likewise caught inline. The one unguarded call, `response.text()`, can
+    // only fail as a transport/stream error — it has no body to fail *with*,
+    // since failing is precisely not obtaining one. A remote body reaches this
+    // handler's caller only via the fenced, tier-3 `return`.
+    throwTier: 0,
     handler: async (args) => {
       const parsed = httpArgs.safeParse(args);
       if (!parsed.success) {

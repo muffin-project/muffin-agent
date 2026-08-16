@@ -307,6 +307,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // can re-fetch on a whim: clearing it to save context deletes the reason
       // the answer was anchored to anything.
       keepResult: true,
+      // `throwTier: 0` — `searchMemory` (`agent/tools/memory.ts`) never throws
+      // with recalled text; recalled fragments only ever leave through its
+      // fenced `return`, tiered to the worst source pulled in. An escape here
+      // would be `recall()`'s own storage/internal error.
+      throwTier: 0,
     },
     // The other half of "a document enters whole": the vault stores every page
     // and the model is handed an index, so it needs a door back to the text.

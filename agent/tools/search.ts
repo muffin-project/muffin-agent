@@ -162,6 +162,12 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
   return {
     capability: searchCapability.id,
     spec: searchSpec,
+    // `throwTier: 0` — `backend.search()` is wrapped in its own `try`/`catch`
+    // two lines down and never escapes this handler. `tavilyBackend`'s own
+    // throws (`tavily ${status}…`, `risposta non riconosciuta: …`) carry a
+    // status code and our own schema-mismatch text, never the response body —
+    // the actual snippets only ever leave through the fenced, tier-3 `return`.
+    throwTier: 0,
     handler: async (args) => {
       const parsed = searchArgs.safeParse(args);
       if (!parsed.success) {

@@ -42,12 +42,13 @@ decide(principal, tenant, capability, resource, args, taint) →
 | Scrittura memoria (episodi/fatti) | ALLOW | ALLOW nel tenant del gruppo, tier ereditato | ALLOW, tier 3 |
 | Reply sul canale di origine | ALLOW | ALLOW | ALLOW |
 | Egress rete (fetch, API esterne) | ALLOW su allowlist; ASK fuori | **solo read-only su allowlist pubblica; niente dati del tenant host nei parametri** | idem |
-| Shell / filesystem host / processi | ALLOW per classe (HITL) | **DENY — nessun percorso** | **DENY** |
+| Shell / filesystem host / processi | ALLOW per classe (HITL) | **ASK** (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione — vedi nota sotto) | **DENY** |
 | Outward (mail, messaggi a terzi, pubblicazione) | DRAFT di default; send solo con conferma | DENY (il gruppo riceve solo reply) | DENY |
 | Scrittura config/voice (cricchetto) | ALLOW solo via ratchet-API | DENY | DENY |
 | Capability `dev` (repo, test, PR) | ALLOW (contesto non tainted) | DENY | DENY |
 | Root of Trust | DENY a runtime per chiunque (solo git+owner+riavvio) | DENY | DENY |
 
+- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione.
 - **Regola dei trigger**: un'azione proattiva (scheduler) può nascere solo da evidenza tier ≤1. Un fatto tier-2 non arma mai un trigger — il "ricordo dormiente" resta un dato, non diventa un piano.
 - **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché "non c'è nessuno da chiedere"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor.
 

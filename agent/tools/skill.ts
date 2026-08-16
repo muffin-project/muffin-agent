@@ -60,6 +60,13 @@ export function makeSkillTool(skills: readonly SkillInfo[]): RegisteredTool {
     // Every refusal below is `tier: 0`: they are this file's own sentences,
     // written before any skill file was opened. The one path that opens a file
     // is the one at the bottom, and it is the one that carries a tier.
+    //
+    // `throwTier: 0`. The only unguarded call is the final `readFileSync(real)`;
+    // if it throws (permission, a race with something deleting the file after
+    // the `existsSync` check above), the message is Node's own fs-error text
+    // plus the already-realpath-verified path — never the skill body itself,
+    // which only ever leaves through the `return` two lines below it, tiered 1.
+    throwTier: 0,
     handler: (args) => {
       const parsed = skillArgs.safeParse(args);
       if (!parsed.success) {

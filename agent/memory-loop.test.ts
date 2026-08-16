@@ -74,10 +74,12 @@ function harness(script: ChatResult[]) {
       // Wired exactly as production wires it. A harness that hardcodes the
       // tenant tests the harness, and the previous version of this file did.
       handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),
+      throwTier: 0,
     },
     {
       capability: 'demo.write',
       spec: { name: 'demo_write', description: 'w', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => {
         writes.push('demo_write');
         return { content: 'scritto', tier: 0 as const };

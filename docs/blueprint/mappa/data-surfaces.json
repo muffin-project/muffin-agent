@@ -253,13 +253,13 @@
       {
         "n": 4,
         "stage": "i problemi arrivano al boot line",
-        "file": "agent/runtime.ts:455-456",
+        "file": "agent/runtime.ts:488",
         "what": "skillScan.problems, prefissati con '!', entrano in runtime.bootLines e vengono stampati all'avvio di REPL/gateway (cli/repl.ts:145, cli/gateway.ts:375). NON raggiungono `muffin doctor` (vedi gaps)."
       },
       {
         "n": 5,
         "stage": "registrazione del tool condiviso",
-        "file": "agent/runtime.ts:316, agent/tools/skill.ts:33-45,54",
+        "file": "agent/runtime.ts:346, agent/tools/skill.ts:33-45,54",
         "what": "makeSkillTool(skillScan.skills) registra un solo tool skill_read per l'intero elenco, indipendentemente da quante skill sono valide."
       },
       {
@@ -277,18 +277,18 @@
       {
         "n": 8,
         "stage": "handler risolve ed esegue la lettura",
-        "file": "agent/tools/skill.ts:59-96",
+        "file": "agent/tools/skill.ts:70-113",
         "what": "Risolve il path dentro la home della skill, fa realpath sia della skill dir sia del file per bloccare ogni fuga via symlink, e rifiuta oltre 512KB."
       },
       {
         "n": 9,
         "stage": "il contenuto rientra nel turno taggato",
-        "file": "agent/tools/skill.ts:97-110",
+        "file": "agent/tools/skill.ts:114-121",
         "what": "Ritorna {content, tier:1} — non fenced, perche' sono istruzioni owner-installate/auditate — e questo alza il taint del turno come farebbe un fatto detto dall'owner."
       }
     ],
-    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:315-316,455-456; core/skills/skills.ts:59-117). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:124-132, agganciato in agent/runtime.ts:497) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:32-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:59-96). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:97-110).",
-    "taint": "tier 1, non fenced (owner-installed/owner-audited) — a differenza dei risultati MCP che sono tier 3 e fenced di default. file: agent/tools/skill.ts:97-110.",
+    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:345-346,488; core/skills/skills.ts:59-117). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:124-132, agganciato in agent/runtime.ts:534) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:32-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:70-113). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:114-121).",
+    "taint": "tier 1, non fenced (owner-installed/owner-audited) — a differenza dei risultati MCP che sono tier 3 e fenced di default. file: agent/tools/skill.ts:114-121.",
     "installed": []
   },
   "mcp": {

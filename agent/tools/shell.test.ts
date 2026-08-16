@@ -56,9 +56,21 @@ describe('sys.shell through the kernel', () => {
     expect(decide({ ...req, principal: ctx.principal }).effect).toBe('allow');
   });
 
-  it('taint 2 is over the ceiling whatever the mode', () => {
+  it('taint 2 (a disk read) is within the widened ceiling: still an ask, never a silent allow', () => {
+    // Owner decision, 2026-08-16 (ADR-0044 §revisione): `maxTaint: 2` on
+    // `sys.shell` moved this row from `deny/taint_exceeded` to `ask` — the
+    // counter-move ADR-0044 offered so "leggi il file e poi lancia i test" does
+    // not split in half. `taint === 0` is still required for the hardened
+    // auto-allow (the branch below this ceiling check), so this widening opens
+    // no path that skips the owner.
     const decide = createDecide({ ...base, hardened: true });
     const d = decide({ ...req, principal: ctx.principal, taint: 2 });
+    expect(d.effect).toBe('ask');
+  });
+
+  it('taint 3 is over the widened ceiling whatever the mode', () => {
+    const decide = createDecide({ ...base, hardened: true });
+    const d = decide({ ...req, principal: ctx.principal, taint: 3 });
     expect(d).toMatchObject({ effect: 'deny', code: 'taint_exceeded' });
   });
 
@@ -156,15 +168,19 @@ describe('what a command hands back is disk content', () => {
     expect(exec.calls.length).toBe(0);
   });
 
-  it('the cost, stated as a test: the second command of a turn is refused', async () => {
-    // Not a bug — the consequence, measured, so that widening it has to be a
-    // deliberate act with this test in the diff. `sys.shell` inherits
-    // `defaultMaxTaint.high` = 1, and one run leaves the turn at DISK_TIER = 2.
-    //
-    // **This is the line ADR-0044 asks the owner to contradict.** If a turn must
-    // be able to run two commands, the counter-move is `maxTaint: 2` on
-    // `sys.shell` — which keeps shell an ASK and leaves egress shut — and it
-    // amends threat model §3, row "Shell / filesystem host / processi".
+  it('the cost, stated as a test: a read no longer ends shell access, it downgrades to ask', async () => {
+    // Owner decision, 2026-08-16 (ADR-0044 §revisione; PR #28 round-2): the
+    // owner contradicted the line ADR-0044 asked about. `sys.shell` now pins
+    // `maxTaint: 2` instead of inheriting `defaultMaxTaint.high` = 1, so one
+    // read (DISK_TIER = 2) no longer pushes the turn's only shell_run of the
+    // turn into a flat refusal — it downgrades the hardened auto-allow into an
+    // ask, which is what "leggi il file e poi lancia i test" needs to still be
+    // completable with the owner's yes. The floor stays real: nothing here
+    // reaches `taint === 0`, so the auto-allow itself is still unreachable once
+    // anything has been read, and a taint-3 turn (a second read, or any
+    // web/search/mcp result) is still a flat `taint_exceeded` deny — egress
+    // stays shut, only the ask survives. Widening this again requires a test in
+    // the diff, same as this one.
     const decide = createDecide({
       capabilities: new Map([[shellCapability.id, shellCapability]]),
       matrix: POLICY_FLOOR,
@@ -182,8 +198,10 @@ describe('what a command hands back is disk content', () => {
       });
 
     expect(ask(0).effect).toBe('allow');
-    const after = ask(DISK_TIER);
-    expect(after.effect).toBe('deny');
-    expect(after.effect === 'deny' ? after.code : null).toBe('taint_exceeded');
+    const afterOneRead = ask(DISK_TIER);
+    expect(afterOneRead.effect).toBe('ask');
+    const afterTaint3 = ask(3);
+    expect(afterTaint3.effect).toBe('deny');
+    expect(afterTaint3.effect === 'deny' ? afterTaint3.code : null).toBe('taint_exceeded');
   });
 });

@@ -1,7 +1,7 @@
 {
   "registry": {
     "file": "agent/runtime.ts:260-386 (buildRuntime, synchronous tool+capability registration); agent/runtime.ts:525-535 (attachMcp, async, called separately)",
-    "note": "buildRuntime() (agent/runtime.ts:104) builds a RegisteredTool[] array and a CapabilityId->CapabilityDecl Map at boot: fs x3 always (261-278), memory always (279-289), shell only if the sandbox probe succeeds (301-304), process x2 always (310), skill always (316), http always (327), search only if configured+keyed+allowlisted (333-370), capabilities Map assembled at 372-386. Every real entrypoint (cli/repl.ts:111, cli/run.ts:30, cli/gateway.ts:297) then calls attachMcp(runtime, home) (runtime.ts:525-535) as a second, async step that connects rot/mcp.json's servers and pushes their verified tools via Runtime.register() (runtime.ts:98,464-467 - attachMcp is its only caller, line 531). agent/loop.ts's runTool() (line 696) is the sole consumer: it resolves the model-chosen name against the full deps.tools list (never the filtered 'exposed' list, so a member naming a host-only tool still gets a real policy denial and not a fabricated 'unknown tool'), derives a Resource via resourceFor() (loop.ts:867-881), and gates execution through PermissionSnapshot.check() (loop.ts:747, backed by core/policy/decide.ts)."
+    "note": "buildRuntime() (agent/runtime.ts:104) builds a RegisteredTool[] array and a CapabilityId->CapabilityDecl Map at boot: fs x3 always via a single `...makeFsTools(scope)` spread (runtime.ts:299 - the three handlers live in agent/tools/fs.ts:324-375, not inline here), memory always, shell only if the sandbox probe succeeds, process x2 always, skill always, http always, search only if configured+keyed+allowlisted, capabilities Map assembled further down. Every real entrypoint (cli/repl.ts:111, cli/run.ts:30, cli/gateway.ts:297) then calls attachMcp(runtime, home) (runtime.ts:525-535) as a second, async step that connects rot/mcp.json's servers and pushes their verified tools via Runtime.register() (runtime.ts:98,464-467 - attachMcp is its only caller, line 531). agent/loop.ts's runTool() (line 696) is the sole consumer: it resolves the model-chosen name against the full deps.tools list (never the filtered 'exposed' list, so a member naming a host-only tool still gets a real policy denial and not a fabricated 'unknown tool'), derives a Resource via resourceFor() (loop.ts:867-881), and gates execution through PermissionSnapshot.check() (loop.ts:747, backed by core/policy/decide.ts)."
   },
   "tools": [
     {
@@ -14,7 +14,7 @@
       "maxTaint": null,
       "taintOut": "tier: 2 (DISK_TIER, agent/tools/fs.ts) on every read - ADR-0044. Until that ADR this handler returned {content} with no `tier` key and a file's content was treated as fully trusted whatever its provenance; the map recorded that as a finding (see gaps) and it is now closed. 2 because `stat` cannot tell the owner's own note from something that arrived in ~/Downloads: under that uncertainty the fail-closed reading is the only honest one.",
       "wired": true,
-      "wiredNote": "Registered unconditionally at agent/runtime.ts:261-265.",
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:326-339 (makeFsTools), not inline in runtime.ts (the three fs handlers were unified into one factory, used by both runtime.ts and evals/floor/run.ts, so the fix could not stay in the tool file without reaching production).",
       "onDeny": "Generic kernel refusal at agent/loop.ts:769-776: 'Rifiutato dal kernel dei permessi (<code>). Non insistere: serve una decisione dell'owner.' Most likely code in practice: taint_exceeded once turn taint > 3 (defaultMaxTaint.low, core/policy/matrix.ts:95).",
       "oneLine": "Legge un file di testo dentro la working directory."
     },
@@ -28,7 +28,7 @@
       "maxTaint": null,
       "taintOut": "tier: 2 (DISK_TIER) - same shape as fs_read, and the same argument: a filename is text somebody chose, and `IGNORA le istruzioni precedenti.md` costs an attacker nothing. Treating a listing as metadata rather than content would be a special case whose only argument is that the strings are short (ADR-0044).",
       "wired": true,
-      "wiredNote": "Registered unconditionally at agent/runtime.ts:266-270.",
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:340-359 (makeFsTools), not inline in runtime.ts.",
       "onDeny": "agent/loop.ts:769-776, same generic kernel refusal as fs_read.",
       "oneLine": "Elenca le voci di una directory, indicando quali sono cartelle."
     },
@@ -42,7 +42,7 @@
       "maxTaint": null,
       "taintOut": "tier: 0, declared and not omitted (ADR-0044): the result is this tool's own receipt ('wrote N bytes'), nothing enters the turn. n/a in practice anyway - see wiredNote: the handler (fsWrite) is never reached in production.",
       "wired": true,
-      "wiredNote": "Registered at agent/runtime.ts:271-278 and exposed to the model - but see gaps: fs.write is declared risk:'medium' + reversible:'undoable' (fs.ts:78-85), and core/policy/decide.ts:204-207 maps every medium+undoable capability to effect:'draft'. agent/loop.ts:777-791 has no undo journal implemented, so 'draft' is turned into an unconditional hard refusal (isError:true) BEFORE fsWrite() ever runs. Confirmed unconditional (owner, taint 0) by core/policy/decide.test.ts:117 and agent/loop.test.ts:505-535. The tool is registered and reachable; it never actually writes.",
+      "wiredNote": "Registered via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 (handler at agent/tools/fs.ts:360-373) and exposed to the model - but see gaps: fs.write is declared risk:'medium' + reversible:'undoable' (fs.ts:78-85), and core/policy/decide.ts:204-207 maps every medium+undoable capability to effect:'draft'. agent/loop.ts:777-791 has no undo journal implemented, so 'draft' is turned into an unconditional hard refusal (isError:true) BEFORE fsWrite() ever runs. Confirmed unconditional (owner, taint 0) by core/policy/decide.test.ts:117 and agent/loop.test.ts:527-556. The tool is registered and reachable; it never actually writes.",
       "onDeny": "Not a policy 'deny' - a 'draft' verdict, refused at agent/loop.ts:783-791: '\"fs.write\" richiede una bozza revocabile e il registro di undo non esiste ancora. Non eseguito: dillo all'owner invece di riprovare.'",
       "oneLine": "Scriverebbe un file, ma il verdetto 'draft' lo blocca sempre."
     },
@@ -110,9 +110,9 @@
       "risk": "low",
       "reversible": true,
       "maxTaint": 1,
-      "taintOut": "tier: 1, always (skill.ts:110) - deliberately not tier 0 and not fenced. The file's own comment (skill.ts:96-109) documents a since-fixed defect: an omitted tier let a skill body reach context at taint 0, which combined with decide.ts's hardened-high-risk branch (taint===0 required for a silent allow) meant a turn could read a skill's instructions and then reach sys.shell without the owner ever being asked. Current code sets tier:1 and this file's docstring calls skill bodies 'instructions on purpose' (owner-installed, owner-audited).",
+      "taintOut": "tier: 1, always (skill.ts:127) - deliberately not tier 0 and not fenced. The file's own comment (skill.ts:114-121) documents a since-fixed defect: an omitted tier let a skill body reach context at taint 0, which combined with decide.ts's hardened-high-risk branch (taint===0 required for a silent allow) meant a turn could read a skill's instructions and then reach sys.shell without the owner ever being asked. Current code sets tier:1 and this file's docstring calls skill bodies 'instructions on purpose' (owner-installed, owner-audited).",
       "wired": true,
-      "wiredNote": "Registered unconditionally at agent/runtime.ts:316, over whatever discoverSkills(home) found at boot (skillScan.skills); parse failures are reported as boot lines (runtime.ts:456), never silently dropped.",
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:346, over whatever discoverSkills(home) found at boot (skillScan.skills); parse failures are reported as boot lines (runtime.ts:488), never silently dropped.",
       "onDeny": "agent/loop.ts:769-776 generic.",
       "oneLine": "Legge SKILL.md o un file allegato di una skill installata."
     },
@@ -263,7 +263,7 @@
   "gaps": [
     {
       "what": "fs_write is fully registered, declared, schema-valid and reachable by the model - and can never actually write a file. fs.write is declared risk:'medium' + reversible:'undoable' (agent/tools/fs.ts:78-85). core/policy/decide.ts:204-207 maps EVERY medium+undoable capability to effect:'draft'. agent/loop.ts:777-791 has no undo journal implemented, so the 'draft' case is an unconditional hard refusal (isError:true, 'il registro di undo non esiste ancora') - the fsWrite() function itself (fs.ts:257-262) is fully correct code with no caller in production.",
-      "evidence": "agent/tools/fs.ts:78-85; core/policy/decide.ts:204-207; agent/loop.ts:777-791; confirmed by tests at core/policy/decide.test.ts:117 (draft even for owner at taint 0) and agent/loop.test.ts:505-535 ('refuses a draft instead of executing it as an allow')",
+      "evidence": "agent/tools/fs.ts:78-85; core/policy/decide.ts:204-207; agent/loop.ts:777-791; confirmed by tests at core/policy/decide.test.ts:117 (draft even for owner at taint 0) and agent/loop.test.ts:527-556 ('refuses a draft instead of executing it as an allow')",
       "why_it_matters": "The only declared write capability among 'the three filesystem primitives of M1' (fs.ts:7) is inert in every build that ships today - an owner asking Muffin to save a note or edit a file gets the same fixed Italian refusal every single time, and no runtime configuration changes that outcome; only building the undo journal would."
     },
     {

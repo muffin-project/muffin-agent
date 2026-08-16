@@ -68,6 +68,13 @@ export function makeDocumentTool(vault: Vault, store: MemoryStore): RegisteredTo
   return {
     capability: documentCapability.id,
     spec: documentReadSpec,
+    // `throwTier: 0` — `readDocument` never intentionally throws with a
+    // document's own text; `vault.document()` and `portionOf()` carry no
+    // `throw` of their own (checked: neither module has one), so an escape
+    // here would be a storage/internal error, and the stored text itself only
+    // ever leaves through the fenced `return` inside `readDocument`, tiered to
+    // the document's own worst recorded tier there.
+    throwTier: 0,
     handler: (args, ctx) => readDocument(vault, store, ctx.tenant, args),
   };
 }
