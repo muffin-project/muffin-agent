@@ -24,6 +24,7 @@ const STRANGER = '777000000000000002';
 const msg = (id: string, over: { authorId: string; text: string }): DiscordMessage => ({
   id,
   channel_id: '42',
+  channel_type: 1,
   author: { id: over.authorId, username: 'x', bot: false },
   content: over.text,
 });
@@ -96,8 +97,10 @@ describe('pairing through the connector', () => {
     // The same hole `connectors/telegram/pairing-flow.test.ts` names for
     // Telegram, in Discord's own shape: a webhook message carries no `author`
     // at all, and without the explicit check `undefined === undefined` would
-    // read as a match against an unset owner id.
-    const senderless = { id: '1', channel_id: '42', content: 'ciao' } as DiscordMessage;
+    // read as a match against an unset owner id. `channel_type: 1` is set so
+    // this exercises the "no author" branch specifically, not the (also
+    // refusing) channel_type gate D1 added above it.
+    const senderless = { id: '1', channel_id: '42', channel_type: 1, content: 'ciao' } as DiscordMessage;
     expect(parseMessage(senderless)).toBeNull();
   });
 

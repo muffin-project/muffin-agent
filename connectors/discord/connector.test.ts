@@ -22,14 +22,15 @@ const OWNER = '888000000000000001';
 
 describe('reading a MESSAGE_CREATE dispatch', () => {
   it('reads a plain DM', () => {
-    const parsed = parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' });
-    expect(parsed).toMatchObject({ channelId: '42', text: 'ciao', fromId: OWNER, messageId: '1' });
+    const parsed = parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' });
+    expect(parsed).toMatchObject({ channelId: '42', text: 'ciao', fromId: OWNER, messageId: '1', direct: true });
   });
 
   it('carries the first attachment when there is one, text or not', () => {
     const withText = parseMessage({
       id: '1',
       channel_id: '42',
+      channel_type: 1,
       author: { id: OWNER, bot: false },
       content: 'guarda',
       attachments: [{ id: 'a1', filename: 'nota.pdf', size: 10, url: 'https://cdn/x' }],
@@ -40,6 +41,7 @@ describe('reading a MESSAGE_CREATE dispatch', () => {
     const noText = parseMessage({
       id: '2',
       channel_id: '42',
+      channel_type: 1,
       author: { id: OWNER, bot: false },
       content: '',
       attachments: [{ id: 'a1', filename: 'nota.pdf', size: 10, url: 'https://cdn/x' }],
@@ -49,25 +51,29 @@ describe('reading a MESSAGE_CREATE dispatch', () => {
   });
 
   it('skips what it cannot handle instead of guessing', () => {
-    expect(parseMessage({ id: '1', channel_id: '42', content: 'ciao' })).toBeNull(); // no author
-    expect(parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: '' })).toBeNull(); // no text, no attachment
-    expect(parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: '   ' })).toBeNull(); // whitespace only
+    expect(parseMessage({ id: '1', channel_id: '42', channel_type: 1, content: 'ciao' })).toBeNull(); // no author
+    expect(parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: '' })).toBeNull(); // no text, no attachment
+    expect(parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: '   ' })).toBeNull(); // whitespace only
     expect(
-      parseMessage({ id: '1', channel_id: '42', guild_id: '9', author: { id: OWNER, bot: false }, content: 'ciao' }),
+      parseMessage({ id: '1', channel_id: '42', guild_id: '9', channel_type: 0, author: { id: OWNER, bot: false }, content: 'ciao' }),
     ).toBeNull(); // guild — out of scope for this slice
-    expect(parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: true }, content: 'ciao' })).toBeNull(); // a bot, including this one
-    expect(parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, system: true }, content: 'ciao' })).toBeNull(); // Discord's own system messages
+    expect(
+      parseMessage({ id: '1', channel_id: '42', channel_type: 3, author: { id: OWNER, bot: false }, content: 'ciao' }),
+    ).toBeNull(); // GROUP_DM (D1) — no guild_id either, but not a one-to-one DM
+    expect(parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' })).toBeNull(); // channel_type absent — fail-closed, not assumed DM
+    expect(parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: true }, content: 'ciao' })).toBeNull(); // a bot, including this one
+    expect(parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, system: true }, content: 'ciao' })).toBeNull(); // Discord's own system messages
   });
 
   it('does not decide who the owner is', () => {
-    const parsed = parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' })!;
+    const parsed = parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' })!;
     expect(Object.keys(parsed)).not.toContain('isOwner');
   });
 });
 
 describe('who is speaking', () => {
   it('gives the owner the host tenant with a DM', () => {
-    const parsed = parseMessage({ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' })!;
+    const parsed = parseMessage({ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' })!;
     expect(principalFor(parsed, OWNER)).toEqual({
       principal: { kind: 'owner', connector: 'discord', externalId: OWNER },
       tenant: 'host',
@@ -146,7 +152,7 @@ async function deliver(h: ReturnType<typeof harness>, messages: DiscordMessage[]
 describe('handling a DM end to end', () => {
   it('answers and records the delivery on the turn', async () => {
     const h = harness();
-    await deliver(h, [{ id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' }]);
+    await deliver(h, [{ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' }]);
 
     expect(h.sent).toEqual([{ channelId: '42', text: 'fatto' }]);
     expect(h.delivered).toHaveLength(1);
@@ -159,6 +165,7 @@ describe('handling a DM end to end', () => {
       {
         id: '1',
         channel_id: '42',
+        channel_type: 1,
         author: { id: OWNER, bot: false },
         content: 'guarda',
         attachments: [{ id: 'a1', filename: 'nota.txt', size: 5, url: 'https://cdn/x' }],
@@ -190,7 +197,7 @@ describe('durability — a message survives a failure mid-turn', () => {
     const api = { sendMessage: async () => ({}) as never, typing: async () => undefined } as unknown as DiscordApi;
     const connector = new DiscordConnector({ loop, sessions: loop.sessions, inbox, api, config: { token: 't', ownerUserId: OWNER } });
 
-    const raw: DiscordMessage = { id: '1', channel_id: '42', author: { id: OWNER, bot: false }, content: 'ciao' };
+    const raw: DiscordMessage = { id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'ciao' };
     inbox.accept(raw.id, raw, new Date().toISOString());
     await (connector as unknown as { drain: () => Promise<void> }).drain();
 
