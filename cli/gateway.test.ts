@@ -271,6 +271,96 @@ describe("cmdGatewayRun's own assembly", () => {
       await fake.close();
     }
   });
+
+  /**
+   * M5-BIS B14's wiring, the same standard as B8 just above: checked by hand
+   * first — commenting out `attachSendFile(runtime, home, surfaces.registry)`
+   * in both `cli/gateway.ts` and `cli/repl.ts` left the entire suite green,
+   * `send_file`'s own unit tests included (they drive `makeSendFileTool`
+   * directly, which proves the tool's logic, not that any production entry
+   * point ever constructs and registers one).
+   *
+   * The fake server scripts a tool call on the first turn — `send_file` on a
+   * file this test writes into the vault first — then a plain answer once the
+   * tool result comes back, and captures every request body so the second one
+   * can be inspected for what the model was actually handed back.
+   */
+  function fakeToolCallServer(toolName: string, argsJson: string): Promise<{ url: string; requests: unknown[]; close: () => Promise<void> }> {
+    const requests: unknown[] = [];
+    return new Promise((resolve) => {
+      let call = 0;
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
+          call += 1;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          const message =
+            call === 1
+              ? { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: toolName, arguments: argsJson } }] }
+              : { role: 'assistant', content: 'fatto.' };
+          res.end(
+            JSON.stringify({
+              id: `fake-${call}`,
+              model: 'fake',
+              choices: [{ index: 0, finish_reason: call === 1 ? 'tool_calls' : 'stop', message }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+          );
+        });
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+        resolve({ url: `http://127.0.0.1:${addr.port}/v1`, requests, close: () => new Promise((r) => server.close(() => r())) });
+      });
+    });
+  }
+
+  it('reaches send_file for real: a job can attach a vault file, through the actual production wiring', async () => {
+    const fake = await fakeToolCallServer('send_file', JSON.stringify({ path: 'report.txt' }));
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-sendfile-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      // The file send_file will be asked to attach — written before the job
+      // fires, exactly like a prior tool call (fs_write, an ingest) would have
+      // left it for a real turn to pick up.
+      writeFileSync(join(paths(dir).vault, 'report.txt'), 'contenuto finto\n');
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+      try {
+        await vi.waitFor(
+          () => {
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            expect(row?.delivery).toBe('sent');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+      } finally {
+        db.close();
+      }
+
+      // The second request is the one that carries the tool's own result back
+      // to the model — inspecting it is the only way to see, from outside the
+      // process, whether `send_file` actually ran (and succeeded) rather than
+      // the model merely claiming it would in the final text.
+      expect(fake.requests).toHaveLength(2);
+      const second = fake.requests[1] as { messages: { role: string; content?: unknown; tool_call_id?: string }[] };
+      const toolResult = second.messages.find((m) => m.role === 'tool' || 'tool_call_id' in m);
+      expect(JSON.stringify(toolResult)).toContain('inviato: report.txt');
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  });
 });
 
 /**
