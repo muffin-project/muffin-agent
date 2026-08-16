@@ -25,3 +25,30 @@
 {"id":"a2e0ee68fb905b26d","branch":"slice/memoria-nel-tempo","quando":"2026-08-15T21:08:39.972Z"}
 {"id":"ae14fe916b0f84a37","slug":"superfici-discord","cosa":"B8: contratto di superficie, Discord, consegna che non mente","quando":"2026-08-15T21:09:13.089Z"}
 {"id":"a49b7c31bf6fff494","slug":"documenti-pdf","cosa":"C7: parser documenti, niente troncamento","quando":"2026-08-15T21:09:13.138Z"}
+{"id":"a52f18e2ae07067a4","slug":"chip-worktree-valutazione","cosa":"valutazione read-only dei 6 worktree claude/* dei chip owner: integrare/fold/scartare con evidenza (sonnet)","quando":"2026-08-16T03:08:15.198Z"}
+{"id":"a2048097301a0958d","slug":"pr28-taint-merge-dev","cosa":"PR #28 taint-in-ingresso: merge origin/dev nel branch, ADR 0042→0044 in data-tools.json, rigenera mappa, tsc+vitest, push (sonnet)","quando":"2026-08-16T03:12:53.106Z"}
+{"id":"a2048097301a0958d","branch":"slice/taint-in-ingresso","quando":"2026-08-16T03:12:53.155Z"}
+{"id":"adcfdac28126796d7","slug":"pr29-hermes-merge-dev","cosa":"PR #29 hermes: merge origin/dev nel branch, conflitto M5-BIS.md senza cambiare stati, push (sonnet)","quando":"2026-08-16T03:12:53.204Z"}
+{"id":"adcfdac28126796d7","branch":"slice/hermes","quando":"2026-08-16T03:12:53.253Z"}
+{"id":"a9b64f35acab205f9","slug":"superfici-ripresa","cosa":"ripresa slice/superfici (B8/B14, forma surface per B15/B16, Discord) dal WIP 44692fc del morto ae14fe916b0f84a37 (sonnet)","quando":"2026-08-16T03:17:25.086Z"}
+{"id":"a9b64f35acab205f9","branch":"slice/superfici","quando":"2026-08-16T03:17:25.130Z"}
+{"id":"a09e2486908a1323f","slug":"memoria-nel-tempo-ripresa","cosa":"ripresa slice/memoria-nel-tempo (C4/C6) dal WIP 006fcfa del morto a2e0ee68fb905b26d (sonnet)","quando":"2026-08-16T03:17:25.173Z"}
+{"id":"a09e2486908a1323f","branch":"slice/memoria-nel-tempo","quando":"2026-08-16T03:17:25.215Z"}
+{"id":"af85bb655859af839","slug":"accettazione-ripresa","cosa":"ripresa slice/accettazione (E4: harness binario vero, stato inventario derivato) dal WIP a6b14d6 del morto acf9ffdddf9b1676c (sonnet)","quando":"2026-08-16T03:17:25.259Z"}
+{"id":"af85bb655859af839","branch":"slice/accettazione","quando":"2026-08-16T03:17:25.302Z"}
+{"id":"a8e1f7347a764666d","slug":"chip-fix-integrazione","cosa":"tre fix dei chip owner in tre slice da dev: doctor-esiti-consolidamento, vault-tier-pessimista (min→max), taint-non-si-lava-in-uscita (reply a trustTier 0); mutazione provata, PR verso dev (sonnet, worktree isolato)","quando":"2026-08-16T03:19:18.768Z"}
+{"id":"a2c4b7c7d8071e26f","branch":"slice/mappa","quando":"2026-08-16T03:22:29.189Z"}
+{"id":"a5231b59f886c9e8d","branch":"slice/mappa","quando":"2026-08-16T03:22:29.281Z"}
+{"id":"a4ba815ad13547579","branch":"slice/mappa","quando":"2026-08-16T03:22:29.356Z"}
+{"id":"a0cdda42ae2ba8dff","branch":"slice/mappa","quando":"2026-08-16T03:22:29.437Z"}
+{"id":"ae108f830791618c5","branch":"slice/mappa","quando":"2026-08-16T03:22:29.530Z"}
+{"id":"a147b2d590f993238","chiuso":"morta con la sessione del 15/08 prima di produrre; slice/reasoning-budget senza commit, branch cancellato; il tema (eval nuovo modello dopo reasoning budget) resta in CODA","quando":"2026-08-16T03:22:29.629Z"}
+{"id":"a1c0162e0e40dcd9c","chiuso":"morta con la sessione del 15/08 prima di produrre; nessun branch; il confronto permessi e' entrato in ORCHESTRATION/JUDGE via altre slice","quando":"2026-08-16T03:22:29.710Z"}
+{"id":"a08590b1dde1ed4eb","chiuso":"morta con la sessione del 15/08 prima di produrre; slice/gate1-installazione senza commit, branch cancellato; l'inventario A1-A8 resta in M5-BIS","quando":"2026-08-16T03:22:29.790Z"}
+{"id":"task_74b3bb59","branch":"slice/vault-tier-pessimista","quando":"2026-08-16T03:22:29.860Z"}
+{"id":"task_4a02f3ea","branch":"slice/taint-non-si-lava-in-uscita","quando":"2026-08-16T03:22:29.957Z"}
+{"id":"ae14fe916b0f84a37","branch":"slice/superfici","quando":"2026-08-16T03:22:30.037Z"}
+{"id":"a52f18e2ae07067a4","chiuso":"valutazione consegnata e verificata dall'orchestratore: 3 integrate (doctor, vault max, reply-taint), 3 scartate (ADR-0039, slice/superfici, subset)","quando":"2026-08-16T03:22:30.122Z"}
+{"id":"ae14fe916b0f84a37","chiuso":"morta per session limit al turno 212 (opus); WIP salvato nel commit 44692fc su slice/superfici; ripresa dalla delega a9b64f35acab205f9","quando":"2026-08-16T03:22:41.210Z"}
+{"id":"a2e0ee68fb905b26d","chiuso":"morta per session limit al turno 141 (opus); WIP salvato nel commit 006fcfa su slice/memoria-nel-tempo; ripresa dalla delega a09e2486908a1323f","quando":"2026-08-16T03:22:41.256Z"}
+{"id":"acf9ffdddf9b1676c","chiuso":"morta per session limit al turno 128 (opus); WIP salvato nel commit a6b14d6 su slice/accettazione; ripresa dalla delega af85bb655859af839","quando":"2026-08-16T03:22:41.300Z"}

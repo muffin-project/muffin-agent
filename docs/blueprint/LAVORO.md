@@ -13,15 +13,13 @@
 
 **Inventario**: `M5-BIS.md` è autoritativo. DAY-1 parte a zero BLOCKER e zero `?`; niente conteggi copiati che possono invecchiare.
 
-**Non integrato**: accettazione E4 · turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 (worktree) · taint/Hermes (branch). Mai READY prima dell'accettazione.
+**Non integrato**: WIP pushato sui branch — turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 · accettazione E4 (deleghe in volo: `deleghe.mjs riprendi`) · PR #28 taint, #29 Hermes. Mai READY prima dell'acceptance.
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: PR #32 `dev`→`main` è `ADJUST`. PR #34 corregge anche il
-full-scan cross-tenant con `reindexPath` e fixture host+due gruppi: CI+judge,
-merge, poi judge nuovo su #32.
+**Checkpoint**: #32 `dev`→`main` mergiata. #28/#29 riallineate → judge → merge. Tre fix chip (doctor esiti · vault `max` · reply-taint) in slice proprie. Poi turno-sospeso sopra #28.
 
-**Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
+**Critica**: una garanzia è obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
 <!-- FINE BLOCCO -->
