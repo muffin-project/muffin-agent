@@ -309,21 +309,98 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     } else {
       const last = consolidation.last;
       const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
-      if (last.outcome === 'budget') {
-        warn(
-          'consolidamento',
-          `fermo dal ${when}: budget mensile esaurito`,
-          // The cap moved into the seal, so the remedy moved with it: telling the
-          // owner to edit config.json would now send them to a field that no
-          // longer exists.
-          'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
-        );
-      } else {
-        ok(
-          'consolidamento',
-          `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
-            `${last.facts} fatti · ${consolidation.runs} run in totale`,
-        );
+      // Nothing got through: every episode the extractor attempted failed *and*
+      // the batch added no fact. Three conjuncts, each load-bearing.
+      //
+      // `episodes` counts attempts, not successes (`ingest.ts` §`marked`), which
+      // is what makes it comparable to `errors` at all. A failed extraction is
+      // deliberately left unmarked so the next fire retries it — so a *minority*
+      // of errors is a lane that is healing itself, and escalating that to a
+      // non-zero exit would train the owner to ignore the line. What does not
+      // heal is a batch where nothing came through: those same episodes fail
+      // again next run, and again, forever (`ingest.ts` §`fetched`).
+      //
+      // `facts === 0` is not decoration. The maintenance sweep pushes its own
+      // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
+      // episode that succeeded and then tripped the sweep would otherwise land
+      // here reading as total failure — a warn over a batch that worked.
+      const nothingGotThrough =
+        last.episodes > 0 && last.errors >= last.episodes && last.facts === 0;
+
+      // `ConsolidationOutcome` is a closed union of four (`ran | budget | busy
+      // | error`); a `switch` with an exhaustive `default` is what makes a
+      // fifth outcome a compile error instead of a branch that silently falls
+      // into whichever case happens to sit last — the same guarantee
+      // `agent/loop.ts`'s `assertNever` gives its own switch, and
+      // `core/policy/decide.ts`'s `switch (decl.risk)` gets for free from its
+      // non-void return type; this one has to say so, since none of these
+      // branches return.
+      switch (last.outcome) {
+        case 'budget':
+          warn(
+            'consolidamento',
+            `fermo dal ${when}: budget mensile esaurito`,
+            // The cap moved into the seal, so the remedy moved with it: telling the
+            // owner to edit config.json would now send them to a field that no
+            // longer exists.
+            'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
+          );
+          break;
+        case 'error':
+          // The batch threw, so `execute` wrote a *blank* row — zero episodi, zero
+          // fatti, and the message only ever went to stderr. Printed through `ok`
+          // (as it was until this branch existed) that row read exactly like the
+          // quiet week above: same shape, same zeroes, green. Telling a dead lane
+          // from a quiet one is the single confusion this whole check exists to
+          // remove, so this is the one outcome that has to be a `fail`.
+          fail(
+            'consolidamento',
+            `ultimo giro ${when} (${last.trigger}) fallito: gli episodi non diventano fatti ` +
+              `e il recall resta solo-keyword · ${consolidation.runs} run in totale`,
+            "run `muffin memory extract`: rifà il giro in primo piano e stampa l'errore, che la riga non conserva",
+          );
+          break;
+        case 'ran':
+        case 'busy': {
+          if (nothingGotThrough) {
+            // Unreachable on `busy`: that outcome never accumulates episodes
+            // (`ingest.ts` returns before touching `pendingEpisodes` once the
+            // lock refuses), so this branch is a `ran`-only concern in
+            // practice even though the case is shared.
+            warn(
+              'consolidamento',
+              `ultimo giro ${when} (${last.trigger}) · ${last.errors} errori su ${last.episodes} episodi: ` +
+                `il giro è andato a vuoto e quegli episodi tornano al prossimo · ${consolidation.runs} run in totale`,
+              'run `muffin memory extract`: rifà il giro in primo piano e stampa ogni errore per esteso',
+            );
+            break;
+          }
+          ok(
+            'consolidamento',
+            `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
+              `${last.facts} fatti · ${consolidation.runs} run in totale` +
+              // Named even when the verdict stays green, which was the defect: a
+              // third of a batch could fail to extract and the owner read a line
+              // with nothing on it but the successes. `muffin memory stats` had
+              // been surfacing its own error count for exactly this reason
+              // (`reviewLine`); this line had not.
+              //
+              // Gated to `ran`: on `busy`, `last.errors` is the lock-refusal
+              // message `ingest.ts` pushes onto `report.errors` when
+              // `acquireIngestLock` refuses, not a per-episode extraction
+              // failure — every `busy` row has `errors >= 1`, so without this
+              // gate a lock refusal always read as "N falliti" on a run that
+              // never attempted a single episode.
+              (last.outcome === 'ran' && last.errors > 0
+                ? ` · ${last.errors} falliti, riprovati al prossimo giro`
+                : ''),
+          );
+          break;
+        }
+        default: {
+          const _exhaustive: never = last.outcome;
+          throw new Error(`consolidamento: esito non gestito (${_exhaustive})`);
+        }
       }
     }
 
