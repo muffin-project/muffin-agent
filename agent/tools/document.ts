@@ -68,6 +68,13 @@ export function makeDocumentTool(vault: Vault, store: MemoryStore): RegisteredTo
   return {
     capability: documentCapability.id,
     spec: documentReadSpec,
+    // `throwTier: 0` — `readDocument` never intentionally throws with a
+    // document's own text; `vault.document()` and `portionOf()` carry no
+    // `throw` of their own (checked: neither module has one), so an escape
+    // here would be a storage/internal error, and the stored text itself only
+    // ever leaves through the fenced `return` inside `readDocument`, tiered to
+    // the document's own worst recorded tier there.
+    throwTier: 0,
     handler: (args, ctx) => readDocument(vault, store, ctx.tenant, args),
   };
 }
@@ -80,7 +87,7 @@ export async function readDocument(
 ): Promise<ToolOutcome> {
   const { path, da, a } = (args ?? {}) as { path?: unknown; da?: unknown; a?: unknown };
   if (typeof path !== 'string' || path.trim() === '') {
-    return { content: 'document_read richiede "path" non vuoto.', isError: true };
+    return { content: 'document_read richiede "path" non vuoto.', isError: true, tier: 0 };
   }
 
   const document = await vault.document(tenantId, path.trim());
@@ -94,6 +101,7 @@ export async function readDocument(
         `Non ho un documento leggibile a "${path}" in questa memoria. ` +
         'Usa memory_search per trovare come si chiama davvero.',
       isError: true,
+      tier: 0,
     };
   }
 
