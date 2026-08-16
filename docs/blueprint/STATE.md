@@ -37,6 +37,7 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
+Attiva: **PR #30**, `slice/agente-continuo`→`dev`, commit `ed46bc8`, draft.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -533,6 +534,10 @@ loop, turn store, gateway, policy, memory e surface; gli artefatti generati sono
 ignorati da git. Il report non è un certificato: segnala 553 archi con endpoint
 non risolto, quindi il grafo resta utile per navigazione ma non autorizza claim
 di copertura completa.
+
+Checkpoint pubblicato: commit `ed46bc8` su `slice/agente-continuo`, draft PR
+**#30** verso `dev`. Non è stata fusa: il checkpoint successivo è un judge nuovo
+con verdetto terminale, non l'esistenza della PR.
 
 ## Sessioni 2026-08-09
 
