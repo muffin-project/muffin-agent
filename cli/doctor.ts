@@ -309,6 +309,23 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     } else {
       const last = consolidation.last;
       const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
+      // Nothing got through: every episode the extractor attempted failed *and*
+      // the batch added no fact. Three conjuncts, each load-bearing.
+      //
+      // `episodes` counts attempts, not successes (`ingest.ts` §`marked`), which
+      // is what makes it comparable to `errors` at all. A failed extraction is
+      // deliberately left unmarked so the next fire retries it — so a *minority*
+      // of errors is a lane that is healing itself, and escalating that to a
+      // non-zero exit would train the owner to ignore the line. What does not
+      // heal is a batch where nothing came through: those same episodes fail
+      // again next run, and again, forever (`ingest.ts` §`fetched`).
+      //
+      // `facts === 0` is not decoration. The maintenance sweep pushes its own
+      // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
+      // episode that succeeded and then tripped the sweep would otherwise land
+      // here reading as total failure — a warn over a batch that worked.
+      const nothingGotThrough =
+        last.episodes > 0 && last.errors >= last.episodes && last.facts === 0;
       if (last.outcome === 'budget') {
         warn(
           'consolidamento',
@@ -318,11 +335,37 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
           // longer exists.
           'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
         );
+      } else if (last.outcome === 'error') {
+        // The batch threw, so `execute` wrote a *blank* row — zero episodi, zero
+        // fatti, and the message only ever went to stderr. Printed through `ok`
+        // (as it was until this branch existed) that row read exactly like the
+        // quiet week above: same shape, same zeroes, green. Telling a dead lane
+        // from a quiet one is the single confusion this whole check exists to
+        // remove, so this is the one outcome that has to be a `fail`.
+        fail(
+          'consolidamento',
+          `ultimo giro ${when} (${last.trigger}) fallito: gli episodi non diventano fatti ` +
+            `e il recall resta solo-keyword · ${consolidation.runs} run in totale`,
+          "run `muffin memory extract`: rifà il giro in primo piano e stampa l'errore, che la riga non conserva",
+        );
+      } else if (nothingGotThrough) {
+        warn(
+          'consolidamento',
+          `ultimo giro ${when} (${last.trigger}) · ${last.errors} errori su ${last.episodes} episodi: ` +
+            `il giro è andato a vuoto e quegli episodi tornano al prossimo · ${consolidation.runs} run in totale`,
+          'run `muffin memory extract`: rifà il giro in primo piano e stampa ogni errore per esteso',
+        );
       } else {
         ok(
           'consolidamento',
           `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
-            `${last.facts} fatti · ${consolidation.runs} run in totale`,
+            `${last.facts} fatti · ${consolidation.runs} run in totale` +
+            // Named even when the verdict stays green, which was the defect: a
+            // third of a batch could fail to extract and the owner read a line
+            // with nothing on it but the successes. `muffin memory stats` had
+            // been surfacing its own error count for exactly this reason
+            // (`reviewLine`); this line had not.
+            (last.errors > 0 ? ` · ${last.errors} falliti, riprovati al prossimo giro` : ''),
         );
       }
     }
