@@ -71,102 +71,102 @@
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 345,
+    "line": 361,
     "testo": "// Permissions, taint and *which context this turn gets* are resolved before"
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 349,
+    "line": 365,
     "testo": "const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant);"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 367,
+    "line": 383,
     "testo": "recoveriesUsed,"
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 380,
+    "line": 396,
     "testo": "* point of the failure path. The alternative — start anyway and record later"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 381,
+    "line": 397,
     "testo": "* — is a log of what already happened, and the property being bought is that"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 384,
+    "line": 400,
     "testo": "* Above the episode write below it, deliberately, and the two are not in"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 392,
+    "line": 408,
     "testo": "* later, carries the assembled context."
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 403,
+    "line": 419,
     "testo": "model: deps.model,"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 373,
+    "line": 358,
     "testo": "});"
   },
   "agent/loop.ts:402": {
     "path": "agent/loop.ts",
-    "line": 413,
+    "line": 429,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 457,
+    "line": 473,
     "testo": "// What this turn is shown, decided from who is speaking and where — never"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 482,
+    "line": 498,
     "testo": "// process that dies here would otherwise take with it — the transcript,"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 495,
+    "line": 511,
     "testo": "// `tool_use` keeps its `tool_result` and the request stays well-formed."
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 511,
+    "line": 527,
     "testo": "...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 517,
+    "line": 533,
     "testo": "// frontier.json matches, on the config `muffin init` writes by default."
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 550,
+    "line": 566,
     "testo": "// Two failures wearing one type, and they take different doors."
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 557,
+    "line": 573,
     "testo": "// `transport` is a 429 or a 502, and it gets its own budget: the"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 558,
+    "line": 574,
     "testo": "// recovery cascade lives in the profile because a weak model needs more"
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 569,
+    "line": 585,
     "testo": "// are throttled at once and would otherwise retry in lockstep."
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 572,
+    "line": 588,
     "testo": "continue;"
   },
   "agent/loop.ts:56": {
@@ -176,12 +176,12 @@
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 603,
+    "line": 619,
     "testo": "[ATTR.usageInputTokens]: result.usage.inputTokens,"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 624,
+    "line": 640,
     "testo": "// The completion gate: did the answer describe a call this turn never"
   },
   "agent/loop.ts:62": {
@@ -191,87 +191,87 @@
   },
   "agent/loop.ts:660": {
     "path": "agent/loop.ts",
-    "line": 689,
+    "line": 731,
     "testo": "// may legitimately have none (openai-compat says so with `[]`), not"
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 725,
+    "line": 767,
     "testo": "messages.push({ role: 'user', content: results });"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 798,
+    "line": 840,
     "testo": "* the answer, and a background lane that can turn a good turn into an"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 806,
+    "line": 848,
     "testo": "} catch {"
   },
   "agent/loop.ts:783": {
     "path": "agent/loop.ts",
-    "line": 812,
+    "line": 854,
     "testo": "* One step down the cascade the profile declared, or false when it is spent."
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 821,
+    "line": 863,
     "testo": "* Not the same mechanism as the completion gate below, which nudges once when"
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 827,
+    "line": 869,
     "testo": "if (strategy === undefined) return false;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 805,
+    "line": 847,
     "testo": "deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 846,
+    "line": 888,
     "testo": "used: TurnResult['usage'],"
   },
   "agent/loop.ts:823": {
     "path": "agent/loop.ts",
-    "line": 852,
+    "line": 894,
     "testo": "closeRecord(stopped);"
   },
   "agent/loop.ts:825": {
     "path": "agent/loop.ts",
-    "line": 854,
+    "line": 896,
     "testo": "// Last thing before the return, so the span is closed and the result is"
   },
   "agent/loop.ts:867": {
     "path": "agent/loop.ts",
-    "line": 896,
+    "line": 949,
     "testo": "// which is both a lie and the kernel branch going quietly unexercised."
   },
   "agent/loop.ts:888": {
     "path": "agent/loop.ts",
-    "line": 917,
+    "line": 970,
     "testo": "// The kernel decides on a *resource*, so anything it is supposed to gate has"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 918,
+    "line": 971,
     "testo": "// to be lifted out of the args here. `url` was missing, and the consequence"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 954,
+    "line": 1007,
     "testo": "case 'deny':"
   },
   "agent/loop.ts:936": {
     "path": "agent/loop.ts",
-    "line": 965,
+    "line": 1018,
     "testo": "// allow was the kernel emitting a verdict nobody implemented, which is"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 958,
+    "line": 962,
     "testo": "toolCallId: call.id,"
   },
   "agent/observe-run.ts:104": {
@@ -1621,7 +1621,7 @@
   },
   "core/memory/store.ts:709": {
     "path": "core/memory/store.ts",
-    "line": 709,
+    "line": 724,
     "testo": "episodeById(tenantId: string, id: number): Episode | null {"
   },
   "core/memory/vectors.ts:106": {
@@ -2151,7 +2151,7 @@
   },
   "docs/blueprint/M5-BIS.md:219": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 219,
+    "line": 229,
     "testo": "|---|---|---|---|"
   },
   "executor.ts:112": {
@@ -2261,122 +2261,122 @@
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 338,
+    "line": 354,
     "testo": "[ATTR.principalKind]: input.principal.kind,"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 381,
+    "line": 397,
     "testo": "* — is a log of what already happened, and the property being bought is that"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 384,
+    "line": 400,
     "testo": "* Above the episode write below it, deliberately, and the two are not in"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 458,
+    "line": 474,
     "testo": "// from what they said. Filter first, cap second: `slice` on registration"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 460,
+    "line": 476,
     "testo": "// tools the kernel is going to refuse this principal anyway."
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 420,
+    "line": 436,
     "testo": "content: input.text,"
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 513,
+    "line": 529,
     "testo": "// The profile decides both, and until this slice neither reached the"
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 514,
+    "line": 530,
     "testo": "// wire: `thinking` was declared in every profile and passed by nobody"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 537,
+    "line": 553,
     "testo": "};"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 550,
+    "line": 566,
     "testo": "// Two failures wearing one type, and they take different doors."
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 603,
+    "line": 619,
     "testo": "[ATTR.usageInputTokens]: result.usage.inputTokens,"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 606,
+    "line": 622,
     "testo": "// The attribute existed with zero writers while the adapter hardcoded"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 631,
+    "line": 647,
     "testo": "// nothing of it), it answers a false-success rate measured on every"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 749,
+    "line": 763,
     "testo": "}"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 776,
+    "line": 818,
     "testo": "function closeRecord(outcome: TurnResult['stopped']): void {"
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 798,
+    "line": 840,
     "testo": "* the answer, and a background lane that can turn a good turn into an"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 806,
+    "line": 848,
     "testo": "} catch {"
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 821,
+    "line": 863,
     "testo": "* Not the same mechanism as the completion gate below, which nudges once when"
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 835,
+    "line": 877,
     "testo": "'muffin.recovery.strategy': strategy,"
   },
   "loop.ts:824": {
     "path": "agent/loop.ts",
-    "line": 853,
+    "line": 895,
     "testo": "span.end({ status: stopped === 'error' ? 'error' : 'ok' });"
   },
   "loop.ts:825": {
     "path": "agent/loop.ts",
-    "line": 854,
+    "line": 896,
     "testo": "// Last thing before the return, so the span is closed and the result is"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 871,
+    "line": 924,
     "testo": "* whatever depended on the branch nobody wrote. If it is somehow still"
   },
   "loop.ts:867": {
     "path": "agent/loop.ts",
-    "line": 896,
+    "line": 949,
     "testo": "// which is both a lie and the kernel branch going quietly unexercised."
   },
   "loop.ts:936": {
     "path": "agent/loop.ts",
-    "line": 965,
+    "line": 1018,
     "testo": "// allow was the kernel emitting a verdict nobody implemented, which is"
   },
   "maintenance.ts:21": {
@@ -2706,7 +2706,7 @@
   },
   "store.ts:657": {
     "path": "core/memory/store.ts",
-    "line": 657,
+    "line": 672,
     "testo": "provenanceOf("
   },
   "tracer.ts:94": {
