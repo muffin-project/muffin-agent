@@ -200,6 +200,16 @@ ancora verificato — **è un debito, non uno stato**).
 > che obblighi ogni futura surface a fare lo stesso e che impedisca a bio,
 > filename, metadata, OCR o trascrizioni di entrare come stringhe senza fonte.
 
+> 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
+> `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
+> Hermes Agent letta contro il nostro codice. Quel documento non aggiunge solo
+> righe: **cambia la forma del rimedio** di B2 (il turno non va reso asincrono
+> — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`
+> cancella il payload *intero* mentre ogni cap sotto è testa+coda — è un difetto,
+> non una mancanza), di D2/D3 (*non chiedere, fotografare*) e di E1 (contare
+> l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
+> riga per riga cosa sposta.
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
@@ -328,6 +338,35 @@ per tenant. Il criterio di completamento dei `todo` è una query sulle righe, ma
 il modello che si dichiara finito: **finito = nessun passo `pending` o `retry`**,
 e la frase è scritta nel contesto perché è l'unico posto dove il modello legge
 del piano.
+
+> 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
+> §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
+>
+> **Chi decide il `wait`.** Non il modello dentro il turno — lì la decisione è
+> tainted come tutto il resto e attaccabile per injection. Un giudice *fuori* dal
+> turno che legge il registro dei processi vivi (che è fatto nostro, non testo di
+> un terzo: `agent/tools/process.ts` esiste già e non è mai stato collegato a una
+> decisione di controllo) e restituisce `done | continue | wait`, con tre forme di
+> barriera: pid, sessione+pattern, tempo. **Fail-open**: giudice rotto ⇒
+> `continue`, e il freno vero resta il budget di turni.
+>
+> **Un invariante che non avevamo scritto.** *Una barriera scaduta non può mai
+> incastrare il loop*: pid già morto, pid che muore mentre si aspetta, scadenza
+> passata ⇒ la barriera si libera al controllo successivo. Lo stesso pattern del
+> lock del gateway (stale dopo 10 battiti, qualunque sia il pid) mai
+> generalizzato.
+>
+> **Dove vive la durevolezza.** Hermes divide: ciò che è legato a una sessione
+> persiste lo *stato* ma serve un processo vivo per *scattare*; ciò che deve
+> sopravvivere a tutto va nello scheduler. Per noi la divisione costa meno che
+> per loro, perché ADR-0035 ha già deciso che un processo che vive esiste — a
+> patto che un `waiting` orfano si veda al boot, come già fa la riga
+> `interrupted` di ADR-0042.
+>
+> E su `todo`: la loro risposta **non è un tool `todo`**. È un obiettivo
+> persistente + criteri aggiungibili a metà corsa + **gate deterministici** —
+> un comando che deve uscire 0 prima che un giudice venga anche solo chiamato.
+> Il pezzo che fa terminare il ciclo è il gate, non lo stato del todo.
 
 ## §3 · La direzione oltre il Gate 1 non allarga il Gate 1
 
