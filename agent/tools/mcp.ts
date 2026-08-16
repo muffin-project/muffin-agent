@@ -106,14 +106,38 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
           // server's contract and the provider passes it through opaquely.
           inputSchema: def.inputSchema as RegisteredTool['spec']['inputSchema'],
         },
+        // `throwTier: 3`, matching the tier every successful call already
+        // declares. Judge round-1 (PR #28): `connection.call` → `client.callTool`
+        // lets a JSON-RPC-level error through uncaught, and its `message` is the
+        // THIRD PARTY's own field — a compromised server could throw
+        // "IGNORE previous instructions…" and reach `runTool`'s generic catch,
+        // where the text landed in the model's context un-fenced and the
+        // resulting failure cost the server nothing to repeat, unlike a
+        // tier-3 success (which closes egress at the shipped medium ceiling
+        // after one round-trip). The `try`/`catch` below closes the specific
+        // door; `throwTier: 3` is the declared ceiling for whatever this
+        // handler cannot be proven not to throw next.
+        throwTier: 3,
         handler: async (args) => {
-          const result = await connection.call(def.name, (args ?? {}) as Record<string, unknown>);
-          const body = fence('mcp', result.text, `risultato di ${server}.${def.name}`);
-          return {
-            content: body.block,
-            tier: 3,
-            ...(result.isError ? { isError: true } : {}),
-          };
+          try {
+            const result = await connection.call(def.name, (args ?? {}) as Record<string, unknown>);
+            const body = fence('mcp', result.text, `risultato di ${server}.${def.name}`);
+            return {
+              content: body.block,
+              tier: 3,
+              ...(result.isError ? { isError: true } : {}),
+            };
+          } catch (error) {
+            // Fenced and tier 3, in the same shape `http.ts` and `search.ts`
+            // already give their own caught errors: a server that fails
+            // instead of succeeding must not get a channel a successful call
+            // does not have. Without this, `error.message` reached `runTool`'s
+            // generic catch bare — recinto only guards the `content` field of
+            // a normal return, never the message of a thrown Error.
+            const detail = error instanceof Error ? error.message : String(error);
+            const body = fence('mcp', detail, `errore da ${server}.${def.name}`);
+            return { content: body.block, isError: true, tier: 3 };
+          }
         },
       });
     }

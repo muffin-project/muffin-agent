@@ -89,6 +89,16 @@ export function makeSendFileTool(deps: SendFileDeps): RegisteredTool {
   return {
     capability: sendFileCapability.id,
     spec: sendFileToolSpec,
+    // `throwTier` (ADR-0044, required since dev's PR #28) is the tier a
+    // *thrown* failure from this handler would drag in. It never does: every
+    // exit below is a returned `ToolOutcome`, including the `try/catch` around
+    // `resolveInScope`, and `deps.deliverFile` is `SurfaceRegistry.deliverFile`
+    // in production, which itself catches an implementation that throws and
+    // converts it to `{delivered:false}` (`core/surface/registry.ts`). What
+    // this handler can throw is therefore only its own words — a path echoed
+    // back, a validation message — never a byte read from outside it, so 0 is
+    // the correct answer, not a placeholder pending a redesign.
+    throwTier: 0,
     handler: async (args, ctx): Promise<ToolOutcome> => {
       const parsed = sendFileArgs.safeParse(args);
       if (!parsed.success) {

@@ -55,7 +55,7 @@ export async function searchMemory(
 ): Promise<ToolOutcome> {
   const { query, limit } = (args ?? {}) as { query?: unknown; limit?: unknown };
   if (typeof query !== 'string' || query.trim() === '') {
-    return { content: 'memory_search richiede "query" non vuota.', isError: true };
+    return { content: 'memory_search richiede "query" non vuota.', isError: true, tier: 0 };
   }
 
   const result = await recall(deps, tenantId, query, {
@@ -67,6 +67,10 @@ export async function searchMemory(
     // tell "I have no memory of this" apart from "the tool broke".
     return {
       content: `Nessun ricordo per "${query}". Strategie usate: ${result.strategies.join(', ')}.`,
+      // No memory came back, so nothing came in. The max below is over an empty
+      // set and would say 0 anyway; saying it here keeps the two paths from
+      // being read as one having been forgotten.
+      tier: 0,
     };
   }
 

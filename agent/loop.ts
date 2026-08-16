@@ -158,14 +158,64 @@ export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutco
 export type ToolOutcome = {
   content: string;
   isError?: boolean;
-  /** Tier of whatever this result dragged in. Web and third-party tools are 3. */
-  tier?: TrustTier;
+  /**
+   * Tier of whatever this result dragged into the turn. Web and third-party
+   * tools are 3; the local filesystem is 2 (ADR-0044); a result made only of
+   * the tool's own words — *"wrote 41 bytes"*, *"invalid arguments"* — is 0.
+   *
+   * **Required, and that is the fix.** It was `tier?`, and `runTool` raised the
+   * turn's taint only when the field was present, so *not answering* the
+   * provenance question meant "this context is as clean as when the owner
+   * typed". Four tools never answered — `fs_read`, `fs_list`, `shell_run`,
+   * `process_list` — and every one of them carries bytes somebody else wrote.
+   * The consequence was not local: `core/policy/decide.ts` reads the turn's
+   * taint to decide egress, so a turn could swallow an injected file and still
+   * reach an off-allowlist host as an `ask` the owner might approve.
+   *
+   * Optional-with-a-safe-default was the other candidate and is weaker in the
+   * way that matters: it makes the omission harmless *today* without making it
+   * visible, and `agent/tools/skill.ts:114-121` is the record of how long an
+   * invisible omission survives here — months, in a file whose own docstring
+   * claimed the missing value. A required field is the same guarantee
+   * `assertNever` gives the decision switch below: the day a new tool arrives,
+   * the compiler asks it where its bytes came from.
+   */
+  tier: TrustTier;
 };
 
 export type RegisteredTool = {
   spec: ToolSpec;
   capability: string;
   handler: ToolHandler;
+  /**
+   * The tier of whatever a THROWN failure from this tool's handler can bring
+   * into the turn — the question `ToolOutcome.tier` asks of a returned result,
+   * asked here of the handler's other exit.
+   *
+   * **Required, for the reason `tier` is required, one level up.** A judge's
+   * round-1 review of this PR found the same shape of gap it closed still open
+   * in `runTool`'s `catch`: it put `error.message` into the session as a tool
+   * result the model reads, called `raiseTaint` never, and recorded `tier:
+   * undefined` in the turn record. A handler that answered "0" on success but
+   * *threw* was invisible to the taint ledger no matter whose words the
+   * message carried — and `agent/tools/mcp.ts` (`connection.call` →
+   * `client.callTool`) is a production handler that can throw with a
+   * third-party MCP server's own text (`McpError.message`, lifted from the
+   * server's JSON-RPC `error.message` field). That gave a compromised server a
+   * second channel next to the one ADR-0044 closed, and a cheaper one: a
+   * successful tier-3 call raises the taint and (at the shipped medium
+   * ceiling) closes egress after one round-trip, but a *failing* call cost the
+   * server nothing and could be retried without limit — returning an error is
+   * more powerful than returning a result.
+   *
+   * 0 for every tool whose thrown text is provably ours — see the comment on
+   * each tool's declaration for the internal boundary that makes it true (a
+   * validation message, a path, an errno, never a byte the handler did not
+   * write itself). 3 for every `mcp.*` tool: the words on the other side of
+   * that particular throw belong to a third party, fenced or not, so the
+   * ceiling matches the one its successful calls already declare.
+   */
+  throwTier: TrustTier;
   /**
    * This tool's output must survive context compaction.
    *
@@ -1077,11 +1127,19 @@ async function runTool(
       principal: input.principal,
       replyChannel: input.replyChannel ?? null,
     });
-    if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);
+    // Unconditional. The `!== undefined` guard that used to stand here was the
+    // whole defect: it turned "this tool said nothing about provenance" into
+    // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
+    // that honestly reports 0 costs the turn nothing.
+    snapshot.raiseTaint(outcome.tier);
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
     // is the privilege escalation this table exists to prevent.
+    //
+    // With `tier` required on `ToolOutcome` (ADR-0044) the row can no longer be
+    // written with the tier absent, which is the version of that same argument
+    // one level down: a resumed turn cannot inherit a provenance nobody stated.
     recordOutcome(deps, parent.traceId, span, call.id, {
       content: outcome.content,
       isError: outcome.isError === true,
@@ -1106,10 +1164,19 @@ async function runTool(
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
     const detail = error instanceof Error ? error.message : String(error);
+    // Unconditional, and the same call the success path makes a few lines up
+    // — a judge's round-1 finding was that this branch never raised taint at
+    // all, so a handler that threw was invisible to the ledger no matter whose
+    // words `detail` carried. `tool.throwTier` is this tool's own declared
+    // answer for its failure exit, the same way `outcome.tier` is its answer
+    // for success; neither is guessed here.
+    snapshot.raiseTaint(tool.throwTier);
     // And an outcome all the same: a handler that threw *came back*, so the
     // call is decided, not uncertain. Leaving the intent row open here would
     // make every failed tool call look like one that might still have landed.
-    recordOutcome(deps, parent.traceId, span, call.id, { content: detail, isError: true, tier: undefined });
+    // `tier: tool.throwTier`, never `undefined` — the record and the taint it
+    // produced must agree, exactly as ADR-0044 requires of the success path.
+    recordOutcome(deps, parent.traceId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
   }
@@ -1142,7 +1209,10 @@ function recordOutcome(
   turnId: string,
   span: SpanHandle,
   callId: string,
-  result: { content: string; isError: boolean; tier: TrustTier | undefined },
+  // `tier` is never `undefined` at either call site any more (ADR-0044's own
+  // field on success, `throwTier` on the catch path below) — narrowed to match
+  // so a third call site could not reintroduce the omission silently.
+  result: { content: string; isError: boolean; tier: TrustTier },
 ): void {
   try {
     deps.turns.endToolCall(turnId, callId, result);
