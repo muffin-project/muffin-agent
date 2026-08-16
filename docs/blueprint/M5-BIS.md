@@ -179,13 +179,52 @@ ancora verificato — **è un debito, non uno stato**).
 | C1 | Memory write | Ogni informazione importante viene acquisita? | ? |
 | C2 | Extraction | L'estrazione è automatica? | READY (ADR-0038) |
 | C3 | Consolidation | Si consolida senza intervento? | READY (ADR-0040) |
-| C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
+| C4 | Recall | Ripesca il vecchio **e** il superseded? | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) ⚠️ nota sotto |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
-| C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
+| C6 | Temporal graph | «Chi era X a maggio» | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) |
 | C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
 | C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
 | C10 | World state | Distingue ciò che vale adesso da episodi, credenze e lavoro? | OUT — post-Gate 1, consumer prima dello schema (ADR-0045) |
+
+> **C4/C6, cosa vuol dire `READY` qui.** `--history` era già stato corretto per
+> i fatti sul solo hop grafo (`d66765d`, già in `dev` prima di questa slice); il
+> gap reale era più stretto di quanto la riga dicesse, ma restava su tre punti:
+> il lato episodi di `--history`, `asOf` come primitiva unica al posto di due
+> manopole, e l'intera C6 (data/superficie/vicinato). Un parametro solo,
+> `asOf: string | 'all' | undefined`, attraversa `recall()` — non un flag in
+> più, la rimozione di una costante (`expired_at IS NULL`/`superseded_at IS
+> NULL`) che nessun chiamante poteva muovere. `factsAsOf`/`nearestFactTo`
+> (`core/memory/store.ts`) rispondono a «chi era X a maggio» dentro le
+> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e
+> vicinato sono le due primitive di `02-ontologia.md` §9, cablate sia in
+> `muffin memory search` sia nel tool `memory_search` che il modello raggiunge
+> — quest'ultimo era il cablaggio mancante reale: lo schema dichiarava
+> `as_of`/`history`/`surface`/`since`/`until`/`around` e l'handler leggeva solo
+> `query`/`limit`. Un fatto superseded torna etichettato con successore e
+> finestra `valid_from → valid_to`, mai come corrente; una domanda temporale
+> fuori portata risponde con una lacuna esplicita invece del presente. Tre
+> percorsi di fallimento espliciti (data malformata, finestra `since`>`until`,
+> `asOf` nel futuro) condivisi da CLI e tool via `checkTemporalWindow`. Un
+> invariante a 60 combinazioni (`asOf`×`surface`×`since/until`×`neighbours`)
+> prova che un fatto ritirato non torna mai attivo; isolamento cross-tenant
+> verificato sul vicinato e sulla modalità storia. Ogni test nuovo verificato
+> **rosso** prima del fix (PRACTICES §5). Dettaglio in `docs/lessons.md`
+> («Una garanzia che regge su due percorsi e non sul terzo non è una
+> garanzia»).
+>
+> ⚠️ **Trovato lavorandoci, non nel mandato originale.** Il mezzo semantico di
+> `recall()` non aveva mai letto `expired_at`: un fatto o un episodio ritirato,
+> una volta indicizzato per vettori, resta trovabile per significato per
+> sempre (niente si ri-indicizza al supersede), e tornava **senza** la marca
+> `expired` su **qualunque** ricerca semanticamente vicina — non solo sotto
+> `--history`. Misurato: 60/60 combinazioni prima del fix, 0/60 dopo. Corretto
+> leggendo il fatto intero via `factById` invece di una seconda query di
+> provenienza più stretta, con la stessa regola `successorOf` del hop grafo
+> (una sola, letta da due punti). `(surface, date_range)` sul mezzo semantico
+> vale solo per gli episodi, mai per i fatti — per costruzione, coerente con
+> `02-ontologia.md` §9 che nomina il filtro come proprietà dell'evidenza, non
+> del grafo.
 
 > **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
 > piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
