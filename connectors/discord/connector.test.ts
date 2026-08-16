@@ -9,6 +9,7 @@ import { DiscordInbox } from './inbox.js';
 import { runInit } from '../../cli/init.js';
 import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
+import { makeWaitTool } from '../../agent/tools/wait.js';
 import type { Provider } from '../../agent/providers/types.js';
 import { CONSERVATIVE } from '../../agent/profiles/profile.js';
 import { SessionStore } from '../../core/session/store.js';
@@ -116,7 +117,7 @@ describe('who is speaking', () => {
   });
 });
 
-function harness(over: { attachment?: { filename: string; content: string } } = {}) {
+function harness(over: { attachment?: { filename: string; content: string }; suspend?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-discord-connector-'));
   const sent: { channelId: string; text: string }[] = [];
   const delivered: [string, DeliveryState][] = [];
@@ -131,20 +132,23 @@ function harness(over: { attachment?: { filename: string; content: string } } = 
     download: async () => Buffer.from(over.attachment?.content ?? ''),
   } as unknown as DiscordApi;
 
+  const turns = fakeTurns(delivered);
   const loop = {
     provider: {
       kind: 'openai-compat' as const,
       chat: async () => ({
-        text: 'fatto',
-        toolCalls: [],
-        stopReason: 'end' as const,
+        // `suspend`: the model asks to wait on its first call, which parks the
+        // turn inside `runTurn` (`stopped: 'suspended'`, empty text).
+        text: over.suspend ? '' : 'fatto',
+        toolCalls: over.suspend ? [{ id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto' } }] : [],
+        stopReason: over.suspend ? ('tool_use' as const) : ('end' as const),
         usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
         model: 't',
       }),
     },
     profile: CONSERVATIVE,
     model: 't',
-    tools: [],
+    tools: over.suspend ? [makeWaitTool(turns)] : [],
     decide: () => ({ effect: 'allow' as const }),
     // A fresh id per call, not a shared constant: `deps.turns.create` now
     // persists a row keyed by `traceId` (`slice/turno-sospeso`), and `turns`
@@ -152,7 +156,7 @@ function harness(over: { attachment?: { filename: string; content: string } } = 
     // moment a real `TurnStore` sat behind this fake.
     tracer: { start: () => ({ traceId: randomUUID(), setAttributes: () => {}, end: () => {} }) },
     sessions: new SessionStore(home),
-    turns: fakeTurns(delivered),
+    turns,
     todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'x', group: 'x' },
@@ -194,6 +198,16 @@ describe('handling a DM end to end', () => {
     expect(h.sent).toEqual([{ channelId: '42', text: 'fatto' }]);
     expect(h.delivered).toHaveLength(1);
     expect(h.delivered[0]?.[1]).toBe('sent');
+  });
+
+  it('a suspended turn sends nothing and is not marked delivered', async () => {
+    // Before the guard: `renderForDiscord('')` is `['(risposta vuota)']`, so a
+    // parked turn produced a phantom reply and a `sent` record — found by the
+    // integrated judge of the dev→main promotion (#44), between #41 and #42.
+    const h = harness({ suspend: true });
+    await deliver(h, [{ id: '1', channel_id: '42', channel_type: 1, author: { id: OWNER, bot: false }, content: 'aspetta' }]);
+    expect(h.sent).toEqual([]);
+    expect(h.delivered.map(([, state]) => state)).not.toContain('sent');
   });
 
   it('ingests an attachment into the vault before the turn runs, tagged with the sender tenant', async () => {

@@ -375,6 +375,15 @@ export class TelegramConnector {
         replyChannel: `telegram:${incoming.chatId}`,
       });
 
+      // A suspended turn has produced nothing to deliver. Rendering `''` would
+      // send an empty message (`renderForTelegram('')` is `['']`) and record
+      // `sent` on a turn that has not answered — the owner would read it as the
+      // answer. The placeholder stays as the truth of the moment, and the lane's
+      // `deliverTo` replaces it when the turn resumes: the mirror of the guard
+      // `agent/turn-lane.ts` already has on the resume path. Found by the
+      // integrated judge of the dev→main promotion (#44), between #41 and #42.
+      if (result.stopped === 'suspended') return;
+
       try {
         const parts = renderForTelegram(result.text);
         for (const [i, part] of parts.entries()) {
