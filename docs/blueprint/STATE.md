@@ -44,9 +44,12 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
 Integrate: **PR #30/#31/#33** in `dev`. **PR #32** `dev`→`main` ha ricevuto
-`ADJUST` sul delta completo. Le cinque correzioni viaggiano nella draft
-**PR #34** `slice/adjust-main-promotion`→`dev`; richiede CI verde e un judge
-nuovo prima del merge. Solo dopo PR #32 riceve una verifica integrata nuova.
+`ADJUST` sul delta completo. Le cinque correzioni viaggiano nella
+**PR #34** `slice/adjust-main-promotion`→`dev`. Il primo judge della PR ha
+trovato un residuo cross-tenant: il tenant era propagato, ma l'arrivo chiamava
+il full scan del vault condiviso. La head usa ora `reindexPath` e una fixture con
+host + due gruppi; richiede CI verde e un judge nuovo prima del merge. Solo dopo
+PR #32 riceve una verifica integrata nuova.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -563,6 +566,13 @@ senza bound sull'output, parti DOCX fuori dal corpo perse, symlink esterni
 indicizzati ma non rileggibili e `riprendi` che su errore GitHub dichiarava
 riapribile lavoro già fuso. La correzione viaggia su una slice separata; PR #32
 resta non autorizzata finché un judge nuovo non segue l'insieme corretto.
+
+Il primo judge della correzione ha trovato la seconda metà del difetto tenant:
+`reindex(tenant)` scansionava ogni file della directory condivisa, quindi un
+allegato di gruppo importava anche note host e file di altri gruppi. L'ingresso
+ora chiama `reindexPath(tenant, savedPath)`; il full scan resta manutenzione.
+La prova integrata prepara tre domini nello stesso vault e diventa rossa se il
+cablaggio di produzione torna alla scansione completa.
 
 ## Sessioni 2026-08-09
 

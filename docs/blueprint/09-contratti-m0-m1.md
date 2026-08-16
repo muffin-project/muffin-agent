@@ -192,6 +192,15 @@ JSON (non YAML: parsing senza dipendenze, niente ambiguità di tipo; i commenti 
 - **Secrets**: default **file cifrato age** `~/.muffin/secrets/secrets.age` (portabile, headless-safe, uguale su macOS e Linux — il Keychain è opt-in perché su sessione SSH il dialog di sistema blocca, C6); passphrase chiesta a `init` e tenuta in memoria dal runtime, oppure chiave in `~/.muffin/secrets/key.txt` `0400` per l'avvio non presidiato (trade-off dichiarato). Riferimento in config: `"apiKey": "secret://anthropic_api_key"`.
 - **Directory (K5)**: non è XDG-multi-dir: è **una** cartella `~/.muffin/` (override `MUFFIN_HOME`). Il termine "XDG-compatibile" negli altri documenti va letto come "rispetta `XDG_CONFIG_HOME` se impostata per collocare la cartella", non come "sparge i dati in tre posti". Motivo: backup/export/cancellazione GDPR = un percorso.
 
+**Contratto d'ingresso del vault.** La directory dei byte è condivisa, la
+visibilità dell'indice no. Un producer che ha appena acquisito un file invoca
+`reindexPath(tenantId, vaultPath, tier)`: il path deve essere canonico, interno
+al vault e nomina l'unico file che può entrare nel tenant. `reindex(tenantId)`
+enumera l'intera directory e ritira gli assenti; è riservato a un comando di
+manutenzione che intende davvero riconciliare l'intero tenant. I due contratti
+non sono intercambiabili: un tenant corretto applicato al source-set sbagliato
+è comunque una violazione cross-tenant.
+
 > **Emendamento 2026-08-13 (ADR-0039) — l'unica eccezione a K5, dichiarata.** Un
 > segreto può stare anche in `$XDG_CONFIG_HOME/muffin/secrets/<nome>` (dir
 > `0700`, file `0600`), e la risoluzione è una catena ordinata: prima

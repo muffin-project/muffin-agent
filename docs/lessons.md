@@ -701,6 +701,20 @@ chat, so it proved the hardcode. **Instead:** the connector-vault boundary takes
 observes the group store, proves the host store empty, and reopens the document
 through the actual tool.
 
+## The right tenant does not repair the wrong source set
+
+After carrying `tenantId` correctly, attachment ingress still called the full
+vault reconciliation. That operation enumerated a shared physical directory,
+so a group member sending one file caused private host notes and another
+group's files to be indexed into the caller's tenant. The first integration
+fixture had an otherwise empty vault and could not observe the leak.
+
+**Instead:** arrivals call `reindexPath(tenantId, savedPath)` and full `reindex`
+is reserved for explicit maintenance. The production-path test begins with a
+host note and a second group's attachment already present, then asserts search
+and drill-down isolation in every direction. Scope belongs to the source set as
+well as the destination identity.
+
 ## A compressed input limit is not an output limit
 
 The vault refused files above 20 MB and still allowed a tiny DOCX to expand

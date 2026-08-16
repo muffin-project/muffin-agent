@@ -66,6 +66,23 @@ describe('vault', () => {
     expect(second).toMatchObject({ unchanged: 1, added: 0, updated: 0, chunks: 0 });
   });
 
+  it('indexes one named path without granting that tenant the rest of the vault', async () => {
+    const f = fixture();
+    write(f.root, 'private.md', '# Private\n\nOWNERONLY\n');
+    write(f.root, 'existing.md', '# Existing\n\nSTILLTHERE\n');
+    write(f.root, 'incoming.md', '# Incoming\n\nGROUPONLY\n');
+    await f.vault.reindexPath('group:telegram:7', 'existing.md', { now: NOW });
+
+    const report = await f.vault.reindexPath('group:telegram:7', 'incoming.md', { now: NOW });
+
+    expect(report).toMatchObject({ scanned: 1, added: 1, removed: 0 });
+    expect(f.store.searchEpisodes('group:telegram:7', 'GROUPONLY')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'STILLTHERE')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'OWNERONLY')).toHaveLength(0);
+    expect(await f.vault.reindexPath('group:telegram:7', '../private.md', { now: NOW }))
+      .toMatchObject({ scanned: 0, added: 0, skipped: [{ path: '../private.md' }] });
+  });
+
   it('actually reindexes a changed file — the failure every comparable system has', async () => {
     const f = fixture();
     write(f.root, 'a.md', '# A\n\nprima versione\n');
@@ -287,9 +304,8 @@ describe('a PDF in the vault', () => {
   });
 
   it('does not re-parse an unchanged document, and does not call it drift', async () => {
-    // Every Telegram attachment reindexes the whole vault. If "has this changed"
-    // cost a PDF parse, a vault with fifty documents would parse fifty of them
-    // on every message.
+    // Full maintenance scans still need to make "has this changed" cheap. File
+    // arrivals use reindexPath and never enumerate the other forty-nine.
     const f = fixture();
     writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
     await f.vault.reindex(HOST, { now: NOW });

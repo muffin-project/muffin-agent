@@ -70,7 +70,7 @@ export type ConnectorDeps = {
    */
   vault?: {
     root: string;
-    reindex: (tenantId: string, defaultTier: TrustTier) => Promise<{
+    reindexPath: (tenantId: string, vaultPath: string, defaultTier: TrustTier) => Promise<{
       skipped: { path: string; why: string }[];
       /** What went in, and the compact view of each. See `core/vault/vault.ts`. */
       documents: { path: string; outline: string }[];
@@ -415,7 +415,7 @@ export class TelegramConnector {
       // The tenant resolved from the authenticated sender travels with the
       // bytes. Using a surface-wide `host` here indexed group documents into
       // the owner's private memory, then made document_read fail in the group.
-      const report = await this.deps.vault.reindex(tenantId, tier);
+      const report = await this.deps.vault.reindexPath(tenantId, saved.vaultPath, tier);
       const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
       if (skipped) {
         return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;

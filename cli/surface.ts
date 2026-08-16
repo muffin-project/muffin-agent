@@ -272,8 +272,11 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
 export function telegramVault(runtime: Runtime, root: string): NonNullable<ConnectorDeps['vault']> {
   return {
     root,
-    reindex: (tenantId, defaultTier) =>
-      runtime.vault.reindex(tenantId, { defaultTier, vectors: runtime.memory.recall.vectors }),
+    reindexPath: (tenantId, vaultPath, defaultTier) =>
+      runtime.vault.reindexPath(tenantId, vaultPath, {
+        defaultTier,
+        vectors: runtime.memory.recall.vectors,
+      }),
   };
 }
 
