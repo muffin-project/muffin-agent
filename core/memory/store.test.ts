@@ -297,4 +297,34 @@ describe('memory store', () => {
     );
     expect(s.stats(HOST).pending).toBe(0);
   });
+
+  it('attribuisce a un file del vault il tier della sua prova peggiore, non della migliore', () => {
+    // A document is only as trustworthy as its worst chunk. `min()` reported the
+    // opposite — a tier-3 web import sitting next to one owner-grade chunk was
+    // displayed as tier 0 — and the whole point of the tier is that it never
+    // rises. `maxTierForContent` and `recallTaint` already take the maximum for
+    // exactly this reason; this aggregate was the one place that disagreed.
+    const s = store();
+    const chunk = (tier: 0 | 1 | 2 | 3, content: string) =>
+      s.addEpisode({
+        tenantId: HOST,
+        connector: 'vault',
+        threadKey: 'note.md',
+        role: 'user',
+        kind: 'document',
+        content,
+        vaultPath: 'note.md',
+        trustTier: tier,
+        createdAt: '2026-08-04T10:00:00Z',
+      });
+    // Mixed live chunks under one path are reachable: `reindex` writes the new
+    // chunks inside the loop and only supersedes the old ones after it, so a
+    // crash in between leaves both generations live under the same file.
+    chunk(0, 'scritto da me');
+    chunk(3, 'incollato dal web');
+
+    const row = s.vaultPaths(HOST).find((v) => v.vaultPath === 'note.md');
+    expect(row?.chunks).toBe(2);
+    expect(row?.trustTier).toBe(3);
+  });
 });
