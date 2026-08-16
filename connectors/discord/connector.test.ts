@@ -277,3 +277,48 @@ describe('concurrency — two dispatches close together (D2)', () => {
     expect(inbox.pending()).toHaveLength(0); // both settled, nothing stranded
   });
 });
+
+describe('boundary — a malformed payload never reaches the model (U1)', () => {
+  it('discards a message whose id arrived as a number instead of a Discord snowflake string', async () => {
+    // A real snowflake this large already lost precision the moment
+    // `JSON.parse` read it as a bare number literal, before any type ever
+    // looked at it — `data as DiscordMessage` / `JSON.parse(...) as
+    // DiscordMessage` let it through typed `string` while it was, at
+    // runtime, never one. `DiscordMessageSchema` requires `z.string()` and
+    // does not coerce, so this payload fails validation instead of being
+    // silently promoted with a corrupted id.
+    const h = harness();
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    const corrupted = {
+      id: 111111111111111111,
+      channel_id: '42',
+      channel_type: 1,
+      author: { id: OWNER, bot: false },
+      content: 'ciao',
+    };
+    inbox.accept('corrupted-1', corrupted, new Date().toISOString());
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+
+    expect(h.sent).toEqual([]); // never answered — never reached parseMessage/handle
+    expect(inbox.pending()).toHaveLength(0); // marked processed, not retried forever
+  });
+
+  it('still answers a message whose id is a real, correctly-quoted large snowflake', async () => {
+    // The schema must reject a numeric id without over-rejecting the normal
+    // case: a real snowflake routinely exceeds Number.MAX_SAFE_INTEGER and is
+    // still a perfectly ordinary string.
+    const h = harness();
+    const inbox = (h.connector as unknown as { deps: { inbox: DiscordInbox } }).deps.inbox;
+    const big: DiscordMessage = {
+      id: '111111111111111111',
+      channel_id: '42',
+      channel_type: 1,
+      author: { id: OWNER, bot: false },
+      content: 'ciao',
+    };
+    inbox.accept(big.id, big, new Date().toISOString());
+    await (h.connector as unknown as { drain: () => Promise<void> }).drain();
+
+    expect(h.sent).toEqual([{ channelId: '42', text: 'fatto' }]);
+  });
+});
