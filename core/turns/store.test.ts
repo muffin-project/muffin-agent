@@ -217,7 +217,7 @@ describe('the reader a surface with only a database can use', () => {
     const empty = new DatabaseCtor(':memory:');
     expect(readTurnHealth(empty)).toBeNull();
     new TurnStore(empty);
-    expect(readTurnHealth(empty)).toEqual({ total: 0, interrupted: [] });
+    expect(readTurnHealth(empty)).toEqual({ total: 0, waiting: { count: 0, oldestWakeAt: null }, interrupted: [] });
   });
 
   it('sees a crash nobody has reclaimed yet — the state a diagnosis is run in', () => {

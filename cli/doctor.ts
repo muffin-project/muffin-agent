@@ -358,10 +358,37 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       warn(
         'turni',
         `${turns.total} registrati · ${turns.interrupted.length} interrotti — ${describeInterrupted(turns.interrupted[0]!)}`,
-        'non esiste ancora un resume: se una di quelle chiamate aveva effetti sul mondo, controllali a mano',
+        // The old text said "non esiste ancora un resume". It did not survive
+        // the slice that built one, and a remedy that tells the owner to go and
+        // do by hand something the runtime now does is worse than no remedy: it
+        // sends them to repeat an effect the record exists to avoid repeating.
+        'il gateway li riprende alla prossima corsia; una chiamata non ri-eseguibile non viene rifatta e viene dichiarata — se aveva effetti sul mondo, verificali',
       );
     } else {
       ok('turni', `${turns.total} registrati · nessuno interrotto`);
+    }
+
+    /**
+     * A suspended turn is only a promise while something is running the lane.
+     *
+     * The two facts are useless apart, which is why they are read together: N
+     * turns at `waiting` is normal and healthy on a machine with a gateway, and
+     * is *work nobody will ever wake* on one without. Only the REPL and `muffin
+     * run` can produce the second state — neither owns a lane (ADR-0035) — and
+     * before this line nothing anywhere said so.
+     */
+    if (turns !== null && turns.waiting.count > 0) {
+      const oldest = turns.waiting.oldestWakeAt;
+      const due = oldest === null ? '' : ` · il più vecchio scade ${oldest.slice(0, 16).replace('T', ' ')}`;
+      if (readGateway(db) === null) {
+        warn(
+          'turni sospesi',
+          `${turns.waiting.count} in attesa e nessun gateway attivo: non li sveglia nessuno${due}`,
+          'avvia il gateway (`muffin gateway install`, o `muffin gateway run` per vederlo) — la corsia dei turni gira solo lì',
+        );
+      } else {
+        ok('turni sospesi', `${turns.waiting.count} in attesa · li riprende il gateway${due}`);
+      }
     }
 
     // Is anything running? Same shape of invisible fact as the cache dialect

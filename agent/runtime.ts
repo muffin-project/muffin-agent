@@ -203,13 +203,39 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
    * pending, and the restart re-runs the whole turn — **tool calls and their
    * effects included** — with nothing anywhere saying that it did.
    *
-   * It reclaims, it does not resume: rows go to `interrupted`, never to
-   * `runnable`. Promising a resume that does not exist would be worse than the
-   * silence it replaces.
+   * It reclaims, it does not resume: rows go to `interrupted`, never straight to
+   * `runnable`. The split is the point — marking happens at boot in **every**
+   * process that opens the home, resuming happens in the one process that owns
+   * the lane (`core/turns/lane.ts`). Merging them would resume a turn inside
+   * `buildRuntime`, i.e. inside `muffin doctor`.
+   *
+   * (This comment used to end "promising a resume that does not exist would be
+   * worse than the silence it replaces". A resume exists now; the sentence was
+   * left behind by the slice that built it, which is exactly how a comment
+   * becomes a lie a reader has no way to catch.)
    */
   const turnNotes = turns
     .reclaim()
     .map((t) => `! ${describeInterrupted(t)}`);
+
+  /**
+   * Turns suspended with nobody to wake them, named at boot for the same reason
+   * interrupted ones are.
+   *
+   * Only the surfaces that do **not** own a lane can produce this state — the
+   * REPL and `muffin run` both stand down for the gateway (ADR-0035) — so it is
+   * precisely the owner running Muffin from a terminal who would otherwise wait
+   * for an answer that no process is coming back to give.
+   */
+  const waitingNotes = ((): string[] => {
+    const { waiting } = turns.health({ windowMs: 0 });
+    if (waiting.count === 0) return [];
+    const due = waiting.oldestWakeAt === null ? '' : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
+    return [
+      `! ${waiting.count} turni sospesi in attesa di risveglio${due} — li riprende la corsia del gateway, ` +
+        `\`muffin doctor\` dice se ne sta girando uno`,
+    ];
+  })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
@@ -529,6 +555,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     safeMode,
     bootLines: [
       ...turnNotes,
+      ...waitingNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,

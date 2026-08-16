@@ -396,102 +396,102 @@
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 249,
+    "line": 275,
     "testo": "const light = lightLane(provider, {"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 304,
+    "line": 330,
     "testo": "const guards = mandatoryGuards(home, cwd);"
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 306,
+    "line": 332,
     "testo": "const tools: RegisteredTool[] = ["
   },
   "agent/runtime.ts:261": {
     "path": "agent/runtime.ts",
-    "line": 307,
+    "line": 333,
     "testo": "{"
   },
   "agent/runtime.ts:262": {
     "path": "agent/runtime.ts",
-    "line": 308,
+    "line": 334,
     "testo": "capability: 'fs.read',"
   },
   "agent/runtime.ts:266": {
     "path": "agent/runtime.ts",
-    "line": 307,
+    "line": 333,
     "testo": "{"
   },
   "agent/runtime.ts:271": {
     "path": "agent/runtime.ts",
-    "line": 307,
+    "line": 333,
     "testo": "{"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 307,
+    "line": 333,
     "testo": "{"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 368,
+    "line": 394,
     "testo": "const executor = new SandboxExecutor(guards);"
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 377,
+    "line": 403,
     "testo": "tools.push(...makeProcessTools());"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 382,
+    "line": 408,
     "testo": "const skillScan = discoverSkills(home);"
   },
   "agent/runtime.ts:316": {
     "path": "agent/runtime.ts",
-    "line": 383,
+    "line": 409,
     "testo": "tools.push(makeSkillTool(skillScan.skills));"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 394,
+    "line": 420,
     "testo": "tools.push(makeHttpTool(egress));"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 400,
+    "line": 426,
     "testo": "let searchOn = false;"
   },
   "agent/runtime.ts:455": {
     "path": "agent/runtime.ts",
-    "line": 530,
+    "line": 556,
     "testo": "bootLines: ["
   },
   "agent/runtime.ts:490": {
     "path": "agent/runtime.ts",
-    "line": 575,
+    "line": 602,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 579,
+    "line": 606,
     "testo": "systemPrompts: buildSystemPrompts("
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 582,
+    "line": 609,
     "testo": "skillsPromptSection(skillScan.skills),"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 610,
+    "line": 637,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 618,
+    "line": 645,
     "testo": "runtime.onClose(() => attachment.close());"
   },
   "agent/scheduler-run.ts:31": {
@@ -2646,37 +2646,37 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 330,
+    "line": 356,
     "testo": "handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),"
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 416,
+    "line": 442,
     "testo": "searchNotes.push("
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 459,
+    "line": 485,
     "testo": "...(searchOn ? [searchCapability] : []),"
   },
   "runtime.ts:456": {
     "path": "agent/runtime.ts",
-    "line": 532,
+    "line": 559,
     "testo": "...skillScan.problems.map((p) => `! ${p}`),"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 540,
+    "line": 567,
     "testo": "register: (tool, decl) => {"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 610,
+    "line": 637,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 616,
+    "line": 643,
     "testo": "for (const t of tool) runtime.register(t, decl);"
   },
   "runtime.ts:98": {
