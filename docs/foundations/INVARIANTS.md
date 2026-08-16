@@ -1,5 +1,14 @@
 # Invarianti architetturali
 
+> **Stato: CORPUS EREDITATO dal vecchio Muffin, non contratto normativo del
+> runtime corrente.** Nomi di tabelle, path e claim di implementazione qui sotto
+> descrivono il sistema precedente e possono essere superati. I princìpi vivi
+> sono curati in `docs/blueprint/knowledge/`; le garanzie eseguibili correnti
+> sono in `docs/blueprint/03-threat-model.md`,
+> `docs/blueprint/09-contratti-m0-m1.md` e nei test. ADR-0045 aggiunge la
+> continuità dell'agente come direzione senza retroattivamente dichiarare
+> implementati gli schemi di questo documento.
+
 Questo documento elenca gli **invarianti di costruzione** del sistema Muffin: scelte schema-level e di contratto che ogni intervento successivo deve rispettare. Sono cose diverse da:
 
 - **Principi metodologici** (`foundations/PRINCIPLES.md`) — come ragionare sul sistema

@@ -29,6 +29,15 @@ Oggi cambiare la forma di un turno non rompe nessuno: niente è pubblico, niente
 quello che oggi è una riscrittura di un pomeriggio diventa una migrazione con
 deprecazioni.
 
+**DAY-1 READY è il fondo dell'inventario, non una sensazione.** Il contatore dei
+quattordici giorni parte solo con zero `BLOCKER` e zero `?` in questo inventario
+e con l'accettazione sulla vera installazione dell'owner. Durante quei giorni il
+repo continua a cambiare e i gruppi si costruiscono in parallelo; l'attivazione
+dei gruppi aspetta il termine della finestra. Escluderli dall'esperienza non
+esclude la loro architettura: ogni lavoro del giorno 1 conserva tenant,
+principal, provenance, taint e capability come assi variabili, mai `host` come
+forma nascosta.
+
 **Conseguenza pratica sull'inventario**: le righe che sono **decisioni di forma**
 vengono prima di quelle che sono **aggiunte di feature**, anche quando una
 feature si sente di più. Un turno che non sa sospendersi è una forma; un parser
@@ -114,6 +123,8 @@ ancora verificato — **è un debito, non uno stato**).
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
 | B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | BLOCKER 🔭 — `sendDocument` scritto, nessun chiamante |
+| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — Telegram usa `from.id`, ma il binding è config ordinaria e il registry multi-surface non è integrato |
+| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — envelope universale assente; parse non significa trusted |
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
 > `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
@@ -142,23 +153,34 @@ ancora verificato — **è un debito, non uno stato**).
 >
 > Restano marcate con la loro provenienza invece di essere assorbite in silenzio.
 > Il punto dell'inventario non è essere completo al primo colpo — nessuna lista
-> lo è. Il punto è che una lacuna, quando qualcuno la vede, **entri**. Ricerca in
-> corso: `research/superfici-e-streaming.md`.
+> lo è. Il punto è che una lacuna, quando qualcuno la vede, **entri**. La prima
+> stesura rimandava a `research/superfici-e-streaming.md`, ma quel file non
+> esiste in `dev`: il worktree `slice/superfici` contiene codice in corso, non
+> l'istruttoria promessa. Il buco resta dichiarato invece di fingere il link.
+
+> 🔭 **Le righe col cannocchiale vengono dal confronto esterno con Hermes**, già
+> persistito su `slice/hermes` e riletto insieme alla conversazione owner del
+> 2026-08-16. Un audit che confronta il codice solo coi nostri documenti non può
+> trovare ciò che non abbiamo mai scritto. Queste righe restano aperte finché il
+> relativo branch non è integrato e verificato: una ricerca su un altro branch
+> non è una feature in `dev`.
+
+> 🔐 **B15 e B16 vengono dalla direttiva owner del 2026-08-16 (ADR-0046).** Sono
+> due garanzie diverse: autenticare chi parla non rende fidato ciò che porta, e
+> parsare un contenuto non lo rende sicuro. Il test di impersonazione Telegram
+> prova già che display name e chat non eleggono l'owner; manca ancora la forma
+> che obblighi ogni futura surface a fare lo stesso e che impedisca a bio,
+> filename, metadata, OCR o trascrizioni di entrare come stringhe senza fonte.
 
 > 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
 > `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
-> Hermes Agent letta contro il nostro codice. Sono **B13**, **B14**, **C9**,
-> **D11**, **E6**, ed esistono per la ragione scritta in `ORCHESTRATION.md` §13:
-> un audit che confronta il codice **coi nostri stessi documenti** è cieco a ciò
-> che non abbiamo mai pensato. B11 e B12 ci erano sfuggite così; queste cinque
-> sarebbero sfuggite allo stesso modo.
->
-> Quel documento non aggiunge solo righe: **cambia la forma del rimedio** di
-> B2 (il turno non va reso asincrono — serve un canale di progresso ortogonale),
-> di B12 (`agent/context/compact.ts:90` cancella il payload *intero* mentre ogni
-> cap sotto è testa+coda — è un difetto, non una mancanza), di D2/D3 (*non
-> chiedere, fotografare*) e di E1 (contare l'atto patologico costa meno che
-> stimare i token). Il §5 di quel file elenca riga per riga cosa sposta.
+> Hermes Agent letta contro il nostro codice. Quel documento non aggiunge solo
+> righe: **cambia la forma del rimedio** di B2 (il turno non va reso asincrono
+> — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`
+> cancella il payload *intero* mentre ogni cap sotto è testa+coda — è un difetto,
+> non una mancanza), di D2/D3 (*non chiedere, fotografare*) e di E1 (contare
+> l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
+> riga per riga cosa sposta.
 
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
@@ -170,9 +192,36 @@ ancora verificato — **è un debito, non uno stato**).
 | C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
 | C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
-| C7 | PDF | Acquisisce documenti utili? | BLOCKER — nessun parser |
+| C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
 | C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
+| C10 | World state | Distingue ciò che vale adesso da episodi, credenze e lavoro? | OUT — post-Gate 1, consumer prima dello schema (ADR-0045) |
+
+> **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
+> piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
+> percorso vero ci arriva: allegato Telegram → `vault/inbox/` → `reindexPath` →
+> episodi `kind='document'`, nello stesso tenant risolto dal connector. Il turno
+> di gruppo riapre il proprio documento e `host` non lo vede; l'ingresso non
+> enumera il vault condiviso, quindi non importa nel gruppo note host o allegati
+> di un altro gruppo. Il turno riceve
+> una **vista compatta** — indice delle pagine + `document_read` per riaprirne una dal file — invece del
+> documento intero. Provato end-to-end in
+> `connectors/telegram/document-arrival.test.ts` con PDF veri costruiti byte per
+> byte; il test parte anche da due chat di gruppo con una nota host già presente
+> e osserva isolamento dello store in tutte le direzioni, oltre al tool result.
+> Per DOCX il corpo e le parti OOXML collegate (header, footer, note, commenti)
+> restano nominate; la decompressione ha un bound indipendente dalla dimensione
+> dichiarata nello ZIP. I symlink esterni sono esclusi con motivo visibile,
+> perché non offrirebbero una fonte stabile a `document_read`.
+>
+> ⚠️ **Il limite, dichiarato invece che scoperto dopo.** Un PDF di sole
+> scansioni non ha testo da estrarre: **fallisce in modo esplicito** («PDF senza
+> testo selezionabile: N pagine di sola immagine… qui non c'è OCR») e non viene
+> mai indicizzato come documento vuoto. L'OCR resta fuori scopo — quando entrerà,
+> è una riga nuova di questo inventario, non una correzione silenziosa di questa.
+> Insieme all'OCR resta fuori la **struttura visiva**: due colonne e le celle di
+> una tabella arrivano come testo di seguito (misurato in ADR-0043), il contenuto
+> tutto, la forma no.
 
 ### D · Capability e sicurezza → `gate1/d-capability.md`
 
@@ -188,7 +237,7 @@ ancora verificato — **è un debito, non uno stato**).
 | D8 | MCP | Gestisce drift e revoca? | ? — pinning solo all'attach |
 | D9 | Skills | Scopre e usa le skill? | ? |
 | D10 | Security | Nessuna capability escape? | ? |
-| D11 | Checkpoint | Esiste uno **snapshot prima di ogni mutazione**, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
+| D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
 
 ### E · Economia e osservabilità → `gate1/e-osservabilita.md`
 
@@ -199,7 +248,7 @@ ancora verificato — **è un debito, non uno stato**).
 | E3 | Tracing | Posso ricostruire cosa è successo? | ? |
 | E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
-| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 subagent? | ? 🔭 |
+| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | ? 🔭 |
 
 ---
 
@@ -228,17 +277,13 @@ Oggi il kernel ne ha tre (`allow` / `draft` / `ask` / `deny`) e `draft` non è
 eseguibile da nessun percorso. Il disegno va fatto **dopo** aver letto ADR,
 threat model e i contratti di capability — non prima.
 
-> 🔭 **Un modello funzionante esiste già, fuori** — `research/hermes-documentazione.md`
-> §3.7 (2026-08-15). La forma è più semplice di come l'avevamo scritta:
-> **non chiedere, fotografare.** Snapshot in un repo git ombra condiviso *prima*
-> di ogni mutazione (file tool e comandi shell distruttivi), al massimo uno per
-> directory per turno, e il ripristino disfa **anche l'ultimo turno di
-> conversazione** — altrimenti il contesto dell'agente e il filesystem divergono.
-> La riga «reversibile ma potenzialmente distruttivo» smette così di collassare
-> su `allow`. Tre vincoli nostri da rispettare prima di adottarlo (dati solo in
-> `~/.muffin/`, la caduta dei commit sotto il cap va **dichiarata** e tracciata,
-> il kernel resta puro: il checkpoint è un *effetto* di `draft`, mai un ingresso
-> di `Decide`) sono scritti lì.
+Il confronto Hermes aggiunge una forma concreta: **non chiedere, fotografare**.
+Uno snapshot prima della mutazione può rendere eseguibile `draft` senza
+trasformarlo in `allow`, e il ripristino deve riallineare filesystem **e turno**
+o il contesto continuerà a credere in un effetto che è stato annullato. È una
+traccia di disegno, non una feature acquisita: deve ancora rispettare il vincolo
+che i dati vivono solo in `~/.muffin/`, dichiarare quando il checkpoint non può
+essere creato e lasciare il kernel puro.
 
 ## §2 · `wait` e `todo` sono primitive del runtime, non tool
 
@@ -251,6 +296,13 @@ async molto lunga, ed è precisamente la differenza fra un Muffin vivo e un
 Muffin lanciato da terminale. Stessa cosa per `todo`: il modello operativo non è
 `goal → turn → done` ma `goal → plan → todo{done|blocked|waiting|retry|pending}
 → resume`.
+
+Il lavoro non si chiude aggiungendo due tool al menu. `wait` deve avere una
+barriera durevole con scadenza che non può incastrare il loop; `todo` deve essere
+letto dal turno successivo e accompagnato da un criterio deterministico di
+completamento. Il worktree `slice/turno-sospeso` contiene un'implementazione in
+corso, non committata: finché non passa integrazione, cablaggio e accettazione,
+B2–B5 restano BLOCKER.
 
 > 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
 > §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
@@ -280,6 +332,24 @@ Muffin lanciato da terminale. Stessa cosa per `todo`: il modello operativo non �
 > persistente + criteri aggiungibili a metà corsa + **gate deterministici** —
 > un comando che deve uscire 0 prima che un giudice venga anche solo chiamato.
 > Il pezzo che fa terminare il ciclo è il gate, non lo stato del todo.
+
+## §3 · La direzione oltre il Gate 1 non allarga il Gate 1
+
+ADR-0045 nomina l'agente continuo, la presenza, il world state e l'autonomia
+guadagnata. ADR-0046 fissa il confine di ogni surface. Non sono una scusa per
+aggiungere adesso hardware, un trust score o una tabella generica. Il Gate 1
+compra la continuità operativa necessaria a vivere quattordici giorni; l'uso
+reale decide poi quale interfaccia sostituire.
+
+Tre confini restano già decisi:
+
+- world state è distinto da episodi, credenze e stato del lavoro, ma aspetta un
+  consumer prima dello schema;
+- un device è una surface dello stesso agente, mai una seconda memoria o policy;
+- una surface separa identità autenticata e contenuto: nessun metadata elegge
+  l'owner, ogni campo model-visible è parsato, provenanced e tainted;
+- l'autonomia futura comprime supervisione per capability/risorsa/contesto su
+  evidenza osservabile; non indebolisce il kernel, il taint o il Root of Trust.
 
 ---
 
