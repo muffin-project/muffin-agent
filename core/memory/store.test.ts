@@ -90,6 +90,24 @@ describe('memory store', () => {
     expect(hits[0]?.content).toContain('Serra');
   });
 
+  it("U2: factsAsOf never returns another tenant's facts, even handed its raw subject id directly", () => {
+    // Defence in depth, deliberately not routed through `entitiesByName` —
+    // that method already filters by tenant, so a test built on it would
+    // never notice `factsAsOf` losing its own `f.tenant_id = ?` clause. The
+    // raw id is what a caller with a bug somewhere else could still hand in,
+    // and this method's own WHERE clause has to be the line that holds anyway.
+    const s = store();
+    const groupSubject = s.upsertEntity(GROUP, 'Marco', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, GROUP, 'nota di gruppo');
+    s.addFact({
+      tenantId: GROUP, subjectId: groupSubject, predicate: 'claims', objectValue: 'IBAN XX',
+      episodeId: ep, trustTier: 2, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+    });
+
+    const leaked = s.factsAsOf(HOST, groupSubject, '2026-08-04T10:00:00Z');
+    expect(leaked).toHaveLength(0);
+  });
+
   it('accumulates set-valued predicates instead of expiring the previous one', () => {
     // The exact regression the old system had: a second interest silently
     // retired the first. Accumulating wrongly is visible; deleting wrongly is not.

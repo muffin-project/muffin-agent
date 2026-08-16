@@ -84,8 +84,8 @@
       "n": 5,
       "id": "recall",
       "title": "Il recupero di memoria gira e puo' alzare la taint",
-      "file": "agent/loop.ts:289-314; core/memory/recall.ts:160-276",
-      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita', limitato a 8 elementi di default (recall.ts:166), poi eventualmente re-ranka. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:293), recintato come contesto a bassa autorita'. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato.",
+      "file": "agent/loop.ts:289-314; core/memory/recall.ts:369-643",
+      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita' (quest'ultimo su tre selettori — ora, storia, o un istante passato via asOf — mai un quarto), limitato a 8 elementi di default (recall.ts:375), poi eventualmente re-ranka e attacca il vicinato in coda. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:675), recintato come contesto a bassa autorita'; una domanda temporale a cui il grafo non arriva rientra come lacuna esplicita, mai come il presente. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato.",
       "taint": "puo' salire fino al trustTier massimo tra gli elementi recuperati (0-3) — loop.ts:299-300",
       "branches": [
         {
@@ -234,7 +234,7 @@
       "title": "Handler eseguito, risultato accodato, il loop riparte",
       "file": "agent/loop.ts:823-847, 592",
       "what": "Su allow (o ask approvato), l'handler del tool gira con {tenant, principal} presi dal turno reale (mai cablati alla registrazione); il suo esito puo' alzare la taint dello snapshot (es. tier 3 per risultati web/terze parti); il risultato viene accodato al log della sessione e alla lista tool_result del turno. Dopo che tutte le chiamate del batch sono finite, i risultati vengono accodati come un unico messaggio utente e il loop itera di nuovo.",
-      "taint": "sale sempre a outcome.tier, che ogni tool DEVE dichiarare (campo obbligatorio, ADR-0044): 3 web/mcp, 2 disco (fs_read, fs_list, stdout di shell_run), 1 process_list e skill_read, 0 quando il risultato sono parole del tool — loop.ts:825, 134-136",
+      "taint": "sale sempre a outcome.tier, che ogni tool DEVE dichiarare (campo obbligatorio, ADR-0044): 3 web/mcp, 2 disco (fs_read, fs_list, stdout di shell_run), 1 process_list e skill_read, 0 quando il risultato sono parole del tool — loop.ts:1093, 134-136",
       "branches": [
         {
           "cond": "AbortSignal scatta tra una tool call e l'altra dentro un batch",
@@ -314,8 +314,8 @@
       },
       {
         "name": "memoria recuperata (recall)",
-        "source": "core/memory/recall.ts:160-276, invocato da agent/loop.ts:289-314",
-        "budget": "8 elementi di default (recall.ts:166), ognuno troncato a 400 caratteri nel rendering (recall.ts:293)"
+        "source": "core/memory/recall.ts:369-643, invocato da agent/loop.ts:289-314",
+        "budget": "8 elementi di default (recall.ts:375), ognuno troncato a 400 caratteri nel rendering (recall.ts:675)"
       },
       {
         "name": "messaggio utente corrente",
