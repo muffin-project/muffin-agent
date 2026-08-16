@@ -237,6 +237,24 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     ];
   })();
 
+  /**
+   * Turns that answered with nobody to tell, named at boot for the same
+   * reason `waitingNotes` is (D2, judge round 2).
+   *
+   * `agent/turn-lane.ts` writes `delivery = 'undeliverable'` on the row the
+   * moment it happens, but the process that resumed the turn is not
+   * necessarily the process an owner is watching — a gateway with no
+   * terminal writes this to a journal nobody tails. `bootLines` is read by
+   * every surface (`muffin run`, the REPL, the gateway) before its first
+   * turn, which is what makes this the second, durable notice next to
+   * `muffin doctor`'s own.
+   */
+  const undeliverableNotes = ((): string[] => {
+    const { undeliverable } = turns.health({ windowMs: 0 });
+    if (undeliverable.count === 0) return [];
+    return [`! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`];
+  })();
+
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
     config.provider.kind === 'anthropic'
@@ -566,6 +584,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     bootLines: [
       ...turnNotes,
       ...waitingNotes,
+      ...undeliverableNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,
