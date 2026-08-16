@@ -17,6 +17,7 @@ import {
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
+import { normaliseDate } from '../core/memory/recall.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
@@ -481,7 +482,15 @@ async function cmdMemory(argv: string[]): Promise<number> {
   if (sub === 'search') {
     const { values, positionals } = parseArgs({
       args: rest,
-      options: { n: { type: 'string', short: 'n' }, history: { type: 'boolean' } },
+      options: {
+        n: { type: 'string', short: 'n' },
+        history: { type: 'boolean' },
+        'as-of': { type: 'string' },
+        surface: { type: 'string' },
+        since: { type: 'string' },
+        until: { type: 'string' },
+        around: { type: 'string' },
+      },
       allowPositionals: true,
     });
     const query = positionals.join(' ').trim();
@@ -489,9 +498,31 @@ async function cmdMemory(argv: string[]): Promise<number> {
       process.stderr.write(`usage: muffin memory search "<query>"\n`);
       return 78;
     }
+    // Parsed here rather than deeper down, and rejected rather than coerced: a
+    // date SQLite cannot compare turns every temporal predicate false, and the
+    // search would come back empty looking like "I never knew that" instead of
+    // like "you typed a date I cannot read".
+    const asOf = normaliseDate(values['as-of'], 'end');
+    const since = normaliseDate(values.since, 'start');
+    const until = normaliseDate(values.until, 'end');
+    for (const [flag, raw, parsed] of [
+      ['--as-of', values['as-of'], asOf],
+      ['--since', values.since, since],
+      ['--until', values.until, until],
+    ] as const) {
+      if (raw !== undefined && parsed === undefined) {
+        process.stderr.write(`${flag}: "${raw}" non è una data leggibile (usa 2026-05 o 2026-05-14)\n`);
+        return 78;
+      }
+    }
     return cmdMemorySearch(home, query, {
       ...(values.n ? { limit: Number(values.n) } : {}),
       ...(values.history ? { history: true } : {}),
+      ...(asOf ? { asOf } : {}),
+      ...(values.surface ? { surface: values.surface } : {}),
+      ...(since ? { since } : {}),
+      ...(until ? { until } : {}),
+      ...(values.around ? { around: Number(values.around) } : {}),
     });
   }
 
