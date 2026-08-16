@@ -1,6 +1,9 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Principal } from '../policy/types.js';
+import { Scheduler } from '../scheduler/scheduler.js';
+import { JobStore } from '../scheduler/jobs.js';
+import { ModelLane } from './model-lane.js';
 import { TurnLane, type LaneEvent } from './lane.js';
 import { TurnStore, type NewTurn } from './store.js';
 import { encodeWaitFor } from './wait.js';
@@ -270,5 +273,111 @@ describe('una corsia sola, e non si incastra', () => {
     lane.tick();
     await settle();
     expect(ran).toEqual([]);
+  });
+});
+
+describe('una corsia del modello sola, per davvero', () => {
+  /**
+   * The claim at the top of `lane.ts` — that this and `Scheduler` share the
+   * model lane — used to be true of each of them **separately**: a private
+   * `running` flag each, and `Gateway.tick` drives both in the same beat. A
+   * job and a resumed turn therefore ran at the same moment, against one
+   * provider and one budget, while both files said they could not.
+   *
+   * So the assertion is a **measured maximum concurrency**, not a flag: both
+   * lanes are armed with work and told to tick the way the gateway ticks them.
+   */
+  it('con entrambe le corsie cariche, la concorrenza massima è 1', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new TurnStore(db);
+    const jobs = new JobStore(db);
+    const modelLane = new ModelLane();
+
+    let live = 0;
+    let peak = 0;
+    const release: (() => void)[] = [];
+    const hold = async (): Promise<void> => {
+      live += 1;
+      peak = Math.max(peak, live);
+      await new Promise<void>((r) => release.push(r));
+      live -= 1;
+    };
+
+    const scheduler = new Scheduler(
+      jobs,
+      async () => {
+        await hold();
+        return { stopped: 'answered' as const, text: 'job' };
+      },
+      async () => {},
+      undefined,
+      () => {},
+      undefined,
+      undefined,
+      modelLane,
+    );
+    const lane = new TurnLane({
+      turns: store,
+      run: async (turnId) => {
+        await hold();
+        store.claim(turnId);
+        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() });
+        return { stopped: 'answered' as const };
+      },
+      modelLane,
+    });
+
+    jobs.add({ cron: '* * * * *', timezone: 'Europe/Rome', goal: 'un job', channel: 'cli' });
+    store.enqueue(spec('t-1'));
+
+    // Exactly what `Gateway.tick` does, twice, so both lanes get their chance.
+    const beat = new Date(Date.now() + 120_000);
+    scheduler.tick(beat);
+    lane.tick(beat);
+    await settle();
+    scheduler.tick(beat);
+    lane.tick(beat);
+    await settle();
+
+    expect(peak).toBe(1);
+    // …and it really was contended: something was held the whole time.
+    expect(live).toBe(1);
+
+    for (const r of release) r();
+    await settle();
+  });
+
+  it('quando la prima lascia, la seconda parte al battito dopo', async () => {
+    // A serialiser that never let the other side run would also score 1.
+    const db = new DatabaseCtor(':memory:');
+    const store = new TurnStore(db);
+    const modelLane = new ModelLane();
+    const ran: string[] = [];
+    let release: (() => void) | null = null;
+
+    const lane = new TurnLane({
+      turns: store,
+      run: async (turnId) => {
+        ran.push(turnId);
+        store.claim(turnId);
+        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() });
+        return { stopped: 'answered' as const };
+      },
+      modelLane,
+    });
+
+    // The scheduler is holding it.
+    expect(modelLane.take('jobs')).toBeNull();
+    store.enqueue(spec('t-later'));
+    lane.tick();
+    await settle();
+    expect(ran).toEqual([]);
+
+    modelLane.release('jobs');
+    release = null;
+    expect(release).toBeNull();
+    lane.tick();
+    await settle();
+    expect(ran).toEqual(['t-later']);
   });
 });

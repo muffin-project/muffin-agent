@@ -776,42 +776,42 @@
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 29,
+    "line": 30,
     "testo": "* `muffin gateway` — the process that lives, and the three verbs around it."
   },
   "cli/gateway.ts:294": {
     "path": "cli/gateway.ts",
-    "line": 296,
+    "line": 297,
     "testo": "export async function cmdGatewayRun(home = paths().home): Promise<number> {"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 299,
+    "line": 300,
     "testo": "runtime = buildRuntime(home);"
   },
   "cli/gateway.ts:359": {
     "path": "cli/gateway.ts",
-    "line": 398,
+    "line": 415,
     "testo": "const surfaces = connectSurfaces(runtime, home);"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 406,
+    "line": 423,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 418,
+    "line": 435,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 440,
+    "line": 457,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
-    "line": 83,
+    "line": 84,
     "testo": "export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {"
   },
   "cli/init.ts:101": {
@@ -1901,7 +1901,7 @@
   },
   "core/scheduler/scheduler.ts:168": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 195,
+    "line": 212,
     "testo": "try {"
   },
   "core/session/store.ts:35": {
@@ -1961,7 +1961,7 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 97,
+    "line": 109,
     "testo": "tick(now: Date = this.clock()): void {"
   },
   "core/vault/vault.ts:238": {
@@ -2256,7 +2256,7 @@
   },
   "gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 440,
+    "line": 457,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "guards.ts:41": {

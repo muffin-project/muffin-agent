@@ -1,5 +1,6 @@
 import { pidAlive } from '../lock/durable.js';
 import { ALWAYS_IDLE, type ForegroundGate, type StandDown } from '../scheduler/scheduler.js';
+import { LANE_TURNS, ModelLane } from './model-lane.js';
 import type { TurnStopped, TurnStore } from './store.js';
 import { decodeWaitFor, satisfied } from './wait.js';
 
@@ -15,7 +16,10 @@ import { decodeWaitFor, satisfied } from './wait.js';
  *
  * ## Why it is a sibling of `Scheduler` and not a method on it
  *
- * They tick on the same timer and share the model lane, and they are still two
+ * They tick on the same timer and share the model lane — literally, through one
+ * `ModelLane` token, because for a while they only said so: each had a private
+ * `running` flag, so a job and a resumed turn ran at the same moment against one
+ * provider while both files documented that they could not. They are still two
  * things: a job is *work that is due*, a turn is *work that was interrupted*.
  * Merging them would put `markRan` and `claim` in one body, and the two have
  * opposite failure directions — a job that runs twice costs money, a turn that
@@ -64,10 +68,17 @@ export type LaneDeps = {
   clock?: () => Date;
   /** Injected for the same reason the store injects it: a test needs a dead pid. */
   alive?: (pid: number) => boolean;
+  /**
+   * The single model lane, shared with `Scheduler` when both are running.
+   *
+   * Its own instance by default, so a lane driven on its own still runs one
+   * turn at a time. `Gateway` is what hands the *same* token to both.
+   */
+  modelLane?: ModelLane;
 };
 
 export class TurnLane {
-  private running = false;
+  private readonly modelLane: ModelLane;
   private readonly gate: ForegroundGate;
   private readonly standDown: StandDown;
   private readonly onEvent: (e: LaneEvent) => void;
@@ -75,6 +86,7 @@ export class TurnLane {
   private readonly alive: (pid: number) => boolean;
 
   constructor(private readonly deps: LaneDeps) {
+    this.modelLane = deps.modelLane ?? new ModelLane();
     this.gate = deps.gate ?? ALWAYS_IDLE;
     this.standDown = deps.standDown ?? (() => false);
     this.onEvent = deps.onEvent ?? (() => {});
@@ -102,7 +114,9 @@ export class TurnLane {
 
     this.sweepBarriers();
 
-    if (this.running) {
+    // The shared lane, not a flag of our own: the thing that must not happen
+    // twice is a model call, and the scheduler makes them too.
+    if (this.modelLane.busy()) {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;
     }
@@ -114,9 +128,12 @@ export class TurnLane {
     const [row] = this.deps.turns.due(now, 1);
     if (!row) return;
 
-    this.running = true;
+    if (this.modelLane.take(LANE_TURNS) !== null) {
+      this.onEvent({ kind: 'deferred', reason: 'in_flight' });
+      return;
+    }
     void this.take(row.id).finally(() => {
-      this.running = false;
+      this.modelLane.release(LANE_TURNS);
     });
   }
 
@@ -163,8 +180,11 @@ export class TurnLane {
     }
   }
 
-  /** True while a turn is in flight — for a caller that drains on shutdown. */
+  /**
+   * True while **this** lane holds the model. See `Scheduler.isRunning` — the
+   * gateway ORs the two, so each has to answer for its own work only.
+   */
   isRunning(): boolean {
-    return this.running;
+    return this.modelLane.heldBy() === LANE_TURNS;
   }
 }
