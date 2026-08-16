@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
+import { makeLaneRunner, NO_SURFACE, type LaneDeliver } from '../agent/turn-lane.js';
+import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
@@ -332,6 +335,16 @@ export async function cmdGatewayRun(
 
   const lock = new GatewayLock(runtime.db);
   const notify = createNotifier();
+  /**
+   * One model lane for the two things that use the model.
+   *
+   * Constructed **here**, where both are built, because this is the only place
+   * that knows they run on the same beat: `Gateway.tick` drives the scheduler
+   * and then the turn lane, and with a private flag each they would both start
+   * work in the same tick against one provider and one budget — while both
+   * files documented that they could not. One token cannot be half-connected.
+   */
+  const modelLane = new ModelLane();
 
   /**
    * The registry exists only after the claim is won — `connectSurfaces` starts
@@ -366,7 +379,49 @@ export async function cmdGatewayRun(
     // The outcome lands on the turn's row, so "did the 08:00 brief arrive" is a
     // query and not an inference from whether anyone was reading stderr.
     (turnId, state) => runtime.deps.turns.delivered(turnId, state),
+    // The same token the turn lane gets below, which is the whole point of
+    // building it above rather than letting each lane default to its own.
+    modelLane,
   );
+
+  /**
+   * The turn lane, on the gateway's own beat.
+   *
+   * This is the process that lives, so it is the one that owes a suspended turn
+   * its wake-up and an interrupted one its resume. The REPL deliberately does
+   * not get one: it stands down for the gateway (ADR-0035), and two lanes over
+   * one database would race for the same rows. `TurnStore.claim` makes that race
+   * *safe* rather than *right* — one owner is the property worth having.
+   *
+   * Delivery goes through the surfaces this process actually connected, and it
+   * is late-bound because they come up after the lock is taken: a resumed turn's
+   * answer has no stack to return to, only the `replyTo` on its row. That
+   * indirection is the seam B2's two-phase delivery attaches to.
+   */
+  let deliverFromLane: LaneDeliver = NO_SURFACE;
+  const laneLog = (e: LaneEvent): void => {
+    if (e.kind === 'refused') {
+      process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa rifiutata — ${e.why}\n`);
+    } else if (e.kind === 'failed') {
+      process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa fallita — ${e.error}\n`);
+    } else if (e.kind === 'undeliverable') {
+      // Said with the answer in it, because there is nowhere else it can go.
+      // Under a supervisor this is the journal, which is the honest home for a
+      // reply nobody was there to receive.
+      process.stderr.write(
+        `turno ${e.turnId.slice(0, 8)} su ${e.surface}: nessun indirizzo di risposta sulla riga, ` +
+          `la risposta resta qui\n${e.text}\n`,
+      );
+    }
+  };
+  const turnLane = new TurnLane({
+    turns: runtime.deps.turns,
+    run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text), laneLog),
+    onEvent: laneLog,
+    // The same token the scheduler got, which is the whole point of building it
+    // above rather than letting each lane default to its own.
+    modelLane,
+  });
 
   let stopSurfaces: (() => void) | null = null;
   const gateway = new Gateway({
@@ -374,6 +429,7 @@ export async function cmdGatewayRun(
     lock,
     notify,
     scheduler,
+    turnLane,
     jobs: runtime.jobs,
     close: () => {
       // Surfaces first, then the runtime: the connector must stop polling
@@ -401,6 +457,10 @@ export async function cmdGatewayRun(
 
   const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);
   stopSurfaces = surfaces.stop;
+  // Bound now that the surfaces exist. Before this line a resumed turn would be
+  // recorded `failed:` rather than sent nowhere quietly — the window is the boot
+  // sequence, and the honest direction inside it is "undelivered", not "sent".
+  deliverFromLane = surfaces.deliver;
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
   registry = surfaces.registry;

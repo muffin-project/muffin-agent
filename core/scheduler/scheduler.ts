@@ -1,4 +1,5 @@
-import type { DeliveryState } from '../turns/store.js';
+import { LANE_JOBS, ModelLane } from '../turns/model-lane.js';
+import type { DeliveryState, TurnStopped } from '../turns/store.js';
 import type { DeliveryOutcome } from '../surface/types.js';
 import type { Job, JobStore } from './jobs.js';
 
@@ -43,8 +44,19 @@ export const ALWAYS_IDLE: ForegroundGate = {
 };
 
 export type JobOutcome = {
-  /** How the turn ended — 'aborted' means it yielded and must be retried. */
-  stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
+  /**
+   * How the turn ended — 'aborted' means it yielded and must be retried, and
+   * 'suspended' means it has not ended at all (see `run`).
+   *
+   * Referenced from `core/turns/store.ts` rather than re-declared. This union
+   * had three literal copies — here, `TurnResult['stopped']` and the store's
+   * own `TurnOutcome` — and the design that produced the turn record named the
+   * divergence as this repo's typical defect *before* it happened
+   * (`research/turno-sospendibile.md` §Domanda 6). One reference means adding an
+   * arm reaches every consumer as a build error, which is how `suspended` got
+   * an answer here at all instead of being silently treated as an ending.
+   */
+  stopped: TurnStopped;
   /** What to deliver to the channel (the answer, or the queued question). */
   text: string;
   /**
@@ -118,8 +130,6 @@ export type SchedulerEvent =
   | { kind: 'not_recorded'; job: Job; error: string };
 
 export class Scheduler {
-  private running = false;
-
   constructor(
     private readonly store: JobStore,
     private readonly runJob: RunJob,
@@ -129,6 +139,29 @@ export class Scheduler {
     private readonly clock: () => Date = () => new Date(),
     private readonly standDown: StandDown = () => false,
     private readonly recordDelivery: RecordDelivery = () => {},
+    /**
+     * The single model lane, shared with `TurnLane` when both are running.
+     *
+     * Property (2) above — *"one owner, one model lane"* — used to be a private
+     * boolean, so it was true of this class **alone**: `Gateway.tick` drives
+     * this and the turn lane on the same beat, and both would start work in the
+     * same tick against one provider and one budget.
+     *
+     * **Mandatory (D1, judge round 2).** A default of `= new ModelLane()` sat
+     * here until a mutation showed exactly what it cost: give `cli/gateway.ts`
+     * a second, unshared `ModelLane` for the turn lane and nothing caught it —
+     * `tsc` compiled, all 1192 tests stayed green, and the two-lanes-at-once
+     * bug the token exists to prevent came back. A default is a value nobody
+     * had to choose, and this one was load-bearing. Every construction site now
+     * states its choice: a scheduler run without a turn lane passes its own
+     * fresh `new ModelLane()` (unchanged behaviour, just spelled out), and
+     * `cli/gateway.ts` passes the one token both lanes share.
+     *
+     * Placed last, after `recordDelivery` (which has a default): TypeScript
+     * allows a required parameter after one with an initializer, and callers
+     * that only care about `modelLane` pass `undefined` for the slot before it.
+     */
+    private readonly modelLane: ModelLane,
   ) {}
 
   /**
@@ -143,7 +176,9 @@ export class Scheduler {
       this.onEvent({ kind: 'deferred', reason: 'handover' });
       return;
     }
-    if (this.running) {
+    // Asked of the shared lane, not of a flag of our own: the thing that must
+    // not happen twice is a *model call*, and the turn lane makes them too.
+    if (this.modelLane.busy()) {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;
     }
@@ -154,9 +189,14 @@ export class Scheduler {
     const [job] = this.store.due(now);
     if (!job) return;
 
-    this.running = true;
+    if (this.modelLane.take(LANE_JOBS) !== null) {
+      // Somebody took it between the check above and here. Impossible on one
+      // event loop today, and cheap insurance against the day it is not.
+      this.onEvent({ kind: 'deferred', reason: 'in_flight' });
+      return;
+    }
     void this.run(job).finally(() => {
-      this.running = false;
+      this.modelLane.release(LANE_JOBS);
     });
   }
 
@@ -207,6 +247,34 @@ export class Scheduler {
       return;
     }
 
+    /**
+     * A suspended turn is delivered by whoever resumes it, not here.
+     *
+     * It sits between the two arms above and `settle` below, and it belongs to
+     * neither. It is **not** a yield: the turn released the runtime on purpose,
+     * its row says `waiting`, and the lane will pick it up at its deadline — so
+     * leaving the job due would fire a *second* turn for the same goal while the
+     * first is still owed, which is the duplicate execution the whole record
+     * exists to prevent. And it is not a completion either: there is nothing to
+     * say yet, and sending the placeholder text would tell the owner a job
+     * answered when it has not started answering.
+     *
+     * So: no delivery is attempted, `settle`'s `recordDelivery` call is
+     * skipped entirely (the row's `delivery` stays `pending`, exactly where
+     * `agent/turn-lane.ts` will settle it once the lane resumes the turn), and
+     * `markRan` still runs — the fire happened, whether or not it has finished
+     * answering.
+     */
+    if (outcome.stopped === 'suspended') {
+      try {
+        this.store.markRan(job.id);
+        this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
+      } catch (error) {
+        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     // Deliver the answer, or — for a scheduler-principal ASK queued by the
     // kernel — the question the owner has to decide.
     //
@@ -228,6 +296,8 @@ export class Scheduler {
    * to be holding in order to call it. A future branch that advances the
    * schedule without knowing whether the message arrived does not compile,
    * because there is no path to `markRan` that does not take a `DeliveryOutcome`.
+   * A suspended turn's fire never reaches this method at all — see the guard
+   * in `run` above — because there is no delivery outcome to hold yet.
    *
    * **What it deliberately does not do is re-run the job.** A failed delivery
    * must not put the fire back: the model has already been paid for, and
@@ -276,8 +346,12 @@ export class Scheduler {
     }
   }
 
-  /** True while a job is in flight — for a caller that wants to drain on shutdown. */
+  /**
+   * True while **this** lane holds the model — not merely while the model is
+   * busy. `Gateway` asks both lanes and ORs the answers, so a shared "is anyone
+   * working" here would make each lane report the other's work as its own.
+   */
   isRunning(): boolean {
-    return this.running;
+    return this.modelLane.heldBy() === LANE_JOBS;
   }
 }

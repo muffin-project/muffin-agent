@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../policy/decide.js';
 import { POLICY_FLOOR } from '../policy/matrix.js';
+import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { buildMcpTools, mcpCapabilityFor } from '../../agent/tools/mcp.js';
 import { connectServer } from './connect.js';
 import {
@@ -161,10 +162,7 @@ describe('against a real stdio server', () => {
       expect(tool.capability).toBe('mcp.echo');
       // the third-party description travels fenced, never bare
       expect(tool.spec.description).toMatch(/<<<mcpdesc_[0-9a-f]+/);
-      const out = await tool.handler({ message: 'x' }, {
-        tenant: 'host',
-        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
-      });
+      const out = await tool.handler({ message: 'x' }, toolContext());
       expect(out.tier).toBe(3);
       expect(out.content).toMatch(/<<<mcp_[0-9a-f]+/);
       expect(out.content).toContain('echo:x');
@@ -216,10 +214,7 @@ describe('against a real stdio server', () => {
     });
     try {
       expect(attachment.tools.length).toBe(1);
-      const out = await attachment.tools[0]!.handler(
-        {},
-        { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } },
-      );
+      const out = await attachment.tools[0]!.handler({}, toolContext());
       // Recinto: the server's words are inside a fence, not the bare content —
       // the same shape `http.ts`'s and `search.ts`'s own caught-error returns
       // already use.

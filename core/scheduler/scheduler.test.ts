@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { JobStore, type Job } from './jobs.js';
 import { Scheduler, type ForegroundGate, type JobOutcome, type SchedulerEvent } from './scheduler.js';
+import { ModelLane } from '../turns/model-lane.js';
 import { DELIVERED, notDelivered } from '../surface/types.js';
 
 const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' };
@@ -33,7 +34,7 @@ describe('Scheduler.tick', () => {
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
     const runJob = vi.fn(async (j: Job): Promise<JobOutcome> => ({ stopped: 'answered', text: `ecco il brief per ${j.id}`, turnId: TURN }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -50,7 +51,7 @@ describe('Scheduler.tick', () => {
     const { store, clock, set } = storeWith();
     set(new Date('2026-06-15T05:59:00Z'));
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, () => {}, clock, undefined, undefined, new ModelLane());
     sched.tick();
     await flush();
     expect(runJob).not.toHaveBeenCalled();
@@ -66,7 +67,7 @@ describe('Scheduler.tick', () => {
       return { stopped: 'answered', text: 'done', turnId: TURN };
     });
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
 
     sched.tick(); // launches the run, stays in flight
     await flush();
@@ -86,7 +87,7 @@ describe('Scheduler.tick', () => {
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
     const events: SchedulerEvent[] = [];
     const busy: ForegroundGate = { isActive: () => true, signal: () => undefined };
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, busy, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, async () => DELIVERED, busy, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -102,7 +103,7 @@ describe('Scheduler.tick', () => {
     const deliver = vi.fn(async () => DELIVERED);
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'aborted', text: '', turnId: TURN }));
     const before = store.get(job.id)!.nextFireAt.toISOString();
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -116,7 +117,7 @@ describe('Scheduler.tick', () => {
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'ask', text: 'serve la tua conferma per X', turnId: TURN }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -130,7 +131,7 @@ describe('Scheduler.tick', () => {
     const deliver = vi.fn(async () => notDelivered('canale giù'));
     const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, deliver, undefined, (e) => events.push(e), clock);
+    const sched = new Scheduler(store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
 
     sched.tick();
     await flush();
@@ -163,6 +164,7 @@ describe('Scheduler.tick', () => {
         clock,
         undefined,
         (turnId, state) => recorded.push([turnId, state]),
+        new ModelLane(),
       );
 
       sched.tick();
@@ -191,6 +193,7 @@ describe('Scheduler.tick', () => {
         clock,
         undefined,
         () => order.push('recordDelivery'),
+        new ModelLane(),
       );
 
       sched.tick();
@@ -211,6 +214,9 @@ describe('Scheduler.tick', () => {
         undefined,
         (e) => events.push(e),
         clock,
+        undefined,
+        undefined,
+        new ModelLane(),
       );
 
       sched.tick();
@@ -239,6 +245,7 @@ describe('Scheduler.tick', () => {
         () => {
           throw new Error('The database connection is not open');
         },
+        new ModelLane(),
       );
 
       sched.tick();
@@ -265,6 +272,7 @@ describe('Scheduler.tick', () => {
         clock,
         undefined,
         (turnId) => recorded.push(turnId),
+        new ModelLane(),
       );
 
       sched.tick();

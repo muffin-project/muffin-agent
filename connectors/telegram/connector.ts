@@ -212,6 +212,48 @@ export class TelegramConnector {
     this.running = false;
   }
 
+  /**
+   * Send an answer for a turn **this call did not run** — the lane's door.
+   *
+   * A turn that suspended, or that a crash interrupted, comes back in a process
+   * whose stack has none of `handle`'s context: no presence placeholder, no
+   * `Incoming`, no open `try`. All it has is the `replyTo` written onto the row
+   * when the turn started, which is why that field was made durable in the
+   * record slice with a comment naming this exact day.
+   *
+   * **This surface validates its own shape**, and that is the boundary rather
+   * than a nicety: `replyTo` is `Record<string, unknown>` everywhere above here
+   * on purpose — the loop must not learn what a chat id is, which is precisely
+   * what the previous system lost when its gateway started building
+   * Telegram-shaped footers. A row whose address is unreadable throws, and the
+   * caller records `failed:` on it instead of silently dropping the answer.
+   *
+   * Deliberately additive and separate from `handle`'s own send: the in-band
+   * path is being rewritten by another slice, and two slices editing one send
+   * is a merge war rather than a suture.
+   */
+  async deliverTo(replyTo: Record<string, unknown>, text: string): Promise<void> {
+    const chatId = replyTo['chatId'];
+    if (typeof chatId !== 'number') {
+      throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
+    }
+    const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
+    const editMessageId = typeof replyTo['editMessageId'] === 'number' ? replyTo['editMessageId'] : undefined;
+
+    for (const [i, part] of renderForTelegram(text).entries()) {
+      // The placeholder from the original turn is reused when it is still
+      // there: a suspended turn that left "sto guardando…" in the chat should
+      // replace it, not answer underneath it hours later.
+      if (i === 0 && editMessageId !== undefined) {
+        await this.deps.api.editMessageText(chatId, editMessageId, part);
+      } else {
+        await this.deps.api.sendMessage(chatId, part, {
+          ...(i === 0 && replyToMessage !== undefined ? { replyTo: replyToMessage } : {}),
+        });
+      }
+    }
+  }
+
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {

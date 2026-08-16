@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths } from '../core/config/config.js';
 import { runDoctor } from '../cli/doctor.js';
+import { GatewayLock } from '../core/gateway/lock.js';
 import { buildRuntime } from './runtime.js';
 import { runTurn, type LoopDeps } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
@@ -147,6 +148,8 @@ describe('buildRuntime puts the turn record on the real path', () => {
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
         spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
       },
     });
     const seen = runtime.db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
@@ -229,6 +232,8 @@ describe('a turn a dead process was holding', () => {
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
         spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
       },
     });
     const other = buildRuntime(home, ws);
@@ -239,8 +244,103 @@ describe('a turn a dead process was holding', () => {
   });
 });
 
+describe('un turno sospeso senza gateway non è un turno perso in silenzio', () => {
+  /**
+   * The state only a laneless surface can produce, and the one `doctor` was
+   * blind to.
+   *
+   * `health()` counted `interrupted` and nothing else, so a turn suspended from
+   * the REPL or from `muffin run` sat at `waiting` for ever with no path by
+   * which the owner ever learned that its wake-up was owed to a process that is
+   * not running. The two facts are useless apart: N suspended turns is healthy
+   * with a gateway up and is *work nobody will ever wake* without one.
+   */
+  function homeWithASuspendedTurn(): string {
+    const home = bootHome();
+    const ws = workspace();
+    const runtime = buildRuntime(home, ws);
+    runtime.deps.turns.create({
+      id: 'sospeso',
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'cli',
+      sessionId: 's',
+      model: 'm',
+      messages: [],
+      taint: 0,
+      counters: {
+        iterations: 1,
+        recoveriesUsed: 0,
+        transportRetriesLeft: 2,
+        toolCallsMade: 0,
+        nudgedForCompletion: false,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        spentUsd: 0,
+        resumes: 0,
+        contextBuilt: true,
+      },
+    });
+    runtime.deps.turns.suspend('sospeso', {
+      messages: [],
+      taint: 0,
+      counters: {
+        iterations: 1,
+        recoveriesUsed: 0,
+        transportRetriesLeft: 2,
+        toolCallsMade: 0,
+        nudgedForCompletion: false,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        spentUsd: 0,
+        resumes: 0,
+        contextBuilt: true,
+      },
+      wakeAt: '2026-08-16T11:00:00.000Z',
+      waitFor: null,
+    });
+    runtime.close();
+    return home;
+  }
+
+  it('`muffin doctor` avverte quando nessun gateway può svegliarlo', () => {
+    const check = runDoctor(homeWithASuspendedTurn()).checks.find((c) => c.name === 'turni sospesi');
+    expect(check?.level).toBe('warn');
+    expect(check?.detail).toContain('nessun gateway attivo');
+    // The number and the deadline, because "some turns are waiting" is not
+    // something an owner can act on.
+    expect(check?.detail).toContain('1 in attesa');
+    expect(check?.detail).toContain('2026-08-16 11:00');
+    expect(check?.remedy).toContain('gateway');
+  });
+
+  it('lo dice anche al boot, dove l’owner guarda per primo', () => {
+    const runtime = buildRuntime(homeWithASuspendedTurn(), workspace());
+    const notes = runtime.bootLines.join('\n');
+    runtime.close();
+    expect(notes).toContain('1 turni sospesi');
+  });
+
+  it('e non è un allarme quando il gateway c’è', () => {
+    const home = homeWithASuspendedTurn();
+    // A live claim, taken by this very process, so `readGateway` sees a holder.
+    const db = new DatabaseCtor(paths(home).db);
+    new GatewayLock(db).claim(new Date(), 'in attesa', process.pid);
+    db.close();
+
+    const check = runDoctor(home).checks.find((c) => c.name === 'turni sospesi');
+    expect(check?.level).toBe('ok');
+    expect(check?.detail).toContain('li riprende il gateway');
+  });
+
+  it('e tace del tutto quando non ce ne sono', () => {
+    const home = bootHome();
+    buildRuntime(home, workspace()).close();
+    // No row, no line: a check that always speaks is a check nobody reads.
+    expect(runDoctor(home).checks.find((c) => c.name === 'turni sospesi')).toBeUndefined();
+  });
+});
+
 describe('acceptance: the owner asks what happened', () => {
-  it('`muffin doctor` names the interrupted turn and says nobody can resume it', () => {
+  it('`muffin doctor` names the interrupted turn and says what the resume will and will not redo', () => {
     const home = bootHome();
     const ws = workspace();
     crashHoldingATurn(home, ws);
@@ -252,7 +352,13 @@ describe('acceptance: the owner asks what happened', () => {
     expect(turns?.level).toBe('warn');
     expect(turns?.detail).toContain('crash-turn');
     expect(turns?.detail).toContain('shell_run');
-    expect(turns?.remedy).toContain('controllali a mano');
+    // The remedy used to read "non esiste ancora un resume … controllali a
+    // mano", and this assertion is what kept it honest — it now pins the
+    // opposite fact, because the resume exists. A remedy that tells the owner to
+    // go and redo by hand what the runtime deliberately did not redo would send
+    // them to repeat the very effect the record exists to avoid repeating.
+    expect(turns?.remedy).toContain('il gateway li riprende');
+    expect(turns?.remedy).toContain('non ri-eseguibile non viene rifatta');
 
     // And once it has been reported at boot, `doctor` still says it: the state
     // is on the row, not in whoever happened to print a line first.

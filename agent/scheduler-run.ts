@@ -29,6 +29,28 @@ import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
  * an ASK — is tested without a model.
  */
 export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
+  /**
+   * A job's turn may now suspend, and that is neither an answer nor a failure.
+   *
+   * The row is `waiting`, the lane owns it, and it will come back and deliver
+   * on its own. The text is written even though `Scheduler` does not deliver it
+   * (see the guard there), because the day something does deliver it the string
+   * must already be true rather than empty — an empty answer sent to the owner
+   * reads as a job that produced nothing.
+   */
+  if (result.stopped === 'suspended') {
+    return {
+      stopped: 'suspended',
+      text:
+        `Il job si è sospeso fino a ${result.suspendedUntil?.wakeAt ?? '?'}: ` +
+        `il turno resta registrato e riprende da solo.`,
+      // Required on `JobOutcome` since PR #42 landed on dev — `Scheduler`
+      // reads it to write the delivery outcome onto the same row `finish`
+      // wrote. A suspended turn is not delivered here (see the guard in
+      // `Scheduler.run`), but the id still identifies which row this fire was.
+      turnId: result.turnId,
+    };
+  }
   if (result.stopped === 'ask' && result.pending) {
     const on = result.pending.resource ? ` su ${result.pending.resource}` : '';
     return {
@@ -53,16 +75,22 @@ export function makeJobRunner(deps: LoopDeps): RunJob {
        * Every job turn delivers **out of band**, including one whose channel is
        * `cli`, and the address is the channel itself.
        *
-       * This is the field that makes B8 checkable rather than a promise. A turn
-       * created without `replyTo` gets `delivery = NULL`, which
-       * `core/turns/store.ts` defines as *"this surface delivers in band — the
-       * caller of `runTurn` has the text in its hand and there is no separate
-       * step that can fail"*. For a job that is simply false: `Scheduler.run`
-       * calls `deliver` afterwards and that call can fail. So the row started
-       * out asserting the one thing that made the failure invisible. With the
-       * address on it the row starts at `pending`, and a fire whose delivery is
-       * never settled stays `pending` where `muffin doctor` can see it — which
-       * is a different and more useful fact than "no record either way".
+       * This is the field that makes B8 checkable rather than a promise, and it
+       * is also what `slice/turno-sospeso` needed for its own reason: a job
+       * whose turn calls `wait` returns `suspended`, the scheduler stops (it
+       * has nothing to say yet), and the lane finishes the turn later — in a
+       * process with no stack to return to. With no address on the row,
+       * `agent/turn-lane.ts` had nothing to deliver to and dropped the answer
+       * in silence. A turn created without `replyTo` gets `delivery = NULL`,
+       * which `core/turns/store.ts` defines as *"this surface delivers in band
+       * — the caller of `runTurn` has the text in its hand and there is no
+       * separate step that can fail"*. For a job that is simply false:
+       * `Scheduler.run` calls `deliver` afterwards and that call can fail. So
+       * the row started out asserting the one thing that made the failure
+       * invisible. With the address on it the row starts at `pending`, and a
+       * fire whose delivery is never settled stays `pending` where `muffin
+       * doctor` can see it — which is a different and more useful fact than
+       * "no record either way".
        */
       replyTo: { channel: job.channel },
       // `job.channel` is already a `SurfaceRegistry` address — the exact same

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
+import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
 
 /**
  * Context assembly: what the model is told, and which tools it is shown.
@@ -112,6 +113,48 @@ export function visibleTools<T extends { capability: CapabilityId }>(
   if (principal.kind !== 'member') return tools;
   if (!capabilities) return tools;
   return tools.filter((tool) => capabilities.get(tool.capability)?.hostOnly === false);
+}
+
+/**
+ * The open plan, rendered for the turn that is about to run.
+ *
+ * **This function is the whole reason `todo` is a mechanism and not a table.**
+ * A store with a writer and no reader is this repository's signature defect,
+ * and here it would be a particularly pointless one: a plan the model is never
+ * shown is a plan it re-derives from its own earlier prose, which is exactly
+ * the step that goes missing across a compaction, a suspension or a crash.
+ *
+ * Three decisions are in the text below, and each is load-bearing:
+ *
+ *  - **It lives in the volatile tail, never in `SystemPrompts`.** The prompts
+ *    above are built once at boot precisely so each class keeps a byte-identical
+ *    cacheable prefix; a list that changes every turn placed in front of them
+ *    would go cold on every message. So the loop pushes this next to recalled
+ *    memory (`buildContext`), for the same reason recall rides there.
+ *  - **Only the open items.** A finished step still in front of the model is an
+ *    invitation to redo it. `done` rows stay in the table — nothing is deleted
+ *    (`AGENTS.md` §I-8) — and `todo list` still shows them; what the turn is
+ *    handed unasked is what is still owed.
+ *  - **The completion criterion is stated, and it is deterministic.** M5-BIS §2
+ *    asks for one: "finished" is *every item out of `pending`/`retry`*, decided
+ *    by reading rows, not by the model declaring itself done. It is written
+ *    here because this is the only place the model reads about the plan at all.
+ *
+ * Empty in, empty out — a session with nothing open costs zero tokens, which is
+ * what lets the loop call it unconditionally.
+ */
+export function todoSection(open: TodoItem[]): string {
+  if (open.length === 0) return '';
+  return [
+    '## Piano di questa conversazione',
+    '',
+    'Questi passi li hai scritti tu con `todo` e sopravvivono ai riavvii. Sono aperti:',
+    '',
+    renderTodos(open),
+    '',
+    'Aggiorna lo stato con `todo set` appena qualcosa cambia — è la sola traccia che resta ' +
+      'se il processo muore. Il lavoro è finito quando nessun passo è più `pending` o `retry`.',
+  ].join('\n');
 }
 
 /**

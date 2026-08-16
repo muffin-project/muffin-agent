@@ -149,3 +149,30 @@ e il boot successivo — di `muffin run`, della REPL o del gateway, indifferente
 stampa la stessa frase, perché la formulazione è una sola e condivisa
 (`describeInterrupted`): due punti che descrivono la stessa riga con parole
 diverse sono il modo in cui un owner finisce per credere che siano due problemi.
+
+---
+
+**Emendamento, 2026-08-16 — i consumatori sono arrivati: ADR-0047.**
+
+Questa ADR si chiude dicendo cosa non aveva costruito — «`wait`, il resume vero,
+la consegna dalla corsia» — e lascia le righe BLOCKER apposta. Sono state
+costruite in `slice/turno-sospeso`, e **ADR-0047** registra le decisioni che
+scriverle ha costretto a prendere. Niente qui sopra è stato riscritto: quello che
+segue è solo ciò che di questo testo va letto diversamente adesso.
+
+- Il blocco `muffin doctor` copiato qui sopra finisce con *«non esiste ancora un
+  resume: se una di quelle chiamate aveva effetti sul mondo, controllali a
+  mano»*. **Quella riga non esiste più**, ed è stata corretta perché era
+  diventata falsa: un resume c'è, e mandare l'owner a rifare a mano proprio ciò
+  che il runtime ha deliberatamente non rifatto lo manderebbe a ripetere
+  l'effetto che il record esiste per non ripetere. Adesso dice cosa la ripresa
+  rifà e cosa no.
+- `TurnCounters` è cresciuto di due campi nel blob JSON (`resumes`,
+  `contextBuilt`), nella direzione additiva che questa ADR chiama a basso costo.
+- `TurnHealth` ha una seconda domanda, `waiting`, perché `health()` contava solo
+  `interrupted`: un turno sospeso da una superficie senza corsia restava
+  `waiting` per sempre e non lo diceva nessuno.
+- La tabella `todos` (ADR-0047 §3-4) porta un `tier` per la stessa ragione per
+  cui questa ADR ha reso la taint una colonna del turno: un piano scritto da un
+  turno sporco, riletto pulito dal turno dopo, è la stessa scalata di privilegio
+  che avevamo chiuso da un lato e lasciato aperta dall'altro.
