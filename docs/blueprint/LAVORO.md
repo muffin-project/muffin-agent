@@ -17,7 +17,7 @@
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: commit verificabile · draft PR a decisione fissata · `dev` solo dopo build+suite+judge MERGE · `main` dopo prova separata. Aggiorna blocco e mappa.
+**Checkpoint**: draft PR **#30** (`slice/agente-continuo`→`dev`), commit `ed46bc8`; build+suite verdi. Merge solo dopo judge MERGE; `main` richiede prova separata.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
