@@ -748,3 +748,16 @@ When `gh pr list` failed, an empty PR list meant every registered branch became
 with PR numbers and remote state. Anything ancestry cannot settle during a
 GitHub outage enters a separate `SCONOSCIUTE` section that explicitly forbids
 resume until verification; it never enters `APERTE`.
+
+## Cleanup after a merge is conditional on the merge, not on the intent to merge
+
+`gh pr merge 39` failed (the map file had been regenerated on both sides), the
+failure was printed, and the next command in the same script still deleted the
+branch — locally and on `origin`. GitHub then closed the PR because its head no
+longer existed. The commit was recovered from the object store and the branch
+re-pushed, so nothing was lost; the PR had to be reopened by hand.
+
+**Instead:** delete a branch only after reading `mergedAt` for that PR (or
+`git merge-base --is-ancestor`), never in the same breath as the merge command.
+The rule was already written for the reverse case (`cmd | tail` hides the exit
+status): the mistake here was acting on the *plan* rather than on the *state*.
