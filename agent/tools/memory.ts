@@ -32,17 +32,60 @@ export const memoryCapability: CapabilityDecl = {
   hostOnly: false,
 };
 
+/**
+ * The temporal arguments are on the tool and not only on the CLI, and that is
+ * the load-bearing part of this slice rather than a convenience.
+ *
+ * `--history` existed, worked, and was reachable from a terminal only. The
+ * consumer that decides whether Muffin can answer *"who was my contact in May"*
+ * is the model, mid-turn, and it had `query` and `limit` — so a memory that
+ * kept every retired belief on purpose had no path by which any of them could
+ * reach an answer. That is `operational_mode` in `knowledge/05-person-model.md`:
+ * a column, a value, zero readers. The rule the corpus draws from it is the one
+ * followed here — wire the reader first.
+ *
+ * They are arguments the model sets, which is also why this is not the
+ * classifier `02-ontologia.md` §9 forbids: nothing inspects the query text for
+ * "in May" and switches mode behind the model's back. The model says which
+ * instant it means, recall labels what it finds, and the answer is the model's.
+ */
 export const memorySearchSpec: ToolSpec = {
   name: 'memory_search',
   description:
     'Search your own memory: past conversations, documents and facts you have learned. ' +
     'Use it when the answer may depend on something said before, or on a name or detail you ' +
-    'have just come across. Results carry their source and how much it is trusted.',
+    'have just come across. Results carry their source and how much it is trusted. ' +
+    'For a question about the past ("who was my accountant in May", "what did we decide back then"), ' +
+    'set as_of to that date — without it you get what is true now, which is a wrong answer to a ' +
+    'question about then. Set history:true to see a belief and everything it replaced.',
   inputSchema: {
     type: 'object',
     properties: {
       query: { type: 'string', description: 'What to look for, in natural language' },
       limit: { type: 'number', description: 'How many fragments to return (default 8, max 20)' },
+      as_of: {
+        type: 'string',
+        description:
+          'Evaluate memory as it stood at this date (YYYY-MM or YYYY-MM-DD), instead of now. ' +
+          'Use it whenever the question is about a past moment.',
+      },
+      history: {
+        type: 'boolean',
+        description:
+          'Return superseded beliefs too, each marked with when it held and what replaced it.',
+      },
+      surface: {
+        type: 'string',
+        description: 'Only what was learned on this channel (e.g. "telegram", "cli", "vault").',
+      },
+      since: { type: 'string', description: 'Only evidence from this date onwards (YYYY-MM-DD).' },
+      until: { type: 'string', description: 'Only evidence up to this date (YYYY-MM-DD).' },
+      around: {
+        type: 'number',
+        description:
+          'Also return the K messages before and after each result in its own thread, as context. ' +
+          'Use it when a single recalled line is ambiguous on its own (max 5).',
+      },
     },
     required: ['query'],
   },

@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Embedder } from './embed.js';
-import { recall, recallTaint, renderForPrompt } from './recall.js';
+import { EVERY_INSTANT, recall, recallTaint, renderForPrompt } from './recall.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
 
@@ -341,11 +341,13 @@ describe('recall', () => {
     expect(accountants.map((a) => a.text).join(' ')).not.toContain('Marco');
   });
 
-  it('includeHistory brings the retired belief back, marked as retired, beside the current one', async () => {
+  it("asOf:'all' brings the retired belief back, marked as retired, beside the current one", async () => {
     // `RecallOptions.includeHistory` was declared, threaded through
     // `cli/memory.ts` and `cli/main.ts`, and documented in the USAGE — and
     // `recall()` never read it. `--history` answered exactly like the default
-    // search: silently. This is the wiring test that fails without it.
+    // search: silently. This is the wiring test that fails without it. The
+    // option is now a value of `asOf` rather than a boolean beside it; the
+    // property it guards did not change.
     const { store, vectors } = harness();
     const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
     const ep = episode(store, 'cambio commercialista');
@@ -354,7 +356,7 @@ describe('recall', () => {
     const lucia = store.addFact({ ...base, objectValue: 'Lucia' });
     store.supersede(HOST, marco, lucia, NOW);
 
-    const result = await recall({ store, vectors }, HOST, 'Giusto commercialista', { includeHistory: true });
+    const result = await recall({ store, vectors }, HOST, 'Giusto commercialista', { asOf: EVERY_INSTANT });
     const accountants = result.items.filter((i) => i.kind === 'fact' && /accountant/.test(i.text));
     const retired = accountants.find((a) => a.text.includes('Marco'));
     const current = accountants.find((a) => a.text.includes('Lucia'));
@@ -362,6 +364,10 @@ describe('recall', () => {
     expect(retired?.expired).toBe(true);
     expect(current).toBeDefined();
     expect(current?.expired).toBe(false);
+    // And the retired one says what took its place. Returning "Marco, retired"
+    // and stopping there answers "who was it" with half the sentence: the other
+    // half — who it is now — is the part that makes the first safe to say.
+    expect(retired?.replacedBy?.text).toContain('Lucia');
   });
 
   it('never crosses a tenant, on either half', async () => {
