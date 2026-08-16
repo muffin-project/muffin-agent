@@ -118,6 +118,14 @@ volatile e non in `SystemPrompts`: i prompt sono assemblati una volta al boot
 proprio perché restino byte-identici e il prefisso resti caldo, e una lista che
 cambia a ogni turno davanti a loro lo farebbe raffreddare a ogni messaggio.
 
+**Il piano ha un tetto cumulativo, e non solo per chiamata** (N3, judge giro 2).
+`plan` limita già una singola chiamata (30 passi × 500 caratteri), ma quel tetto
+non limitava la sessione: niente impediva a un modello di richiamare `plan`
+più volte, ognuna sotto chiavi nuove, mentre il contesto rende **tutte** le
+righe aperte a ogni turno senza condizione. `MAX_OPEN_TODOS = 60`
+(`core/turns/todo.ts`) chiude la coda: sopra il tetto `plan` rifiuta con i
+numeri nel rifiuto, nella stessa forma di `MAX_SUSPENDED_PER_TENANT` sopra.
+
 ### 4. Un todo porta la taint di chi lo ha scritto
 
 Colonna `tier`, `NOT NULL` senza default, `max()`-ata a ogni scrittura.

@@ -396,102 +396,102 @@
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 275,
+    "line": 293,
     "testo": "const light = lightLane(provider, {"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 330,
+    "line": 348,
     "testo": "const guards = mandatoryGuards(home, cwd);"
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 332,
+    "line": 350,
     "testo": "const tools: RegisteredTool[] = ["
   },
   "agent/runtime.ts:261": {
     "path": "agent/runtime.ts",
-    "line": 333,
+    "line": 351,
     "testo": "{"
   },
   "agent/runtime.ts:262": {
     "path": "agent/runtime.ts",
-    "line": 334,
+    "line": 352,
     "testo": "capability: 'fs.read',"
   },
   "agent/runtime.ts:266": {
     "path": "agent/runtime.ts",
-    "line": 333,
+    "line": 351,
     "testo": "{"
   },
   "agent/runtime.ts:271": {
     "path": "agent/runtime.ts",
-    "line": 333,
+    "line": 351,
     "testo": "{"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 333,
+    "line": 351,
     "testo": "{"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 377,
+    "line": 395,
     "testo": "const executor = new SandboxExecutor(guards);"
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 386,
+    "line": 404,
     "testo": "tools.push(...makeProcessTools());"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 391,
+    "line": 409,
     "testo": "const skillScan = discoverSkills(home);"
   },
   "agent/runtime.ts:316": {
     "path": "agent/runtime.ts",
-    "line": 392,
+    "line": 410,
     "testo": "tools.push(makeSkillTool(skillScan.skills));"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 403,
+    "line": 421,
     "testo": "tools.push(makeHttpTool(egress));"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 409,
+    "line": 427,
     "testo": "let searchOn = false;"
   },
   "agent/runtime.ts:455": {
     "path": "agent/runtime.ts",
-    "line": 566,
+    "line": 584,
     "testo": "bootLines: ["
   },
   "agent/runtime.ts:490": {
     "path": "agent/runtime.ts",
-    "line": 612,
+    "line": 631,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 616,
+    "line": 635,
     "testo": "systemPrompts: buildSystemPrompts("
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 619,
+    "line": 638,
     "testo": "skillsPromptSection(skillScan.skills),"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 647,
+    "line": 666,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 655,
+    "line": 674,
     "testo": "runtime.onClose(() => attachment.close());"
   },
   "agent/scheduler-run.ts:31": {
@@ -1036,62 +1036,62 @@
   },
   "cli/repl.ts:108": {
     "path": "cli/repl.ts",
-    "line": 108,
+    "line": 109,
     "testo": "export async function runRepl(home = paths().home): Promise<number> {"
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 111,
+    "line": 112,
     "testo": "runtime = buildRuntime(home);"
   },
   "cli/repl.ts:133": {
     "path": "cli/repl.ts",
-    "line": 133,
+    "line": 134,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 145,
+    "line": 146,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 157,
+    "line": 158,
     "testo": "runtime.deps.approve = async (request) => {"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 255,
+    "line": 261,
     "testo": "try {"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 286,
+    "line": 292,
     "testo": "controller = new AbortController();"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 288,
+    "line": 294,
     "testo": "const result = await runTurn(runtime.deps, {"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 289,
+    "line": 295,
     "testo": "principal: { kind: 'owner', connector: 'cli', externalId: 'local' },"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 316,
+    "line": 322,
     "testo": "} catch (error) {"
   },
   "cli/repl.ts:36": {
     "path": "cli/repl.ts",
-    "line": 36,
+    "line": 37,
     "testo": "* has a `delivery_failed` event for exactly this, with its own handler here"
   },
   "cli/repl.ts:48": {
     "path": "cli/repl.ts",
-    "line": 48,
+    "line": 49,
     "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
   },
   "cli/run.ts:26": {
@@ -1901,7 +1901,7 @@
   },
   "core/scheduler/scheduler.ts:168": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 153,
+    "line": 161,
     "testo": "try {"
   },
   "core/session/store.ts:35": {
@@ -1961,7 +1961,7 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 86,
+    "line": 99,
     "testo": "private readonly onEvent: (e: LaneEvent) => void;"
   },
   "core/vault/vault.ts:238": {
@@ -2631,12 +2631,12 @@
   },
   "repl.ts:48": {
     "path": "cli/repl.ts",
-    "line": 48,
+    "line": 49,
     "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
   },
   "repl.ts:55": {
     "path": "cli/repl.ts",
-    "line": 55,
+    "line": 56,
     "testo": "process.stderr.write(`\\n⏰ [job → ${channel}: consegna remota da cablare]\\n${text}\\n`);"
   },
   "rerank.ts:64": {
@@ -2646,37 +2646,37 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 356,
+    "line": 374,
     "testo": "handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),"
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 425,
+    "line": 443,
     "testo": "searchNotes.push("
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 495,
+    "line": 513,
     "testo": "...(searchOn ? [searchCapability] : []),"
   },
   "runtime.ts:456": {
     "path": "agent/runtime.ts",
-    "line": 569,
+    "line": 588,
     "testo": "...skillScan.problems.map((p) => `! ${p}`),"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 577,
+    "line": 596,
     "testo": "register: (tool, decl) => {"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 647,
+    "line": 666,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 653,
+    "line": 672,
     "testo": "for (const t of tool) runtime.register(t, decl);"
   },
   "runtime.ts:98": {
