@@ -13,8 +13,9 @@ Confonderle permette due famiglie di attacco. La prima è l'impersonazione: nome
 username, bio, foto o stanza assomigliano all'owner e diventano autorità. È già
 successo nel connector Telegram in una forma più sottile: il codice confrontava
 la chat — la stanza — invece della persona. Oggi `parseUpdate` usa `from.id`,
-richiede una chat privata e ha un test di cablaggio contro l'impersonazione, ma
-la regola non è ancora una proprietà obbligatoria di ogni surface.
+richiede una chat privata e il percorso inbox → connector → loop ha un test di
+cablaggio contro l'impersonazione, ma la regola non è ancora una proprietà
+obbligatoria di ogni surface.
 
 La seconda è la prompt injection indiretta. Il veicolo non è solo la prosa di
 una pagina web: può essere una bio, un display name, un filename, il titolo di
@@ -99,9 +100,10 @@ essere assegnati fuori dal modello e il kernel contiene gli effetti.
 ## Stato dell'implementazione e falsificazione
 
 Telegram prova già la parte stretta di identità: `from.id`, chat privata,
-pairing fail-closed e test contro display-name/chat impersonation. Non prova il
-Root-of-Trust del binding né un envelope universale per metadata e multimodale;
-B15 e B16 restano blocker in `M5-BIS.md`.
+pairing fail-closed e un test che parte da `UpdateInbox` contro la chat
+dell'owner usata da un mittente estraneo. Non prova il Root-of-Trust del binding
+né un envelope universale per metadata e multimodale; B15 e B16 restano blocker
+in `M5-BIS.md`.
 
 La decisione è falsa o incompleta se accade uno di questi casi:
 

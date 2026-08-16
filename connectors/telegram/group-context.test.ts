@@ -33,14 +33,14 @@ const OWNER = 4242;
 const GROUP = -100200;
 const STRANGER = 9999;
 
-const privateMsg = (id: number): Update =>
+const privateMsg = (id: number, fromId = OWNER): Update =>
   ({
     update_id: id,
     message: {
       message_id: id,
       date: 0,
       chat: { id: OWNER, type: 'private' },
-      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      from: { id: fromId, is_bot: false, first_name: 'o' },
       text: 'ciao',
     },
   }) as unknown as Update;
@@ -257,6 +257,30 @@ describe("the owner's own chat is untouched by the split", () => {
       expect(names).toContain('memory_search');
       // The exposure cap still applies, and it applies after the filter.
       expect(names.length).toBeLessThanOrEqual(h.runtime.deps.profile.maxToolsExposed);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('does not grant owner context to a stranger in the owner chat', async () => {
+    // This starts where production starts. Calling parseUpdate/principalFor by
+    // hand proved their logic but did not prove that drain() uses that result
+    // for the real loop. Regressing from message.from.id to message.chat.id
+    // must make this test expose the owner prompt and host-only tools.
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
+    try {
+      await deliver(h, [privateMsg(1, STRANGER)]);
+      expect(h.seen).toHaveLength(1);
+
+      const block = h.seen[0]!.system[0]!;
+      expect(block.type === 'text' && block.text).toBe(h.prompts.group);
+      expect(block.type === 'text' && block.text).not.toBe(h.prompts.owner);
+
+      const names = (h.seen[0]!.tools ?? []).map((t) => t.name);
+      expect(names).toContain('memory_search');
+      expect(names).not.toContain('fs_read');
+      expect(names).not.toContain('fs_write');
+      expect(names).not.toContain('process_kill');
     } finally {
       h.runtime.close();
     }
