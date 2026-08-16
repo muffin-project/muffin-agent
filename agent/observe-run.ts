@@ -109,7 +109,23 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
         role: 'agent',
         kind: 'message',
         content: text,
-        trustTier: 0,
+        /**
+         * The composing turn's own tier, and not the `0` this used to hardcode.
+         *
+         * The tempting argument for `0` is that stage 1 is clean by
+         * construction: `detectAbsences` counts only `trust_tier <= 1` facts,
+         * and the goal above ends with "non chiamare tool". Both are true and
+         * neither is a guarantee. The first bounds the *anchor*, not the
+         * sentence — and the sentence is what gets written. The second is a
+         * line of Italian in a prompt: the tools are still exposed, the loop
+         * will still run one, and a model that reaches for `web_search` here
+         * comes back at tier 3. "The prompt asked it not to" is the one kind of
+         * argument 03's opening paragraph rules out of the threat model.
+         *
+         * So it is read, not assumed. Cheap, and it makes the guarantee
+         * structural instead of a property of two files staying in agreement.
+         */
+        trustTier: result.taint,
         createdAt: (deps.now ?? (() => new Date()))().toISOString(),
       });
     };
