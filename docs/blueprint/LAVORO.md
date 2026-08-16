@@ -17,9 +17,9 @@
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: PR **#30/#31** integrate in `dev`; build e suite verdi. Aperta
-**PR #32** `dev`→`main`: non eredita i verdetti precedenti e richiede CI verde
-più un judge nuovo. Record del checkpoint: **PR #33**.
+**Checkpoint**: PR **#32** `dev`→`main` ha ricevuto `ADJUST`: tenant allegati,
+bound/parti DOCX, symlink rileggibili e handoff senza GitHub. Correzioni su
+`slice/adjust-main-promotion`; serviranno CI e judge nuovi.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 

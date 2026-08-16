@@ -161,13 +161,12 @@ export class Vault {
    * Every file under the vault root that could be content, plus the ones that
    * could not and why.
    *
-   * **Symlinks are followed.** A vault whose notes live somewhere else and are
-   * linked in is the ordinary setup, not an edge case, and the previous version
-   * dropped them silently: `Dirent.isFile()` is false for a link, so a linked
-   * note was invisible — and `audit()` built its "disk" side from this same
-   * function, which meant the two sides that exist to disagree shared a blind
-   * spot. Following them means the filter has to run on the resolved path, which
-   * it does.
+   * Symlinks are followed only when their target remains inside the vault.
+   * External targets used to be indexed but could never be reopened by
+   * `document_read`; allowing the later read would instead create a TOCTOU path
+   * where retargeting the link changes the source after indexing. The honest
+   * boundary is therefore visible refusal until external material is imported
+   * into immutable storage inside the vault.
    *
    * `audit()` and `reindex()` both go through here on purpose: one enumeration,
    * so they cannot drift.
@@ -176,6 +175,7 @@ export class Vault {
     const files: VaultFile[] = [];
     const skipped: { path: string; why: string }[] = [];
     const visited = new Set<string>();
+    const rootReal = realpathSync(this.root);
 
     const walk = (dir: string): void => {
       let entries;
@@ -202,6 +202,14 @@ export class Vault {
         const reason = skipReason(rel, real);
         if (reason !== null) {
           skipped.push({ path: rel, why: reason });
+          continue;
+        }
+
+        if (real !== rootReal && !real.startsWith(`${rootReal}${sep}`)) {
+          skipped.push({
+            path: rel,
+            why: 'link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile',
+          });
           continue;
         }
 

@@ -70,7 +70,7 @@ export type ConnectorDeps = {
    */
   vault?: {
     root: string;
-    reindex: (defaultTier: TrustTier) => Promise<{
+    reindex: (tenantId: string, defaultTier: TrustTier) => Promise<{
       skipped: { path: string; why: string }[];
       /** What went in, and the compact view of each. See `core/vault/vault.ts`. */
       documents: { path: string; outline: string }[];
@@ -308,7 +308,7 @@ export class TelegramConnector {
       // A failed download does not fail the turn: the message still deserves an
       // answer, and an honest one says the file did not arrive.
       const arrival = incoming.attachment
-        ? await this.ingest(incoming, incoming.attachment, principal.kind === 'owner' ? 0 : 2)
+        ? await this.ingest(incoming, incoming.attachment, tenant, principal.kind === 'owner' ? 0 : 2)
         : null;
 
       const result = await runTurn(this.deps.loop, {
@@ -397,7 +397,12 @@ export class TelegramConnector {
    * and stays tier-2 through reindexing, which the vault enforces by content
    * hash rather than by path.
    */
-  private async ingest(incoming: Incoming, spec: MediaSpec, tier: TrustTier): Promise<string> {
+  private async ingest(
+    incoming: Incoming,
+    spec: MediaSpec,
+    tenantId: string,
+    tier: TrustTier,
+  ): Promise<string> {
     if (!this.deps.vault) return `[allegato ricevuto ma il vault non è configurato: ${spec.originalName}]`;
     try {
       const saved = await downloadToVault(
@@ -407,7 +412,10 @@ export class TelegramConnector {
         incoming.updateId,
         this.now(),
       );
-      const report = await this.deps.vault.reindex(tier);
+      // The tenant resolved from the authenticated sender travels with the
+      // bytes. Using a surface-wide `host` here indexed group documents into
+      // the owner's private memory, then made document_read fail in the group.
+      const report = await this.deps.vault.reindex(tenantId, tier);
       const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
       if (skipped) {
         return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;

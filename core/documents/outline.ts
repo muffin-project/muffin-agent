@@ -65,6 +65,17 @@ export function partsOf(doc: ExtractedDocument): DocumentPart[] {
   if (doc.format === 'pdf') {
     return doc.pages.map((text, i) => ({ n: i + 1, label: `p. ${i + 1}`, text }));
   }
+  if (doc.sections && doc.sections.length > 0) {
+    let n = 0;
+    return doc.sections.flatMap((section) => {
+      const blocks = blocksOf(section.text);
+      return blocks.map((text, i) => ({
+        n: ++n,
+        label: blocks.length === 1 ? section.label : `${section.label} ${i + 1}`,
+        text,
+      }));
+    });
+  }
   return blocksOf(doc.text).map((text, i) => ({ n: i + 1, label: `parte ${i + 1}`, text }));
 }
 
