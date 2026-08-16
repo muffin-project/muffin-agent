@@ -11,6 +11,7 @@ import { Gateway } from '../core/gateway/service.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler } from '../core/scheduler/scheduler.js';
 import { TurnLane } from '../core/turns/lane.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
 import { JobStore as Jobs } from '../core/scheduler/jobs.js';
 import { enqueueTurn, type LoopDeps } from './loop.js';
@@ -83,16 +84,21 @@ const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
 function gatewayOver(deps: LoopDeps, home: string, delivered: { turn: TurnRecord; text: string }[]) {
   const db = new DatabaseCtor(paths(home).db);
   const jobs = new JobStore(db);
+  // Shared, exactly as `cmdGatewayRun` shares it (D1, judge round 2) — the
+  // whole point of "wired exactly as production wires it" is that this is the
+  // same token, not two lanes each holding their own.
+  const modelLane = new ModelLane();
   const lane = new TurnLane({
     turns: deps.turns,
     run: makeLaneRunner(deps, async (turn, text) => {
       delivered.push({ turn, text });
     }),
+    modelLane,
   });
   const gateway = new Gateway({
     lock: new GatewayLock(db, () => true),
     notify: createNotifier({}, () => {}),
-    scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}),
+    scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}, undefined, undefined, undefined, undefined, modelLane),
     turnLane: lane,
     jobs,
     close: () => {},
@@ -193,6 +199,7 @@ describe('B2 · il turno torna subito, e la risposta arriva dopo', () => {
       run: makeLaneRunner(deps, async () => {
         throw new Error('telegram giù');
       }),
+      modelLane: new ModelLane(),
     });
     lane.tick();
     await settle(lane);
@@ -354,6 +361,7 @@ describe('un job che aspetta non perde la risposta', () => {
       run: makeLaneRunner(deps, async (turn, text) => {
         delivered.push({ turn, text });
       }),
+      modelLane: new ModelLane(),
     });
     lane.tick(new Date(Date.parse(row!.wakeAt!) + 1000));
     await settle(lane);
@@ -386,6 +394,7 @@ describe('un job che aspetta non perde la risposta', () => {
     const lane = new TurnLane({
       turns: deps.turns,
       run: makeLaneRunner(deps, NO_SURFACE_FOR_TEST, (e) => events.push(e)),
+      modelLane: new ModelLane(),
     });
     lane.tick();
     await settle(lane);

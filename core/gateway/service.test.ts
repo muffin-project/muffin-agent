@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { JobStore } from '../scheduler/jobs.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import { ModelLane } from '../turns/model-lane.js';
 import { createNotifier } from './notify.js';
 import { GatewayLock, readGateway } from './lock.js';
 import { EXIT_STOPPED, Gateway, STATUS } from './service.js';
@@ -58,6 +59,11 @@ function harness(
     async (_channel, text) => {
       delivered.push(text);
     },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    new ModelLane(),
   );
 
   const sent = over.sent;
@@ -321,7 +327,16 @@ describe('supervision hooks', () => {
       // A supervisor that is listening, faked at the transport so no systemd is
       // involved: the module under test is the cadence, not the socket.
       notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p)),
-      scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}),
+      scheduler: new Scheduler(
+        jobs,
+        async () => ({ stopped: 'answered', text: '' }),
+        async () => {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new ModelLane(),
+      ),
       turnLane: { tick: () => {}, isRunning: () => false },
       jobs,
       close: () => {},

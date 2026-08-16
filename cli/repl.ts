@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
+import { ModelLane } from '../core/turns/model-lane.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
@@ -236,6 +237,11 @@ export async function runRepl(home = paths().home): Promise<number> {
     },
     undefined,
     standDown,
+    // The REPL owns no `TurnLane` (ADR-0035: it cedes turns to the gateway),
+    // so there is nothing to share this token with — a fresh instance still
+    // serialises this scheduler against itself, which is the whole property
+    // this session needs.
+    new ModelLane(),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
