@@ -66,6 +66,23 @@ describe('vault', () => {
     expect(second).toMatchObject({ unchanged: 1, added: 0, updated: 0, chunks: 0 });
   });
 
+  it('indexes one named path without granting that tenant the rest of the vault', async () => {
+    const f = fixture();
+    write(f.root, 'private.md', '# Private\n\nOWNERONLY\n');
+    write(f.root, 'existing.md', '# Existing\n\nSTILLTHERE\n');
+    write(f.root, 'incoming.md', '# Incoming\n\nGROUPONLY\n');
+    await f.vault.reindexPath('group:telegram:7', 'existing.md', { now: NOW });
+
+    const report = await f.vault.reindexPath('group:telegram:7', 'incoming.md', { now: NOW });
+
+    expect(report).toMatchObject({ scanned: 1, added: 1, removed: 0 });
+    expect(f.store.searchEpisodes('group:telegram:7', 'GROUPONLY')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'STILLTHERE')).toHaveLength(1);
+    expect(f.store.searchEpisodes('group:telegram:7', 'OWNERONLY')).toHaveLength(0);
+    expect(await f.vault.reindexPath('group:telegram:7', '../private.md', { now: NOW }))
+      .toMatchObject({ scanned: 0, added: 0, skipped: [{ path: '../private.md' }] });
+  });
+
   it('actually reindexes a changed file — the failure every comparable system has', async () => {
     const f = fixture();
     write(f.root, 'a.md', '# A\n\nprima versione\n');
@@ -181,21 +198,21 @@ describe('vault', () => {
     expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('nascosto');
   });
 
-  it('follows a symlinked note — the ordinary setup, not an edge case', async () => {
-    // A vault whose notes live elsewhere and are linked in is how people use
-    // this. `Dirent.isFile()` is false for a link, so the previous version
-    // dropped them without a word — and `audit()` shared the blind spot,
-    // reporting "aligned" over a vault it could not see.
+  it('refuses an external symlink instead of indexing a source document_read cannot reopen', async () => {
+    // Indexing this used to advertise a working way back into the note while
+    // Vault.document correctly refused the external realpath. Following it at
+    // read time would be worse: the link can be retargeted after indexing.
     const f = fixture();
     mkdirSync(join(f.root, '..', 'obsidian'), { recursive: true });
     writeFileSync(join(f.root, '..', 'obsidian', 'diario.md'), '# Diario\n\nil ritrovo è al porto\n');
     symlinkSync(join(f.root, '..', 'obsidian', 'diario.md'), join(f.root, 'diario.md'));
 
     const report = await f.vault.reindex(HOST, { now: NOW });
-    expect(report.scanned).toBe(1);
-    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(1);
-    // And the audit agrees with the reindex, because both enumerate the same way.
-    expect(await f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [] });
+    expect(report.scanned).toBe(0);
+    expect(report.skipped.find((s) => s.path === 'diario.md')?.why).toContain('link esterno');
+    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(0);
+    expect(await f.vault.document(HOST, 'diario.md')).toBeNull();
+    expect(await f.vault.audit(HOST)).toMatchObject({ files: 0, indexed: 0, missing: [], stale: [] });
   });
 
   it('does not launder the tier when a file is renamed', async () => {
@@ -287,9 +304,8 @@ describe('a PDF in the vault', () => {
   });
 
   it('does not re-parse an unchanged document, and does not call it drift', async () => {
-    // Every Telegram attachment reindexes the whole vault. If "has this changed"
-    // cost a PDF parse, a vault with fifty documents would parse fifty of them
-    // on every message.
+    // Full maintenance scans still need to make "has this changed" cheap. File
+    // arrivals use reindexPath and never enumerate the other forty-nine.
     const f = fixture();
     writeFileSync(join(f.root, 'contratto.pdf'), CONTRATTO);
     await f.vault.reindex(HOST, { now: NOW });

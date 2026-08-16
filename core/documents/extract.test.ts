@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { buildPdf, pagesWithoutText } from './fixtures/pdf.js';
 import { extractDocument, paragraphsFromWordXml, sniffFormat } from './extract.js';
-import { NotAZip, readZipEntry } from './zip.js';
+import { MAX_ZIP_ENTRY_BYTES, NotAZip, readZipEntry } from './zip.js';
 
 /**
  * The defect this file exists to prevent is not "PDFs are not supported". It is
@@ -88,6 +89,54 @@ describe('extracting a document', () => {
     expect(result.document.text).toContain('margine');
   });
 
+  it('keeps linked headers, footers and footnotes as named DOCX parts', async () => {
+    const relationships =
+      '<Relationships>' +
+      '<Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>' +
+      '<Relationship Id="r2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>' +
+      '<Relationship Id="r3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>' +
+      '</Relationships>';
+    const word = (text: string, root = 'document') =>
+      `<w:${root}><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:${root}>`;
+    const bytes = zipEntries([
+      { name: 'word/document.xml', content: word('Clausola nel corpo') },
+      { name: 'word/_rels/document.xml.rels', content: relationships },
+      { name: 'word/header1.xml', content: word('Modello riservato', 'hdr') },
+      { name: 'word/footer1.xml', content: word('Pagina contrattuale', 'ftr') },
+      { name: 'word/footnotes.xml', content: word('Penale di recesso', 'footnotes') },
+    ]);
+
+    const result = await extractDocument(bytes);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.text).toContain('Clausola nel corpo');
+    expect(result.document.text).toContain('Modello riservato');
+    expect(result.document.text).toContain('Pagina contrattuale');
+    expect(result.document.text).toContain('Penale di recesso');
+    expect(result.document.sections?.map((section) => section.label)).toEqual([
+      'corpo principale',
+      'intestazione',
+      'piè di pagina',
+      'note a piè di pagina',
+    ]);
+  });
+
+  it('refuses a DOCX part above the decompressed document budget', async () => {
+    const bomb = zipEntries([
+      {
+        name: 'word/document.xml',
+        content: Buffer.alloc(MAX_ZIP_ENTRY_BYTES + 1, 0x61),
+        deflated: true,
+      },
+    ]);
+    const result = await extractDocument(bomb);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toBe('unreadable');
+      expect(result.why).toContain('limite decompresso');
+    }
+  });
+
   it('reads plain text and markdown unchanged', async () => {
     const result = await extractDocument(Buffer.from('# Nota\n\nil ritrovo è al porto\n'));
     expect(result.ok && result.document.format).toBe('text');
@@ -135,6 +184,25 @@ describe('the ZIP reader', () => {
   it('refuses bytes that are not a ZIP, rather than slicing them', () => {
     expect(() => readZipEntry(Buffer.from('non è un archivio'), 'word/document.xml')).toThrow(NotAZip);
   });
+
+  it('enforces the inflater bound even when the central-directory size lies', () => {
+    const forged = zipEntries([
+      {
+        name: 'word/document.xml',
+        content: Buffer.alloc(8_192, 0x61),
+        deflated: true,
+        declaredUncompressed: 1,
+      },
+    ]);
+    expect(() => readZipEntry(forged, 'word/document.xml', 1_024)).toThrow(/decompressione fallita/);
+  });
+
+  it('refuses encrypted entries instead of parsing attacker-controlled ciphertext', () => {
+    const encrypted = zipEntries([
+      { name: 'word/document.xml', content: '<w:document/>', encrypted: true },
+    ]);
+    expect(() => readZipEntry(encrypted, 'word/document.xml')).toThrow(/cifrata/);
+  });
 });
 
 describe('WordprocessingML to text', () => {
@@ -162,32 +230,58 @@ describe('WordprocessingML to text', () => {
 
 /** A one-entry ZIP, stored uncompressed — enough to be sniffed. */
 function zipOf(name: string, content: string): Buffer {
-  const nameBytes = Buffer.from(name, 'utf8');
-  const data = Buffer.from(content, 'utf8');
+  return zipEntries([{ name, content }]);
+}
 
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4);
-  local.writeUInt16LE(0, 8); // stored
-  local.writeUInt32LE(data.length, 18);
-  local.writeUInt32LE(data.length, 22);
-  local.writeUInt16LE(nameBytes.length, 26);
+type ZipFixtureEntry = {
+  name: string;
+  content: string | Buffer;
+  deflated?: boolean;
+  declaredUncompressed?: number;
+  encrypted?: boolean;
+};
 
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(0, 10); // stored
-  central.writeUInt32LE(data.length, 20);
-  central.writeUInt32LE(data.length, 24);
-  central.writeUInt16LE(nameBytes.length, 28);
-  central.writeUInt32LE(0, 42);
+function zipEntries(entries: ZipFixtureEntry[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let localOffset = 0;
 
-  const centralAt = local.length + nameBytes.length + data.length;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, 'utf8');
+    const raw = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(entry.content, 'utf8');
+    const payload = entry.deflated ? deflateRawSync(raw) : raw;
+    const method = entry.deflated ? 8 : 0;
+    const flags = entry.encrypted ? 0x0001 : 0;
+    const declared = entry.declaredUncompressed ?? raw.length;
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(payload.length, 18);
+    local.writeUInt32LE(declared, 22);
+    local.writeUInt16LE(name.length, 26);
+    locals.push(local, name, payload);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(payload.length, 20);
+    central.writeUInt32LE(declared, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(localOffset, 42);
+    centrals.push(central, name);
+    localOffset += local.length + name.length + payload.length;
+  }
+
+  const centralDirectory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(central.length + nameBytes.length, 12);
-  end.writeUInt32LE(centralAt, 16);
-
-  return Buffer.concat([local, nameBytes, data, central, nameBytes, end]);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...locals, centralDirectory, end]);
 }

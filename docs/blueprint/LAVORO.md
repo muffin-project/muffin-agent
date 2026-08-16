@@ -9,17 +9,17 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-16
 
-**Obiettivo**: Muffin regge **14 giorni**. Verifica end-to-end anche il gia-fatto. Ordine: turno > permessi > superfici > schema.
+**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Fix/build continuano; la forma resta tenant/surface-agnostic. Ordine: turno > permessi > superficie privata > memoria > acceptance.
 
-**Inventario**: 51 righe · 27 non verificate · 18 BLOCKER · 5 READY · 1 OUT. Fondo: zero BLOCKER e zero `?`.
+**Inventario**: `M5-BIS.md` è autoritativo. DAY-1 parte a zero BLOCKER e zero `?`; niente conteggi copiati che possono invecchiare.
 
 **Non integrato**: accettazione E4 · turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 (worktree) · taint/Hermes (branch). Mai READY prima dell'accettazione.
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: PR **#30/#31** integrate in `dev`; build e suite verdi. Aperta
-**PR #32** `dev`→`main`: non eredita i verdetti precedenti e richiede CI verde
-più un judge nuovo. Record del checkpoint: **PR #33**.
+**Checkpoint**: PR #32 `dev`→`main` è `ADJUST`. PR #34 corregge anche il
+full-scan cross-tenant con `reindexPath` e fixture host+due gruppi: CI+judge,
+merge, poi judge nuovo su #32.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 

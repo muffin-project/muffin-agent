@@ -192,6 +192,15 @@ JSON (non YAML: parsing senza dipendenze, niente ambiguità di tipo; i commenti 
 - **Secrets**: default **file cifrato age** `~/.muffin/secrets/secrets.age` (portabile, headless-safe, uguale su macOS e Linux — il Keychain è opt-in perché su sessione SSH il dialog di sistema blocca, C6); passphrase chiesta a `init` e tenuta in memoria dal runtime, oppure chiave in `~/.muffin/secrets/key.txt` `0400` per l'avvio non presidiato (trade-off dichiarato). Riferimento in config: `"apiKey": "secret://anthropic_api_key"`.
 - **Directory (K5)**: non è XDG-multi-dir: è **una** cartella `~/.muffin/` (override `MUFFIN_HOME`). Il termine "XDG-compatibile" negli altri documenti va letto come "rispetta `XDG_CONFIG_HOME` se impostata per collocare la cartella", non come "sparge i dati in tre posti". Motivo: backup/export/cancellazione GDPR = un percorso.
 
+**Contratto d'ingresso del vault.** La directory dei byte è condivisa, la
+visibilità dell'indice no. Un producer che ha appena acquisito un file invoca
+`reindexPath(tenantId, vaultPath, tier)`: il path deve essere canonico, interno
+al vault e nomina l'unico file che può entrare nel tenant. `reindex(tenantId)`
+enumera l'intera directory e ritira gli assenti; è riservato a un comando di
+manutenzione che intende davvero riconciliare l'intero tenant. I due contratti
+non sono intercambiabili: un tenant corretto applicato al source-set sbagliato
+è comunque una violazione cross-tenant.
+
 > **Emendamento 2026-08-13 (ADR-0039) — l'unica eccezione a K5, dichiarata.** Un
 > segreto può stare anche in `$XDG_CONFIG_HOME/muffin/secrets/<nome>` (dir
 > `0700`, file `0600`), e la risoluzione è una catena ordinata: prima
@@ -267,7 +276,7 @@ Tutti i messaggi di sistema sono distinguibili dalla voce dell'agente (D9): mai 
 
 **stdout/stderr (H3)**: stdout = solo la risposta finale (o JSON con `--json`); stderr = log, avvisi di sistema, prompt. **Sessione (H4)**: `muffin run` = thread effimero per invocazione (`--session <id>` per continuare); REPL = una sessione per lancio, `/new` per azzerare. **Ctrl+C (H5)**: primo = annulla il turno in corso (abort del `signal`, il REPL resta); secondo entro 2s = esce. **Librerie (H6, J-*)**: `commander` (CLI), `@inquirer/prompts` (init), `readline` nativo per il REPL v1 (Ink solo se il REPL cresce), `zod` (schemi), `@opentelemetry/api`+`sdk-trace-node` con exporter custom su file, `better-sqlite3` **già in M0** (budget e audit: J3), `@anthropic-ai/sdk` + `openai` per i due adapter, `age` via libreria JS per i secrets. Vietati: framework LLM/agentici, graph-engine, ORM.
 
-*(Aggiunte dopo M1, ciascuna con la sua ADR e ciascuna una libreria importata nel processo — mai un sottoprocesso, mai un servizio terzo che legga i dati dell'owner al posto nostro: `defuddle`+`linkedom`+`turndown` per l'estrazione HTML (ADR-0041), `unpdf` per i PDF (ADR-0042, zero dipendenze runtime, pdf.js di Mozilla sotto). Il DOCX **non** ha portato una libreria: `node:zlib` più un lettore di directory centrale ZIP in `core/documents/zip.ts`, perché la scelta standard — `mammoth` — costa dieci dipendenze runtime per una voce sola di un archivio.)*
+*(Aggiunte dopo M1, ciascuna con la sua ADR e ciascuna una libreria importata nel processo — mai un sottoprocesso, mai un servizio terzo che legga i dati dell'owner al posto nostro: `defuddle`+`linkedom`+`turndown` per l'estrazione HTML (ADR-0041), `unpdf` per i PDF (ADR-0042, zero dipendenze runtime, pdf.js di Mozilla sotto). Il DOCX **non** ha portato una libreria: `node:zlib` più un lettore bounded della directory centrale e delle parti OOXML collegate in `core/documents/{zip,extract}.ts`; la scelta standard `mammoth` costa dieci dipendenze runtime.)*
 
 ## 11. Test (I1-I6)
 

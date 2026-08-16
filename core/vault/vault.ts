@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import {
   extractDocument,
   readableText,
@@ -151,6 +151,11 @@ export type ReindexOptions = {
   vectors?: VectorIndex | undefined;
 };
 
+type VaultScan = {
+  files: VaultFile[];
+  skipped: { path: string; why: string }[];
+};
+
 export class Vault {
   constructor(
     private readonly store: MemoryStore,
@@ -161,21 +166,21 @@ export class Vault {
    * Every file under the vault root that could be content, plus the ones that
    * could not and why.
    *
-   * **Symlinks are followed.** A vault whose notes live somewhere else and are
-   * linked in is the ordinary setup, not an edge case, and the previous version
-   * dropped them silently: `Dirent.isFile()` is false for a link, so a linked
-   * note was invisible — and `audit()` built its "disk" side from this same
-   * function, which meant the two sides that exist to disagree shared a blind
-   * spot. Following them means the filter has to run on the resolved path, which
-   * it does.
+   * Symlinks are followed only when their target remains inside the vault.
+   * External targets used to be indexed but could never be reopened by
+   * `document_read`; allowing the later read would instead create a TOCTOU path
+   * where retargeting the link changes the source after indexing. The honest
+   * boundary is therefore visible refusal until external material is imported
+   * into immutable storage inside the vault.
    *
    * `audit()` and `reindex()` both go through here on purpose: one enumeration,
    * so they cannot drift.
    */
-  list(): { files: VaultFile[]; skipped: { path: string; why: string }[] } {
+  list(): VaultScan {
     const files: VaultFile[] = [];
     const skipped: { path: string; why: string }[] = [];
     const visited = new Set<string>();
+    const rootReal = realpathSync(this.root);
 
     const walk = (dir: string): void => {
       let entries;
@@ -202,6 +207,14 @@ export class Vault {
         const reason = skipReason(rel, real);
         if (reason !== null) {
           skipped.push({ path: rel, why: reason });
+          continue;
+        }
+
+        if (real !== rootReal && !real.startsWith(`${rootReal}${sep}`)) {
+          skipped.push({
+            path: rel,
+            why: 'link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile',
+          });
           continue;
         }
 
@@ -234,6 +247,68 @@ export class Vault {
    * from the evidence plane — "what did that note say in May" stays answerable.
    */
   async reindex(tenantId: string, options: ReindexOptions = {}): Promise<VaultReport> {
+    return this.indexScan(tenantId, this.list(), options, true);
+  }
+
+  /**
+   * Indexes exactly one file already inside the vault.
+   *
+   * An attachment arrival is not a request to grant its tenant visibility over
+   * every other file in the shared vault. The old connector called `reindex`
+   * here: the tenant was correct, but the scan copied private owner notes into a
+   * group tenant and made every attachment O(vault size). Keep the full scan for
+   * explicit maintenance commands; ingress paths must name the bytes they own.
+   */
+  async reindexPath(
+    tenantId: string,
+    vaultPath: string,
+    options: ReindexOptions = {},
+  ): Promise<VaultReport> {
+    return this.indexScan(tenantId, this.scanPath(vaultPath), options, false);
+  }
+
+  private scanPath(vaultPath: string): VaultScan {
+    const skipped = (why: string): VaultScan => ({ files: [], skipped: [{ path: vaultPath, why }] });
+    const root = resolve(this.root);
+    const full = resolve(root, vaultPath);
+    const normalized = relative(root, full).split(sep).join('/');
+
+    // A vault path is a durable identifier as well as a filesystem location.
+    // Accepting aliases such as `a/../b` would let the index and document_read
+    // disagree about which identifier owns the bytes.
+    if (normalized === '' || normalized === '..' || normalized.startsWith('../') || normalized !== vaultPath) {
+      return skipped('percorso fuori dal vault o non canonico');
+    }
+
+    let real: string;
+    let stat;
+    try {
+      real = realpathSync(full);
+      stat = statSync(full);
+    } catch {
+      return skipped('file illeggibile o inesistente');
+    }
+
+    const rootReal = realpathSync(this.root);
+    const reason = skipReason(normalized, real);
+    if (reason !== null) return skipped(reason);
+    if (real !== rootReal && !real.startsWith(`${rootReal}${sep}`)) {
+      return skipped('link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile');
+    }
+    if (!stat.isFile()) return skipped('non è un file');
+
+    return {
+      files: [{ path: normalized, bytes: stat.size, ...(real !== full ? { linkedTo: real } : {}) }],
+      skipped: [],
+    };
+  }
+
+  private async indexScan(
+    tenantId: string,
+    scan: VaultScan,
+    options: ReindexOptions,
+    retireMissing: boolean,
+  ): Promise<VaultReport> {
     const now = (options.now ?? (() => new Date()))().toISOString();
     const defaultTier = options.defaultTier ?? 0;
     const report: VaultReport = {
@@ -241,7 +316,6 @@ export class Vault {
       skipped: [], documents: [], errors: [],
     };
 
-    const scan = this.list();
     report.skipped.push(...scan.skipped);
     const seen = new Set<string>();
     const retired: number[] = [];
@@ -267,10 +341,10 @@ export class Vault {
       const existing = this.store.episodesForVaultPath(tenantId, file.path);
       const existingHash = existing.length > 0 ? metaOf(existing[0]!.mediaMeta).hash : undefined;
 
-      // Before extraction, not after: this is what keeps `reindex` cheap now
-      // that a document can cost a PDF parse. A Telegram attachment reindexes
-      // the whole vault, so an unchanged PDF must cost one read and one hash —
-      // never a re-parse to discover it had not changed.
+      // Before extraction, not after: this is what keeps a maintenance reindex
+      // cheap now that a document can cost a PDF parse. An unchanged PDF must
+      // cost one read and one hash — never a re-parse to discover it had not
+      // changed.
       if (existingHash === identity.hash) {
         report.unchanged += 1;
         continue;
@@ -358,11 +432,13 @@ export class Vault {
 
     // Files that are no longer on disk: the source is gone, so the index must
     // stop answering from it.
-    for (const known of this.store.vaultPaths(tenantId)) {
-      if (seen.has(known.vaultPath)) continue;
-      const stale = this.store.episodesForVaultPath(tenantId, known.vaultPath);
-      retired.push(...stale.map((e) => e.id));
-      report.removed += 1;
+    if (retireMissing) {
+      for (const known of this.store.vaultPaths(tenantId)) {
+        if (seen.has(known.vaultPath)) continue;
+        const stale = this.store.episodesForVaultPath(tenantId, known.vaultPath);
+        retired.push(...stale.map((e) => e.id));
+        report.removed += 1;
+      }
     }
 
     if (retired.length > 0) {
