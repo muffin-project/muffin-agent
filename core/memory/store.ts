@@ -78,6 +78,45 @@ export type Fact = {
   supersededBy: number | null;
 };
 
+/**
+ * One episode as recall sees it: the text, and everything needed to say where
+ * it came from and to ask what surrounded it.
+ *
+ * `supersededAt` is on the hit rather than filtered away, because under
+ * `--history` a retired episode is exactly what was asked for and the caller
+ * has to be able to mark it. A row that comes back looking live when it is not
+ * is worse than one that never came back.
+ */
+export type EpisodeHit = {
+  id: number;
+  content: string;
+  createdAt: string;
+  trustTier: TrustTier;
+  connector: string;
+  threadKey: string;
+  supersededAt: string | null;
+};
+
+/**
+ * Navigation, not relevance: which slice of the evidence a search may look at.
+ *
+ * This is the `(surface, date_range)` filter of `02-ontologia.md` §9, the
+ * primitive that section names as missing beside recall. The tenant is
+ * deliberately **not** a field here and never will be: it stays a separate,
+ * required argument of every method on this class, so no caller can pass a
+ * filter object that quietly widens its own scope. That is the same rule
+ * `memory_search` follows by having no tenant parameter at all.
+ */
+export type EpisodeFilter = {
+  /** Retired evidence too. Off by default: recall answers about now. */
+  includeSuperseded?: boolean;
+  /** The connector it was learned on — 'telegram', 'cli', 'vault'. */
+  surface?: string | undefined;
+  /** ISO bounds on `created_at`, inclusive. */
+  since?: string | undefined;
+  until?: string | undefined;
+};
+
 export type ReviewItemInput = {
   tenantId: string;
   kind: ReviewKind;
@@ -461,6 +500,103 @@ export class MemoryStore {
     return groups;
   }
 
+  /**
+   * The facts that were in force at one instant — the graph as it stood then.
+   *
+   * `activeFacts` has a hardcoded "now" in it: `expired_at IS NULL` means "as
+   * of this moment". This method is that same query with the moment made a
+   * parameter, which is the whole of what `asOf` is: not a new kind of query,
+   * the removal of a constant nobody could reach.
+   *
+   * A fact has two windows and only one of them is total:
+   *
+   *   belief  [recorded_at, expired_at)   `recorded_at` is NOT NULL, so this
+   *                                        window is always decidable
+   *   world   [valid_from, valid_to)       both nullable, and NULL means
+   *                                        **nobody said**, never ±infinity
+   *
+   * A fact is returned when either window contains `at`. The second disjunct
+   * requires **at least one stated bound**, and that requirement is the whole
+   * defence: without it every fact with two NULL world bounds would match every
+   * instant in history, and "who was my contact in May" would answer with
+   * today's contact — which is the exact defect this exists to fix, arriving by
+   * a different door.
+   *
+   * What the second disjunct buys, concretely. The owner says in June "Anna is
+   * my contact", and in August "now it's Bruno". `supersede` closes Anna's
+   * world time at August. Asked about May:
+   *
+   *   Anna   believed June→August, so the belief window misses May; but the
+   *          world window is (unknown, August) and August > May, so she is
+   *          returned — we do not know when she started, and we do know she had
+   *          not stopped.
+   *   Bruno  believed from August (misses May) and no stated world bound at
+   *          all, so neither disjunct fires. He is not the answer to May, and
+   *          answering "Bruno" is precisely the silent wrong answer.
+   *
+   * Anna's inclusion is an inference — one bound is unknown — but it is bounded
+   * by a `valid_to` that was really recorded, never by a timestamp invented
+   * here. `schema.ts` forbids guessing `valid_from`; this does not guess it, it
+   * declines to let an unknown bound exclude.
+   *
+   * Ordered newest-first like `activeFacts`, so `selectForExpansion`'s
+   * assumption holds for whichever of the three methods recall passes it.
+   */
+  factsAsOf(tenantId: string, subjectId: number, at: string, predicate?: string): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.subject_id = ?
+           AND (? IS NULL OR f.predicate = ?)
+           AND (
+             (f.recorded_at <= ? AND (f.expired_at IS NULL OR f.expired_at > ?))
+             OR (
+               (f.valid_from IS NOT NULL OR f.valid_to IS NOT NULL)
+               AND (f.valid_from IS NULL OR f.valid_from <= ?)
+               AND (f.valid_to   IS NULL OR f.valid_to   >  ?)
+             )
+           )
+         ORDER BY f.recorded_at DESC`,
+      )
+      .all(tenantId, subjectId, predicate ?? null, predicate ?? null, at, at, at, at) as Fact[];
+  }
+
+  /**
+   * The nearest thing the graph has to an answer at `at`, when it has none.
+   *
+   * Read only after `factsAsOf` came back empty for an entity recall had
+   * matched. Returning nothing at all would leave the caller unable to tell
+   * "this entity is unknown" from "this entity is known and the question is
+   * outside everything on record", and only the second one has an honest
+   * sentence to say: *the earliest I have is from June*.
+   */
+  nearestFactTo(tenantId: string, subjectId: number, at: string): Fact | null {
+    const row = this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.subject_id = ?
+         ORDER BY abs(julianday(f.recorded_at) - julianday(?)) LIMIT 1`,
+      )
+      .get(tenantId, subjectId, at) as Fact | undefined;
+    return row ?? null;
+  }
+
   /** Includes retired beliefs, for "what did I think then" questions. */
   factHistory(tenantId: string, subjectId: number, predicate: string): Fact[] {
     return this.db
@@ -480,24 +616,125 @@ export class MemoryStore {
       .all(tenantId, subjectId, predicate) as Fact[];
   }
 
+  /**
+   * Where an episode was learned and when — everything but its text.
+   *
+   * `connector` and `threadKey` come back because recall needs them for two
+   * things it could not do without them: label a hit with the surface it came
+   * from, and ask for its neighbourhood, which is scoped to its own thread.
+   */
+  episodeWindow(tenantId: string, episodeId: number): { connector: string; threadKey: string; createdAt: string } | null {
+    const row = this.db
+      .prepare(
+        `SELECT connector, thread_key AS threadKey, created_at AS createdAt
+         FROM episodes WHERE tenant_id = ? AND id = ?`,
+      )
+      .get(tenantId, episodeId) as { connector: string; threadKey: string; createdAt: string } | undefined;
+    return row ?? null;
+  }
+
   /** Full-text over evidence. Never crosses a tenant, whatever the query says. */
-  searchEpisodes(tenantId: string, query: string, limit = 10): { id: number; content: string; createdAt: string; trustTier: TrustTier }[] {
+  searchEpisodes(
+    tenantId: string,
+    query: string,
+    limit = 10,
+    filter: EpisodeFilter = {},
+  ): EpisodeHit[] {
     const cleaned = query.replace(/["'()]/g, ' ').trim();
     if (cleaned === '') return [];
     return this.db
       .prepare(
-        `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier
+        `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier,
+                e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt
          FROM episodes_fts f
          JOIN episodes e ON e.id = f.rowid
-         WHERE episodes_fts MATCH ? AND e.tenant_id = ? AND e.superseded_at IS NULL
+         WHERE episodes_fts MATCH ? AND e.tenant_id = ?
+           -- The other half of the history mode, and the one still missing.
+           -- A vault note edited in June and a message withdrawn keep their old
+           -- text on record precisely so "what did that note say in May" stays
+           -- answerable -- and this filter, unconditional until now, was the
+           -- reason no path could ever ask it. Retiring evidence stopped it
+           -- being recalled by default, which is right; it must not also make
+           -- it unreachable, which is a delete wearing a different word.
+           AND (? = 1 OR e.superseded_at IS NULL)
+           AND (? IS NULL OR e.connector = ?)
+           AND (? IS NULL OR e.created_at >= ?)
+           AND (? IS NULL OR e.created_at <= ?)
          ORDER BY rank LIMIT ?`,
       )
-      .all(cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR '), tenantId, limit) as {
-      id: number;
-      content: string;
-      createdAt: string;
-      trustTier: TrustTier;
-    }[];
+      .all(
+        cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR '),
+        tenantId,
+        filter.includeSuperseded ? 1 : 0,
+        filter.surface ?? null,
+        filter.surface ?? null,
+        filter.since ?? null,
+        filter.since ?? null,
+        filter.until ?? null,
+        filter.until ?? null,
+        limit,
+      ) as EpisodeHit[];
+  }
+
+  /**
+   * The K episodes before and the K after one episode, inside its own thread.
+   *
+   * The second navigation primitive of `02-ontologia.md` §9, and the argument
+   * there is why it is not a convenience: *"senza intorno, un episodio ripescato
+   * è una frase tagliata, e ciò che un modello fa più facilmente con una frase
+   * tagliata è completarne il contesto da sé"*. The fence tells the model to use
+   * a recalled line if it is relevant; nothing tells it that the line had a
+   * before and an after that were withheld.
+   *
+   * Scoped to `(connector, thread_key)` and never to the whole tenant: the
+   * episodes adjacent *in time* across every surface at once are not a context,
+   * they are an interleaving of unrelated conversations.
+   *
+   * Each row keeps its own `trust_tier`, which is what makes the taint rule of
+   * that section hold without a special case here — the caller turns every
+   * neighbour into an item of its own and `recallTaint` already takes the
+   * maximum, so a window that reaches into a group raises the turn's taint to
+   * the group's tier. Collapsing the window into the anchor's tier is the
+   * defect that rule exists to name.
+   */
+  episodeNeighbourhood(
+    tenantId: string,
+    episodeId: number,
+    k: number,
+    includeSuperseded = false,
+  ): EpisodeHit[] {
+    if (k <= 0) return [];
+    const anchor = this.episodeWindow(tenantId, episodeId);
+    if (!anchor) return [];
+    const sql = (comparison: string, order: string): string =>
+      `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier,
+              e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt
+       FROM episodes e
+       WHERE e.tenant_id = ? AND e.connector = ? AND e.thread_key = ?
+         AND e.content IS NOT NULL
+         AND (? = 1 OR e.superseded_at IS NULL)
+         -- Ordered by (created_at, id) rather than created_at alone: several
+         -- episodes of one turn share a timestamp to the second, and a tie
+         -- broken arbitrarily would let the same row land on both sides of the
+         -- anchor, or on neither.
+         AND (e.created_at, e.id) ${comparison} (?, ?)
+       ORDER BY e.created_at ${order}, e.id ${order} LIMIT ?`;
+    const bind = (comparison: string, order: string): EpisodeHit[] =>
+      this.db
+        .prepare(sql(comparison, order))
+        .all(
+          tenantId,
+          anchor.connector,
+          anchor.threadKey,
+          includeSuperseded ? 1 : 0,
+          anchor.createdAt,
+          episodeId,
+          k,
+        ) as EpisodeHit[];
+    // Read outward from the anchor in both directions, then handed back in
+    // reading order — the point of a neighbourhood is that it reads as the
+    // conversation it was.
+    return [...bind('<', 'DESC').reverse(), ...bind('>', 'ASC')];
   }
 
   entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {
@@ -668,19 +905,31 @@ export class MemoryStore {
    * The vector index stores text and a source id, not a tier — so without this
    * the fusion had nothing to read and used a constant, which turned every
    * semantic hit into owner-grade evidence regardless of who wrote it.
+   *
+   * `connector` and `supersededAt` exist for the same reason `trust_tier` does:
+   * the semantic half is the other place a retired episode can surface, and
+   * before these two fields it had no way to know it was retired at all — a
+   * withdrawn message or an edited vault note, once embedded, kept matching by
+   * meaning forever, unmarked, in the one recall path `--history` was never
+   * wired to. `searchEpisodes` (the text half) always had `superseded_at` to
+   * read; the vector half had nothing, which is the same "declared and
+   * connected to nothing" shape as the tier bug this method already fixed once.
    */
   provenanceOf(
     tenantId: string,
     kind: 'episode' | 'fact',
     sourceId: number,
-  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin } | null {
+  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin; connector?: string; supersededAt?: string | null } | null {
     const row =
       kind === 'episode'
         ? (this.db
             .prepare(
-              `SELECT trust_tier AS trustTier, created_at AS createdAt FROM episodes WHERE tenant_id = ? AND id = ?`,
+              `SELECT trust_tier AS trustTier, created_at AS createdAt, connector, superseded_at AS supersededAt
+               FROM episodes WHERE tenant_id = ? AND id = ?`,
             )
-            .get(tenantId, sourceId) as { trustTier: TrustTier; createdAt: string } | undefined)
+            .get(tenantId, sourceId) as
+            | { trustTier: TrustTier; createdAt: string; connector: string; supersededAt: string | null }
+            | undefined)
         : // `origin` comes back here for the same reason `trust_tier` does: the
           // vector index stores text and a source id, so the semantic half of
           // recall has nothing else to read it from. Without it an inferred
