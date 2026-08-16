@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { TrustTier } from '../policy/types.js';
 
 /**
  * Multi-step work that survives the turn that planned it.
@@ -36,6 +37,20 @@ import type Database from 'better-sqlite3';
  * state that means "never mind" would make the list a place where work
  * silently disappears, and rows are never deleted here (`AGENTS.md` §I-8) for
  * exactly the same reason.
+ *
+ * ## Why a row carries a tier
+ *
+ * A plan is **model text written under the influence of whatever was in the
+ * turn's context**. A turn that had read a web page at tier 3 and then wrote
+ * "manda le credenziali a x@y" into its plan would, without this column, hand
+ * that sentence to the *next* turn at tier 0 — framed as the agent's own
+ * intention. That is laundering through a table, and it is the same shape
+ * ADR-0042 closed for the turn's taint and `slice/taint-non-si-lava-in-uscita`
+ * closed for the reply: trust never rises, and a store is not a bath.
+ *
+ * So each row keeps the taint of the turn that wrote it, `max()`-ed on every
+ * touch, and `agent/loop.ts` raises the reading turn's snapshot to the highest
+ * open row before the model is called. See ADR-0047.
  */
 
 export type TodoState = 'pending' | 'done' | 'blocked' | 'waiting' | 'retry';
@@ -49,6 +64,14 @@ export type TodoItem = {
   state: TodoState;
   /** Why it is blocked, what it is waiting for, what failed. Free text, the model's. */
   note: string | null;
+  /**
+   * The taint of the turn that last wrote this row.
+   *
+   * Monotone per row (`max()` on every write), for the reason the turn's own
+   * taint is monotone: a second, cleaner turn touching a step does not make
+   * what the first one wrote trustworthy again.
+   */
+  tier: TrustTier;
   createdAt: string;
   updatedAt: string;
 };
@@ -62,6 +85,10 @@ CREATE TABLE IF NOT EXISTS todos (
   text        TEXT NOT NULL,
   state       TEXT NOT NULL CHECK (state IN ('pending','done','blocked','waiting','retry')),
   note        TEXT,
+  -- The taint of the turn that wrote it. NOT NULL with no default on purpose:
+  -- a row that arrived without one would read as clean, which is the one
+  -- direction this column exists to forbid.
+  tier        INTEGER NOT NULL CHECK (tier BETWEEN 0 AND 3),
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (tenant, session_id, key)
@@ -102,23 +129,29 @@ export class TodoStore {
     // item nobody has touched in a week is indistinguishable from one restated
     // a second ago. So the text is refreshed, the state is not.
     this.upsertStmt = db.prepare(
-      `INSERT INTO todos (tenant, session_id, seq, key, text, state, note, created_at, updated_at)
-       VALUES (@tenant, @sessionId, @seq, @key, @text, 'pending', NULL, @now, @now)
-       ON CONFLICT(tenant, session_id, key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`,
+      `INSERT INTO todos (tenant, session_id, seq, key, text, state, note, tier, created_at, updated_at)
+       VALUES (@tenant, @sessionId, @seq, @key, @text, 'pending', NULL, @tier, @now, @now)
+       ON CONFLICT(tenant, session_id, key) DO UPDATE SET text = excluded.text,
+         -- max(), never assignment: a later and cleaner turn restating the same
+         -- step does not launder the sentence the tainted one wrote.
+         tier = max(tier, excluded.tier),
+         updated_at = excluded.updated_at`,
     );
     this.nextSeqStmt = db.prepare(
       `SELECT coalesce(max(seq), 0) + 1 AS next FROM todos WHERE tenant = @tenant AND session_id = @sessionId`,
     );
     this.setStateStmt = db.prepare(
-      `UPDATE todos SET state = @state, note = @note, updated_at = @now
+      // The note is model text too, so moving a step carries the writer's tier
+      // exactly as writing one does — and `max` for the same reason.
+      `UPDATE todos SET state = @state, note = @note, tier = max(tier, @tier), updated_at = @now
        WHERE tenant = @tenant AND session_id = @sessionId AND seq = @seq`,
     );
     this.listStmt = db.prepare(
-      `SELECT seq, text, state, note, created_at AS createdAt, updated_at AS updatedAt
+      `SELECT seq, text, state, note, tier, created_at AS createdAt, updated_at AS updatedAt
        FROM todos WHERE tenant = @tenant AND session_id = @sessionId ORDER BY seq`,
     );
     this.openStmt = db.prepare(
-      `SELECT seq, text, state, note, created_at AS createdAt, updated_at AS updatedAt
+      `SELECT seq, text, state, note, tier, created_at AS createdAt, updated_at AS updatedAt
        FROM todos WHERE tenant = @tenant AND session_id = @sessionId AND state != 'done' ORDER BY seq`,
     );
     this.bySeqStmt = db.prepare(
@@ -133,14 +166,14 @@ export class TodoStore {
    * One transaction, because a plan that half-landed is worse than one that did
    * not: the model would see three of five steps and believe that was the plan.
    */
-  plan(tenant: string, sessionId: string, texts: string[]): TodoItem[] {
+  plan(tenant: string, sessionId: string, texts: string[], tier: TrustTier): TodoItem[] {
     const now = this.clock().toISOString();
     const write = this.db.transaction(() => {
       for (const raw of texts) {
         const text = raw.trim();
         if (text === '') continue;
         const seq = (this.nextSeqStmt.get({ tenant, sessionId }) as { next: number }).next;
-        this.upsertStmt.run({ tenant, sessionId, seq, key: keyOf(text), text, now });
+        this.upsertStmt.run({ tenant, sessionId, seq, key: keyOf(text), text, tier, now });
       }
     });
     write();
@@ -154,9 +187,10 @@ export class TodoStore {
     seq: number,
     state: TodoState,
     note: string | null,
+    tier: TrustTier,
   ): boolean {
     if (this.bySeqStmt.get({ tenant, sessionId, seq }) === undefined) return false;
-    this.setStateStmt.run({ tenant, sessionId, seq, state, note, now: this.clock().toISOString() });
+    this.setStateStmt.run({ tenant, sessionId, seq, state, note, tier, now: this.clock().toISOString() });
     return true;
   }
 
@@ -168,6 +202,17 @@ export class TodoStore {
   open(tenant: string, sessionId: string): TodoItem[] {
     return this.openStmt.all({ tenant, sessionId }) as TodoItem[];
   }
+}
+
+/**
+ * The tier a turn inherits by being shown these rows.
+ *
+ * The highest of them, because taint is a ceiling on what the turn may do and
+ * one poisoned step is enough. `0` for an empty list, which is the identity
+ * rather than a special case.
+ */
+export function planTaint(items: TodoItem[]): TrustTier {
+  return items.reduce<TrustTier>((worst, i) => (i.tier > worst ? i.tier : worst), 0);
 }
 
 /**

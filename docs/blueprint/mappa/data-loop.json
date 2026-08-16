@@ -72,7 +72,7 @@
       "n": 3,
       "id": "turn-starts",
       "title": "runTurn scrive il record, poi apre span e snapshot",
-      "file": "agent/loop.ts:399-449, 550-600",
+      "file": "agent/loop.ts:425-475, 576-626",
       "what": "runTurn apre uno span 'muffin.turn' e scrive SUBITO la riga in `turns` (status running, modello pinnato, trascritto con le sole parole dell'owner, taint iniziale) — non dentro un try: una riga che non si puo' scrivere ferma il turno prima che accada qualsiasi cosa. Poi `drive` costruisce il PermissionSnapshot a partire dalla taint DELLA RIGA e calcola tenantClass (owner|group). `drive` e' lo stesso corpo per un turno fresco e per uno ripreso: cambia solo lo stato di partenza.",
       "taint": "letta dal record, mai riderivata dal principal: makeSnapshot parte da record.taint (loop.ts:594, 1742). Su un turno fresco vale 0 (owner/system) o 2 (member); su una ripresa vale la taint a cui quel turno era gia' salito",
       "branches": []
@@ -82,7 +82,7 @@
       "id": "episode-recorded",
       "title": "Le parole dell'utente registrate prima del modello",
       "file": "agent/loop.ts:271-283",
-      "what": "Se la memoria e' configurata, il testo grezzo del turno viene scritto come episodio (trustTier 0 o 2) PRIMA di qualsiasi chiamata al modello, cosi' un crash a meta' turno non perde mai l'input che lo ha causato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:670).",
+      "what": "Se la memoria e' configurata, il testo grezzo del turno viene scritto come episodio (trustTier 0 o 2) PRIMA di qualsiasi chiamata al modello, cosi' un crash a meta' turno non perde mai l'input che lo ha causato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
       "taint": "0 (owner) o 2 (member), da episode.trustTier",
       "branches": []
     },
@@ -91,7 +91,7 @@
       "id": "recall",
       "title": "Il recupero di memoria gira e puo' alzare la taint",
       "file": "agent/loop.ts:289-314; core/memory/recall.ts:160-276",
-      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita', limitato a 8 elementi di default (recall.ts:166), poi eventualmente re-ranka. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:293), recintato come contesto a bassa autorita'. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:670).",
+      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita', limitato a 8 elementi di default (recall.ts:166), poi eventualmente re-ranka. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:293), recintato come contesto a bassa autorita'. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
       "taint": "puo' salire fino al trustTier massimo tra gli elementi recuperati (0-3) — loop.ts:299-300",
       "branches": [
         {
@@ -106,7 +106,7 @@
       "id": "context-assembled",
       "title": "Tool filtrati, prompt e storia assemblati",
       "file": "agent/loop.ts:316-334, 888-931; agent/context/assemble.ts:107-192",
-      "what": "I tool sono filtrati per principal/capabilities (visibleTools) e poi tagliati a profile.maxToolsExposed. buildContext prende gli ultimi 40 messaggi user/assistant della sessione (MAX_HISTORY_TURNS), annuncia un troncamento se ne sono stati scartati di piu' vecchi, e accoda memoria recuperata + il nuovo messaggio all'ultimo turno utente. Il system prompt e' la stringa owner o group pre-costruita al boot, scelta da tenantClass. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:670).",
+      "what": "I tool sono filtrati per principal/capabilities (visibleTools) e poi tagliati a profile.maxToolsExposed. buildContext prende gli ultimi 40 messaggi user/assistant della sessione (MAX_HISTORY_TURNS), annuncia un troncamento se ne sono stati scartati di piu' vecchi, e accoda memoria recuperata + il nuovo messaggio all'ultimo turno utente. Il system prompt e' la stringa owner o group pre-costruita al boot, scelta da tenantClass. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
       "taint": "invariata qui — questo passo decide COSA viene mostrato, non quanto e' tainted",
       "branches": []
     },
@@ -255,7 +255,7 @@
         {
           "cond": "l'handler chiama ctx.suspend (solo `wait`)",
           "goto": "turn-suspends",
-          "note": "la barriera e' ARMATA, non eseguita: il batch finisce e ogni tool_use riceve il suo tool_result, poi la sospensione avviene fra un'iterazione e l'altra — agent/loop.ts:756"
+          "note": "la barriera e' ARMATA, non eseguita: il batch finisce e ogni tool_use riceve il suo tool_result, poi la sospensione avviene fra un'iterazione e l'altra — agent/loop.ts:819"
         }
       ]
     },
@@ -263,7 +263,7 @@
       "n": 14,
       "id": "turn-suspends",
       "title": "Il turno si sospende e RILASCIA il runtime",
-      "file": "agent/loop.ts:756, 1072-1120; core/turns/wait.ts; agent/tools/wait.ts",
+      "file": "agent/loop.ts:819, 1161-1209; core/turns/wait.ts; agent/tools/wait.ts",
       "what": "Punto di sospensione 1: nulla e' in volo. Lo stato (trascritto, taint, contatori) va su disco con una sola UPDATE che porta la riga a `waiting`, scrive `wake_at`/`wait_for` e RILASCIA la rivendicazione; poi runTurn RITORNA con stopped:'suspended'. E' questa la meta' che distingue un wait da un `await sleep()`: il processo non tiene niente mentre la scadenza scorre. La scadenza e' obbligatoria (min 60s, max 7 giorni) e il tetto e' 8 turni sospesi per tenant.",
       "taint": "salvata sulla riga com'e' adesso, e riletta da li' alla ripresa — mai riderivata dal principal",
       "branches": [
@@ -278,14 +278,14 @@
       "n": 15,
       "id": "lane-resumes",
       "title": "La corsia riprende la riga: scadenza, evento, o processo morto",
-      "file": "core/turns/lane.ts:86-140; agent/loop.ts:477-537, 1145-1220",
+      "file": "core/turns/lane.ts:86-140; agent/loop.ts:503-563, 1240-1315",
       "what": "TurnLane.tick valuta le barriere a evento (process_exit) e sveglia in anticipo chi le ha soddisfatte, poi prende una riga da `due` e chiama resumeTurn: claim atomico (una sola corsia la prende), tre rifiuti espliciti — modello diverso (ADR-0037: le firme di thinking appartengono al modello che le ha prodotte), tre riprese gia' spese, turno gia' chiuso — e infine `reconcile`, che ripara un trascritto lasciato con un tool_use senza risposta usando le due righe di turn_tool_calls: esito registrato -> rigiocato; intento senza esito -> `rerunnable` decide, e dove dice no il turno riparte DICHIARANDO che la chiamata puo' essere avvenuta.",
       "taint": "ripristinata dalla colonna della riga — ricostruirla dal principal farebbe ripartire pulito un turno che aveva gia' letto il web",
       "branches": [
         {
           "cond": "il modello configurato non e' quello pinnato sulla riga",
           "goto": "exit",
-          "note": "rifiuto esplicito e riga chiusa: riprovare a ogni boot sarebbe il fallimento silenzioso che il record esiste per non produrre — agent/loop.ts:512"
+          "note": "rifiuto esplicito e riga chiusa: riprovare a ogni boot sarebbe il fallimento silenzioso che il record esiste per non produrre — agent/loop.ts:538"
         },
         {
           "cond": "un'altra corsia ha gia' preso la riga",
@@ -346,7 +346,7 @@
     "verdict": "Morto end-to-end: agent/loop.ts:402 manda sempre `stream: false` su ogni singola chiamata, e ne' agent/providers/anthropic.ts (chat(), righe 42-110) ne' agent/providers/openai-compat.ts (chat(), righe 112-180) leggono mai `call.stream` — un grep sull'intero albero agent/ trova solo quella riga 402 come unico uso del token 'stream:'. Entrambi gli adapter chiamano sempre il metodo .create() non-streaming dell'SDK e restituiscono un ChatResult completo in un colpo solo; nessuna superficie (CLI, Telegram, scheduler) mostra mai testo incrementale."
   },
   "context": {
-    "assembleFn": "agent/loop.ts:888-931 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPrompts, una volta al boot)",
+    "assembleFn": "agent/loop.ts:1771-1830 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPrompts, una volta al boot)",
     "blocks": [
       {
         "name": "system prompt (classe owner|group)",

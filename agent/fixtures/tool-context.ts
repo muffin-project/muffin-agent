@@ -23,6 +23,8 @@ export function toolContext(over: Partial<ToolContext> = {}): ToolContext {
     principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
     turnId: 'turn-under-test',
     sessionId: 'session-under-test',
+    // Clean by default. A test about what a *tainted* turn writes passes its own.
+    taint: () => 0,
     suspend: () => {
       throw new Error('questo tool non dovrebbe sospendere il turno');
     },
