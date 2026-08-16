@@ -666,6 +666,21 @@ L'owner: *"voglio che Muffin nuovo abbia un MVP decente, non che lo mettiamo in 
 
 **Gate 1 — MVP** (il nuovo Muffin è usabile davvero; il vecchio resta acceso). Richiede **M0→M5**: kernel e tracce, loop e CLI, **memoria**, primitivi host con sandbox, surface remote, scheduler e proattività. Non è un demo: ricorda, agisce sulla macchina, parla per primo, si usa da terminale e da chat. **Criterio di uscita**: l'owner lo usa come agente quotidiano per **due settimane consecutive** senza tornare al vecchio per qualcosa che non siano i gruppi.
 
+**DAY-1 READY — l'ingresso nel Gate 1** (direttiva owner 2026-08-16). Prima
+dei quattordici giorni l'inventario M5-bis deve avere zero `BLOCKER` e zero `?`,
+la prova reale deve usare l'installazione dell'owner e lo
+stato deve sopravvivere a restart/errore. Non è un terzo gate di prodotto: è il
+punto osservabile in cui il contatore può partire e i dati smettono di essere
+usa-e-getta. Da lì ogni migrazione conserva ciò che l'uso accumula.
+
+Durante la finestra si continua a fixare e costruire. Una correzione non azzera
+il contatore; un ritorno al vecchio Muffin per una capability personale mancante
+sì. M6/M7 e la preparazione dei gruppi procedono in parallelo, ma i gruppi non
+si riattivano prima dei quattordici giorni. Questo ordine differisce
+dall'architettura: il comportamento gruppo può aspettare, la forma che porta
+tenant, principal, provenienza e capability non può diventare host-only nel
+frattempo.
+
 **Gate 2 — Cutover** (il vecchio si spegne). Richiede MVP + **M6** (introspezione) + **M7** (gruppi con isolamento) + **migrazione della memoria completata e verificata** (02 §8) + **una settimana in parallelo** senza regressioni misurate. Motivo del vincolo: il Muffin in produzione oggi ha gruppi vivi e anni di memoria — spegnerlo prima di averli significa perdere capability che usi, ed è esattamente ciò che l'owner esclude.
 
 Fuori da entrambi i gate (post-v1): community cross-connector, system layer "flagship" (app control, computer-use), MCP Apps.

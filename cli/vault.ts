@@ -69,7 +69,10 @@ export async function cmdVaultAdd(home: string, source: string, tier: TrustTier)
       return 1;
     }
     copyFileSync(from, target);
-    const report = await vault.reindex(TENANT, { defaultTier: tier, vectors: runtime.memory.recall.vectors });
+    const report = await vault.reindexPath(TENANT, basename(from), {
+      defaultTier: tier,
+      vectors: runtime.memory.recall.vectors,
+    });
     const skipped = report.skipped.find((s) => s.path === basename(from));
     if (skipped) {
       process.stderr.write(`copiato ma non indicizzato — ${skipped.why}\n`);

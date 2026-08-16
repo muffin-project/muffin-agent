@@ -66,13 +66,22 @@ principale è del 2025-10-20 — dieci mesi.
 
 **DOCX senza una seconda dipendenza.** `mammoth` è la scelta standard e porta
 **dieci** dipendenze runtime, contro un repo che ne ha tredici e tratta la
-prossima come il rischio che è (`PRACTICES.md` §1). Un `.docx` è uno ZIP di cui
-serve una sola voce, `word/document.xml`, e `node:zlib` fa già la metà difficile:
-`core/documents/zip.ts` sono quaranta righe di lettura della directory centrale
-(APPNOTE 6.3.10 §4.3.12/§4.3.16), con ZIP64, cifratura e metodi diversi da
-stored/deflate **rifiutati per nome** invece che letti male. La fixture è un
-`.docx` vero scritto da un serializzatore altrui (macOS `textutil`), non uno che
-ci siamo costruiti per farci tornare i conti.
+prossima come il rischio che è (`PRACTICES.md` §1). Un `.docx` è uno ZIP:
+`core/documents/zip.ts` legge la directory centrale (APPNOTE 6.3.10
+§4.3.12/§4.3.16) e `extract.ts` segue le relazioni da `document.xml` a header,
+footer, footnote, endnote e commenti. Ogni parte resta nominata nella vista e
+nel drill-down: non viene spacciata per corpo principale. ZIP64, cifratura e
+metodi diversi da stored/deflate sono rifiutati per nome. La fixture è un
+`.docx` vero scritto da un serializzatore altrui (macOS `textutil`), affiancato
+da una fixture multipart che mette una clausola proprio in nota.
+
+**Il contenitore non decide il costo.** Il limite di 20 MB sui byte compressi
+non contiene una zip bomb. La directory centrale viene rifiutata se dichiara
+più di 20 MB di XML testuale complessivo e `inflateRawSync` riceve anche
+`maxOutputLength`: il bound continua quindi a valere quando la dimensione
+dichiarata mente. Lo sniff guarda solo i nomi della directory e non decomprime;
+ogni parte testuale viene aperta una volta sola. Il superamento è `unreadable`
+con motivo visibile, mai un processo lungo lasciato a espandere senza tetto.
 
 **Il fallimento che assomiglia al successo, e perché ha un tipo.** Un PDF di
 scansioni si apre benissimo, dichiara le sue pagine, e restituisce la stringa
@@ -91,6 +100,18 @@ elementi nell'ordine del content stream, quindi due colonne emesse riga-per-riga
 escono fuse su una riga sola (misurato: `"SINISTRA-1 DESTRA-1"`), e i confini di
 cella di una tabella diventano uno spazio (`"Voce Importo"`). Il testo c'è tutto;
 la sua forma no. Vale la stessa cosa per le tabelle DOCX.
+
+Un symlink che esce dal vault non viene indicizzato. Prima appariva nel recall
+ma `document_read` lo rifiutava; consentire la rilettura del target corrente
+avrebbe invece permesso di ritargettare il link dopo l'indice. Finché non esiste
+una copia interna immutabile, il report lo nomina come `link esterno` e non
+promette una via di ritorno che non possiede.
+
+Un arrivo indicizza soltanto il path appena scritto con `reindexPath`. La
+directory fisica è condivisa fra tenant: usare il full `reindex` con il tenant
+del mittente sembrava una propagazione corretta, ma importava anche ogni nota
+host e allegato di altri gruppi nel suo indice. Il full scan resta disponibile
+per la riconciliazione esplicita; non è un'operazione di ingestione.
 
 **Alternative scartate.** *Compattare in ingresso* (indicizzare un riassunto):
 irreversibile, e la perdita non si vede — è esattamente il difetto che C7

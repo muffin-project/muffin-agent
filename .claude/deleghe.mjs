@@ -211,9 +211,12 @@ function stato() {
 
 const sh = (cmd) => {
   try {
-    return execSync(cmd, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return {
+      ok: true,
+      output: execSync(cmd, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }),
+    };
   } catch {
-    return '';
+    return { ok: false, output: '' };
   }
 };
 
@@ -234,36 +237,79 @@ const sh = (cmd) => {
 function riprendi() {
   const reg = registro();
   const prs = new Map();
+  let githubAvailable = true;
+  const gh = sh('gh pr list --state all --limit 60 --json number,title,headRefName,state,mergedAt');
   try {
-    for (const p of JSON.parse(sh('gh pr list --state all --limit 60 --json number,title,headRefName,state,mergedAt') || '[]')) {
+    if (!gh.ok) throw new Error('gh non disponibile');
+    for (const p of JSON.parse(gh.output)) {
       prs.set(p.headRefName, p);
     }
   } catch {
-    /* senza gh si lavora lo stesso, solo con meno contesto */
+    githubAvailable = false;
   }
+  const remote = sh("git branch -r --format='%(refname:short)'");
   const branches = new Set(
-    sh("git branch -r --format='%(refname:short)'")
+    remote.output
       .split('\n')
       .map((b) => b.replace(/^origin\//, '').trim())
       .filter(Boolean),
   );
+
+  // Git answers integration before GitHub enriches it. This remains available
+  // during a gh outage and prevents a merged branch from becoming actionable
+  // again merely because an API call failed.
+  const mergedBranches = new Set();
+  for (const target of ['dev', 'main']) {
+    const merged = sh(
+      `git for-each-ref --merged=refs/remotes/origin/${target} --format='%(refname:short)' refs/remotes/origin`,
+    );
+    if (!merged.ok) continue;
+    for (const ref of merged.output.split('\n').filter(Boolean)) {
+      mergedBranches.add(ref.replace(/^origin\//, '').trim());
+    }
+  }
+  // Merged slice refs are normally deleted. The merge commit subject keeps the
+  // branch name after that deletion, so local ancestry still has a durable
+  // witness without asking GitHub.
+  const mergedSubjects = new Set();
+  const log = sh("git log refs/remotes/origin/dev refs/remotes/origin/main --merges --format='%s'");
+  if (log.ok) {
+    for (const line of log.output.split('\n')) {
+      const match = /^Merge pull request #\d+ from [^/]+\/(.+)$/.exec(line.trim());
+      if (match) mergedSubjects.add(match[1]);
+    }
+  }
 
   const righe = [];
   for (const v of reg) {
     const t = transcriptOf(v.id);
     const branch = v.branch ?? (branches.has(`slice/${v.slug}`) ? `slice/${v.slug}` : null);
     const pr = branch ? prs.get(branch) : undefined;
+    const locallyMerged = branch !== null && (mergedBranches.has(branch) || mergedSubjects.has(branch));
+    const stato = pr?.state === 'MERGED' || locallyMerged
+      ? 'closed'
+      : githubAvailable
+        ? 'open'
+        : 'unknown';
     let dove;
     if (pr?.state === 'MERGED') dove = `mergiata #${pr.number}`;
+    else if (locallyMerged) dove = 'integrata (ancestry Git locale)';
     else if (pr?.state === 'OPEN') dove = `PR #${pr.number} aperta`;
+    else if (!githubAvailable && branch) dove = `branch ${branch}, stato PR sconosciuto`;
+    else if (!githubAvailable) dove = 'stato sconosciuto: GitHub non disponibile';
     else if (branch) dove = `branch ${branch}, nessuna PR`;
     else dove = 'nessun branch';
     const ultimo = t ? statSync(t).mtime.toISOString().slice(5, 16).replace('T', ' ') : '—';
-    righe.push({ slug: v.slug, id: v.id, dove, ultimo, cosa: v.cosa ?? '', vivo: !!t, chiuso: pr?.state === 'MERGED' });
+    righe.push({ slug: v.slug, id: v.id, dove, ultimo, cosa: v.cosa ?? '', vivo: !!t, stato });
   }
 
-  const aperte = righe.filter((r) => !r.chiuso);
-  const chiuse = righe.filter((r) => r.chiuso);
+  const aperte = righe.filter((r) => r.stato === 'open');
+  const chiuse = righe.filter((r) => r.stato === 'closed');
+  const sconosciute = righe.filter((r) => r.stato === 'unknown');
+
+  if (!githubAvailable) {
+    console.log('\n⚠ GitHub non disponibile: nessuna delega incerta viene dichiarata aperta o riprendibile.');
+  }
 
   console.log(`\n═══ APERTE (${aperte.length}) — riprendibili con SendMessage all'id ═══`);
   for (const r of aperte) {
@@ -273,6 +319,12 @@ function riprendi() {
   }
   console.log(`\n═══ CHIUSE (${chiuse.length}) ═══`);
   for (const r of chiuse) console.log(`  ${r.slug.padEnd(22)} ${r.dove}`);
+
+  console.log(`\n═══ SCONOSCIUTE (${sconosciute.length}) — non riprendere senza verifica ═══`);
+  for (const r of sconosciute) {
+    console.log(`  ${r.slug.padEnd(22)} ${r.dove.padEnd(36)} ultimo ${r.ultimo}`);
+    console.log(`  ${' '.repeat(22)} id ${r.id}`);
+  }
 
   // Cosa manca: le righe bloccanti dell'inventario che nessuna delega nomina.
   // È la domanda a cui una sessione morta non saprebbe più rispondere.
