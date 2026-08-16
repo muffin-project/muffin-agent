@@ -7,17 +7,21 @@
 > l'obiettivo successivo.
 
 <!-- INIZIO BLOCCO -->
-**Aggiornato**: 2026-08-15
+**Aggiornato**: 2026-08-16
 
-**Obiettivo** (owner, `/goal`): Muffin regge **14 giorni**. Ogni pezzo verificato end-to-end, **anche i gia-fatti**. Soluzioni architetturali, mai tappabuchi. Ordine: irreversibilita — turno > permessi > superfici > schema.
+**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Fix/build continuano; la forma resta tenant/surface-agnostic. Ordine: turno > permessi > superficie privata > memoria > acceptance.
 
-**Inventario**: 24 righe mai verificate · 15 BLOCKER · 4 READY. Fondo: zero di entrambi.
+**Inventario**: `M5-BIS.md` è autoritativo. DAY-1 parte a zero BLOCKER e zero `?`; niente conteggi copiati che possono invecchiare.
 
-**Deleghe in volo**: accettazione E4 (stato dell'inventario **derivato**) · turno sospeso B2-B5 · superfici+Discord B8 · taint in ingresso · documenti C7 · Hermes.
+**Non integrato**: accettazione E4 · turno sospeso B2-B5 · superfici B8/B14-B16 · memoria-tempo C4/C6 (worktree) · taint/Hermes (branch). Mai READY prima dell'accettazione.
 
-**Ogni giro**: aggiorna questo blocco, ripubblica plancia e mappa, `node docs/blueprint/mappa/ancore.mjs` finche esce 0.
+**Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**La critica di fondo**: le garanzie stanno sui chiamanti, non sui dati — `tier?` opzionale, redazione solo nel tracer, `markRan` cieco alla consegna. Dove una proprieta e' portante, l'assenza non dev'essere rappresentabile: vedi `rerunnable`.
+**Checkpoint**: PR #32 `dev`→`main` è `ADJUST`. PR #34 corregge anche il
+full-scan cross-tenant con `reindexPath` e fixture host+due gruppi: CI+judge,
+merge, poi judge nuovo su #32.
+
+**Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
 **Decisioni owner aperte**: scope lettura sandbox · `mcp.*` per-tool · modello di reversibilita · `ricorda` scrive o propone · lingua doc pubblici · identity/persona.
 <!-- FINE BLOCCO -->

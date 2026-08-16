@@ -59,6 +59,14 @@ sembra ovvia che non ce la si fa.
 - C'è una query senza indice, un `slice()` su una lista che cresce, un loop che
   chiama il modello una volta per elemento?
 
+**È generale, o soltanto vero per la fixture dominante?**
+- Il single-user è espresso come configurazione della stessa forma che useranno
+  più tenant e surface, oppure `host`, Telegram, un provider o una macchina sono
+  diventati assunzioni nascoste?
+- Quali branch, worktree, producer e consumer non compaiono nel diff ma
+  condividono il contratto? Una seconda fixture con valori diversi spezza la
+  garanzia?
+
 **Costa?**
 - Token per turno. Questa roba sta nel prefisso cacheabile o nella coda volatile?
 - Chiamate al modello per turno. Soldi al mese.
