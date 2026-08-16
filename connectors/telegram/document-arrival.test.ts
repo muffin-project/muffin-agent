@@ -8,6 +8,7 @@ import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { runInit } from '../../cli/init.js';
+import { telegramVault } from '../../cli/surface.js';
 import { paths } from '../../core/config/config.js';
 import { buildPdf, pagesWithoutText } from '../../core/documents/fixtures/pdf.js';
 import { TelegramConnector } from './connector.js';
@@ -32,6 +33,8 @@ import { UpdateInbox } from './updates.js';
  */
 
 const OWNER = 4242;
+const GROUP = -100200;
+const STRANGER = 9999;
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 // The vault path includes the receipt day. Pin it: a fixture whose tool call
 // says 2026-08-15 must not start failing only because the wall clock crossed
@@ -47,14 +50,22 @@ const CONTRATTO = buildPdf({
   ],
 });
 
-const withDocument = (id: number, name: string): Update =>
+const withDocument = (
+  id: number,
+  name: string,
+  sender: { chatId: number; fromId: number; type: 'private' | 'supergroup' } = {
+    chatId: OWNER,
+    fromId: OWNER,
+    type: 'private',
+  },
+): Update =>
   ({
     update_id: id,
     message: {
       message_id: id,
       date: 0,
-      chat: { id: OWNER, type: 'private' },
-      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      chat: { id: sender.chatId, type: sender.type },
+      from: { id: sender.fromId, is_bot: false, first_name: 'o' },
       caption: 'tieni questo',
       document: { file_id: `f${id}`, file_unique_id: `u${id}`, file_name: name, file_size: 4096 },
     },
@@ -120,11 +131,7 @@ function harness(bytes: Buffer, script: ChatResult[] = []) {
     // vault — a connector indexing into a second root would produce documents
     // `document_read` cannot open, and every assertion below would still pass
     // if this test built its own.
-    vault: {
-      root: vaultRoot,
-      reindex: (defaultTier) =>
-        runtime.vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
-    },
+    vault: telegramVault(runtime, vaultRoot),
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
     now: () => new Date(RECEIVED_AT),
   });
@@ -238,6 +245,34 @@ describe('a PDF sent to the bot', () => {
       expect(text).toContain('non indicizzato');
       expect(text).toContain('OCR');
       expect(text).toContain('5 pagine');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('keeps a group document in the group tenant and lets that turn reopen it', async () => {
+    const path = 'inbox/2026-08-15-5-contratto.pdf';
+    const tenant = `group:telegram:${GROUP}`;
+    const h = harness(CONTRATTO, [
+      callDocumentRead({ path, da: 2 }),
+      reply('Nel gruppo: canone 850 euro.'),
+    ]);
+    try {
+      await deliver(h, [
+        withDocument(5, 'contratto.pdf', { chatId: GROUP, fromId: STRANGER, type: 'supergroup' }),
+      ]);
+
+      const store = h.runtime.memory.store;
+      const groupDocuments = store.searchEpisodes(tenant, 'Canone')
+        .map((hit) => store.episodeById(tenant, hit.id))
+        .filter((episode) => episode?.kind === 'document');
+      expect(groupDocuments).toHaveLength(1);
+      expect(store.searchEpisodes('host', 'Canone')).toHaveLength(0);
+      expect(await h.runtime.vault.document('host', path)).toBeNull();
+
+      const returned = toolResults(h.seen[1]!);
+      expect(returned).toContain('Canone mensile 850 euro');
+      expect(returned).toContain('[p. 2]');
     } finally {
       h.runtime.close();
     }

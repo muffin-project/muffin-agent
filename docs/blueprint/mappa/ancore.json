@@ -1116,7 +1116,7 @@
   },
   "cli/surface.ts:209": {
     "path": "cli/surface.ts",
-    "line": 211,
+    "line": 209,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:44": {
@@ -1926,12 +1926,12 @@
   },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
-    "line": 323,
+    "line": 331,
     "testo": "this.store.addEpisode({"
   },
   "core/vault/vault.ts:420": {
     "path": "core/vault/vault.ts",
-    "line": 420,
+    "line": 428,
     "testo": "async audit(tenantId: string): Promise<VaultAudit> {"
   },
   "core/vault/vault.ts:48": {
@@ -2156,7 +2156,7 @@
   },
   "docs/blueprint/M5-BIS.md:219": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 219,
+    "line": 224,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
@@ -2791,7 +2791,7 @@
   },
   "vault.ts:219": {
     "path": "core/vault/vault.ts",
-    "line": 291,
+    "line": 299,
     "testo": "// Trust never rises on reindex, and it follows the **content** rather than"
   },
   "vault.ts:26": {

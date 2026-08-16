@@ -181,11 +181,16 @@ ancora verificato — **è un debito, non uno stato**).
 > **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
 > piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
 > percorso vero ci arriva: allegato Telegram → `vault/inbox/` → reindex →
-> episodi `kind='document'`. Il turno riceve una **vista compatta** — indice
-> delle pagine + `document_read` per riaprirne una dal file — invece del
+> episodi `kind='document'`, nello stesso tenant risolto dal connector. Il turno
+> di gruppo riapre il proprio documento e `host` non lo vede. Il turno riceve
+> una **vista compatta** — indice delle pagine + `document_read` per riaprirne una dal file — invece del
 > documento intero. Provato end-to-end in
 > `connectors/telegram/document-arrival.test.ts` con PDF veri costruiti byte per
-> byte, e le stesse dieci asserzioni falliscono se si spegne il parser.
+> byte; il test parte anche da una chat di gruppo e osserva store e tool result.
+> Per DOCX il corpo e le parti OOXML collegate (header, footer, note, commenti)
+> restano nominate; la decompressione ha un bound indipendente dalla dimensione
+> dichiarata nello ZIP. I symlink esterni sono esclusi con motivo visibile,
+> perché non offrirebbero una fonte stabile a `document_read`.
 >
 > ⚠️ **Il limite, dichiarato invece che scoperto dopo.** Un PDF di sole
 > scansioni non ha testo da estrarre: **fallisce in modo esplicito** («PDF senza

@@ -181,21 +181,21 @@ describe('vault', () => {
     expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('nascosto');
   });
 
-  it('follows a symlinked note — the ordinary setup, not an edge case', async () => {
-    // A vault whose notes live elsewhere and are linked in is how people use
-    // this. `Dirent.isFile()` is false for a link, so the previous version
-    // dropped them without a word — and `audit()` shared the blind spot,
-    // reporting "aligned" over a vault it could not see.
+  it('refuses an external symlink instead of indexing a source document_read cannot reopen', async () => {
+    // Indexing this used to advertise a working way back into the note while
+    // Vault.document correctly refused the external realpath. Following it at
+    // read time would be worse: the link can be retargeted after indexing.
     const f = fixture();
     mkdirSync(join(f.root, '..', 'obsidian'), { recursive: true });
     writeFileSync(join(f.root, '..', 'obsidian', 'diario.md'), '# Diario\n\nil ritrovo è al porto\n');
     symlinkSync(join(f.root, '..', 'obsidian', 'diario.md'), join(f.root, 'diario.md'));
 
     const report = await f.vault.reindex(HOST, { now: NOW });
-    expect(report.scanned).toBe(1);
-    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(1);
-    // And the audit agrees with the reindex, because both enumerate the same way.
-    expect(await f.vault.audit(HOST)).toMatchObject({ files: 1, indexed: 1, missing: [], stale: [] });
+    expect(report.scanned).toBe(0);
+    expect(report.skipped.find((s) => s.path === 'diario.md')?.why).toContain('link esterno');
+    expect(f.store.searchEpisodes(HOST, 'porto')).toHaveLength(0);
+    expect(await f.vault.document(HOST, 'diario.md')).toBeNull();
+    expect(await f.vault.audit(HOST)).toMatchObject({ files: 0, indexed: 0, missing: [], stale: [] });
   });
 
   it('does not launder the tier when a file is renamed', async () => {

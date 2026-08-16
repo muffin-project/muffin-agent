@@ -37,9 +37,10 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Integrate: **PR #30/#31** in `dev`, con CI e judge `MERGE`. Aperta **PR #32**
-`dev`→`main`: è un checkpoint nuovo, non eredita quei verdetti e richiede CI
-verde più un judge sull'insieme completo. Il record del checkpoint è **PR #33**.
+Integrate: **PR #30/#31/#33** in `dev`. **PR #32** `dev`→`main` ha ricevuto
+`ADJUST` sul delta completo: isolamento tenant degli allegati, bound e parti
+DOCX, symlink rileggibili e stato deleghe senza GitHub sono in correzione su
+`slice/adjust-main-promotion`. Serviranno CI e judge nuovi.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -104,7 +105,7 @@ Resta aperto solo `structuredOutput` nel `ChatCall` normativo (nessun consumator
 
 **Media chiusi** (2026-08-06): allegato → `vault/inbox/` → indicizzato **prima** del turno, col tier del mittente. Il nome file non è sanificato ma **ricostruito** da un alfabeto sicuro (`../../.ssh/authorized_keys` non ha modo di uscire), niente dotfile, unicità da data+update-id senza check di collisione. Dimensione verificata due volte, e l'URL di download — che contiene il token — non finisce mai in un errore o in un log. Multipart in uscita con `FormData` nativa; `muffin telegram send` è un comando **dell'owner**, non un tool del modello: mandare è azione outward e ha il suo gate. **195 test.**
 
-**Documenti chiusi — M5-bis C7** (2026-08-15, **ADR-0043**). I media erano chiusi, i **documenti** no: `vault.ts` leggeva utf-8 o niente, quindi un PDF finiva in `vault/inbox/` e veniva saltato con «non è testo — serve un estrattore». Muffin diceva *ricevuto* e non una parola era ripescabile — regressione rispetto al vecchio. Ora `core/documents/` estrae **PDF, DOCX e testo interi** (`unpdf` 1.8.1, MIT, zero dipendenze, pdf.js 6.1.200 sotto; DOCX via `node:zlib` + un lettore di directory centrale ZIP di 40 righe, invece delle 10 dipendenze di `mammoth`), il vault li spezza **pagina per pagina** (`p. 3` nella riga di contesto di ogni chunk, così una citazione si può aprire) e il turno riceve una **vista compatta** — indice + `document_read(path, da, a)` che rilegge la porzione **dal file**, non da una copia. Misurato su un PDF vero di 6 pagine: **19.116 caratteri in 83 ms**. Il fallimento che assomiglia al successo — una scansione restituisce `["",""]` — è un'unione tipizzata, non una stringa vuota: `no_text_layer`, e l'owner legge «PDF senza testo selezionabile: N pagine… qui non c'è OCR». Trovato e chiuso di rimbalzo: `reindex` lasciava esplodere l'embedder, quindi con Ollama spento il connettore rispondeva `[allegato NON ricevuto]` **su un documento appena indicizzato per intero**. **1.024 test.**
+**Documenti chiusi — M5-bis C7** (2026-08-15, **ADR-0043**). I media erano chiusi, i **documenti** no: `vault.ts` leggeva utf-8 o niente, quindi un PDF finiva in `vault/inbox/` e veniva saltato con «non è testo — serve un estrattore». Muffin diceva *ricevuto* e non una parola era ripescabile — regressione rispetto al vecchio. Ora `core/documents/` estrae **PDF, DOCX e testo interi** (`unpdf` 1.8.1, MIT, zero dipendenze, pdf.js 6.1.200 sotto; DOCX via `node:zlib` e directory centrale ZIP bounded, invece delle 10 dipendenze di `mammoth`). Il vault conserva le pagine PDF e le parti OOXML collegate con il loro nome semantico; il turno riceve una **vista compatta** — indice + `document_read(path, da, a)` che rilegge la porzione **dal file**, non da una copia. L'output effettivo dell'inflater ha un tetto indipendente dai campi dichiarati nello ZIP; il formato viene riconosciuto senza decomprimerlo due volte. Misurato su un PDF vero di 6 pagine: **19.116 caratteri in 83 ms**. Il fallimento che assomiglia al successo — una scansione restituisce `["",""]` — è un'unione tipizzata, non una stringa vuota: `no_text_layer`, e l'owner legge «PDF senza testo selezionabile: N pagine… qui non c'è OCR». Trovato e chiuso di rimbalzo: `reindex` lasciava esplodere l'embedder, quindi con Ollama spento il connettore rispondeva `[allegato NON ricevuto]` **su un documento appena indicizzato per intero**. **1.024 test.**
 
 **CLI rimodellata su critica owner (2026-08-06)**: `muffin telegram run|send` erano verbi sbagliati — il primo un secondo processo dove ADR-0022 ne prescrive uno, il secondo un chiamante finto bullonato per esercitare il multipart. Ora **`muffin` avvia l'agente** (REPL + ogni surface abilitata nello stesso processo) e le surface si gestiscono col registro di ADR-0021: `muffin surface list|enable|disable`. L'owner chat id sta in config, non in una env var. `sendDocument` resta con un test e un commento che dichiara il chiamante differito (modulo outward) — cablaggio rimandato per decisione, non dimenticato.
 
@@ -550,7 +551,12 @@ worktree contiene `.codex/` non tracciata, che duplica due suite di hook: il run
 integrato conta quindi 98 file e 1.103 passati, mentre il tree Git pulito e
 byte-identico al merge ne conta 96 e 1.075; in entrambi resta 1 saltato.
 La promozione dell'insieme è aperta separatamente come **PR #32** `dev`→`main`;
-il suo verdetto deve nascere dall'integrazione completa.
+il suo primo judge integrato ha restituito `ADJUST` con cinque difetti che le
+review di slice non vedevano: allegati di gruppo indicizzati in `host`, ZIP
+senza bound sull'output, parti DOCX fuori dal corpo perse, symlink esterni
+indicizzati ma non rileggibili e `riprendi` che su errore GitHub dichiarava
+riapribile lavoro già fuso. La correzione viaggia su una slice separata; PR #32
+resta non autorizzata finché un judge nuovo non segue l'insieme corretto.
 
 ## Sessioni 2026-08-09
 

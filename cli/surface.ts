@@ -11,7 +11,7 @@ import {
   ConfigError,
 } from '../core/config/config.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
-import { TelegramConnector } from '../connectors/telegram/connector.js';
+import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 
 /**
@@ -206,18 +206,12 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
         // The runtime's own vault, not a second one: `document_read` reads
         // through that instance, and a connector indexing into a different root
         // would produce documents the model cannot open.
-        const vault = runtime.vault;
-
         const connector = new TelegramConnector({
           loop: runtime.deps,
           sessions: runtime.deps.sessions,
           inbox,
           api,
-          vault: {
-            root: vaultRoot,
-            reindex: (defaultTier) =>
-              vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
-          },
+          vault: telegramVault(runtime, vaultRoot),
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
@@ -266,6 +260,21 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
   }
 
   return { lines, stop: () => stops.forEach((s) => s()) };
+}
+
+/**
+ * The attachment adapter shared by production and its connector acceptance test.
+ *
+ * The tenant is an authority boundary, not decoration. Keeping this adapter as
+ * one named unit means the test exercises the exact place where production once
+ * replaced every resolved group tenant with `host`.
+ */
+export function telegramVault(runtime: Runtime, root: string): NonNullable<ConnectorDeps['vault']> {
+  return {
+    root,
+    reindex: (tenantId, defaultTier) =>
+      runtime.vault.reindex(tenantId, { defaultTier, vectors: runtime.memory.recall.vectors }),
+  };
 }
 
 function hasSecret(ref: string, home: string): boolean {

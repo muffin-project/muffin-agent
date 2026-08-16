@@ -1,5 +1,12 @@
 import { extractText, getDocumentProxy, getMeta } from 'unpdf';
-import { NotAZip, readZipEntry } from './zip.js';
+import { posix } from 'node:path';
+import {
+  MAX_ZIP_ENTRY_BYTES,
+  NotAZip,
+  hasZipEntry,
+  listZipEntries,
+  readZipEntry,
+} from './zip.js';
 
 /**
  * Text out of a document, whole.
@@ -42,6 +49,8 @@ export type ExtractedDocument = {
    * page number in a citation that cannot be checked.
    */
   pages: string[];
+  /** Named OOXML parts when the source has semantic sections without pages. */
+  sections?: { label: string; text: string }[];
   /** From the document's own metadata, when it declares one. */
   title: string | null;
   chars: number;
@@ -79,7 +88,9 @@ export function sniffFormat(bytes: Buffer): DocumentFormat | null {
   if (bytes.subarray(0, 1024).includes('%PDF-')) return 'pdf';
   if (bytes.length >= 4 && bytes.readUInt32LE(0) === 0x04034b50) {
     try {
-      return readZipEntry(bytes, 'word/document.xml') === null ? null : 'docx';
+      // Presence comes from the central directory. Sniffing must never inflate
+      // the document once only to inflate it again during extraction.
+      return hasZipEntry(bytes, 'word/document.xml') ? 'docx' : null;
     } catch {
       return null;
     }
@@ -146,18 +157,79 @@ async function extractPdf(bytes: Buffer): Promise<Extraction> {
 }
 
 function extractDocx(bytes: Buffer): Extraction {
-  let xml: Buffer | null;
+  let sections: { label: string; text: string }[];
   try {
-    xml = readZipEntry(bytes, 'word/document.xml');
+    sections = docxSections(bytes);
   } catch (error) {
     const why = error instanceof NotAZip ? error.message : String(error);
     return failed('unreadable', `DOCX illeggibile: ${why}`);
   }
-  if (xml === null) return failed('unreadable', 'DOCX senza word/document.xml');
+  if (sections.length === 0) return failed('unreadable', 'DOCX senza word/document.xml');
 
-  const text = paragraphsFromWordXml(xml.toString('utf8'));
+  const text = sections.map((section) => section.text).join(PAGE_SEPARATOR);
   if (text.trim() === '') return failed('empty', 'DOCX senza testo');
-  return { ok: true, document: { format: 'docx', text, pages: [text], title: null, chars: text.length } };
+  return {
+    ok: true,
+    document: { format: 'docx', text, pages: [text], sections, title: null, chars: text.length },
+  };
+}
+
+const RELATION_LABELS = new Map([
+  ['header', 'intestazione'],
+  ['footer', 'piè di pagina'],
+  ['footnotes', 'note a piè di pagina'],
+  ['endnotes', 'note finali'],
+  ['comments', 'commenti'],
+]);
+
+/**
+ * Every text-bearing part linked by the main Word document, with a shared
+ * decompression budget. The relation is provenance: a header is not silently
+ * flattened into the body and a footnote remains named as a footnote.
+ */
+function docxSections(bytes: Buffer): { label: string; text: string }[] {
+  const entries = listZipEntries(bytes);
+  const names = new Set(entries.map((entry) => entry.name));
+  if (!names.has('word/document.xml')) return [];
+
+  const parts: { name: string; label: string }[] = [
+    { name: 'word/document.xml', label: 'corpo principale' },
+  ];
+  const rels = readZipEntry(bytes, 'word/_rels/document.xml.rels', 1024 * 1024, entries);
+  if (rels !== null) {
+    for (const tag of rels.toString('utf8').match(/<Relationship\b[^>]*>/g) ?? []) {
+      const attrs = new Map(
+        [...tag.matchAll(/\b([A-Za-z][\w:]*)="([^"]*)"/g)].map((match) => [match[1]!, match[2]!]),
+      );
+      if (attrs.get('TargetMode') === 'External') continue;
+      const kind = attrs.get('Type')?.split('/').pop();
+      const label = kind ? RELATION_LABELS.get(kind) : undefined;
+      const target = attrs.get('Target');
+      if (!label || !target) continue;
+
+      const name = target.startsWith('/')
+        ? posix.normalize(target).replace(/^\/+/, '')
+        : posix.normalize(posix.join('word', target));
+      if (!name.startsWith('word/') || !names.has(name) || parts.some((part) => part.name === name)) continue;
+      parts.push({ name, label });
+    }
+  }
+
+  let remaining = MAX_ZIP_ENTRY_BYTES;
+  const sections: { label: string; text: string }[] = [];
+  const labelCounts = new Map<string, number>();
+  for (const part of parts) {
+    const xml = readZipEntry(bytes, part.name, remaining, entries);
+    if (xml === null) continue;
+    remaining -= xml.length;
+    const text = paragraphsFromWordXml(xml.toString('utf8'));
+    if (text.trim() === '') continue;
+    const count = (labelCounts.get(part.label) ?? 0) + 1;
+    labelCounts.set(part.label, count);
+    const duplicates = parts.filter((candidate) => candidate.label === part.label).length;
+    sections.push({ label: duplicates > 1 ? `${part.label} ${count}` : part.label, text });
+  }
+  return sections;
 }
 
 /**
@@ -170,14 +242,13 @@ function extractDocx(bytes: Buffer): Extraction {
  * `core/documents/fixtures/relazione.docx`, so this is checked against someone
  * else's serialiser rather than against one we wrote to match.
  *
- * Not a full XML parse, deliberately: the alternative is a parser dependency
- * for one element name, and the pieces this ignores (tables, footnotes,
- * headers) degrade to *their text arrives without its structure*, which is
- * exactly what a PDF's tables do as well. Losing text would be a different
- * matter, and `<w:t>` is where text lives whatever encloses it.
+ * Not a full XML parse, deliberately: relations select each relevant part and
+ * this reader walks its text runs in order. Tables lose presentation like PDF
+ * tables do, while headers, footers and notes keep a named part in the result.
  */
 export function paragraphsFromWordXml(xml: string): string {
-  const body = xml.slice(xml.indexOf('<w:body'));
+  const bodyAt = xml.indexOf('<w:body');
+  const body = bodyAt === -1 ? xml : xml.slice(bodyAt);
   // One pass in document order, because the three things that produce
   // characters are siblings: a `<w:br/>` is a line the author asked for and a
   // `<w:tab/>` separates table cells often enough that dropping it would join
