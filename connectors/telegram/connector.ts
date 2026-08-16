@@ -1,9 +1,9 @@
 import type { Message, Update } from '@grammyjs/types';
 import { runTurn, type LoopDeps } from '../../agent/loop.js';
-import type { Principal } from '../../core/policy/types.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
+import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { TelegramApi, TelegramError } from './api.js';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
@@ -75,13 +75,12 @@ export type ConnectorDeps = {
 };
 
 /** What one update turns into, or null when it is not ours to handle. */
-type Incoming = {
+export type Incoming = {
   updateId: number;
   chatId: number;
   text: string;
   isPrivate: boolean;
-  fromOwner: boolean;
-  /** Who sent it. The person, never the room. */
+  /** Who sent it. The person, never the room. 0 when Telegram did not say. */
   fromId: number;
   messageId: number;
   attachment?: MediaSpec;
@@ -94,8 +93,15 @@ type Incoming = {
  * a schema, not from what a live server does under an edge case, and this is the
  * one place where being wrong means a crash in a long-running process. So every
  * field is checked, and anything unrecognised is skipped rather than guessed at.
+ *
+ * **It no longer decides who the owner is**, and that separation is the repair
+ * of the bug this function used to carry. Reading a message and authorising its
+ * sender are two jobs; doing both here is how `message.chat.id` — the room —
+ * ended up being compared against the owner, because it was the field already in
+ * scope. Parsing now produces facts, `principalFor` applies the rule, and the
+ * rule lives in `core/surface/types.ts` where every surface reads the same one.
  */
-export function parseUpdate(update: Update, ownerUserId: number | undefined): Incoming | null {
+export function parseUpdate(update: Update): Incoming | null {
   const message: Message | undefined = update.message ?? update.edited_message;
   if (!message || typeof message.chat?.id !== 'number') return null;
 
@@ -111,57 +117,42 @@ export function parseUpdate(update: Update, ownerUserId: number | undefined): In
     chatId: message.chat.id,
     text: typeof text === 'string' ? text : '',
     isPrivate: message.chat.type === 'private',
+    // `from` is absent on channel posts and anonymous admins. Zero rather than
+    // undefined so the field is always there to read, and zero is never a real
+    // Telegram user id — `principalFor` maps it to "the platform did not say".
     fromId: message.from?.id ?? 0,
-    // The *person*, and only in a one-to-one chat.
-    //
-    // This compared `message.chat.id` — the conversation — so anyone speaking
-    // in a chat whose id matched arrived as the owner. In a private chat the
-    // two coincide, and that accident was carrying the entire check. The
-    // comment that used to sit here had already reasoned that a display name is
-    // chosen by whoever holds the account, and then compared the room.
-    //
-    // The `isPrivate` half is not belt-and-braces: the owner speaking in a
-    // group is a member of that group's tenant, or group content lands in host
-    // memory. `from` is absent on channel posts and anonymous admins, and `?? 0`
-    // never equals a real id, so those are not the owner either.
-    // `ownerUserId === undefined` is the unpaired state, and `?? 0` never
-    // equals it, so an unpaired bot has no owner at all rather than a default
-    // one.
-    fromOwner:
-      ownerUserId !== undefined &&
-      message.chat.type === 'private' &&
-      message.from?.id === ownerUserId,
     messageId: message.message_id,
     ...(attachment ? { attachment } : {}),
   };
 }
 
 /**
- * The tenant and the principal, from who is speaking.
+ * The tenant and the principal, from who is speaking — via the rule every
+ * surface shares.
  *
- * A group is a tenant of its own, so its memory is separate by construction
- * rather than by a filter someone has to remember. The owner in a private chat
- * is the host tenant. Someone else in a private chat is *not* the owner even
- * though the chat is private — that is the case a naive `isPrivate` check gets
- * wrong, and it is the one that matters.
+ * This function used to *be* the rule. It is now an adapter onto `identify`
+ * (`core/surface/types.ts`), and that change is the point of the surfaces slice
+ * rather than a tidy-up: a rule written once per connector is a rule that will
+ * eventually be written differently once per connector. Discord calls the same
+ * `identify` with its own snowflakes, so "who is the owner" cannot answer
+ * differently on two surfaces without the compiler routing both through this one
+ * function first.
+ *
+ * The properties `connectors/telegram/impersonation.test.ts` has always guarded
+ * are unchanged and are now guarded for both surfaces at once: the room is not
+ * the person, unpaired means nobody is the owner, and the owner speaking in a
+ * group is a member of that group's tenant.
  */
-export function principalFor(incoming: Incoming): { principal: Principal; tenant: string } {
-  if (incoming.fromOwner) {
-    return {
-      principal: { kind: 'owner', connector: 'telegram', externalId: String(incoming.fromId) },
-      tenant: 'host',
-    };
-  }
-  const tenant = `group:telegram:${incoming.chatId}`;
-  return {
-    principal: {
-      kind: 'member',
+export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {
+  return identify(
+    {
       connector: 'telegram',
-      tenantId: tenant,
-      externalId: String(incoming.fromId || incoming.chatId),
+      authorId: incoming.fromId === 0 ? '' : String(incoming.fromId),
+      conversationId: String(incoming.chatId),
+      direct: incoming.isPrivate,
     },
-    tenant,
-  };
+    ownerUserId === undefined ? undefined : String(ownerUserId),
+  );
 }
 
 export class TelegramConnector {
@@ -218,7 +209,7 @@ export class TelegramConnector {
   private async drain(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
       const update = JSON.parse(stored.payload) as Update;
-      const incoming = parseUpdate(update, this.deps.config.ownerUserId);
+      const incoming = parseUpdate(update);
 
       if (!incoming) {
         // Nothing to do with it, and saying so is better than leaving it pending
@@ -289,7 +280,7 @@ export class TelegramConnector {
 
   private async handle(incoming: Incoming): Promise<void> {
     if (await this.tryPair(incoming)) return;
-    const { principal, tenant } = principalFor(incoming);
+    const { principal, tenant } = principalFor(incoming, this.deps.config.ownerUserId);
     const presence = await startPresence(this.deps.api, incoming.chatId, {
       isPrivate: incoming.isPrivate,
       placeholder: 'sto guardando…',
@@ -301,7 +292,7 @@ export class TelegramConnector {
       // A failed download does not fail the turn: the message still deserves an
       // answer, and an honest one says the file did not arrive.
       const arrival = incoming.attachment
-        ? await this.ingest(incoming, incoming.attachment, principal.kind === 'owner' ? 0 : 2)
+        ? await this.ingest(incoming, incoming.attachment, tierOf(principal))
         : null;
 
       const result = await runTurn(this.deps.loop, {

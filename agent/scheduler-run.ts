@@ -34,9 +34,10 @@ export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
     return {
       stopped: 'ask',
       text: `In coda per te: "${result.pending.capability}"${on} — ${result.pending.prompt}`,
+      turnId: result.turnId,
     };
   }
-  return { stopped: result.stopped, text: result.text };
+  return { stopped: result.stopped, text: result.text, turnId: result.turnId };
 }
 
 export function makeJobRunner(deps: LoopDeps): RunJob {
@@ -48,6 +49,22 @@ export function makeJobRunner(deps: LoopDeps): RunJob {
       surface: job.channel,
       session,
       text: job.goal,
+      /**
+       * Every job turn delivers **out of band**, including one whose channel is
+       * `cli`, and the address is the channel itself.
+       *
+       * This is the field that makes B8 checkable rather than a promise. A turn
+       * created without `replyTo` gets `delivery = NULL`, which
+       * `core/turns/store.ts` defines as *"this surface delivers in band — the
+       * caller of `runTurn` has the text in its hand and there is no separate
+       * step that can fail"*. For a job that is simply false: `Scheduler.run`
+       * calls `deliver` afterwards and that call can fail. So the row started
+       * out asserting the one thing that made the failure invisible. With the
+       * address on it the row starts at `pending`, and a fire whose delivery is
+       * never settled stays `pending` where `muffin doctor` can see it — which
+       * is a different and more useful fact than "no record either way".
+       */
+      replyTo: { channel: job.channel },
       ...(signal ? { signal } : {}),
     });
     return jobOutcomeFromTurn(result);
