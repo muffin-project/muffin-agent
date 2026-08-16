@@ -222,4 +222,117 @@ describe('memory wired into the loop', () => {
     await runTurn(h.deps, turn(h, 'dove ci vediamo?', member));
     expect(h.provider.seen.join('\n')).toContain('porto');
   });
+
+  describe('the temporal arguments, reached from the tool the model actually calls', () => {
+    // `memorySearchSpec.inputSchema` declared `as_of`/`history`/`surface`/
+    // `since`/`until`/`around` before `searchMemory` read a single one of them
+    // — exactly the "declared and connected to nothing" shape this repo keeps
+    // finding. Each test here fails on a `searchMemory` that only reads
+    // `query`/`limit`, which is what production shipped with until this slice.
+
+    function seedAccountantHistory(h: ReturnType<typeof harness>) {
+      const me = h.store.upsertEntity('host', 'Giusto', 'person', '2026-06-01T10:00:00Z');
+      const ep = h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: 'note sul commercialista', trustTier: 0, createdAt: '2026-06-01T10:00:00Z',
+      });
+      const base = {
+        tenantId: 'host', subjectId: me, predicate: 'accountant', episodeId: ep,
+        trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+      };
+      const marco = h.store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
+      const lucia = h.store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+      h.store.supersede('host', marco, lucia, '2026-08-01T10:00:00Z');
+      return { marco, lucia };
+    }
+
+    it('reaches a retired belief when the model asks for history, marked with its successor', async () => {
+      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('era Marco, ora è Lucia')]);
+      seedAccountantHistory(h);
+
+      const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista prima?'));
+      expect(result.stopped).toBe('answered');
+      const shown = h.provider.seen.join('\n');
+      expect(shown).toContain('Marco');
+      expect(shown).toContain('sostituito da');
+      expect(shown).toContain('Lucia');
+    });
+
+    it('reaches the belief that held at a past date, not the current one — "chi era X a giugno"', async () => {
+      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', as_of: '2026-06-15' }), answer('era Marco')]);
+      seedAccountantHistory(h);
+
+      const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista a giugno?'));
+      expect(result.stopped).toBe('answered');
+      const shown = h.provider.seen.join('\n');
+      expect(shown).toContain('Marco');
+      // Lucia is expected here — as the successor on Marco's own line, which is
+      // exactly what "etichettato con successore" asks for. What must not
+      // happen is Lucia appearing as her *own*, unmarked, independent line: a
+      // June-scoped `factsAsOf` has no belief-window or world-window reason to
+      // return her at all, since she was not recorded until August.
+      expect(shown).toContain('sostituito da: Giusto — accountant — Lucia');
+      const withoutSuccessorAnnotations = shown.replace(/↳ sostituito da:[^\n]*/g, '');
+      expect(withoutSuccessorAnnotations).not.toContain('Lucia');
+    });
+
+    it('filters by surface', async () => {
+      const h = harness([callTool('memory_search', { query: 'promemoria', surface: 'telegram' }), answer('trovato')]);
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      });
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
+        kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      });
+
+      await runTurn(h.deps, turn(h, 'cerca promemoria'));
+      // The automatic pre-turn recall (on the raw user message, unfiltered by
+      // design) also matches both episodes and is part of `seen` — isolating
+      // the deliberate tool's own output is what the `" ricordi ("` prefix is
+      // for: only `searchMemory` writes it, never the automatic recall.
+      const shown = h.provider.seen.join('\n');
+      const toolOutput = shown.slice(shown.indexOf(' ricordi ('));
+      expect(toolOutput).toContain('da telegram');
+      expect(toolOutput).not.toContain('dal terminale');
+    });
+
+    it('tells the model a malformed as_of is unreadable, instead of silently searching without it', async () => {
+      const h = harness([callTool('memory_search', { query: 'qualcosa', as_of: 'non-una-data' }), answer('capito')]);
+      await runTurn(h.deps, turn(h, 'prova'));
+      expect(h.provider.seen.join('\n')).toContain('non è una data leggibile');
+    });
+
+    it('refuses an as_of that has not happened yet, instead of predicting it', async () => {
+      const h = harness([callTool('memory_search', { query: 'qualcosa', as_of: '2099-01-01' }), answer('capito')]);
+      await runTurn(h.deps, turn(h, 'prova'));
+      expect(h.provider.seen.join('\n')).toContain('nel futuro');
+    });
+
+    it('refuses a since that is after until — a window that cannot contain anything', async () => {
+      const h = harness([callTool('memory_search', { query: 'qualcosa', since: '2026-08-01', until: '2026-01-01' }), answer('capito')]);
+      await runTurn(h.deps, turn(h, 'prova'));
+      expect(h.provider.seen.join('\n')).toContain('non può contenere niente');
+    });
+
+    it('refuses a wrongly-typed argument instead of coercing it silently', async () => {
+      const h = harness([callTool('memory_search', { query: 'qualcosa', history: 'yes' }), answer('capito')]);
+      await runTurn(h.deps, turn(h, 'prova'));
+      expect(h.provider.seen.join('\n')).toContain('booleano');
+    });
+
+    it('history mode does not let a second tenant reach another tenant’s retired belief either', async () => {
+      const member: Principal = {
+        kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
+      };
+      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('non trovo niente')]);
+      seedAccountantHistory(h);
+
+      await runTurn(h.deps, turn(h, 'chi era il commercialista?', member));
+      const shown = h.provider.seen.join('\n');
+      expect(shown).not.toContain('Marco');
+      expect(shown).not.toContain('Lucia');
+    });
+  });
 });
