@@ -292,15 +292,30 @@ export function fsList(scope: FsScope, path: string): string {
     .map((entry) => {
       // `statSync` follows links, so one broken symlink in a directory used to
       // throw ENOENT and take the whole listing with it — a real state in any
-      // dotfile repo or `node_modules/.bin`.
-      const stat = lstatSync(join(full, entry), { throwIfNoEntry: false });
-      if (stat === undefined) return `${entry} (illeggibile)`;
-      if (stat.isSymbolicLink()) {
-        const target = statSync(join(full, entry), { throwIfNoEntry: false });
-        if (target === undefined) return `${entry} (link rotto)`;
-        return target.isDirectory() ? `${entry}/ →` : `${entry} →`;
+      // dotfile repo or `node_modules/.bin`. `throwIfNoEntry: false` covers
+      // that ENOENT case, but only that one: a directory that is readable but
+      // not traversable (`chmod 0o400`, no +x) lets `readdirSync` above
+      // succeed while `lstatSync` on an entry it just returned throws EACCES
+      // instead of coming back `undefined` — and the `statSync` a few lines
+      // down, which follows a symlink's target, can throw the same way for the
+      // same reason. Both calls sit behind one try/catch so neither can throw
+      // past this function with the entry's name (bytes `readdirSync` read off
+      // the disk, not the model-typed `path`) riding in Node's own error
+      // message: any failure in here answers exactly like the ENOENT branch
+      // already does, which is what makes `throwTier: 0` below true rather
+      // than assumed.
+      try {
+        const stat = lstatSync(join(full, entry), { throwIfNoEntry: false });
+        if (stat === undefined) return `${entry} (illeggibile)`;
+        if (stat.isSymbolicLink()) {
+          const target = statSync(join(full, entry), { throwIfNoEntry: false });
+          if (target === undefined) return `${entry} (link rotto)`;
+          return target.isDirectory() ? `${entry}/ →` : `${entry} →`;
+        }
+        return stat.isDirectory() ? `${entry}/` : entry;
+      } catch {
+        return `${entry} (illeggibile)`;
       }
-      return stat.isDirectory() ? `${entry}/` : entry;
     })
     .join('\n');
 }
@@ -347,10 +362,18 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // it. Same source, same tier — the alternative is a special case whose
       // only argument is that the text is short.
       //
-      // `throwTier: 0` for the same reason as `fs_read`: `fsList`'s throws are
-      // this file's own sentences (`no such directory`, `is a file`) plus the
-      // model-typed `path`. The entries a directory actually holds only ever
-      // leave through the `return`, tiered above.
+      // `throwTier: 0`, true rather than assumed. `fsList`'s only throws that
+      // reach here are the two `PathDenied`/`no such directory`/`is a file`
+      // sentences above plus whatever `resolveInScope` throws on `full` — this
+      // file's own template strings plus the model-typed `path`, never a byte
+      // read off the disk. The entries a directory actually holds leave two
+      // ways: through the `return`, tiered above, or — this was the gap a
+      // judge found — through `lstatSync`/`statSync` throwing EACCES on an
+      // entry `readdirSync` handed back, which used to carry the entry's own
+      // name (disk bytes) past this declaration. The try/catch in the `.map`
+      // above closes that: every per-entry failure now returns the same
+      // `(illeggibile)` sentence the ENOENT branch already used, so nothing an
+      // entry's name can trigger ever leaves through a throw.
       throwTier: 0,
       handler: (args) => ({
         content: fsList(scope, String((args as { path: string }).path)),
