@@ -193,6 +193,7 @@ describe('accettazione · ucciso a metà turno, riprende al riavvio', () => {
       {
         capability: 'demo.send',
         spec: { name: 'send_message', description: 'manda', inputSchema: { type: 'object', properties: {} } },
+        throwTier: 0,
         handler: () => {
           sends += 1;
           return { content: 'inviato', tier: 0 as const };

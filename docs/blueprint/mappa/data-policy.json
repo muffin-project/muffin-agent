@@ -57,8 +57,8 @@
     "tiers": [
       { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)", "docs/blueprint/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
       { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/blueprint/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
-      { "tier": 2, "name": "gruppo/sconosciuti (group members)", "sources": ["agent/loop.ts:449 (principal.kind === 'member' ? 2 : 0, written into the record's taint column)"], "meaning": "turn started by a non-owner group member" },
-      { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts:158 (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint at agent/loop.ts:825" }
+      { "tier": 2, "name": "gruppo/sconosciuti (group members) — e il disco", "sources": ["agent/loop.ts (principal.kind === 'member' ? 2 : 0, written into the record's taint column)", "agent/tools/fs.ts (DISK_TIER, ADR-0044)"], "meaning": "turn started by a non-owner group member, OR a turn that read from the local filesystem: `stat` cannot separate the owner's own note from a file a stranger sent, so an unprovenanced read lands in the same bucket as a stranger speaking" },
+      { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint, which since ADR-0044 is called unconditionally because `tier` is a required field" }
     ],
     "monotonic": "agent/loop.ts:942-946 — raiseTaint(tier) only assigns when tier > taint, and clears the per-turn decision cache on every raise; there is no lowerTaint anywhere in the codebase (grep confirms). types.ts:104-109 documents the PermissionSnapshot contract this implements.",
     "maxTaintDefaults": "core/policy/matrix.ts:94-102 (POLICY_FLOOR.defaultMaxTaint = { low: 3, medium: 1, high: 1 }), mirrored verbatim in the shipped seal at defaults/rot/policy.json:4. A sealed rot/policy.json may only tighten these (core/policy/matrix.ts:162-165 tighter(), 181-185 merge()) — never raise them, even if the file says so."
@@ -70,7 +70,7 @@
     { "pattern": ".git/hooks (join(cwd,'.git','hooks'))", "file": "core/rot/guards.ts:76", "enforced": true, "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites" },
     { "pattern": "shell dotfiles — 9 named files (.zshrc/.zshenv/.zprofile/.zlogin/.bashrc/.bash_profile/.bash_login/.profile/.kshrc) + fish config", "file": "core/rot/guards.ts:47-57,77-79", "enforced": true, "note": "named individually rather than globbed, by design (guards.ts:41-46)" }
   ],
-  "denyPathsSummary": "5 of 5 mandatory categories from docs/blueprint/03-threat-model.md:67 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
+  "denyPathsSummary": "5 of 5 mandatory categories from docs/blueprint/03-threat-model.md:69 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
   "surfaces": [
     {
       "name": "RoT / sigillo",
@@ -97,7 +97,7 @@
       "name": "Egress / allowlist",
       "file": "core/net/egress.ts:41-124; kernel check at core/policy/decide.ts:149-193",
       "guards": "allow-only hostname allowlist (exact match or single-label wildcard) evaluated by the kernel for any capability declared resourceKind:'url'; an SSRF floor (isForbiddenAddress) blocking loopback/RFC1918/link-local(incl. cloud metadata)/CGNAT/multicast/reserved and their IPv6 equivalents including v4-mapped-v6, applied by the http tool per-hop after DNS resolution",
-      "holds": "ships with an empty allow list by default (defaults/rot/egress.json:4 — 'No domain is granted by default'); off-allowlist is ASK only for the owner at taint<=1 and DENY for every other principal/taint combination (decide.ts:182-192) — a tainted context cannot nominate a new exfiltration destination, per decide.ts:149-154's own reasoning comment; agent/tools/http.ts:97-104 re-checks EVERY redirect hop against the same allowlist, not just the URL the kernel approved, closing the '302 as allowlist bypass' path; isForbiddenAddress is actually called (agent/tools/http.ts:174,185), not merely declared.",
+      "holds": "ships with an empty allow list by default (defaults/rot/egress.json:4 — 'No domain is granted by default'); off-allowlist is ASK only for the owner at taint<=1 and DENY for every other principal/taint combination (decide.ts:182-192) — a tainted context cannot nominate a new exfiltration destination, per decide.ts:149-154's own reasoning comment; agent/tools/http.ts:116-122 re-checks EVERY redirect hop against the same allowlist, not just the URL the kernel approved, closing the '302 as allowlist bypass' path; isForbiddenAddress is actually called (agent/tools/http.ts:192,203), not merely declared.",
       "gap": "sys.shell and sys.process.* declare resourceKind:'none' (agent/tools/shell.ts:36, agent/tools/process.ts:28,37) so they never reach the kernel's egress branch at all — their only network control is the sandbox's per-call allowedDomains, which agent/tools/shell.ts:106-111 never populates (no allowHosts field passed), so shell network access is fully blocked rather than allowlisted — stricter than 'allowlist', worth noting as a mechanism difference. Separately, agent/tools/http.ts:22-24 self-declares a resolve-then-connect DNS-rebinding TOCTOU window as an accepted v1 limit."
     },
     {
@@ -146,21 +146,21 @@
     },
     {
       "claim": "Mandatory deny paths: RoT, config, secrets, .git/hooks, shell dotfiles",
-      "doc": "docs/blueprint/03-threat-model.md:67",
+      "doc": "docs/blueprint/03-threat-model.md:69",
       "real": "all five categories present in one shared guard object and enforced at both the fs tool and the sandbox executor",
       "verdict": "HOLDS",
       "evidence": "core/rot/guards.ts:64-88; agent/tools/fs.ts:192-203; core/sandbox/executor.ts:117-120,136-140"
     },
     {
       "claim": "filesystem write-scope = workspace del turno + tmp di sessione",
-      "doc": "docs/blueprint/03-threat-model.md:66",
+      "doc": "docs/blueprint/03-threat-model.md:68",
       "real": "write is scoped as claimed; read is explicitly NOT scoped beyond 2-3 RoT paths, per the test's own title",
       "verdict": "PARTIAL",
       "evidence": "core/sandbox/executor.test.ts:173; core/rot/guards.ts:81-87"
     },
     {
       "claim": "nessun dominio pre-concesso (no domain pre-granted)",
-      "doc": "docs/blueprint/03-threat-model.md:66",
+      "doc": "docs/blueprint/03-threat-model.md:68",
       "real": "shipped egress.json allow list is empty",
       "verdict": "HOLDS",
       "evidence": "defaults/rot/egress.json:4"

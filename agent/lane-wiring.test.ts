@@ -13,6 +13,7 @@ import { Scheduler } from '../core/scheduler/scheduler.js';
 import { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
+import { DELIVERED } from '../core/surface/types.js';
 import { JobStore as Jobs } from '../core/scheduler/jobs.js';
 import { enqueueTurn, type LoopDeps } from './loop.js';
 import { makeJobRunner } from './scheduler-run.js';
@@ -98,7 +99,17 @@ function gatewayOver(deps: LoopDeps, home: string, delivered: { turn: TurnRecord
   const gateway = new Gateway({
     lock: new GatewayLock(db, () => true),
     notify: createNotifier({}, () => {}),
-    scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}, undefined, undefined, undefined, undefined, modelLane),
+    scheduler: new Scheduler(
+      jobs,
+      async () => ({ stopped: 'answered', text: '', turnId: null }),
+      async () => DELIVERED,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      modelLane,
+    ),
     turnLane: lane,
     jobs,
     close: () => {},

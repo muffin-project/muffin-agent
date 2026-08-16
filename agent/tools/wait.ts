@@ -158,6 +158,14 @@ export function makeWaitTool(turns: Pick<TurnStore, 'countSuspended'>, now: () =
   return {
     capability: waitCapability.id,
     spec: waitSpec,
+    /**
+     * `throwTier: 0` (PR #42's `RegisteredTool.throwTier`, landed on `dev`
+     * after this file did). The handler is synchronous and every throw it can
+     * reach is a SQLite error out of `turns.countSuspended` — this tool's own
+     * failure, carrying none of the caller's bytes, the same reasoning `tier:
+     * 0` above already gives for every return on the success path.
+     */
+    throwTier: 0,
     handler: (args, ctx) => {
       const a = (args ?? {}) as { seconds?: unknown; until_process_exits?: unknown; why?: unknown };
       const parsed = parseWait(

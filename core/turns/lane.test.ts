@@ -7,6 +7,7 @@ import { ModelLane } from './model-lane.js';
 import { TurnLane, type LaneEvent } from './lane.js';
 import { TurnStore, type NewTurn } from './store.js';
 import { encodeWaitFor } from './wait.js';
+import { DELIVERED } from '../surface/types.js';
 
 /**
  * The lane, over the real store.
@@ -314,11 +315,12 @@ describe('una corsia del modello sola, per davvero', () => {
       jobs,
       async () => {
         await hold();
-        return { stopped: 'answered' as const, text: 'job' };
+        return { stopped: 'answered' as const, text: 'job', turnId: null };
       },
-      async () => {},
+      async () => DELIVERED,
       undefined,
       () => {},
+      undefined,
       undefined,
       undefined,
       modelLane,

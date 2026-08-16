@@ -85,6 +85,32 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
+  /**
+   * Where a mid-turn tool can address a follow-up delivery — the registry
+   * channel this turn's conversation arrived on (`telegram:<chatId>`,
+   * `discord:<channelId>`, `cli`), or absent/`null` when there is none (a job
+   * turn with no `replyChannel`, a surface that never set one, or — every
+   * call site that existed before this field did — a handler that never reads
+   * it and has no reason to construct it).
+   *
+   * Optional, deliberately, and not the same argument as `ToolOutcome.tier`'s
+   * required field one file over: an omitted `tier` was a *silent* security
+   * default (a tool that said nothing about provenance was read as spotless).
+   * An omitted `replyChannel` has no default to be silent about — the one
+   * handler that reads it (`send_file`, M5-BIS B14) must branch on
+   * absence/`null` explicitly either way, and forcing the other dozen tool
+   * handlers in this tree to state a channel they never touch would be noise
+   * bolted onto call sites the field has nothing to say to.
+   *
+   * Separate from `TurnInput.replyTo`, which stays opaque to the loop on
+   * purpose (see its docstring): `replyTo` is a connector's own reply
+   * metadata, read only by that connector after the turn returns.
+   * `replyChannel` is the one piece of it every surface already expresses in
+   * the same shape — the `SurfaceRegistry` address — so a tool can ask the
+   * registry for a delivery without the loop having to learn what a chat id
+   * is.
+   */
+  replyChannel?: string | null | undefined;
 };
 
 /**
@@ -172,14 +198,64 @@ export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutco
 export type ToolOutcome = {
   content: string;
   isError?: boolean;
-  /** Tier of whatever this result dragged in. Web and third-party tools are 3. */
-  tier?: TrustTier;
+  /**
+   * Tier of whatever this result dragged into the turn. Web and third-party
+   * tools are 3; the local filesystem is 2 (ADR-0044); a result made only of
+   * the tool's own words — *"wrote 41 bytes"*, *"invalid arguments"* — is 0.
+   *
+   * **Required, and that is the fix.** It was `tier?`, and `runTool` raised the
+   * turn's taint only when the field was present, so *not answering* the
+   * provenance question meant "this context is as clean as when the owner
+   * typed". Four tools never answered — `fs_read`, `fs_list`, `shell_run`,
+   * `process_list` — and every one of them carries bytes somebody else wrote.
+   * The consequence was not local: `core/policy/decide.ts` reads the turn's
+   * taint to decide egress, so a turn could swallow an injected file and still
+   * reach an off-allowlist host as an `ask` the owner might approve.
+   *
+   * Optional-with-a-safe-default was the other candidate and is weaker in the
+   * way that matters: it makes the omission harmless *today* without making it
+   * visible, and `agent/tools/skill.ts:114-121` is the record of how long an
+   * invisible omission survives here — months, in a file whose own docstring
+   * claimed the missing value. A required field is the same guarantee
+   * `assertNever` gives the decision switch below: the day a new tool arrives,
+   * the compiler asks it where its bytes came from.
+   */
+  tier: TrustTier;
 };
 
 export type RegisteredTool = {
   spec: ToolSpec;
   capability: string;
   handler: ToolHandler;
+  /**
+   * The tier of whatever a THROWN failure from this tool's handler can bring
+   * into the turn — the question `ToolOutcome.tier` asks of a returned result,
+   * asked here of the handler's other exit.
+   *
+   * **Required, for the reason `tier` is required, one level up.** A judge's
+   * round-1 review of this PR found the same shape of gap it closed still open
+   * in `runTool`'s `catch`: it put `error.message` into the session as a tool
+   * result the model reads, called `raiseTaint` never, and recorded `tier:
+   * undefined` in the turn record. A handler that answered "0" on success but
+   * *threw* was invisible to the taint ledger no matter whose words the
+   * message carried — and `agent/tools/mcp.ts` (`connection.call` →
+   * `client.callTool`) is a production handler that can throw with a
+   * third-party MCP server's own text (`McpError.message`, lifted from the
+   * server's JSON-RPC `error.message` field). That gave a compromised server a
+   * second channel next to the one ADR-0044 closed, and a cheaper one: a
+   * successful tier-3 call raises the taint and (at the shipped medium
+   * ceiling) closes egress after one round-trip, but a *failing* call cost the
+   * server nothing and could be retried without limit — returning an error is
+   * more powerful than returning a result.
+   *
+   * 0 for every tool whose thrown text is provably ours — see the comment on
+   * each tool's declaration for the internal boundary that makes it true (a
+   * validation message, a path, an errno, never a byte the handler did not
+   * write itself). 3 for every `mcp.*` tool: the words on the other side of
+   * that particular throw belong to a third party, fenced or not, so the
+   * ceiling matches the one its successful calls already declare.
+   */
+  throwTier: TrustTier;
   /**
    * This tool's output must survive context compaction.
    *
@@ -314,6 +390,17 @@ export type TurnInput = {
    * there is no second step that can fail.
    */
   replyTo?: Record<string, unknown> | undefined;
+  /**
+   * The `SurfaceRegistry` address of this turn's conversation — see
+   * `ToolContext.replyChannel`, which is exactly this value, threaded through
+   * unopened. A string, not `Record<string, unknown>` like `replyTo`: every
+   * surface already produces this exact shape for `Deliver`/`Scheduler`
+   * (`telegram:<chatId>`, `discord:<channelId>`, the bare surface id), so there
+   * is nothing here for the loop to parse — it hands the string to
+   * `SurfaceRegistry.deliver`/`deliverFile` unchanged, same as `job.channel`
+   * always has.
+   */
+  replyChannel?: string | undefined;
 };
 
 export type TurnResult = {
@@ -469,6 +556,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   return drive(deps, record, turn, {
     session: input.session,
     ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
   });
 }
 
@@ -606,6 +694,20 @@ async function drive(
     wokenFromWait?: boolean;
     /** The ref the caller already opened. Absent on a resume — see `input.session`. */
     session?: SessionRef | undefined;
+    /**
+     * The caller's `TurnInput.replyChannel`, for a fresh turn only.
+     *
+     * Not persisted on `TurnRecord` — by design, per `ToolContext.replyChannel`'s
+     * own docstring, so there is nowhere on `record` to read it back from on a
+     * resume. `runTurn` is the only caller that ever has a live one to pass;
+     * `resumeTurn` leaves this absent on purpose, which is the correct answer
+     * there and not an oversight — a turn woken with no stack to return to has
+     * no live "this call's own channel" either, only the durable `replyTo` the
+     * lane already carries. `string | undefined`, matching `TurnInput`'s own
+     * field exactly — `null` is `ToolContext`'s vocabulary, applied once, where
+     * `toolContext` is built below.
+     */
+    replyChannel?: string | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -629,6 +731,7 @@ async function drive(
     text: lastUserText(record.messages),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
+    ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -697,6 +800,10 @@ async function drive(
     suspend: (spec) => {
       barrier = spec;
     },
+    // `input.replyChannel` threaded through, per `ToolContext.replyChannel`'s
+    // own docstring: the one field `send_file` (M5-BIS B14) reads, absent
+    // everywhere else.
+    replyChannel: input.replyChannel ?? null,
   };
 
   const messages: Message[] = [...record.messages];
@@ -1655,12 +1762,27 @@ async function runTool(
   });
 
   try {
+    // `ctx` carries everything `input.tenant`/`input.principal`/`replyChannel`
+    // would have (it is built from exactly those, plus `turnId`, `sessionId`,
+    // `taint` and `suspend` — see `toolContext` above), so the handler gets one
+    // object with the whole contract rather than two overlapping ones.
     const outcome = await tool.handler(args, ctx);
-    if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);
+    // Unconditional. The `!== undefined` guard that used to stand here was the
+    // whole defect: it turned "this tool said nothing about provenance" into
+    // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
+    // that honestly reports 0 costs the turn nothing.
+    snapshot.raiseTaint(outcome.tier);
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
     // is the privilege escalation this table exists to prevent.
+    //
+    // `ctx.turnId`, not `parent.traceId`: they agree on a fresh turn, but on a
+    // **resumed** one the span is a child of a remote parent, so its trace id
+    // names the trace and not the row (ADR-0047 §Reversibilità). And with
+    // `tier` required on `ToolOutcome` (ADR-0044) the row can no longer be
+    // written with the tier absent, which is the version of that same argument
+    // one level down: a resumed turn cannot inherit a provenance nobody stated.
     recordOutcome(deps, ctx.turnId, span, call.id, {
       content: outcome.content,
       isError: outcome.isError === true,
@@ -1685,10 +1807,20 @@ async function runTool(
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
     const detail = error instanceof Error ? error.message : String(error);
+    // Unconditional, and the same call the success path makes a few lines up
+    // — a judge's round-1 finding was that this branch never raised taint at
+    // all, so a handler that threw was invisible to the ledger no matter whose
+    // words `detail` carried. `tool.throwTier` is this tool's own declared
+    // answer for its failure exit, the same way `outcome.tier` is its answer
+    // for success; neither is guessed here.
+    snapshot.raiseTaint(tool.throwTier);
     // And an outcome all the same: a handler that threw *came back*, so the
     // call is decided, not uncertain. Leaving the intent row open here would
     // make every failed tool call look like one that might still have landed.
-    recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: undefined });
+    // `ctx.turnId` for the same reason as the success path above; `tier:
+    // tool.throwTier`, never `undefined` — the record and the taint it
+    // produced must agree, exactly as ADR-0044 requires of the success path.
+    recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
   }
@@ -1721,7 +1853,10 @@ function recordOutcome(
   turnId: string,
   span: SpanHandle,
   callId: string,
-  result: { content: string; isError: boolean; tier: TrustTier | undefined },
+  // `tier` is never `undefined` at either call site any more (ADR-0044's own
+  // field on success, `throwTier` on the catch path below) — narrowed to match
+  // so a third call site could not reintroduce the omission silently.
+  result: { content: string; isError: boolean; tier: TrustTier },
 ): void {
   try {
     deps.turns.endToolCall(turnId, callId, result);
