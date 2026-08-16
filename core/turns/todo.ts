@@ -58,6 +58,27 @@ export type TodoState = 'pending' | 'done' | 'blocked' | 'waiting' | 'retry';
 
 export const TODO_STATES: readonly TodoState[] = ['pending', 'done', 'blocked', 'waiting', 'retry'];
 
+/**
+ * How many open (non-`done`) rows one session may hold at once (N3, judge
+ * round 2).
+ *
+ * `agent/tools/todo.ts` already bounds one `plan` call — 30 items, 500 chars
+ * each — but that cap is per call, not per session: nothing stopped a model
+ * from calling `plan` again and again, each time adding new steps under new
+ * keys, while `agent/context/assemble.ts` renders **every** open row into
+ * **every** turn unconditionally (`todoSection`, "empty in, empty out" — the
+ * property that lets the loop call it without checking first). A plan that
+ * only grows turns that free lunch into an unbounded prompt.
+ *
+ * Sixty, in the same spirit as `MAX_SUSPENDED_PER_TENANT` (`core/turns/wait.ts`):
+ * high enough that a real multi-step piece of work — the kind this primitive
+ * exists for — never brushes against it, low enough that a model that likes
+ * planning hits a refusal instead of a silently growing context. Refused at
+ * the tool boundary with the numbers in the message, because a limit that
+ * fails without saying which one it was is a limit debugged by reading source.
+ */
+export const MAX_OPEN_TODOS = 60;
+
 export type TodoItem = {
   /** Stable within the session, and what the model names when it updates one. */
   seq: number;

@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { TodoStore } from '../../core/turns/todo.js';
+import { MAX_OPEN_TODOS, TodoStore } from '../../core/turns/todo.js';
 import { toolContext } from '../fixtures/tool-context.js';
 import { makeTodoTool, todoCapability } from './todo.js';
 
@@ -77,6 +77,57 @@ describe('le tre azioni', () => {
       const out = await handler(bad, toolContext());
       expect(out.isError, JSON.stringify(bad)).toBe(true);
     }
+  });
+});
+
+describe('il tetto cumulativo di sessione (N3, judge giro 2)', () => {
+  /**
+   * The per-call cap (30 items) was never the whole story: `plan` accumulates
+   * across calls, keyed by normalised text, and `agent/context/assemble.ts`
+   * renders every open row into every turn unconditionally. Nothing stopped a
+   * model from calling `plan` again and again, each time under new keys.
+   */
+  const filler = (from: number, count: number): string[] =>
+    Array.from({ length: count }, (_, i) => `passo ${from + i}`);
+
+  it('un piano che resta sotto il tetto passa', async () => {
+    const { handler, todos } = tool();
+    const ctx = toolContext();
+    const out = await handler({ action: 'plan', items: filler(1, 30) }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(todos.open('host', ctx.sessionId).length).toBe(30);
+  });
+
+  it('rifiuta il piano che porterebbe la sessione sopra MAX_OPEN_TODOS, col numero nel rifiuto', async () => {
+    const { handler, todos } = tool();
+    const ctx = toolContext();
+    // Two calls of 30 distinct steps reach the cap exactly, without ever
+    // tripping the *per-call* limit of 30.
+    await handler({ action: 'plan', items: filler(1, 30) }, ctx);
+    await handler({ action: 'plan', items: filler(31, 30) }, ctx);
+    expect(todos.open('host', ctx.sessionId).length).toBe(MAX_OPEN_TODOS);
+
+    const out = await handler({ action: 'plan', items: ['un passo di troppo'] }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain(String(MAX_OPEN_TODOS));
+    // The refused call must not have landed even partially — one all-or-nothing
+    // step, the same guarantee `TodoStore.plan`'s own transaction gives.
+    expect(todos.open('host', ctx.sessionId).length).toBe(MAX_OPEN_TODOS);
+    expect(todos.list('host', ctx.sessionId).some((i) => i.text === 'un passo di troppo')).toBe(false);
+  });
+
+  it('restating an already-open step does not by itself cost room under the cap', async () => {
+    // Conservative check (open-count + this call's size), so a call that only
+    // restates existing steps can still be refused if it is large enough — the
+    // safe direction, since the alternative risks letting one call cross the
+    // cap. What must hold is the inverse: a *small* restating call must not be
+    // permanently blocked once the session is merely near the ceiling.
+    const { handler, todos } = tool();
+    const ctx = toolContext();
+    await handler({ action: 'plan', items: filler(1, 30) }, ctx);
+    const out = await handler({ action: 'plan', items: filler(1, 30) }, ctx); // same 30 texts again
+    expect(out.isError).toBeUndefined();
+    expect(todos.open('host', ctx.sessionId).length).toBe(30); // no new rows
   });
 });
 

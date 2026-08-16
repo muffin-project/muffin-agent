@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
-import { renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
+import { MAX_OPEN_TODOS, renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
 import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
 
@@ -141,6 +141,33 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
 
       switch (parsed.data.action) {
         case 'plan': {
+          /**
+           * N3 (judge round 2): the per-call cap above (30 × 500 chars) bounds
+           * one `plan`, not the session — nothing stopped a model from calling
+           * it again and again, each time under new keys, while the whole open
+           * list is rendered into every turn unconditionally
+           * (`agent/context/assemble.ts`).
+           *
+           * Conservative on purpose: every incoming item counts as new here,
+           * even one that only restates an already-open step (which `plan`
+           * upserts onto the same row instead of appending). Refusing a call
+           * that would in fact have been harmless is recoverable — the model
+           * closes a step first or sends a shorter plan; letting the cap be
+           * crossed *inside* one 30-item call is not, and that is the failure
+           * `MAX_OPEN_TODOS` exists to make impossible rather than merely
+           * discourage.
+           */
+          const open = todos.open(tenant, sessionId).length;
+          if (open + parsed.data.items.length > MAX_OPEN_TODOS) {
+            return {
+              content:
+                `piano rifiutato: ci sono già ${open} passi aperti in questa conversazione e questo piano ne ` +
+                `porta fino a ${parsed.data.items.length} altri, il tetto è ${MAX_OPEN_TODOS}. Chiudine qualcuno ` +
+                'con `todo set` (`done` o `blocked`) prima di aggiungerne altri, o manda un piano più corto.',
+              isError: true,
+              tier: CLEAN,
+            };
+          }
           const items = todos.plan(tenant, sessionId, parsed.data.items, tier);
           return { content: `Piano aggiornato:\n${renderTodos(items)}`, tier: CLEAN };
         }
