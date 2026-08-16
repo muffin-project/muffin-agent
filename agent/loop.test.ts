@@ -8,6 +8,7 @@ import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
@@ -81,27 +82,41 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     {
       capability: 'demo.read',
       spec: { name: 'demo_read', description: 'read', inputSchema: { type: 'object', properties: {} } },
+      // `tier: 0` on the fakes in this file, deliberately: these tools exist to
+      // exercise sequencing, caps and recovery, and a tier they do not need
+      // would make every one of those tests also a taint test by accident.
+      // `demo_web` below is the one that carries provenance, because that is
+      // what it is for. Same reasoning for `throwTier: 0` throughout: none of
+      // these fakes throw anything but their own words.
+      throwTier: 0,
       handler: (args) => {
         calls.push(`demo_read:${JSON.stringify(args)}`);
-        return { content: 'letto' };
+        return { content: 'letto', tier: 0 as const };
       },
     },
     {
       capability: 'demo.read',
       spec: { name: 'demo_web', description: 'fetch', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
     },
     {
       capability: 'demo.write',
       spec: { name: 'demo_write', description: 'write', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => {
         calls.push('demo_write');
-        return { content: 'scritto' };
+        return { content: 'scritto', tier: 0 as const };
       },
     },
     {
       capability: 'demo.read',
       spec: { name: 'demo_boom', description: 'throws', inputSchema: { type: 'object', properties: {} } },
+      // The one fake that actually exercises the catch path below — still
+      // `throwTier: 0`, since `il tool è esploso` is this file's own literal,
+      // not third-party text. The dedicated non-zero-`throwTier` wiring test
+      // lives in `read-then-egress.test.ts`, next to the rest of ADR-0044.
+      throwTier: 0,
       handler: () => {
         throw new Error('il tool è esploso');
       },
@@ -109,7 +124,12 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   ];
 
   const store = new SessionStore(home);
-  const turns = new TurnStore(new DatabaseCtor(':memory:'));
+  // One handle for both, as production has it: the plan and the turn record live
+  // on the same connection (ADR-0022), so a test can see a `todo` a turn wrote
+  // from the row that same turn left behind.
+  const db = new DatabaseCtor(':memory:');
+  const turns = new TurnStore(db);
+  const todos = new TodoStore(db);
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -124,11 +144,12 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     turns,
+    todos,
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     ...overrides,
   };
-  return { deps: base, store, turns, home, calls };
+  return { deps: base, store, turns, todos, home, calls };
 }
 
 const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' }) => ({
@@ -201,7 +222,8 @@ describe('agent loop', () => {
     const tool = (name: string, capability: string): RegisteredTool => ({
       capability,
       spec: { name, description: name, inputSchema: { type: 'object', properties: {} } },
-      handler: () => ({ content: 'ok' }),
+      throwTier: 0,
+      handler: () => ({ content: 'ok', tier: 0 as const }),
     });
     const provider = new ScriptedProvider([answer('ciao')]);
     const { deps: d, store } = deps([], {
@@ -375,7 +397,8 @@ describe('agent loop', () => {
         {
           capability: 'demo.read',
           spec: { name: 'demo_read', description: 'r', inputSchema: { type: 'object', properties: {} } },
-          handler: () => ({ content: big }),
+          throwTier: 0,
+          handler: () => ({ content: big, tier: 0 as const }),
         },
       ],
       decide: createDecide({
@@ -387,6 +410,7 @@ describe('agent loop', () => {
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
       turns: new TurnStore(new DatabaseCtor(':memory:')),
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'test', group: 'test in gruppo' },
     };
@@ -450,9 +474,10 @@ describe('agent loop', () => {
         {
           capability: 'demo.ask',
           spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
           handler: () => {
             ran.push('demo_ask');
-            return { content: 'fatto' };
+            return { content: 'fatto', tier: 0 as const };
           },
         },
       ],
@@ -485,9 +510,10 @@ describe('agent loop', () => {
           {
             capability: 'demo.ask',
             spec: { name: 'demo_ask', description: 'a', inputSchema: { type: 'object', properties: {} } },
+            throwTier: 0,
             handler: () => {
               ran.push('demo_ask');
-              return { content: 'fatto' };
+              return { content: 'fatto', tier: 0 as const };
             },
           },
         ],
@@ -525,9 +551,10 @@ describe('agent loop', () => {
         {
           capability: 'demo.draft',
           spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
           handler: () => {
             ran.push('demo_draft');
-            return { content: 'scritto davvero' };
+            return { content: 'scritto davvero', tier: 0 as const };
           },
         },
       ],
@@ -562,9 +589,10 @@ describe('agent loop', () => {
         {
           capability: 'demo.unknown',
           spec: { name: 'demo_unknown', description: 'u', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
           handler: () => {
             ran.push('demo_unknown');
-            return { content: 'eseguito' };
+            return { content: 'eseguito', tier: 0 as const };
           },
         },
       ],
@@ -1019,7 +1047,8 @@ describe('the loop hands the model its own reasoning back', () => {
         {
           capability: 'demo.read',
           spec: { name: 'demo_big', description: 'big', inputSchema: { type: 'object', properties: {} } },
-          handler: () => ({ content: big }),
+          throwTier: 0,
+          handler: () => ({ content: big, tier: 0 as const }),
         },
       ],
       capabilities: new Map([

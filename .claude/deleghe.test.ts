@@ -77,4 +77,34 @@ describe('delegation handoff without GitHub', () => {
     expect(output).toContain('aperta');
     expect(output).toContain('non riprendere senza verifica');
   });
+
+  it('a hand closure keeps a branchless delegation out of the resumable set', () => {
+    // A read-only extraction or an agent that died before producing anything
+    // has no branch, so nothing can ever derive "closed" for it: without the
+    // `chiudi` row it stays "APERTE — riprendibili" forever, and a fresh session
+    // would resume it. Eight such rows sat in the register on one day.
+    const f = fixture();
+    const script = join(f.repo, '.claude', 'deleghe.mjs');
+    execFileSync(process.execPath, [script, 'registra', 'estrazione', 'mappa-tools', 'estrazione read-only'], {
+      cwd: f.repo,
+      env: f.env,
+      encoding: 'utf8',
+    });
+    const prima = execFileSync(process.execPath, [script, 'riprendi'], { cwd: f.repo, env: f.env, encoding: 'utf8' });
+    // Without GitHub a branchless row is "unknown", never resumable — but it is
+    // still not closed, which is the state this verb exists to record.
+    expect(prima).toContain('SCONOSCIUTE (2)');
+    expect(prima).toContain('CHIUSE (1)');
+
+    execFileSync(process.execPath, [script, 'chiudi', 'estrazione', 'digest letto, niente da riprendere'], {
+      cwd: f.repo,
+      env: f.env,
+      encoding: 'utf8',
+    });
+    const dopo = execFileSync(process.execPath, [script, 'riprendi'], { cwd: f.repo, env: f.env, encoding: 'utf8' });
+    expect(dopo).toContain('CHIUSE (2)');
+    expect(dopo).toContain('chiusa: digest letto, niente da riprendere');
+    expect(dopo).toContain('SCONOSCIUTE (1)');
+    expect(dopo).not.toMatch(/SCONOSCIUTE[\s\S]*mappa-tools/);
+  });
 });

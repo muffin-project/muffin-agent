@@ -1,13 +1,13 @@
 {
   "03-threat-model.md:116": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 120,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
+    "line": 116,
+    "testo": "| Rubber-stamping delle PR generate da Muffin (volume che cresce, reviewer sempre uno) | il collo è umano per design | path del RoT sotto CODEOWNERS + diff isolato obbligatorio + CI che segnala le PR che li toccano (C1-9); mai RoT mescolato ad altre modifiche in una stessa PR |"
   },
   "03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 52,
-    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
+    "line": 51,
+    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
   },
   "agent/completion.ts:58": {
     "path": "agent/completion.ts",
@@ -17,262 +17,282 @@
   "agent/context/assemble.ts:107": {
     "path": "agent/context/assemble.ts",
     "line": 107,
-    "testo": "export function visibleTools<T extends { capability: CapabilityId }>("
+    "testo": "*/"
   },
   "agent/context/assemble.ts:125": {
     "path": "agent/context/assemble.ts",
     "line": 125,
-    "testo": "export function buildSystemPrompts("
+    "testo": "* the step that goes missing across a compaction, a suspension or a crash."
   },
   "agent/context/compact.ts:58": {
     "path": "agent/context/compact.ts",
     "line": 58,
     "testo": "export function compactToolResults(messages: Message[], options: CompactOptions): CompactResult {"
   },
-  "agent/loop.test.ts:505": {
+  "agent/loop.test.ts:527": {
     "path": "agent/loop.test.ts",
-    "line": 509,
-    "testo": "it('refuses a draft instead of executing it as an allow', async () => {"
+    "line": 527,
+    "testo": "// And a no is a no: the tool does not run, and the model is told not to push."
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 103,
-    "testo": "export type ApprovalRequest = {"
+    "line": 102,
+    "testo": "* handlers in this tree to state a channel they never touch would be noise"
+  },
+  "agent/loop.ts:1088": {
+    "path": "agent/loop.ts",
+    "line": 1088,
+    "testo": "if (nudgedForCompletion === false) {"
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 188,
-    "testo": "approve?: Approver | undefined;"
+    "line": 172,
+    "testo": "prompt: string;"
   },
-  "agent/loop.ts:252": {
+  "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 285,
-    "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
+    "line": 1753,
+    "testo": "* world and an intent row for it would be a lie about what was attempted."
+  },
+  "agent/loop.ts:1771": {
+    "path": "agent/loop.ts",
+    "line": 1771,
+    "testo": "// whole defect: it turned \"this tool said nothing about provenance\" into"
+  },
+  "agent/loop.ts:1873": {
+    "path": "agent/loop.ts",
+    "line": 1873,
+    "testo": "* carried: `resourceKind` says what kind of thing this capability acts on and"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 362,
-    "testo": "let currentEpisodeId: number | undefined;"
+    "line": 271,
+    "testo": "provider: Provider;"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 364,
-    "testo": "currentEpisodeId = deps.memory.store.addEpisode({"
+    "line": 273,
+    "testo": "model: string;"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 380,
-    "testo": "const recalled: ContentBlock[] = [];"
+    "line": 289,
+    "testo": "*"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 390,
-    "testo": "const inherited = recallTaint(result);"
+    "line": 299,
+    "testo": "* rows, the tests would still be green, and the model would keep re-deriving"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 407,
-    "testo": "// What this turn is shown, decided from who is speaking and where — never"
+    "line": 316,
+    "testo": "/**"
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 411,
-    "testo": "const exposed = visibleTools(deps.tools, input.principal, deps.capabilities).slice("
+    "line": 320,
+    "testo": "recordSpend?: ((entry: SpendEntry) => number) | undefined;"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 304,
-    "testo": "const cap = iterationCap(deps.profile);"
+    "line": 338,
+    "testo": "* from `resourceKind`/`policyArgs` instead of a hardcoded argument name."
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 428,
-    "testo": "while (iterations < cap) {"
+    "line": 351,
+    "testo": "*"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 435,
-    "testo": "if (deps.budgetExhausted(input.tenant)) {"
+    "line": 352,
+    "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 438,
-    "testo": "if (input.signal?.aborted) {"
+    "line": 355,
+    "testo": "* contract is narrow on purpose — it is called from `finish`, microseconds"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 446,
-    "testo": "const compacted = compactToolResults(messages, {"
+    "line": 363,
+    "testo": "* memory of something that did not happen. Here the episode is written at the"
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 457,
-    "testo": "const call: ChatCall = {"
+    "line": 374,
+    "testo": "};"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 462,
-    "testo": "maxOutputTokens: 4096,"
+    "line": 379,
+    "testo": "surface: string;"
   },
   "agent/loop.ts:402": {
     "path": "agent/loop.ts",
-    "line": 485,
-    "testo": "stream: false,"
+    "line": 402,
+    "testo": "*/"
+  },
+  "agent/loop.ts:425": {
+    "path": "agent/loop.ts",
+    "line": 425,
+    "testo": "/**"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 511,
-    "testo": "if (error instanceof ProviderError && error.retryable) {"
+    "line": 428,
+    "testo": "*"
+  },
+  "agent/loop.ts:449": {
+    "path": "agent/loop.ts",
+    "line": 449,
+    "testo": "* How many times a row may be picked back up before we stop trying."
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 536,
-    "testo": "const usd = deps.recordSpend?.({"
+    "line": 453,
+    "testo": "* retried by every boot for ever, and the process that dies is never the one"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 549,
-    "testo": "snapshot.invalidate();"
+    "line": 466,
+    "testo": "* `runTurn`, and the design measured what that costs: a turn **in flight and"
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 565,
-    "testo": "// Nothing at all: recover rather than presenting silence as an answer."
+    "line": 482,
+    "testo": "deps.turns.enqueue({"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 571,
-    "testo": "if (result.toolCalls.length === 0) {"
+    "line": 488,
+    "testo": "model: deps.model,"
+  },
+  "agent/loop.ts:503": {
+    "path": "agent/loop.ts",
+    "line": 503,
+    "testo": "toolCallsMade: 0,"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 604,
-    "testo": "deps.sessions.append(input.session, {"
+    "line": 521,
+    "testo": "* The record, before anything happens — and **not** inside a try."
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 611,
-    "testo": "if (deps.memory) {"
+    "line": 528,
+    "testo": "*"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 612,
-    "testo": "deps.memory.store.addEpisode({"
+    "line": 529,
+    "testo": "* Above the episode write in `drive` below, deliberately, and the two are not"
+  },
+  "agent/loop.ts:538": {
+    "path": "agent/loop.ts",
+    "line": 538,
+    "testo": "* which lost the question along with the answer."
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 623,
-    "testo": "return finish(turn, 'answered', text, iterations, usage);"
+    "line": 540,
+    "testo": "const record = deps.turns.create({"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 626,
-    "testo": "// Model's turn goes into the transcript before the results, so a crash"
+    "line": 543,
+    "testo": "tenant: input.tenant,"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 57,
-    "testo": "const TOOL_RESULT_BUDGET_CHARS = 60_000;"
+    "line": 56,
+    "testo": "turnId: string;"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 657,
-    "testo": "if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);"
+    "line": 574,
+    "testo": "* Three refusals live here, and none of them is a convenience:"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 678,
-    "testo": "return finish("
+    "line": 595,
+    "testo": "const existing = deps.turns.get(turnId);"
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 63,
-    "testo": "const MAX_HISTORY_TURNS = 40;"
-  },
-  "agent/loop.ts:624": {
-    "path": "agent/loop.ts",
-    "line": 755,
-    "testo": "deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });"
+    "line": 62,
+    "testo": "/**"
   },
   "agent/loop.ts:660": {
     "path": "agent/loop.ts",
-    "line": 791,
-    "testo": "function finish("
+    "line": 660,
+    "testo": "span.setAttributes({ 'muffin.turn.resume_refused': 'model_changed' });"
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 831,
-    "testo": "async function runTool("
+    "line": 696,
+    "testo": "session?: SessionRef | undefined;"
+  },
+  "agent/loop.ts:720": {
+    "path": "agent/loop.ts",
+    "line": 720,
+    "testo": "* is not — and **never** rebuilt by hand."
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 904,
-    "testo": "case 'deny':"
+    "line": 769,
+    "testo": "nudgedForCompletion,"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 912,
-    "testo": "case 'draft':"
+    "line": 777,
+    "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:783": {
     "path": "agent/loop.ts",
-    "line": 918,
-    "testo": "span.end({ status: 'error', error: 'draft_unavailable' });"
+    "line": 783,
+    "testo": ""
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 927,
-    "testo": "case 'ask': {"
+    "line": 792,
+    "testo": "* call. The build said so; the runtime would have said so on message one."
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 933,
-    "testo": "if (!deps.approve) {"
+    "line": 798,
+    "testo": "sessionId: input.session.id,"
+  },
+  "agent/loop.ts:805": {
+    "path": "agent/loop.ts",
+    "line": 805,
+    "testo": "// everywhere else."
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 952,
-    "testo": "case 'allow':"
+    "line": 817,
+    "testo": "// pure function of the principal and the profile, and the profile follows the"
   },
-  "agent/loop.ts:823": {
+  "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 754,
-    "testo": "try {"
-  },
-  "agent/loop.ts:825": {
-    "path": "agent/loop.ts",
-    "line": 986,
-    "testo": "if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);"
-  },
-  "agent/loop.ts:867": {
-    "path": "agent/loop.ts",
-    "line": 1077,
-    "testo": "function resourceFor("
-  },
-  "agent/loop.ts:888": {
-    "path": "agent/loop.ts",
-    "line": 1098,
-    "testo": "function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]): Message[] {"
+    "line": 819,
+    "testo": "// a tightened permission matrix — is one a resume should *inherit*, not one"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1099,
-    "testo": "const history = deps.sessions.read(input.session);"
+    "line": 889,
+    "testo": "messages.push(...buildContext(deps, input, recalled, open));"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1115,
-    "testo": "messages.push({"
-  },
-  "agent/loop.ts:936": {
-    "path": "agent/loop.ts",
-    "line": 1146,
-    "testo": "let taint: TrustTier = principal.kind === 'member' ? 2 : 0;"
+    "line": 925,
+    "testo": "// released and nothing holds it while the deadline runs."
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1152,
-    "testo": "raiseTaint(tier) {"
+    "line": 942,
+    "testo": "// `tool_use` keeps its `tool_result` and the request stays well-formed."
   },
   "agent/observe-run.ts:104": {
     "path": "agent/observe-run.ts",
@@ -361,113 +381,113 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 113,
-    "testo": "export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime {"
+    "line": 104,
+    "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:124": {
     "path": "agent/runtime.ts",
-    "line": 133,
-    "testo": "const hardening: HardeningCheck ="
+    "line": 124,
+    "testo": ""
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 241,
-    "testo": "const light = lightLane(provider, {"
+    "line": 209,
+    "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 296,
-    "testo": "const guards = mandatoryGuards(home, cwd);"
+    "line": 258,
+    "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 298,
-    "testo": "const tools: RegisteredTool[] = ["
-  },
-  "agent/runtime.ts:261": {
-    "path": "agent/runtime.ts",
-    "line": 299,
-    "testo": "{"
-  },
-  "agent/runtime.ts:262": {
-    "path": "agent/runtime.ts",
-    "line": 300,
-    "testo": "capability: 'fs.read',"
-  },
-  "agent/runtime.ts:266": {
-    "path": "agent/runtime.ts",
-    "line": 299,
-    "testo": "{"
-  },
-  "agent/runtime.ts:271": {
-    "path": "agent/runtime.ts",
-    "line": 299,
-    "testo": "{"
+    "line": 260,
+    "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
+    "line": 279,
+    "testo": "return usd;"
+  },
+  "agent/runtime.ts:299": {
+    "path": "agent/runtime.ts",
     "line": 299,
-    "testo": "{"
+    "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 343,
-    "testo": "const executor = new SandboxExecutor(guards);"
+    "line": 301,
+    "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 352,
-    "testo": "tools.push(...makeProcessTools());"
+    "line": 310,
+    "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 357,
-    "testo": "const skillScan = discoverSkills(home);"
-  },
-  "agent/runtime.ts:316": {
-    "path": "agent/runtime.ts",
-    "line": 358,
-    "testo": "tools.push(makeSkillTool(skillScan.skills));"
+    "line": 315,
+    "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 369,
-    "testo": "tools.push(makeHttpTool(egress));"
+    "line": 327,
+    "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 375,
-    "testo": "let searchOn = false;"
+    "line": 333,
+    "testo": "// telling them to create one."
   },
-  "agent/runtime.ts:455": {
+  "agent/runtime.ts:345": {
     "path": "agent/runtime.ts",
-    "line": 498,
-    "testo": "bootLines: ["
+    "line": 345,
+    "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
+  },
+  "agent/runtime.ts:346": {
+    "path": "agent/runtime.ts",
+    "line": 346,
+    "testo": "// contained write that becomes an uncontained execution the next time the"
+  },
+  "agent/runtime.ts:488": {
+    "path": "agent/runtime.ts",
+    "line": 488,
+    "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:490": {
     "path": "agent/runtime.ts",
-    "line": 539,
-    "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
+    "line": 490,
+    "testo": "// Declared next to the tools above, in the same commit: a tool whose"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 543,
-    "testo": "systemPrompts: buildSystemPrompts("
+    "line": 494,
+    "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 546,
-    "testo": "skillsPromptSection(skillScan.skills),"
+    "line": 497,
+    "testo": "// Declared only when the tool exists. A capability the kernel knows about"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 574,
-    "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
+    "line": 525,
+    "testo": "safeMode: safeMode !== null,"
+  },
+  "agent/runtime.ts:527": {
+    "path": "agent/runtime.ts",
+    "line": 527,
+    "testo": ""
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 582,
-    "testo": "runtime.onClose(() => attachment.close());"
+    "line": 533,
+    "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
+  },
+  "agent/runtime.ts:534": {
+    "path": "agent/runtime.ts",
+    "line": 534,
+    "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
   },
   "agent/scheduler-run.ts:31": {
     "path": "agent/scheduler-run.ts",
@@ -477,66 +497,81 @@
   "agent/scheduler-run.ts:42": {
     "path": "agent/scheduler-run.ts",
     "line": 42,
-    "testo": "export function makeJobRunner(deps: LoopDeps): RunJob {"
+    "testo": "return {"
   },
   "agent/scheduler-run.ts:44": {
     "path": "agent/scheduler-run.ts",
     "line": 44,
-    "testo": "const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);"
+    "testo": "text:"
   },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
     "line": 108,
-    "testo": "{"
+    "testo": "rerunnable: true,"
   },
   "agent/tools/fs.ts:192": {
     "path": "agent/tools/fs.ts",
-    "line": 201,
-    "testo": "// Writes check the full deny-list; reads check the narrower one. Both sides go"
+    "line": 192,
+    "testo": "// target does not exist yet reads as \"missing\", the loop walks past it, and"
   },
   "agent/tools/fs.ts:196": {
     "path": "agent/tools/fs.ts",
-    "line": 205,
-    "testo": "const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);"
+    "line": 196,
+    "testo": "// exactly the shape of a bug that survives testing."
+  },
+  "agent/tools/fs.ts:326": {
+    "path": "agent/tools/fs.ts",
+    "line": 326,
+    "testo": "writeFileSync(full, content, 'utf8');"
+  },
+  "agent/tools/fs.ts:340": {
+    "path": "agent/tools/fs.ts",
+    "line": 340,
+    "testo": "return ["
+  },
+  "agent/tools/fs.ts:360": {
+    "path": "agent/tools/fs.ts",
+    "line": 360,
+    "testo": "// `IGNORA le istruzioni precedenti.md` is a filename, it costs an attacker"
   },
   "agent/tools/fs.ts:62": {
     "path": "agent/tools/fs.ts",
     "line": 62,
-    "testo": "{"
+    "testo": "* stdout is the same disk read through a different door — and two literals that"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
-    "line": 71,
-    "testo": "{"
+    "line": 70,
+    "testo": "* 3 in the shipped `rot/policy.json`. That was examined on its own merits"
   },
   "agent/tools/fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 80,
-    "testo": "{"
+    "line": 78,
+    "testo": "* half is refused. So the ceiling stays high and the **read itself pays**:"
   },
   "agent/tools/fs.ts:79": {
     "path": "agent/tools/fs.ts",
-    "line": 81,
-    "testo": "id: 'fs.write',"
+    "line": 79,
+    "testo": "* every read taints the turn to `DISK_TIER`, which is what a turn that has"
   },
   "agent/tools/fs.ts:89": {
     "path": "agent/tools/fs.ts",
-    "line": 80,
-    "testo": "{"
+    "line": 89,
+    "testo": "* back as an `ask` the owner could approve. The file's own security argument"
   },
   "agent/tools/fs.ts:99": {
     "path": "agent/tools/fs.ts",
-    "line": 98,
-    "testo": "{"
+    "line": 99,
+    "testo": "*"
   },
-  "agent/tools/http.ts:158": {
+  "agent/tools/http.ts:116": {
     "path": "agent/tools/http.ts",
-    "line": 162,
-    "testo": "tier: 3,"
+    "line": 116,
+    "testo": "if (hop > 0 && !hostAllowed(current.hostname, policy)) {"
   },
-  "agent/tools/http.ts:174": {
+  "agent/tools/http.ts:192": {
     "path": "agent/tools/http.ts",
-    "line": 178,
+    "line": 192,
     "testo": "return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;"
   },
   "agent/tools/http.ts:22": {
@@ -551,28 +586,18 @@
   },
   "agent/tools/http.ts:41": {
     "path": "agent/tools/http.ts",
-    "line": 45,
-    "testo": "export const httpSpec: ToolSpec = {"
-  },
-  "agent/tools/http.ts:97": {
-    "path": "agent/tools/http.ts",
-    "line": 101,
-    "testo": "// Redirect hops answer to the same allowlist as the first URL. The"
+    "line": 41,
+    "testo": "hostOnly: false,"
   },
   "agent/tools/mcp.ts:104": {
     "path": "agent/tools/mcp.ts",
-    "line": 109,
-    "testo": "handler: async (args) => {"
-  },
-  "agent/tools/mcp.ts:106": {
-    "path": "agent/tools/mcp.ts",
-    "line": 111,
-    "testo": "const body = fence('mcp', result.text, `risultato di ${server}.${def.name}`);"
+    "line": 104,
+    "testo": "description: fenced.block,"
   },
   "agent/tools/mcp.ts:118": {
     "path": "agent/tools/mcp.ts",
-    "line": 123,
-    "testo": "return {"
+    "line": 118,
+    "testo": "// door; `throwTier: 3` is the declared ceiling for whatever this"
   },
   "agent/tools/mcp.ts:24": {
     "path": "agent/tools/mcp.ts",
@@ -586,48 +611,53 @@
   },
   "agent/tools/mcp.ts:54": {
     "path": "agent/tools/mcp.ts",
-    "line": 59,
-    "testo": "export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): Promise<McpAttachment> {"
+    "line": 54,
+    "testo": "/** Injectable for tests. */"
   },
   "agent/tools/mcp.ts:71": {
     "path": "agent/tools/mcp.ts",
-    "line": 76,
-    "testo": "const verdict = verifyTools(connection.tools, entry.tools);"
+    "line": 71,
+    "testo": "const detail = error instanceof Error ? error.message : String(error);"
   },
   "agent/tools/mcp.ts:93": {
     "path": "agent/tools/mcp.ts",
-    "line": 98,
-    "testo": "for (const def of connection.tools) {"
+    "line": 93,
+    "testo": "}"
   },
-  "agent/tools/memory.ts:16": {
+  "agent/tools/memory.ts:112": {
     "path": "agent/tools/memory.ts",
-    "line": 16,
-    "testo": "* It reads the tenant of the turn, never a tenant of its own choosing: the"
+    "line": 112,
+    "testo": "export async function searchMemory("
+  },
+  "agent/tools/memory.ts:145": {
+    "path": "agent/tools/memory.ts",
+    "line": 145,
+    "testo": "return { content: 'memory_search: \"around\" deve essere un numero.', isError: true, tier: 0 };"
   },
   "agent/tools/memory.ts:21": {
     "path": "agent/tools/memory.ts",
     "line": 21,
-    "testo": "export const memoryCapability: CapabilityDecl = {"
+    "testo": "*"
+  },
+  "agent/tools/memory.ts:22": {
+    "path": "agent/tools/memory.ts",
+    "line": 22,
+    "testo": "* It reads the tenant of the turn, never a tenant of its own choosing: the"
   },
   "agent/tools/memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 28,
-    "testo": "resourceKind: 'tenant',"
+    "line": 25,
+    "testo": "*/"
   },
   "agent/tools/memory.ts:32": {
     "path": "agent/tools/memory.ts",
-    "line": 35,
-    "testo": "export const memorySearchSpec: ToolSpec = {"
+    "line": 32,
+    "testo": "// rows or fresher ones, and changes nothing."
   },
   "agent/tools/memory.ts:90": {
     "path": "agent/tools/memory.ts",
-    "line": 93,
-    "testo": "// The turn inherits the worst source it just pulled in, exactly as the"
-  },
-  "agent/tools/process.ts:130": {
-    "path": "agent/tools/process.ts",
-    "line": 135,
-    "testo": "return { content: [header, ...shown].join('\\n') + cut };"
+    "line": 90,
+    "testo": "type: 'number',"
   },
   "agent/tools/process.ts:23": {
     "path": "agent/tools/process.ts",
@@ -636,28 +666,23 @@
   },
   "agent/tools/process.ts:28": {
     "path": "agent/tools/process.ts",
-    "line": 29,
-    "testo": "resourceKind: 'none',"
+    "line": 28,
+    "testo": "maxTaint: 1,"
   },
   "agent/tools/process.ts:32": {
     "path": "agent/tools/process.ts",
-    "line": 33,
-    "testo": "{"
+    "line": 32,
+    "testo": "},"
   },
   "agent/tools/process.ts:42": {
     "path": "agent/tools/process.ts",
-    "line": 47,
-    "testo": "export const processListSpec: ToolSpec = {"
+    "line": 42,
+    "testo": "policyArgs: ['pid', 'signal'],"
   },
   "agent/tools/process.ts:55": {
     "path": "agent/tools/process.ts",
-    "line": 60,
-    "testo": "export const processKillSpec: ToolSpec = {"
-  },
-  "agent/tools/search.ts:186": {
-    "path": "agent/tools/search.ts",
-    "line": 190,
-    "testo": "return {"
+    "line": 55,
+    "testo": "grep: { type: 'string', description: 'Case-insensitive substring filter on the line' },"
   },
   "agent/tools/search.ts:48": {
     "path": "agent/tools/search.ts",
@@ -666,38 +691,33 @@
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 63,
-    "testo": "export const searchSpec: ToolSpec = {"
+    "line": 59,
+    "testo": "hostOnly: true,"
   },
   "agent/tools/shell.ts:106": {
     "path": "agent/tools/shell.ts",
-    "line": 110,
-    "testo": "const result = await executor.run({"
-  },
-  "agent/tools/shell.ts:119": {
-    "path": "agent/tools/shell.ts",
-    "line": 123,
-    "testo": "export function formatExecOutcome("
+    "line": 106,
+    "testo": "// `child.on('error', …)`, Node's own spawn-failure text (e.g. ENOENT on the"
   },
   "agent/tools/shell.ts:32": {
     "path": "agent/tools/shell.ts",
     "line": 32,
-    "testo": "export const shellCapability: CapabilityDecl = {"
+    "testo": "*/"
   },
   "agent/tools/shell.ts:36": {
     "path": "agent/tools/shell.ts",
-    "line": 40,
-    "testo": "resourceKind: 'none',"
+    "line": 36,
+    "testo": "reversible: 'no',"
   },
   "agent/tools/shell.ts:42": {
     "path": "agent/tools/shell.ts",
-    "line": 46,
-    "testo": "export const shellSpec: ToolSpec = {"
+    "line": 42,
+    "testo": "policyArgs: ['command'],"
   },
-  "agent/tools/skill.ts:110": {
+  "agent/tools/skill.ts:114": {
     "path": "agent/tools/skill.ts",
-    "line": 111,
-    "testo": "return { content: content.toString('utf8'), tier: 1 };"
+    "line": 114,
+    "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
   },
   "agent/tools/skill.ts:22": {
     "path": "agent/tools/skill.ts",
@@ -706,23 +726,23 @@
   },
   "agent/tools/skill.ts:32": {
     "path": "agent/tools/skill.ts",
-    "line": 33,
-    "testo": "export const skillSpec: ToolSpec = {"
+    "line": 32,
+    "testo": ""
   },
   "agent/tools/skill.ts:33": {
     "path": "agent/tools/skill.ts",
-    "line": 34,
-    "testo": "name: 'skill_read',"
+    "line": 33,
+    "testo": "export const skillSpec: ToolSpec = {"
   },
-  "agent/tools/skill.ts:59": {
+  "agent/tools/skill.ts:70": {
     "path": "agent/tools/skill.ts",
-    "line": 60,
+    "line": 70,
     "testo": "handler: (args) => {"
   },
-  "agent/tools/skill.ts:97": {
-    "path": "agent/tools/skill.ts",
-    "line": 98,
-    "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
+  "agent/turn-lane.ts:47": {
+    "path": "agent/turn-lane.ts",
+    "line": 47,
+    "testo": "export function makeLaneRunner("
   },
   "budget.ts:127": {
     "path": "core/budget/budget.ts",
@@ -736,53 +756,53 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 249,
-    "testo": "warn('api reachability', 'online check not implemented in M0', 'omit --online');"
+    "line": 248,
+    "testo": "if (options.online) {"
   },
   "cli/doctor.ts:44": {
     "path": "cli/doctor.ts",
-    "line": 45,
-    "testo": "export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {"
+    "line": 44,
+    "testo": ""
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
     "line": 27,
-    "testo": "* `muffin gateway` — the process that lives, and the three verbs around it."
+    "testo": "import type { SurfaceRegistry } from '../core/surface/registry.js';"
   },
-  "cli/gateway.ts:294": {
+  "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 294,
-    "testo": "export async function cmdGatewayRun(home = paths().home): Promise<number> {"
+    "line": 296,
+    "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
     "line": 297,
-    "testo": "runtime = buildRuntime(home);"
-  },
-  "cli/gateway.ts:359": {
-    "path": "cli/gateway.ts",
-    "line": 359,
-    "testo": "const surfaces = connectSurfaces(runtime, home);"
+    "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
     "line": 363,
-    "testo": "mcpLines = await attachMcp(runtime, home);"
+    "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
     "line": 375,
-    "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
+    "testo": "}"
   },
-  "cli/gateway.ts:397": {
+  "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 397,
-    "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
+    "line": 381,
+    "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
+  },
+  "cli/gateway.ts:388": {
+    "path": "cli/gateway.ts",
+    "line": 388,
+    "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
     "line": 81,
-    "testo": "export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {"
+    "testo": "*"
   },
   "cli/init.ts:101": {
     "path": "cli/init.ts",
@@ -822,132 +842,137 @@
   "cli/main.ts:101": {
     "path": "cli/main.ts",
     "line": 101,
-    "testo": "memoria: 'memory',"
+    "testo": "const COMMAND_ALIASES: Readonly<Record<string, string>> = {"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
     "line": 159,
-    "testo": "case 'run':"
+    "testo": "switch (command) {"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
     "line": 161,
-    "testo": "case 'repl':"
+    "testo": "return cmdRun(rest);"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
     "line": 163,
-    "testo": "case 'init':"
+    "testo": "return runRepl();"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
     "line": 165,
-    "testo": "case 'config':"
+    "testo": "return cmdInit(rest);"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
     "line": 167,
-    "testo": "case 'doctor':"
+    "testo": "return cmdConfig(paths().home, rest);"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
     "line": 169,
-    "testo": "case 'rot':"
+    "testo": "return cmdDoctor(rest);"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
     "line": 171,
-    "testo": "case 'uninstall':"
+    "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
     "line": 173,
-    "testo": "case 'memory':"
+    "testo": "return cmdUninstall(rest);"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
     "line": 175,
-    "testo": "case 'vault':"
+    "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
     "line": 177,
-    "testo": "case 'surface':"
+    "testo": "return cmdVault(rest);"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
     "line": 179,
-    "testo": "case 'mcp':"
+    "testo": "return cmdSurface(rest);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
     "line": 181,
-    "testo": "case 'jobs':"
+    "testo": "return cmdMcp(rest);"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
     "line": 183,
-    "testo": "case 'gateway':"
+    "testo": "return cmdJobs(rest);"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
     "line": 185,
-    "testo": "case 'observe':"
+    "testo": "return cmdGateway(rest);"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
     "line": 187,
-    "testo": "case 'secret':"
+    "testo": "return cmdObserve(paths().home, rest);"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
     "line": 189,
-    "testo": "case 'trace':"
+    "testo": "return cmdSecret(rest);"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
     "line": 191,
-    "testo": "case undefined: {"
+    "testo": "return cmdTrace(rest);"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
     "line": 198,
-    "testo": "case '--help':"
+    "testo": "}"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
     "line": 202,
-    "testo": "case '--version':"
+    "testo": "return 0;"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
     "line": 245,
-    "testo": "let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];"
+    "testo": "// answers and nothing is prompted or copied."
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
     "line": 258,
-    "testo": "if (apiKey && looksLikeTelegramToken(apiKey)) {"
+    "testo": "// let it through and fail confusingly at the first call to the model."
   },
   "cli/main.ts:296": {
     "path": "cli/main.ts",
     "line": 296,
-    "testo": "await offerGateway();"
+    "testo": ""
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
     "line": 297,
-    "testo": "process.stderr.write(`\\nOra: muffin doctor\\n`);"
+    "testo": "await offerGateway();"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
     "line": 317,
-    "testo": "async function offerGateway(): Promise<void> {"
+    "testo": "*/"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
     "line": 340,
-    "testo": "async function firstRun(): Promise<number> {"
+    "testo": "*/"
+  },
+  "cli/main.ts:505": {
+    "path": "cli/main.ts",
+    "line": 505,
+    "testo": "const asOf = normaliseDate(values['as-of'], 'end');"
   },
   "cli/mcp.ts:142": {
     "path": "cli/mcp.ts",
@@ -972,12 +997,12 @@
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
     "line": 175,
-    "testo": "export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {"
+    "testo": "process.stdout.write("
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
     "line": 256,
-    "testo": "export function cmdMemoryReview(home: string): number {"
+    "testo": "for (const r of report.needsReview) {"
   },
   "cli/memory.ts:27": {
     "path": "cli/memory.ts",
@@ -987,17 +1012,17 @@
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
     "line": 326,
-    "testo": "const answered = resolveContradiction(store, TENANT, factId, new Date());"
+    "testo": "const span ="
   },
-  "cli/observe.ts:62": {
+  "cli/observe.ts:67": {
     "path": "cli/observe.ts",
-    "line": 62,
-    "testo": "const printDeliver: Deliver = async (channel, text) => {"
+    "line": 67,
+    "testo": "function printDeliver(registry: SurfaceRegistry): Deliver {"
   },
   "cli/observe.ts:91": {
     "path": "cli/observe.ts",
     "line": 91,
-    "testo": "export async function cmdObserve(home: string, argv: string[], over: ObserveOverrides = {}): Promise<number> {"
+    "testo": "}"
   },
   "cli/onboarding.ts:43": {
     "path": "cli/onboarding.ts",
@@ -1007,62 +1032,52 @@
   "cli/repl.ts:108": {
     "path": "cli/repl.ts",
     "line": 108,
-    "testo": "export async function runRepl(home = paths().home): Promise<number> {"
+    "testo": ""
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
     "line": 111,
-    "testo": "runtime = buildRuntime(home);"
+    "testo": "`! safe mode: root of trust diverged (${runtime.safeMode.reason}) — capability sopra il rischio basso negate\\n`,"
   },
   "cli/repl.ts:133": {
     "path": "cli/repl.ts",
     "line": 133,
-    "testo": "mcpLines = await attachMcp(runtime, home);"
+    "testo": "let mcpLines: string[] = [];"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
     "line": 145,
-    "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
+    "testo": "surfaces.lines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
     "line": 157,
-    "testo": "runtime.deps.approve = async (request) => {"
+    "testo": "// verdict becomes a question instead of a refusal. The wording is the kernel's"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
     "line": 255,
-    "testo": "try {"
+    "testo": "ticker.unref(); // the timer must not, by itself, keep the process alive"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
     "line": 286,
-    "testo": "controller = new AbortController();"
+    "testo": "process.stderr.write(`${session.id}\\n`);"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
     "line": 288,
-    "testo": "const result = await runTurn(runtime.deps, {"
+    "testo": "}"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
     "line": 289,
-    "testo": "principal: { kind: 'owner', connector: 'cli', externalId: 'local' },"
+    "testo": "if (line === '/spend') {"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
     "line": 300,
-    "testo": "} catch (error) {"
-  },
-  "cli/repl.ts:36": {
-    "path": "cli/repl.ts",
-    "line": 36,
-    "testo": "* has a `delivery_failed` event for exactly this, with its own handler here"
-  },
-  "cli/repl.ts:48": {
-    "path": "cli/repl.ts",
-    "line": 48,
-    "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
+    "testo": "controller = new AbortController();"
   },
   "cli/run.ts:26": {
     "path": "cli/run.ts",
@@ -1109,70 +1124,85 @@
     "line": 96,
     "testo": "switch (result.stopped) {"
   },
-  "cli/surface.ts:187": {
+  "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 186,
-    "testo": "export function connectSurfaces(runtime: Runtime, home: string): { lines: string[]; stop: () => void } {"
+    "line": 199,
+    "testo": "* controls via an OAuth2 URL with the `bot` scope and no permissions, then"
   },
-  "cli/surface.ts:209": {
+  "cli/surface.ts:233": {
     "path": "cli/surface.ts",
-    "line": 209,
+    "line": 233,
+    "testo": "`  https://discord.com/oauth2/authorize?client_id=${me.id}&scope=bot&permissions=0\\n` +"
+  },
+  "cli/surface.ts:291": {
+    "path": "cli/surface.ts",
+    "line": 291,
+    "testo": "* never arrived even on a home where Telegram was connected and answering"
+  },
+  "cli/surface.ts:295": {
+    "path": "cli/surface.ts",
+    "line": 295,
+    "testo": "export function connectSurfaces("
+  },
+  "cli/surface.ts:344": {
+    "path": "cli/surface.ts",
+    "line": 344,
     "testo": "const connector = new TelegramConnector({"
   },
-  "cli/surface.ts:44": {
+  "cli/surface.ts:52": {
     "path": "cli/surface.ts",
-    "line": 43,
-    "testo": "for (const id of ['cli', 'telegram']) {"
+    "line": 52,
+    "testo": "export function cmdSurfaceList(home: string): number {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 76,
-    "testo": "export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {"
+    "line": 77,
+    "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
-  "connector.ts:223": {
-    "path": "connectors/telegram/connector.ts",
-    "line": 230,
-    "testo": "if (!incoming) {"
+  "connectors/discord/connector.ts:139": {
+    "path": "connectors/discord/connector.ts",
+    "line": 139,
+    "testo": "};"
   },
-  "connector.ts:255": {
+  "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
-    "line": 262,
-    "testo": "private async tryPair(incoming: Incoming): Promise<boolean> {"
+    "line": 153,
+    "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
-  "connectors/telegram/connector.ts:148": {
+  "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
-    "line": 155,
-    "testo": "export function principalFor(incoming: Incoming): { principal: Principal; tenant: string } {"
-  },
-  "connectors/telegram/connector.ts:167": {
-    "path": "connectors/telegram/connector.ts",
-    "line": 174,
+    "line": 165,
     "testo": "export class TelegramConnector {"
   },
   "connectors/telegram/connector.ts:179": {
     "path": "connectors/telegram/connector.ts",
-    "line": 186,
-    "testo": "async run(signal?: AbortSignal): Promise<void> {"
+    "line": 179,
+    "testo": "const me = await this.deps.api.getMe();"
+  },
+  "connectors/telegram/connector.ts:223": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 223,
+    "testo": "*"
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
-    "line": 237,
-    "testo": "try {"
+    "line": 230,
+    "testo": "*"
+  },
+  "connectors/telegram/connector.ts:255": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 255,
+    "testo": "}"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 314,
-    "testo": "const result = await runTurn(this.deps.loop, {"
+    "line": 307,
+    "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 320,
-    "testo": "session: this.deps.sessions.open(`telegram:${incoming.chatId}`),"
-  },
-  "connectors/telegram/media.ts:154": {
-    "path": "connectors/telegram/media.ts",
-    "line": 154,
-    "testo": "* **Its production caller does not exist yet, on purpose.** Sending a file is an"
+    "line": 313,
+    "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "consolidator.ts:109": {
     "path": "core/memory/consolidator.ts",
@@ -1217,22 +1247,22 @@
   "core/config/config.ts:100": {
     "path": "core/config/config.ts",
     "line": 100,
-    "testo": "rot: { mode: 'single-user' },"
+    "testo": "*/"
   },
   "core/config/config.ts:101": {
     "path": "core/config/config.ts",
     "line": 101,
-    "testo": "traces: { retentionDays: 90 },"
+    "testo": "discord: z"
   },
   "core/config/config.ts:102": {
     "path": "core/config/config.ts",
     "line": 102,
-    "testo": "surfaces: { default: 'cli', enabled: ['cli'] },"
+    "testo": ".object({"
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
     "line": 169,
-    "testo": "export function loadConfig(home = muffinHome(), onNote: (line: string) => void = () => {}): Config {"
+    "testo": "`dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +"
   },
   "core/config/config.ts:39": {
     "path": "core/config/config.ts",
@@ -1243,6 +1273,11 @@
     "path": "core/config/config.ts",
     "line": 50,
     "testo": "search: z"
+  },
+  "core/config/config.ts:96": {
+    "path": "core/config/config.ts",
+    "line": 96,
+    "testo": "* ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one"
   },
   "core/config/inventory.ts:52": {
     "path": "core/config/inventory.ts",
@@ -1282,32 +1317,37 @@
   "core/gateway/service.ts:108": {
     "path": "core/gateway/service.ts",
     "line": 108,
-    "testo": "const EXIT_FOR: Record<string, number> = {"
+    "testo": "*/"
+  },
+  "core/gateway/service.ts:252": {
+    "path": "core/gateway/service.ts",
+    "line": 252,
+    "testo": "this.deps.turnLane.tick(now);"
   },
   "core/gateway/service.ts:264": {
     "path": "core/gateway/service.ts",
     "line": 264,
-    "testo": "beat(now: Date = this.now()): void {"
+    "testo": "*/"
   },
   "core/gateway/service.ts:332": {
     "path": "core/gateway/service.ts",
     "line": 332,
-    "testo": "async serve(): Promise<number> {"
+    "testo": "}"
   },
   "core/gateway/service.ts:57": {
     "path": "core/gateway/service.ts",
     "line": 57,
-    "testo": "export const TICK_MS = HEARTBEAT_MS;"
+    "testo": "*/"
   },
   "core/gateway/service.ts:92": {
     "path": "core/gateway/service.ts",
     "line": 92,
-    "testo": "export const EXIT_STOPPED = 143;"
+    "testo": "*/"
   },
   "core/gateway/service.ts:98": {
     "path": "core/gateway/service.ts",
     "line": 98,
-    "testo": "* **0 means \"restart me\"** — SIGUSR1 is the drain-and-come-back signal, and on"
+    "testo": "*"
   },
   "core/gateway/unit.ts:232": {
     "path": "core/gateway/unit.ts",
@@ -1489,60 +1529,80 @@
     "line": 212,
     "testo": "export function openContradictions(store: MemoryStore, tenantId: string, limit = 50): OpenContradiction[] {"
   },
-  "core/memory/recall.ts:120": {
+  "core/memory/recall.ts:108": {
     "path": "core/memory/recall.ts",
-    "line": 120,
-    "testo": "export function selectForExpansion(facts: Fact[]): Fact[] {"
+    "line": 108,
+    "testo": "export function normaliseDate(raw: string | undefined, edge: 'start' | 'end'): string | undefined {"
   },
-  "core/memory/recall.ts:160": {
+  "core/memory/recall.ts:266": {
     "path": "core/memory/recall.ts",
-    "line": 160,
-    "testo": "export async function recall("
-  },
-  "core/memory/recall.ts:178": {
-    "path": "core/memory/recall.ts",
-    "line": 178,
-    "testo": "const textHits = deps.store.searchEpisodes(tenantId, query, limit * 2);"
-  },
-  "core/memory/recall.ts:192": {
-    "path": "core/memory/recall.ts",
-    "line": 192,
-    "testo": "if (deps.vectors) {"
-  },
-  "core/memory/recall.ts:194": {
-    "path": "core/memory/recall.ts",
-    "line": 194,
-    "testo": "const vectorHits = await deps.vectors.search(tenantId, query, limit * 2);"
-  },
-  "core/memory/recall.ts:230": {
-    "path": "core/memory/recall.ts",
-    "line": 230,
-    "testo": "const entityNames = extractCandidateNames(query);"
-  },
-  "core/memory/recall.ts:269": {
-    "path": "core/memory/recall.ts",
-    "line": 269,
-    "testo": "if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {"
-  },
-  "core/memory/recall.ts:284": {
-    "path": "core/memory/recall.ts",
-    "line": 284,
-    "testo": "export function renderForPrompt(result: RecallResult): string {"
-  },
-  "core/memory/recall.ts:307": {
-    "path": "core/memory/recall.ts",
-    "line": 307,
-    "testo": "export function recallTaint(result: RecallResult): TrustTier {"
-  },
-  "core/memory/recall.ts:76": {
-    "path": "core/memory/recall.ts",
-    "line": 76,
+    "line": 266,
     "testo": "/** Names the halves that actually ran, so a degraded recall is never silent. */"
   },
-  "core/memory/recall.ts:81": {
+  "core/memory/recall.ts:279": {
     "path": "core/memory/recall.ts",
-    "line": 81,
+    "line": 279,
     "testo": "const K = 60;"
+  },
+  "core/memory/recall.ts:302": {
+    "path": "core/memory/recall.ts",
+    "line": 302,
+    "testo": "* discarded."
+  },
+  "core/memory/recall.ts:369": {
+    "path": "core/memory/recall.ts",
+    "line": 369,
+    "testo": "// Least important, and among equals the oldest. The `<`-only reduce that was"
+  },
+  "core/memory/recall.ts:396": {
+    "path": "core/memory/recall.ts",
+    "line": 396,
+    "testo": "tenantId: string,"
+  },
+  "core/memory/recall.ts:428": {
+    "path": "core/memory/recall.ts",
+    "line": 428,
+    "testo": "if (textHits.length > 0) strategies.push('fts');"
+  },
+  "core/memory/recall.ts:432": {
+    "path": "core/memory/recall.ts",
+    "line": 432,
+    "testo": "options.surface ? `superficie=${options.surface}` : '',"
+  },
+  "core/memory/recall.ts:435": {
+    "path": "core/memory/recall.ts",
+    "line": 435,
+    "testo": "]"
+  },
+  "core/memory/recall.ts:441": {
+    "path": "core/memory/recall.ts",
+    "line": 441,
+    "testo": "fuse(`episode:${hit.id}`, {"
+  },
+  "core/memory/recall.ts:527": {
+    "path": "core/memory/recall.ts",
+    "line": 527,
+    "testo": "if (options.surface !== undefined && connector !== options.surface) return;"
+  },
+  "core/memory/recall.ts:586": {
+    "path": "core/memory/recall.ts",
+    "line": 586,
+    "testo": "...(nearest"
+  },
+  "core/memory/recall.ts:593": {
+    "path": "core/memory/recall.ts",
+    "line": 593,
+    "testo": ": {}),"
+  },
+  "core/memory/recall.ts:665": {
+    "path": "core/memory/recall.ts",
+    "line": 665,
+    "testo": "const key = `episode:${near.id}`;"
+  },
+  "core/memory/recall.ts:708": {
+    "path": "core/memory/recall.ts",
+    "line": 708,
+    "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
     "path": "core/memory/rerank.ts",
@@ -1582,31 +1642,36 @@
   "core/memory/store.test.ts:106": {
     "path": "core/memory/store.test.ts",
     "line": 106,
-    "testo": "expect(s.isFunctional('interest')).toBe(false);"
+    "testo": ""
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
     "line": 147,
-    "testo": "const seed = db.prepare("
+    "testo": "*"
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
     "line": 162,
-    "testo": "addEpisode(input: EpisodeInput): number {"
+    "testo": "private readonly ingestLock: IngestLock;"
   },
-  "core/memory/store.ts:179": {
+  "core/memory/store.ts:218": {
     "path": "core/memory/store.ts",
-    "line": 179,
+    "line": 218,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
-  "core/memory/store.ts:198": {
+  "core/memory/store.ts:237": {
     "path": "core/memory/store.ts",
-    "line": 198,
+    "line": 237,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
     "line": 256,
+    "testo": "releaseIngestLock(pid: number = process.pid): void {"
+  },
+  "core/memory/store.ts:295": {
+    "path": "core/memory/store.ts",
+    "line": 295,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
@@ -1614,20 +1679,40 @@
     "line": 38,
     "testo": "export type FactInput = {"
   },
-  "core/memory/store.ts:484": {
+  "core/memory/store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 484,
-    "testo": "searchEpisodes(tenantId: string, query: string, limit = 10): { id: number; content: string; createdAt: string; trustTier: TrustTier }[] {"
+    "line": 503,
+    "testo": "/**"
   },
-  "core/memory/store.ts:592": {
+  "core/memory/store.ts:572": {
     "path": "core/memory/store.ts",
-    "line": 592,
+    "line": 572,
+    "testo": "/**"
+  },
+  "core/memory/store.ts:610": {
+    "path": "core/memory/store.ts",
+    "line": 610,
+    "testo": "FROM facts f"
+  },
+  "core/memory/store.ts:637": {
+    "path": "core/memory/store.ts",
+    "line": 637,
+    "testo": "searchEpisodes("
+  },
+  "core/memory/store.ts:700": {
+    "path": "core/memory/store.ts",
+    "line": 700,
+    "testo": "episodeNeighbourhood("
+  },
+  "core/memory/store.ts:829": {
+    "path": "core/memory/store.ts",
+    "line": 829,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
-  "core/memory/store.ts:709": {
+  "core/memory/store.ts:958": {
     "path": "core/memory/store.ts",
-    "line": 709,
-    "testo": "episodeById(tenantId: string, id: number): Episode | null {"
+    "line": 958,
+    "testo": "f.superseded_by AS supersededBy"
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
@@ -1864,10 +1949,10 @@
     "line": 27,
     "testo": "export const SCHEMA = `"
   },
-  "core/scheduler/scheduler.ts:168": {
+  "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 168,
-    "testo": "try {"
+    "line": 240,
+    "testo": "* duration, it is money and not correctness, and closing it would require"
   },
   "core/session/store.ts:35": {
     "path": "core/session/store.ts",
@@ -1924,30 +2009,35 @@
     "line": 94,
     "testo": "attributes: redactAttributes(current),"
   },
+  "core/turns/lane.ts:86": {
+    "path": "core/turns/lane.ts",
+    "line": 86,
+    "testo": "* construction site — instead of a silent regression a judge has to"
+  },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
-    "line": 397,
-    "testo": "this.store.addEpisode({"
+    "line": 238,
+    "testo": "walk(this.root);"
   },
   "core/vault/vault.ts:420": {
     "path": "core/vault/vault.ts",
-    "line": 496,
-    "testo": "async audit(tenantId: string): Promise<VaultAudit> {"
+    "line": 420,
+    "testo": "report.chunks += 1;"
   },
   "core/vault/vault.ts:48": {
     "path": "core/vault/vault.ts",
-    "line": 74,
-    "testo": "const NEVER_CONTENT = new Set(["
+    "line": 48,
+    "testo": ""
   },
   "core/vault/vault.ts:58": {
     "path": "core/vault/vault.ts",
-    "line": 84,
-    "testo": "export function skipReason(relPath: string, realPath: string): string | null {"
+    "line": 58,
+    "testo": "* than by how many megabytes of images it carries."
   },
   "core/vault/vault.ts:95": {
     "path": "core/vault/vault.ts",
-    "line": 159,
-    "testo": "export class Vault {"
+    "line": 95,
+    "testo": "export type VaultFile = {"
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
@@ -2071,43 +2161,43 @@
   },
   "docs/blueprint/03-threat-model.md:116": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 120,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
+    "line": 116,
+    "testo": "| Rubber-stamping delle PR generate da Muffin (volume che cresce, reviewer sempre uno) | il collo è umano per design | path del RoT sotto CODEOWNERS + diff isolato obbligatorio + CI che segnala le PR che li toccano (C1-9); mai RoT mescolato ad altre modifiche in una stessa PR |"
   },
   "docs/blueprint/03-threat-model.md:21": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 21,
-    "testo": "- **Trust tier** (dal modello dati, 02 §5): 0 owner · 1 contatti confermati · 2 gruppo/sconosciuti · 3 web/tool-esterni. Il **taint del contesto** = max tier dei blocchi **fisicamente presenti nel context del turno** (messaggio + recall + tool output già ricevuti). Il taint **si propaga**: messaggio→fatto (il fatto eredita il tier), fatto→recall (l'etichetta viaggia), recall→azione (il kernel legge il taint prima di eseguire). Risposta alla domanda diretta del BRIEF: sì, serve il taint, ed è un campo persistito, non una convenzione di prompt."
+    "testo": "- **Trust tier** (dal modello dati, 02 §5): 0 owner · 1 contatti confermati · 2 gruppo/sconosciuti · 3 web/tool-esterni. Il **taint del contesto** = max tier dei blocchi **fisicamente presenti nel context del turno** (messaggio + recall + tool output già ricevuti). Il taint **si propaga**: messaggio→fatto (il fatto eredita il tier), fatto→recall (l'etichetta viaggia), recall→azione (il kernel legge il taint prima di eseguire). Risposta alla domanda diretta del BRIEF: sì, serve il taint, ed è un campo persistito, non una convenzione di prompt. **Il filesystem locale non ha provenienza** (ADR-0044): `stat` non distingue `~/appunti.md` scritto dall'owner da `~/Downloads/fattura.pdf` arrivato da uno sconosciuto, quindi ciò che entra dal disco — `fs_read`, `fs_list`, lo stdout di `shell_run` — è **tier 2**; la tabella dei processi (`process_list`, solo `comm`) è tier 1, perché sceglierne il contenuto costa a un attaccante l'esecuzione di codice sull'host. Un risultato di tool fatto solo di parole del tool stesso è tier 0, **dichiarato** e non omesso: il campo è obbligatorio, così che «pulito» e «nessuno ha chiesto» non siano più lo stesso valore."
   },
   "docs/blueprint/03-threat-model.md:30": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 31,
-    "testo": "ALLOW | ASK(owner) | DRAFT (act-notify-undo) | DENY (con motivo loggato)"
+    "line": 30,
+    "testo": "decide(principal, tenant, capability, resource, args, taint) →"
   },
-  "docs/blueprint/03-threat-model.md:44": {
+  "docs/blueprint/03-threat-model.md:45": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 45,
-    "testo": "| Shell / filesystem host / processi | ALLOW per classe (HITL) | **DENY — nessun percorso** | **DENY** |"
+    "testo": "| Shell / filesystem host / processi | ALLOW per classe (HITL) | **ASK** (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione — vedi nota sotto) | **DENY** |"
   },
   "docs/blueprint/03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 52,
-    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
+    "line": 51,
+    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
   },
-  "docs/blueprint/03-threat-model.md:66": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 67,
-    "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
-  },
-  "docs/blueprint/03-threat-model.md:67": {
+  "docs/blueprint/03-threat-model.md:68": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 68,
+    "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
+  },
+  "docs/blueprint/03-threat-model.md:69": {
+    "path": "docs/blueprint/03-threat-model.md",
+    "line": 69,
     "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
   },
   "docs/blueprint/03-threat-model.md:70": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 71,
-    "testo": "- **Sandbox non disponibile ≠ silenziosamente unsandboxed**: se la piattaforma non supporta il sandbox (es. bubblewrap assente), le capability di esecuzione si auto-degradano di un livello (ALLOW→ASK) e `muffin doctor` lo dichiara. (Lezione interna diretta: il flag attuale di Muffin è ON ma no-op senza bubblewrap sull'host — esattamente il silenzio che qui diventa impossibile.)"
+    "line": 70,
+    "testo": "- **Niente side-channel**: il codice dentro il sandbox non ha alcun canale verso i tool del loop — è codice+fs+rete proxata. Il confine di esecuzione è anche un confine di capability. *(Riferimento corretto 2026-08-11: Hermes #4146 era questa classe — sandbox→RPC→tool privilegiato — ma loro l'hanno chiusa TENENDO il canale e propagando l'approvazione giù per i thread (PR #34497); la PR che toglieva la capability fu rifiutata, e la classe si è riaperta due volte (#65592, #74078, aperte a agosto 2026). La nostra scelta è il ramo che loro hanno rifiutato, e la loro storia da allora è l'argomento per il nostro.)*"
   },
   "docs/blueprint/04-roadmap.md:210": {
     "path": "docs/blueprint/04-roadmap.md",
@@ -2154,10 +2244,10 @@
     "line": 262,
     "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
   },
-  "docs/blueprint/M5-BIS.md:219": {
+  "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 236,
-    "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
+    "line": 255,
+    "testo": "> `muffin memory search` sia nel tool `memory_search` che il modello raggiunge"
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
@@ -2196,28 +2286,23 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 266,
-    "testo": "export function fsWrite(scope: FsScope, path: string, content: string): string {"
+    "line": 257,
+    "testo": "// is a second name for a file inside the deny-list. Refusing to write to any"
   },
   "fs.ts:34": {
     "path": "agent/tools/fs.ts",
     "line": 34,
-    "testo": "export const fsCapabilities: CapabilityDecl[] = ["
+    "testo": ""
   },
   "fs.ts:7": {
     "path": "agent/tools/fs.ts",
     "line": 7,
-    "testo": "* The three filesystem primitives of M1."
+    "testo": "/**"
   },
   "fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 80,
-    "testo": "{"
-  },
-  "gateway.ts:397": {
-    "path": "cli/gateway.ts",
-    "line": 397,
-    "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
+    "line": 78,
+    "testo": "* half is refused. So the ceiling stays high and the **read itself pays**:"
   },
   "guards.ts:41": {
     "path": "core/rot/guards.ts",
@@ -2234,15 +2319,10 @@
     "line": 9,
     "testo": "* 03 §3-bis: *\"**Mandatory deny paths**: `~/.muffin/rot/`, config, secrets,"
   },
-  "http.ts:153": {
-    "path": "agent/tools/http.ts",
-    "line": 157,
-    "testo": "const body = clipBody(extracted ?? rawBody);"
-  },
   "http.ts:97": {
     "path": "agent/tools/http.ts",
-    "line": 101,
-    "testo": "// Redirect hops answer to the same allowlist as the first URL. The"
+    "line": 97,
+    "testo": "handler: async (args) => {"
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
@@ -2261,133 +2341,123 @@
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 113,
-    "testo": "class ApprovalRequired extends Error {"
+    "line": 112,
+    "testo": "*/"
+  },
+  "loop.ts:1639": {
+    "path": "agent/loop.ts",
+    "line": 1639,
+    "testo": "toolCallId: call.id,"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 390,
-    "testo": "const inherited = recallTaint(result);"
+    "line": 299,
+    "testo": "* rows, the tests would still be green, and the model would keep re-deriving"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 400,
-    "testo": "} catch (error) {"
+    "line": 309,
+    "testo": "*/"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 435,
-    "testo": "if (deps.budgetExhausted(input.tenant)) {"
+    "line": 352,
+    "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 438,
-    "testo": "if (input.signal?.aborted) {"
+    "line": 355,
+    "testo": "* contract is narrow on purpose — it is called from `finish`, microseconds"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 512,
-    "testo": "if (error.source === 'output') {"
+    "line": 429,
+    "testo": "* Returned because the caller may have to **write something derived from this"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 514,
-    "testo": "} else if (transportRetriesLeft > 0) {"
+    "line": 431,
+    "testo": "* keeps the taint in a closure that dies with the call, so every caller"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 525,
-    "testo": "throw error;"
+    "line": 442,
+    "testo": "/** Present when `stopped` is 'ask': what the turn wanted permission for. */"
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 567,
-    "testo": "if (recover('empty')) continue;"
+    "line": 484,
+    "testo": "principal: input.principal,"
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 568,
-    "testo": "return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', iterations, usage);"
+    "line": 485,
+    "testo": "tenant: input.tenant,"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 591,
-    "testo": "if (nudgedForCompletion === false) {"
+    "line": 508,
+    "testo": "contextBuilt: false,"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 604,
-    "testo": "deps.sessions.append(input.session, {"
+    "line": 521,
+    "testo": "* The record, before anything happens — and **not** inside a try."
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 657,
-    "testo": "if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);"
+    "line": 574,
+    "testo": "* Three refusals live here, and none of them is a convenience:"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 498,
-    "testo": "} catch (error) {"
+    "line": 577,
+    "testo": "*     to the model that produced it, and ADR-0037 records that sending one to a"
+  },
+  "loop.ts:594": {
+    "path": "agent/loop.ts",
+    "line": 594,
+    "testo": "): Promise<TurnResult | ResumeRefusal> {"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 660,
-    "testo": "} catch (error) {"
+    "line": 602,
+    "testo": "const wasWaiting = existing.status === 'waiting';"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 879,
-    "testo": "{ [ATTR.capability]: capability, [ATTR.taint]: snapshot.currentTaint() },"
+    "line": 744,
+    "testo": "// `resumeTurn` §2. On a fresh turn the two agree by construction, which is"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 882,
-    "testo": "const decision = snapshot.check(capability, resource, args);"
+    "line": 747,
+    "testo": "const turnClass = tenantClass(input.principal, input.tenant);"
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 904,
-    "testo": "case 'deny':"
+    "line": 769,
+    "testo": "nudgedForCompletion,"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 912,
-    "testo": "case 'draft':"
+    "line": 777,
+    "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 927,
-    "testo": "case 'ask': {"
+    "line": 792,
+    "testo": "* call. The build said so; the runtime would have said so on message one."
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 941,
-    "testo": "if (answer === 'deny') {"
-  },
-  "loop.ts:824": {
-    "path": "agent/loop.ts",
-    "line": 985,
-    "testo": "const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });"
-  },
-  "loop.ts:825": {
-    "path": "agent/loop.ts",
-    "line": 986,
-    "testo": "if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);"
+    "line": 806,
+    "testo": "replyChannel: input.replyChannel ?? null,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 734,
-    "testo": "} catch (error) {"
-  },
-  "loop.ts:867": {
-    "path": "agent/loop.ts",
-    "line": 1077,
-    "testo": "function resourceFor("
-  },
-  "loop.ts:936": {
-    "path": "agent/loop.ts",
-    "line": 1146,
-    "testo": "let taint: TrustTier = principal.kind === 'member' ? 2 : 0;"
+    "line": 842,
+    "testo": "}"
   },
   "maintenance.ts:21": {
     "path": "core/memory/maintenance.ts",
@@ -2411,13 +2481,13 @@
   },
   "mcp.ts:102": {
     "path": "agent/tools/mcp.ts",
-    "line": 107,
-    "testo": "inputSchema: def.inputSchema as RegisteredTool['spec']['inputSchema'],"
+    "line": 102,
+    "testo": "spec: {"
   },
   "mcp.ts:106": {
     "path": "agent/tools/mcp.ts",
-    "line": 111,
-    "testo": "const body = fence('mcp', result.text, `risultato di ${server}.${def.name}`);"
+    "line": 106,
+    "testo": "// server's contract and the provider passes it through opaquely."
   },
   "mcp.ts:20": {
     "path": "agent/tools/mcp.ts",
@@ -2426,43 +2496,43 @@
   },
   "mcp.ts:37": {
     "path": "agent/tools/mcp.ts",
-    "line": 42,
-    "testo": "hostOnly: true,"
+    "line": 37,
+    "testo": "// become a per-server option later without the server telling us: a"
   },
   "mcp.ts:61": {
     "path": "agent/tools/mcp.ts",
-    "line": 66,
-    "testo": "for (const [server, entry] of Object.entries(registry.servers)) {"
+    "line": 61,
+    "testo": "const tools: RegisteredTool[] = [];"
   },
   "mcp.ts:71": {
     "path": "agent/tools/mcp.ts",
-    "line": 76,
-    "testo": "const verdict = verifyTools(connection.tools, entry.tools);"
+    "line": 71,
+    "testo": "const detail = error instanceof Error ? error.message : String(error);"
   },
   "mcp.ts:74": {
     "path": "agent/tools/mcp.ts",
-    "line": 79,
-    "testo": "// with maximum standing; nothing from this server reaches the loop."
+    "line": 74,
+    "testo": "}"
   },
   "mcp.ts:91": {
     "path": "agent/tools/mcp.ts",
-    "line": 96,
-    "testo": "capabilities.push(mcpCapabilityFor(server));"
+    "line": 91,
+    "testo": "await connection.close().catch(() => {});"
   },
   "memory.ts:25": {
     "path": "agent/tools/memory.ts",
-    "line": 28,
-    "testo": "resourceKind: 'tenant',"
+    "line": 25,
+    "testo": "*/"
   },
   "memory.ts:29": {
     "path": "agent/tools/memory.ts",
-    "line": 32,
-    "testo": "hostOnly: false,"
+    "line": 29,
+    "testo": "risk: 'low',"
   },
   "memory.ts:48": {
     "path": "agent/tools/memory.ts",
-    "line": 51,
-    "testo": "export async function searchMemory("
+    "line": 48,
+    "testo": "* kept every retired belief on purpose had no path by which any of them could"
   },
   "pricing.ts:43": {
     "path": "core/budget/pricing.ts",
@@ -2489,25 +2559,10 @@
     "line": 99,
     "testo": "// A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a"
   },
-  "process.ts:108": {
-    "path": "agent/tools/process.ts",
-    "line": 113,
-    "testo": "handler: async (args) => {"
-  },
-  "process.ts:130": {
-    "path": "agent/tools/process.ts",
-    "line": 135,
-    "testo": "return { content: [header, ...shown].join('\\n') + cut };"
-  },
   "process.ts:146": {
     "path": "agent/tools/process.ts",
-    "line": 151,
-    "testo": "if (pid === process.pid) {"
-  },
-  "process.ts:162": {
-    "path": "agent/tools/process.ts",
-    "line": 167,
-    "testo": "return { content: `SIG${signal} delivered to pid ${pid} — check with process_list whether it exited` };"
+    "line": 146,
+    "testo": "// on the host, which is a different game and a lost one."
   },
   "process.ts:18": {
     "path": "agent/tools/process.ts",
@@ -2516,8 +2571,8 @@
   },
   "process.ts:27": {
     "path": "agent/tools/process.ts",
-    "line": 28,
-    "testo": "maxTaint: 1,"
+    "line": 27,
+    "testo": "rerunnable: true,"
   },
   "profile.ts:150": {
     "path": "agent/profiles/profile.ts",
@@ -2534,65 +2589,65 @@
     "line": 204,
     "testo": "/**"
   },
-  "recall.ts:166": {
+  "recall.ts:17": {
     "path": "core/memory/recall.ts",
-    "line": 166,
-    "testo": "const limit = options.limit ?? 8;"
+    "line": 17,
+    "testo": "* Then one hop on the graph: whatever entity the retrieved text is about, its"
   },
-  "recall.ts:19": {
+  "recall.ts:290": {
     "path": "core/memory/recall.ts",
-    "line": 19,
-    "testo": "* expansion on a comparable system cost 44 points on BEAM, and cleverness on a"
-  },
-  "recall.ts:200": {
-    "path": "core/memory/recall.ts",
-    "line": 200,
-    "testo": "// The tier comes from the source row, never from the fact that a vector"
-  },
-  "recall.ts:223": {
-    "path": "core/memory/recall.ts",
-    "line": 223,
-    "testo": "strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);"
-  },
-  "recall.ts:271": {
-    "path": "core/memory/recall.ts",
-    "line": 271,
-    "testo": "strategies.push(`rerank(${deps.reranker.id})`);"
-  },
-  "recall.ts:289": {
-    "path": "core/memory/recall.ts",
-    "line": 289,
-    "testo": "// Only inferred is marked. Labelling `said` too would put a word in front"
+    "line": 290,
+    "testo": "* model-typed. Fixed at the primitive instead of at each boundary so a third"
   },
   "recall.ts:293": {
     "path": "core/memory/recall.ts",
     "line": 293,
-    "testo": "`${item.text.replace(/\\s+/g, ' ').slice(0, 400)}`,"
+    "testo": "const MAX_NEIGHBOURS = 5;"
   },
-  "recall.ts:323": {
+  "recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 323,
-    "testo": "function extractCandidateNames(query: string): string[] {"
+    "line": 302,
+    "testo": "* discarded."
   },
-  "recall.ts:93": {
+  "recall.ts:375": {
     "path": "core/memory/recall.ts",
-    "line": 93,
-    "testo": "/**"
+    "line": 375,
+    "testo": "(min, f) =>"
+  },
+  "recall.ts:503": {
+    "path": "core/memory/recall.ts",
+    "line": 503,
+    "testo": "validFrom: fact.validFrom,"
+  },
+  "recall.ts:588": {
+    "path": "core/memory/recall.ts",
+    "line": 588,
+    "testo": "nearest: {"
+  },
+  "recall.ts:655": {
+    "path": "core/memory/recall.ts",
+    "line": 655,
+    "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
+  },
+  "recall.ts:675": {
+    "path": "core/memory/recall.ts",
+    "line": 675,
+    "testo": "score: 0,"
+  },
+  "recall.ts:731": {
+    "path": "core/memory/recall.ts",
+    "line": 731,
+    "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
+  },
+  "recall.ts:750": {
+    "path": "core/memory/recall.ts",
+    "line": 750,
+    "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
     "path": "core/tracing/redact.ts",
     "line": 11,
     "testo": "* That first sentence was false for as long as this file has existed, and said"
-  },
-  "repl.ts:48": {
-    "path": "cli/repl.ts",
-    "line": 48,
-    "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
-  },
-  "repl.ts:55": {
-    "path": "cli/repl.ts",
-    "line": 55,
-    "testo": "process.stderr.write(`\\n⏰ [job → ${channel}: consegna remota da cablare]\\n${text}\\n`);"
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
@@ -2601,43 +2656,43 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 322,
-    "testo": "handler: async (args, ctx) => searchMemory(recallDeps, ctx.tenant, args),"
+    "line": 284,
+    "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 391,
-    "testo": "searchNotes.push("
+    "line": 349,
+    "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 427,
-    "testo": "...(searchOn ? [searchCapability] : []),"
-  },
-  "runtime.ts:456": {
-    "path": "agent/runtime.ts",
-    "line": 500,
-    "testo": "...skillScan.problems.map((p) => `! ${p}`),"
+    "line": 384,
+    "testo": "if (executor.status().available) {"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 508,
-    "testo": "register: (tool, decl) => {"
+    "line": 464,
+    "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
+  },
+  "runtime.ts:488": {
+    "path": "agent/runtime.ts",
+    "line": 488,
+    "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 574,
-    "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
+    "line": 525,
+    "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 580,
-    "testo": "for (const t of tool) runtime.register(t, decl);"
+    "line": 531,
+    "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 107,
-    "testo": "register(tool: RegisteredTool, decl: CapabilityDecl): void;"
+    "line": 98,
+    "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {
     "path": "core/memory/schema.ts",
@@ -2669,21 +2724,6 @@
     "line": 9,
     "testo": "* The invariant that makes the rest work: drop every derived table, replay the"
   },
-  "search.ts:170": {
-    "path": "agent/tools/search.ts",
-    "line": 174,
-    "testo": "} catch (error) {"
-  },
-  "search.ts:179": {
-    "path": "agent/tools/search.ts",
-    "line": 183,
-    "testo": "return { content: `nessun risultato per \"${parsed.data.query}\"`, tier: 3 };"
-  },
-  "search.ts:186": {
-    "path": "agent/tools/search.ts",
-    "line": 190,
-    "testo": "return {"
-  },
   "search.ts:33": {
     "path": "agent/tools/search.ts",
     "line": 33,
@@ -2691,43 +2731,38 @@
   },
   "search.ts:55": {
     "path": "agent/tools/search.ts",
-    "line": 59,
-    "testo": "hostOnly: true,"
+    "line": 55,
+    "testo": "rerunnable: true,"
   },
-  "skill.ts:110": {
+  "skill.ts:114": {
     "path": "agent/tools/skill.ts",
-    "line": 111,
+    "line": 114,
+    "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
+  },
+  "skill.ts:127": {
+    "path": "agent/tools/skill.ts",
+    "line": 127,
     "testo": "return { content: content.toString('utf8'), tier: 1 };"
   },
-  "skill.ts:59": {
+  "skill.ts:70": {
     "path": "agent/tools/skill.ts",
-    "line": 60,
+    "line": 70,
     "testo": "handler: (args) => {"
-  },
-  "skill.ts:96": {
-    "path": "agent/tools/skill.ts",
-    "line": 97,
-    "testo": "}"
-  },
-  "skill.ts:97": {
-    "path": "agent/tools/skill.ts",
-    "line": 98,
-    "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
     "line": 116,
-    "testo": "export const OPEN_CONTRADICTION_FROM = `FROM memory_review r"
+    "testo": "since?: string | undefined;"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
     "line": 147,
-    "testo": "const seed = db.prepare("
+    "testo": "*"
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
     "line": 179,
-    "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
+    "testo": "`origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,"
   },
   "store.ts:21": {
     "path": "core/session/store.ts",
@@ -2737,17 +2772,27 @@
   "store.ts:228": {
     "path": "core/memory/store.ts",
     "line": 228,
-    "testo": "findEntity(tenantId: string, name: string, kind?: string): number | null {"
+    "testo": ".all(tenantId, extractionV, limit) as Episode[];"
   },
-  "store.ts:333": {
+  "store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 333,
+    "line": 503,
     "testo": "/**"
   },
-  "store.ts:657": {
+  "store.ts:740": {
     "path": "core/memory/store.ts",
-    "line": 657,
-    "testo": "provenanceOf("
+    "line": 740,
+    "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
+  },
+  "store.ts:903": {
+    "path": "core/memory/store.ts",
+    "line": 903,
+    "testo": "* Where a recalled chunk came from and how much it is worth."
+  },
+  "store.ts:935": {
+    "path": "core/memory/store.ts",
+    "line": 935,
+    "testo": "// recall has nothing else to read it from. Without it an inferred"
   },
   "tracer.ts:94": {
     "path": "core/tracing/tracer.ts",
@@ -2756,8 +2801,8 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 126,
-    "testo": "export interface PermissionSnapshot {"
+    "line": 104,
+    "testo": "*/"
   },
   "types.ts:11": {
     "path": "core/policy/types.ts",
@@ -2791,23 +2836,23 @@
   },
   "vault.ts:219": {
     "path": "core/vault/vault.ts",
-    "line": 365,
-    "testo": "// Trust never rises on reindex, and it follows the **content** rather than"
+    "line": 219,
+    "testo": "}"
   },
   "vault.ts:26": {
     "path": "core/vault/vault.ts",
-    "line": 34,
-    "testo": "* mined for facts. A downloaded paper full of confident claims is not a source"
+    "line": 26,
+    "testo": "*"
   },
   "vault.ts:48": {
     "path": "core/vault/vault.ts",
-    "line": 74,
-    "testo": "const NEVER_CONTENT = new Set(["
+    "line": 48,
+    "testo": ""
   },
   "vault.ts:58": {
     "path": "core/vault/vault.ts",
-    "line": 84,
-    "testo": "export function skipReason(relPath: string, realPath: string): string | null {"
+    "line": 58,
+    "testo": "* than by how many megabytes of images it carries."
   },
   "vectors.ts:43": {
     "path": "core/memory/vectors.ts",

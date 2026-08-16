@@ -6,13 +6,14 @@ import { parseArgs } from 'node:util';
 import { runTurn, type RegisteredTool } from '../../agent/loop.js';
 import { loadProfiles, selectProfile } from '../../agent/profiles/profile.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
-import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from '../../agent/tools/fs.js';
+import { fsCapabilities, makeFsTools, type FsScope } from '../../agent/tools/fs.js';
 import { BudgetEngine } from '../../core/budget/budget.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TurnStore } from '../../core/turns/store.js';
+import { TodoStore } from '../../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { SCENARIOS, type Scenario, type Verdict } from './scenarios.js';
 
@@ -81,22 +82,11 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
     },
   });
 
-  // Annotated here rather than on the `.map(observe)` result: the annotation on
-  // the mapped value never reaches the literal, so each `handler: (a) => …`
-  // below was an implicit `any` — the eval's own arguments went unchecked.
-  const declared: RegisteredTool[] = [
-    { capability: 'fs.read', spec: fsToolSpecs[0]!, handler: (a) => ({ content: fsRead(scope, String((a as { path: string }).path)) }) },
-    { capability: 'fs.list', spec: fsToolSpecs[1]!, handler: (a) => ({ content: fsList(scope, String((a as { path: string }).path)) }) },
-    {
-      capability: 'fs.write',
-      spec: fsToolSpecs[2]!,
-      handler: (a) => {
-        const x = a as { path: string; content: string };
-        return { content: fsWrite(scope, String(x.path), String(x.content ?? '')) };
-      },
-    },
-    ...(scenario.extraTools ?? []),
-  ];
+  // The same factory production wires (`agent/runtime.ts`), not a second copy of
+  // the three handlers. The copy was here, and it was already one field behind:
+  // an eval that runs tools production does not have measures a floor nobody
+  // ships.
+  const declared: RegisteredTool[] = [...makeFsTools(scope), ...(scenario.extraTools ?? [])];
   const tools: RegisteredTool[] = declared.map(observe);
 
   const db = new DatabaseCtor(join(home, 'muffin.db'));
@@ -105,6 +95,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
   // The floor runs the production loop, so it gets the production record too:
   // an eval on a shape the runtime does not have measures nothing.
   const turns = new TurnStore(db);
+  const todos = new TodoStore(db);
   const started = Date.now();
 
   try {
@@ -125,6 +116,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
         tracer: new SimpleTracer(new JsonlExporter(home)),
         sessions,
         turns,
+        todos,
         budgetExhausted: () => budget.exhausted(),
         // The floor is measured on the owner class: the scenarios run as the
         // owner on the host tenant, and a capability floor is about what the

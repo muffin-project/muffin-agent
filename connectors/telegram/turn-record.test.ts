@@ -51,13 +51,13 @@ const reply = (text: string): ChatResult => ({
 
 const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OWNER };
 
-function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: boolean } = {}) {
+function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: boolean; provider?: Provider } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-tgrec-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-tgrec-ws-'));
   runInit({ home, apiKey: 'sk-tgrec-never-called' });
   const runtime = buildRuntime(home, workspace);
 
-  const provider: Provider = { kind: 'openai-compat', chat: async () => reply('ecco la risposta') };
+  const provider: Provider = over.provider ?? { kind: 'openai-compat', chat: async () => reply('ecco la risposta') };
   const turns = over.breakDeliveryRecord
     ? Object.assign(Object.create(Object.getPrototypeOf(runtime.deps.turns) as object), runtime.deps.turns, {
         delivered: () => {
@@ -68,9 +68,18 @@ function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: bool
   const loop: LoopDeps = { ...runtime.deps, provider, turns };
 
   const logged: string[] = [];
+  const outbound: string[] = [];
   const api = {
-    sendMessage: over.send ?? (async () => ({}) as never),
-    editMessageText: async () => ({}) as never,
+    sendMessage:
+      over.send ??
+      (async (_chatId: number, text: string) => {
+        outbound.push(`send:${text}`);
+        return {} as never;
+      }),
+    editMessageText: async (_chatId: number, _id: number, text: string) => {
+      outbound.push(`edit:${text}`);
+      return {} as never;
+    },
     sendChatAction: async () => true,
     sendMessageDraft: async () => true,
   } as unknown as TelegramApi;
@@ -89,6 +98,7 @@ function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: bool
     connector,
     inbox,
     logged,
+    outbound,
     runtime,
     /** The single turn the drain produced, read from the production store. */
     row: (): TurnRecord | null => {
@@ -110,8 +120,11 @@ describe('a telegram turn records where the answer goes and whether it got there
     const row = h.row();
     // The address is on the record and not only on the stack. Nothing reads it
     // yet — this same function still delivers — and that is the point: the day
-    // the lane delivers instead, the address is already durable.
-    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10 });
+    // the lane delivers instead, the address is already durable. `channel` is
+    // the SurfaceRegistry address that day's lane (#41, turno sospeso) needs —
+    // without it the row has Telegram's own addressing but nothing saying
+    // which registry entry to deliver through.
+    expect(row?.replyTo).toMatchObject({ chatId: OWNER, messageId: 10, channel: `telegram:${OWNER}` });
     expect(row?.outcome).toBe('answered');
     expect(row?.delivery).toBe('sent');
     h.runtime.close();
@@ -143,6 +156,38 @@ describe('a telegram turn records where the answer goes and whether it got there
     // again on the next drain — a worse bug than the missing row.
     expect(h.inbox.pending()).toEqual([]);
     expect(h.logged.join('\n')).toContain('consegna non registrata');
+    h.runtime.close();
+  });
+
+  it('a suspended turn sends nothing and is not marked delivered — the placeholder is the truth until the lane resumes it', async () => {
+    // The model asks to wait: `wait` is registered by `buildRuntime`, so this
+    // is the production path — the turn suspends inside `runTurn` and comes
+    // back with `stopped: 'suspended'` and an empty text. Before the guard the
+    // connector rendered that '' (`renderForTelegram('')` is `['']`), sent an
+    // empty message and recorded `sent` on a turn that had not answered.
+    let calls = 0;
+    const provider: Provider = {
+      kind: 'openai-compat',
+      chat: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            ...reply(''),
+            toolCalls: [{ id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto il report' } }],
+            stopReason: 'tool_use',
+          };
+        }
+        return reply('non dovrei essere chiamato in questo turno');
+      },
+    };
+    const h = harness({ provider });
+    await deliver(h, [privateMsg(1)]);
+    const row = h.row();
+    expect(row?.status).toBe('waiting');
+    expect(row?.delivery).toBe('pending'); // addressed, not delivered — never 'sent'
+    // Only the presence placeholder went out ("sto guardando…"); no answer, no
+    // empty edit or send after the suspension.
+    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([]);
     h.runtime.close();
   });
 });

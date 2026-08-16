@@ -58,15 +58,39 @@ import type { Principal, TrustTier } from '../policy/types.js';
  *    dies inside `handle()` leaves the update pending and the restart re-runs
  *    the turn from the top, tool calls and their effects included, with nothing
  *    anywhere saying so.
- *  - `runnable` / `waiting` — for the resume and the `wait` primitive. Declared
- *    here and written by nobody yet, deliberately: see the migration note above.
- *    A row is never *read* as these two either, so nothing depends on a value
- *    that does not occur.
+ *  - `runnable` — created by a surface that will not execute it (B2), or woken
+ *    from `waiting`. Written by `enqueue` and `wake`; read by `due`.
+ *  - `waiting` — the turn released the runtime and is owed a wake-up. Written
+ *    by `suspend`, which is also the only writer of `wake_at` and `wait_for`.
+ *
+ * The last two arrived with the consumers (`slice/turno-sospeso`) and were in
+ * the `CHECK` before them, which is the whole reason this list was written for
+ * the consumers that were coming rather than for the one writer that existed:
+ * adding them now cost nothing, and after day 1 of the fourteen it would have
+ * cost a table rebuild.
  */
 export type TurnStatus = 'runnable' | 'running' | 'waiting' | 'interrupted' | 'done';
 
 /** How the turn itself ended. The `stopped` value of `TurnResult`, verbatim. */
 export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
+
+/**
+ * How a *step* of a turn stopped — the outcomes above, plus the one that is not
+ * an ending at all.
+ *
+ * `suspended` is deliberately **not** a `TurnOutcome`: `turn_outcome` is the
+ * column that says how the turn ended, and a suspended turn has not ended. It
+ * has released the runtime and is owed a resume. Keeping the two unions apart
+ * is what stops `finish` from ever writing an outcome for a turn that is coming
+ * back.
+ *
+ * Declared here, in `core`, because it had grown **three** literal copies —
+ * `TurnResult['stopped']`, `JobOutcome['stopped']` and this file's own
+ * `TurnOutcome` — and the design that produced this table named the divergence
+ * as this repo's typical defect (`research/turno-sospendibile.md` §Domanda 6,
+ * row 9). One reference each now; adding an arm reaches every consumer.
+ */
+export type TurnStopped = TurnOutcome | 'suspended';
 
 /**
  * How the *delivery* went, which is a second question and never the same one.
@@ -79,8 +103,18 @@ export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 
  * `null` means this surface delivers **in band** — the caller of `runTurn` has
  * the text in its hand and there is no separate step that can fail. A turn that
  * carries a `replyTo` is the other kind, and starts at `pending`.
+ *
+ * `'undeliverable'` (D2, judge round 2) is the fourth outcome: the turn ended
+ * with an answer and the row carries **no** address at all — not a delivery
+ * that was attempted and failed, but one that was never attemptable.
+ * `agent/turn-lane.ts` already emitted a `LaneEvent.undeliverable` for this
+ * case; the gap was that the event reached only the process's own stderr and
+ * nothing wrote it onto the row, so a restart — or `doctor`, which opens its
+ * own handle and never sees an in-memory event — had no way to learn it had
+ * happened. Additive: existing rows keep reading `pending` / `sent` /
+ * `failed:…` exactly as before.
  */
-export type DeliveryState = 'pending' | 'sent' | `failed:${string}`;
+export type DeliveryState = 'pending' | 'sent' | 'undeliverable' | `failed:${string}`;
 
 export type TurnCounters = {
   iterations: number;
@@ -90,7 +124,55 @@ export type TurnCounters = {
   nudgedForCompletion: boolean;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   spentUsd: number;
+  /**
+   * How many times this row has been picked back up.
+   *
+   * The bound on a resume loop, and it belongs in the record rather than in the
+   * lane: a turn whose resume kills the process would otherwise be retried by
+   * every boot for ever, and the process that dies is not the one that can
+   * count. Counted in the JSON blob and not in a column because that is the
+   * cheap direction (§T2, "blob JSON contro colonne": additive, low cost) —
+   * and read defensively, since rows written before this field existed have no
+   * value for it.
+   */
+  resumes: number;
+  /**
+   * Whether the deterministic preamble has already run for this row.
+   *
+   * The preamble is not idempotent: it writes the user episode, calls recall
+   * and appends the user line to the session file. A resumed turn that ran it
+   * again would duplicate the owner's words in memory and in the transcript,
+   * and — worse — would *rebuild* the transcript from the session file,
+   * throwing away the half-answered tool batch the crash left behind, which is
+   * the one thing `reconcile` needs to repair anything.
+   *
+   * It is also what makes `enqueueTurn` legal: a connector writes a row whose
+   * transcript is only the owner's words and returns in milliseconds, and this
+   * flag is how the lane knows the expensive half is still owed. Read
+   * defensively for the same reason `resumes` is — rows written by the slice
+   * before this field have no value for it, and `undefined` must read as "not
+   * built yet" rather than as `NaN`-shaped nonsense.
+   */
+  contextBuilt: boolean;
 };
+
+/**
+ * Counters as they come off disk, with the fields a row may predate filled in.
+ *
+ * A `JSON.parse(...) as TurnCounters` is a claim, not a check, and the one
+ * field this slice added would arrive as `undefined` on any row written by the
+ * slice before it — then `resumes + 1` is `NaN`, `NaN >= MAX` is false, and the
+ * bound above silently stops bounding. One place normalises, so no consumer has
+ * to remember.
+ */
+function toCounters(raw: string): TurnCounters {
+  const parsed = JSON.parse(raw) as TurnCounters;
+  return {
+    ...parsed,
+    resumes: Number.isFinite(parsed.resumes) ? parsed.resumes : 0,
+    contextBuilt: parsed.contextBuilt === true,
+  };
+}
 
 export type TurnRecord = {
   id: string;
@@ -152,6 +234,53 @@ export type UncertainCall = {
   capability: string;
   rerunnable: boolean;
   startedAt: string;
+};
+
+/**
+ * A turn that finished and whose answer cannot be shown to have arrived.
+ *
+ * Deliberately not folded into `InterruptedTurn`: an interrupted turn is one
+ * whose *process* died, and this is one whose *delivery* did — the same
+ * separation `TurnOutcome` and `DeliveryState` keep in two columns. A turn can
+ * be both, and reporting it once under the wrong heading loses the half the
+ * owner can act on.
+ *
+ * A different question from `TurnHealth.undeliverable` below, and the two are
+ * not merged: this is a turn that **had** an address and the delivery either
+ * never settled (`pending`) or was attempted and refused (`failed:<why>`) —
+ * `TurnHealth.undeliverable` is a turn that had **no** address at all, so
+ * there was never a delivery to attempt or fail. Same family of fact
+ * (`DeliveryState`), two different rows it can be true of.
+ */
+export type UndeliveredTurn = {
+  id: string;
+  surface: string;
+  tenant: string;
+  startedAt: string;
+  /** `pending` (nothing ever settled it) or `failed:<why>` (the surface said no). */
+  delivery: DeliveryState;
+};
+
+/**
+ * What `doctor` and the boot sequence ask about the table.
+ *
+ * Two different questions, kept apart because their remedies are: an
+ * *interrupted* turn is a thing that already went wrong and may have left
+ * effects, a *waiting* one is a promise that only comes true if some process is
+ * running the lane.
+ */
+export type TurnHealth = {
+  total: number;
+  waiting: { count: number; oldestWakeAt: string | null };
+  /**
+   * Turns that finished with an answer and no address to send it to (D2,
+   * judge round 2). Counted the same way `waiting` is — unwindowed, because a
+   * reply stranded last week is exactly as owed as one from ten minutes ago —
+   * and named next to it for the same reason: both are promises the row keeps
+   * that only a human reading `doctor` can now close.
+   */
+  undeliverable: { count: number };
+  interrupted: InterruptedTurn[];
 };
 
 /** An interrupted turn, with everything needed to say what may have happened. */
@@ -266,7 +395,7 @@ function toRecord(row: Row): TurnRecord {
     model: row.model,
     messages: JSON.parse(row.messages) as Message[],
     taint: row.taint as TrustTier,
-    counters: JSON.parse(row.counters) as TurnCounters,
+    counters: toCounters(row.counters),
     replyTo: row.reply_to === null ? null : (JSON.parse(row.reply_to) as Record<string, unknown>),
     status: row.status as TurnStatus,
     wakeAt: row.wake_at,
@@ -308,7 +437,17 @@ export class TurnStore {
   private readonly interruptStmt: Database.Statement;
   private readonly openCallsStmt: Database.Statement;
   private readonly interruptedStmt: Database.Statement;
+  private readonly undeliveredStmt: Database.Statement;
   private readonly countStmt: Database.Statement;
+  private readonly waitingStmt: Database.Statement;
+  private readonly claimStmt: Database.Statement;
+  private readonly suspendStmt: Database.Statement;
+  private readonly dueStmt: Database.Statement;
+  private readonly armedStmt: Database.Statement;
+  private readonly wakeStmt: Database.Statement;
+  private readonly suspendedCountStmt: Database.Statement;
+  private readonly outcomesStmt: Database.Statement;
+  private readonly undeliverableCountStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -317,11 +456,16 @@ export class TurnStore {
     private readonly alive: (pid: number) => boolean = pidAlive,
   ) {
     db.exec(SCHEMA);
+    // `@status` and a nullable `@pid`, where both used to be the literal
+    // `'running'` and this process: a connector that creates the row and
+    // returns (B2) writes a turn nobody is executing yet, and a row claimed by
+    // a pid that is not running it would be reclaimed as *interrupted* the
+    // moment that pid dies — reporting a crash for work that had not started.
     this.insertStmt = db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters,
                           reply_to, status, claimed_by, claimed_at, delivery, created_at, updated_at)
        VALUES (@id, @principal, @tenant, @surface, @sessionId, @model, @messages, @taint, @counters,
-               @replyTo, 'running', @pid, @now, @delivery, @now, @now)`,
+               @replyTo, @status, @pid, @claimedAt, @delivery, @now, @now)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
     this.checkpointStmt = db.prepare(
@@ -370,7 +514,102 @@ export class TurnStore {
        FROM turns WHERE status IN ('interrupted','running') AND updated_at >= @since
        ORDER BY updated_at DESC`,
     );
+    /**
+     * Turns that owed a delivery and cannot show one.
+     *
+     * Both halves matter and they are different failures. `failed:%` is a
+     * delivery that was attempted and reported back — the surface said no.
+     * `pending` on a turn that is already `done` is worse: the work finished and
+     * *nothing ever settled the delivery*, which is what a process dying between
+     * the answer and the send looks like from the outside.
+     *
+     * `status = 'done'` excludes a turn that is still running, whose `pending`
+     * is simply the truth for now.
+     */
+    this.undeliveredStmt = db.prepare(
+      `SELECT id, surface, tenant, created_at AS startedAt, delivery
+       FROM turns
+       WHERE status = 'done' AND (delivery = 'pending' OR delivery LIKE 'failed:%')
+         AND updated_at >= @since
+       ORDER BY updated_at DESC`,
+    );
     this.countStmt = db.prepare(`SELECT count(*) AS n FROM turns`);
+    /**
+     * Suspended turns, and the one that has been owed longest.
+     *
+     * `health` used to count only `interrupted`, so a turn suspended from the
+     * REPL or from `muffin run` — neither of which owns a lane — sat at
+     * `waiting` for ever and **nothing said so**. That is the failure this whole
+     * inventory exists to stop shipping: a mechanism that works, a row that is
+     * correct, and no path by which an owner ever learns the wake-up is owed to
+     * a process that is not running.
+     */
+    this.waitingStmt = db.prepare(
+      `SELECT count(*) AS n, min(wake_at) AS oldest FROM turns WHERE status = 'waiting'`,
+    );
+
+    /**
+     * The claim, as one statement.
+     *
+     * `BEGIN IMMEDIATE` is what `core/lock/durable.ts` needed because its claim
+     * is a *read* of the holder followed by a *write*. This one is not: a
+     * single `UPDATE` with the old status in its `WHERE` is already atomic in
+     * SQLite, so two processes racing for the same row produce one `changes: 1`
+     * and one `changes: 0`. The guard on `status` is what makes it a claim
+     * rather than an assignment — a row somebody is already running has left
+     * the set and cannot be taken.
+     */
+    this.claimStmt = db.prepare(
+      `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, updated_at = @now
+       WHERE id = @id AND status IN ('runnable','waiting','interrupted')`,
+    );
+    /**
+     * The write that suspends, and it releases the claim in the same statement.
+     *
+     * Same shape as `finish`: **one write advances the state**, which is
+     * ADR-0035 §1's property (`markRan` the only writer of `next_fire_at`)
+     * applied here. A suspended row must not keep a pid, or the next boot would
+     * reclaim it as interrupted the moment that process exits — turning every
+     * `wait` that outlives its process into a reported crash.
+     */
+    this.suspendStmt = db.prepare(
+      `UPDATE turns SET status = 'waiting', wake_at = @wakeAt, wait_for = @waitFor,
+                        messages = @messages, taint = @taint, counters = @counters,
+                        claimed_by = NULL, updated_at = @now
+       WHERE id = @id AND status = 'running'`,
+    );
+    /**
+     * What the lane may pick up, oldest first.
+     *
+     * Three producers in one query, because they are one queue: a turn a
+     * surface created and did not run (`runnable`), a turn whose deadline has
+     * arrived (`waiting` past `wake_at`), and a turn a dead process was holding
+     * (`interrupted`). `idx_turns_due` covers the first two; the third is the
+     * one `reclaim` writes, and until this slice nothing ever read it back.
+     */
+    this.dueStmt = db.prepare(
+      `SELECT * FROM turns
+       WHERE status IN ('runnable','interrupted')
+          OR (status = 'waiting' AND wake_at IS NOT NULL AND wake_at <= @now)
+       ORDER BY updated_at LIMIT @limit`,
+    );
+    /** Suspended turns with an event barrier — the rows whose predicate is evaluated. */
+    this.armedStmt = db.prepare(
+      `SELECT * FROM turns WHERE status = 'waiting' AND wait_for IS NOT NULL ORDER BY updated_at LIMIT @limit`,
+    );
+    this.wakeStmt = db.prepare(
+      `UPDATE turns SET status = 'runnable', updated_at = @now WHERE id = @id AND status = 'waiting'`,
+    );
+    this.suspendedCountStmt = db.prepare(
+      `SELECT count(*) AS n FROM turns WHERE tenant = @tenant AND status = 'waiting'`,
+    );
+    /** Recorded tool outcomes, for a resume that must replay instead of re-calling. */
+    this.outcomesStmt = db.prepare(
+      `SELECT call_id AS callId, content, is_error AS isError, tier
+       FROM turn_tool_calls WHERE turn_id = ? AND ended_at IS NOT NULL`,
+    );
+    /** Turns whose answer has nowhere to go (D2) — read by `health`. */
+    this.undeliverableCountStmt = db.prepare(`SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`);
   }
 
   /**
@@ -381,6 +620,29 @@ export class TurnStore {
    * while the work is still owed.
    */
   create(spec: NewTurn, pid: number = process.pid): TurnRecord {
+    return this.insert(spec, 'running', pid);
+  }
+
+  /**
+   * The same row, written by a caller that is **not** going to run it.
+   *
+   * This is B2's whole mechanism, and it is one word of SQL: a connector that
+   * creates the record and returns leaves a `runnable` row, and the lane
+   * executes it. `runTurn` staying synchronous was never the property anybody
+   * wanted — the property was that the connector does not block, and a row
+   * nobody claimed is how that is expressed durably instead of by dropping an
+   * `await` and hoping (`research/turno-sospendibile.md` §B2, the three
+   * guarantees a bare `void runTurn(...)` breaks).
+   *
+   * `claimed_by` is NULL, deliberately: a pid on a row nobody is executing
+   * would be reclaimed as *interrupted* the moment that process exited, which
+   * is a crash report for work that had not started.
+   */
+  enqueue(spec: NewTurn): TurnRecord {
+    return this.insert(spec, 'runnable', null);
+  }
+
+  private insert(spec: NewTurn, status: TurnStatus, pid: number | null): TurnRecord {
     const now = this.clock().toISOString();
     this.insertStmt.run({
       id: spec.id,
@@ -396,12 +658,116 @@ export class TurnStore {
       // The address and the delivery state travel together: a turn nobody has
       // to deliver to has no delivery that can fail.
       delivery: spec.replyTo === undefined ? null : 'pending',
+      status,
       pid,
+      claimedAt: pid === null ? null : now,
       now,
     });
     const created = this.get(spec.id);
     if (created === null) throw new Error(`turn ${spec.id} non scritto`);
     return created;
+  }
+
+  /**
+   * Take a row that nobody is running, or say somebody else got there first.
+   *
+   * `null` is not an error: two lanes ticking over one database is the normal
+   * case this exists for (a REPL and a gateway both up for the seconds before
+   * the REPL stands down), and the loser simply has nothing to do. What it must
+   * never be is *both* — a turn executed twice re-runs its tool calls, which is
+   * the effect duplication the whole record exists to prevent.
+   */
+  claim(id: string, pid: number = process.pid, now: Date = this.clock()): TurnRecord | null {
+    const at = now.toISOString();
+    if (this.claimStmt.run({ id, pid, now: at }).changes === 0) return null;
+    return this.get(id);
+  }
+
+  /**
+   * The turn released the runtime and is owed a wake-up.
+   *
+   * `wakeAt` is **not optional**, and that is a decision with a measured
+   * precedent: a job with no stop condition keeps arriving, so the owner
+   * notices it; a suspended turn with no deadline is *silent* — it holds a row
+   * and its whole context and nothing ever says so
+   * (`research/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
+   * even when an event barrier is also armed: whichever comes first wins, and
+   * neither can be absent.
+   */
+  suspend(
+    id: string,
+    patch: {
+      messages: Message[];
+      taint: TrustTier;
+      counters: TurnCounters;
+      wakeAt: string;
+      waitFor: string | null;
+    },
+  ): boolean {
+    return (
+      this.suspendStmt.run({
+        id,
+        messages: JSON.stringify(patch.messages),
+        taint: patch.taint,
+        counters: JSON.stringify(patch.counters),
+        wakeAt: patch.wakeAt,
+        waitFor: patch.waitFor,
+        now: this.clock().toISOString(),
+      }).changes === 1
+    );
+  }
+
+  /** Rows the lane may pick up now: enqueued, expired, or left by a dead process. */
+  due(now: Date = this.clock(), limit = 20): TurnRecord[] {
+    return (this.dueStmt.all({ now: now.toISOString(), limit }) as Row[]).map(toRecord);
+  }
+
+  /** Suspended rows carrying an event barrier, for the lane to evaluate. */
+  armed(limit = 50): TurnRecord[] {
+    return (this.armedStmt.all({ limit }) as Row[]).map(toRecord);
+  }
+
+  /**
+   * The barrier was satisfied: the row becomes runnable ahead of its deadline.
+   *
+   * Guarded on `waiting` so an event arriving twice, or arriving for a turn the
+   * deadline already woke, cannot move a row that has left the waiting set.
+   */
+  wake(id: string, now: Date = this.clock()): boolean {
+    return this.wakeStmt.run({ id, now: now.toISOString() }).changes === 1;
+  }
+
+  /**
+   * How many turns this tenant is holding suspended.
+   *
+   * The ceiling `wait` is refused above. Without one, a model that likes
+   * waiting produces rows without a bottom and nobody reads a table
+   * (`research/turno-sospendibile.md` §Domanda 3, third stop condition).
+   */
+  countSuspended(tenant: string): number {
+    return (this.suspendedCountStmt.get({ tenant }) as { n: number }).n;
+  }
+
+  /**
+   * The tool calls this turn already has an answer for.
+   *
+   * The half of the two-phase record that a resume *replays* instead of
+   * re-running — Temporal's property in our own words: "When a Workflow calls
+   * an Activity … During replay, that result is reused, not recomputed."
+   */
+  recordedOutcomes(turnId: string): Map<string, { content: string; isError: boolean; tier: TrustTier | null }> {
+    const rows = this.outcomesStmt.all(turnId) as {
+      callId: string;
+      content: string | null;
+      isError: number | null;
+      tier: number | null;
+    }[];
+    return new Map(
+      rows.map((r) => [
+        r.callId,
+        { content: r.content ?? '', isError: r.isError === 1, tier: (r.tier as TrustTier | null) ?? null },
+      ]),
+    );
   }
 
   get(id: string): TurnRecord | null {
@@ -500,8 +866,11 @@ export class TurnStore {
    * booting at the same moment report each interrupted turn exactly once
    * instead of both announcing it.
    *
-   * It does **not** resume anything, and it does not pretend it could: a
-   * resumable turn is `runnable`, and nothing writes that yet.
+   * It marks; it does not resume. The lane (`core/turns/lane.ts`) is what picks
+   * an `interrupted` row back up, and the split is deliberate: marking happens
+   * at boot in every process that opens the home, resuming happens in the one
+   * process that owns the lane. Merging them would resume a turn inside
+   * `buildRuntime`, i.e. inside `muffin doctor`.
    */
   reclaim(now: Date = this.clock()): InterruptedTurn[] {
     const nowMs = now.getTime();
@@ -525,6 +894,32 @@ export class TurnStore {
       });
     }
     return out;
+  }
+
+  /**
+   * Answers "did the thing I was told was sent actually go out".
+   *
+   * The reader for M5-BIS B8. Before this, a job whose delivery failed was
+   * indistinguishable from one that arrived: `markRan` advanced the schedule
+   * either way and the only trace was a line on stderr that nobody was
+   * necessarily reading. The scheduler now settles every fire onto the turn's
+   * row, and this is the query that reads it back.
+   *
+   * Bounded by a window for the same reason `health` is: rows are never deleted
+   * (§I-8), so without one a failure from last month sits next to this
+   * morning's for ever.
+   */
+  undelivered(options: { now?: Date; windowMs?: number } = {}): UndeliveredTurn[] {
+    const now = options.now ?? this.clock();
+    const windowMs = options.windowMs ?? DOCTOR_WINDOW_MS;
+    const since = new Date(now.getTime() - windowMs).toISOString();
+    return (this.undeliveredStmt.all({ since }) as {
+      id: string;
+      surface: string;
+      tenant: string;
+      startedAt: string;
+      delivery: string;
+    }[]).map((r) => ({ ...r, delivery: r.delivery as DeliveryState }));
   }
 
   /** Tool calls with an intent row and no outcome row — the "maybe done" set. */
@@ -555,7 +950,7 @@ export class TurnStore {
    * month would sit in `doctor` for ever, next to one from ten minutes ago that
    * actually wants looking at.
    */
-  health(options: { now?: Date; windowMs?: number } = {}): { total: number; interrupted: InterruptedTurn[] } {
+  health(options: { now?: Date; windowMs?: number } = {}): TurnHealth {
     const now = options.now ?? this.clock();
     const since = options.windowMs === undefined ? '' : new Date(now.getTime() - options.windowMs).toISOString();
     const total = (this.countStmt.get() as { n: number }).n;
@@ -574,8 +969,17 @@ export class TurnStore {
     const abandoned = rows.filter(
       (r) => r.status === 'interrupted' || heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
     );
+    const waiting = this.waitingStmt.get() as { n: number; oldest: string | null };
+    const undeliverable = this.undeliverableCountStmt.get() as { n: number };
     return {
       total,
+      // Not windowed, unlike `interrupted`: a crash from last month is old news,
+      // but a turn still suspended from last month is a turn still owed — the
+      // window would hide exactly the worst case.
+      waiting: { count: waiting.n, oldestWakeAt: waiting.oldest },
+      // Same reasoning, same absence of a window: a reply nobody could send
+      // last month is still a reply nobody sent.
+      undeliverable: { count: undeliverable.n },
       interrupted: abandoned.map((r) => ({
         id: r.id,
         surface: r.surface,
@@ -627,7 +1031,7 @@ export function describeInterrupted(turn: InterruptedTurn): string {
 export function readTurnHealth(
   db: Database.Database,
   windowMs: number = DOCTOR_WINDOW_MS,
-): { total: number; interrupted: InterruptedTurn[] } | null {
+): TurnHealth | null {
   try {
     db.prepare(`SELECT 1 FROM turns LIMIT 1`).get();
   } catch {
@@ -636,6 +1040,28 @@ export function readTurnHealth(
   // Read-only: the constructor's `CREATE TABLE IF NOT EXISTS` is a no-op here
   // because the probe above already proved the table exists.
   return new TurnStore(db).health({ windowMs });
+}
+
+/**
+ * `undelivered()`'s own half of the pair above — same shape, same reason:
+ * `doctor` opens a read-only handle and has no runtime to hold a `TurnStore`.
+ *
+ * D3 (judge, PR #42): this method had zero callers and zero tests until
+ * `cli/doctor.ts` read it here — B8's own guarantee ("un job che dice
+ * «inviato» è arrivato") was checkable in principle and unchecked in
+ * practice, the exact shape `AGENTS.md` names: a mechanism with a schema and
+ * no caller.
+ */
+export function readUndelivered(
+  db: Database.Database,
+  windowMs: number = DOCTOR_WINDOW_MS,
+): UndeliveredTurn[] | null {
+  try {
+    db.prepare(`SELECT 1 FROM turns LIMIT 1`).get();
+  } catch {
+    return null;
+  }
+  return new TurnStore(db).undelivered({ windowMs });
 }
 
 /**
