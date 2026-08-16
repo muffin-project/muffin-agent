@@ -9,7 +9,7 @@ import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
-import { connectSurfaces } from './surface.js';
+import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
  * The REPL.
@@ -122,6 +122,10 @@ export async function runRepl(home = paths().home): Promise<number> {
   // delivery that lands before the prompt exists simply does not redraw one.
   let redrawPrompt: () => void = () => {};
   const surfaces = connectSurfaces(runtime, home, makeReplCliWrite({ prompt: () => redrawPrompt() }));
+  // M5-BIS B14: a file the model produces can now reach the owner as a real
+  // attachment on whichever surface this turn is on, not only as a path cited
+  // in text — the same registry `deliver` uses, one call later.
+  attachSendFile(runtime, home, surfaces.registry);
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.

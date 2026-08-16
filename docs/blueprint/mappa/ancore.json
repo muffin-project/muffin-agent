@@ -761,12 +761,12 @@
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 409,
+    "line": 412,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 421,
+    "line": 424,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/gateway.ts:381": {
@@ -776,7 +776,7 @@
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 409,
+    "line": 412,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:81": {
@@ -1016,42 +1016,42 @@
   },
   "cli/repl.ts:133": {
     "path": "cli/repl.ts",
-    "line": 130,
+    "line": 134,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 142,
+    "line": 146,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 155,
+    "line": 159,
     "testo": "runtime.deps.approve = async (request) => {"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 258,
+    "line": 262,
     "testo": "try {"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 289,
+    "line": 293,
     "testo": "controller = new AbortController();"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 291,
+    "line": 295,
     "testo": "const result = await runTurn(runtime.deps, {"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 292,
+    "line": 296,
     "testo": "principal: { kind: 'owner', connector: 'cli', externalId: 'local' },"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 309,
+    "line": 313,
     "testo": "} catch (error) {"
   },
   "cli/run.ts:26": {
@@ -1101,35 +1101,40 @@
   },
   "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 199,
+    "line": 294,
     "testo": "export function connectSurfaces("
-  },
-  "cli/surface.ts:205": {
-    "path": "cli/surface.ts",
-    "line": 205,
-    "testo": "* only the decision to *have* a CLI surface is made here (L0-1: it is the"
   },
   "cli/surface.ts:233": {
     "path": "cli/surface.ts",
-    "line": 233,
+    "line": 328,
     "testo": "const connector = new TelegramConnector({"
   },
-  "cli/surface.ts:47": {
+  "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 47,
-    "testo": "for (const id of ['cli', 'telegram']) {"
+    "line": 294,
+    "testo": "export function connectSurfaces("
+  },
+  "cli/surface.ts:52": {
+    "path": "cli/surface.ts",
+    "line": 55,
+    "testo": "for (const id of ['cli', 'telegram', 'discord']) {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 80,
+    "line": 99,
     "testo": "export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {"
+  },
+  "connectors/discord/connector.ts:139": {
+    "path": "connectors/discord/connector.ts",
+    "line": 139,
+    "testo": "export class DiscordConnector {"
   },
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
     "line": 153,
     "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
-  "connectors/telegram/connector.ts:167": {
+  "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
     "line": 165,
     "testo": "export class TelegramConnector {"
@@ -1163,11 +1168,6 @@
     "path": "connectors/telegram/connector.ts",
     "line": 311,
     "testo": "session: this.deps.sessions.open(`telegram:${incoming.chatId}`),"
-  },
-  "connectors/telegram/media.ts:154": {
-    "path": "connectors/telegram/media.ts",
-    "line": 154,
-    "testo": "* **Its production caller does not exist yet, on purpose.** Sending a file is an"
   },
   "consolidator.ts:109": {
     "path": "core/memory/consolidator.ts",
@@ -1211,22 +1211,22 @@
   },
   "core/config/config.ts:100": {
     "path": "core/config/config.ts",
-    "line": 100,
+    "line": 120,
     "testo": "rot: { mode: 'single-user' },"
   },
   "core/config/config.ts:101": {
     "path": "core/config/config.ts",
-    "line": 101,
+    "line": 121,
     "testo": "traces: { retentionDays: 90 },"
   },
   "core/config/config.ts:102": {
     "path": "core/config/config.ts",
-    "line": 102,
+    "line": 122,
     "testo": "surfaces: { default: 'cli', enabled: ['cli'] },"
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
-    "line": 169,
+    "line": 189,
     "testo": "export function loadConfig(home = muffinHome(), onNote: (line: string) => void = () => {}): Config {"
   },
   "core/config/config.ts:39": {
@@ -1238,6 +1238,11 @@
     "path": "core/config/config.ts",
     "line": 50,
     "testo": "search: z"
+  },
+  "core/config/config.ts:96": {
+    "path": "core/config/config.ts",
+    "line": 96,
+    "testo": "* ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one"
   },
   "core/config/inventory.ts:52": {
     "path": "core/config/inventory.ts",

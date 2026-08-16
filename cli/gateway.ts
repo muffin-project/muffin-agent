@@ -23,7 +23,7 @@ import {
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { notDelivered } from '../core/surface/types.js';
-import { connectSurfaces } from './surface.js';
+import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
  * `muffin gateway` — the process that lives, and the three verbs around it.
@@ -404,6 +404,9 @@ export async function cmdGatewayRun(
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
   registry = surfaces.registry;
+  // M5-BIS B14, same as runRepl: a file the model produces during a job's
+  // turn can reach the owner as a real attachment.
+  attachSendFile(runtime, home, surfaces.registry);
   let mcpLines: string[] = [];
   try {
     mcpLines = await attachMcp(runtime, home);
