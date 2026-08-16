@@ -110,6 +110,12 @@ export function makeProcessTools(deps: ProcessDeps = {}): RegisteredTool[] {
     {
       capability: 'sys.process.list',
       spec: processListSpec,
+      // `throwTier: 0` — the only `await` that can reject (`psFn`) is wrapped in
+      // its own `try`/`catch` two lines down and never escapes the handler; a
+      // process-table listing (the actually risky text) leaves only through the
+      // `return` at the bottom, tiered 1 there. If `psFn` ever threw uncaught it
+      // would be a `ps` invocation error, not a captured line of the table.
+      throwTier: 0,
       handler: async (args) => {
         const parsed = listArgs.safeParse(args);
         if (!parsed.success) {
@@ -153,6 +159,9 @@ export function makeProcessTools(deps: ProcessDeps = {}): RegisteredTool[] {
       // Tier 0 on every path: `process_kill` is a write. Every string it can
       // return is one this file wrote — a refusal, an errno translated, or the
       // receipt below. Nothing enters the turn, so nothing taints it.
+      // `throwTier: 0` to match: `killFn` is wrapped in its own `try`/`catch`
+      // below and nothing here ever reads bytes from anywhere else.
+      throwTier: 0,
       handler: (args) => {
         const parsed = killArgs.safeParse(args);
         if (!parsed.success) {

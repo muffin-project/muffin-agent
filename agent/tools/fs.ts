@@ -326,6 +326,12 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
     {
       capability: 'fs.read',
       spec: fsToolSpecs[0]!,
+      // `throwTier: 0` — every throw in `fsRead` (`PathDenied`, or the missing/
+      // directory/too-large checks) is built from this file's own template
+      // strings plus the `path` the model itself typed, never a byte read off
+      // disk: the one call that can return disk bytes (`readFileSync`) never
+      // throws with them, it returns them, which is the success path above.
+      throwTier: 0,
       handler: (args) => ({
         content: fsRead(scope, String((args as { path: string }).path)),
         tier: DISK_TIER,
@@ -340,6 +346,12 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // nothing, and it reaches the model through this door with no fence around
       // it. Same source, same tier — the alternative is a special case whose
       // only argument is that the text is short.
+      //
+      // `throwTier: 0` for the same reason as `fs_read`: `fsList`'s throws are
+      // this file's own sentences (`no such directory`, `is a file`) plus the
+      // model-typed `path`. The entries a directory actually holds only ever
+      // leave through the `return`, tiered above.
+      throwTier: 0,
       handler: (args) => ({
         content: fsList(scope, String((args as { path: string }).path)),
         tier: DISK_TIER,
@@ -351,6 +363,9 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // Tier 0: the result is this tool's own sentence about how many bytes it
       // wrote. Nothing came *in*. The point of a required `tier` is that this is
       // now an answer someone gave, not a question nobody was asked.
+      // `throwTier: 0` to match: `fsWrite`'s only throws are `PathDenied`,
+      // built the same way as the two tools above.
+      throwTier: 0,
       handler: (args) => {
         const a = args as { path: string; content: string };
         return { content: fsWrite(scope, String(a.path), String(a.content ?? '')), tier: 0 };

@@ -176,3 +176,55 @@ Segnali che era sbagliata: se l'owner scopre che i turni utili si spezzano più
 spesso di quanto la catena valga, il numero da rivedere è il **soffitto delle
 capability che agiscono**, non il tier della lettura — cioè la riga qui sopra,
 che è il motivo per cui è scritta a parte e chiede un sì.
+
+## Revisione — 2026-08-16
+
+**Decisione owner sulla riga sopra: la contropartita.** Dopo un `fs_read`,
+`shell_run` nello stesso turno torna `ask`, non più `deny/taint_exceeded`.
+`sys.shell` dichiara ora `maxTaint: 2` (`agent/tools/shell.ts`), il numero che
+questa ADR aveva già nominato come contropartita se la risposta fosse stata no.
+**Non è una riscrittura della decisione sopra** — il tier di lettura resta 2,
+`DISK_TIER` resta 2, la catena read-then-egress resta chiusa esattamente come
+misurata: questa riga tocca solo il soffitto di `sys.shell`, la capability che
+*agisce*, non quella che *legge*.
+
+**La ragione, con le parole dell'owner:** l'agente diventa inutilizzabile se
+*«leggi il file e poi lancia i test»* si spezza a metà. Un rifiuto silenzioso a
+metà di un compito quotidiano costa più, in uso reale, di quanto valga la
+differenza fra "rifiutato" e "chiesto e approvato" — e un `ask` che l'owner può
+dire no altrettanto quanto sì non riapre nessuna delle due gambe che questa ADR
+chiude: l'auto-allow del kernel richiede `taint === 0` (`core/policy/
+decide.ts`), che un turno che ha letto qualcosa non raggiunge mai a `maxTaint:
+2` tanto quanto a `maxTaint: 1`, e l'egress fuori allowlist resta `deny` sopra
+taint 1 esattamente come prima — quella riga non è toccata da questo
+emendamento.
+
+**Cosa cambia, misurato:**
+
+| | prima di questa revisione | dopo |
+|---|---|---|
+| `sys.shell` a taint 0 (owner, hardened) | allow | allow (invariato) |
+| `sys.shell` dopo un `fs_read` (taint 2) | **deny/taint_exceeded** | **ask** |
+| `sys.shell` a taint 3 (web/search/mcp) | deny/taint_exceeded | deny/taint_exceeded (invariato) |
+| `sys.http` fuori allowlist, taint ≥2 | deny/resource_denied | deny/resource_denied (invariato) |
+
+**Cablaggio.** `agent/tools/shell.ts` (`shellCapability.maxTaint = 2`, con la
+ragione in un commento). Test aggiornati per asserire il nuovo costo, non solo
+per non fallire: `agent/tools/shell.test.ts` §«il costo, stated as a test» ora
+verifica `ask` a taint 2 e `deny/taint_exceeded` a taint 3 — invariato solo nel
+metodo (un test nel diff prima di poter allargare di nuovo il soffitto), non nel
+verdetto atteso. `agent/read-then-egress.test.ts` §«the price of the same rule»
+misura la stessa cosa attraverso un turno vero: `shell_run` dopo `fs_read` ora
+gira una volta che l'owner approva l'`ask`, e resta un rifiuto secco solo a
+taint 3. `03-threat-model.md` §3 emendata in riga, sulla stessa riga citata qui
+sopra, con la data e il riferimento a questa sezione.
+
+**Cosa NON copre questa revisione (dichiarato, non nascosto).** L'`ask` che il
+kernel produce oggi porta solo `capability` + `prompt` + una `resource` se di
+tipo `path` (`ApprovalRequest`, `agent/loop.ts`): il comando che `shell_run`
+sta per eseguire, l'URL che `sys.http` sta per raggiungere, il pid che
+`process_kill` sta per segnalare non compaiono nel testo che l'owner vede prima
+di dire sì. Un `ask` che non mostra *cosa* sta approvando è un consenso più
+debole di quanto sembri — e con questa revisione `sys.shell` torna a passare per
+quel canale più spesso, non meno. Non chiuso qui: è nominato come lavoro
+immediatamente successivo, non lasciato per essere ritrovato una terza volta.

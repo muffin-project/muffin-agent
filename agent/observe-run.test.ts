@@ -86,6 +86,7 @@ function harness(
     {
       capability: 'demo.read',
       spec: { name: 'demo_read', description: 'read', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => ({ content: 'letto', tier: 0 as const }),
     },
   ];

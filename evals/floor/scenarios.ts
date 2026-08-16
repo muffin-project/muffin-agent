@@ -58,6 +58,10 @@ function decoyTools(names: string[]): RegisteredTool[] {
       description: `Strumento ausiliario "${name}", non pertinente ai compiti di questa sessione.`,
       inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
     },
+    // Never called by design (that is what the scenario checks), and never
+    // throws either — `throwTier: 0` is this fake's own honest floor, same as
+    // its declared `tier`.
+    throwTier: 0,
     handler: () => ({ content: `${name}: nessun risultato.`, tier: 0 }),
   }));
 }
@@ -141,6 +145,10 @@ export const SCENARIOS: Scenario[] = [
             required: ['date'],
           },
         },
+        // This fake never throws — every failure mode below is a returned
+        // `isError` outcome, which is the point of the scenario (recovering
+        // from a *reported* failure, not an exception).
+        throwTier: 0,
         handler: (() => {
           // The failure has to be unavoidable, not hoped for. A first attempt
           // that fails only when the model formats the date badly measures
