@@ -363,23 +363,6 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // and the model is handed an index, so it needs a door back to the text.
     // An index with no door is a summary with extra steps.
     makeDocumentTool(vault, memoryStore),
-    /**
-     * The two runtime primitives (M5-BIS §2), registered unconditionally.
-     *
-     * Neither is optional on any install: they need no key, no probe and no
-     * daemon — a database is the whole dependency, and this runtime already has
-     * one open. Registered *here*, in the base list, and not behind a config
-     * flag, because a `wait` that exists on some surfaces and not others is a
-     * model that learns to suspend and then, on the surface that lacks it,
-     * silently does something else instead.
-     *
-     * `wait` gets the store for one purpose only — counting how many turns this
-     * tenant already holds suspended — and cannot suspend anything by itself:
-     * it arms a barrier on the turn's context and the loop honours it. See
-     * `agent/tools/wait.ts`.
-     */
-    makeWaitTool(turns),
-    makeTodoTool(todos),
   ];
 
   // The hands of M3. The shell tool is registered only when the probe proved a
@@ -461,6 +444,33 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       }
     }
   }
+
+  /**
+   * The two runtime primitives (M5-BIS §2) — registered **last**, and the
+   * position is a decision rather than an accident of where the import landed.
+   *
+   * `profile.maxToolsExposed` truncates this list by registration order, and
+   * `consumer-local.json` sets it to **10** against a default install of twelve
+   * tools. Sitting where they used to (positions 6-7, in the base array) `wait`
+   * and `todo` pushed `skill_read` and `http_get` off the end — a weak local
+   * model silently lost the web and the skill catalogue in exchange for the
+   * ability to suspend itself, which is the wrong trade on the profile least
+   * able to run a multi-turn plan in the first place. Nothing said so: the two
+   * tools simply were not in the request.
+   *
+   * So the order is by what a turn loses without it: reading and remembering,
+   * then hands, then the catalogue, then the web, then these. On a frontier
+   * profile (cap 24) nothing is cut and the order is invisible; on the small
+   * one it is the whole difference. `runtime-exposure.test.ts` pins the
+   * resulting set, so a future insertion cannot move a capability across the
+   * line without a test saying which one moved.
+   *
+   * Neither is optional on any install: they need no key, no probe and no
+   * daemon — a database is the whole dependency, and this runtime has one open.
+   * `wait` gets the store for one purpose only, counting how many turns this
+   * tenant already holds suspended; it cannot suspend anything by itself.
+   */
+  tools.push(makeWaitTool(turns), makeTodoTool(todos));
 
   const capabilities = new Map<string, CapabilityDecl>(
     [

@@ -436,62 +436,62 @@
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 394,
+    "line": 377,
     "testo": "const executor = new SandboxExecutor(guards);"
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 403,
+    "line": 386,
     "testo": "tools.push(...makeProcessTools());"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 408,
+    "line": 391,
     "testo": "const skillScan = discoverSkills(home);"
   },
   "agent/runtime.ts:316": {
     "path": "agent/runtime.ts",
-    "line": 409,
+    "line": 392,
     "testo": "tools.push(makeSkillTool(skillScan.skills));"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 420,
+    "line": 403,
     "testo": "tools.push(makeHttpTool(egress));"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 426,
+    "line": 409,
     "testo": "let searchOn = false;"
   },
   "agent/runtime.ts:455": {
     "path": "agent/runtime.ts",
-    "line": 556,
+    "line": 566,
     "testo": "bootLines: ["
   },
   "agent/runtime.ts:490": {
     "path": "agent/runtime.ts",
-    "line": 602,
+    "line": 612,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 606,
+    "line": 616,
     "testo": "systemPrompts: buildSystemPrompts("
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 609,
+    "line": 619,
     "testo": "skillsPromptSection(skillScan.skills),"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 637,
+    "line": 647,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 645,
+    "line": 655,
     "testo": "runtime.onClose(() => attachment.close());"
   },
   "agent/scheduler-run.ts:31": {
@@ -2651,32 +2651,32 @@
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 442,
+    "line": 441,
     "testo": "searchNotes.push("
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 485,
+    "line": 495,
     "testo": "...(searchOn ? [searchCapability] : []),"
   },
   "runtime.ts:456": {
     "path": "agent/runtime.ts",
-    "line": 559,
+    "line": 569,
     "testo": "...skillScan.problems.map((p) => `! ${p}`),"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 567,
+    "line": 577,
     "testo": "register: (tool, decl) => {"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 637,
+    "line": 647,
     "testo": "export async function attachMcp(runtime: Runtime, home = paths().home): Promise<string[]> {"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 643,
+    "line": 653,
     "testo": "for (const t of tool) runtime.register(t, decl);"
   },
   "runtime.ts:98": {
