@@ -6,8 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
+import type { Embedder } from '../core/memory/embed.js';
 import { MemoryStore } from '../core/memory/store.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { VectorIndex } from '../core/memory/vectors.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
@@ -16,6 +18,32 @@ import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { fsCapabilities } from './tools/fs.js';
+
+/**
+ * A deterministic embedder, same shape as `core/memory/recall.test.ts`'s own —
+ * a bag-of-words vector over a fixed vocabulary, real semantic overlap without
+ * a model running. Needed here specifically for D1's regression: a harness
+ * with no vector half at all made the temporal gate in `recall.ts`'s semantic
+ * branch untestable from the loop, because that branch never ran.
+ */
+class FakeEmbedder implements Embedder {
+  readonly id = 'fake:v1';
+  readonly dimensions = 16;
+  private readonly vocab = [
+    'commercialista', 'fiscale', 'tasse', 'contabile',
+    'vela', 'barca', 'mare', 'regata',
+    'cagliari', 'sardegna', 'casa', 'città',
+    'marco', 'lucia', 'anna', 'riunione',
+  ];
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    return texts.map((text) => {
+      const lower = text.toLowerCase();
+      const v = Float32Array.from(this.vocab.map((w) => (lower.includes(w) ? 1 : 0)));
+      const norm = Math.hypot(...v) || 1;
+      return v.map((x) => x / norm) as Float32Array;
+    });
+  }
+}
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
@@ -63,7 +91,13 @@ function harness(script: ChatResult[]) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-mem-loop-'));
   const db = new DatabaseCtor(':memory:');
   const store = new MemoryStore(db);
-  const recallDeps: RecallDeps = { store };
+  // A real vector index, not an absent one. D1's defect (the semantic half
+  // never consulted `asOf`) is unreachable from a harness with no vector half
+  // at all — `strategies` would read `vector-non-configurato` and the branch
+  // under test would simply never run. Nothing is indexed by default, so every
+  // test that does not call `vectors.index(...)` behaves exactly as before.
+  const vectors = new VectorIndex(db, new FakeEmbedder());
+  const recallDeps: RecallDeps = { store, vectors };
   const writes: string[] = [];
   const provider = new Scripted(script);
 
@@ -103,7 +137,7 @@ function harness(script: ChatResult[]) {
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     memory: { store, recall: recallDeps },
   };
-  return { deps, store, provider, writes, sessions: deps.sessions };
+  return { deps, store, vectors, provider, writes, sessions: deps.sessions };
 }
 
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
@@ -230,7 +264,7 @@ describe('memory wired into the loop', () => {
     // finding. Each test here fails on a `searchMemory` that only reads
     // `query`/`limit`, which is what production shipped with until this slice.
 
-    function seedAccountantHistory(h: ReturnType<typeof harness>) {
+    async function seedAccountantHistory(h: ReturnType<typeof harness>) {
       const me = h.store.upsertEntity('host', 'Giusto', 'person', '2026-06-01T10:00:00Z');
       const ep = h.store.addEpisode({
         tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
@@ -243,12 +277,20 @@ describe('memory wired into the loop', () => {
       const marco = h.store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
       const lucia = h.store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
       h.store.supersede('host', marco, lucia, '2026-08-01T10:00:00Z');
+      // Indexed the way ingest indexes it, so the semantic half — not only the
+      // graph hop — can find both. Without this the vector half in the harness
+      // above has nothing to embed and D1's regression stays unreachable: the
+      // bug is specifically that the *semantic* branch never consulted `asOf`.
+      await h.vectors.index('host', [
+        { kind: 'fact', sourceId: marco, text: 'Giusto accountant Marco' },
+        { kind: 'fact', sourceId: lucia, text: 'Giusto accountant Lucia' },
+      ], '2026-08-01T10:00:00Z');
       return { marco, lucia };
     }
 
     it('reaches a retired belief when the model asks for history, marked with its successor', async () => {
       const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('era Marco, ora è Lucia')]);
-      seedAccountantHistory(h);
+      await seedAccountantHistory(h);
 
       const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista prima?'));
       expect(result.stopped).toBe('answered');
@@ -260,19 +302,29 @@ describe('memory wired into the loop', () => {
 
     it('reaches the belief that held at a past date, not the current one — "chi era X a giugno"', async () => {
       const h = harness([callTool('memory_search', { query: 'Giusto commercialista', as_of: '2026-06-15' }), answer('era Marco')]);
-      seedAccountantHistory(h);
+      await seedAccountantHistory(h);
 
       const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista a giugno?'));
       expect(result.stopped).toBe('answered');
       const shown = h.provider.seen.join('\n');
-      expect(shown).toContain('Marco');
+      // Isolated to the deliberate `as_of` search's own output, the same way
+      // "filters by surface" below does. The automatic pre-turn recall runs on
+      // the raw message with no `as_of` at all, and — now that the harness has
+      // a real vector half — correctly finds Lucia there too: she really is
+      // today's answer to a plain, untimed "now" query. That is a different
+      // guarantee from this one, which is specifically about what the model's
+      // own `as_of`-scoped tool call came back with.
+      const toolOutput = shown.slice(shown.indexOf(' ricordi ('));
+      expect(toolOutput).toContain('Marco');
       // Lucia is expected here — as the successor on Marco's own line, which is
       // exactly what "etichettato con successore" asks for. What must not
-      // happen is Lucia appearing as her *own*, unmarked, independent line: a
-      // June-scoped `factsAsOf` has no belief-window or world-window reason to
-      // return her at all, since she was not recorded until August.
-      expect(shown).toContain('sostituito da: Giusto — accountant — Lucia');
-      const withoutSuccessorAnnotations = shown.replace(/↳ sostituito da:[^\n]*/g, '');
+      // happen is Lucia appearing as her *own*, unmarked, independent line in
+      // *this* tool's result: a June-scoped `factsAsOf` has no belief-window or
+      // world-window reason to return her at all, since she was not recorded
+      // until August — on the graph hop or, D1's regression, on the semantic
+      // half either.
+      expect(toolOutput).toContain('sostituito da: Giusto — accountant — Lucia');
+      const withoutSuccessorAnnotations = toolOutput.replace(/↳ sostituito da:[^\n]*/g, '');
       expect(withoutSuccessorAnnotations).not.toContain('Lucia');
     });
 
@@ -327,7 +379,7 @@ describe('memory wired into the loop', () => {
         kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
       };
       const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('non trovo niente')]);
-      seedAccountantHistory(h);
+      await seedAccountantHistory(h);
 
       await runTurn(h.deps, turn(h, 'chi era il commercialista?', member));
       const shown = h.provider.seen.join('\n');

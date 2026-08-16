@@ -293,6 +293,31 @@ const EXPANSION_SLOTS = 6;
 const MAX_NEIGHBOURS = 5;
 
 /**
+ * How many of `kept`'s episodes get a neighbourhood attached — never all of
+ * them. The primitive exists to un-cut *the ambiguous line* (`02-ontologia.md`
+ * §9), the one anchor whose meaning depends on what came before or after, not
+ * to re-inline every thread a search happened to touch. Bounding this at the
+ * source also means the fourth anchor onward never pays for an
+ * `episodeNeighbourhood` query whose rows `MAX_CONTEXT_ITEMS` would only have
+ * discarded.
+ */
+const MAX_NEIGHBOUR_ANCHORS = 3;
+
+/**
+ * Ceiling on the whole result, after the neighbourhood is attached — the
+ * backstop `MAX_NEIGHBOURS` and `MAX_NEIGHBOUR_ANCHORS` do not provide by
+ * themselves. Each bounds one axis (one anchor's own window; how many anchors
+ * get one); neither bounds their product, and neither bounds `limit`, which a
+ * caller — `muffin memory search -n` has no cap of its own — can set as large
+ * as it likes. Before this existed, `limit:20, around:5` on twenty threads
+ * could append up to 220 rows, about 24k tokens, to a tool result
+ * `runtime.ts` marks `keepResult: true` — so it was never compacted, for the
+ * rest of the conversation. Exported so the test that proves this asserts
+ * against the real threshold rather than a copy of the number.
+ */
+export const MAX_CONTEXT_ITEMS = 40;
+
+/**
  * At most one of those slots may be taken by importance rather than recency.
  * One, not two, because the displacement has to be bounded and visible: this is
  * the whole budget importance gets to spend on retrieval.
@@ -451,6 +476,22 @@ export async function recall(
           const fact = deps.store.factById(tenantId, hit.sourceId);
           if (!fact) return;
           if (fact.expiredAt !== null && !includeSuperseded) return;
+          // The gate above only ever excluded a fact that is *itself* retired
+          // — it never asked whether an *active* fact had even been recorded
+          // yet as of `when`. `asOf('2026-05')` with Marco (June) superseded by
+          // Lucia (August) walked Lucia through here unmarked: her row has
+          // `expiredAt: null`, so the check above never fires, and the graph
+          // hop's own temporal gate (`factsAsOf`, below) was never consulted on
+          // this path. Reusing it here — one query per vector hit, bounded by
+          // `limit * 2` — is the same primitive the graph hop already trusts,
+          // not a second, divergent temporal rule. `EVERY_INSTANT` keeps its
+          // own history semantics (every instant, nothing to check here); the
+          // default instant (`when === undefined`) leaves the gate above
+          // unchanged, so an ordinary "now" turn pays for none of this.
+          if (when !== undefined && when !== EVERY_INSTANT) {
+            const inForceThen = deps.store.factsAsOf(tenantId, fact.subjectId, when).some((f) => f.id === fact.id);
+            if (!inForceThen) return;
+          }
           const successor = successorOf(deps.store, tenantId, fact);
           fuse(`fact:${fact.id}`, {
             kind: 'fact',
@@ -601,16 +642,25 @@ export async function recall(
   // a group, are that many more chances for an injection to arrive at the tier
   // of whoever searched — collapsing the window into the anchor's tier is
   // exactly that hole, and it stays closed here by construction rather than by
-  // a check. The count itself is clamped, not just described as small: an
-  // unbounded `neighbours` from a tool argument the model controls would make
-  // "small" a comment instead of a property.
+  // a check.
+  //
+  // Three clamps, not one, because each bounds a different axis and none of
+  // them implies another: `MAX_NEIGHBOURS` bounds one anchor's own window;
+  // `MAX_NEIGHBOUR_ANCHORS` (below) bounds how many of `kept` get a window at
+  // all; `MAX_CONTEXT_ITEMS` bounds the sum of everything this call returns,
+  // `limit` included. An earlier version of this comment claimed the first
+  // alone made "the count" safe — true of one anchor, false of the call:
+  // `limit:20, around:5` on twenty threads reached 220 rows through exactly
+  // the product these three clamps now cut.
   const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);
   if (k > 0) {
     strategies.push(`vicinato(${k})`);
     const already = new Set(kept.map((i) => `${i.kind}:${i.id}`));
     const context: RecallItem[] = [];
-    for (const anchor of kept) {
-      if (anchor.kind !== 'episode') continue;
+    // Only the highest-ranked few, not every episode in `kept` — see
+    // `MAX_NEIGHBOUR_ANCHORS`.
+    const anchors = kept.filter((item) => item.kind === 'episode').slice(0, MAX_NEIGHBOUR_ANCHORS);
+    for (const anchor of anchors) {
       for (const near of deps.store.episodeNeighbourhood(tenantId, anchor.id, k, includeSuperseded)) {
         const key = `episode:${near.id}`;
         if (already.has(key) || near.id === options.excludeEpisodeId) continue;
@@ -632,7 +682,10 @@ export async function recall(
     kept = [...kept, ...context];
   }
 
-  return { items: kept, strategies, gaps };
+  // The hard backstop: ranked results occupy the front of `kept` and
+  // neighbours were appended after them, so a cut here drops context before it
+  // ever drops something that actually matched the query.
+  return { items: kept.slice(0, MAX_CONTEXT_ITEMS), strategies, gaps };
 }
 
 /** One fact as a line: subject, predicate, object. Written once, read by four callers. */
@@ -733,11 +786,23 @@ function temporalLabel(item: RecallItem): string {
   if (item.validFrom || item.validTo) {
     parts.push(`valido ${item.validFrom?.slice(0, 10) ?? '?'} → ${item.validTo?.slice(0, 10) ?? 'oggi'}`);
   }
-  // Said plainly, because the model has to be able to use it as a fact about
-  // the past rather than discard it as stale. "Retired" without "it was true
-  // before" reads as "unreliable", and the whole point of keeping the row is
-  // that it is reliable about a different time.
-  if (item.expired) parts.push('non più attuale — era vero prima');
+  if (item.expired) {
+    // Two different reasons a fact can be retired, and only one of them is a
+    // change of mind. `supersede` is called from the judge, closing world time
+    // (`validTo` set), and from the duplicate sweep, which passes `validTo:
+    // null` on purpose because a duplicate was never a separate truth
+    // (`store.ts` supersede's own doc comment; `successorOf` above reads the
+    // same discriminant). Saying "was true before" about a row that was never
+    // a distinct belief — only ever a second copy of the one that survived —
+    // is a fabrication under `as-of`, exactly where a dedup-retired row is
+    // often the only line left standing. Episodes have no `validTo` at all
+    // (the field is fact-only): their `expired` always means the vault file
+    // changed under them, which the old text was still true of when it was
+    // recorded, so only a fact makes this distinction.
+    parts.push(
+      item.kind === 'fact' && !item.validTo ? 'riga ritirata (duplicato)' : 'non più attuale — era vero prima',
+    );
+  }
   return parts.length === 0 ? '' : `, ${parts.join(', ')}`;
 }
 
