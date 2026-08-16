@@ -8,5 +8,5 @@
     "sourceMap": false
   },
   "include": ["core/**/*.ts", "agent/**/*.ts", "cli/**/*.ts"],
-  "exclude": ["**/*.test.ts", "node_modules", "dist"]
+  "exclude": ["**/*.test.ts", "**/fixtures/**", "node_modules", "dist"]
 }

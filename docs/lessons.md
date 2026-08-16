@@ -687,3 +687,64 @@ Where a containment is supposed to be provable, its absence is a failing test
 carrying the probe's own reason; everywhere else the skip stays a skip and prints
 why. The prose was already correct — what it lacked was a mechanism, which is
 `docs/PRACTICES.md` §6 exactly.
+
+## The tenant must travel with the bytes, not be reconstructed by the surface
+
+Telegram resolved a group principal and tenant correctly, then handed the
+attachment to a callback whose contract carried only trust tier. The production
+callback filled the missing tenant with `host`. Every identity and policy test
+stayed green: the loss happened after identity resolution and before indexing.
+
+The document-arrival test copied that callback exactly and used only the owner
+chat, so it proved the hardcode. **Instead:** the connector-vault boundary takes
+`tenantId` explicitly, and the production-path test begins with a group update,
+observes the group store, proves the host store empty, and reopens the document
+through the actual tool.
+
+## The right tenant does not repair the wrong source set
+
+After carrying `tenantId` correctly, attachment ingress still called the full
+vault reconciliation. That operation enumerated a shared physical directory,
+so a group member sending one file caused private host notes and another
+group's files to be indexed into the caller's tenant. The first integration
+fixture had an otherwise empty vault and could not observe the leak.
+
+**Instead:** arrivals call `reindexPath(tenantId, savedPath)` and full `reindex`
+is reserved for explicit maintenance. The production-path test begins with a
+host note and a second group's attachment already present, then asserts search
+and drill-down isolation in every direction. Scope belongs to the source set as
+well as the destination identity.
+
+## A compressed input limit is not an output limit
+
+The vault refused files above 20 MB and still allowed a tiny DOCX to expand
+without bound in `inflateRawSync` — twice, because sniffing decompressed the
+same entry as extraction. Container size is not resource containment.
+
+**Instead:** sniff from the central directory without inflation; reject a
+declared expanded size over budget; and independently pass `maxOutputLength` to
+the inflater because the declaration is attacker-controlled. The test for the
+second guard lies in the central directory on purpose.
+
+## Indexed and readable are one guarantee
+
+An external symlink was treated as an ordinary note by `reindex`, while
+`document_read` correctly refused its realpath. Recall advertised a document
+whose promised exact source could never be opened. Allowing the later read
+would turn the mismatch into TOCTOU: retarget the link after indexing.
+
+**Instead:** until content is materialised inside immutable vault storage,
+external symlinks are skipped with a visible reason. A test asserts all three
+sides together: no index row, a named skip, and no drill-down.
+
+## Unknown external state is not open work
+
+The delegation handoff converted every command failure to an empty string.
+When `gh pr list` failed, an empty PR list meant every registered branch became
+“no PR” and therefore actionable, including branches already merged into
+`dev`. The fallback did not have less context; it manufactured positive state.
+
+**Instead:** Git ancestry decides integration first. GitHub only enriches it
+with PR numbers and remote state. Anything ancestry cannot settle during a
+GitHub outage enters a separate `SCONOSCIUTE` section that explicitly forbids
+resume until verification; it never enters `APERTE`.

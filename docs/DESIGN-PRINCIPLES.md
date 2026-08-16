@@ -84,10 +84,12 @@ that accumulates. It emerges automatically from input; for any person with
 coherent input over time, it populates itself. No configuration. It is the
 substrate. In the repository it is exposed intact — as schema, never as content.
 
-**Level 2 — identity and behaviour.** Who the agent is, how it speaks, what it
-never does. Per installation, different. The repository ships a **template**;
-the real one lives in the user's own directory and is never touched by a
-`git pull`.
+**Level 2 — agent identity and behaviour.** This has two parts that must not be
+conflated. Voice, relationship and local character are shaped per installation;
+the repository ships a template and the real content lives in the owner's
+directory. The constitutional floor — what the agent may never do, who may
+change policy, which evidence can authorize action — is explicit and versioned.
+It is not inferred from familiarity and cannot be learned away.
 
 **Level 3 — architectural choices that are actually personal preferences.**
 Numeric thresholds, cadences, how proactive is too proactive, the minimum gap
@@ -95,9 +97,10 @@ between unsolicited messages. These *look* like architecture and are taste. They
 must be parameters, not constants baked into the code.
 
 The working rule: when writing or changing code, know which level you are on. On
-levels 1 and 2, the mechanism ships intact. On level 3, the decision has to
-become a parameter. Applied consistently, this makes the open-source extraction
-a matter of *removing content*, not rewriting structure.
+levels 1 and 2, the mechanism ships intact while personal content stays local.
+On level 3, the decision has to become a parameter or an evidenced adaptation.
+Applied consistently, this makes the open-source extraction a matter of
+*removing content*, not rewriting structure.
 
 ## P4 — The model reasons; the code does not
 
@@ -116,6 +119,21 @@ because its errors were invisible and its value was unmeasured. If you add
 something that decides on the model's behalf, decide *first* how you would find
 out it is wrong.
 
+There is one boundary P4 never crosses: **the model is the arbiter of meaning,
+never of safety**. It may interpret the request, the situation and the owner's
+intent. The policy kernel decides whether an effect is allowed from typed facts
+that the model cannot rewrite: principal, capability, resource, taint, budget
+and sealed policy. Better reasoning may improve the proposal; it may not vote
+itself a wider permission.
+
+That boundary starts at ingress, before the model sees anything. A surface
+resolves authority from a transport-authenticated stable subject identifier,
+never from display names, biographies, usernames, rooms or content. Everything
+else it accepts is parsed into typed, provenance-carrying data — including
+metadata and multimodal extraction — and remains potentially adversarial after
+parsing. The model may interpret those blocks; no block may redefine its own
+principal or trust.
+
 ## P5 — Proprioception before power
 
 A system that does not know whether it is working does not get powerful tools.
@@ -131,12 +149,19 @@ harness, and the resolution is the same: if a model with a self-inspection tool
 produces better proprioception than hardcoded monitoring, the hardcoded version
 gives way.
 
+Proprioception is also how supervision may shrink. Autonomy is never a scalar
+claim that the agent has become "trusted". It is a grant for one capability,
+resource class and context, backed by observable successful history and by a
+recovery path. Grants expire or are revoked, and failures make them regress.
+The constitutional floor and the kernel's monotone confinement do not loosen.
+
 ## P6 — YAGNI as an active filter
 
 Every proposed feature faces two questions:
 
 1. **Is the agent fundamentally broken without this?**
-2. **Does it move toward something with a point of view, or toward a tool?**
+2. **Does it move toward a continuous point of view, or replace a direct
+   interface the owner still has to operate?**
 
 If neither answer is yes, the feature waits.
 
@@ -162,6 +187,12 @@ processes, *and* understands, *and* has a voice, is **more** of an entity, not
 less. Hands without a voice are a tool; hands with a voice are not. The length
 or ambition of the work is never, by itself, a signal.
 
+The second question is also what keeps device work honest. A new connector or
+piece of hardware matters when it is a better port onto the same continuous
+agent, or when it makes a direct interface unnecessary. A separate memory,
+persona or policy fork for the device is not a new capability; it is a second
+agent by accident.
+
 ## P7 — These principles are calibrated for a phase
 
 This document is not timeless and does not pretend to be. It is written for the
@@ -172,7 +203,8 @@ that does not exist yet in code *or* model.
 
 A phase transition is a recognisable structural change: the reduction work is
 done; a new model materially changes what is available; the project is released
-publicly and the ecosystem around it changes.
+publicly and the ecosystem around it changes; or the unit of use moves from a
+session to a continuous agent that owns durable work across surfaces.
 
 The operating rule: at each transition, **reread this document whole, not
 incrementally**, asking whether the principles are still calibrated or need
