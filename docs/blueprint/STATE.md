@@ -38,8 +38,8 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
 Integrate: **PR #30/#31** in `dev`, con CI e judge `MERGE`. Aperta **PR #32**
-`dev`→`main`: è un checkpoint nuovo, non eredita quei verdetti e attende CI più
-un judge sull'insieme completo. Il record del checkpoint è **PR #33**.
+`dev`→`main`: è un checkpoint nuovo, non eredita quei verdetti e richiede CI
+verde più un judge sull'insieme completo. Il record del checkpoint è **PR #33**.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
