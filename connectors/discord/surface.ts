@@ -50,13 +50,19 @@ async function resolveChannelId(api: DiscordApi, channelId: string, ownerUserId:
 }
 
 export function discordSurface(api: DiscordApi, ownerUserId: string | undefined): Surface {
+  // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
+  // `10 * 1024 * 1024` again instead of reading the number it had already
+  // declared here — two literals that agreed today and had no reason to keep
+  // agreeing tomorrow. One value, read back from the object callers see.
+  const limits = {
+    maxMessageChars: DISCORD_MAX,
+    maxUploadBytes: 10 * 1024 * 1024,
+    maxDownloadBytes: 25 * 1024 * 1024,
+  };
+
   return {
     id: 'discord',
-    limits: {
-      maxMessageChars: DISCORD_MAX,
-      maxUploadBytes: 10 * 1024 * 1024,
-      maxDownloadBytes: 25 * 1024 * 1024,
-    },
+    limits,
 
     handles: (channel) => channelIdFor(channel, ownerUserId) !== null,
 
@@ -97,8 +103,10 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
       } catch (error) {
         return notDelivered(`${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}`);
       }
-      if (bytes > 10 * 1024 * 1024) {
-        return notDelivered(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di upload di 10MB (Nitro alza il tetto ma non è verificato qui)`);
+      if (bytes > limits.maxUploadBytes) {
+        return notDelivered(
+          `${(bytes / 1e6).toFixed(1)}MB, oltre il limite di upload di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB (Nitro alza il tetto ma non è verificato qui)`,
+        );
       }
 
       let channelId: string;
