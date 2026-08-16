@@ -11,8 +11,12 @@ import {
   ConfigError,
 } from '../core/config/config.js';
 import { Vault } from '../core/vault/vault.js';
+import { cliSurface, type CliWriter } from '../core/surface/cli.js';
+import { SurfaceRegistry } from '../core/surface/registry.js';
+import type { Surface } from '../core/surface/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector } from '../connectors/telegram/connector.js';
+import { telegramSurface } from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 
 /**
@@ -179,14 +183,34 @@ export function cmdSurfaceDisable(home: string, id: string): number {
 /**
  * Connects every enabled surface, inside this process.
  *
- * Called by the REPL and by headless serve alike. Returns the stops, and a line
- * per surface for the prompt — including the surface that *should* be up and is
+ * Called by the REPL and by headless serve alike. Returns the stops, a line per
+ * surface for the prompt — including the surface that *should* be up and is
  * not, because a surface silently missing is how "Muffin non risponde su
- * Telegram" becomes a mystery instead of a line of output.
+ * Telegram" becomes a mystery instead of a line of output — and **the registry**,
+ * which is what anything wanting to *send* now asks.
+ *
+ * The registry is the half that was missing. Delivery used to be three
+ * hand-rolled `Deliver` functions, one per caller, each with its own opinion
+ * about which channels were real; two of the three said "consegna remota da
+ * cablare" for everything that was not the terminal, so a job targeting Telegram
+ * never arrived even on a home where Telegram was connected and answering
+ * messages a metre away. The connector and the delivery path did not know about
+ * each other. Now they are built together, here, from the same token.
  */
-export function connectSurfaces(runtime: Runtime, home: string): { lines: string[]; stop: () => void } {
+export function connectSurfaces(
+  runtime: Runtime,
+  home: string,
+  /**
+   * Where the CLI surface writes. The REPL has to reprint its prompt after, and
+   * a gateway's stdout is the journal — so the destination is the caller's, and
+   * only the decision to *have* a CLI surface is made here (L0-1: it is the
+   * surface of last resort and is never absent).
+   */
+  cliWrite: CliWriter = (text) => process.stdout.write(`${text}\n`),
+): { lines: string[]; stop: () => void; registry: SurfaceRegistry } {
   const lines: string[] = [];
   const stops: (() => void)[] = [];
+  const surfaces: Surface[] = [cliSurface(cliWrite)];
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -252,6 +276,11 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
           process.stderr.write(`\rtelegram: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
         });
         stops.push(() => connector.stop());
+        // Delivery, from the same token the listener uses. `ownerChatId` is what
+        // makes `handles('telegram')` true, so an unpaired surface listens but
+        // does not claim to be a destination — which is the honest answer while
+        // nobody is the owner yet.
+        surfaces.push(telegramSurface(api, ownerChatId));
         lines.push(
           ownerUserId === undefined
             ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
@@ -263,7 +292,7 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
     }
   }
 
-  return { lines, stop: () => stops.forEach((s) => s()) };
+  return { lines, stop: () => stops.forEach((s) => s()), registry: new SurfaceRegistry(surfaces) };
 }
 
 function hasSecret(ref: string, home: string): boolean {

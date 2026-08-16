@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { DELIVERED } from '../core/surface/types.js';
 import { paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { JobStore } from '../core/scheduler/jobs.js';
@@ -209,10 +210,8 @@ describe('the claim can change under a REPL that is already ticking', () => {
     const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
     const sched = new Scheduler(
       w.jobs,
-      async () => ({ stopped: 'answered', text: 'brief' }),
-      async (_c, t) => {
-        w.delivered.push(t);
-      },
+      async () => ({ stopped: 'answered', text: 'brief', turnId: 'turn-test' }),
+      async (_c, t) => (w.delivered.push(t), DELIVERED),
       undefined,
       (e) => w.events.push(e),
       undefined,
@@ -290,11 +289,9 @@ describe('the claim can change under a REPL that is already ticking', () => {
       w.jobs,
       async () => {
         await inFlight;
-        return { stopped: 'answered', text: 'brief' };
+        return { stopped: 'answered', text: 'brief', turnId: 'turn-test' };
       },
-      async (_c, t) => {
-        w.delivered.push(t);
-      },
+      async (_c, t) => (w.delivered.push(t), DELIVERED),
       undefined,
       (e) => w.events.push(e),
       undefined,
