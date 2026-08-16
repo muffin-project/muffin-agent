@@ -41,8 +41,9 @@ due meccanismi concreti che non abbiamo.
 ### Cosa prendere
 
 1. **Traversata multi-hop.** La nostra espansione del grafo è a **un** hop
-   (`activeFacts` dall'entità seminata, taglio a 6 per `importance`; da #35 anche
-   `factsAsOf` per l'istante). Il caso-trappola — «rimborso di £800 a marzo:
+   (`activeFacts` dall'entità seminata, taglio a 6 per **recency** con un solo slot
+   riscattato per `importance` — `selectForExpansion`; da #35 anche `factsAsOf`
+   per l'istante). Il caso-trappola — «rimborso di £800 a marzo:
    chi firma?» → policy → ruolo → persona → delega — a un hop si ferma alla
    persona sbagliata. Una `WITH RECURSIVE` a profondità ≤3 sui nostri fatti
    (soggetto/predicato/oggetto sono già lì; i predicati liberi non sono un
@@ -50,7 +51,7 @@ due meccanismi concreti che non abbiamo.
    dal mezzo vettoriale (loro lo elencano come limite «lexical seeding» — noi
    ce l'abbiamo già), e ranking per **appartenenza a un cammino fra due seed**
    invece che per grado (la loro cura al «top-k crowding»; il nostro taglio per
-   `importance` ha lo stesso rischio sugli hub). Tetto fisso di iniezione come
+   recency ha lo stesso rischio sugli hub). Tetto fisso di iniezione come
    il nostro `MAX_CONTEXT_ITEMS`.
 2. **Il golden set a trappola.** Tre file che non condividono parole, decoy
    intorno (una policy stantia con numeri diversi, una nota spese con lo stesso
@@ -86,8 +87,8 @@ stessa primitiva che Muffin userà per il multi-hop. Non è per il Gate 1.
 |---|---|---|---|
 | Storage | 3 SQLite tables: `entities(id uuid5, name, type, description, source_doc)`, `relations(source_id, target_id, predicate, source_doc)`, `aliases(entity_id, alias)` | `core/memory/store.ts`: 14 tables, three planes; facts are S-P-O with `valid_from/valid_to/recorded_at/expired_at`, `trust_tier`, `tenant_id` | none on the store; ours carries time, tier, tenant |
 | Seeding | name/alias match on the prompt | `entitiesByName` + FTS5 + vector k-NN (RRF k=60) | none |
-| Walk | `WITH RECURSIVE walk(entity_id, depth)` over `relations`, depth ≤ 3, undirected | one hop: `activeFacts`/`factsAsOf` from seeded entities, cut to 6 by `importance` | **multi-hop absent** |
-| Ranking | top-k; proposed fix: rank by path membership between seeds | `importance DESC` inside the hop; `MAX_CONTEXT_ITEMS`, `MAX_NEIGHBOUR_ANCHORS` | path-membership ranking absent |
+| Walk | `WITH RECURSIVE walk(entity_id, depth)` over `relations`, depth ≤ 3, undirected | one hop: `activeFacts`/`factsAsOf` from seeded entities, cut to 6 by recency (`EXPANSION_SLOTS`), one slot rescued by importance (`PROTECTED_SLOTS`); order is recency, always | **multi-hop absent** |
+| Ranking | top-k; proposed fix: rank by path membership between seeds | recency inside the hop with one importance slot; `MAX_CONTEXT_ITEMS`, `MAX_NEIGHBOUR_ANCHORS` | path-membership ranking absent |
 | Injection | `UserPromptSubmit` hook → `additionalContext`, ~400 tokens fixed | recall block in the volatile tail before the model call; capped items | none |
 | Write path | LLM extraction outside the turn, at build time | idle-front lane, ADR-0038; maintenance ADR-0040 | none |
 | Evidence | 3-hop trap case; Haiku 1/3 → 3/3; 660–1,180 tokens → ~400; 2 ms | no golden set yet (STATE, since M2) | **golden set absent** |
