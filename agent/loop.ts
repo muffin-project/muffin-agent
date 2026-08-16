@@ -162,6 +162,35 @@ export type RegisteredTool = {
   capability: string;
   handler: ToolHandler;
   /**
+   * The tier of whatever a THROWN failure from this tool's handler can bring
+   * into the turn — the question `ToolOutcome.tier` asks of a returned result,
+   * asked here of the handler's other exit.
+   *
+   * **Required, for the reason `tier` is required, one level up.** A judge's
+   * round-1 review of this PR found the same shape of gap it closed still open
+   * in `runTool`'s `catch`: it put `error.message` into the session as a tool
+   * result the model reads, called `raiseTaint` never, and recorded `tier:
+   * undefined` in the turn record. A handler that answered "0" on success but
+   * *threw* was invisible to the taint ledger no matter whose words the
+   * message carried — and `agent/tools/mcp.ts` (`connection.call` →
+   * `client.callTool`) is a production handler that can throw with a
+   * third-party MCP server's own text (`McpError.message`, lifted from the
+   * server's JSON-RPC `error.message` field). That gave a compromised server a
+   * second channel next to the one ADR-0044 closed, and a cheaper one: a
+   * successful tier-3 call raises the taint and (at the shipped medium
+   * ceiling) closes egress after one round-trip, but a *failing* call cost the
+   * server nothing and could be retried without limit — returning an error is
+   * more powerful than returning a result.
+   *
+   * 0 for every tool whose thrown text is provably ours — see the comment on
+   * each tool's declaration for the internal boundary that makes it true (a
+   * validation message, a path, an errno, never a byte the handler did not
+   * write itself). 3 for every `mcp.*` tool: the words on the other side of
+   * that particular throw belong to a third party, fenced or not, so the
+   * ceiling matches the one its successful calls already declare.
+   */
+  throwTier: TrustTier;
+  /**
    * This tool's output must survive context compaction.
    *
    * Set it for tools whose result *is* the grounding rather than something the
