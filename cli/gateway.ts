@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type LaneDeliver } from '../agent/turn-lane.js';
-import { TurnLane } from '../core/turns/lane.js';
+import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
@@ -343,16 +343,25 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
    * indirection is the seam B2's two-phase delivery attaches to.
    */
   let deliverFromLane: LaneDeliver = NO_SURFACE;
+  const laneLog = (e: LaneEvent): void => {
+    if (e.kind === 'refused') {
+      process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa rifiutata — ${e.why}\n`);
+    } else if (e.kind === 'failed') {
+      process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa fallita — ${e.error}\n`);
+    } else if (e.kind === 'undeliverable') {
+      // Said with the answer in it, because there is nowhere else it can go.
+      // Under a supervisor this is the journal, which is the honest home for a
+      // reply nobody was there to receive.
+      process.stderr.write(
+        `turno ${e.turnId.slice(0, 8)} su ${e.surface}: nessun indirizzo di risposta sulla riga, ` +
+          `la risposta resta qui\n${e.text}\n`,
+      );
+    }
+  };
   const turnLane = new TurnLane({
     turns: runtime.deps.turns,
-    run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text)),
-    onEvent: (e) => {
-      if (e.kind === 'refused') {
-        process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa rifiutata — ${e.why}\n`);
-      } else if (e.kind === 'failed') {
-        process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa fallita — ${e.error}\n`);
-      }
-    },
+    run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text), laneLog),
+    onEvent: laneLog,
   });
 
   let stopSurfaces: (() => void) | null = null;

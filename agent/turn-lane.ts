@@ -1,4 +1,4 @@
-import type { LaneRun } from '../core/turns/lane.js';
+import type { LaneEvent, LaneRun } from '../core/turns/lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
 import { resumeTurn, type LoopDeps } from './loop.js';
 
@@ -44,7 +44,16 @@ export const NO_SURFACE: LaneDeliver = async (turn) => {
   throw new Error(`nessuna superficie cablata per ${turn.surface}`);
 };
 
-export function makeLaneRunner(deps: LoopDeps, deliver: LaneDeliver = NO_SURFACE): LaneRun {
+export function makeLaneRunner(
+  deps: LoopDeps,
+  deliver: LaneDeliver = NO_SURFACE,
+  /**
+   * Told when a finished turn had an answer and no address. Handed in rather
+   * than logged here, because the lane owns the event stream and this file owns
+   * the loop — and a `console.error` in a library is a report nobody can route.
+   */
+  onUndeliverable: (event: Extract<LaneEvent, { kind: 'undeliverable' }>) => void = () => {},
+): LaneRun {
   return async (turnId) => {
     const outcome = await resumeTurn(deps, turnId);
     if ('why' in outcome) {
@@ -67,10 +76,22 @@ export function makeLaneRunner(deps: LoopDeps, deliver: LaneDeliver = NO_SURFACE
     if (outcome.stopped === 'suspended') return { stopped: outcome.stopped };
 
     const record = deps.turns.get(turnId);
-    // No address means the caller of `runTurn` was holding the answer itself —
-    // there is no second step that can fail, and nothing here to do.
     if (record?.replyTo != null && outcome.text !== '') {
       await sendAndRecord(deps, record, outcome.text);
+      return { stopped: outcome.stopped };
+    }
+    /**
+     * An answer with nowhere to go is **reported**, not dropped.
+     *
+     * A row with no address normally means the caller of `runTurn` was holding
+     * the text itself — in band, no second step that can fail. But a turn the
+     * *lane* finished has no such caller by construction, so here the same
+     * absence means the opposite: somebody enqueued or suspended work without
+     * saying where the answer goes, and the honest move is to say so rather
+     * than to return quietly as if there had been nothing to deliver.
+     */
+    if (record !== null && outcome.text !== '') {
+      onUndeliverable({ kind: 'undeliverable', turnId, surface: record.surface, text: outcome.text });
     }
     return { stopped: outcome.stopped };
   };

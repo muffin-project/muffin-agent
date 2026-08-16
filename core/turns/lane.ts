@@ -39,6 +39,17 @@ export type LaneEvent =
   /** An event barrier came true, so the row is runnable ahead of its deadline. */
   | { kind: 'woken'; turnId: string }
   | { kind: 'ran'; turnId: string; stopped: TurnStopped }
+  /**
+   * The turn produced an answer and the row carries no address.
+   *
+   * Its own arm rather than silence, because silence is what this slice was
+   * caught doing: a scheduled job that suspended came back, answered, and its
+   * text went nowhere because nothing had written `replyTo`. An answer that
+   * cannot be delivered is a fact the owner needs — it is the difference
+   * between "the agent said nothing" and "the agent said something and this
+   * process had no idea where to put it".
+   */
+  | { kind: 'undeliverable'; turnId: string; surface: string; text: string }
   | { kind: 'refused'; turnId: string; why: string }
   | { kind: 'failed'; turnId: string; error: string }
   | { kind: 'deferred'; reason: 'in_flight' | 'foreground' | 'handover' };

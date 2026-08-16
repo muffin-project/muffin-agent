@@ -12,7 +12,10 @@ import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler } from '../core/scheduler/scheduler.js';
 import { TurnLane } from '../core/turns/lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
+import { JobStore as Jobs } from '../core/scheduler/jobs.js';
 import { enqueueTurn, type LoopDeps } from './loop.js';
+import { makeJobRunner } from './scheduler-run.js';
+import type { LaneEvent } from '../core/turns/lane.js';
 import { buildRuntime } from './runtime.js';
 import { makeLaneRunner } from './turn-lane.js';
 import type { ChatResult, Provider } from './providers/types.js';
@@ -315,3 +318,85 @@ describe('B5 · un turno interrotto viene ripreso dalla corsia', () => {
     expect(done.counters.resumes).toBe(1);
   });
 });
+
+describe('un job che aspetta non perde la risposta', () => {
+  /**
+   * The gap this closes was made reachable by this very slice.
+   *
+   * A scheduled job whose turn calls `wait` returns `suspended`. `Scheduler`
+   * correctly says nothing — there is no answer yet — and the lane finishes the
+   * turn later, in a process with no stack to return to. The only thing that can
+   * tell the lane where the answer goes is `replyTo` on the row, and
+   * `makeJobRunner` was not writing one: the turn came back, answered, and the
+   * text went nowhere in silence.
+   */
+  it('job → wait → risveglio → consegnato', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Scripted([call('wait', { seconds: 3600 }), answer('il backup è finito')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const delivered: { turn: TurnRecord; text: string }[] = [];
+
+    const jobs = new Jobs(runtime.db);
+    const job = jobs.add({ goal: 'controlla il backup', cron: '0 9 * * *', timezone: 'Europe/Rome', channel: 'cli' });
+    const outcome = await makeJobRunner(deps)(jobs.get(job.id)!, undefined);
+    // The scheduler is told it has not ended, so it neither delivers an empty
+    // message nor leaves the fire due for a second turn.
+    expect(outcome.stopped).toBe('suspended');
+
+    const row = runtime.deps.turns.due(new Date('2099-01-01'), 10)[0];
+    expect(row?.status).toBe('waiting');
+    // The address is on the row, which is the whole fix.
+    expect(row?.replyTo).toEqual({ channel: 'cli' });
+
+    const lane = new TurnLane({
+      turns: deps.turns,
+      run: makeLaneRunner(deps, async (turn, text) => {
+        delivered.push({ turn, text });
+      }),
+    });
+    lane.tick(new Date(Date.parse(row!.wakeAt!) + 1000));
+    await settle(lane);
+    const done = deps.turns.get(row!.id)!;
+    runtime.close();
+
+    expect(delivered.map((d) => d.text)).toEqual(['il backup è finito']);
+    expect(done.delivery).toBe('sent');
+  });
+
+  it('una risposta senza indirizzo viene DETTA, non scartata', async () => {
+    // The belt for the day some other caller forgets the address the way the
+    // scheduler did. Dropping the text silently is what made the defect above
+    // invisible for as long as it existed.
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Scripted([answer('avevo qualcosa da dire')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const events: LaneEvent[] = [];
+
+    // Enqueued with no `replyTo` at all.
+    const turnId = enqueueTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: deps.sessions.open('senza-indirizzo'),
+      text: 'ciao',
+    });
+
+    const lane = new TurnLane({
+      turns: deps.turns,
+      run: makeLaneRunner(deps, NO_SURFACE_FOR_TEST, (e) => events.push(e)),
+    });
+    lane.tick();
+    await settle(lane);
+    runtime.close();
+
+    const said = events.find((e) => e.kind === 'undeliverable');
+    expect(said).toMatchObject({ turnId, surface: 'telegram', text: 'avevo qualcosa da dire' });
+  });
+});
+
+/** A door that is never reached in that test — the row has no address at all. */
+const NO_SURFACE_FOR_TEST = async (): Promise<void> => {
+  throw new Error('non dovrebbe essere chiamata');
+};

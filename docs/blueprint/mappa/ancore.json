@@ -752,7 +752,7 @@
   "agent/turn-lane.ts:47": {
     "path": "agent/turn-lane.ts",
     "line": 47,
-    "testo": "export function makeLaneRunner(deps: LoopDeps, deliver: LaneDeliver = NO_SURFACE): LaneRun {"
+    "testo": "export function makeLaneRunner("
   },
   "budget.ts:127": {
     "path": "core/budget/budget.ts",
@@ -791,22 +791,22 @@
   },
   "cli/gateway.ts:359": {
     "path": "cli/gateway.ts",
-    "line": 389,
+    "line": 398,
     "testo": "const surfaces = connectSurfaces(runtime, home);"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 397,
+    "line": 406,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 409,
+    "line": 418,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 431,
+    "line": 440,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "cli/gateway.ts:81": {
@@ -1961,7 +1961,7 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 86,
+    "line": 97,
     "testo": "tick(now: Date = this.clock()): void {"
   },
   "core/vault/vault.ts:238": {
@@ -2256,7 +2256,7 @@
   },
   "gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 431,
+    "line": 440,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "guards.ts:41": {
