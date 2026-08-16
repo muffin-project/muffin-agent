@@ -1,9 +1,10 @@
+import type { z } from 'zod';
 import { runTurn, type LoopDeps } from '../../agent/loop.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
-import { DiscordApi, DiscordError } from './api.js';
+import { DiscordApi, DiscordError, DiscordMessageSchema } from './api.js';
 import { DiscordGateway } from './gateway.js';
 import { DiscordInbox } from './inbox.js';
 import { downloadToVault } from './media.js';
@@ -155,6 +156,11 @@ export function principalFor(incoming: Incoming, ownerUserId: string | undefined
   );
 }
 
+/** Names the field, same idiom as `core/config/config.ts`'s own boundary parse. */
+function describeZodIssues(error: z.ZodError): string {
+  return error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
+}
+
 export class DiscordConnector {
   private gateway: DiscordGateway | null = null;
   /** D2 guard — see `drain()`. */
@@ -194,8 +200,19 @@ export class DiscordConnector {
       },
       onDispatch: (event, data) => {
         if (event !== 'MESSAGE_CREATE') return;
-        const raw = data as DiscordMessage;
-        const stored = this.deps.inbox.accept(raw.id, raw, this.now());
+        // U1 — `data` is `unknown` here (the gateway's own `onDispatch`
+        // signature says so); the id used as the inbox's primary key comes
+        // from the same schema `drainOnce()` validates against below, not
+        // from an `as DiscordMessage` cast. A payload that fails to parse has
+        // no id this file can trust to store it under, so it is refused at
+        // the door — logged, never promoted — rather than accepted under a
+        // borrowed or synthetic key.
+        const parsed = DiscordMessageSchema.safeParse(data);
+        if (!parsed.success) {
+          log(`discord: MESSAGE_CREATE scartato all'ingresso, payload non valido — ${describeZodIssues(parsed.error)}`);
+          return;
+        }
+        const stored = this.deps.inbox.accept(parsed.data.id, parsed.data, this.now());
         // A duplicate (RESUMED replay, or a rare Discord-side redelivery) is
         // silently absorbed by the inbox's primary key; only a genuinely new
         // arrival triggers a drain, so a busy resume does not re-walk the
@@ -253,8 +270,25 @@ export class DiscordConnector {
   /** One pass over whatever `inbox.pending()` returns right now. */
   private async drainOnce(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
-      const raw = JSON.parse(stored.payload) as DiscordMessage;
-      const incoming = parseMessage(raw);
+      // U1 — validated against the same schema `onDispatch` uses, not
+      // `JSON.parse(...) as DiscordMessage`. A row can only get here via
+      // `inbox.accept`, which by construction (see `onDispatch`) only ever
+      // stores an already-validated payload — so this is defence in depth
+      // for a row written by an older or future code path, the same reason
+      // `core/turns/store.ts` parses a row `better-sqlite3` cannot type
+      // rather than trusting the column.
+      const parsed = DiscordMessageSchema.safeParse(JSON.parse(stored.payload));
+      if (!parsed.success) {
+        // Marked processed, not retried: the same bytes would fail the same
+        // way forever, so leaving it pending would only make `doctor` see a
+        // queue that never empties. Never promoted to `parseMessage`/`handle`.
+        this.deps.inbox.markProcessed(stored.messageId, this.now());
+        (this.deps.log ?? (() => {}))(
+          `discord: messaggio ${stored.messageId} scartato, payload non valido — ${describeZodIssues(parsed.error)}`,
+        );
+        continue;
+      }
+      const incoming = parseMessage(parsed.data);
 
       if (!incoming) {
         this.deps.inbox.markProcessed(stored.messageId, this.now());
