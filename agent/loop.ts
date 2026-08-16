@@ -487,6 +487,27 @@ export async function resumeTurn(
   }
   const wasWaiting = existing.status === 'waiting';
 
+  /**
+   * Is this picking work **back** up, or running it for the first time?
+   *
+   * The distinction is the resume budget, and getting it wrong is expensive in
+   * the quiet direction: a row `enqueueTurn` wrote (B2) has never executed, so
+   * counting its first execution as a resume spends a third of `MAX_RESUMES`
+   * before the turn has run once — and a turn that then legitimately waits
+   * twice is refused as "already resumed three times and not closing".
+   *
+   * `contextBuilt` is the signal, not the status. A row woken from `waiting`
+   * comes back as `runnable` (that is what `wake` writes), so status alone
+   * cannot tell "enqueued and never run" from "suspended and now due". Having
+   * built its context is exactly "this turn has already started".
+   *
+   * `interrupted` counts regardless, and that arm is what keeps the bound a
+   * bound: a row that kills the process *during* its preamble never sets
+   * `contextBuilt`, and without this it would be retried by every boot for ever
+   * — which is the failure the counter exists for.
+   */
+  const firstAttempt = existing.status === 'runnable' && !existing.counters.contextBuilt;
+
   const record = deps.turns.claim(turnId, process.pid, (deps.now ?? (() => new Date()))());
   if (record === null) {
     // Not an error: two lanes over one database is the normal case for the
@@ -502,7 +523,9 @@ export async function resumeTurn(
       [ATTR.surface]: record.surface,
       [ATTR.requestModel]: record.model,
       [ATTR.turnId]: record.id,
-      [ATTR.turnResume]: record.counters.resumes + 1,
+      // What the counter will be after this attempt, so a trace of a first
+      // execution reads 0 rather than claiming a resume that did not happen.
+      [ATTR.turnResume]: record.counters.resumes + (firstAttempt ? 0 : 1),
     },
     // A remote parent: the record's id *is* the trace id of the turn's first
     // span, so a resume is a child of the trace it belongs to rather than a
@@ -536,7 +559,7 @@ export async function resumeTurn(
     return { turnId, why: 'exhausted', detail };
   }
 
-  return drive(deps, record, span, { resumed: true, wokenFromWait: wasWaiting });
+  return drive(deps, record, span, { resumed: !firstAttempt, wokenFromWait: wasWaiting });
 }
 
 /**
