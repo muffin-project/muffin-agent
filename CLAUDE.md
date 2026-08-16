@@ -16,6 +16,24 @@ agent for two consecutive weeks without falling back to the old one (except
 groups). The substrate M0–M5 is built; the work is closing "built" → "used every
 day".
 
+## The two zero-context entry points
+
+`/loop` with no arguments is the normal continuation command. Claude Code loads
+`.claude/loop.md`, reconstructs repository-wide state, closes any active review
+before starting new work, and advances the DAY-1 READY inventory. The command
+is deliberately not a synonym for "pick a nearby TODO".
+
+`/goal` is a Claude Code built-in and a bare invocation only displays the active
+or most recently achieved goal; it cannot infer a new one from this repository.
+Start it once with this canonical condition, then let it continue across turns:
+
+> `/goal Porta Muffin a DAY-1 READY come definito in M5-BIS, seguendo .claude/loop.md e ORCHESTRATION.md; non chiudere blocker senza evidenza.`
+
+DAY-1 READY starts the fourteen-day personal-use window. Group work continues
+in parallel but group activation waits until that window completes. A
+single-user default must still use the general tenant/surface/capability shape:
+"groups later" never authorizes a host-only shortcut.
+
 ## Map — don't duplicate, point
 
 | You want… | Go to |
