@@ -8,7 +8,7 @@ import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
-import { describeInterrupted, readTurnHealth } from '../core/turns/store.js';
+import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
@@ -439,6 +439,31 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       );
     } else {
       ok('turni', `${turns.total} registrati · nessuno interrotto`);
+    }
+
+    // B8's own guarantee, checked here rather than only claimed: a turn that
+    // finished and whose delivery never settled — `pending` on a `done` row —
+    // or was reported failed by the surface. D3 (judge, PR #42): `undelivered()`
+    // had no caller and no test before this; a job could say "inviato" to
+    // nobody, forever, with nothing anywhere reading the query built to catch
+    // it. Reported only when `turns` exists — an absent table already said so
+    // above, and a second "nessun turno" line would be noise repeating itself.
+    if (turns !== null) {
+      const undelivered = readUndelivered(db);
+      if (undelivered !== null && undelivered.length > 0) {
+        // `undelivered()` orders most-recent-first; the owner wants the
+        // oldest unresolved one, which is what has waited longest.
+        const oldest = undelivered[undelivered.length - 1]!;
+        const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
+        warn(
+          'consegne',
+          `${undelivered.length} turni con delivery mai arrivata nelle ultime 24h — la più vecchia: ` +
+            `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
+          'il lavoro è stato fatto ma non ha raggiunto il canale: controlla che la superficie sia connessa e raggiungibile',
+        );
+      } else if (undelivered !== null) {
+        ok('consegne', 'nessuna delivery mancante nelle ultime 24h');
+      }
     }
 
     // Is anything running? Same shape of invisible fact as the cache dialect

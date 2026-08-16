@@ -9,7 +9,7 @@ import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
-import { connectSurfaces } from './surface.js';
+import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
  * The REPL.
@@ -26,34 +26,25 @@ const HELP = `/new     inizia una sessione nuova
 /exit    esci (o Ctrl+D)`;
 
 /**
- * Delivery for the REPL's own scheduler, and the reason the remote branch
- * throws rather than logging and moving on.
+ * How the CLI surface writes inside a REPL, and the one thing it has to do that
+ * a plain `write` does not: give the prompt back.
  *
- * Mirrors `cli/observe.ts`'s `printDeliver`: a remote channel is not wired
- * yet (the M4 connect), so reporting it as delivered would let `markRan`
- * advance the job regardless — turn paid, schedule moved — on evidence that
- * was one stderr line nobody was necessarily reading. The scheduler already
- * has a `delivery_failed` event for exactly this, with its own handler here
- * and its own test (`core/scheduler/scheduler.test.ts`); it only fires if
- * `deliver` actually throws, which this one silently did not.
+ * This replaces a whole hand-rolled `Deliver`. That function branched on
+ * `'cli'`, printed anything else to stderr and **threw**, because at the time
+ * throwing was the only way a `Promise<void>` could say "not delivered". Two of
+ * the three implementations in the tree remembered to throw and one did not
+ * (`cli/gateway.ts`), which is the asymmetry `docs/ORCHESTRATION.md` §14 uses as
+ * its worked example.
  *
- * The text is still printed first, unconditionally: losing the message
- * would be a worse bug than the one this fixes. `rl.prompt()` runs in
- * `finally` so the terminal keeps prompting whether delivery succeeded or
- * not — a thrown delivery must not leave the REPL looking hung.
- *
- * Extracted and exported so the throw can be tested directly, without
- * driving the interactive stdin loop `runRepl` owns.
+ * Now the terminal only knows how to write to a terminal, and whether a channel
+ * is deliverable at all is the registry's question. `rl.prompt()` still runs
+ * after every line for the reason it always did: a delivery that arrives while
+ * the owner is looking at an empty prompt must not leave the REPL looking hung.
  */
-export function makeReplDeliver(rl: { prompt: () => void }): Deliver {
-  return async (channel, text) => {
+export function makeReplCliWrite(rl: { prompt: () => void }): (text: string) => void {
+  return (text) => {
     try {
-      if (channel === 'cli') {
-        process.stdout.write(`\n⏰ ${text}\n`);
-        return;
-      }
-      process.stderr.write(`\n⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
-      throw new Error(`consegna su "${channel}" non è cablata — il messaggio è qui sopra, non è stato inviato`);
+      process.stdout.write(`\n⏰ ${text}\n`);
     } finally {
       rl.prompt();
     }
@@ -124,7 +115,17 @@ export async function runRepl(home = paths().home): Promise<number> {
   // in this same process (ADR-0022), for as long as this process lives. Not a
   // subcommand you also have to remember to run: a message from the phone works
   // because Muffin is running, which is what "running" should mean.
-  const surfaces = connectSurfaces(runtime, home);
+  //
+  // The readline interface does not exist yet and must not be created early —
+  // constructing it starts stdin flowing, before the boot lines are even
+  // printed. So the CLI surface is handed a prompt it resolves at call time; a
+  // delivery that lands before the prompt exists simply does not redraw one.
+  let redrawPrompt: () => void = () => {};
+  const surfaces = connectSurfaces(runtime, home, makeReplCliWrite({ prompt: () => redrawPrompt() }));
+  // M5-BIS B14: a file the model produces can now reach the owner as a real
+  // attachment on whichever surface this turn is on, not only as a path cited
+  // in text — the same registry `deliver` uses, one call later.
+  attachSendFile(runtime, home, surfaces.registry);
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.
@@ -149,6 +150,7 @@ export async function runRepl(home = paths().home): Promise<number> {
   );
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  redrawPrompt = () => rl.prompt();
 
   // The terminal is the surface that *can* ask, so here the kernel's `ask`
   // verdict becomes a question instead of a refusal. The wording is the kernel's
@@ -193,7 +195,11 @@ export async function runRepl(home = paths().home): Promise<number> {
     isActive: () => controller !== null,
     signal: () => controller?.signal,
   };
-  const deliver: Deliver = makeReplDeliver(rl);
+  // Delivery is the registry's, not this file's. Every surface `connectSurfaces`
+  // brought up is a destination; anything else comes back `{ delivered: false }`
+  // with the list of what is connected, which is the sentence that tells the
+  // owner whether the fix is `muffin surface enable` or a network problem.
+  const deliver: Deliver = surfaces.registry.deliver;
   /**
    * Two schedulers must never run (ADR-0035).
    *
@@ -236,6 +242,7 @@ export async function runRepl(home = paths().home): Promise<number> {
     },
     undefined,
     standDown,
+    (turnId, state) => runtime.deps.turns.delivered(turnId, state),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
@@ -292,6 +299,12 @@ export async function runRepl(home = paths().home): Promise<number> {
           session,
           text: line,
           signal: controller.signal,
+          // No `replyTo` (the REPL holds the answer itself, see below), but a
+          // `replyChannel` all the same: `send_file` mid-turn needs somewhere
+          // to address an attachment, and for the terminal that address is
+          // just `cli` — the owner is on this machine, so `cliSurface`'s
+          // `deliverFile` names the path rather than moving any bytes.
+          replyChannel: 'cli',
         });
         process.stdout.write(`\n${result.text}\n\n`);
         if (result.stopped !== 'answered') {

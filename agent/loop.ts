@@ -45,6 +45,32 @@ import {
 export type ToolContext = {
   tenant: string;
   principal: Principal;
+  /**
+   * Where a mid-turn tool can address a follow-up delivery — the registry
+   * channel this turn's conversation arrived on (`telegram:<chatId>`,
+   * `discord:<channelId>`, `cli`), or absent/`null` when there is none (a job
+   * turn with no `replyChannel`, a surface that never set one, or — every
+   * call site that existed before this field did — a handler that never reads
+   * it and has no reason to construct it).
+   *
+   * Optional, deliberately, and not the same argument as `ToolOutcome.tier`'s
+   * required field one file over: an omitted `tier` was a *silent* security
+   * default (a tool that said nothing about provenance was read as spotless).
+   * An omitted `replyChannel` has no default to be silent about — the one
+   * handler that reads it (`send_file`, M5-BIS B14) must branch on
+   * absence/`null` explicitly either way, and forcing the other dozen tool
+   * handlers in this tree to state a channel they never touch would be noise
+   * bolted onto call sites the field has nothing to say to.
+   *
+   * Separate from `TurnInput.replyTo`, which stays opaque to the loop on
+   * purpose (see its docstring): `replyTo` is a connector's own reply
+   * metadata, read only by that connector after the turn returns.
+   * `replyChannel` is the one piece of it every surface already expresses in
+   * the same shape — the `SurfaceRegistry` address — so a tool can ask the
+   * registry for a delivery without the loop having to learn what a chat id
+   * is.
+   */
+  replyChannel?: string | null | undefined;
 };
 
 /**
@@ -313,6 +339,17 @@ export type TurnInput = {
    * there is no second step that can fail.
    */
   replyTo?: Record<string, unknown> | undefined;
+  /**
+   * The `SurfaceRegistry` address of this turn's conversation — see
+   * `ToolContext.replyChannel`, which is exactly this value, threaded through
+   * unopened. A string, not `Record<string, unknown>` like `replyTo`: every
+   * surface already produces this exact shape for `Deliver`/`Scheduler`
+   * (`telegram:<chatId>`, `discord:<channelId>`, the bare surface id), so there
+   * is nothing here for the loop to parse — it hands the string to
+   * `SurfaceRegistry.deliver`/`deliverFile` unchanged, same as `job.channel`
+   * always has.
+   */
+  replyChannel?: string | undefined;
 };
 
 export type TurnResult = {
@@ -1085,7 +1122,11 @@ async function runTool(
   });
 
   try {
-    const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });
+    const outcome = await tool.handler(args, {
+      tenant: input.tenant,
+      principal: input.principal,
+      replyChannel: input.replyChannel ?? null,
+    });
     // Unconditional. The `!== undefined` guard that used to stand here was the
     // whole defect: it turned "this tool said nothing about provenance" into
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool

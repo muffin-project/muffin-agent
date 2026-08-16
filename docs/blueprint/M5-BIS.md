@@ -116,15 +116,15 @@ ancora verificato — **è un debito, non uno stato**).
 | B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume · substrato pronto 🧱, e un crash ora **si vede** |
 | B6 | Retry | Se fallisce una tool call, recupera? | ? |
 | B7 | Scheduler | I job sopravvivono al riavvio? | ? |
-| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | BLOCKER 🔧 in lavorazione |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
-| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | BLOCKER 🔭 — `sendDocument` scritto, nessun chiamante |
-| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — Telegram usa `from.id`, ma il binding è config ordinaria e il registry multi-surface non è integrato |
-| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — envelope universale assente; parse non significa trusted |
+| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | READY per l'owner — `send_file` (agent/tools/deliver.ts) raggiunge `Surface.deliverFile` su Telegram e Discord; ⚠️ `hostOnly`, un member non può ricevere un proprio file (vedi sotto) |
+| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — `identify()` unica e cablata su Telegram e Discord (provato da impersonation test su entrambe); DM-only enforced su `channel_type` (D1, judge PR #42, 2026-08-16: un GROUP_DM senza `guild_id` non deriva più `direct: true`); resta aperta la metà "protetto": binding ancora in config, non nel RoT — `ownerUserId` vive in `config.json` ordinario, non nel Root of Trust |
+| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — invariato: Discord non legge username/global_name/bio per l'identità (stesso non-conflation di Telegram), ma non esiste ancora l'envelope universale con provenienza/tier per campo che B16 chiede — questa slice non l'ha costruito |
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
 > `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
@@ -167,10 +167,24 @@ ancora verificato — **è un debito, non uno stato**).
 
 > 🔐 **B15 e B16 vengono dalla direttiva owner del 2026-08-16 (ADR-0046).** Sono
 > due garanzie diverse: autenticare chi parla non rende fidato ciò che porta, e
-> parsare un contenuto non lo rende sicuro. Il test di impersonazione Telegram
-> prova già che display name e chat non eleggono l'owner; manca ancora la forma
-> che obblighi ogni futura surface a fare lo stesso e che impedisca a bio,
-> filename, metadata, OCR o trascrizioni di entrare come stringhe senza fonte.
+> parsare un contenuto non lo rende sicuro. **Aggiornamento 2026-08-16
+> (`slice/superfici`):** la "forma che obblighi ogni futura surface" per la
+> prima garanzia è ora `identify()`/`tierOf()` in `core/surface/types.ts` —
+> Telegram e Discord la chiamano entrambe, e l'impersonazione è provata su
+> entrambe (`connectors/{telegram,discord}/impersonation.test.ts`: un
+> `username`/`global_name` che dichiara di essere l'owner non è nemmeno letto
+> nella struttura `Incoming`, non solo ignorato per disciplina). **Correzione
+> 2026-08-16 (judge PR #42, D1):** quella prima metà aveva comunque un buco —
+> un GROUP_DM (`channel_type: 3`) non ha `guild_id` più di quanto ne abbia una
+> DM vera, quindi il check basato solo su `guild_id === undefined` lasciava
+> passare un GROUP_DM come `direct: true`, costante, verso `identify()`. Il
+> check ora legge `channel_type === 1` (fail-closed: assente è rifiutato, non
+> assunto DM) e `direct` è derivato in `parseMessage`, mai riasserito da
+> `principalFor`. Quello che resta aperto per B15 è la seconda metà,
+> "protetto": il binding vive in `config.json` ordinario, non nel Root of
+> Trust — nessuna surface lo cambia ancora. B16 è invariato: nessun envelope
+> universale per bio, filename, metadata, OCR o trascrizioni — questa slice
+> non l'ha costruito.
 
 > 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
 > `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
