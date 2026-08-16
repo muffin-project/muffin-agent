@@ -151,6 +151,51 @@ export class DiscordApi {
   }
 
   /**
+   * Sends a file, as multipart — the M5-BIS B14 half of this API.
+   *
+   * `payload_json` is Discord's documented way to carry the JSON body
+   * alongside binary parts in the same request; `call` cannot be reused as-is
+   * because it always serialises `payload` as the *whole* body. Not `call`
+   * with a flag: a multipart body is a `FormData`, whose `content-type` (with
+   * its boundary) the runtime sets and must not be supplied by hand — the
+   * exact reason `TelegramApi.upload` is a separate method from `call` too.
+   *
+   * No retry. A failed upload should be retried by whoever knows what the
+   * file was and whether it is still worth the bytes, not guessed at here —
+   * same reasoning as `TelegramApi.upload`.
+   */
+  async sendFile(
+    channelId: string,
+    bytes: Buffer,
+    filename: string,
+    options: { content?: string } = {},
+  ): Promise<DiscordMessage> {
+    const body = new FormData();
+    body.append(
+      'payload_json',
+      JSON.stringify({ ...(options.content ? { content: options.content } : {}), attachments: [{ id: 0, filename }] }),
+    );
+    body.append('files[0]', new Blob([bytes]), filename);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bot ${this.token}`, 'user-agent': USER_AGENT },
+        body,
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      throw new DiscordError(0, error instanceof Error ? error.message : String(error));
+    }
+    if (!response.ok) {
+      const errBody = (await response.json().catch(() => ({}))) as { message?: string; retry_after?: number };
+      throw new DiscordError(response.status, errBody.message ?? response.statusText, errBody.retry_after);
+    }
+    return (await response.json()) as DiscordMessage;
+  }
+
+  /**
    * The DM channel with a user, opened or reused.
    *
    * Idempotent by Discord's own contract — "if one already exists, it will be

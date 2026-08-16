@@ -36,242 +36,242 @@
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 103,
+    "line": 129,
     "testo": "export type ApprovalRequest = {"
+  },
+  "agent/loop.ts:1171": {
+    "path": "agent/loop.ts",
+    "line": 1171,
+    "testo": "function resourceFor("
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 188,
+    "line": 214,
     "testo": "approve?: Approver | undefined;"
   },
   "agent/loop.ts:252": {
     "path": "agent/loop.ts",
-    "line": 301,
+    "line": 338,
     "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 378,
+    "line": 415,
     "testo": "let currentEpisodeId: number | undefined;"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 380,
+    "line": 417,
     "testo": "currentEpisodeId = deps.memory.store.addEpisode({"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 396,
+    "line": 433,
     "testo": "const recalled: ContentBlock[] = [];"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 406,
+    "line": 443,
     "testo": "const inherited = recallTaint(result);"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 423,
+    "line": 460,
     "testo": "// What this turn is shown, decided from who is speaking and where — never"
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 427,
+    "line": 464,
     "testo": "const exposed = visibleTools(deps.tools, input.principal, deps.capabilities).slice("
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 320,
+    "line": 357,
     "testo": "const cap = iterationCap(deps.profile);"
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 444,
+    "line": 481,
     "testo": "while (iterations < cap) {"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 451,
+    "line": 488,
     "testo": "if (deps.budgetExhausted(input.tenant)) {"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 454,
+    "line": 491,
     "testo": "if (input.signal?.aborted) {"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 462,
+    "line": 499,
     "testo": "const compacted = compactToolResults(messages, {"
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 473,
+    "line": 510,
     "testo": "const call: ChatCall = {"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 478,
+    "line": 515,
     "testo": "maxOutputTokens: 4096,"
   },
   "agent/loop.ts:402": {
     "path": "agent/loop.ts",
-    "line": 501,
+    "line": 538,
     "testo": "stream: false,"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 527,
+    "line": 564,
     "testo": "if (error instanceof ProviderError && error.retryable) {"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 552,
+    "line": 589,
     "testo": "const usd = deps.recordSpend?.({"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 565,
+    "line": 602,
     "testo": "snapshot.invalidate();"
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 581,
+    "line": 618,
     "testo": "// Nothing at all: recover rather than presenting silence as an answer."
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 587,
+    "line": 624,
     "testo": "if (result.toolCalls.length === 0) {"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 620,
+    "line": 657,
     "testo": "deps.sessions.append(input.session, {"
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 627,
+    "line": 664,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 628,
+    "line": 665,
     "testo": "deps.memory.store.addEpisode({"
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 665,
+    "line": 702,
     "testo": "return finish(turn, 'answered', text, iterations, usage);"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 668,
+    "line": 705,
     "testo": "// Model's turn goes into the transcript before the results, so a crash"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 57,
+    "line": 83,
     "testo": "const TOOL_RESULT_BUDGET_CHARS = 60_000;"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 699,
+    "line": 736,
     "testo": "if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 720,
+    "line": 757,
     "testo": "return finish("
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 63,
+    "line": 89,
     "testo": "const MAX_HISTORY_TURNS = 40;"
   },
   "agent/loop.ts:624": {
     "path": "agent/loop.ts",
-    "line": 797,
+    "line": 834,
     "testo": "deps.onTurnEnd?.({ tenant: input.tenant, principal: input.principal, stopped });"
   },
   "agent/loop.ts:660": {
     "path": "agent/loop.ts",
-    "line": 833,
+    "line": 870,
     "testo": "function finish("
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 884,
+    "line": 921,
     "testo": "async function runTool("
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 957,
+    "line": 994,
     "testo": "case 'deny':"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 965,
+    "line": 1002,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:783": {
     "path": "agent/loop.ts",
-    "line": 971,
+    "line": 1008,
     "testo": "span.end({ status: 'error', error: 'draft_unavailable' });"
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 980,
+    "line": 1017,
     "testo": "case 'ask': {"
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 986,
+    "line": 1023,
     "testo": "if (!deps.approve) {"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 1005,
+    "line": 1042,
     "testo": "case 'allow':"
   },
   "agent/loop.ts:823": {
     "path": "agent/loop.ts",
-    "line": 760,
+    "line": 737,
     "testo": "try {"
   },
   "agent/loop.ts:825": {
     "path": "agent/loop.ts",
-    "line": 1039,
+    "line": 1080,
     "testo": "if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);"
-  },
-  "agent/loop.ts:867": {
-    "path": "agent/loop.ts",
-    "line": 1130,
-    "testo": "function resourceFor("
   },
   "agent/loop.ts:888": {
     "path": "agent/loop.ts",
-    "line": 1151,
+    "line": 1192,
     "testo": "function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]): Message[] {"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1152,
+    "line": 1193,
     "testo": "const history = deps.sessions.read(input.session);"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1168,
+    "line": 1209,
     "testo": "messages.push({"
   },
   "agent/loop.ts:936": {
     "path": "agent/loop.ts",
-    "line": 1199,
+    "line": 1240,
     "testo": "let taint: TrustTier = principal.kind === 'member' ? 2 : 0;"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1205,
+    "line": 1246,
     "testo": "raiseTaint(tier) {"
   },
   "agent/observe-run.ts:104": {
@@ -1051,7 +1051,7 @@
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 303,
+    "line": 309,
     "testo": "} catch (error) {"
   },
   "cli/run.ts:26": {
@@ -1124,16 +1124,6 @@
     "line": 80,
     "testo": "export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {"
   },
-  "connector.ts:223": {
-    "path": "connectors/telegram/connector.ts",
-    "line": 221,
-    "testo": "if (!incoming) {"
-  },
-  "connector.ts:255": {
-    "path": "connectors/telegram/connector.ts",
-    "line": 253,
-    "testo": "private async tryPair(incoming: Incoming): Promise<boolean> {"
-  },
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
     "line": 153,
@@ -1149,10 +1139,20 @@
     "line": 177,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
+  "connectors/telegram/connector.ts:223": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 223,
+    "testo": "// for ever: a queue that never empties hides the ones that matter."
+  },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
     "line": 228,
     "testo": "try {"
+  },
+  "connectors/telegram/connector.ts:255": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 255,
+    "testo": "if (ownerUserId !== undefined || !pairing || !this.deps.savePairing) return false;"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
@@ -2249,134 +2249,139 @@
     "line": 44,
     "testo": "export const SUPERSEDE_THRESHOLD = 0.75;"
   },
+  "loop.ts:1075": {
+    "path": "agent/loop.ts",
+    "line": 1075,
+    "testo": "const outcome = await tool.handler(args, {"
+  },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 113,
+    "line": 139,
     "testo": "class ApprovalRequired extends Error {"
+  },
+  "loop.ts:1171": {
+    "path": "agent/loop.ts",
+    "line": 1171,
+    "testo": "function resourceFor("
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 406,
+    "line": 443,
     "testo": "const inherited = recallTaint(result);"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 416,
+    "line": 453,
     "testo": "} catch (error) {"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 451,
+    "line": 488,
     "testo": "if (deps.budgetExhausted(input.tenant)) {"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 454,
+    "line": 491,
     "testo": "if (input.signal?.aborted) {"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 528,
+    "line": 565,
     "testo": "if (error.source === 'output') {"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 530,
+    "line": 567,
     "testo": "} else if (transportRetriesLeft > 0) {"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 541,
+    "line": 578,
     "testo": "throw error;"
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 583,
+    "line": 620,
     "testo": "if (recover('empty')) continue;"
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 584,
+    "line": 621,
     "testo": "return finish(turn, 'error', 'Il modello non ha prodotto una risposta utilizzabile.', iterations, usage);"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 607,
+    "line": 644,
     "testo": "if (nudgedForCompletion === false) {"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 620,
+    "line": 657,
     "testo": "deps.sessions.append(input.session, {"
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 699,
+    "line": 736,
     "testo": "if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 514,
+    "line": 551,
     "testo": "} catch (error) {"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 702,
+    "line": 739,
     "testo": "} catch (error) {"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 932,
+    "line": 969,
     "testo": "{ [ATTR.capability]: capability, [ATTR.taint]: snapshot.currentTaint() },"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 935,
+    "line": 972,
     "testo": "const decision = snapshot.check(capability, resource, args);"
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 957,
+    "line": 994,
     "testo": "case 'deny':"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 965,
+    "line": 1002,
     "testo": "case 'draft':"
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 980,
+    "line": 1017,
     "testo": "case 'ask': {"
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 994,
+    "line": 1031,
     "testo": "if (answer === 'deny') {"
-  },
-  "loop.ts:824": {
-    "path": "agent/loop.ts",
-    "line": 1038,
-    "testo": "const outcome = await tool.handler(args, { tenant: input.tenant, principal: input.principal });"
   },
   "loop.ts:825": {
     "path": "agent/loop.ts",
-    "line": 1039,
+    "line": 1080,
     "testo": "if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier);"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 727,
+    "line": 739,
     "testo": "} catch (error) {"
   },
   "loop.ts:867": {
     "path": "agent/loop.ts",
-    "line": 1130,
+    "line": 1171,
     "testo": "function resourceFor("
   },
   "loop.ts:936": {
     "path": "agent/loop.ts",
-    "line": 1199,
+    "line": 1240,
     "testo": "let taint: TrustTier = principal.kind === 'member' ? 2 : 0;"
   },
   "maintenance.ts:21": {

@@ -95,6 +95,9 @@ describe('a channel nothing serves', () => {
       deliver: async () => {
         throw new Error('socket chiuso');
       },
+      deliverFile: async () => {
+        throw new Error('socket chiuso');
+      },
     };
     const registry = new SurfaceRegistry([broken]);
 
@@ -116,6 +119,7 @@ describe('a channel nothing serves', () => {
         seen.push(`${id}:${text}`);
         return DELIVERED;
       },
+      deliverFile: async () => DELIVERED,
     });
     const registry = new SurfaceRegistry([cliSurface(() => {}), fake('telegram'), fake('discord')]);
 

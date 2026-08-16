@@ -1,6 +1,7 @@
-import { DELIVERED, notDelivered, type DeliveryOutcome, type Surface } from '../../core/surface/types.js';
+import { statSync } from 'node:fs';
+import { DELIVERED, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
 import type { TelegramApi } from './api.js';
-import { MAX_DOWNLOAD_BYTES } from './media.js';
+import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
 import { renderForTelegram, TELEGRAM_MAX } from './render.js';
 
 /**
@@ -80,6 +81,37 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
         }
       }
       return DELIVERED;
+    },
+
+    /**
+     * `sendDocument` (`media.ts`) was written and tested with no production
+     * caller — "sending a file is an outward action, and outward actions
+     * arrive with the outward module and its approval path", its own
+     * docstring says. This is that caller.
+     */
+    deliverFile: async (channel, file: FileSpec): Promise<DeliveryOutcome> => {
+      const chatId = chatIdFor(channel, ownerChatId);
+      if (chatId === null) return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+
+      let bytes: number;
+      try {
+        bytes = statSync(file.absolutePath).size;
+      } catch (error) {
+        return notDelivered(`${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      // Checked here, before a multipart upload is even built: failing fast on
+      // a file the Bot API would reject anyway is cheaper than discovering it
+      // after reading the bytes into memory and opening the connection.
+      if (bytes > 50 * 1024 * 1024) {
+        return notDelivered(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di 50MB di sendDocument`);
+      }
+
+      try {
+        await sendDocument(api, chatId, file.absolutePath, { filename: file.filename, ...(file.caption ? { caption: file.caption } : {}) });
+        return DELIVERED;
+      } catch (error) {
+        return notDelivered(`telegram ha rifiutato l'allegato: ${error instanceof Error ? error.message : String(error)}`);
+      }
     },
   };
 }

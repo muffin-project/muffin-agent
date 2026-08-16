@@ -65,6 +65,10 @@ export function makeJobRunner(deps: LoopDeps): RunJob {
        * is a different and more useful fact than "no record either way".
        */
       replyTo: { channel: job.channel },
+      // `job.channel` is already a `SurfaceRegistry` address — the exact same
+      // string `Deliver` uses — so a tool call mid-job (`send_file`) reaches
+      // the same destination the job's own text answer will.
+      replyChannel: job.channel,
       ...(signal ? { signal } : {}),
     });
     return jobOutcomeFromTurn(result);
