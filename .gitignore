@@ -3,6 +3,10 @@ dist/
 *.log
 .DS_Store
 
+# Local generated knowledge graph. The persistent outputs are useful across
+# sessions, but they are machine-specific build artefacts, not source.
+graphify-out/
+
 # Secrets & local env (hardened before first publish)
 .env
 .env.*

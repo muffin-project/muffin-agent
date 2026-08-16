@@ -33,6 +33,10 @@ import { UpdateInbox } from './updates.js';
 
 const OWNER = 4242;
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+// The vault path includes the receipt day. Pin it: a fixture whose tool call
+// says 2026-08-15 must not start failing only because the wall clock crossed
+// midnight. Production still receives the real timestamp from UpdateInbox.
+const RECEIVED_AT = '2026-08-15T12:00:00.000Z';
 
 const CONTRATTO = buildPdf({
   title: 'Contratto',
@@ -122,6 +126,7 @@ function harness(bytes: Buffer, script: ChatResult[] = []) {
         runtime.vault.reindex('host', { defaultTier, vectors: runtime.memory.recall.vectors }),
     },
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
+    now: () => new Date(RECEIVED_AT),
   });
 
   return { connector, seen, runtime };
@@ -129,7 +134,7 @@ function harness(bytes: Buffer, script: ChatResult[] = []) {
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
   const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
-  inbox.accept(updates, new Date().toISOString());
+  inbox.accept(updates, RECEIVED_AT);
   await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 }
 

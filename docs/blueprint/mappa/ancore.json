@@ -1,12 +1,12 @@
 {
   "03-threat-model.md:116": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 116,
+    "line": 120,
     "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
   "03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 51,
+    "line": 52,
     "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "agent/completion.ts:58": {
@@ -2071,48 +2071,53 @@
   },
   "docs/blueprint/03-threat-model.md:116": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 116,
+    "line": 120,
     "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
-  "docs/blueprint/03-threat-model.md:19": {
+  "docs/blueprint/03-threat-model.md:21": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 19,
-    "testo": "- **Principal del turno**: `owner@host` (CLI o canale privato autenticato), `member@group:<id>`, `system@scheduler` (trigger interni), `agent@dev` (lavoro su se stesso). Il principal + il tenant determinano lo **snapshot di permessi** del turno, calcolato nel pre-loop e immutabile per il turno (V7)."
+    "line": 21,
+    "testo": "- **Trust tier** (dal modello dati, 02 §5): 0 owner · 1 contatti confermati · 2 gruppo/sconosciuti · 3 web/tool-esterni. Il **taint del contesto** = max tier dei blocchi **fisicamente presenti nel context del turno** (messaggio + recall + tool output già ricevuti). Il taint **si propaga**: messaggio→fatto (il fatto eredita il tier), fatto→recall (l'etichetta viaggia), recall→azione (il kernel legge il taint prima di eseguire). Risposta alla domanda diretta del BRIEF: sì, serve il taint, ed è un campo persistito, non una convenzione di prompt."
   },
   "docs/blueprint/03-threat-model.md:30": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 30,
+    "line": 31,
     "testo": "ALLOW | ASK(owner) | DRAFT (act-notify-undo) | DENY (con motivo loggato)"
   },
   "docs/blueprint/03-threat-model.md:44": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 44,
+    "line": 45,
     "testo": "| Shell / filesystem host / processi | ALLOW per classe (HITL) | **DENY — nessun percorso** | **DENY** |"
   },
   "docs/blueprint/03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 51,
+    "line": 52,
     "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "docs/blueprint/03-threat-model.md:66": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 66,
+    "line": 67,
     "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
   },
   "docs/blueprint/03-threat-model.md:67": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 67,
+    "line": 68,
     "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
   },
   "docs/blueprint/03-threat-model.md:70": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 70,
+    "line": 71,
     "testo": "- **Sandbox non disponibile ≠ silenziosamente unsandboxed**: se la piattaforma non supporta il sandbox (es. bubblewrap assente), le capability di esecuzione si auto-degradano di un livello (ALLOW→ASK) e `muffin doctor` lo dichiara. (Lezione interna diretta: il flag attuale di Muffin è ON ma no-op senza bubblewrap sull'host — esattamente il silenzio che qui diventa impossibile.)"
   },
   "docs/blueprint/04-roadmap.md:210": {
     "path": "docs/blueprint/04-roadmap.md",
     "line": 210,
     "testo": "`queue`/`steer` e il concetto di \"occupato\" (serve il protocollo client/server"
+  },
+  "docs/blueprint/04-roadmap.md:613": {
+    "path": "docs/blueprint/04-roadmap.md",
+    "line": 613,
+    "testo": "(`core/budget/budget.ts`), consultati dal kernel; il cap per-turno conta i"
   },
   "docs/blueprint/10-risoluzioni-fase-c.md:34": {
     "path": "docs/blueprint/10-risoluzioni-fase-c.md",
@@ -2149,15 +2154,10 @@
     "line": 262,
     "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
   },
-  "docs/blueprint/STATE.md:33": {
-    "path": "docs/blueprint/STATE.md",
-    "line": 33,
-    "testo": "(a) `queue`/`steer`/`heartbeat`/`undo` — vogliono il protocollo sul socket,"
-  },
-  "docs/blueprint/STATE.md:38": {
-    "path": "docs/blueprint/STATE.md",
-    "line": 38,
-    "testo": "(d) **il budget per-job**, che entra in questa slice e non dopo — i cap oggi"
+  "docs/blueprint/M5-BIS.md:219": {
+    "path": "docs/blueprint/M5-BIS.md",
+    "line": 219,
+    "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
