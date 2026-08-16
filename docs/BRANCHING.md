@@ -43,6 +43,32 @@ scopo e va tolto. Un ramo si tiene finché risponde a una domanda.
 6. **Il ramo si cancella al merge**, locale e remoto. Un ramo mergiato che resta
    è un invito a ripartire da uno stato vecchio.
 
+## Commit, PR e checkpoint
+
+Una slice non resta una massa non recuperabile fino alla fine. I checkpoint
+sono decisi **prima** del lavoro e hanno una prova osservabile:
+
+1. **Decisione fissata** — scope e, se serve, ADR sono leggibili. Si apre una PR
+   draft; il link entra nello stato. Prima di questo punto il lavoro può ancora
+   cambiare forma senza fingere stabilità.
+2. **Meccanismo raggiunto** — il percorso di produzione arriva al cambiamento e
+   il test di wiring fallisce senza quella cucitura. Si crea un commit coerente
+   e si aggiorna la PR; non serve aspettare tutta la slice per avere un punto di
+   ripresa.
+3. **Slice verificata** — `npm run build`, `npx vitest run`, scenario di
+   fallimento, accettazione richiesta, documenti/stato e viste derivate sono
+   aggiornati. La PR esce da draft e chiede il verdetto di `JUDGE.md`.
+4. **Integrazione** — solo un verdetto terminale `MERGE` autorizza il merge in
+   `dev`. Il passaggio `dev`→`main` è un checkpoint separato: suite sull'insieme
+   integrato e nuovo verdetto terminale.
+
+“Commit continuo” non significa un commit per ogni file: significa che nessuna
+unità verificabile o passaggio rischioso vive soltanto nel worktree. Un commit
+deve poter essere descritto e verificato da solo. `WIP` è ammesso solo sulla
+slice/draft PR, mai come requisito d'ingresso in `dev`. Un merge non è un gesto
+periodico né automatico: avviene al checkpoint scritto, con la prova dello stato
+che si sta promuovendo.
+
 ## Cosa NON abbiamo, e perché va saputo
 
 **Nessuna protezione su `main`.** `gh api .../branches/main/protection` risponde
@@ -54,5 +80,9 @@ Detto qui perché la regola sopra sembra applicata e non lo è. Quando il repo
 diventerà pubblico, o con Pro, la protezione va accesa: è il gradino quattro
 della scala di `PRACTICES.md` §6 per una regola che oggi sta al gradino uno.
 
-**Nessuna CI.** Non esiste `.github/workflows`. Build e test girano perché
-qualcuno li lancia. Stesso discorso: la regola 3 è disciplina, non cancello.
+**La CI esiste, il gate no.** `.github/workflows/ci.yml` esegue typecheck e suite
+su ogni PR e sui push a `dev`/`main`, col sandbox Linux richiesto. Questo rende
+il risultato osservabile e ripetibile; senza branch protection non obbliga però
+GitHub a richiedere il verde prima del merge o a impedire un push diretto.
+Quindi la regola 3 ha un meccanismo di verifica, ma il suo enforcement resta una
+convenzione finché la protection non può rendere il check obbligatorio.

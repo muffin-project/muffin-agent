@@ -4,8 +4,10 @@ For agents — including this project's own agent, once it can work on itself.
 
 Read `docs/THESIS.md` for what this is betting on and `docs/DESIGN-PRINCIPLES.md`
 for how decisions get made. `docs/BRANCHING.md` says where work lives and what
-`main` means — including the two rules there that are conventions rather than
-mechanisms, because the repo has neither branch protection nor CI. Read `docs/lessons.md` before you add a guard: it is
+`main` means — including the rule that remains a convention rather than a
+mechanism because the repo has no branch protection. CI exists and verifies
+PRs plus pushes to `dev`/`main`; it cannot by itself forbid an unchecked merge.
+Read `docs/lessons.md` before you add a guard: it is
 a list of guards this repository already wrote and failed to connect.
 
 ## The one rule that has cost the most to learn
@@ -35,6 +37,10 @@ diff — because the defect above was in neither diff.
 
 - `npm run build` (`tsc --noEmit`) and `npm test` both clean. Tests passing while
   the build fails has happened here; run both.
+- Reconstruct the whole repository state: current worktree, every local and
+  remote branch, open PR/check state, and the non-integrated work named in
+  `STATE.md`. A nearby file is not the whole project, and another worktree may
+  already contain the primitive you are about to duplicate.
 - Research before an architectural choice, not after. A chunker was written from
   intuition and thrown away when three hours of reading said the intuitive answer
   loses on this corpus — see `docs/blueprint/adr/0024`. Chunking looked like an
@@ -43,6 +49,12 @@ diff — because the defect above was in neither diff.
   a virtual table without renaming its shadow tables; `sqlite-vec` supports
   partition keys; Ollama does not expose pre-pooling token embeddings. All three
   changed a design, and all three took one script to establish.
+
+The first deployment is single-user; the architecture is not host-only. Tenant,
+principal, surface, provider, capability, provenance and budget remain variable
+across boundaries even when today's default has one value. Group activation can
+wait until after the fourteen-day personal-use window. Retrofitting isolation
+after data accumulates cannot.
 
 ## Shape of the thing
 
