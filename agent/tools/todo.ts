@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
-import { renderTodos, TODO_STATES, type TodoState, type TodoStore } from '../../core/turns/todo.js';
+import { renderTodos, TODO_STATES, type TodoStore } from '../../core/turns/todo.js';
 import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
 
@@ -136,7 +136,9 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
         }
         case 'set': {
           const { step, state, note } = parsed.data;
-          const moved = todos.setState(tenant, sessionId, step, state as TodoState, note ?? null);
+          // No cast: the zod enum already narrows to `TodoState`, and a cast
+          // here would be a claim that survives the day the two lists diverge.
+          const moved = todos.setState(tenant, sessionId, step, state, note ?? null);
           if (!moved) {
             return {
               content: `nessun passo numero ${step} in questa conversazione — \`todo list\` per vedere quali ci sono`,
