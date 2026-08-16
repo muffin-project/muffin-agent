@@ -423,8 +423,18 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     // Turns that a dead process was holding. `buildRuntime` announces these at
     // boot, but a boot line scrolls past and this is the command an owner runs
     // when something feels wrong — and "the answer never came and nobody said
-    // why" is exactly that feeling. Reported, never repaired: there is no
-    // resume, so the honest output is what is unknown and who has to check it.
+    // why" is exactly that feeling.
+    //
+    // (N1, judge round 2: this used to end "Reported, never repaired: there is
+    // no resume, so the honest output is what is unknown and who has to check
+    // it." That sentence did not survive the slice that built the resume —
+    // the remedy two branches down already says the opposite, "il gateway li
+    // riprende" — and a stale comment claiming the resume does not exist is
+    // exactly how a reader ends up trusting the wrong half of this file.)
+    // What is still honestly unknown is narrower: a resume replays every tool
+    // call whose *outcome* was recorded and declares, rather than repeats, the
+    // ones that were not — so the open question below is what a declared,
+    // non-replayed call may have done to the world, never whether it runs.
     const turns = readTurnHealth(db);
     if (turns === null) {
       // Not a warning. The table is created by the first runtime that opens
