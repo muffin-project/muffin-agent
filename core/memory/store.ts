@@ -598,11 +598,26 @@ export class MemoryStore {
       .all(tenantId, vaultPath) as { id: number; mediaMeta: string | null }[];
   }
 
-  /** Every vault path that still has live evidence behind it. */
+  /**
+   * Every vault path that still has live evidence behind it, each carrying the
+   * tier of its **least-trusted** chunk.
+   *
+   * The maximum, for the same reason as `maxTierForContent`: a lower number
+   * means more trusted, so a document is worth its worst chunk and not its
+   * best. `min()` here read as the opposite — one owner-grade chunk beside a
+   * web import displayed the whole file as tier 0 — and a tier that rises
+   * because of how a file happened to be split is not a tier.
+   *
+   * Chunks of one live path usually agree, since `reindex` writes them in a
+   * single pass with one tier. Usually is not a guarantee: the new chunks are
+   * written inside the loop and the old ones superseded only after it, so an
+   * interrupted reindex leaves two generations live under the same path. The
+   * aggregate that survives that has to be the pessimistic one.
+   */
   vaultPaths(tenantId: string): { vaultPath: string; chunks: number; trustTier: TrustTier }[] {
     return this.db
       .prepare(
-        `SELECT vault_path AS vaultPath, count(*) AS chunks, min(trust_tier) AS trustTier
+        `SELECT vault_path AS vaultPath, count(*) AS chunks, max(trust_tier) AS trustTier
          FROM episodes
          WHERE tenant_id = ? AND vault_path IS NOT NULL AND superseded_at IS NULL
          GROUP BY vault_path ORDER BY vault_path`,
