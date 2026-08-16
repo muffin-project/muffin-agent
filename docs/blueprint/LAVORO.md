@@ -19,7 +19,7 @@
 
 **Checkpoint**: PR **#30/#31** integrate in `dev`; build e suite verdi. Aperta
 **PR #32** `dev`→`main`: non eredita i verdetti precedenti e attende CI più un
-judge nuovo.
+judge nuovo. Record del checkpoint: **PR #33**.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
