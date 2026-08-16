@@ -148,7 +148,7 @@ function backoffMs(attempt: number): number {
 
 export class DiscordGateway {
   private ws: WebSocketLike | null = null;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private sequence: number | null = null;
   private sessionId: string | null = null;
   private resumeUrl: string | null = null;
@@ -338,6 +338,19 @@ export class DiscordGateway {
    * socket locally rather than waiting for Discord to notice — the documented
    * "zombied connection" case, and the reason this file tracks `awaitingAck`
    * instead of trusting the timer alone.
+   *
+   * **One `setTimeout` that reschedules itself, not a jittered kickoff racing
+   * an independent `setInterval`.** The first version used both, and they
+   * raced: the interval's own first tick lands `intervalMs` after the
+   * interval was *created*, which is only moments after the jittered beat
+   * actually fired — nowhere near a full interval later. `awaitingAck` was
+   * still true because the first beat had not had time to be ACK'd, so the
+   * interval's tick read that as a zombie and closed a connection that was a
+   * few hundred milliseconds old. Caught by `gateway.test.ts`'s heartbeat
+   * test, not reasoned out — the failure was `sent` going from one Identify
+   * to an empty array, i.e. a silent reconnect nothing in the test had asked
+   * for. A self-rescheduling chain has exactly one timer in flight at a time,
+   * so "the previous beat" always means one whole `intervalMs` ago.
    */
   private startHeartbeat(ws: WebSocketLike, intervalMs: number): void {
     this.clearHeartbeat();
@@ -345,17 +358,17 @@ export class DiscordGateway {
       if (this.awaitingAck) {
         this.log('discord: nessun ACK al battito precedente — connessione considerata zombie, riconnetto');
         ws.close(1000, 'zombied connection');
-        return;
+        return; // no reschedule — the socket is closing, connectOnce's close handler takes over
       }
       this.awaitingAck = true;
       this.send(ws, { op: OP.HEARTBEAT, d: this.sequence });
+      this.heartbeatTimer = setTimeout(beat, intervalMs);
     };
-    setTimeout(beat, Math.floor(intervalMs * Math.random()));
-    this.heartbeatTimer = setInterval(beat, intervalMs);
+    this.heartbeatTimer = setTimeout(beat, Math.floor(intervalMs * Math.random()));
   }
 
   private clearHeartbeat(): void {
-    if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
+    if (this.heartbeatTimer !== null) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = null;
     this.awaitingAck = false;
   }
