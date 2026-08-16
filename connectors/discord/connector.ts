@@ -157,6 +157,9 @@ export function principalFor(incoming: Incoming, ownerUserId: string | undefined
 
 export class DiscordConnector {
   private gateway: DiscordGateway | null = null;
+  /** D2 guard — see `drain()`. */
+  private draining = false;
+  private redrainRequested = false;
 
   constructor(private readonly deps: ConnectorDeps) {}
 
@@ -209,8 +212,46 @@ export class DiscordConnector {
     this.gateway?.stop();
   }
 
-  /** Everything not yet answered, oldest first. Also the crash-recovery path. */
+  /**
+   * Everything not yet answered, oldest first. Also the crash-recovery path.
+   *
+   * **Guarded against overlap — D2.** `onDispatch` calls `void this.drain()`
+   * on every new arrival, with nothing awaiting it. Two DMs a few
+   * milliseconds apart used to start two concurrent walks of
+   * `inbox.pending()`: the first message was still mid-turn — not yet
+   * `markProcessed` — when the second walk read the table, so it saw the
+   * same row as still pending and processed it a second time, in parallel
+   * with the first. One message paid for and answered twice, on top of
+   * whatever else had genuinely arrived.
+   *
+   * The shape is `Scheduler.tick`'s `running` guard
+   * (`core/scheduler/scheduler.ts:146-160`): a call that arrives while one is
+   * already in flight does not start a second walk. Unlike the scheduler —
+   * which simply waits for the next timer tick to pick up what a deferred run
+   * left due — nothing here re-invokes `drain()` on its own, so a request
+   * that arrived mid-drain has to be remembered and honoured once the current
+   * pass finishes, or a message that arrived after `pending()` had already
+   * been read would sit answered by nobody until some unrelated later
+   * dispatch happened to trigger a fresh drain.
+   */
   private async drain(): Promise<void> {
+    if (this.draining) {
+      this.redrainRequested = true;
+      return;
+    }
+    this.draining = true;
+    try {
+      do {
+        this.redrainRequested = false;
+        await this.drainOnce();
+      } while (this.redrainRequested);
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  /** One pass over whatever `inbox.pending()` returns right now. */
+  private async drainOnce(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
       const raw = JSON.parse(stored.payload) as DiscordMessage;
       const incoming = parseMessage(raw);
