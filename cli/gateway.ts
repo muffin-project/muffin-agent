@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
+import { makeLaneRunner, NO_SURFACE, type LaneDeliver } from '../agent/turn-lane.js';
+import { TurnLane } from '../core/turns/lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
@@ -326,11 +328,39 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
     },
   );
 
+  /**
+   * The turn lane, on the gateway's own beat.
+   *
+   * This is the process that lives, so it is the one that owes a suspended turn
+   * its wake-up and an interrupted one its resume. The REPL deliberately does
+   * not get one: it stands down for the gateway (ADR-0035), and two lanes over
+   * one database would race for the same rows. `TurnStore.claim` makes that race
+   * *safe* rather than *right* — one owner is the property worth having.
+   *
+   * Delivery goes through the surfaces this process actually connected, and it
+   * is late-bound because they come up after the lock is taken: a resumed turn's
+   * answer has no stack to return to, only the `replyTo` on its row. That
+   * indirection is the seam B2's two-phase delivery attaches to.
+   */
+  let deliverFromLane: LaneDeliver = NO_SURFACE;
+  const turnLane = new TurnLane({
+    turns: runtime.deps.turns,
+    run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text)),
+    onEvent: (e) => {
+      if (e.kind === 'refused') {
+        process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa rifiutata — ${e.why}\n`);
+      } else if (e.kind === 'failed') {
+        process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa fallita — ${e.error}\n`);
+      }
+    },
+  });
+
   let stopSurfaces: (() => void) | null = null;
   const gateway = new Gateway({
     lock,
     notify,
     scheduler,
+    turnLane,
     jobs: runtime.jobs,
     close: () => {
       // Surfaces first, then the runtime: the connector must stop polling
@@ -358,6 +388,10 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
 
   const surfaces = connectSurfaces(runtime, home);
   stopSurfaces = surfaces.stop;
+  // Bound now that the surfaces exist. Before this line a resumed turn would be
+  // recorded `failed:` rather than sent nowhere quietly — the window is the boot
+  // sequence, and the honest direction inside it is "undelivered", not "sent".
+  deliverFromLane = surfaces.deliver;
   let mcpLines: string[] = [];
   try {
     mcpLines = await attachMcp(runtime, home);

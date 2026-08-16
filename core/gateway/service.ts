@@ -1,5 +1,6 @@
 import type { JobStore } from '../scheduler/jobs.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
+import type { TurnLane } from '../turns/lane.js';
 import { HEARTBEAT_MS, type GatewayLock } from './lock.js';
 import type { Notifier } from './notify.js';
 
@@ -136,6 +137,22 @@ export type GatewayDeps = {
   lock: GatewayLock;
   notify: Notifier;
   scheduler: Pick<Scheduler, 'tick' | 'isRunning'>;
+  /**
+   * The other lane: turns that were enqueued, suspended or interrupted.
+   *
+   * **Required**, and on the same beat as the scheduler rather than on a timer
+   * of its own. Two reasons, and neither is tidiness. A second timer would let
+   * the turn lane keep working while the scheduler had stopped being asked
+   * anything — the "up but wedged" state this whole file exists to make
+   * impossible. And a `wait` is only ever as precise as the beat that ends it,
+   * so one beat means one number to reason about (`MIN_WAIT_MS` is written
+   * against exactly this one).
+   *
+   * Not optional, because an optional lane is a lane some assembly forgets, and
+   * a forgotten one means every suspended turn on that install sleeps for ever
+   * with the row saying `waiting` and nobody looking.
+   */
+  turnLane: Pick<TurnLane, 'tick' | 'isRunning'>;
   /** Read for the idle status line only — the scheduler owns the firing. */
   jobs: Pick<JobStore, 'list'>;
   /** Teardown, in the caller's order: surfaces before the runtime under them. */
@@ -228,6 +245,11 @@ export class Gateway {
       return;
     }
     this.deps.scheduler.tick(now);
+    // After the scheduler, on the same beat. The order is not arbitrary: a job
+    // that comes due creates work the turn lane may then pick up in the same
+    // beat, whereas the reverse ordering would make every job's turn wait a
+    // full interval before anything looked at it.
+    this.deps.turnLane.tick(now);
   }
 
   /**
@@ -242,7 +264,20 @@ export class Gateway {
    */
   private state(now: Date): string {
     if (this.stopping) return STATUS.draining;
-    return this.scheduler.isRunning() ? STATUS.working : this.idleStatus(now);
+    return this.busy() ? STATUS.working : this.idleStatus(now);
+  }
+
+  /**
+   * Is either lane holding the model right now?
+   *
+   * One question with two answers underneath, asked in one place so the status
+   * line, the drain and `muffin gateway status` cannot disagree. A gateway
+   * resuming an interrupted turn is working, and a drain that only watched the
+   * scheduler would tear the database out from under it — which is the measured
+   * crash `Scheduler.run` wraps `markRan` for.
+   */
+  private busy(): boolean {
+    return this.scheduler.isRunning() || this.deps.turnLane.isRunning();
   }
 
   private idleStatus(now: Date): string {
@@ -292,10 +327,10 @@ export class Gateway {
     );
 
     const deadline = Date.now() + this.drainBudgetMs;
-    while (this.deps.scheduler.isRunning() && Date.now() < deadline) {
+    while (this.busy() && Date.now() < deadline) {
       await this.sleep(50);
     }
-    if (this.deps.scheduler.isRunning()) {
+    if (this.busy()) {
       // Said out loud, with the number: this is the one exit that abandons a
       // turn, and it must never be the silent kind.
       this.deps.log(
