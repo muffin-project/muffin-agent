@@ -51,8 +51,8 @@
       "n": 2,
       "id": "identity-resolved",
       "title": "Principal e tenant risolti",
-      "file": "connectors/telegram/connector.ts:148-165; cli/repl.ts:289; cli/run.ts:66",
-      "what": "Chi parla decide il tenant, mai il contenuto del messaggio. Telegram mappa il mittente a owner (chat privata + id utente combaciante) o a member di un tenant per-gruppo (principalFor). La CLI usa sempre {kind:'owner', connector:'cli', externalId:'local'}. Lo scheduler usa {kind:'system', source:'scheduler'}.",
+      "file": "connectors/telegram/connector.ts:153-163; core/surface/types.ts (identify); cli/repl.ts:289; cli/run.ts:66",
+      "what": "Chi parla decide il tenant, mai il contenuto del messaggio. Telegram mappa il mittente a owner (chat privata + id utente combaciante) o a member di un tenant per-gruppo (principalFor, che ora e' un adapter sottile sulla regola condivisa `identify` in core/surface/types.ts — la stessa che una seconda superficie deve chiamare per non poter rispondere diversamente sulla stessa domanda). La CLI usa sempre {kind:'owner', connector:'cli', externalId:'local'}. Lo scheduler usa {kind:'system', source:'scheduler'}.",
       "taint": "fissa la base della taint del turno: owner/system=0, member=2 (assegnata poi in loop.ts:936)",
       "branches": [
         {
@@ -271,13 +271,13 @@
       "id": "reply-delivered",
       "title": "La superficie rende e invia la risposta",
       "file": "cli/repl.ts:288-299; cli/run.ts:63-94; connectors/telegram/connector.ts:307-330; agent/scheduler-run.ts:42-55",
-      "what": "La CLI REPL stampa result.text su stdout e una riga di stato su stderr se non e' 'answered'. `muffin run` stampa su stdout/stderr e mappa result.stopped su un exit code (0/1/3/4/5). Telegram spezza il testo con renderForTelegram, modifica il placeholder 'sto guardando...' con la prima parte e invia il resto come risposte, poi ferma la presenza di digitazione. Un job schedulato passa invece il suo TurnResult a jobOutcomeFromTurn, che diventa una chiamata Deliver — il canale 'cli' stampa su stdout, qualsiasi altro canale e' esplicitamente NON CABLATO e lancia un'eccezione (repl.ts:55-56) o logga su stderr (gateway.ts:397-403).",
+      "what": "La CLI REPL stampa result.text su stdout e una riga di stato su stderr se non e' 'answered'. `muffin run` stampa su stdout/stderr e mappa result.stopped su un exit code (0/1/3/4/5). Telegram spezza il testo con renderForTelegram, modifica il placeholder 'sto guardando...' con la prima parte e invia il resto come risposte, poi ferma la presenza di digitazione. Un job schedulato passa invece il suo TurnResult a jobOutcomeFromTurn, che diventa una chiamata Deliver — ma Deliver ora ritorna un DeliveryOutcome (core/surface/types.ts) invece di Promise<void>: ogni canale passa dallo stesso SurfaceRegistry (cli/surface.ts:199 connectSurfaces), che risponde {delivered:true} solo se una superficie reale lo gestisce e {delivered:false, why} altrimenti — mai un'eccezione silenziosa ne' un log che nessuno legge.",
       "taint": "n/a",
       "branches": [
         {
-          "cond": "il canale Deliver di un job schedulato non e' 'cli'",
+          "cond": "nessuna superficie del registro gestisce il canale (es. un indirizzo scritto male, o una superficie disabilitata)",
           "goto": "exit",
-          "note": "consegna remota non cablata — repl.ts:48-61, gateway.ts:397-403 — il testo viene solo loggato, mai inviato davvero altrove"
+          "note": "SurfaceRegistry.deliver ritorna {delivered:false, why} con l'elenco delle superfici connesse — core/surface/registry.ts; Scheduler.settle scrive l'esito sulla riga del turno prima di markRan (core/scheduler/scheduler.ts:240)"
         }
       ]
     }
@@ -389,9 +389,9 @@
       "evidence": "agent/loop.ts:574 (controllo abort dentro il for delle tool call), 592 (append del batch che un return anticipato salta), 826-834 (append alla sessione avviene dentro runTool, per ogni chiamata)"
     },
     {
-      "what": "La consegna remota di job/turni schedulati non e' implementata per nessun canale tranne 'cli'",
-      "consequence": "Un job creato con un canale diverso da 'cli' (jobs.ts permette --channel) produce una risposta che non viene mai davvero inviata da nessuna parte: sotto la REPL lancia un'eccezione (visibile su stderr, il gestore delivery_failed dello scheduler la logga), sotto il gateway viene solo scritta su stderr — il journal che nessuno guarda. Il job avanza comunque (markRan), quindi la schedulazione non ritenta.",
-      "evidence": "cli/repl.ts:48-61 (makeReplDeliver lancia per channel !== 'cli'); cli/gateway.ts:397-403 (gatewayDeliver logga soltanto); il commento a cli/repl.ts:36-38 lo nomina direttamente: 'consegna remota da cablare'"
+      "what": "CHIUSO (era: consegna remota non implementata per nessun canale tranne 'cli'). Un job su un canale non gestito da nessuna superficie del registro ora produce {delivered:false, why} — mai un'eccezione, mai un log muto — e markRan avanza SOLO dopo che Scheduler.settle ha scritto l'esito sulla riga del turno.",
+      "consequence": "Resta un buco reale e diverso: Discord non e' ancora una superficie del registro (M5-BIS B15/B16), quindi un job con channel='discord:<id>' oggi ritorna {delivered:false, why:'nessuna superficie serve...'} finche' connectors/discord/ non e' cablato in cli/surface.ts — visibile, non silenzioso, ma comunque non consegnato.",
+      "evidence": "core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:240 (settle), :268 (unico markRan); cli/surface.ts:199 (connectSurfaces costruisce il registry da cio' che e' davvero abilitato)"
     }
   ],
   "gaps": [
@@ -406,13 +406,13 @@
       "why_it_matters": "il tipo suggerisce che esista un interruttore streaming/non-streaming quando nessuna parte del cablaggio lo supporta — ogni superficie aspetta la risposta intera prima di mostrare qualsiasi cosa"
     },
     {
-      "what": "La consegna di job/turni schedulati su un canale diverso da 'cli' e' dichiarata nel tipo Deliver (accetta qualsiasi stringa channel) ma non implementata: sia la REPL che il gateway ammettono esplicitamente nei commenti che e' 'da cablare'.",
-      "evidence": "cli/repl.ts:48-61 (lancia un'eccezione per ogni channel !== 'cli'); cli/gateway.ts:397-403 (logga soltanto su stderr)",
-      "why_it_matters": "un job schedulato per consegnare su Telegram (o qualsiasi canale non-cli) produce una risposta che sparisce silenziosamente in un log — nessun errore visibile al di fuori dello stderr del processo, e il job avanza comunque come se fosse andato a buon fine"
+      "what": "CHIUSO per testo (Deliver ora ritorna DeliveryOutcome, core/surface/types.ts) — resta aperto per allegati: SurfaceRegistry.deliverFile esiste ma nessun tool di produzione lo chiama ancora (M5-BIS B14), quindi un file scritto nel vault raggiunge l'owner solo come percorso citato nel testo, non come allegato vero.",
+      "evidence": "core/surface/types.ts (Surface.deliverFile); connectors/telegram/media.ts sendDocument scritto e testato ma senza chiamante di produzione finche' agent/tools/deliver.ts non e' cablato",
+      "why_it_matters": "un report o un grafico che il modello produce nel vault non arriva mai come file su Telegram/Discord — l'owner deve andare a leggerlo sul filesystem, il che non funziona affatto da remoto"
     },
     {
       "what": "ApprovalRequest non porta ne' tenant ne' principal ne' surface, e LoopDeps (l'oggetto che porta `approve`) e' condiviso per riferimento tra REPL e Telegram: cli/surface.ts costruisce TelegramConnector con `loop: runtime.deps` PRIMA che repl.ts assegni `runtime.deps.approve` — ma essendo lo stesso oggetto in memoria, l'assegnazione successiva vale anche per Telegram.",
-      "evidence": "agent/loop.ts:102-107 (ApprovalRequest: solo capability/prompt/resource); cli/repl.ts:157-164 (assegna runtime.deps.approve); cli/surface.ts:209-211 (TelegramConnector costruito con loop: runtime.deps, stesso oggetto); connectors/telegram/connector.ts:307 (runTurn(this.deps.loop, ...) usa quell'oggetto condiviso)",
+      "evidence": "agent/loop.ts:102-107 (ApprovalRequest: solo capability/prompt/resource); cli/repl.ts:157-164 (assegna runtime.deps.approve); cli/surface.ts:233-234 (TelegramConnector costruito con loop: runtime.deps, stesso oggetto); connectors/telegram/connector.ts:307 (runTurn(this.deps.loop, ...) usa quell'oggetto condiviso)",
       "why_it_matters": "quando REPL e Telegram girano nello stesso processo (il modo normale documentato, ADR-0022), un 'ask' sollevato da un membro anonimo di un gruppo Telegram viene silenziosamente risposto da chi e' seduto al terminale dell'owner, e il prompt mostra solo capability e resource — mai chi ha chiesto o da dove"
     },
     {

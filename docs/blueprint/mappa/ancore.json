@@ -476,12 +476,12 @@
   },
   "agent/scheduler-run.ts:42": {
     "path": "agent/scheduler-run.ts",
-    "line": 42,
+    "line": 43,
     "testo": "export function makeJobRunner(deps: LoopDeps): RunJob {"
   },
   "agent/scheduler-run.ts:44": {
     "path": "agent/scheduler-run.ts",
-    "line": 44,
+    "line": 45,
     "testo": "const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);"
   },
   "agent/tools/fs.ts:108": {
@@ -746,42 +746,42 @@
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 27,
+    "line": 29,
     "testo": "* `muffin gateway` — the process that lives, and the three verbs around it."
   },
-  "cli/gateway.ts:294": {
+  "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 294,
+    "line": 296,
     "testo": "export async function cmdGatewayRun(home = paths().home): Promise<number> {"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 297,
+    "line": 299,
     "testo": "runtime = buildRuntime(home);"
-  },
-  "cli/gateway.ts:359": {
-    "path": "cli/gateway.ts",
-    "line": 359,
-    "testo": "const surfaces = connectSurfaces(runtime, home);"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 363,
+    "line": 388,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 375,
+    "line": 400,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
-  "cli/gateway.ts:397": {
+  "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 397,
-    "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
+    "line": 381,
+    "testo": "const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);"
+  },
+  "cli/gateway.ts:388": {
+    "path": "cli/gateway.ts",
+    "line": 388,
+    "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
-    "line": 81,
+    "line": 83,
     "testo": "export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {"
   },
   "cli/init.ts:101": {
@@ -989,14 +989,14 @@
     "line": 326,
     "testo": "const answered = resolveContradiction(store, TENANT, factId, new Date());"
   },
-  "cli/observe.ts:62": {
+  "cli/observe.ts:67": {
     "path": "cli/observe.ts",
-    "line": 62,
-    "testo": "const printDeliver: Deliver = async (channel, text) => {"
+    "line": 67,
+    "testo": "function printDeliver(registry: SurfaceRegistry): Deliver {"
   },
   "cli/observe.ts:91": {
     "path": "cli/observe.ts",
-    "line": 91,
+    "line": 100,
     "testo": "export async function cmdObserve(home: string, argv: string[], over: ObserveOverrides = {}): Promise<number> {"
   },
   "cli/onboarding.ts:43": {
@@ -1006,63 +1006,53 @@
   },
   "cli/repl.ts:108": {
     "path": "cli/repl.ts",
-    "line": 108,
+    "line": 99,
     "testo": "export async function runRepl(home = paths().home): Promise<number> {"
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 111,
+    "line": 102,
     "testo": "runtime = buildRuntime(home);"
   },
   "cli/repl.ts:133": {
     "path": "cli/repl.ts",
-    "line": 133,
+    "line": 130,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 145,
+    "line": 142,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 157,
+    "line": 155,
     "testo": "runtime.deps.approve = async (request) => {"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 255,
+    "line": 258,
     "testo": "try {"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 286,
+    "line": 289,
     "testo": "controller = new AbortController();"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 288,
+    "line": 291,
     "testo": "const result = await runTurn(runtime.deps, {"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 289,
+    "line": 292,
     "testo": "principal: { kind: 'owner', connector: 'cli', externalId: 'local' },"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 300,
+    "line": 303,
     "testo": "} catch (error) {"
-  },
-  "cli/repl.ts:36": {
-    "path": "cli/repl.ts",
-    "line": 36,
-    "testo": "* has a `delivery_failed` event for exactly this, with its own handler here"
-  },
-  "cli/repl.ts:48": {
-    "path": "cli/repl.ts",
-    "line": 48,
-    "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
   },
   "cli/run.ts:26": {
     "path": "cli/run.ts",
@@ -1109,64 +1099,69 @@
     "line": 96,
     "testo": "switch (result.stopped) {"
   },
-  "cli/surface.ts:187": {
+  "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 186,
-    "testo": "export function connectSurfaces(runtime: Runtime, home: string): { lines: string[]; stop: () => void } {"
+    "line": 199,
+    "testo": "export function connectSurfaces("
   },
-  "cli/surface.ts:209": {
+  "cli/surface.ts:205": {
     "path": "cli/surface.ts",
-    "line": 209,
+    "line": 205,
+    "testo": "* only the decision to *have* a CLI surface is made here (L0-1: it is the"
+  },
+  "cli/surface.ts:233": {
+    "path": "cli/surface.ts",
+    "line": 233,
     "testo": "const connector = new TelegramConnector({"
   },
-  "cli/surface.ts:44": {
+  "cli/surface.ts:47": {
     "path": "cli/surface.ts",
-    "line": 43,
+    "line": 47,
     "testo": "for (const id of ['cli', 'telegram']) {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 76,
+    "line": 80,
     "testo": "export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {"
   },
   "connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
-    "line": 230,
+    "line": 221,
     "testo": "if (!incoming) {"
   },
   "connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
-    "line": 262,
+    "line": 253,
     "testo": "private async tryPair(incoming: Incoming): Promise<boolean> {"
   },
-  "connectors/telegram/connector.ts:148": {
+  "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
-    "line": 155,
-    "testo": "export function principalFor(incoming: Incoming): { principal: Principal; tenant: string } {"
+    "line": 153,
+    "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
   "connectors/telegram/connector.ts:167": {
     "path": "connectors/telegram/connector.ts",
-    "line": 174,
+    "line": 165,
     "testo": "export class TelegramConnector {"
   },
   "connectors/telegram/connector.ts:179": {
     "path": "connectors/telegram/connector.ts",
-    "line": 186,
+    "line": 177,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
-    "line": 237,
+    "line": 228,
     "testo": "try {"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 314,
+    "line": 305,
     "testo": "const result = await runTurn(this.deps.loop, {"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 320,
+    "line": 311,
     "testo": "session: this.deps.sessions.open(`telegram:${incoming.chatId}`),"
   },
   "connectors/telegram/media.ts:154": {
@@ -1864,10 +1859,10 @@
     "line": 27,
     "testo": "export const SCHEMA = `"
   },
-  "core/scheduler/scheduler.ts:168": {
+  "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 168,
-    "testo": "try {"
+    "line": 240,
+    "testo": "private settle(job: Job, outcome: JobOutcome, delivery: DeliveryOutcome): void {"
   },
   "core/session/store.ts:35": {
     "path": "core/session/store.ts",
@@ -2213,11 +2208,6 @@
     "path": "agent/tools/fs.ts",
     "line": 80,
     "testo": "{"
-  },
-  "gateway.ts:397": {
-    "path": "cli/gateway.ts",
-    "line": 397,
-    "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "guards.ts:41": {
     "path": "core/rot/guards.ts",
@@ -2583,16 +2573,6 @@
     "path": "core/tracing/redact.ts",
     "line": 11,
     "testo": "* That first sentence was false for as long as this file has existed, and said"
-  },
-  "repl.ts:48": {
-    "path": "cli/repl.ts",
-    "line": 48,
-    "testo": "export function makeReplDeliver(rl: { prompt: () => void }): Deliver {"
-  },
-  "repl.ts:55": {
-    "path": "cli/repl.ts",
-    "line": 55,
-    "testo": "process.stderr.write(`\\n⏰ [job → ${channel}: consegna remota da cablare]\\n${text}\\n`);"
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
