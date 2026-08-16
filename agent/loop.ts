@@ -277,6 +277,22 @@ export type TurnResult = {
    */
   turnId: string;
   stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
+  /**
+   * The taint the turn ended at — the max tier of everything that was physically
+   * in its context (03 §2).
+   *
+   * Returned because the caller may have to **write something derived from this
+   * turn**, and until this field existed it had no way to ask. `makeSnapshot`
+   * keeps the taint in a closure that dies with the call, so every caller
+   * holding the reply text was left guessing, and the two that guessed both
+   * guessed `0`: the laundering this field closes was written *outside* the loop
+   * as often as inside it (`agent/observe-run.ts`).
+   *
+   * Not the same value as the row's — `core/turns/store.ts` has its own column,
+   * written from the same accessor. That one is state a resume reads; this one
+   * is a fact the caller needs in the same breath as `text`.
+   */
+  taint: TrustTier;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   /** Present when `stopped` is 'ask': what the turn wanted permission for. */
   pending?: ApprovalRequest;
@@ -616,7 +632,33 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
             role: 'agent',
             kind: 'message',
             content: text,
-            trustTier: 0,
+            /**
+             * The tier of the turn that produced it, never a literal.
+             *
+             * This line used to read `trustTier: 0`, and 03 §2 names exactly
+             * what that is: «un riassunto di contenuto tier-3 è tier-3, sempre
+             * — altrimenti la sintesi diventa una lavanderia del taint». The
+             * model summarising a poisoned page into its reply is that summary,
+             * and the whole of `raiseTaint` upstream was undone by one constant
+             * on the way out.
+             *
+             * The laundering is not theoretical and it does not stop at the
+             * write. `searchEpisodes` has no role filter and `indexBacklog`
+             * indexes agent rows like any other, so tomorrow's recall fishes
+             * this sentence back out; `recallTaint` takes the max over what it
+             * found, sees 0, and raises nothing; `describeTier(0)` labels it
+             * **«tu»** in front of the model. What a web page said last week
+             * comes back this week as something the owner said, at the one tier
+             * that arms a proactive trigger (`decideProactive` refuses tier > 1).
+             *
+             * Extraction is *not* what closes this: `ingest.ts` skips
+             * `role: 'agent'` for its own reason (the agent's words are evidence
+             * of what was said, never a source of facts), so no fact is ever
+             * derived here and `trust_tier_raised` — which joins a fact to its
+             * own episode — has nothing to fire on. The graph invariant cannot
+             * see this defect at all. Recall can, and does.
+             */
+            trustTier: snapshot.currentTaint(),
             createdAt: now().toISOString(),
           });
         }
@@ -805,7 +847,18 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // built: the hook is not allowed to see a half-finished turn, and it is not
     // allowed to delay this return.
     announceEnd(stopped);
-    return { text, iterations: iters, traceId: span.traceId, turnId: span.traceId, stopped, usage: used };
+    return {
+      text,
+      iterations: iters,
+      traceId: span.traceId,
+      turnId: span.traceId,
+      stopped,
+      // Read here rather than at any earlier point, because the whole property
+      // is that it can still rise: a tool result on the last iteration taints
+      // the answer exactly as much as one on the first.
+      taint: snapshot.currentTaint(),
+      usage: used,
+    };
   }
 }
 
