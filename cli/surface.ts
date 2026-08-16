@@ -431,10 +431,19 @@ export function connectSurfaces(
         });
         stops.push(() => connector.stop());
         surfaces.push(discordSurface(api, ownerUserId));
+        // N2 (judge, PR #42): this used to say "connessa" before `api.me()` —
+        // called inside `connector.run()`, fire-and-forget above — had
+        // actually answered. A bad token would print "connessa" and then, a
+        // moment later, "discord: caduta" from the `.catch` above: two lines
+        // that contradict each other, in the order that hides which one is
+        // true. `connector.run()` already logs the real confirmation once
+        // `me()` succeeds ("discord: connesso come @…", `connector.ts`), so
+        // this line only ever claims what it can see synchronously: that the
+        // connector was started, not that Discord has answered it.
         lines.push(
           ownerUserId === undefined
-            ? 'discord: connessa, in attesa del codice — nessuno è owner finché non arriva'
-            : `discord: connessa (owner ${ownerUserId})`,
+            ? 'discord: in connessione, in attesa del codice — nessuno è owner finché non arriva'
+            : `discord: in connessione (owner ${ownerUserId})`,
         );
       }
     } catch (error) {
