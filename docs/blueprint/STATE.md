@@ -25,31 +25,37 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
 - A2/A3: `identity.md` è template e manca il taglio persona dell'owner.
 - B2–B5: turno lungo, `wait`, `todo`, resume e budget per-job. Il record durevole
-  esiste; i consumer sono nel worktree sporco `slice/turno-sospeso`.
-- B8/B14: delivery remota e allegati prodotti; lavoro sporco in
-  `slice/superfici`.
+  esiste; i consumer sono WIP sul branch `slice/turno-sospeso`.
+- B8/B14: delivery remota e allegati prodotti; WIP sul branch `slice/superfici`.
 - B15/B16: binding owner nel RoT e envelope tipizzato universale non esistono.
   Telegram prova `from.id`+privato contro impersonazione, ma conserva il binding
   nella config ordinaria e non tipizza ogni metadata/multimodale.
-- C4/C6: recall storico e grafo temporale (`slice/memoria-nel-tempo`, sporco).
-- C8: audio senza trascrizione. E4: acceptance harness (`slice/accettazione`,
-  sporco). Gli altri `?` restano debito anche quando non sono blocker nominati.
+- C4/C6: recall storico e grafo temporale (WIP su `slice/memoria-nel-tempo`).
+- C8: audio senza trascrizione. E4: acceptance harness (WIP su
+  `slice/accettazione`). Gli altri `?` restano debito anche quando non sono
+  blocker nominati.
 
-**Non integrato.** Oltre ai quattro worktree sopra, i branch puliti
-`slice/hermes` e `slice/taint-in-ingresso` non sono fusi in `dev`. Nessun lavoro
-vale READY prima di integration test, wiring di produzione, failure path,
-scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
+**Non integrato.** Le quattro slice morte per limite di sessione (turno sospeso,
+superfici, memoria nel tempo, accettazione) non vivono più solo nei worktree: il
+loro lavoro è committato come WIP — non verificato, non integrabile così com'è —
+e pushato sui rispettivi branch; `.claude/deleghe.mjs riprendi` deriva branch,
+PR e delega che li sta riprendendo. `slice/hermes` (PR #29) e
+`slice/taint-in-ingresso` (PR #28) sono aperte verso `dev`. Nessun lavoro vale
+READY prima di integration test, wiring di produzione, failure path, scenario
+reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Integrate: **PR #30/#31/#33** in `dev`. **PR #32** `dev`→`main` ha ricevuto
-`ADJUST` sul delta completo. Le cinque correzioni viaggiano nella
-**PR #34** `slice/adjust-main-promotion`→`dev`. Il primo judge della PR ha
-trovato un residuo cross-tenant: il tenant era propagato, ma l'arrivo chiamava
-il full scan del vault condiviso. La head usa ora `reindexPath` e una fixture con
-host + due gruppi; richiede CI verde e un judge nuovo prima del merge. Solo dopo
-PR #32 riceve una verifica integrata nuova.
+Integrate in `dev`: **PR #30/#31/#33/#34**; **PR #32** `dev`→`main` è
+**mergiata** (`main` = `dev` più il merge). Aperte: **#28** e **#29**, entrambe
+in conflitto con `dev` dopo #30–#34 — riallineate, poi judge nuovo. Dei sei
+worktree lasciati dai chip dell'owner, tre fix erano bug vivi su `dev` e
+diventano slice proprie con la loro mutazione provata (`doctor` che piegava
+`error` su `ok`; `vaultPaths` che aggregava il tier con `min` invece di `max`;
+la risposta dell'agente salvata a `trustTier 0` dopo un turno sporco); tre sono
+scartati con motivo (superati da ADR-0039 e da `slice/superfici`, o sottoinsieme
+di un altro) e archiviati come commit sui loro branch `claude/*`.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
