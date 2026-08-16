@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Embedder } from './embed.js';
-import { checkTemporalWindow, EVERY_INSTANT, recall, recallTaint, renderForPrompt } from './recall.js';
+import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
 
@@ -604,6 +604,68 @@ describe('recall', () => {
     expect(result.strategies).toContain('vicinato(5)');
     const neighbourCount = result.items.filter((i) => i.neighbourOf === anchor).length;
     expect(neighbourCount).toBeLessThanOrEqual(10);
+  });
+
+  it('clamps the whole result, not only how many messages surround one anchor', async () => {
+    // D2: `MAX_NEIGHBOURS` bounds one anchor's own window; nothing bounded how
+    // many anchors got one, or the size of `limit` itself, which a CLI caller
+    // can set with no cap of its own. `limit:20, around:5` on twenty threads of
+    // thirty messages used to be able to append up to 220 rows — about 24k
+    // tokens — to a tool result `runtime.ts` marks `keepResult: true`, so it
+    // was never compacted, for the rest of the conversation.
+    // One matching message per thread, at a fixed mid-thread position, amid
+    // filler that does not share the query word — so the twenty ranked hits
+    // are spread one-per-thread and their neighbourhoods (the filler either
+    // side) are not already part of `kept`, the way a real "sweep of threads"
+    // would be. Uniform content across every thread would instead rank as one
+    // long tie, and `kept` would silently become "the first twenty rows of
+    // thread zero" — whose own neighbours are already in `kept` — which
+    // proves nothing about the clamp.
+    const { store, vectors } = harness(false);
+    for (let t = 0; t < 20; t++) {
+      for (let m = 0; m < 30; m++) {
+        store.addEpisode({
+          tenantId: HOST, connector: 'cli', threadKey: `t${t}`, role: 'user',
+          kind: 'message',
+          content: m === 15 ? 'regata di stamattina' : `messaggio ${m} senza rilievo`,
+          trustTier: 0,
+          createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+        });
+      }
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 20, neighbours: 5 });
+    // The declared threshold, not a copy of the number: this fails the moment
+    // the constant and the guarantee drift apart.
+    expect(result.items.length).toBeLessThanOrEqual(MAX_CONTEXT_ITEMS);
+    // Non-vacuous: the clamp actually had a neighbourhood to cut down, not an
+    // empty one that would pass regardless of whether the clamp exists.
+    expect(result.items.some((i) => i.neighbourOf !== undefined)).toBe(true);
+  });
+
+  it('gives a neighbourhood to only the first few ranked episodes, not every one', async () => {
+    // The other half of D2, isolated from the size clamp above: kept sits at
+    // 6 items and each neighbourhood adds at most 2, so the total (18) never
+    // approaches `MAX_CONTEXT_ITEMS` and cannot be the thing doing the
+    // cutting here. Only `MAX_NEIGHBOUR_ANCHORS` can explain fewer than six
+    // distinct anchors showing up with context.
+    const { store, vectors } = harness(false);
+    for (let t = 0; t < 6; t++) {
+      for (let m = 0; m < 10; m++) {
+        store.addEpisode({
+          tenantId: HOST, connector: 'cli', threadKey: `t${t}`, role: 'user',
+          kind: 'message',
+          content: m === 5 ? 'regata di stamattina' : `messaggio ${m} senza rilievo`,
+          trustTier: 0,
+          createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+        });
+      }
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 6, neighbours: 1 });
+    const distinctAnchors = new Set(result.items.filter((i) => i.neighbourOf !== undefined).map((i) => i.neighbourOf));
+    expect(distinctAnchors.size).toBeGreaterThan(0);
+    expect(distinctAnchors.size).toBeLessThanOrEqual(3);
   });
 
   it('never lets the neighbourhood reach across a tenant boundary', async () => {
