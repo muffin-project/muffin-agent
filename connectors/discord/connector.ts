@@ -86,6 +86,12 @@ export type Incoming = {
   text: string;
   /** Who sent it. `''` when Discord did not say (never a real snowflake). */
   fromId: string;
+  /**
+   * Is this a real one-to-one DM — derived from `channel_type`, never
+   * assumed. Threaded through rather than re-derived by `principalFor`, so
+   * the check and the value that authority relies on cannot drift apart.
+   */
+  direct: boolean;
   attachment?: DiscordAttachment;
 };
 
@@ -93,19 +99,29 @@ export type Incoming = {
  * Reads a `MESSAGE_CREATE` payload defensively, and decides "is this ours to
  * answer" — the DM filter lives here, once, rather than at every call site.
  *
- * **`guild_id === undefined` is the DM check, not `channel_type`.** Discord's
- * own docs mark `channel_type` optional on `MESSAGE_CREATE`; `guild_id` is the
- * field whose *absence* is the documented signal for "no guild" — a bot that
- * checked `channel_type` first would silently treat an update that omitted it
- * as a guild message and refuse it, on a field that was never guaranteed to
- * be there.
+ * **`channel_type === 1` is the DM check, fail-closed.** A DM (`1`) and a
+ * GROUP_DM (`3`) both omit `guild_id` — a group has no guild either — so
+ * `guild_id === undefined` alone cannot tell the two apart, and a GROUP_DM
+ * used to reach `identify()` as `direct: true` by construction, which made
+ * every member of that group a candidate to be recognised as the owner.
+ * Discord's own docs mark `channel_type` optional on `MESSAGE_CREATE`; the
+ * absent case is refused here rather than assumed to mean DM, on purpose —
+ * requiring the positive signal (`1`) is what "fail-closed" means for a check
+ * that authority depends on, even though it costs an occasional false refusal
+ * on a field Discord's docs do not always guarantee.
+ *
+ * `guild_id` is checked too, even though no legitimate `channel_type: 1`
+ * payload should ever carry one — belt and suspenders costs one comparison
+ * and refuses a payload that claims both signals at once instead of trusting
+ * either alone.
  *
  * A message from a bot account — including this bot's own messages, which the
  * gateway echoes back — is never processed: nothing here calls itself, and no
  * bot's words are the owner's.
  */
 export function parseMessage(raw: DiscordMessage): Incoming | null {
-  if (raw.guild_id !== undefined) return null; // guild message — out of scope for this slice
+  const direct = raw.channel_type === 1; // DM only — see docstring above for why not `guild_id === undefined`
+  if (!direct || raw.guild_id !== undefined) return null;
   if (raw.author === undefined || raw.author.bot === true || raw.author.system === true) return null;
 
   const text = raw.content ?? '';
@@ -117,6 +133,7 @@ export function parseMessage(raw: DiscordMessage): Incoming | null {
     channelId: raw.channel_id,
     text,
     fromId: raw.author.id,
+    direct,
     ...(attachment ? { attachment } : {}),
   };
 }
@@ -125,13 +142,15 @@ export function parseMessage(raw: DiscordMessage): Incoming | null {
  * The tenant and the principal, from who is speaking — via the rule every
  * surface shares (`identify`, `core/surface/types.ts`).
  *
- * A DM is `direct: true` by construction here (`parseMessage` already refused
- * anything with a `guild_id`), so this adapter is thinner than Telegram's:
- * there is no `isPrivate` to compute, only the snowflake to hand over.
+ * `direct` is read off `incoming`, never asserted `true` here: `parseMessage`
+ * is the one place that derives it from `channel_type`, and a second, hand-
+ * written `true` at this call site is exactly the shape that let a GROUP_DM's
+ * absent `guild_id` read as a private chat — the check and the value it fed
+ * `identify()` had drifted apart without either line looking wrong on its own.
  */
 export function principalFor(incoming: Incoming, ownerUserId: string | undefined): SurfaceIdentity {
   return identify(
-    { connector: 'discord', authorId: incoming.fromId, conversationId: incoming.channelId, direct: true },
+    { connector: 'discord', authorId: incoming.fromId, conversationId: incoming.channelId, direct: incoming.direct },
     ownerUserId,
   );
 }

@@ -376,7 +376,7 @@
       "name": "discord",
       "file": "connectors/discord/connector.ts:139",
       "handles": [
-        "text (message.content, DM soltanto — un guild_id presente rifiuta il messaggio)",
+        "text (message.content, DM soltanto — channel_type deve essere 1; guild_id presente o channel_type assente rifiutano il messaggio, fail-closed, D1)",
         "file (il primo attachment del messaggio -> vault, indicizzato prima che il turno giri, stesso reindexPath scoperto per tenant di Telegram)",
         "attachment in uscita: discordSurface.deliverFile (connectors/discord/surface.ts), stessa astrazione di Telegram",
         "errors (close-code table completa da docs.discord.com, nextAction() in gateway.ts; 4004/4010-4014 non riprovano mai — sono config, non rete; un heartbeat senza ACK chiude e riconnette da solo)"
