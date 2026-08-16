@@ -1,4 +1,4 @@
-import { notDelivered, type DeliveryOutcome, type Surface } from './types.js';
+import { notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from './types.js';
 
 /**
  * The one place that knows which surfaces exist, and the only caller of
@@ -47,19 +47,40 @@ export class SurfaceRegistry {
    */
   deliver = async (channel: string, text: string): Promise<DeliveryOutcome> => {
     const surface = this.find(channel);
-    if (surface === null) {
-      const known = this.surfaces.map((s) => s.id).join(', ');
-      return notDelivered(
-        `nessuna superficie serve "${channel}"` +
-          (known === '' ? ' — nessuna superficie è connessa' : ` — connesse: ${known}`),
-      );
-    }
-    try {
-      return await surface.deliver(channel, text);
-    } catch (error) {
-      return notDelivered(
-        `${surface.id} ha lanciato invece di riportare l'esito: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    if (surface === null) return this.noSurface(channel);
+    return this.caught(surface.id, () => surface.deliver(channel, text));
   };
+
+  /**
+   * The B14 half of the same guarantee: a file that cannot be sent is a value,
+   * never an exception, exactly as `deliver` established for text.
+   */
+  deliverFile = async (channel: string, file: FileSpec): Promise<DeliveryOutcome> => {
+    const surface = this.find(channel);
+    if (surface === null) return this.noSurface(channel);
+    return this.caught(surface.id, () => surface.deliverFile(channel, file));
+  };
+
+  private noSurface(channel: string): DeliveryOutcome {
+    const known = this.surfaces.map((s) => s.id).join(', ');
+    return notDelivered(
+      `nessuna superficie serve "${channel}"` + (known === '' ? ' — nessuna superficie è connessa' : ` — connesse: ${known}`),
+    );
+  }
+
+  /**
+   * A surface that throws instead of returning is caught here rather than
+   * allowed to escape. The contract says implementations return their failures;
+   * an implementation that breaks the contract must still not be able to turn a
+   * failed delivery into an exception in the scheduler's floating promise, which
+   * is the exact shape that took the gateway down once already
+   * (`core/scheduler/scheduler.ts`, the `markRan` catch).
+   */
+  private async caught(surfaceId: string, attempt: () => Promise<DeliveryOutcome>): Promise<DeliveryOutcome> {
+    try {
+      return await attempt();
+    } catch (error) {
+      return notDelivered(`${surfaceId} ha lanciato invece di riportare l'esito: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }

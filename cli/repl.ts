@@ -295,6 +295,12 @@ export async function runRepl(home = paths().home): Promise<number> {
           session,
           text: line,
           signal: controller.signal,
+          // No `replyTo` (the REPL holds the answer itself, see below), but a
+          // `replyChannel` all the same: `send_file` mid-turn needs somewhere
+          // to address an attachment, and for the terminal that address is
+          // just `cli` — the owner is on this machine, so `cliSurface`'s
+          // `deliverFile` names the path rather than moving any bytes.
+          replyChannel: 'cli',
         });
         process.stdout.write(`\n${result.text}\n\n`);
         if (result.stopped !== 'answered') {

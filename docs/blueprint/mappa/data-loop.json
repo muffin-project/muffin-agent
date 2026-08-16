@@ -43,7 +43,7 @@
         {
           "cond": "Telegram: l'update non e' testo/allegato riconoscibile (parseUpdate torna null)",
           "goto": "exit",
-          "note": "marcato processato e scartato in silenzio, connector.ts:223-227 — non raggiunge mai runTurn"
+          "note": "marcato processato e scartato in silenzio, connectors/telegram/connector.ts:223-227 — non raggiunge mai runTurn"
         }
       ]
     },
@@ -58,7 +58,7 @@
         {
           "cond": "Telegram: installazione non ancora accoppiata e il messaggio sembra un codice di pairing",
           "goto": "exit",
-          "note": "consumato da tryPair, non arriva mai a runTurn — connector.ts:255-288"
+          "note": "consumato da tryPair, non arriva mai a runTurn — connectors/telegram/connector.ts:255-288"
         }
       ]
     },

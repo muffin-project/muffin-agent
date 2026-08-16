@@ -320,6 +320,13 @@ export class TelegramConnector {
           messageId: incoming.messageId,
           ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
         },
+        // The registry address for *this* conversation — always the fully
+        // qualified `telegram:<chatId>`, even for the owner's own private
+        // chat: a mid-turn tool addressing a follow-up delivery needs the
+        // exact room the turn came from, not the surface's default (which
+        // `telegram` alone would mean, and which is the owner's chat
+        // regardless of which group this turn is actually in).
+        replyChannel: `telegram:${incoming.chatId}`,
       });
 
       try {

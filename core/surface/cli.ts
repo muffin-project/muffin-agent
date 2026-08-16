@@ -1,4 +1,5 @@
-import { DELIVERED, type DeliveryOutcome, type Surface } from './types.js';
+import { statSync } from 'node:fs';
+import { DELIVERED, type DeliveryOutcome, type FileSpec, type Surface } from './types.js';
 
 /**
  * The terminal, as a surface like any other.
@@ -41,10 +42,15 @@ export function cliSurface(write: CliWriter): Surface {
     id: 'cli',
     limits: {
       maxMessageChars: Number.POSITIVE_INFINITY,
-      // A terminal moves no bytes. Zero rather than Infinity so a caller that
-      // asks "can I attach this here" is told no, instead of being told yes and
-      // discovering there is no code to do it.
-      maxUploadBytes: 0,
+      // Infinity, not zero. `deliverFile` does not move a single byte over a
+      // wire — the owner is on this machine, so "delivering" a file here is
+      // naming where it already sits, which costs nothing regardless of size.
+      // (An earlier version of this file set this to 0, reasoning that a
+      // caller probing "can I attach here" should be told no rather than
+      // discover there was no code behind a yes — right at the time, when
+      // `deliverFile` did not exist. It does now, below, so the honest answer
+      // changed with it.)
+      maxUploadBytes: Number.POSITIVE_INFINITY,
       maxDownloadBytes: 0,
     },
     handles: (channel) => channel === 'cli',
@@ -53,6 +59,22 @@ export function cliSurface(write: CliWriter): Surface {
       // The one surface that can honestly say this without asking anyone: the
       // bytes are on the file descriptor, and there is no second hop that can
       // fail after this function returns.
+      return DELIVERED;
+    },
+    deliverFile: async (_channel, file: FileSpec): Promise<DeliveryOutcome> => {
+      // No transport, so no way to fail *sending* — the one way this can go
+      // wrong is the file not being there any more, which is worth saying
+      // rather than printing a path to nothing.
+      let bytes: number;
+      try {
+        bytes = statSync(file.absolutePath).size;
+      } catch (error) {
+        return { delivered: false, why: `${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      write(
+        `[allegato pronto: ${file.absolutePath} (${Math.round(bytes / 1024)}KB)]` +
+          (file.caption ? `\n${file.caption}` : ''),
+      );
       return DELIVERED;
     },
   };

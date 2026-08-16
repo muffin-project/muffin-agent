@@ -107,7 +107,41 @@ export interface Surface {
    * a caller that was promised a value.
    */
   deliver(channel: string, text: string): Promise<DeliveryOutcome>;
+
+  /**
+   * Send a file to a channel this surface `handles` — M5-BIS B14, "un file
+   * prodotto arriva come allegato, o come percorso da copiare a mano?".
+   *
+   * **Required, not optional, on the same principle `Deliver` was rewritten
+   * for.** An optional method invites the fourth implementation to omit it
+   * silently — exactly the shape `docs/ORCHESTRATION.md` §14 already spent one
+   * slice closing for text. A surface that has no real way to move bytes still
+   * answers honestly: `cliSurface` names the path instead of a transport it
+   * does not have, which is a `{ delivered: true }` that is true, not a
+   * `{ delivered: false }` standing in for "not implemented".
+   *
+   * Same non-throwing contract as `deliver`: a foreseeable failure (file too
+   * large, upload rejected, channel unreachable) is a `{ delivered: false }`
+   * value, and `SurfaceRegistry.deliverFile` catches an implementation that
+   * throws anyway for the same reason `deliver`'s does.
+   */
+  deliverFile(channel: string, file: FileSpec): Promise<DeliveryOutcome>;
 }
+
+/**
+ * What `deliverFile` is handed. `absolutePath` is a real path on this
+ * process's filesystem — the caller (`agent/tools/deliver.ts`) is responsible
+ * for having already resolved and contained it; a `Surface` implementation
+ * reads from it but does not re-validate where it came from, the same
+ * division of labour `fs.ts`'s tools and their `FsScope` already keep.
+ */
+export type FileSpec = {
+  absolutePath: string;
+  /** What the recipient sees as the filename — never trusted back into a path. */
+  filename: string;
+  /** Shown alongside the file where the surface supports one. Truncated by the implementation to its own caption limit. */
+  caption?: string;
+};
 
 /**
  * A surface that also *listens*. Separate from `Surface` because delivery and
