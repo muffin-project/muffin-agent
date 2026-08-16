@@ -315,9 +315,13 @@ export class TelegramConnector {
         // below — and that is the point of writing it now: the day the lane
         // delivers instead of this function, the address is already durable and
         // this call site does not have to be reopened to put it there.
+        // `channel` is that address in `SurfaceRegistry` terms — added for
+        // #41's lane (turno sospeso), the same field `makeJobRunner`
+        // (`agent/scheduler-run.ts`) already writes for a scheduled job.
         replyTo: {
           chatId: incoming.chatId,
           messageId: incoming.messageId,
+          channel: `telegram:${incoming.chatId}`,
           ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
         },
         // The registry address for *this* conversation — always the fully
