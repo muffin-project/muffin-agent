@@ -1,9 +1,9 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startFakeProvider, type FakeProvider, type FakeProviderOptions } from './provider.js';
 
 /**
@@ -38,8 +38,24 @@ const CLI = join(REPO, 'cli', 'main.ts');
  * `node_modules` — so the bare name fails with ERR_MODULE_NOT_FOUND before the
  * CLI is ever reached. Resolving it here pins it to this checkout's copy, which
  * is also the copy the rest of the suite is running under.
+ *
+ * Not `import.meta.resolve('tsx')`, which is what this line used to be: it
+ * works standalone but throws `__vite_ssr_import_meta__.resolve is not a
+ * function` the moment this module is loaded through vitest's own Vite-based
+ * SSR runner, which does not implement it — found by running the acceptance
+ * suite under vitest, not by reading Vite's docs. `tsx`'s own package.json
+ * points `"."` unconditionally at `dist/loader.mjs` (checked directly, no
+ * `import`/`require` split on that entry), so building the URL from `REPO` is
+ * exactly what resolution would have produced, without an API only one of the
+ * two runners this file needs to survive actually has.
  */
-const TSX = import.meta.resolve('tsx');
+const TSX_LOADER = join(REPO, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+if (!existsSync(TSX_LOADER)) {
+  throw new Error(
+    `tsx loader non trovato in ${TSX_LOADER} — la versione installata potrebbe aver spostato dist/loader.mjs`,
+  );
+}
+const TSX = pathToFileURL(TSX_LOADER).href;
 
 export type Run = { code: number; out: string; err: string };
 
