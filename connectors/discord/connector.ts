@@ -359,6 +359,16 @@ export class DiscordConnector {
         replyChannel: `discord:${incoming.channelId}`,
       });
 
+      // A suspended turn has produced nothing to deliver. Rendering `''` would
+      // send an empty message (`renderForDiscord('')` is `['(risposta vuota)']`) and record
+      // `sent` on a turn that has not answered — the owner would read it as the
+      // answer. Discord has no `deliverTo` yet, so the resumed answer
+      // is recorded `failed:` by the lane until that door exists (named in
+      // M5-BIS): the mirror of the guard
+      // `agent/turn-lane.ts` already has on the resume path. Found by the
+      // integrated judge of the dev→main promotion (#44), between #41 and #42.
+      if (result.stopped === 'suspended') return;
+
       try {
         const parts = renderForDiscord(result.text);
         for (const part of parts) {
