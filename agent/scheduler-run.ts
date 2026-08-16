@@ -65,6 +65,25 @@ export function makeJobRunner(deps: LoopDeps): RunJob {
       surface: job.channel,
       session,
       text: job.goal,
+      /**
+       * Every job turn delivers **out of band**, including one whose channel is
+       * `cli`, and the address is the channel itself.
+       *
+       * Taken verbatim from `slice/superfici`, which writes the same field for
+       * B8's reason: a turn created without `replyTo` gets `delivery = NULL`,
+       * which `core/turns/store.ts` defines as *"this surface delivers in band
+       * — the caller of `runTurn` has the text in its hand and there is no
+       * separate step that can fail"*. For a job that is simply false.
+       *
+       * It is taken **now** because this slice made the gap reachable: a job
+       * whose turn calls `wait` returns `suspended`, the scheduler stops (it has
+       * nothing to say yet), and the lane finishes the turn later — in a process
+       * with no stack to return to. With no address on the row,
+       * `agent/turn-lane.ts` had nothing to deliver to and dropped the answer in
+       * silence. Writing the same line as the other slice means the merge is a
+       * cucitura and not a decision either of us has to relitigate.
+       */
+      replyTo: { channel: job.channel },
       ...(signal ? { signal } : {}),
     });
     return jobOutcomeFromTurn(result);
