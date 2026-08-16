@@ -37,6 +37,10 @@ diff — because the defect above was in neither diff.
 
 - `npm run build` (`tsc --noEmit`) and `npm test` both clean. Tests passing while
   the build fails has happened here; run both.
+- Reconstruct the whole repository state: current worktree, every local and
+  remote branch, open PR/check state, and the non-integrated work named in
+  `STATE.md`. A nearby file is not the whole project, and another worktree may
+  already contain the primitive you are about to duplicate.
 - Research before an architectural choice, not after. A chunker was written from
   intuition and thrown away when three hours of reading said the intuitive answer
   loses on this corpus — see `docs/blueprint/adr/0024`. Chunking looked like an
@@ -45,6 +49,12 @@ diff — because the defect above was in neither diff.
   a virtual table without renaming its shadow tables; `sqlite-vec` supports
   partition keys; Ollama does not expose pre-pooling token embeddings. All three
   changed a design, and all three took one script to establish.
+
+The first deployment is single-user; the architecture is not host-only. Tenant,
+principal, surface, provider, capability, provenance and budget remain variable
+across boundaries even when today's default has one value. Group activation can
+wait until after the fourteen-day personal-use window. Retrofitting isolation
+after data accumulates cannot.
 
 ## Shape of the thing
 

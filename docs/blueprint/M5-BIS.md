@@ -29,6 +29,15 @@ Oggi cambiare la forma di un turno non rompe nessuno: niente è pubblico, niente
 quello che oggi è una riscrittura di un pomeriggio diventa una migrazione con
 deprecazioni.
 
+**DAY-1 READY è il fondo dell'inventario, non una sensazione.** Il contatore dei
+quattordici giorni parte solo con zero `BLOCKER` e zero `?` in questo inventario
+e con l'accettazione sulla vera installazione dell'owner. Durante quei giorni il
+repo continua a cambiare e i gruppi si costruiscono in parallelo; l'attivazione
+dei gruppi aspetta il termine della finestra. Escluderli dall'esperienza non
+esclude la loro architettura: ogni lavoro del giorno 1 conserva tenant,
+principal, provenance, taint e capability come assi variabili, mai `host` come
+forma nascosta.
+
 **Conseguenza pratica sull'inventario**: le righe che sono **decisioni di forma**
 vengono prima di quelle che sono **aggiunte di feature**, anche quando una
 feature si sente di più. Un turno che non sa sospendersi è una forma; un parser
