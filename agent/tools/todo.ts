@@ -103,6 +103,15 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
     capability: todoCapability.id,
     spec: todoSpec,
     /**
+     * `throwTier: 0` (PR #42's `RegisteredTool.throwTier`, landed on `dev`
+     * after this file did). The handler is synchronous, parses with
+     * `safeParse` rather than `parse`, and every other path returns a plain
+     * object — the only way out is a SQLite error from `TodoStore`, which is
+     * this tool's own failure and carries none of the caller's bytes, the
+     * same reasoning `tier: 0` above already gives for the success path.
+     */
+    throwTier: 0,
+    /**
      * The result survives compaction, like recalled memory does.
      *
      * Same argument as `memory_search` (`agent/runtime.ts`): this output *is*

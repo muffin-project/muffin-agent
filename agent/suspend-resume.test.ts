@@ -111,11 +111,13 @@ function world(
     {
       capability: webCapability.id,
       spec: { name: 'http_get', description: 'fetch', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => ({ content: 'la pagina dice X', tier: 3 as const }),
     },
     {
       capability: sendCapability.id,
       spec: { name: 'send_message', description: 'send', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
       handler: () => {
         state.sends += 1;
         return { content: 'inviato', tier: 0 as const };

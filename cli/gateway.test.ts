@@ -1,16 +1,19 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { DELIVERED } from '../core/surface/types.js';
 import { paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { gatewayStandDown } from './repl.js';
-import { stopCaveat } from './gateway.js';
+import { cmdGatewayRun, stopCaveat } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -185,6 +188,183 @@ describe('two schedulers must never run', () => {
 });
 
 /**
+ * `cmdGatewayRun`'s own assembly — the one thing none of the tests above
+ * reaches.
+ *
+ * Every test up to here either spawns `muffin gateway run` and asserts on the
+ * lock/lease (never a due job actually settling), or drives `Gateway` in
+ * isolation with a hand-built `Scheduler` (`core/gateway/service.test.ts` —
+ * real coverage of the *class*, but of a `Scheduler` that test constructs
+ * itself). Nothing exercised whether `cmdGatewayRun` threads
+ * `runtime.deps.turns.delivered` into the `Scheduler` it builds, or the
+ * `SurfaceRegistry` from `connectSurfaces` into the `deliver` the scheduler
+ * calls — the exact wiring `docs/blueprint/M5-BIS.md` B8 is about. Checked by
+ * hand first: commenting out the `recordDelivery` argument in `cli/gateway.ts`
+ * left every other test in this file and in `core/gateway/service.test.ts`
+ * green.
+ *
+ * Getting a due job through a real model call needs a real `Provider`, and
+ * `buildRuntime` only ever constructs one from config — there is no seam to
+ * hand it a fake in-process. So this drives the actual seam that exists: an
+ * `openai-compat` `baseUrl` pointed at a local HTTP server that speaks just
+ * enough of the Chat Completions shape to answer. No token spent, no network
+ * beyond localhost.
+ */
+function fakeCompletionsServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: 'fake-1',
+            model: 'fake',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+        );
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+      resolve({
+        url: `http://127.0.0.1:${addr.port}/v1`,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
+describe("cmdGatewayRun's own assembly", () => {
+  it('records a real delivery onto the turn it just ran, through the actual production wiring', async () => {
+    const fake = await fakeCompletionsServer();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-wiring-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      // Poll for the fire rather than a fixed sleep: the tick is 5ms but the
+      // real HTTP round trip to `fake` is not free, and a flat sleep either
+      // wastes time or races it.
+      const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+      try {
+        await vi.waitFor(
+          () => {
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            expect(row?.delivery).toBe('sent');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+      } finally {
+        db.close();
+      }
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  });
+
+  /**
+   * M5-BIS B14's wiring, the same standard as B8 just above: checked by hand
+   * first — commenting out `attachSendFile(runtime, home, surfaces.registry)`
+   * in both `cli/gateway.ts` and `cli/repl.ts` left the entire suite green,
+   * `send_file`'s own unit tests included (they drive `makeSendFileTool`
+   * directly, which proves the tool's logic, not that any production entry
+   * point ever constructs and registers one).
+   *
+   * The fake server scripts a tool call on the first turn — `send_file` on a
+   * file this test writes into the vault first — then a plain answer once the
+   * tool result comes back, and captures every request body so the second one
+   * can be inspected for what the model was actually handed back.
+   */
+  function fakeToolCallServer(toolName: string, argsJson: string): Promise<{ url: string; requests: unknown[]; close: () => Promise<void> }> {
+    const requests: unknown[] = [];
+    return new Promise((resolve) => {
+      let call = 0;
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
+          call += 1;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          const message =
+            call === 1
+              ? { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: toolName, arguments: argsJson } }] }
+              : { role: 'assistant', content: 'fatto.' };
+          res.end(
+            JSON.stringify({
+              id: `fake-${call}`,
+              model: 'fake',
+              choices: [{ index: 0, finish_reason: call === 1 ? 'tool_calls' : 'stop', message }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+          );
+        });
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+        resolve({ url: `http://127.0.0.1:${addr.port}/v1`, requests, close: () => new Promise((r) => server.close(() => r())) });
+      });
+    });
+  }
+
+  it('reaches send_file for real: a job can attach a vault file, through the actual production wiring', async () => {
+    const fake = await fakeToolCallServer('send_file', JSON.stringify({ path: 'report.txt' }));
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-sendfile-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      // The file send_file will be asked to attach — written before the job
+      // fires, exactly like a prior tool call (fs_write, an ingest) would have
+      // left it for a real turn to pick up.
+      writeFileSync(join(paths(dir).vault, 'report.txt'), 'contenuto finto\n');
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+      try {
+        await vi.waitFor(
+          () => {
+            const row = db.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string } | undefined;
+            expect(row?.delivery).toBe('sent');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+      } finally {
+        db.close();
+      }
+
+      // The second request is the one that carries the tool's own result back
+      // to the model — inspecting it is the only way to see, from outside the
+      // process, whether `send_file` actually ran (and succeeded) rather than
+      // the model merely claiming it would in the final text.
+      expect(fake.requests).toHaveLength(2);
+      const second = fake.requests[1] as { messages: { role: string; content?: unknown; tool_call_id?: string }[] };
+      const toolResult = second.messages.find((m) => m.role === 'tool' || 'tool_call_id' in m);
+      expect(JSON.stringify(toolResult)).toContain('inviato: report.txt');
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  });
+});
+
+/**
  * The two orderings a boot-time answer cannot survive, driven through the real
  * `Scheduler`, the real `JobStore` and the real `GatewayLock` — the same three
  * objects `runRepl` builds, wired by the same `gatewayStandDown` it passes.
@@ -210,14 +390,13 @@ describe('the claim can change under a REPL that is already ticking', () => {
     const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
     const sched = new Scheduler(
       w.jobs,
-      async () => ({ stopped: 'answered', text: 'brief' }),
-      async (_c, t) => {
-        w.delivered.push(t);
-      },
+      async () => ({ stopped: 'answered', text: 'brief', turnId: 'turn-test' }),
+      async (_c, t) => (w.delivered.push(t), DELIVERED),
       undefined,
       (e) => w.events.push(e),
       undefined,
       standDown,
+      undefined,
       new ModelLane(),
     );
 
@@ -292,15 +471,14 @@ describe('the claim can change under a REPL that is already ticking', () => {
       w.jobs,
       async () => {
         await inFlight;
-        return { stopped: 'answered', text: 'brief' };
+        return { stopped: 'answered', text: 'brief', turnId: 'turn-test' };
       },
-      async (_c, t) => {
-        w.delivered.push(t);
-      },
+      async (_c, t) => (w.delivered.push(t), DELIVERED),
       undefined,
       (e) => w.events.push(e),
       undefined,
       gatewayStandDown(w.db, (l) => w.said.push(l), false),
+      undefined,
       new ModelLane(),
     );
 

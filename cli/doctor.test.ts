@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeSecret } from '../core/config/config.js';
-import { MemoryStore } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { MemoryStore } from '../core/memory/store.js';
 import {
   ConsolidationLog,
   type ConsolidationOutcome,
@@ -177,6 +177,102 @@ describe('doctor runs the root-of-trust readers invariant', () => {
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('decorative.json');
     expect(report.exitCode).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
+  /**
+   * `TurnStore.undelivered()` had zero callers and zero tests before this:
+   * B8's own guarantee ("un job che dice inviato è arrivato") was checkable
+   * in principle and unchecked in practice. This is the wiring test —
+   * `runDoctor` is the real production entry point, not `undelivered()`
+   * called directly, so it proves the mechanism is reached rather than only
+   * that its logic is correct.
+   */
+  it('warns, naming the count and the oldest, when a done turn never settled its delivery', () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 3,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: false,
+    };
+    // A turn created with a `replyTo` starts `delivery: 'pending'`
+    // (core/turns/store.ts `create`) — exactly what a process dying between
+    // "the answer is ready" and "the surface confirmed it went out" leaves
+    // behind, since nothing but a settled delivery ever moves it off `pending`.
+    store.create({
+      id: 'turn-undelivered-1',
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-1',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    db.close();
+
+    const c = check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 turni');
+    expect(c?.detail).toContain('turn-undeliv'); // TurnRecord.id.slice(0, 12)
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming none missing, when every delivered turn actually settled', () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 3,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: false,
+    };
+    store.create({
+      id: 'turn-settled-1',
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-1',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
+    db.close();
+
+    const c = check(dir, 'consegne');
+    expect(c?.level).toBe('ok');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says nothing at all on a fresh install — no turns table yet, not a fabricated "ok"', () => {
+    // Same posture as the 'turni' check right above this one in doctor.ts: an
+    // absent table means no turn has ever run here, which is the correct
+    // state on day one, not a second thing to report alongside it.
+    const dir = home();
+    expect(check(dir, 'consegne')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });

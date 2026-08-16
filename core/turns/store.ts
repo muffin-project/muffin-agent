@@ -237,6 +237,31 @@ export type UncertainCall = {
 };
 
 /**
+ * A turn that finished and whose answer cannot be shown to have arrived.
+ *
+ * Deliberately not folded into `InterruptedTurn`: an interrupted turn is one
+ * whose *process* died, and this is one whose *delivery* did — the same
+ * separation `TurnOutcome` and `DeliveryState` keep in two columns. A turn can
+ * be both, and reporting it once under the wrong heading loses the half the
+ * owner can act on.
+ *
+ * A different question from `TurnHealth.undeliverable` below, and the two are
+ * not merged: this is a turn that **had** an address and the delivery either
+ * never settled (`pending`) or was attempted and refused (`failed:<why>`) —
+ * `TurnHealth.undeliverable` is a turn that had **no** address at all, so
+ * there was never a delivery to attempt or fail. Same family of fact
+ * (`DeliveryState`), two different rows it can be true of.
+ */
+export type UndeliveredTurn = {
+  id: string;
+  surface: string;
+  tenant: string;
+  startedAt: string;
+  /** `pending` (nothing ever settled it) or `failed:<why>` (the surface said no). */
+  delivery: DeliveryState;
+};
+
+/**
  * What `doctor` and the boot sequence ask about the table.
  *
  * Two different questions, kept apart because their remedies are: an
@@ -412,6 +437,7 @@ export class TurnStore {
   private readonly interruptStmt: Database.Statement;
   private readonly openCallsStmt: Database.Statement;
   private readonly interruptedStmt: Database.Statement;
+  private readonly undeliveredStmt: Database.Statement;
   private readonly countStmt: Database.Statement;
   private readonly waitingStmt: Database.Statement;
   private readonly claimStmt: Database.Statement;
@@ -486,6 +512,25 @@ export class TurnStore {
       `SELECT id, surface, tenant, session_id AS sessionId, model, created_at AS startedAt, delivery,
               status, claimed_by AS pid, updated_at AS takenAt
        FROM turns WHERE status IN ('interrupted','running') AND updated_at >= @since
+       ORDER BY updated_at DESC`,
+    );
+    /**
+     * Turns that owed a delivery and cannot show one.
+     *
+     * Both halves matter and they are different failures. `failed:%` is a
+     * delivery that was attempted and reported back — the surface said no.
+     * `pending` on a turn that is already `done` is worse: the work finished and
+     * *nothing ever settled the delivery*, which is what a process dying between
+     * the answer and the send looks like from the outside.
+     *
+     * `status = 'done'` excludes a turn that is still running, whose `pending`
+     * is simply the truth for now.
+     */
+    this.undeliveredStmt = db.prepare(
+      `SELECT id, surface, tenant, created_at AS startedAt, delivery
+       FROM turns
+       WHERE status = 'done' AND (delivery = 'pending' OR delivery LIKE 'failed:%')
+         AND updated_at >= @since
        ORDER BY updated_at DESC`,
     );
     this.countStmt = db.prepare(`SELECT count(*) AS n FROM turns`);
@@ -851,6 +896,32 @@ export class TurnStore {
     return out;
   }
 
+  /**
+   * Answers "did the thing I was told was sent actually go out".
+   *
+   * The reader for M5-BIS B8. Before this, a job whose delivery failed was
+   * indistinguishable from one that arrived: `markRan` advanced the schedule
+   * either way and the only trace was a line on stderr that nobody was
+   * necessarily reading. The scheduler now settles every fire onto the turn's
+   * row, and this is the query that reads it back.
+   *
+   * Bounded by a window for the same reason `health` is: rows are never deleted
+   * (§I-8), so without one a failure from last month sits next to this
+   * morning's for ever.
+   */
+  undelivered(options: { now?: Date; windowMs?: number } = {}): UndeliveredTurn[] {
+    const now = options.now ?? this.clock();
+    const windowMs = options.windowMs ?? DOCTOR_WINDOW_MS;
+    const since = new Date(now.getTime() - windowMs).toISOString();
+    return (this.undeliveredStmt.all({ since }) as {
+      id: string;
+      surface: string;
+      tenant: string;
+      startedAt: string;
+      delivery: string;
+    }[]).map((r) => ({ ...r, delivery: r.delivery as DeliveryState }));
+  }
+
   /** Tool calls with an intent row and no outcome row — the "maybe done" set. */
   uncertainCalls(turnId: string): UncertainCall[] {
     const rows = this.openCallsStmt.all(turnId) as {
@@ -969,6 +1040,28 @@ export function readTurnHealth(
   // Read-only: the constructor's `CREATE TABLE IF NOT EXISTS` is a no-op here
   // because the probe above already proved the table exists.
   return new TurnStore(db).health({ windowMs });
+}
+
+/**
+ * `undelivered()`'s own half of the pair above — same shape, same reason:
+ * `doctor` opens a read-only handle and has no runtime to hold a `TurnStore`.
+ *
+ * D3 (judge, PR #42): this method had zero callers and zero tests until
+ * `cli/doctor.ts` read it here — B8's own guarantee ("un job che dice
+ * «inviato» è arrivato") was checkable in principle and unchecked in
+ * practice, the exact shape `AGENTS.md` names: a mechanism with a schema and
+ * no caller.
+ */
+export function readUndelivered(
+  db: Database.Database,
+  windowMs: number = DOCTOR_WINDOW_MS,
+): UndeliveredTurn[] | null {
+  try {
+    db.prepare(`SELECT 1 FROM turns LIMIT 1`).get();
+  } catch {
+    return null;
+  }
+  return new TurnStore(db).undelivered({ windowMs });
 }
 
 /**
