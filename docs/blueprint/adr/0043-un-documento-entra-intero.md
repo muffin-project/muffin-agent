@@ -107,6 +107,12 @@ avrebbe invece permesso di ritargettare il link dopo l'indice. Finché non esist
 una copia interna immutabile, il report lo nomina come `link esterno` e non
 promette una via di ritorno che non possiede.
 
+Un arrivo indicizza soltanto il path appena scritto con `reindexPath`. La
+directory fisica è condivisa fra tenant: usare il full `reindex` con il tenant
+del mittente sembrava una propagazione corretta, ma importava anche ogni nota
+host e allegato di altri gruppi nel suo indice. Il full scan resta disponibile
+per la riconciliazione esplicita; non è un'operazione di ingestione.
+
 **Alternative scartate.** *Compattare in ingresso* (indicizzare un riassunto):
 irreversibile, e la perdita non si vede — è esattamente il difetto che C7
 descrive con un altro nome. *Rileggere la porzione dai chunk* invece che dal

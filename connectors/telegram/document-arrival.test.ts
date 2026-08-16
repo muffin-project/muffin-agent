@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import type { Update } from '@grammyjs/types';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,7 @@ import { UpdateInbox } from './updates.js';
 
 const OWNER = 4242;
 const GROUP = -100200;
+const OTHER_GROUP = -100201;
 const STRANGER = 9999;
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 // The vault path includes the receipt day. Pin it: a fixture whose tool call
@@ -82,7 +83,7 @@ const callDocumentRead = (args: Record<string, unknown>): ChatResult => ({
   model: 'test-model',
 });
 
-function harness(bytes: Buffer, script: ChatResult[] = []) {
+function harness(bytes: Buffer | Buffer[], script: ChatResult[] = []) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-docarr-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-docarr-ws-'));
   runInit({ home, apiKey: 'sk-docarr-never-called' });
@@ -99,8 +100,13 @@ function harness(bytes: Buffer, script: ChatResult[] = []) {
   // everything would have hidden the bug this test found, where a down embedder
   // made the connector report `[allegato NON ricevuto]` over a document it had
   // just indexed in full.
+  let download = 0;
   vi.stubGlobal('fetch', async (input: unknown) => {
-    if (String(input).includes('api.telegram.example')) return new Response(new Uint8Array(bytes));
+    if (String(input).includes('api.telegram.example')) {
+      const body = Array.isArray(bytes) ? bytes[download++] : bytes;
+      if (!body) throw new TypeError('unexpected extra download');
+      return new Response(new Uint8Array(body));
+    }
     throw new TypeError('fetch failed');
   });
 
@@ -136,7 +142,7 @@ function harness(bytes: Buffer, script: ChatResult[] = []) {
     now: () => new Date(RECEIVED_AT),
   });
 
-  return { connector, seen, runtime };
+  return { connector, seen, runtime, vaultRoot };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -273,6 +279,46 @@ describe('a PDF sent to the bot', () => {
       const returned = toolResults(h.seen[1]!);
       expect(returned).toContain('Canone mensile 850 euro');
       expect(returned).toContain('[p. 2]');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('indexes only the arriving file, never the shared vault or another group attachment', async () => {
+    const otherDocument = buildPdf({ pages: [['SECONDOSEGRETO appartiene soltanto all’altro gruppo']] });
+    const h = harness([otherDocument, CONTRATTO]);
+    const hostPath = 'privato-owner.md';
+    const otherPath = 'inbox/2026-08-15-6-altro.pdf';
+    const groupPath = 'inbox/2026-08-15-7-contratto.pdf';
+    const tenant = `group:telegram:${GROUP}`;
+    const otherTenant = `group:telegram:${OTHER_GROUP}`;
+    try {
+      writeFileSync(join(h.vaultRoot, hostPath), '# Privato\n\nOWNERSEGRETO resta privato.\n');
+      await h.runtime.vault.reindexPath('host', hostPath);
+
+      await deliver(h, [
+        withDocument(6, 'altro.pdf', { chatId: OTHER_GROUP, fromId: STRANGER, type: 'supergroup' }),
+      ]);
+      await deliver(h, [
+        withDocument(7, 'contratto.pdf', { chatId: GROUP, fromId: STRANGER, type: 'supergroup' }),
+      ]);
+
+      const store = h.runtime.memory.store;
+      expect(store.searchEpisodes('host', 'OWNERSEGRETO')).toHaveLength(1);
+      expect(store.searchEpisodes('host', 'SECONDOSEGRETO')).toHaveLength(0);
+      expect(store.searchEpisodes('host', 'Canone')).toHaveLength(0);
+
+      expect(store.searchEpisodes(otherTenant, 'SECONDOSEGRETO').length).toBeGreaterThan(0);
+      expect(store.searchEpisodes(otherTenant, 'OWNERSEGRETO')).toHaveLength(0);
+      expect(store.searchEpisodes(otherTenant, 'Canone')).toHaveLength(0);
+
+      expect(store.searchEpisodes(tenant, 'Canone').length).toBeGreaterThan(0);
+      expect(store.searchEpisodes(tenant, 'OWNERSEGRETO')).toHaveLength(0);
+      expect(store.searchEpisodes(tenant, 'SECONDOSEGRETO')).toHaveLength(0);
+
+      expect(await h.runtime.vault.document('host', groupPath)).toBeNull();
+      expect(await h.runtime.vault.document(tenant, otherPath)).toBeNull();
+      expect(await h.runtime.vault.document(otherTenant, groupPath)).toBeNull();
     } finally {
       h.runtime.close();
     }

@@ -17,9 +17,9 @@
 
 **Direzione**: ADR-0045/0046 — agente continuo; surface = owner da ID autenticato protetto + contenuto parsato/provenanced/tainted; autonomia scoped.
 
-**Checkpoint**: PR **#32** `dev`→`main` è `ADJUST`. Le cinque correzioni sono
-nella draft PR **#34** verso `dev`: CI + judge nuovo, poi merge; dopo, nuova
-verifica integrata di PR #32.
+**Checkpoint**: PR #32 `dev`→`main` è `ADJUST`. PR #34 corregge anche il
+full-scan cross-tenant con `reindexPath` e fixture host+due gruppi: CI+judge,
+merge, poi judge nuovo su #32.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
