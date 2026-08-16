@@ -66,6 +66,17 @@ export const ATTR = {
   cacheWriteTokens: 'muffin.usage.cache_write_tokens',
   costUsd: 'muffin.cost.usd',
   turnIteration: 'muffin.turn.iteration',
+  /**
+   * The turn's row id.
+   *
+   * Redundant on a fresh turn — it equals the trace id — and load-bearing on a
+   * resumed one, where the span is a child of a trace whose root belonged to a
+   * process that is gone. Emitted on both, so a query does not have to know
+   * which kind of turn it is reading.
+   */
+  turnId: 'muffin.turn.id',
+  /** Which attempt this is. 0 on a turn that never died and never waited. */
+  turnResume: 'muffin.turn.resume',
   stopReason: 'muffin.stop_reason',
 } as const;
 

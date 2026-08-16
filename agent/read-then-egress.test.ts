@@ -8,6 +8,7 @@ import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool, type ToolOutcome } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -137,6 +138,7 @@ function harness(script: ChatResult[]) {
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns: new TurnStore(new DatabaseCtor(':memory:')),
+    todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     // The owner at 2am, who says yes. This is the point of the whole slice: a
     // gate that degrades to "ask the human" is a gate a poisoned context can

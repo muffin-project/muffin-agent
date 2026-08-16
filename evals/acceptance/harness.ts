@@ -136,6 +136,16 @@ export type Install = {
    * child-process wait blocks the event loop that server needs to answer.
    */
   muffin(args: string[], stdin?: string): Promise<Run>;
+  /**
+   * The same command, as a child this scenario can **kill**.
+   *
+   * `muffin()` awaits the exit, which is right for every scenario about what a
+   * command produces and useless for the one about what happens when a command
+   * never gets to produce anything. B5's claim is precisely that: a process
+   * killed mid-turn leaves a row that is enough on its own. There is no way to
+   * assert that against a process this harness insists on waiting for.
+   */
+  spawnRaw(args: string[]): { kill: () => void; exited: Promise<number | null> };
   /** The home database, read-only, for asserting state instead of prose. */
   db<T>(read: (db: DatabaseCtor.Database) => T): T;
   /** Starts `muffin gateway run` and waits for a line on stderr. */
@@ -209,6 +219,22 @@ export async function install(options: InstallOptions): Promise<Install> {
       } finally {
         db.close();
       }
+    },
+    spawnRaw: (args) => {
+      const child = spawn('node', ['--import', TSX, CLI, ...args], {
+        env: { ...process.env, ...env },
+        cwd: workspace,
+        // Inherited output would interleave with vitest's own; a scenario that
+        // kills this child never reads what it said anyway.
+        stdio: 'ignore',
+      });
+      children.push({ kill: () => child.kill('SIGKILL') });
+      return {
+        kill: () => child.kill('SIGKILL'),
+        // Attached now, not on demand: a child that dies before the caller
+        // awaits would otherwise resolve nothing and hang the scenario.
+        exited: new Promise<number | null>((resolveExit) => child.on('exit', (code) => resolveExit(code))),
+      };
     },
     gateway: async () => {
       const child = spawn('node', ['--import', TSX, CLI, 'gateway', 'run'], {

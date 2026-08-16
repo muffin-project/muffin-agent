@@ -3,6 +3,7 @@ import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
+import type { LaneDeliver } from '../agent/turn-lane.js';
 import {
   loadConfig,
   paths,
@@ -301,10 +302,25 @@ export function connectSurfaces(
    * surface of last resort and is never absent).
    */
   cliWrite: CliWriter = (text) => process.stdout.write(`${text}\n`),
-): { lines: string[]; stop: () => void; registry: SurfaceRegistry } {
+): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver } {
   const lines: string[] = [];
   const stops: (() => void)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
+  /**
+   * How a turn the **lane** finished gets back to whoever asked for it.
+   *
+   * Keyed by `turn.surface`, and separate from `SurfaceRegistry` above rather
+   * than folded into it: the lane resumes a row whose address is the opaque
+   * `replyTo` a connector wrote at creation time (a chat id *and* a message
+   * id, for Telegram), not a `SurfaceRegistry` channel string — the two
+   * addressing schemes exist for different callers (a job has no message to
+   * reply to; a resumed turn does) and collapsing them would mean inventing a
+   * channel string with nowhere to put the part `SurfaceRegistry.find` does
+   * not need. This map is filled by whichever surfaces actually came up, so a
+   * turn addressed to a surface that failed to connect is reported as
+   * undeliverable rather than sent nowhere.
+   */
+  const doors = new Map<string, (replyTo: Record<string, unknown>, text: string) => Promise<void>>();
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -367,10 +383,14 @@ export function connectSurfaces(
           process.stderr.write(`\rtelegram: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
         });
         stops.push(() => connector.stop());
-        // Delivery, from the same token the listener uses. `ownerChatId` is what
-        // makes `handles('telegram')` true, so an unpaired surface listens but
-        // does not claim to be a destination — which is the honest answer while
-        // nobody is the owner yet.
+        // The door for the lane. Registered next to the connector that owns it,
+        // so a surface that did not come up simply has none — the honest state,
+        // rather than a door onto a dead poller.
+        doors.set('telegram', (replyTo, text) => connector.deliverTo(replyTo, text));
+        // Delivery for `SurfaceRegistry`, from the same token the listener
+        // uses. `ownerChatId` is what makes `handles('telegram')` true, so an
+        // unpaired surface listens but does not claim to be a destination —
+        // which is the honest answer while nobody is the owner yet.
         surfaces.push(telegramSurface(api, ownerChatId));
         lines.push(
           ownerUserId === undefined
@@ -451,7 +471,30 @@ export function connectSurfaces(
     }
   }
 
-  return { lines, stop: () => stops.forEach((s) => s()), registry: new SurfaceRegistry(surfaces) };
+  return {
+    lines,
+    stop: () => stops.forEach((s) => s()),
+    registry: new SurfaceRegistry(surfaces),
+    /**
+     * The lane's delivery, over whichever surfaces are up.
+     *
+     * `cli` writes to stdout — under a supervisor that is the journal, which is
+     * the honest place for an answer nobody was there to read, and the same
+     * choice `SurfaceRegistry`'s own `cliSurface` makes for a scheduled job. An
+     * unknown surface **throws**, so the row gets `failed:` and the answer
+     * stays visible as owed instead of being reported as sent.
+     */
+    deliver: async (turn, text) => {
+      if (turn.surface === 'cli') {
+        process.stdout.write(`↩︎ ${text}\n`);
+        return;
+      }
+      const door = doors.get(turn.surface);
+      if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
+      await door(turn.replyTo, text);
+    },
+  };
 }
 
 /**

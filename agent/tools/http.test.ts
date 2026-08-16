@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { toolContext } from '../fixtures/tool-context.js';
 import { makeHttpTool } from './http.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
+const ctx = toolContext();
 const policy = { allow: ['api.example.com', 'cdn.example.com'] };
 
 const publicLookup = async () => [{ address: '93.184.216.34' }];

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
+import { toolContext } from '../fixtures/tool-context.js';
 import { makeProcessTools, processCapabilities } from './process.js';
 
-const ctx = { tenant: 'host', principal: { kind: 'owner', connector: 'cli', externalId: 'local' } } as const;
+const ctx = toolContext();
 
 const FAKE_PS = ['  PID USER   COMM', '    1 root   /sbin/launchd', '  512 giusto node', '  777 giusto redis-server'].join('\n');
 

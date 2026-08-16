@@ -33,6 +33,9 @@ import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { TurnStore, describeInterrupted } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
+import { makeTodoTool, todoCapability } from './tools/todo.js';
 import { OllamaEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
@@ -180,6 +183,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);
+  // The plan, on the same connection as everything else (ADR-0022). Built here
+  // rather than inside the loop because two things read it — the tool that
+  // writes rows and `buildContext`, which shows them back on every turn — and a
+  // second handle would let those two disagree about what is open.
+  const todos = new TodoStore(db);
 
   /**
    * Turns that a dead process was holding, named at boot.
@@ -195,13 +203,57 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
    * pending, and the restart re-runs the whole turn — **tool calls and their
    * effects included** — with nothing anywhere saying that it did.
    *
-   * It reclaims, it does not resume: rows go to `interrupted`, never to
-   * `runnable`. Promising a resume that does not exist would be worse than the
-   * silence it replaces.
+   * It reclaims, it does not resume: rows go to `interrupted`, never straight to
+   * `runnable`. The split is the point — marking happens at boot in **every**
+   * process that opens the home, resuming happens in the one process that owns
+   * the lane (`core/turns/lane.ts`). Merging them would resume a turn inside
+   * `buildRuntime`, i.e. inside `muffin doctor`.
+   *
+   * (This comment used to end "promising a resume that does not exist would be
+   * worse than the silence it replaces". A resume exists now; the sentence was
+   * left behind by the slice that built it, which is exactly how a comment
+   * becomes a lie a reader has no way to catch.)
    */
   const turnNotes = turns
     .reclaim()
     .map((t) => `! ${describeInterrupted(t)}`);
+
+  /**
+   * Turns suspended with nobody to wake them, named at boot for the same reason
+   * interrupted ones are.
+   *
+   * Only the surfaces that do **not** own a lane can produce this state — the
+   * REPL and `muffin run` both stand down for the gateway (ADR-0035) — so it is
+   * precisely the owner running Muffin from a terminal who would otherwise wait
+   * for an answer that no process is coming back to give.
+   */
+  const waitingNotes = ((): string[] => {
+    const { waiting } = turns.health({ windowMs: 0 });
+    if (waiting.count === 0) return [];
+    const due = waiting.oldestWakeAt === null ? '' : ` (il più vecchio scade ${waiting.oldestWakeAt.slice(0, 16).replace('T', ' ')})`;
+    return [
+      `! ${waiting.count} turni sospesi in attesa di risveglio${due} — li riprende la corsia del gateway, ` +
+        `\`muffin doctor\` dice se ne sta girando uno`,
+    ];
+  })();
+
+  /**
+   * Turns that answered with nobody to tell, named at boot for the same
+   * reason `waitingNotes` is (D2, judge round 2).
+   *
+   * `agent/turn-lane.ts` writes `delivery = 'undeliverable'` on the row the
+   * moment it happens, but the process that resumed the turn is not
+   * necessarily the process an owner is watching — a gateway with no
+   * terminal writes this to a journal nobody tails. `bootLines` is read by
+   * every surface (`muffin run`, the REPL, the gateway) before its first
+   * turn, which is what makes this the second, durable notice next to
+   * `muffin doctor`'s own.
+   */
+  const undeliverableNotes = ((): string[] => {
+    const { undeliverable } = turns.health({ windowMs: 0 });
+    if (undeliverable.count === 0) return [];
+    return [`! ${undeliverable.count} turni con risposta senza indirizzo — \`muffin doctor\` li nomina`];
+  })();
 
   // One connection, two lanes: the endpoint is the same, the model id is not.
   const provider: Provider =
@@ -399,6 +451,33 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     }
   }
 
+  /**
+   * The two runtime primitives (M5-BIS §2) — registered **last**, and the
+   * position is a decision rather than an accident of where the import landed.
+   *
+   * `profile.maxToolsExposed` truncates this list by registration order, and
+   * `consumer-local.json` sets it to **10** against a default install of twelve
+   * tools. Sitting where they used to (positions 6-7, in the base array) `wait`
+   * and `todo` pushed `skill_read` and `http_get` off the end — a weak local
+   * model silently lost the web and the skill catalogue in exchange for the
+   * ability to suspend itself, which is the wrong trade on the profile least
+   * able to run a multi-turn plan in the first place. Nothing said so: the two
+   * tools simply were not in the request.
+   *
+   * So the order is by what a turn loses without it: reading and remembering,
+   * then hands, then the catalogue, then the web, then these. On a frontier
+   * profile (cap 24) nothing is cut and the order is invisible; on the small
+   * one it is the whole difference. `runtime-exposure.test.ts` pins the
+   * resulting set, so a future insertion cannot move a capability across the
+   * line without a test saying which one moved.
+   *
+   * Neither is optional on any install: they need no key, no probe and no
+   * daemon — a database is the whole dependency, and this runtime has one open.
+   * `wait` gets the store for one purpose only, counting how many turns this
+   * tenant already holds suspended; it cannot suspend anything by itself.
+   */
+  tools.push(makeWaitTool(turns), makeTodoTool(todos));
+
   const capabilities = new Map<string, CapabilityDecl>(
     [
       ...fsCapabilities,
@@ -408,6 +487,13 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
+      // Declared next to the tools above, in the same commit: a tool whose
+      // capability the kernel has never heard of is refused `no_capability` on
+      // its first call, and a capability with no tool is dead weight. The pair
+      // is what `register` keeps together for MCP, and this list is where the
+      // built-ins get the same treatment.
+      waitCapability,
+      todoCapability,
       // Declared only when the tool exists. A capability the kernel knows about
       // but nothing can invoke is the harmless direction; the dangerous one is a
       // tool the kernel has never heard of, and registering them together is
@@ -485,6 +571,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     safeMode,
     bootLines: [
       ...turnNotes,
+      ...waitingNotes,
+      ...undeliverableNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
       ...searchNotes,
@@ -518,6 +606,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // process, one handle. It is also what lets a turn record and the update
       // that produced it commit together the day the connector needs that.
       turns,
+      // The read half of `todo`. Required by `LoopDeps` on purpose: this is the
+      // seam that makes the plan a mechanism, and a surface that forgot it would
+      // keep writing rows nobody is shown.
+      todos,
       budgetExhausted: (tenant) => budget.exhausted() || budget.tenantExhausted(tenant),
       recordSpend,
       // The seam the loop never had. It is what turns "a turn ended" into "the

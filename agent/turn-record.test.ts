@@ -9,6 +9,7 @@ import type { CapabilityDecl, Principal, TrustTier } from '../core/policy/types.
 import { SessionStore } from '../core/session/store.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
@@ -102,6 +103,7 @@ function harness(
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns: new TurnStore(db),
+    todos: new TodoStore(db),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin in un gruppo.' },
   };

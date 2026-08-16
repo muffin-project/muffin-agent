@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +12,38 @@ import type { LoopDeps } from '../../agent/loop.js';
 import type { Provider } from '../../agent/providers/types.js';
 import { CONSERVATIVE } from '../../agent/profiles/profile.js';
 import { SessionStore } from '../../core/session/store.js';
+import { TurnStore, type DeliveryState } from '../../core/turns/store.js';
+import { TodoStore } from '../../core/turns/todo.js';
 import type { DiscordApi, DiscordMessage } from './api.js';
+
+/**
+ * A real `TurnStore`, not a hand-rolled fake with `create: () => {}`.
+ *
+ * `agent/loop.ts`'s `drive()` (`slice/turno-sospeso`) rebuilds `TurnInput` from
+ * the **return value** of `turns.create(...)`, not from the caller's own
+ * `input` — one body for a fresh turn and a resumed one, because two would
+ * drift. A fake that returns `undefined` from `create` was invisible while
+ * `drive` still read off `input`; merged with that slice, every turn in this
+ * file threw `Cannot read properties of undefined (reading 'principal')`
+ * before ever reaching the model — the connector's own `try` around
+ * `runTurn` swallowed it as a failed turn, so `h.sent` stayed empty and read
+ * as "never answered" instead of the real cause. A real store is what every
+ * comparable test in this repo already uses (`connectors/telegram/turn-record.test.ts`,
+ * `core/turns/lane.test.ts`) for exactly this reason: the contract a fake has
+ * to honour is `TurnStore`'s real one, and a hand-written stub drifts from it
+ * silently.
+ */
+function fakeTurns(delivered: [string, DeliveryState][]): LoopDeps['turns'] {
+  const store = new TurnStore(new DatabaseCtor(':memory:'));
+  // `delivered` shadows the prototype method on this one instance so the
+  // tests below can still assert on what was recorded, without re-deriving it
+  // from a second `store.get(id)` read.
+  store.delivered = (id: string, state: DeliveryState): void => {
+    delivered.push([id, state]);
+    TurnStore.prototype.delivered.call(store, id, state);
+  };
+  return store;
+}
 
 /**
  * The two decisions this file makes that nothing downstream can correct: what
@@ -87,7 +119,7 @@ describe('who is speaking', () => {
 function harness(over: { attachment?: { filename: string; content: string } } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-discord-connector-'));
   const sent: { channelId: string; text: string }[] = [];
-  const delivered: [string, string][] = [];
+  const delivered: [string, DeliveryState][] = [];
   const reindexed: { tenantId: string; path: string; tier: number }[] = [];
 
   const api = {
@@ -114,12 +146,14 @@ function harness(over: { attachment?: { filename: string; content: string } } = 
     model: 't',
     tools: [],
     decide: () => ({ effect: 'allow' as const }),
-    tracer: { start: () => ({ traceId: 't', setAttributes: () => {}, end: () => {} }) },
+    // A fresh id per call, not a shared constant: `deps.turns.create` now
+    // persists a row keyed by `traceId` (`slice/turno-sospeso`), and `turns`
+    // PRIMARY KEYs on `id` — two turns sharing one hardcoded id collided the
+    // moment a real `TurnStore` sat behind this fake.
+    tracer: { start: () => ({ traceId: randomUUID(), setAttributes: () => {}, end: () => {} }) },
     sessions: new SessionStore(home),
-    turns: {
-      create: () => {},
-      delivered: (id: string, state: string) => delivered.push([id, state]),
-    },
+    turns: fakeTurns(delivered),
+    todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'x', group: 'x' },
   } as unknown as LoopDeps;
@@ -191,9 +225,11 @@ describe('durability — a message survives a failure mid-turn', () => {
       model: 't',
       tools: [],
       decide: () => ({ effect: 'allow' as const }),
-      tracer: { start: () => ({ traceId: 't', setAttributes: () => {}, end: () => {} }) },
+      // A fresh id per call — see `fakeTurns`'s docstring above.
+      tracer: { start: () => ({ traceId: randomUUID(), setAttributes: () => {}, end: () => {} }) },
       sessions: new SessionStore(home),
-      turns: { create: () => {}, delivered: () => {} },
+      turns: fakeTurns([]),
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'x', group: 'x' },
     } as unknown as LoopDeps;
@@ -248,9 +284,11 @@ describe('concurrency — two dispatches close together (D2)', () => {
       model: 't',
       tools: [],
       decide: () => ({ effect: 'allow' as const }),
-      tracer: { start: () => ({ traceId: 't', setAttributes: () => {}, end: () => {} }) },
+      // A fresh id per call — see `fakeTurns`'s docstring above.
+      tracer: { start: () => ({ traceId: randomUUID(), setAttributes: () => {}, end: () => {} }) },
       sessions: new SessionStore(home),
-      turns: { create: () => {}, delivered: () => {} },
+      turns: fakeTurns([]),
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'x', group: 'x' },
     } as unknown as LoopDeps;
