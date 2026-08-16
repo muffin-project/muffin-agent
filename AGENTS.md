@@ -4,8 +4,10 @@ For agents — including this project's own agent, once it can work on itself.
 
 Read `docs/THESIS.md` for what this is betting on and `docs/DESIGN-PRINCIPLES.md`
 for how decisions get made. `docs/BRANCHING.md` says where work lives and what
-`main` means — including the two rules there that are conventions rather than
-mechanisms, because the repo has neither branch protection nor CI. Read `docs/lessons.md` before you add a guard: it is
+`main` means — including the rule that remains a convention rather than a
+mechanism because the repo has no branch protection. CI exists and verifies
+PRs plus pushes to `dev`/`main`; it cannot by itself forbid an unchecked merge.
+Read `docs/lessons.md` before you add a guard: it is
 a list of guards this repository already wrote and failed to connect.
 
 ## The one rule that has cost the most to learn

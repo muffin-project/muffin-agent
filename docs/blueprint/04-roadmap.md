@@ -87,10 +87,10 @@ Regole: ogni cartella contiene i *propri* tipi, schema, prompt, test e un README
 - **Config**: allowlist MCP — owner · primo uso di un server (chiede) · senza: nessun MCP; credenziali forge — owner · primo uso `dev` remoto · senza: `dev` solo locale.
 
 ### M4 — Connector Telegram *(durevole nel pattern, sostituibile nell'istanza)*
-- **Include**: transport tipato (pattern P0-P7); mapping sessioni `(tenant, connector, thread)`; **renderer capability-aware** (direttiva owner: il connector dichiara `text|image|file|card|…` e si sceglie il mezzo più ricco, non il più verboso — su Telegram: formattazione nativa, foto/documenti, card-immagine via Chromium headless se presente); ingestion di media/documenti nel vault.
+- **Include**: transport tipato (pattern P0-P7) con confine identità/contenuto di ADR-0046: owner da subject-id stabile autenticato e protetto, mai da metadata; ogni campo model-visible parsato in blocchi con provenienza/taint; mapping sessioni `(tenant, connector, thread)`; **renderer capability-aware** (direttiva owner: il connector dichiara `text|image|file|card|…` e si sceglie il mezzo più ricco, non il più verboso — su Telegram: formattazione nativa, foto/documenti, card-immagine via Chromium headless se presente); ingestion di media/documenti nel vault.
 - **NON include**: gruppi multi-tenant completi (M7), Discord/altri (post-v1), MCP Apps (post-v1).
 - **Dipendenze**: M1-M2 (M3 per azioni). **Prerequisiti**: bot token.
-- **DoD**: scrivo al bot dal telefono: stessa memoria della CLI (stessa istanza host); gli mando un PDF → nel vault, indicizzato, interrogabile; la risposta a una richiesta di sintesi arriva come card leggibile (o testo asciutto se Chromium assente — degradazione dichiarata); dopo riavvio la conversazione riprende dal punto giusto.
+- **DoD**: scrivo al bot dal telefono: stessa memoria della CLI (stessa istanza host); un account con nome/bio/foto dell'owner resta `member`, mentre l'account pairato conserva `owner` anche se cambia display name; ogni campo accettato arriva al loop come blocco tipizzato col tier e un formato non supportato fallisce visibilmente; gli mando un PDF → nel vault, indicizzato, interrogabile; la risposta a una richiesta di sintesi arriva come card leggibile (o testo asciutto se Chromium assente — degradazione dichiarata); dopo riavvio la conversazione riprende dal punto giusto.
 - **Config**: bot token — owner · attivazione connector · senza: connector spento (il resto vive); resa rich-media — auto (rileva Chromium) · runtime · senza: testo.
 
 ### M5 — Scheduler & proattività *(cron durevole; soglia di proattività = impalcatura etichettata)*
@@ -690,6 +690,44 @@ Fuori da entrambi i gate (post-v1): community cross-connector, system layer "fla
 
 ---
 
-## 5. Post-v1 (direzioni con segnale, dettaglio in 07)
+## 5. Dopo i gate: la direzione è continuità, non una coda di feature
 
-Community cross-connector (segnale: M7 stabile + richiesta reale); MCP Apps dashboard (segnale: host adoption che copre i canali dell'owner); system layer flagship (segnale: computer-use long-horizon sopra soglia utile o API OS deterministiche — solo allora "MuffinOS" torna sul tavolo, V12); connector aggiuntivi; outward module (mail/calendar con draft-by-default, pattern HumanLayer fattore-7: HITL come tool call).
+ADR-0045 non cambia l'ordine M0→M7 e non aggiunge blocker al test dei quattordici
+giorni. Cambia la domanda con cui si ordina ciò che viene dopo: non “quale
+integrazione manca rispetto a un peer?”, ma **“quale interfaccia diretta può
+diventare una superficie dello stesso agente senza perdere controllo?”**.
+
+La progressione è questa, e non sono nuovi moduli numerati:
+
+1. **Continuità operativa** — il lavoro vive oltre la richiesta: turni durevoli,
+   `wait`, resume, progresso, consegna e recovery. È il fondo del Gate 1 e vive
+   oggi nell'inventario M5-bis.
+2. **Presenza** — l'agente distingue evidenza, credenze, stato del mondo e stato
+   del lavoro; osserva eventi autorizzati e sa agire, aspettare, tacere,
+   interrompere o abbandonare. Prima un consumer concreto, poi qualunque schema
+   di world state.
+3. **Autonomia guadagnata** — la supervisione si comprime per capability,
+   risorsa e contesto su esiti osservabili, reversibili o recuperabili. Revoca,
+   scadenza e regressione sono parte della concessione. Il kernel e il Root of
+   Trust non si allargano e il modello non arbitra la sicurezza.
+4. **Ubiquità** — nuovi device diventano porte dello stesso agente. Voce,
+   speaker, pendant e sensori non hanno memoria, persona o policy proprie.
+5. **Sostituzione verificata** — una direzione ha valore quando l'owner smette
+   davvero di aprire un'app, un pannello o un device direttamente senza perdere
+   possibilità di intervento.
+
+### Direzioni con il loro segnale
+
+- **Outward mail/calendar** — quando il modello di reversibilità è provato e il
+  threat model delle sorgenti in ingresso è chiuso; parte draft-by-default.
+- **Connector o device aggiuntivo** — quando copre un'interfaccia usata davvero
+  dall'owner e implementa il contratto di surface; non per parità di catalogo.
+- **World state materializzato** — quando un consumer reale dimostra quali
+  condizioni correnti servono, con provenienza, freschezza, ritiro e tenancy.
+- **Autonomia guadagnata** — quando esiste una storia di esiti sufficiente a
+  definire e falsificare una concessione scoped; mai da familiarità generica.
+- **Community cross-connector** — M7 stabile + richiesta reale.
+- **MCP Apps/dashboard** — adozione host che copre i canali dell'owner, senza
+  aprire un secondo scrittore del database contro ADR-0022.
+- **System layer flagship** — computer-use long-horizon sopra soglia utile o API
+  OS deterministiche; solo allora “MuffinOS” torna sul tavolo (V12).

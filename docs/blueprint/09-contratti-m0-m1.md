@@ -9,7 +9,7 @@
 ```ts
 // core/policy/types.ts
 type Principal =
-  | { kind: 'owner';  connector: ConnectorId }                    // l'owner, da qualunque canale autenticato
+  | { kind: 'owner';  connector: ConnectorId; externalId: string } // subject-id autenticato, mai display metadata
   | { kind: 'member'; connector: ConnectorId; tenantId: TenantId; externalId: string }
   | { kind: 'system'; source: 'scheduler' | 'consolidation' | 'ratchet' }
   | { kind: 'agent';  role: 'dev' };                              // Muffin che lavora su se stesso
@@ -43,6 +43,36 @@ function decide(req: {
 - **`tenant` è ridondante ma esplicito (A2)**: `decide()` verifica la coerenza col principal e restituisce `deny/tenant_mismatch` se divergono — è un guard contro bug del chiamante, non una scelta del chiamante.
 - **`args` sono i parametri già validati dallo schema del tool** (non JSON raw dal modello): la validazione di schema precede sempre la policy. Il kernel ispeziona solo i campi che la dichiarazione di capability marca come `policyArgs` (A4).
 - **In M1 il taint è determinato dal solo principal** (owner→0, member→2, system→eredita dal job, agent→0) perché la memoria non esiste ancora (F3). Da M2 è `max(tier dei blocchi in context)`.
+
+### Confine d'ingresso delle surface (ADR-0046; B15-B16 aperte)
+
+Il connector produce due risultati che non possono essere ricavati l'uno
+dall'altro:
+
+1. **Identità di trasporto** → principal. `owner` richiede un binding protetto
+   fra connector/issuer e un subject-id stabile autenticato dalla piattaforma.
+   Il binding nasce da pairing nel control plane locale; un cambio richiede
+   re-pairing esplicito e auditato. Chat id e destinazione di delivery non sono
+   identità. Username, display name, bio, foto, room title e contenuto non sono
+   mai segnali di autorità. Se la surface non offre un subject stabile e
+   autenticato, non può produrre `owner`.
+2. **Envelope di contenuto** → `ContentBlock[]`. Ogni campo model-visible viene
+   parsato e normalizzato in un tipo chiuso con `kind`, fonte, media type e
+   `TrustTier`: testo/caption, quote e forward, filename, nomi e bio, metadata,
+   immagini/descrizioni/OCR, audio/trascrizioni, file e risultati di tool. Un
+   derivato eredita il massimo tier delle fonti. Un formato sconosciuto non
+   cade su stringa raw: viene rifiutato o quarantinato con un errore esplicito.
+
+Parsing e schema **non sono sanificazione**. Ogni valore resta dati non fidati
+e viene delimitato nel prompt; si assume che possa contenere prompt injection.
+Principal, tenant, ruolo del blocco e tier vengono assegnati fuori dal modello e
+non sono sovrascrivibili dal contenuto.
+
+Telegram oggi prova il primo percorso su `from.id` più chat privata, inclusa
+l'impersonazione via display name; il binding vive ancora nella config ordinaria
+e il contratto universale dei blocchi non è implementato. Per questo B15 e B16
+restano `BLOCKER`: questa sezione è il contratto da raggiungere, non una garanzia
+attribuita al runtime attuale.
 
 ### Dichiarazione di capability di un tool (A3, A8, B2)
 
