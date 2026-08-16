@@ -587,7 +587,7 @@
     },
     {
       "what": "I tetti di spesa sono solo globali/per-tenant-giorno: non esiste un limite per singolo job basato sui token",
-      "evidence": "docs/blueprint/M5-BIS.md:219; docs/blueprint/04-roadmap.md:613-617; defaults/rot/budgets.json ha solo monthlyUsd e perTenantDailyUsd",
+      "evidence": "docs/blueprint/M5-BIS.md:253; docs/blueprint/04-roadmap.md:613-617; defaults/rot/budgets.json ha solo monthlyUsd e perTenantDailyUsd",
       "why_it_matters": "Un processo che vive senza un owner davanti allo schermo puo' trasformare un job rotto in un ciclo che spende l'intero budget del mese prima che il cap mensile se ne accorga."
     },
     {

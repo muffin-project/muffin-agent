@@ -2154,9 +2154,9 @@
     "line": 262,
     "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
   },
-  "docs/blueprint/M5-BIS.md:219": {
+  "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 246,
+    "line": 253,
     "testo": "| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |"
   },
   "executor.ts:112": {
