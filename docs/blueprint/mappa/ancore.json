@@ -1661,7 +1661,7 @@
   },
   "core/memory/store.ts:709": {
     "path": "core/memory/store.ts",
-    "line": 709,
+    "line": 724,
     "testo": "episodeById(tenantId: string, id: number): Episode | null {"
   },
   "core/memory/vectors.ts:106": {
@@ -2791,7 +2791,7 @@
   },
   "store.ts:657": {
     "path": "core/memory/store.ts",
-    "line": 657,
+    "line": 672,
     "testo": "provenanceOf("
   },
   "tracer.ts:94": {
