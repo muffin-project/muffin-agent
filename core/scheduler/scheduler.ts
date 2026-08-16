@@ -1,3 +1,4 @@
+import type { TurnStopped } from '../turns/store.js';
 import type { Job, JobStore } from './jobs.js';
 
 /**
@@ -41,8 +42,19 @@ export const ALWAYS_IDLE: ForegroundGate = {
 };
 
 export type JobOutcome = {
-  /** How the turn ended — 'aborted' means it yielded and must be retried. */
-  stopped: 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 'ask';
+  /**
+   * How the turn ended — 'aborted' means it yielded and must be retried, and
+   * 'suspended' means it has not ended at all (see `run`).
+   *
+   * Referenced from `core/turns/store.ts` rather than re-declared. This union
+   * had three literal copies — here, `TurnResult['stopped']` and the store's
+   * own `TurnOutcome` — and the design that produced the turn record named the
+   * divergence as this repo's typical defect *before* it happened
+   * (`research/turno-sospendibile.md` §Domanda 6). One reference means adding an
+   * arm reaches every consumer as a build error, which is how `suspended` got
+   * an answer here at all instead of being silently treated as an ending.
+   */
+  stopped: TurnStopped;
   /** What to deliver to the channel (the answer, or the queued question). */
   text: string;
 };
@@ -161,14 +173,30 @@ export class Scheduler {
       return;
     }
 
-    // Deliver the answer, or — for a scheduler-principal ASK queued by the
-    // kernel — the question the owner has to decide. Either way it is the job's
-    // outcome for this fire; a delivery failure does not re-run the job (that
-    // would double the work), it is reported.
-    try {
-      await this.deliver(job.channel, outcome.text);
-    } catch (error) {
-      this.onEvent({ kind: 'delivery_failed', job, error: error instanceof Error ? error.message : String(error) });
+    /**
+     * A suspended turn is delivered by whoever resumes it, not here.
+     *
+     * It sits between the two arms above and the write below, and it belongs to
+     * neither. It is **not** a yield: the turn released the runtime on purpose,
+     * its row says `waiting`, and the lane will pick it up at its deadline — so
+     * leaving the job due would fire a *second* turn for the same goal while the
+     * first is still owed, which is the duplicate execution the whole record
+     * exists to prevent. And it is not a completion either: there is nothing to
+     * say yet, and sending the placeholder text would tell the owner a job
+     * answered when it has not started answering.
+     *
+     * So: no delivery, and `markRan` all the same — the fire happened.
+     */
+    if (outcome.stopped !== 'suspended') {
+      // Deliver the answer, or — for a scheduler-principal ASK queued by the
+      // kernel — the question the owner has to decide. Either way it is the job's
+      // outcome for this fire; a delivery failure does not re-run the job (that
+      // would double the work), it is reported.
+      try {
+        await this.deliver(job.channel, outcome.text);
+      } catch (error) {
+        this.onEvent({ kind: 'delivery_failed', job, error: error instanceof Error ? error.message : String(error) });
+      }
     }
 
     // `markRan` inside the guard, for a measured crash rather than out of

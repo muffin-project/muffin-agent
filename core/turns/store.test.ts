@@ -36,6 +36,8 @@ const spec = (over: Partial<NewTurn> = {}): NewTurn => ({
     nudgedForCompletion: false,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
     spentUsd: 0,
+    resumes: 0,
+    contextBuilt: false,
   },
   ...over,
 });

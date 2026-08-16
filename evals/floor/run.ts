@@ -13,6 +13,7 @@ import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TurnStore } from '../../core/turns/store.js';
+import { TodoStore } from '../../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import { SCENARIOS, type Scenario, type Verdict } from './scenarios.js';
 
@@ -105,6 +106,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
   // The floor runs the production loop, so it gets the production record too:
   // an eval on a shape the runtime does not have measures nothing.
   const turns = new TurnStore(db);
+  const todos = new TodoStore(db);
   const started = Date.now();
 
   try {
@@ -125,6 +127,7 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
         tracer: new SimpleTracer(new JsonlExporter(home)),
         sessions,
         turns,
+        todos,
         budgetExhausted: () => budget.exhausted(),
         // The floor is measured on the owner class: the scenarios run as the
         // owner on the host tenant, and a capability floor is about what the

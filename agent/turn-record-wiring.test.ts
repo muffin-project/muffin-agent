@@ -147,6 +147,8 @@ describe('buildRuntime puts the turn record on the real path', () => {
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
         spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
       },
     });
     const seen = runtime.db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
@@ -229,6 +231,8 @@ describe('a turn a dead process was holding', () => {
         nudgedForCompletion: false,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
         spentUsd: 0,
+        resumes: 0,
+        contextBuilt: false,
       },
     });
     const other = buildRuntime(home, ws);

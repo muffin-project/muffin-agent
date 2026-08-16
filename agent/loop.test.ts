@@ -8,6 +8,7 @@ import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
+import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
@@ -109,7 +110,12 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   ];
 
   const store = new SessionStore(home);
-  const turns = new TurnStore(new DatabaseCtor(':memory:'));
+  // One handle for both, as production has it: the plan and the turn record live
+  // on the same connection (ADR-0022), so a test can see a `todo` a turn wrote
+  // from the row that same turn left behind.
+  const db = new DatabaseCtor(':memory:');
+  const turns = new TurnStore(db);
+  const todos = new TodoStore(db);
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -124,11 +130,12 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: store,
     turns,
+    todos,
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     ...overrides,
   };
-  return { deps: base, store, turns, home, calls };
+  return { deps: base, store, turns, todos, home, calls };
 }
 
 const input = (store: SessionStore, principal: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' }) => ({
@@ -387,6 +394,7 @@ describe('agent loop', () => {
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: store,
       turns: new TurnStore(new DatabaseCtor(':memory:')),
+      todos: new TodoStore(new DatabaseCtor(':memory:')),
       budgetExhausted: () => false,
       systemPrompts: { owner: 'test', group: 'test in gruppo' },
     };
