@@ -8,6 +8,10 @@ const base: TurnResult = {
   traceId: 't',
   turnId: 't',
   stopped: 'answered',
+  // Nothing here reads it — `jobOutcomeFromTurn` maps a stop reason to a
+  // message. Present because the type requires it, and the type requires it so
+  // that a caller writing something derived from a turn cannot forget to ask.
+  taint: 0,
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 };
 
