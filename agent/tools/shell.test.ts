@@ -177,10 +177,12 @@ describe('what a command hands back is disk content', () => {
     // ask, which is what "leggi il file e poi lancia i test" needs to still be
     // completable with the owner's yes. The floor stays real: nothing here
     // reaches `taint === 0`, so the auto-allow itself is still unreachable once
-    // anything has been read, and a taint-3 turn (a second read, or any
-    // web/search/mcp result) is still a flat `taint_exceeded` deny — egress
-    // stays shut, only the ask survives. Widening this again requires a test in
-    // the diff, same as this one.
+    // anything has been read, and a taint-3 turn — a web/search/mcp result,
+    // never a second read: `raiseTaint` only ever raises to the max it has
+    // seen, so a second DISK_TIER (2) read still leaves the turn at 2 — is
+    // still a flat `taint_exceeded` deny — egress stays shut, only the ask
+    // survives. Widening this again requires a test in the diff, same as this
+    // one.
     const decide = createDecide({
       capabilities: new Map([[shellCapability.id, shellCapability]]),
       matrix: POLICY_FLOOR,
