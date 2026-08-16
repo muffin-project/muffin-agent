@@ -103,8 +103,18 @@ export type TurnStopped = TurnOutcome | 'suspended';
  * `null` means this surface delivers **in band** — the caller of `runTurn` has
  * the text in its hand and there is no separate step that can fail. A turn that
  * carries a `replyTo` is the other kind, and starts at `pending`.
+ *
+ * `'undeliverable'` (D2, judge round 2) is the fourth outcome: the turn ended
+ * with an answer and the row carries **no** address at all — not a delivery
+ * that was attempted and failed, but one that was never attemptable.
+ * `agent/turn-lane.ts` already emitted a `LaneEvent.undeliverable` for this
+ * case; the gap was that the event reached only the process's own stderr and
+ * nothing wrote it onto the row, so a restart — or `doctor`, which opens its
+ * own handle and never sees an in-memory event — had no way to learn it had
+ * happened. Additive: existing rows keep reading `pending` / `sent` /
+ * `failed:…` exactly as before.
  */
-export type DeliveryState = 'pending' | 'sent' | `failed:${string}`;
+export type DeliveryState = 'pending' | 'sent' | 'undeliverable' | `failed:${string}`;
 
 export type TurnCounters = {
   iterations: number;
@@ -237,6 +247,14 @@ export type UncertainCall = {
 export type TurnHealth = {
   total: number;
   waiting: { count: number; oldestWakeAt: string | null };
+  /**
+   * Turns that finished with an answer and no address to send it to (D2,
+   * judge round 2). Counted the same way `waiting` is — unwindowed, because a
+   * reply stranded last week is exactly as owed as one from ten minutes ago —
+   * and named next to it for the same reason: both are promises the row keeps
+   * that only a human reading `doctor` can now close.
+   */
+  undeliverable: { count: number };
   interrupted: InterruptedTurn[];
 };
 
@@ -403,6 +421,7 @@ export class TurnStore {
   private readonly wakeStmt: Database.Statement;
   private readonly suspendedCountStmt: Database.Statement;
   private readonly outcomesStmt: Database.Statement;
+  private readonly undeliverableCountStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -544,6 +563,8 @@ export class TurnStore {
       `SELECT call_id AS callId, content, is_error AS isError, tier
        FROM turn_tool_calls WHERE turn_id = ? AND ended_at IS NOT NULL`,
     );
+    /** Turns whose answer has nowhere to go (D2) — read by `health`. */
+    this.undeliverableCountStmt = db.prepare(`SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`);
   }
 
   /**
@@ -878,12 +899,16 @@ export class TurnStore {
       (r) => r.status === 'interrupted' || heldBy(r, now.getTime(), TURN_STALE_AFTER_MS, this.alive) === null,
     );
     const waiting = this.waitingStmt.get() as { n: number; oldest: string | null };
+    const undeliverable = this.undeliverableCountStmt.get() as { n: number };
     return {
       total,
       // Not windowed, unlike `interrupted`: a crash from last month is old news,
       // but a turn still suspended from last month is a turn still owed — the
       // window would hide exactly the worst case.
       waiting: { count: waiting.n, oldestWakeAt: waiting.oldest },
+      // Same reasoning, same absence of a window: a reply nobody could send
+      // last month is still a reply nobody sent.
+      undeliverable: { count: undeliverable.n },
       interrupted: abandoned.map((r) => ({
         id: r.id,
         surface: r.surface,

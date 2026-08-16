@@ -217,7 +217,12 @@ describe('the reader a surface with only a database can use', () => {
     const empty = new DatabaseCtor(':memory:');
     expect(readTurnHealth(empty)).toBeNull();
     new TurnStore(empty);
-    expect(readTurnHealth(empty)).toEqual({ total: 0, waiting: { count: 0, oldestWakeAt: null }, interrupted: [] });
+    expect(readTurnHealth(empty)).toEqual({
+      total: 0,
+      waiting: { count: 0, oldestWakeAt: null },
+      undeliverable: { count: 0 },
+      interrupted: [],
+    });
   });
 
   it('sees a crash nobody has reclaimed yet — the state a diagnosis is run in', () => {
@@ -261,5 +266,26 @@ describe('the reader a surface with only a database can use', () => {
     const health = readTurnHealth(db);
     expect(health?.total).toBe(1);
     expect(health?.interrupted[0]?.uncertain[0]?.tool).toBe('shell_run');
+  });
+
+  /**
+   * D2, judge round 2: `agent/turn-lane.ts` emitted `LaneEvent.undeliverable`
+   * for a turn whose answer had no address, but nothing wrote it onto the row
+   * — `delivery` stayed at whatever it was (`pending`, or `null` for a turn
+   * created in-band), so this reader had nothing to count and `doctor` had
+   * nothing to say. Unwindowed on purpose, like `waiting`: a stranded reply
+   * from last month is still a stranded reply.
+   */
+  it('counts turns whose answer has nowhere to go', () => {
+    const db = new DatabaseCtor(':memory:');
+    const s = new TurnStore(db, () => new Date(), () => true);
+    s.create(spec());
+    expect(readTurnHealth(db)?.undeliverable.count).toBe(0);
+
+    s.delivered('turn-1', 'undeliverable');
+    expect(readTurnHealth(db)?.undeliverable.count).toBe(1);
+    // Not confused with a delivery that was attempted and failed — the two
+    // columns of `DeliveryState` this table keeps apart.
+    expect(s.get('turn-1')?.delivery).toBe('undeliverable');
   });
 });

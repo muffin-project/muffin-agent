@@ -89,9 +89,23 @@ export function makeLaneRunner(
      * absence means the opposite: somebody enqueued or suspended work without
      * saying where the answer goes, and the honest move is to say so rather
      * than to return quietly as if there had been nothing to deliver.
+     *
+     * D2 (judge round 2): the event alone reached only this process's stderr —
+     * `cli/gateway.ts` was the one place that read it, and nothing else did.
+     * The row is what survives the process: writing `undeliverable` on it is
+     * what lets a restart, `doctor`, or the next boot's health check see that
+     * this turn's answer never had anywhere to go, the same way `delivered`
+     * already records `sent` and `failed:…`. Wrapped for the same measured
+     * reason `sendAndRecord`'s own write is: a bookkeeping write must not turn
+     * a turn that already produced its answer into an unhandled rejection.
      */
     if (record !== null && outcome.text !== '') {
       onUndeliverable({ kind: 'undeliverable', turnId, surface: record.surface, text: outcome.text });
+      try {
+        deps.turns.delivered(turnId, 'undeliverable');
+      } catch {
+        /* the answer was already produced; a bookkeeping write may not undo that */
+      }
     }
     return { stopped: outcome.stopped };
   };

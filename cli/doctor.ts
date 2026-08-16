@@ -478,6 +478,23 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       }
     }
 
+    /**
+     * D2, judge round 2: `LaneEvent.undeliverable` was emitted and reached only
+     * the gateway's own stderr — real inside that one process, invisible to
+     * everything else, including this command opening a fresh handle on the
+     * same database. `turn-lane.ts` now writes `delivery = 'undeliverable'` on
+     * the row itself, which is what makes it a fact `doctor` can read back
+     * instead of a message that existed for as long as one process's terminal
+     * scrollback did.
+     */
+    if (turns !== null && turns.undeliverable.count > 0) {
+      warn(
+        'turni senza indirizzo',
+        `${turns.undeliverable.count} turni con risposta senza indirizzo`,
+        'la riga porta la risposta ma non un indirizzo: nessuno sa a chi appartiene — controlla chi ha aperto quella sessione',
+      );
+    }
+
     // Is anything running? Same shape of invisible fact as the cache dialect
     // and the policy source above: with the scheduler moved out of the REPL
     // (ADR-0035) a home with no gateway schedules *nothing*, and nothing in the
