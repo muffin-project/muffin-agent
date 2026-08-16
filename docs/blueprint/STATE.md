@@ -37,7 +37,8 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Attiva: **PR #30**, `slice/agente-continuo`→`dev`, commit `ed46bc8`, draft.
+Attiva: **PR #30**, `slice/agente-continuo`→`dev`; le correzioni chieste dal
+primo judge `ADJUST` sono verificate e serve un nuovo verdetto terminale.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -522,12 +523,13 @@ draft PR quando la decisione è fissata, review al checkpoint completo, merge in
 
 **Verifica del checkpoint.** `npm run build` è verde. `npm test`, eseguito fuori
 dal sandbox Codex perché Seatbelt deve poter applicare davvero i profili macOS,
-chiude **96 file: 1.074 test passati, 1 saltato, 0 falliti**. La prima esecuzione
+chiude **96 file: 1.075 test passati, 1 saltato, 0 falliti**. La prima esecuzione
 ha trovato un fixture PDF legato al giorno di calendario: il tool chiedeva il
 path del 15 agosto mentre il connector lo nominava col giorno corrente. Il test
 ora pinna l'orologio del connector e torna verde sul percorso di produzione.
 Mappa e handoff sono nuovamente eseguibili: 565 ancore verificate; i blocchi
-iniettati misurano 3.038 (`STATE`) e 1.047 (`LAVORO`) caratteri, senza taglio.
+iniettati entrano interi nel limite e il test del hook fallisce se uno dei due
+viene troncato.
 
 Graphify ha prodotto localmente il grafo usato per interrogare relazioni fra
 loop, turn store, gateway, policy, memory e surface; gli artefatti generati sono
@@ -535,9 +537,13 @@ ignorati da git. Il report non è un certificato: segnala 553 archi con endpoint
 non risolto, quindi il grafo resta utile per navigazione ma non autorizza claim
 di copertura completa.
 
-Checkpoint pubblicato: commit `ed46bc8` su `slice/agente-continuo`, draft PR
-**#30** verso `dev`. Non è stata fusa: il checkpoint successivo è un judge nuovo
-con verdetto terminale, non l'esistenza della PR.
+Checkpoint pubblicato: PR **#30**, `slice/agente-continuo` verso `dev`. Il primo
+judge ha restituito `ADJUST`: CI descritta falsamente, stato legato a un hash
+volatile, prova anti-impersonazione solo isolata e fonte ADR non persistita. La
+correzione aggiunge la prova sul percorso inbox → connector → loop e riallinea i
+documenti. Il test nuovo diventa rosso mutando `from.id` in `chat.id`; dopo il
+ripristino, build, 31 test mirati e suite completa sono verdi. Un judge nuovo
+deve ancora emettere il verdetto terminale.
 
 ## Sessioni 2026-08-09
 

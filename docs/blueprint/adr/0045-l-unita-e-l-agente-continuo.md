@@ -1,7 +1,8 @@
 # ADR-0045 — L'unità è l'agente continuo
 
-**Stato:** accettato · 2026-08-16 · direzione owner dalla conversazione
-`muffin-hermes-chat-verbatim.md` · non modifica da sola alcun permesso
+**Stato:** accettato · 2026-08-16 · direttiva owner nella sessione di progetto;
+il contenuto normativo rilevante è riportato in questa ADR · non modifica da
+sola alcun permesso
 
 ## Contesto
 

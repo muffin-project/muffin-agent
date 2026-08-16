@@ -80,5 +80,9 @@ Detto qui perché la regola sopra sembra applicata e non lo è. Quando il repo
 diventerà pubblico, o con Pro, la protezione va accesa: è il gradino quattro
 della scala di `PRACTICES.md` §6 per una regola che oggi sta al gradino uno.
 
-**Nessuna CI.** Non esiste `.github/workflows`. Build e test girano perché
-qualcuno li lancia. Stesso discorso: la regola 3 è disciplina, non cancello.
+**La CI esiste, il gate no.** `.github/workflows/ci.yml` esegue typecheck e suite
+su ogni PR e sui push a `dev`/`main`, col sandbox Linux richiesto. Questo rende
+il risultato osservabile e ripetibile; senza branch protection non obbliga però
+GitHub a richiedere il verde prima del merge o a impedire un push diretto.
+Quindi la regola 3 ha un meccanismo di verifica, ma il suo enforcement resta una
+convenzione finché la protection non può rendere il check obbligatorio.
