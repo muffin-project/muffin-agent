@@ -515,6 +515,67 @@ describe('recall', () => {
     expect(result.items.some((i) => i.id === cliEp)).toBe(false);
   });
 
+  it('U2: gates a retired episode on the semantic half too, not only full text', async () => {
+    // Neither `expired`/`old` retirement gate has a test that fails without
+    // it: `searchEpisodes` (text) already had one to lean on, so an existing
+    // test proving "retired stays out" could pass on the graph/text path
+    // alone and never touch this guard.
+    const { store, vectors } = harness();
+    const id = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'appunto ormai vecchio sulla regata', trustTier: 0, createdAt: NOW,
+    });
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: id, text: 'appunto ormai vecchio sulla regata' }], NOW);
+    store.supersedeEpisodes(HOST, [id], NOW);
+
+    // No shared word with the episode's own text in either query: only the
+    // vector half, matching by meaning, can retrieve this row at all — so a
+    // pass here can only be explained by the guard, not by the text half.
+    const now = await recall({ store, vectors }, HOST, 'vela barca mare');
+    expect(now.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(false);
+    // Non-vacuous: the row really is reachable through this half once history
+    // is asked for, so the negative above is not just "nothing was indexed".
+    const history = await recall({ store, vectors }, HOST, 'vela barca mare', { asOf: EVERY_INSTANT });
+    expect(history.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(true);
+  });
+
+  it('U2: filters the semantic half by a date window too, not only full text', async () => {
+    const { store, vectors } = harness();
+    const id = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'nota fuori finestra sulla regata', trustTier: 0, createdAt: '2026-01-01T10:00:00Z',
+    });
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: id, text: 'nota fuori finestra sulla regata' }], NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'vela barca mare', {
+      since: '2026-06-01T00:00:00.000Z',
+      until: '2026-09-01T00:00:00.000Z',
+    });
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(false);
+  });
+
+  it('U2: does not attach a successor to a fact retired by the duplicate sweep', async () => {
+    // Distinct from the rendering test above: this checks `successorOf`'s own
+    // output (`replacedBy`) directly, the primitive both the graph hop and the
+    // vector half call — not the string `temporalLabel` builds from it.
+    const { store, vectors } = harness(false);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due letture dello stesso fatto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'lives_in', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const dup = store.addFact({ ...base, objectValue: 'Cagliari' });
+    const keep = store.addFact({ ...base, objectValue: 'Cagliari' });
+    store.supersede(HOST, dup, keep, NOW, null);
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto', { asOf: EVERY_INSTANT });
+    const dupItem = result.items.find((i) => i.kind === 'fact' && i.id === dup);
+    expect(dupItem?.expired).toBe(true);
+    expect(dupItem?.replacedBy).toBeUndefined();
+  });
+
   it('does not let a superseded fact surface through the semantic half either', async () => {
     // The vector index never re-embeds on supersede, so the retired text stays
     // findable by meaning forever. The text half and the graph hop both gate on
