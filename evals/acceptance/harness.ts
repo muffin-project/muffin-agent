@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -43,13 +43,83 @@ const TSX = import.meta.resolve('tsx');
 
 export type Run = { code: number; out: string; err: string };
 
+/**
+ * Run the CLI as a child process — asynchronously, never `spawnSync`.
+ *
+ * This is not a style preference; `spawnSync` here reproduces a real deadlock,
+ * found by running it and reading the exact symptom rather than guessing from
+ * one. `startFakeProvider` runs its HTTP server on this same process's event
+ * loop. `spawnSync` blocks that event loop until the child exits. So a scenario
+ * that calls `muffin run` — which must reach back over loopback to the fake
+ * provider running right here — deadlocks: the child's request arrives, and
+ * the only thread that could answer it is frozen waiting synchronously for the
+ * child to finish. It manifests as `curl`/`fetch` timing out against a server
+ * that demonstrably works when awaited instead of blocked on
+ * (`node -e` probe, 2026-08-16: an in-process `await fetch()` against a
+ * same-process server returns 200; a `spawnSync('curl', …)` against the exact
+ * same server times out with 0 bytes received, because the accept-and-respond
+ * never gets a turn on the loop). `init` and `doctor` never triggered it only
+ * because they make no network call at all — the trap is scoped to exactly
+ * the scenarios that need the provider, which is the whole suite's point.
+ */
+function spawnAsync(
+  args: string[],
+  env: Record<string, string>,
+  cwd: string,
+  stdin: string,
+): Promise<Run> {
+  return new Promise((resolvePromise) => {
+    const child = spawn('node', ['--import', TSX, CLI, ...args], {
+      env: { ...process.env, ...env },
+      cwd,
+      timeout: 120_000,
+    });
+    let out = '';
+    let err = '';
+    let settled = false;
+    // A spawn that never ran (ENOENT, a timeout, a signal) has `code === null`
+    // and an empty stderr — which reads exactly like "the command printed
+    // nothing", the least debuggable failure a scenario can produce. Say what
+    // actually happened instead. Guarded against a double resolve: Node does
+    // not guarantee 'error' and 'close' are mutually exclusive.
+    const finish = (code: number | null, signal: NodeJS.Signals | null, spawnError?: Error): void => {
+      if (settled) return;
+      settled = true;
+      const suffix =
+        (spawnError ? `\n[spawn] ${spawnError.message}` : '') +
+        (signal ? `\n[spawn] ucciso da ${signal}` : '');
+      resolvePromise({ code: code ?? -1, out, err: err + suffix });
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (c: string) => {
+      out += c;
+    });
+    child.stderr.on('data', (c: string) => {
+      err += c;
+    });
+    child.on('error', (e) => finish(null, null, e));
+    child.on('close', (code, signal) => finish(code, signal));
+    // Closed immediately even when empty: `cmdSecret` reads stdin with a
+    // blocking `readFileSync(0)`, which waits for EOF. Never sending it is how
+    // a scenario that never touches `secret set` would still hang.
+    child.stdin.end(stdin);
+  });
+}
+
 export type Install = {
   home: string;
   /** The scratch directory the child runs in — the agent's filesystem scope. */
   workspace: string;
   provider: FakeProvider;
-  /** One CLI invocation, one process. */
-  muffin(args: string[], stdin?: string): Run;
+  /**
+   * One CLI invocation, one process.
+   *
+   * Async, and it must stay that way. See `spawnAsync` below: the fake
+   * provider's HTTP server lives in this same process, and a synchronous
+   * child-process wait blocks the event loop that server needs to answer.
+   */
+  muffin(args: string[], stdin?: string): Promise<Run>;
   /** The home database, read-only, for asserting state instead of prose. */
   db<T>(read: (db: DatabaseCtor.Database) => T): T;
   /** Starts `muffin gateway run` and waits for a line on stderr. */
@@ -93,26 +163,9 @@ export async function install(options: InstallOptions): Promise<Install> {
     ...(options.env ?? {}),
   };
 
-  const run = (args: string[], stdin = ''): Run => {
-    const result = spawnSync('node', ['--import', TSX, CLI, ...args], {
-      env: { ...process.env, ...env },
-      cwd: workspace,
-      input: stdin,
-      encoding: 'utf8',
-      timeout: 120_000,
-    });
-    // A spawn that never ran (ENOENT, a timeout, a signal) has `status === null`
-    // and an empty stderr — which reads exactly like "the command printed
-    // nothing", the least debuggable failure a scenario can produce. Say what
-    // actually happened instead.
-    const err =
-      (result.stderr ?? '') +
-      (result.error ? `\n[spawn] ${result.error.message}` : '') +
-      (result.signal ? `\n[spawn] ucciso da ${result.signal}` : '');
-    return { code: result.status ?? -1, out: result.stdout ?? '', err };
-  };
+  const run = (args: string[], stdin = ''): Promise<Run> => spawnAsync(args, env, workspace, stdin);
 
-  const init = run([
+  const init = await run([
     'init',
     '--provider',
     'openai-compat',
