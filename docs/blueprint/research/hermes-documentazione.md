@@ -130,7 +130,7 @@ mai collegato a una decisione di controllo.
 **Cosa costa.** Il pezzo di controllo, non il pezzo cognitivo. Un modulo che,
 alla fine di un turno, legge `turns` (ADR-0042) + i processi vivi e produce un
 verdetto in tre valori. Il giudice LLM è opzionale e va sulla corsia `light`
-(`agent/runtime.ts:471`): loro dicono ~200 token di output per chiamata. **La
+(`agent/runtime.ts:473-474`): loro dicono ~200 token di output per chiamata. **La
 regola che ci serve di più non costa niente**: *fail-open*. Se il giudice
 sbaglia o è irraggiungibile il verdetto è `continue`, e il vero freno resta il
 budget di turni — un giudice rotto non deve mai incastrare il lavoro.
@@ -365,7 +365,7 @@ letto 2026-08-15.)
 
 **Noi.** Due superfici. Non esiste **nessun tipo `Surface`**: è una `string` nuda
 sul turno (`agent/loop.ts:252` — `surface: string;`), e l'elenco delle possibili
-è letteralmente un array nel sorgente della CLI (`cli/surface.ts:44` — `for
+è letteralmente un array nel sorgente della CLI (`cli/surface.ts:43` — `for
 (const id of ['cli', 'telegram'])`). Il default e l'abilitato stanno in config
 (`core/config/config.ts:102` — `surfaces: { default: 'cli', enabled: ['cli'] }`),
 il cablaggio ha un solo ramo (`cli/surface.ts:191`). La consegna verso un canale
@@ -481,7 +481,7 @@ centrale.
    Tocca `E2` e `E3`.
 2. **`/usage`** — costo, durata, e quando il provider lo espone, **i limiti
    residui dell'account letti dal vivo**. Noi abbiamo `/spend`
-   (`cli/repl.ts:275` → `runtime.budget.status()`), che dà il mese e il cap: è
+   (`cli/repl.ts:276` → `runtime.budget.status()`), che dà il mese e il cap: è
    la metà globale, manca la giornata e manca il residuo lato provider.
 3. **`hermes update`** — e questo è un **buco nostro, non una preferenza**: vedi
    §3.9.
@@ -526,7 +526,7 @@ già nei context file**.
 **Noi.** Tre file freeform, **tutti scritti dall'owner, nessuno dall'agente**:
 `persona.md` (4.803 byte), `rot/identity.md` (dentro la radice di fiducia),
 `voice.md` (9.084 byte). Assemblati una volta al boot
-(`agent/runtime.ts:494` → `agent/context/assemble.ts`), in quest'ordine per il
+(`agent/runtime.ts:543` → `agent/context/assemble.ts`), in quest'ordine per il
 turno owner: `persona, identity, voice, skillsSection, WORK_RULES, [safe mode]`
 (`agent/context/assemble.ts:154-161`); per il turno di gruppo: `GROUP_PERSONA,
 voice, WORK_RULES, [safe mode]` — **senza `identity.md` e senza skill**
@@ -739,7 +739,7 @@ Più il versamento su file (§2.6).
 `agent/tools/process.ts` (200 righe). **Ma il livello del loop li contraddice**:
 `agent/loop.ts:57` + `agent/context/compact.ts:90` cancellano il payload
 *intero* (§2.6), e `agent/tools/mcp.ts:111-114` non ha nessun cap. In più
-`agent/loop.ts:1110` tiene solo `user`/`assistant`: i risultati dei tool **non
+`agent/loop.ts:1100` tiene solo `user`/`assistant`: i risultati dei tool **non
 sopravvivono mai al turno successivo**, quindi «richiamalo se ti serve ancora»
 del segnaposto è l'unica strada e non c'è niente da richiamare se il tool non è
 idempotente. M5-BIS **B12**, `?`.
@@ -777,12 +777,12 @@ prova di collisione. `muffin init` è idempotente e dice a voce cosa ha dedotto.
 `muffin gateway install` scrive un'unità systemd utente o un LaunchAgent
 (`core/gateway/unit.ts:118`). **`muffin update` non esiste**: nessun caso nello
 switch di `cli/main.ts`, nessuna modalità di aggiornamento in `install.sh`. È
-citato come concetto in `09-contratti-m0-m1.md:140` (*«scritto solo da `muffin
+citato come concetto in `09-contratti-m0-m1.md:182` (*«scritto solo da `muffin
 init`/`muffin update`»*) e non esiste in codice.
 
 **Verdetto: `LORO MEGLIO` sull'aggiornamento — noi non abbiamo niente.** Ma
 `NOI MEGLIO` su `doctor`: il nostro **esegue** i controlli invece di
-constatarne l'esistenza (`cli/doctor.ts:44`, 14 controlli, exit code
+constatarne l'esistenza (`cli/doctor.ts:37`, 14 controlli, exit code
 `0 | 1 | 2`), che è la disciplina che questo repo ha imparato dall'audit del
 2026-08-06 («quattro difese scritte, testate, documentate e collegate a
 niente»).
@@ -878,7 +878,7 @@ visibile, con gli schemi completi differiti.
 **Noi.** È **esattamente il nostro pattern per le skill**, e lo abbiamo azzeccato
 per costruzione: `skillsPromptSection` produce una riga «nome — descrizione» per
 skill, ed è l'unico contenuto sempre in contesto (~100 token/skill,
-`core/skills/skills.ts:124-132`, agganciato a `agent/runtime.ts:497`); il
+`core/skills/skills.ts:124-132`, agganciato a `agent/runtime.ts:546`); il
 contenuto vero arriva solo se il modello chiama `skill_read`
 (`agent/tools/skill.ts:32-45`), con doppio `realpath` contro le fughe via
 symlink e un rifiuto oltre 512KB.
