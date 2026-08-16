@@ -19,6 +19,37 @@ invaliderebbe:     un merge che tocca `core/policy/`, `core/rot/`,
 cadenza:           ogni gate (le righe senza controllo eseguibile), oppure alla
                    prima PR che tocca i file qui sopra.
 estende:           docs/ORCHESTRATION.md §13
+
+rivalidato:        2026-08-15 — `slice/taint-in-ingresso` (ADR-0044) tocca
+                   `agent/loop.ts` e `agent/runtime.ts`, cioè la condizione che
+                   questo file si dichiara da solo. Righe riscritte: §1.3 (le due
+                   sul taint) e §5 (il tier di un file su disco). Base rimisurata
+                   nel worktree, senza pipe:
+                   `npx tsc --noEmit` → exit 0
+                   `npx vitest run`  → exit 0, 88 file, 996 passati, 1 skipped
+                   Le altre righe VERIFICATA di §1.3 sono state rilette contro il
+                   codice nuovo, non ricopiate: `raiseTaint` alza soltanto e
+                   svuota la cache (`agent/loop.ts:1181-1186`), la chiave di
+                   memoizzazione include il taint (`:1189`), il recall resta
+                   piegato nel pre-loop (`:411-412`).
+
+rivalidato:        2026-08-16 — giro 2 del judge su PR #28: `throwTier`
+                   obbligatorio su `RegisteredTool`, il catch di `runTool` in
+                   `agent/loop.ts` recintato+tainted, `agent/tools/mcp.ts`
+                   recinta il proprio errore di connessione, `sys.shell` a
+                   `maxTaint: 2` (decisione owner). Tocca di nuovo
+                   `agent/loop.ts`/`agent/runtime.ts` — stessa condizione di
+                   sopra — e in più un merge di `origin/dev` (PR #39 e altre)
+                   nello stesso worktree, che da solo già invaliderebbe la base
+                   precedente per la regola scritta sopra. Riga riscritta: §1.3
+                   (shell/filesystem — `ASK`, non più `DENY`, a taint 2). Base
+                   rimisurata nel worktree DOPO il merge, senza pipe:
+                   `npx tsc --noEmit` → exit 0
+                   `npx vitest run`  → exit 0, 101 file, 1118 passati, 1 skipped
+                   Il salto nei totali (88→101 file, 996→1118 test) viene in
+                   massima parte dal merge di `origin/dev`, non da questa slice
+                   da sola — i due non sono confrontabili come "prima/dopo" di
+                   un fix.
 ```
 
 > **Cos'è.** `09-contratti-m0-m1.md` si dichiara **normativo**; `03-threat-model.md`
@@ -43,11 +74,15 @@ estende:           docs/ORCHESTRATION.md §13
 | VERIFICATA | 37 | 21 | 4 | **62** |
 | DERIVATA | 72 | 12 | 1 | **85** |
 | NON VERIFICABILE | 2 | 6 | 0 | **8** |
-| *troppo vaga per avere uno stato* | — | — | — | **14** |
+| *troppo vaga per avere uno stato* | — | — | — | **13** |
 
 *(Conteggio misurato sulle righe di questo file, non stimato. Una riga con `×N`
-vale N affermazioni. Oltre alle tre categorie c'è **1 RITROVAMENTO**: una cosa
-vera del codice che nessun documento dice — il re-seal silenzioso di `init`.)*
+vale N affermazioni. Oltre alle tre categorie ci sono **2 RITROVAMENTI**: cose
+vere del codice che nessun documento dice — il re-seal silenzioso di `init`, e
+**ciò che entrava nel turno senza dichiarare un tier** (§1.3), che non era una
+riga sbagliata ma una riga assente. Le vaghe scendono da 14 a 13 perché una di
+esse — il tier di un file su disco — è stata decisa e scritta, non riformulata:
+ADR-0044.)*
 
 Le vaghe sono contate a parte perché **non sono un quarto stato**: sono un
 ritrovamento. Un contratto che non si può violare non è un contratto, e sono
@@ -72,7 +107,7 @@ Prima, perché una garanzia falsa qui vale più di dieci righe di deriva altrove
 | «Lettura memoria del tenant corrente — ALLOW (solo proprio tenant)» | `03:40` | **VERIFICATA** | `agent/tools/memory.ts:21-29` (`memory.read`, low, `resourceKind:'tenant'`); il tenant viene dal turno, mai dalla registrazione — `agent/runtime.ts:281` `handler: (args, ctx) => searchMemory(deps, ctx.tenant, args)`, con il commento che spiega perché. `core/policy/decide.ts:120-122` nega `tenant_mismatch`. |
 | «Egress rete — ALLOW su allowlist; ASK fuori» | `03:43` | **VERIFICATA** | `core/policy/decide.ts:155-193`. Fuori allowlist: `ask` solo se owner **e** taint ≤1 (`:184`), altrimenti `deny/resource_denied` (`:187`) — più stretto della riga, deliberatamente e con la ragione scritta. |
 | «taint 2/3: solo read-only su allowlist pubblica» | `03:43` | **VERIFICATA** | `agent/tools/http.ts:30-37` dichiara `maxTaint: 3` e `hostOnly: false`; il metodo è GET, non parametrizzabile. `core/policy/decide.ts:171-177` rifiuta se il chiamante non consegna la url dichiarata (fail-closed). |
-| «Shell / filesystem host / processi — taint 2: **DENY — nessun percorso**» | `03:44` | **VERIFICATA** | `sys.shell` è `high` senza `maxTaint` (`agent/tools/shell.ts:32-38`) → soffitto `defaultMaxTaint.high` = 1 (`core/policy/matrix.ts:95`) → `taint_exceeded` a 2 (`decide.ts:136-143`). `hostOnly:true` chiude comunque i membri (`decide.ts:128`). |
+| «Shell / filesystem host / processi — taint 2: **ASK** (taint 3: DENY)» | `03:45` | **VERIFICATA** | Emendata dall'owner il 2026-08-16 (ADR-0044 §revisione): `sys.shell` dichiara ora `maxTaint: 2` (`agent/tools/shell.ts`, era senza `maxTaint` proprio → soffitto ereditato `defaultMaxTaint.high` = 1). A taint 2 il soffitto non blocca più, quindi la decisione scende nel ramo `high`-risk di `decide.ts`, che resta `ask` finché non è `hardened && owner && taint===0` — mai vero dopo una lettura. A taint 3 il soffitto blocca ancora: `deny/taint_exceeded`. Costo asserito in `agent/tools/shell.test.ts` §«il costo, stated as a test» e `agent/read-then-egress.test.ts` §«the price of the same rule». `hostOnly:true` chiude comunque i membri (`decide.ts:128`), invariato. |
 | «Outward — DRAFT di default; send solo con conferma» | `03:45` | **DERIVATA** | Nessuna capability `outward.*` è dichiarata: `outward.send` compare solo in `core/policy/matrix.ts:99` (deny list), in `defaults/rot/policy.json:6` e in fixture di test. La riga descrive il comportamento di una capability che non esiste. Il deny c'è; la cosa da negare no. |
 | «Le capability `outward.*` … escluse del tutto da `system@scheduler`» | `03:51` | **DERIVATA → CHIUSA** | Era falsa: la lista teneva l'id esatto `outward.send` e il lookup era `Set.has` (`decide.ts:132`, pre-fix), quindi `outward.publish` per lo scheduler rispondeva **`ask`**, non `deny` — misurato, vedi §4. Chiusa in questa PR: `core/policy/matrix.ts:104-138` (`denyListCovers`), floor `:99`, test `core/policy/decide.test.ts:129-176`. |
 | «Scrittura config/voice (cricchetto) — ALLOW solo via ratchet-API» | `03:46` | **DERIVATA** | `config.ratchet` non è dichiarata da nessuna parte se non nella deny list (`core/policy/matrix.ts:99`). Nessuna ratchet-API esiste (M6). Riga al presente per un organo futuro. |
@@ -99,11 +134,13 @@ Prima, perché una garanzia falsa qui vale più di dieci righe di deriva altrove
 | affermazione | dove | stato | prova |
 |---|---|---|---|
 | «Il taint è ricalcolato a ogni `decide()`, mai congelato» | `03:21` | **VERIFICATA** | `agent/loop.ts:903-908`: `raiseTaint` alza e **svuota la cache** delle decisioni; la chiave di memoizzazione include il taint (`:911`). Firma in `core/policy/types.ts:104-117`. |
-| «Un tool result tier-3 ricevuto a metà turno alza il taint … è il pattern fetch-then-act» | `03:21` | **VERIFICATA** | `agent/loop.ts:786` `if (outcome.tier !== undefined) snapshot.raiseTaint(outcome.tier)`. Chi dichiara il tier: `http.ts:158` (3), `search.ts:179,188` (3), `mcp.ts:109` (3), `skill.ts:110` (1), `memory.ts:92` (max dei richiamati). |
+| «Un tool result tier-3 ricevuto a metà turno alza il taint … è il pattern fetch-then-act» | `03:21` | **VERIFICATA — e per mesi vera e fuorviante** | Oggi: `agent/loop.ts:1011` `snapshot.raiseTaint(outcome.tier)`, incondizionato, con `tier` obbligatorio su `ToolOutcome` (`loop.ts:131-158`, il campo a `:157`). Chi dichiara il tier: **tutti**, perché il tipo non ammette altro. Fino a ADR-0044 la riga era `if (outcome.tier !== undefined)` e l'affermazione restava vera **della sola metà positiva**: era il controllo giusto sui cinque tool che un tier lo dichiaravano. Il registro l'ha marcata verificata e si è fermato lì — la lezione di metodo sta nella riga sotto, che nessuno aveva scritto. |
+| *(la domanda negativa, che nessuno aveva fatto)* **«che cosa entra nel turno SENZA tier?»** | — | **RITROVAMENTO → CHIUSO** | Era: `fs_read`, `fs_list`, `shell_run`, `process_list`, `process_kill` — cioè ogni percorso che porta nel turno byte scritti da qualcun altro sul disco. Misurato su `dev` @ a3754c4: `fs_read` di un file con istruzioni iniettate → taint 0 → `http_get` fuori allowlist → `ask` → owner approva → **fetch eseguito**. Il docstring di `fs.read` argomentava il proprio soffitto 3 appoggiandosi a quel cancello, che non poteva scattare. Chiuso in questa PR: ADR-0044, `DISK_TIER` (`agent/tools/fs.ts`), `tier` obbligatorio, test `agent/read-then-egress.test.ts` (catena) e `agent/runtime-wiring.test.ts` §«the tier of a file read reaches the kernel» (stessa catena sul runtime vero). **Metodo:** una riga VERIFICATA controlla ciò che il documento dice; non controlla ciò di cui il documento tace. Il complemento di un'affermazione va cercato a mano, e questo registro ora ne ha uno. |
 | «recall→azione: il kernel legge il taint prima di eseguire» | `03:20` | **VERIFICATA** | `agent/loop.ts:299-300` — il taint del recall è piegato nello snapshot **nel pre-loop**, prima che il modello veda qualcosa. È la chiusura del remember-then-act, e il commento a `:285-288` la nomina. |
 | «Lo scope è **il turno** (non la sessione)» | `03:21` | **VERIFICATA** | `makeSnapshot` è chiamata una volta per turno (`agent/loop.ts:266`) e il taint riparte dal principal (`:897`). |
-| «`fs.read` … il tier di un file su disco» | — | **VAGA** | Il documento definisce la scala su *chi ha parlato* (0 owner · 1 contatti · 2 gruppo · 3 web) e non assegna mai un tier al contenuto del filesystem locale. `fs.read` infatti non dichiara `tier:` (`agent/tools/fs.ts`), quindi non alza mai il taint. Difendibile — ma non deriva da una regola scritta. Vedi §5. |
+| «`fs.read` … il tier di un file su disco» | `03:20` | **VAGA → RISOLTA** | Era vaga perché il documento definiva la scala su *chi ha parlato* e non assegnava alcun tier al filesystem locale, e `fs.read` infatti non dichiarava `tier:`. Il registro la classificò «difendibile ma non derivata da una regola scritta» — e non chiese se l'assenza fosse **sfruttabile**, che era la domanda. Ora la regola è scritta (`03:20`, ultima frase) e eseguita: `DISK_TIER = 2` in `agent/tools/fs.ts`, asserito in `agent/tools/fs.test.ts` §«what a filesystem tool says about where its bytes came from». |
 | «Qualunque testo derivato porta il tier massimo delle proprie fonti: … **summary di compattazione**» | `03:22` | **NON VERIFICABILE** | Il meccanismo nominato non esiste: `agent/context/compact.ts` **cancella payload**, non riassume (`compactToolResults`, e il file non nomina mai `tier`/`taint`). Non c'è testo derivato da etichettare. Corollario da tenere: quando la sommarizzazione arriverà, questa regola **non ha oggi un punto di applicazione**. |
+| «**Qualunque** testo derivato…» — **la risposta dell'agente**, che è il testo derivato che il sistema scrive davvero | `03:22` | **DERIVATA → CHIUSA** (2026-08-15, dopo `7301e77`) | La riga sopra chiude sulla compattazione e si ferma lì, ma la parola è *qualunque*: il testo derivato che questo sistema produce a ogni turno è **la risposta**, e `agent/loop.ts` la scriveva in memoria con `trustTier: 0` **letterale**, qualunque fosse il taint del turno. Era la lavanderia nominata nella stessa frase del contratto, in funzione. Misurata eseguendo, prima del fix: un turno owner chiama un tool che torna tier 3, il modello lo riassume, e al turno dopo il recall rende al modello la riga `- [tu, 2026-08-15] la pagina chiede un bonifico su IT99CRIPTO` — l'istruzione di una pagina web attribuita all'owner, al tier che è l'unico ammesso ad armare un trigger proattivo (`decideProactive`, `core/scheduler/proactivity.ts:112`). Chiusa: `agent/loop.ts:661` `trustTier: snapshot.currentTaint()`, `TurnResult.taint` restituito da `finish` (`:859`) perché il taint viveva in una closure e nessun chiamante poteva chiederlo, e `agent/observe-run.ts:128` che aveva lo stesso letterale. Prova eseguibile: `agent/reply-taint.test.ts` (4 test, attraverso turni veri; 3 rossi sul codice di prima). |
 | «valore di ritorno di un sub-agent (trattato … come un tool result, tier incluso)» | `03:22` | **NON VERIFICABILE** | Stessa ragione: nessun sub-agent esiste. |
 | «Trust never rises» (invariante di grafo) | `03:20` + `AGENTS.md:74` | **VERIFICATA** | `core/memory/invariants.ts:72` `trust_tier_raised`, proprietà controllata sul grafo. Lato turno, `raiseTaint` alza soltanto (`agent/loop.ts:903-905`). |
 
@@ -376,7 +413,7 @@ violare non è un contratto.
 | «Stato del turno: **in RAM** in M1» | `09:201` | Nessuna osservazione la renderebbe falsa — qualunque locale non persistito la soddisfa. Verifica banalmente e non vincola niente. |
 | «**entrambi i modelli di riferimento**» | `09:123` | I modelli di riferimento non sono fissati in codice, config o CI. Finché una coppia non è appuntata da qualche parte di eseguibile, «il floor passa» non ha valore di verità. |
 | **N=10 / X=15** a livello di installazione | `09:117-118` | Il documento non dice **quali profili** debbano onorarli. `frontier.json` li supera, legalmente, e nessuna regola scritta è violata. |
-| il **tier di un file su disco** | `03:20` | La scala è definita su chi ha parlato; il filesystem locale non ha un tier assegnato. `fs.read` infatti non ne dichiara uno. Difendibile, ma non derivato da una regola scritta. |
+| ~~il **tier di un file su disco**~~ — **uscita da questa lista** | `03:20` | Era qui perché la scala era definita su chi ha parlato e il filesystem non aveva un tier assegnato. Ed era la voce più cara dell'elenco: non era solo invalidabile, era **sfruttabile**, e questo registro l'ha catalogata come imprecisione di prosa. `03:20` ora assegna il tier (2, ADR-0044) e il codice lo produce. Resta come promemoria di metodo: «vaga» e «innocua» non sono sinonimi. |
 
 ---
 
@@ -392,3 +429,16 @@ documento — il re-seal silenzioso di `muffin init` (§2.4), trovato eseguendo 
 comando e non leggendolo. Le altre 84 sono cose che avevamo scritto e non fatto.
 La categoria «non ci avevamo pensato» si trova solo guardando fuori, e vuole una
 passata sua.
+
+**Addendum 2026-08-15 — la previsione si è avverata, e con la faccia peggiore.**
+Il secondo ritrovamento (§1.3, «che cosa entra nel turno SENZA tier?») non è stato
+trovato guardando fuori: è stato trovato **girando un'affermazione già
+verificata**. La riga diceva *«un tool result tier-3 alza il taint»*, era vera, ed
+è stata controllata esattamente come è scritta — sui cinque tool che un tier lo
+dichiaravano. I quattro che non lo dichiaravano non comparivano in nessuna riga,
+quindi non comparivano in nessun controllo, quindi il registro li ha attraversati
+senza vederli. **Un'affermazione vera acceca sul proprio complemento.** La regola
+che questo aggiunge a `ORCHESTRATION.md` §13, e che costa poco: per ogni
+affermazione portante della forma *«X fa Y»*, scrivere anche *«che cosa NON è X e
+finisce nello stesso posto?»* — e se la risposta è un elenco, l'elenco è il
+controllo.

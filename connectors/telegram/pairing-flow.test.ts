@@ -99,22 +99,25 @@ async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promis
 
 describe('pairing through the connector', () => {
   it('has no owner at all while unpaired', () => {
-    const i = parseUpdate(msg(1, { chatId: OWNER, fromId: OWNER, text: 'ciao' }), undefined);
-    expect(i?.fromOwner).toBe(false);
-    expect(principalFor(i!).tenant).not.toBe('host');
+    const i = parseUpdate(msg(1, { chatId: OWNER, fromId: OWNER, text: 'ciao' }));
+    expect(principalFor(i!, undefined).tenant).not.toBe('host');
   });
 
   it('a message with no sender is nobody, not everybody', async () => {
     // `undefined === undefined` is true, so without the explicit unpaired check
     // a message carrying no `from` would match an absent ownerUserId and arrive
     // as the owner. Constructed here because the mutation that removes that
-    // check passed every other test in the file.
+    // check passed every other test in the file. The check now lives in
+    // `identify` (`core/surface/types.ts`) and guards every surface at once —
+    // the same hole on Discord is a webhook message, which also has no author.
     const senderless = {
       update_id: 1,
       message: { message_id: 1, date: 0, chat: { id: OWNER, type: 'private' }, text: 'ciao' },
     } as unknown as Update;
-    expect(parseUpdate(senderless, undefined)?.fromOwner).toBe(false);
-    expect(parseUpdate(senderless, OWNER)?.fromOwner).toBe(false);
+    const parsed = parseUpdate(senderless)!;
+    expect(parsed.fromId).toBe(0);
+    expect(principalFor(parsed, undefined).principal.kind).toBe('member');
+    expect(principalFor(parsed, OWNER).principal.kind).toBe('member');
   });
 
   it('binds the person who echoes the code, and runs no turn for it', async () => {

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../core/config/config.js';
 import { MemoryStore } from '../core/memory/store.js';
-import { cmdMemoryReview, cmdMemoryReviewKeep, cmdMemoryStats } from './memory.js';
+import { runInit } from './init.js';
+import { cmdMemoryReview, cmdMemoryReviewKeep, cmdMemorySearch, cmdMemoryStats } from './memory.js';
 
 /**
  * `cmdMemoryStats` and `cmdMemoryReview`: `cmdMemoryExtract`'s fix (the batch
@@ -214,5 +215,100 @@ describe('muffin memory review', () => {
     // contradictions this register exists for.
     expect(text.split('estrazione fallita')).toHaveLength(2);
     expect(text).toContain('3×');
+  });
+});
+
+describe('muffin memory search — cmdMemorySearch reached beyond the argv rejections', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /**
+   * U1: `cli/main.test.ts` proves the three argv-level rejections (bad date,
+   * empty window, future as-of) — all short-circuit *before* `cmdMemorySearch`
+   * ever calls `buildRuntime`. Nothing exercised the function past that point,
+   * so `--surface`/`--around` reaching `recall()` (`cli/memory.ts:165-169`) had
+   * no test that could fail if the wiring were removed. `runInit` gives
+   * `buildRuntime` a real, isolated `MUFFIN_HOME` — no key is ever used since
+   * `cmdMemorySearch` only calls `recall()`, never the provider directly.
+   */
+  it('renders RITIRATO, an open-ended validity window, and the successor line, under --as-of', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-search-cli-'));
+    runInit({ home, apiKey: 'sk-memory-search-cli-never-called' });
+
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const me = store.upsertEntity('host', 'Giusto', 'person', '2026-06-01T10:00:00Z');
+    const ep = store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'note sul commercialista', trustTier: 0, createdAt: '2026-06-01T10:00:00Z',
+    });
+    const base = { tenantId: 'host', subjectId: me, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+    const marco = store.addFact({ ...base, predicate: 'accountant', objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
+    const lucia = store.addFact({ ...base, predicate: 'accountant', objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+    store.supersede('host', marco, lucia, '2026-08-01T10:00:00Z');
+    // A live fact with a stated start and no end, so "valido X → oggi" has a
+    // row to come from — Marco/Lucia's own validTo is always a real date.
+    store.addFact({
+      ...base, predicate: 'lives_in', objectValue: 'Cagliari',
+      validFrom: '2020-01-01T00:00:00Z', recordedAt: '2020-01-01T00:00:00Z',
+    });
+    db.close();
+
+    const { out } = capture();
+    // `history: true` (`--history`) rather than a specific `as_of`: it is the
+    // mode that must surface the retired Marco row at all, which is the row
+    // M17's mutation (`asOf` not passed to `recall`) would silently drop.
+    const code = await cmdMemorySearch(home, 'Giusto', { history: true });
+    expect(code).toBe(0);
+    const text = out.join('');
+    expect(text).toContain('RITIRATO');
+    expect(text).toContain('valido 2020-01-01 → oggi');
+    expect(text).toContain('↳ sostituito da');
+  });
+
+  it('filters by surface, from the same options object cli/main.ts builds from argv', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-search-surface-'));
+    runInit({ home, apiKey: 'sk-memory-search-cli-never-called' });
+
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    store.addEpisode({
+      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    store.addEpisode({
+      tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+    });
+    db.close();
+
+    const { out } = capture();
+    expect(await cmdMemorySearch(home, 'promemoria', { surface: 'telegram' })).toBe(0);
+    const text = out.join('');
+    expect(text).toContain('da telegram');
+    expect(text).not.toContain('dal terminale');
+  });
+
+  it('attaches the surrounding messages when --around is set', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-search-around-'));
+    runInit({ home, apiKey: 'sk-memory-search-cli-never-called' });
+
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const fill = (content: string, minute: number) =>
+      store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+      });
+    fill('un messaggio prima', 1);
+    const anchor = fill('il codice segreto è ZK-9', 2);
+    fill('un messaggio dopo', 3);
+    db.close();
+
+    const { out } = capture();
+    expect(await cmdMemorySearch(home, 'codice segreto', { around: 1 })).toBe(0);
+    const text = out.join('');
+    expect(text).toContain(`intorno a #${anchor}`);
+    expect(text).toContain('un messaggio prima');
+    expect(text).toContain('un messaggio dopo');
   });
 });
