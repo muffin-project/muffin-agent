@@ -9,7 +9,7 @@
 ```ts
 // core/policy/types.ts
 type Principal =
-  | { kind: 'owner';  connector: ConnectorId }                    // l'owner, da qualunque canale autenticato
+  | { kind: 'owner';  connector: ConnectorId; externalId: string } // subject-id autenticato, mai display metadata
   | { kind: 'member'; connector: ConnectorId; tenantId: TenantId; externalId: string }
   | { kind: 'system'; source: 'scheduler' | 'consolidation' | 'ratchet' }
   | { kind: 'agent';  role: 'dev' };                              // Muffin che lavora su se stesso
@@ -43,6 +43,36 @@ function decide(req: {
 - **`tenant` è ridondante ma esplicito (A2)**: `decide()` verifica la coerenza col principal e restituisce `deny/tenant_mismatch` se divergono — è un guard contro bug del chiamante, non una scelta del chiamante.
 - **`args` sono i parametri già validati dallo schema del tool** (non JSON raw dal modello): la validazione di schema precede sempre la policy. Il kernel ispeziona solo i campi che la dichiarazione di capability marca come `policyArgs` (A4).
 - **In M1 il taint è determinato dal solo principal** (owner→0, member→2, system→eredita dal job, agent→0) perché la memoria non esiste ancora (F3). Da M2 è `max(tier dei blocchi in context)`.
+
+### Confine d'ingresso delle surface (ADR-0046; B15-B16 aperte)
+
+Il connector produce due risultati che non possono essere ricavati l'uno
+dall'altro:
+
+1. **Identità di trasporto** → principal. `owner` richiede un binding protetto
+   fra connector/issuer e un subject-id stabile autenticato dalla piattaforma.
+   Il binding nasce da pairing nel control plane locale; un cambio richiede
+   re-pairing esplicito e auditato. Chat id e destinazione di delivery non sono
+   identità. Username, display name, bio, foto, room title e contenuto non sono
+   mai segnali di autorità. Se la surface non offre un subject stabile e
+   autenticato, non può produrre `owner`.
+2. **Envelope di contenuto** → `ContentBlock[]`. Ogni campo model-visible viene
+   parsato e normalizzato in un tipo chiuso con `kind`, fonte, media type e
+   `TrustTier`: testo/caption, quote e forward, filename, nomi e bio, metadata,
+   immagini/descrizioni/OCR, audio/trascrizioni, file e risultati di tool. Un
+   derivato eredita il massimo tier delle fonti. Un formato sconosciuto non
+   cade su stringa raw: viene rifiutato o quarantinato con un errore esplicito.
+
+Parsing e schema **non sono sanificazione**. Ogni valore resta dati non fidati
+e viene delimitato nel prompt; si assume che possa contenere prompt injection.
+Principal, tenant, ruolo del blocco e tier vengono assegnati fuori dal modello e
+non sono sovrascrivibili dal contenuto.
+
+Telegram oggi prova il primo percorso su `from.id` più chat privata, inclusa
+l'impersonazione via display name; il binding vive ancora nella config ordinaria
+e il contratto universale dei blocchi non è implementato. Per questo B15 e B16
+restano `BLOCKER`: questa sezione è il contratto da raggiungere, non una garanzia
+attribuita al runtime attuale.
 
 ### Dichiarazione di capability di un tool (A3, A8, B2)
 
@@ -162,6 +192,15 @@ JSON (non YAML: parsing senza dipendenze, niente ambiguità di tipo; i commenti 
 - **Secrets**: default **file cifrato age** `~/.muffin/secrets/secrets.age` (portabile, headless-safe, uguale su macOS e Linux — il Keychain è opt-in perché su sessione SSH il dialog di sistema blocca, C6); passphrase chiesta a `init` e tenuta in memoria dal runtime, oppure chiave in `~/.muffin/secrets/key.txt` `0400` per l'avvio non presidiato (trade-off dichiarato). Riferimento in config: `"apiKey": "secret://anthropic_api_key"`.
 - **Directory (K5)**: non è XDG-multi-dir: è **una** cartella `~/.muffin/` (override `MUFFIN_HOME`). Il termine "XDG-compatibile" negli altri documenti va letto come "rispetta `XDG_CONFIG_HOME` se impostata per collocare la cartella", non come "sparge i dati in tre posti". Motivo: backup/export/cancellazione GDPR = un percorso.
 
+**Contratto d'ingresso del vault.** La directory dei byte è condivisa, la
+visibilità dell'indice no. Un producer che ha appena acquisito un file invoca
+`reindexPath(tenantId, vaultPath, tier)`: il path deve essere canonico, interno
+al vault e nomina l'unico file che può entrare nel tenant. `reindex(tenantId)`
+enumera l'intera directory e ritira gli assenti; è riservato a un comando di
+manutenzione che intende davvero riconciliare l'intero tenant. I due contratti
+non sono intercambiabili: un tenant corretto applicato al source-set sbagliato
+è comunque una violazione cross-tenant.
+
 > **Emendamento 2026-08-13 (ADR-0039) — l'unica eccezione a K5, dichiarata.** Un
 > segreto può stare anche in `$XDG_CONFIG_HOME/muffin/secrets/<nome>` (dir
 > `0700`, file `0600`), e la risoluzione è una catena ordinata: prima
@@ -236,6 +275,8 @@ Tutti i messaggi di sistema sono distinguibili dalla voce dell'agente (D9): mai 
 | `muffin rot reinstall\|verify` | integrità | 0/2 |
 
 **stdout/stderr (H3)**: stdout = solo la risposta finale (o JSON con `--json`); stderr = log, avvisi di sistema, prompt. **Sessione (H4)**: `muffin run` = thread effimero per invocazione (`--session <id>` per continuare); REPL = una sessione per lancio, `/new` per azzerare. **Ctrl+C (H5)**: primo = annulla il turno in corso (abort del `signal`, il REPL resta); secondo entro 2s = esce. **Librerie (H6, J-*)**: `commander` (CLI), `@inquirer/prompts` (init), `readline` nativo per il REPL v1 (Ink solo se il REPL cresce), `zod` (schemi), `@opentelemetry/api`+`sdk-trace-node` con exporter custom su file, `better-sqlite3` **già in M0** (budget e audit: J3), `@anthropic-ai/sdk` + `openai` per i due adapter, `age` via libreria JS per i secrets. Vietati: framework LLM/agentici, graph-engine, ORM.
+
+*(Aggiunte dopo M1, ciascuna con la sua ADR e ciascuna una libreria importata nel processo — mai un sottoprocesso, mai un servizio terzo che legga i dati dell'owner al posto nostro: `defuddle`+`linkedom`+`turndown` per l'estrazione HTML (ADR-0041), `unpdf` per i PDF (ADR-0042, zero dipendenze runtime, pdf.js di Mozilla sotto). Il DOCX **non** ha portato una libreria: `node:zlib` più un lettore bounded della directory centrale e delle parti OOXML collegate in `core/documents/{zip,extract}.ts`; la scelta standard `mammoth` costa dieci dipendenze runtime.)*
 
 ## 11. Test (I1-I6)
 

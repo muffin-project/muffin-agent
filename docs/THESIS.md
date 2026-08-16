@@ -25,8 +25,8 @@ In that world:
   you have is an architecture, you have something a well-funded team reproduces
   in a quarter.
 
-There is exactly one asymmetry an individual can hold against companies with
-unlimited capital:
+The durable asymmetry an individual can hold against companies with unlimited
+capital is:
 
 > **continuity of a deep dataset under individual control.**
 
@@ -35,6 +35,13 @@ their engineers are worse, but because they operate under aggregate privacy,
 retention policy, and a product surface that has to work for a hundred million
 people. The limit is structural rather than temporary — which is what makes it
 a foundation to build on instead of a head start you eventually lose.
+
+That continuity belongs to the **agent**, not to a chat, a device, an app or a
+model. Those are replaceable surfaces. The unit that persists is one agent with
+one history, one identity, one set of commitments and one safety constitution.
+Its product ambition is equally concrete: become the owner's primary interface
+to the digital and physical world, so direct use of individual apps and devices
+becomes the exception rather than the default.
 
 ## 2. The moat is continuity, not technique
 
@@ -94,24 +101,29 @@ Experimenting in the substrate is controlled trauma: rare, planned, reversible.
 When you cannot tell which layer something belongs to, the test is:
 **if removing it deletes accumulated data, it is substrate.**
 
-## 4. Two legs, not one
+## 4. Three axes, one continuous agent
 
-A personal agent stands on two equal legs.
+A personal agent exists on three equal axes.
 
 It is a **real agent** — it does actual work, autonomously, over long horizons.
 Deep research across many steps. Managing mail and a calendar. A loop that
 spends an hour fixing an inbox. Work on the machine itself: a real filesystem,
 sandboxed execution, presence at the level of the operating system.
 
-And it **understands** — it observes patterns, holds a point of view, and can
+It **understands** — it observes patterns, holds a point of view, and can
 occasionally tell you something about yourself you had not said out loud.
 
-Neither serves the other. Doing is not in service of understanding, and
-understanding is not decoration on top of doing: they are two axes of the same
-object. An agent that executes and nothing else is a tool. An agent that does
-the work **and** understands you **and** has a voice of its own is something
-else — and the difference is operational rather than poetic, because it shows up
-in whether it ever disagrees with you.
+And it is **present** — it remains reachable while work is in flight, keeps an
+honest account of what the world and the work are waiting on, resumes after
+interruptions, and knows when to wait, stay silent, interrupt, ask, revise or
+abandon. Presence is not a typing indicator or a daemon by itself. It is the
+combination of durable state and judgement about when action is warranted.
+
+None serves the others. Doing is not in service of understanding; understanding
+is not decoration on doing; presence is not activity for its own sake. An agent
+that executes and nothing else is a tool. One that understands but cannot stay
+with unfinished work is a session. The object this project is building does the
+work, understands the owner, and remains present across sessions and surfaces.
 
 Concretely: no document in this project may be used to argue against autonomous
 work the agent can do safely. The gate is never the ambition or the duration of
@@ -137,14 +149,18 @@ acts as a full agent.
    periphery. The filter is not "doing versus understanding" — it is "does the
    owner need it, and does it move this closer to something with a point of
    view".
-7. **Inference, not configuration.** The agent never asks how it should behave.
-   It observes and adapts. Settings screens are an anti-pattern: every
-   preference made explicit is one the system stopped having to learn.
-8. **Write on confirmation, for anything outward.** It observes, analyses,
-   proposes. For outward or irreversible actions it does not act without
-   explicit confirmation. Internal, reversible operations — searching memory,
-   reading the vault, a web search — happen on their own. The boundary is
-   outward and irreversible, not "any action at all".
+7. **Infer preferences; declare governance.** Taste, cadence and working style
+   are learned from use. Constitutional limits, budgets and safety policy are
+   explicit and inspectable; the agent never infers permission to weaken them.
+   A settings screen should not replace learning, and learning must not replace
+   governance.
+8. **Autonomy is earned in scopes, never granted as trust.** Repeated safe,
+   reversible outcomes may compress supervision for the same capability,
+   resource and context. That grant is observable, revocable and able to
+   regress after failure. There is no global trust score, and the model never
+   decides its own safety boundary. Outward and irreversible work starts
+   confirmed; only evidence can narrow that friction, never remove the
+   constitutional floor.
 9. **Data sovereignty is non-negotiable; local compute is a design option.**
    The invariant is sovereignty: the data is yours, under your control, not
    deletable by a vendor. On top of that sits a design preference — stay
@@ -153,13 +169,26 @@ acts as a full agent.
    local. An instance running through an API is an operational exception, not
    the norm, and no model choice may burn the local option. Compute is
    replaceable harness. Sovereignty is not.
-10. **Identity-agnostic.** The harness never assumes who the user is. Identity
-    lives in the accumulated data, not in the code and not in the prompts. For
-    any installation, who the user is, is a fact of the dataset.
-11. **Input-agnostic.** New sources must not each require a bespoke adapter. A
-    new sensor, feed or device arrives as interpretable semantic content, not as
-    a predefined schema. The model does the understanding at the point of use.
-12. **Proprioception before power.** A system that does not know whether it is
+10. **Separate who the owner is from who has owner authority.** The person's
+    history, character and preferences live in accumulated data, never in
+    code. Authority is the opposite: each surface binds the owner explicitly
+    to a transport-authenticated, stable opaque subject identifier. A display
+    name, biography, username, room, image or message can describe a person;
+    none can make that person the owner. The agent's constitutional identity is
+    different again: explicit, versioned and never learned away.
+11. **Surface-agnostic.** A terminal, phone, speaker, pendant or future device
+    is a port onto the same agent. A new surface may declare different delivery
+    and input capabilities; it may not fork identity, memory, work or policy.
+12. **Input-agnostic does not mean input-trusting.** New sources must not each
+    require a bespoke cognitive path. Every accepted ingress is first parsed
+    into typed content blocks with provenance and taint; unsupported material
+    is quarantined or rejected explicitly. Message text, names, biographies,
+    filenames, metadata, images, audio and extracted text are all data that may
+    contain prompt injection. Parsing makes the boundary explicit; it does not
+    make the content safe. The model does the understanding at the point of use
+    and the kernel continues to decide effects from facts the content cannot
+    rewrite.
+13. **Proprioception before power.** A system that does not know whether it is
     working does not get powerful tools. Knowing its own state — traces,
     self-inspection, verification of what it holds — is a permanent priority
     rather than a phase that closes. This is not an argument against giving an
@@ -192,6 +221,16 @@ much and it becomes something you learn to ignore, which is worse than silence.
 Slightly too little and it is inert. That calibration is not found in a lab. It
 is found in use, and it needs redoing periodically.
 
+**Presence versus interruption.** A continuous agent has more opportunities to
+get in the way. Waiting, silence, deferral, refusal, revision and cancellation
+are therefore first-class capabilities, not weaker versions of acting.
+
+**Earned autonomy versus a tired confirmation habit.** Repeating the same safe
+approval forever makes the boundary ceremonial; removing it because the agent
+"knows the owner" makes it arbitrary. The only acceptable compression is local
+to a demonstrated pattern, reversible where possible, visible and able to
+regress.
+
 **Genuine insight versus confirming what you already knew.** After enough
 months, a dataset can confirm known patterns with increasing precision — low
 marginal value — or produce something genuinely new. Most architectures are
@@ -218,3 +257,8 @@ requirement. Whether the agent is *good* is a qualitative judgement and always
 will be. What gets measured is whether it is *broken* — a different question,
 and one this repository takes seriously, because the characteristic failure of
 this kind of system is damage that reports success. See `docs/lessons.md`.
+
+The thesis is falsifiable in use. If continuity does not survive replacing the
+model or moving between surfaces, it is not continuity. If months of operation
+do not let the owner stop opening any direct interface without losing control,
+the project is accumulating data without becoming the agent described here.
