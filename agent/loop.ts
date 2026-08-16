@@ -5,7 +5,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
-import type { TodoStore } from '../core/turns/todo.js';
+import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
@@ -59,6 +59,16 @@ export type ToolContext = {
    * a plan that died with the turn that wrote it would not be a plan.
    */
   sessionId: string;
+  /**
+   * The turn's taint **right now**.
+   *
+   * A function and not a value, because it can still rise: a handler running
+   * second in a batch may run after one that dragged in tier-3 bytes, and a
+   * snapshot taken when the context object was built would be stale exactly
+   * there. Every durable thing a handler writes on the turn's behalf has to
+   * carry this — trust never rises, and a table is not a bath (ADR-0047).
+   */
+  taint: () => TrustTier;
   /**
    * Arm the runtime's suspension barrier.
    *
@@ -683,6 +693,7 @@ async function drive(
     principal: input.principal,
     turnId: record.id,
     sessionId: input.session.id,
+    taint: () => snapshot.currentTaint(),
     suspend: (spec) => {
       barrier = spec;
     },
@@ -754,8 +765,21 @@ async function drive(
       }
     }
 
+    /**
+     * The plan, and the taint that comes with it — in that order.
+     *
+     * `raiseTaint` **before** the rows reach the transcript, because the whole
+     * property is that the turn is decided at the tier of everything in its
+     * context. A plan written by a turn that had read the web is model text
+     * shaped by that page: shown to a later turn at tier 0 it would be laundered
+     * into the agent's own intention, which is the fetch-then-act pattern
+     * wearing a table (ADR-0047).
+     */
+    const open = deps.todos.open(input.tenant, input.session.id);
+    snapshot.raiseTaint(planTaint(open));
+
     messages.length = 0;
-    messages.push(...buildContext(deps, input, recalled));
+    messages.push(...buildContext(deps, input, recalled, open));
 
     deps.sessions.append(input.session, {
       role: 'user',
@@ -1744,7 +1768,21 @@ function resourceFor(
  * then recalled memory, then the message. Variable content never precedes
  * stable content, or the cache prefix is invalidated on every turn.
  */
-function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]): Message[] {
+function buildContext(
+  deps: LoopDeps,
+  input: TurnInput,
+  recalled: ContentBlock[],
+  /**
+   * The open plan, read and **taint-accounted by the caller**.
+   *
+   * Passed in rather than read here, and that is the whole point of the
+   * parameter: showing these rows to the model raises the turn's taint, and a
+   * function that both fetched them and rendered them would be the one place
+   * where the raise could be forgotten without anything looking wrong. The
+   * caller has the snapshot; this has the strings.
+   */
+  open: TodoItem[],
+): Message[] {
   const history = deps.sessions.read(input.session);
   const spoken = history.filter((m) => m.role === 'user' || m.role === 'assistant');
 
@@ -1791,7 +1829,7 @@ function buildContext(deps: LoopDeps, input: TurnInput, recalled: ContentBlock[]
    * Unconditional, and that is the point: a plan the model has to remember to
    * ask for is a plan it forgets the moment its own earlier prose is compacted.
    */
-  const plan = todoSection(deps.todos.open(input.tenant, input.session.id));
+  const plan = todoSection(open);
 
   // Recalled memory rides in the same turn as the message it is context for, not
   // as a separate user turn the model might answer. It is already fenced and

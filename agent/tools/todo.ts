@@ -128,17 +128,27 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
       // baked in at wiring time served the owner's rows to a group member, and
       // a tenant taken from `args` would let the model name someone else's.
       const { tenant, sessionId } = ctx;
+      /**
+       * Read once per call, and it is the turn's taint **now**.
+       *
+       * What goes into the row is not "how trusted is a todo" — it is how
+       * trusted was the context that produced this sentence. A turn that had
+       * fetched a page writes its plan at that page's tier, and the next turn
+       * inherits it instead of being handed the sentence as the agent's own
+       * clean intention (ADR-0047).
+       */
+      const tier = ctx.taint();
 
       switch (parsed.data.action) {
         case 'plan': {
-          const items = todos.plan(tenant, sessionId, parsed.data.items);
+          const items = todos.plan(tenant, sessionId, parsed.data.items, tier);
           return { content: `Piano aggiornato:\n${renderTodos(items)}`, tier: CLEAN };
         }
         case 'set': {
           const { step, state, note } = parsed.data;
           // No cast: the zod enum already narrows to `TodoState`, and a cast
           // here would be a claim that survives the day the two lists diverge.
-          const moved = todos.setState(tenant, sessionId, step, state, note ?? null);
+          const moved = todos.setState(tenant, sessionId, step, state, note ?? null, tier);
           if (!moved) {
             return {
               content: `nessun passo numero ${step} in questa conversazione — \`todo list\` per vedere quali ci sono`,
