@@ -1,5 +1,14 @@
 # Hermes Agent — la documentazione intera, letta contro il nostro codice
 
+```
+scritto: 2026-08-15
+verificato: 2026-08-16
+verificato-contro: origin/dev @ ca29d14 (slice/hermes ne è un merge diretto: stesso tree per ogni file:riga citato) · corpus Hermes via llms.txt/llms-full.txt letto 2026-08-15, non ri-scaricato oggi
+modello-strumenti: sito Hermes letto via HTTP pubblico (llms.txt/llms-full.txt), non eseguito; repo letto in loco nel worktree per verificare ogni file:riga. Modello che ha scritto il documento: non registrato.
+invaliderebbe: una release di Hermes che cambia i meccanismi qui confrontati (goal-judge/wait, quality gate, checkpoint/rollback, tool-search, deliverable mode, streaming) o una modifica nostra alle righe di M5-BIS.md elencate in §5.
+estende: m3-connector-timing-hermes-openclaw-goose.md (2026-08-09) · confronto-harness.md (2026-08-11) — entrambi toccano Hermes di striscio, dentro un confronto più ampio; questo documento lo approfondisce da solo, sull'intera documentazione.
+```
+
 > Direttiva owner, 2026-08-15: *«inglobiamo TUTTA questa documentazione cosi da
 > poter prendere ispirazione per risolvere varie cose nostre»* →
 > `https://hermes-agent.nousresearch.com/docs/getting-started/quickstart`.
@@ -17,6 +26,19 @@
 > facciamo noi (con `file:riga` **letto**, non ricordato), e uno di quattro
 > giudizi. La categoria che paga il lavoro è `NON CI AVEVAMO PENSATO`, ed è la
 > prima sezione.
+
+**Indice.**
+
+- [1 · Cosa ho letto davvero](#1--cosa-ho-letto-davvero) — copertura reale: 21/202 pagine intere, 181/202 cercate, cosa resta fuori e perché
+- [2 · NON CI AVEVAMO PENSATO](#2--non-ci-avevamo-pensato) — otto cose che non erano in nessuna nostra lista (§2.1–2.8)
+- [3 · Confronto per area](#3--confronto-per-area) — verdetto per area, LORO/NOI/scelta diversa (§3.1–3.11)
+- [4 · Cosa NON prendiamo, e perché](#4--cosa-non-prendiamo-e-perché) — nove rifiuti scritti, coi vincoli che li motivano
+- [5 · Le righe di M5-BIS.md che questo documento tocca](#5--le-righe-di-m5-bismd-che-questo-documento-tocca) — impatto riga per riga (tabella in Parte II)
+- [6 · Le tre cose da adottare per prime](#6--le-tre-cose-da-adottare-per-prime) — ordine di rapporto valore/costo
+
+Chi cerca **«cosa cambia per noi»** va dritto a **§5** (impatto su ogni riga di
+M5-BIS.md, con la tabella tecnica in **Parte II**) o a **§6** (le tre priorità
+per rapporto valore/costo). Il resto è il ragionamento che ci arriva.
 
 ---
 
@@ -87,6 +109,16 @@ documento è scritto su un branch `slice/hermes` creato **da `origin/dev`**
 `agent/loop.ts` in particolare **differiscono** fra i due branch (`runTurn` è a
 `:252` su `verifica-23` e a `:285` su `dev`): sono stati ricontrollati uno per
 uno sulla base giusta.
+
+### La tensione con «TUTTA», dichiarata
+
+La direttiva diceva «TUTTA la documentazione». Sono state lette per intero
+21/202 pagine e raggiunte per ricerca mirata 181/202; sono rimaste fuori da
+ogni lettura individuale gli adattatori di messaggistica oltre ai quattro
+citati, le guide per-provider, i documenti `developer-guide/*-plugin`, le
+guide di installazione per piattaforma e i cataloghi di skill — le categorie
+già elencate sopra — perché la loro riga d'indice non tocca la roadmap di
+Muffin. È una scelta fatta e dichiarata qui, non un mandato subito a metà.
 
 ---
 
@@ -975,19 +1007,13 @@ Nessuna riga cambia stato qui — questo è un documento di ricerca, non una
 verifica. Quello che sposta è **la forma del rimedio** e, in tre casi, il fatto
 che la riga era ottimista.
 
-| Riga | Stato oggi | Come questo documento la sposta |
-|---|---|---|
-| **A6** Upgrade | `?` | Peggiora e va chiarita: **`muffin update` non esiste**, né come comando (`cli/main.ts:158-190`) né come modalità di `install.sh`. §3.9 dà anche il rimedio più economico: validazione sintattica post-pull con `git reset --hard` allo sha precedente. |
-| **B2** Long-running | BLOCKER · substrato pronto | §3.2: il rimedio **non** è un `runTurn` asincrono. Anche il loro loop è bloccante; ciò che hanno è un canale di progresso ortogonale + una consegna che può scrivere più volte per turno. Molto meno invasivo, e componibile con ADR-0042. |
-| **B3** Wait | BLOCKER · substrato pronto | §2.1–2.3 + §3.3: chi decide il `wait` (un giudice fuori dal turno che legge il registro dei processi, non il modello dentro il turno), tre forme di barriera (pid / sessione+pattern / tempo), l'invariante «una barriera scaduta non può mai incastrare il loop», e la divisione a due livelli — sessione vs scheduler — che ADR-0035 rende economica per noi. |
-| **B4** Todo | BLOCKER | §2.1/§2.3: la loro risposta **non è un tool `todo`**. È un obiettivo persistente + criteri aggiungibili a metà corsa + gate deterministici. `goal → plan → todo{…} → resume` di §2 resta valido, ma il pezzo che rende il ciclo terminante è il **gate che esce 0**, non lo stato del todo. |
-| **B8** Delivery | BLOCKER 🔧 | §2.7: manca la metà in uscita. `sendDocument` è scritto e senza chiamante (`connectors/telegram/media.ts:154-161`); *deliverable mode* è la forma, con il vincolo che da noi deve passare da `outward.send`. |
-| **B11** Streaming | `?` | §3.8: da domanda a disegno. Streaming come **capacità della superficie** (non impostazione globale), editing progressivo, rilevamento delle piattaforme che non sanno editare, e la divisione del messaggio all'overflow. Il campo `stream` è già sul contratto (`agent/providers/types.ts:107`) e nessun adattatore lo legge. |
-| **B12** Overflow | `?` | §2.6 + §3.8: da domanda a **difetto trovato**. `agent/context/compact.ts:90` cancella il payload intero mentre ogni cap sotto è testa+coda, e `agent/tools/mcp.ts:111-114` non ha cap. Rimedio in tre pezzi, il versamento va nel vault e **la chiamata per rileggere va consegnata insieme al percorso**. |
-| **D2/D3** File write · Undo | BLOCKER | §3.7: §1 ha una risposta funzionante. **Non chiedere, fotografare** — snapshot in un repo git ombra condiviso prima di ogni mutazione, e `/rollback` che disfa *anche il turno di conversazione*. La classe «reversibile ma distruttivo» smette di collassare su `allow`. |
-| **E1** Budget | BLOCKER | §3.10: il pezzo per-job può essere **un conteggio dell'atto patologico** (ricerche web per turno, subagent per turno, turni di continuazione) invece di un tetto in token. Deterministico, non richiede di stimare prima di spendere, e dice *cosa* è andato storto. Non sostituisce il tetto monetario sigillato — quello loro non ce l'hanno affatto. |
-| **E2** Cost | `?` | §2.8: c'è un costo che non stiamo contando. `compactToolResults` gira prima di **ogni** richiesta senza soglia di guadagno, e ogni potatura invalida il prefisso di cache. Un `min_reclaim` è un `if`. |
-| **E4** Tests | BLOCKER | §2.3: i *quality gate* sono la forma leggera dell'acceptance test — un comando che esce 0, eseguito prima del giudizio, con il fingerprint git che evita di rifarlo se niente è cambiato. |
+La tabella riga-per-riga — impatto su ciascuna voce toccata, con ogni
+`file:riga` a sostegno — vive nella zona tecnica per non scriverla due volte
+(PRACTICES §13.5): **Parte II, «M5-BIS impact table»**. Il verdetto in una
+frase: undici righe si muovono, nessuna chiude da sola — le sette BLOCKER
+(B2, B3, B4, B8, D2/D3, E1, E4) restano BLOCKER ma con un rimedio più
+economico o più chiaro di quello che avevamo in mente; le quattro `?` (A6,
+B11, B12, E2) diventano un disegno nominato o, per B12, un difetto trovato.
 
 ### Righe nuove da aggiungere all'inventario
 
@@ -1028,3 +1054,76 @@ In ordine di rapporto valore/costo, non di importanza percepita.
    aggiungere una feature, ed è **una decisione di forma**: per la sequenza in
    testa a M5-BIS («fondamenta riscrivibili → usabile davvero → 14 giorni → open
    source»), viene prima di qualunque feature.
+
+---
+
+# Parte II — technical notes (English, STE)
+
+Per PRACTICES §13.1: facts, contracts, `file:riga`, no modals. Reasoning and
+hedges stay in Part I. This section holds the one table dense enough in
+`file:riga` to earn the split — the impact table §5 points to — moved here
+instead of duplicated.
+
+## M5-BIS impact table
+
+Source: §5 (Italian zone). No row here changes state; this table records how
+this document's findings change the shape of the remedy, or the confidence
+behind the row.
+
+| Row | State today | Impact |
+|---|---|---|
+| **A6** Upgrade | `?` | `muffin update` does not exist: no case in the `cli/main.ts` switch (`cli/main.ts:158-190`), no mode in `install.sh`. §3.9 names the cheaper remedy: post-pull syntax validation, `git reset --hard` to the prior sha on failure. |
+| **B2** Long-running | BLOCKER, substrate ready | The fix is not an asynchronous `runTurn`. Hermes's own loop is blocking too; it adds a progress channel orthogonal to the turn, plus delivery that writes more than once per turn. Composable with ADR-0042 (§3.2). |
+| **B3** Wait | BLOCKER, substrate ready | A judge outside the turn reads the process registry and decides `wait`, not the model inside the turn (§2.1–2.3). Three barrier forms: pid, session+pattern, time. Invariant: a stale barrier never wedges the loop. ADR-0035 makes the session/scheduler split economical here (§3.3). |
+| **B4** Todo | BLOCKER | The Hermes answer is not a `todo` tool: a persistent goal, criteria addable mid-run, a deterministic gate (§2.1, §2.3). `goal → plan → todo{…} → resume` (§2) still holds; the exit-0 gate closes the loop, not todo state. |
+| **B8** Delivery | BLOCKER | The outbound half is missing. `sendDocument` is written and tested with no caller (`connectors/telegram/media.ts:154-161`). Deliverable mode is the target shape, routed through `outward.send` here (§2.7). |
+| **B11** Streaming | `?` | From open question to design. Streaming as a surface capability, not a global setting: progressive edit, per-platform edit-support detection, message-length overflow split. The `stream` field is already on the contract (`agent/providers/types.ts:107`) and no adapter reads it (§3.8). |
+| **B12** Overflow | `?` | From open question to a found defect. `agent/context/compact.ts:90` drops the whole payload; every cap below it keeps head and tail instead. `agent/tools/mcp.ts:111-114` has no cap at all. Three-part fix; overflow goes to the vault with the re-read call attached (§2.6). |
+| **D2/D3** File write, Undo | BLOCKER | §1 has a working model: snapshot, then act. A shared shadow git repo records state before every mutation; `/rollback` reverts files and the conversation turn together. The "reversible but destructive" class stops collapsing to `allow` (§3.7). |
+| **E1** Budget | BLOCKER | The per-job piece counts the pathological act — web searches per turn, subagents per turn, continuation turns — instead of a token ceiling. Deterministic, no pre-spend estimate needed, names the failure mode. Does not replace the sealed dollar cap; Hermes has none (§3.10). |
+| **E2** Cost | `?` | An uncounted cost exists. `compactToolResults` runs before every request with no reclaim threshold; every prune invalidates the cache prefix. A `min_reclaim` guard is one `if` (§2.8). |
+| **E4** Tests | BLOCKER | Quality gates are the light form of an acceptance test: a command exits 0, runs before the judge, and a git fingerprint skips the rerun when nothing changed (§2.3). |
+
+---
+
+# Cosa non si è potuto stabilire
+
+1. **181 pagine su 202 non sono state lette, solo interrogate.** §1 le
+   elenca: gli adattatori di messaggistica oltre a Telegram/Discord/Slack e
+   l'indice, le guide per-provider (Bedrock, Azure Foundry, Vertex, Gemini,
+   Ollama, MiniMax, xAI), i 15 documenti `developer-guide/*-plugin`,
+   `nix-setup`, `termux`, `windows-native`, i cataloghi di skill (~90 bundled
+   + ~60 opzionali), `pets`, `skins`, `spotify`, `wake-word`. Non affermo
+   nulla su una pagina che non ho aperto (§1); se una di queste tocca la
+   roadmap più di quanto l'indice lasci credere, questo documento non lo
+   saprebbe.
+
+2. **Hermes non è mai stato eseguito, qui.** Ogni riga di questo documento
+   viene dalla documentazione pubblica (`llms.txt`/`llms-full.txt`), letta
+   via HTTP pubblico, non da un'installazione provata (blocco di freschezza
+   in testa). Se un meccanismo si comporta diversamente da come i `.md` lo
+   descrivono, questo documento non se ne accorgerebbe.
+
+3. **I numeri attribuiti a Hermes sono riportati, non misurati.** «~200
+   token di output per chiamata» per il giudice del `wait` (§2.1) è quello
+   che dice la loro documentazione, non una chiamata cronometrata da noi. Lo
+   stesso vale per ogni altro numero preceduto da «loro dicono» in questo
+   file.
+
+4. **Le stime «cosa costa» sono dimensionamento a vista, non
+   implementazione.** «Una giornata» per `SurfaceCapabilities` (§3.1, §6),
+   «~15 righe» per pinnare il modello, e ogni altra cifra simile in §2 e §3:
+   nessun rimedio proposto qui è stato scritto o provato. Sono etichettate
+   come stima perché lo sono.
+
+5. **Se le categorie escluse davvero non toccano la roadmap è un giudizio
+   sull'indice, non sulle pagine.** §1 esclude gli adattatori minori, le
+   guide per-provider, i documenti plugin, i setup per piattaforma e i
+   cataloghi di skill perché la loro riga di descrizione in `llms.txt` non
+   sembra toccare M5-BIS — nessuna di quelle pagine è stata aperta per
+   confermarlo.
+
+6. **Il corpus letto è quello che l'indice offre, non necessariamente tutto
+   ciò che Nous Research pubblica su Hermes.** `llms.txt`/`llms-full.txt` e
+   il sito `/docs` sono stati raccolti per intero (§1); blog, changelog o
+   issue pubbliche fuori da quel dominio non sono stati cercati.
