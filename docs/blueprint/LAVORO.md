@@ -19,7 +19,7 @@
 
 **Checkpoint**: PR **#30** integrata in `dev` dopo CI verde e judge `MERGE`;
 build e suite sull'insieme integrato verdi. L'eventuale `dev`→`main` richiede un
-checkpoint e un judge separati.
+checkpoint e un judge separati. Record post-integrazione: **PR #31**.
 
 **Critica**: una garanzia deve essere obbligatoria nel tipo e raggiunta dalla produzione; logica isolata verde non basta.
 
