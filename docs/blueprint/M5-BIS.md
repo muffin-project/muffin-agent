@@ -104,6 +104,7 @@ ancora verificato — **è un debito, non uno stato**).
 | A6 | Upgrade | Aggiornare il codice non distrugge dati? | ? |
 | A7 | Migration | Lo schema evolve senza perdere memoria? | ? ⚠️ `episodes.kind` ha un CHECK non alterabile |
 | A8 | Backup | La memoria si salva e si ripristina? | ? |
+| A9 | Setup locale | `muffin init --local` riusa i segreti persistiti per un'installazione pulita di prova? | BLOCKER 👤 — richiesto dall'owner (16/08): senza, ogni prova «da utente nuovo» costa reincollare le chiavi |
 
 ### B · Continuità del runtime → `gate1/b-continuita.md`
 
@@ -235,7 +236,7 @@ ancora verificato — **è un debito, non uno stato**).
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
 | C6 | Temporal graph | «Chi era X a maggio» | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) |
 | C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
-| C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
+| C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione; **decisione owner 16/08**: se il modello ha la capability audio va diretto, altrimenti whisper/faster-whisper in locale sulla VPS; fornitore per capability scelto dalla CLI |
 | C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
 | C10 | World state | Distingue ciò che vale adesso da episodi, credenze e lavoro? | OUT — post-Gate 1, consumer prima dello schema (ADR-0045) |
 
@@ -319,6 +320,7 @@ ancora verificato — **è un debito, non uno stato**).
 | D9 | Skills | Scopre e usa le skill? | ? |
 | D10 | Security | Nessuna capability escape? | ? |
 | D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
+| D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando |
 
 ### E · Economia e osservabilità → `gate1/e-osservabilita.md`
 
@@ -398,6 +400,8 @@ con quattro classi, non due:
 Oggi il kernel ne ha tre (`allow` / `draft` / `ask` / `deny`) e `draft` non è
 eseguibile da nessun percorso. Il disegno va fatto **dopo** aver letto ADR,
 threat model e i contratti di capability — non prima.
+
+**Decisione owner, 2026-08-16**: si adotta il modello a **quattro classi** con **journal per turno** (via B: copia del file prima della mutazione in `~/.muffin/undo/<turno>/`, undo che riallinea filesystem **e** turno; il vault resta append-only); l'owner lo accetta «anche se non convince del tutto, magari refactorizziamo in futuro» — riscrivibile finché non siamo open source.
 
 Il confronto Hermes aggiunge una forma concreta: **non chiedere, fotografare**.
 Uno snapshot prima della mutazione può rendere eseguibile `draft` senza

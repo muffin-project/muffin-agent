@@ -22,8 +22,11 @@
  * transcript intero in un contesto.
  *
  *   node .claude/deleghe.mjs registra <id> <slug> "<cosa deve fare>"
- *   node .claude/deleghe.mjs raccogli [id…]     # default: tutte le registrate
+ *   node .claude/deleghe.mjs collega <id> <branch>   # quando il branch non si chiama come lo slug
+ *   node .claude/deleghe.mjs chiudi <id> "<motivo>"  # senza branch da cui derivare la chiusura
+ *   node .claude/deleghe.mjs raccogli [id…]     # default: tutte le registrate; scrive digest + brief
  *   node .claude/deleghe.mjs stato
+ *   node .claude/deleghe.mjs riprendi           # il quadro con cui una sessione nuova riprende
  *
  * ORCHESTRATION.md §3 (un subagente che dice di aver fatto non è evidenza).
  */
@@ -86,6 +89,23 @@ function registra(id, slug, cosa) {
   const voce = { id, slug, cosa, quando: new Date().toISOString() };
   appendFileSync(REGISTRO, `${JSON.stringify(voce)}\n`);
   console.log(`registrata ${slug} (${id})`);
+}
+
+/**
+ * Chiudere a mano una delega che non ha un branch da cui derivare la chiusura.
+ *
+ * `riprendi` deriva «chiusa» dall'integrazione del branch, e per la maggior
+ * parte delle deleghe basta. Ma una delega può finire senza lasciare un branch:
+ * un'estrazione read-only, una valutazione, o un agente morto prima di produrre
+ * qualcosa. Senza questo verbo quelle voci restano «APERTE — riprendibili» per
+ * sempre, e una sessione nuova le riprenderebbe davvero — è successo con otto
+ * voci in un giorno. La chiusura resta append-only come tutto il resto: si
+ * aggiunge una riga col motivo, non si riscrive la storia.
+ */
+function chiudi(id, motivo) {
+  mkdirSync(DIR, { recursive: true });
+  appendFileSync(REGISTRO, `${JSON.stringify({ id, chiuso: motivo, quando: new Date().toISOString() })}\n`);
+  console.log(`chiusa ${id}: ${motivo}`);
 }
 
 const trunc = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -183,6 +203,33 @@ function digest(id, voce) {
   return righe.join('\n');
 }
 
+/**
+ * Il mandato originale, intero. Il digest lo tronca a 900 caratteri per restare
+ * leggibile in un contesto; ma chi riprende una delega morta deve ricevere il
+ * brief com'era stato scritto — è la parte del lavoro già fatta con più cura, e
+ * riscriverlo a memoria è il modo di perderne un vincolo. Si scrive accanto al
+ * digest, con lo stesso nome più `.brief`.
+ */
+function brief(file) {
+  for (const riga of readFileSync(file, 'utf8').split('\n')) {
+    if (!riga.trim()) continue;
+    let e;
+    try {
+      e = JSON.parse(riga);
+    } catch {
+      continue;
+    }
+    if (e.type !== 'user') continue;
+    const c = e.message?.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      const t = c.find((x) => x.type === 'text');
+      if (t) return t.text;
+    }
+  }
+  return null;
+}
+
 function raccogli(ids) {
   mkdirSync(DIR, { recursive: true });
   const reg = new Map(registro().map((v) => [v.id, v]));
@@ -193,9 +240,15 @@ function raccogli(ids) {
   }
   for (const id of target) {
     const md = digest(id, reg.get(id));
-    const nome = `${reg.get(id)?.slug ?? id}.md`;
-    writeFileSync(join(DIR, nome), `${md}\n`);
-    console.log(`${nome} (${md.length} caratteri)`);
+    const base = reg.get(id)?.slug ?? id;
+    writeFileSync(join(DIR, `${base}.md`), `${md}\n`);
+    console.log(`${base}.md (${md.length} caratteri)`);
+    const file = transcriptOf(id);
+    const mandato = file ? brief(file) : null;
+    if (mandato) {
+      writeFileSync(join(DIR, `${base}.brief.md`), `${mandato}\n`);
+      console.log(`${base}.brief.md (${mandato.length} caratteri)`);
+    }
   }
 }
 
@@ -286,13 +339,16 @@ function riprendi() {
     const branch = v.branch ?? (branches.has(`slice/${v.slug}`) ? `slice/${v.slug}` : null);
     const pr = branch ? prs.get(branch) : undefined;
     const locallyMerged = branch !== null && (mergedBranches.has(branch) || mergedSubjects.has(branch));
-    const stato = pr?.state === 'MERGED' || locallyMerged
+    // A hand closure (`chiudi`) wins over everything else: it is the one fact
+    // about a delegation that git and GitHub cannot derive.
+    const stato = v.chiuso || pr?.state === 'MERGED' || locallyMerged
       ? 'closed'
       : githubAvailable
         ? 'open'
         : 'unknown';
     let dove;
-    if (pr?.state === 'MERGED') dove = `mergiata #${pr.number}`;
+    if (v.chiuso) dove = `chiusa: ${v.chiuso}`;
+    else if (pr?.state === 'MERGED') dove = `mergiata #${pr.number}`;
     else if (locallyMerged) dove = 'integrata (ancestry Git locale)';
     else if (pr?.state === 'OPEN') dove = `PR #${pr.number} aperta`;
     else if (!githubAvailable && branch) dove = `branch ${branch}, stato PR sconosciuto`;
@@ -366,9 +422,15 @@ if (cmd === 'registra') {
   mkdirSync(DIR, { recursive: true });
   appendFileSync(REGISTRO, `${JSON.stringify({ id: args[0], branch: args[1], quando: new Date().toISOString() })}\n`);
   console.log(`${args[0]} → ${args[1]}`);
+} else if (cmd === 'chiudi') {
+  if (args.length < 2) {
+    console.error('uso: deleghe.mjs chiudi <id> "<motivo>"');
+    process.exit(1);
+  }
+  chiudi(args[0], args.slice(1).join(' '));
 } else if (cmd === 'riprendi') {
   riprendi();
 } else {
-  console.error('uso: deleghe.mjs registra|collega|raccogli|stato|riprendi');
+  console.error('uso: deleghe.mjs registra|collega|chiudi|raccogli|stato|riprendi');
   process.exit(1);
 }

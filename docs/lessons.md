@@ -778,3 +778,16 @@ sites, instead of two copies that could drift. The regression test was run
 against the original vector-half code with the gate temporarily removed and
 confirmed to fail before being restored (`core/memory/recall.test.ts`, "does
 not let a superseded fact surface through the semantic half either").
+
+## Cleanup after a merge is conditional on the merge, not on the intent to merge
+
+`gh pr merge 39` failed (the map file had been regenerated on both sides), the
+failure was printed, and the next command in the same script still deleted the
+branch — locally and on `origin`. GitHub then closed the PR because its head no
+longer existed. The commit was recovered from the object store and the branch
+re-pushed, so nothing was lost; the PR had to be reopened by hand.
+
+**Instead:** delete a branch only after reading `mergedAt` for that PR (or
+`git merge-base --is-ancestor`), never in the same breath as the merge command.
+The rule was already written for the reverse case (`cmd | tail` hides the exit
+status): the mistake here was acting on the *plan* rather than on the *state*.
