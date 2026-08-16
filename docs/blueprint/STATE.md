@@ -39,7 +39,7 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
 Integrata: **PR #30** in `dev`, dopo CI verde e secondo judge `MERGE`. Il
 passaggio `dev`→`main`, se aperto, è un checkpoint nuovo e non eredita quel
-verdetto.
+verdetto. Il record post-integrazione è **PR #31**.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
