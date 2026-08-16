@@ -137,6 +137,38 @@ describe('the handshake', () => {
   });
 });
 
+describe('backoff — D4', () => {
+  it('resets attempt after a session sees READY or RESUMED, so failures do not compound forever', async () => {
+    // Without the reset, `attempt` only ever grows across the life of run():
+    // five ordinary reconnects (a laptop sleeping, a Discord-side blip — each
+    // individually harmless once the session came back healthy) leave every
+    // later reconnect waiting the capped 30s+jitter forever, indistinguishable
+    // from a genuinely repeating failure.
+    const h = harness();
+    const run = h.gw.run();
+    await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+    h.latest().serverSends(HELLO(45_000));
+    h.latest().serverSends(READY('sess-1'));
+    h.latest().close(1006, 'dropped'); // first reconnect: attempt 0 -> 1, backoff base 2000ms
+
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    await vi.waitFor(() => expect(h.sockets.length).toBe(2));
+    h.sockets[1]!.serverSends(HELLO(45_000));
+    h.sockets[1]!.serverSends({ op: 0, s: 2, t: 'RESUMED' }); // this session is healthy too
+
+    h.sockets[1]!.close(1006, 'dropped again'); // second reconnect
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(2));
+
+    // attempt=1 backoff is base 2000 + jitter [0,1000) = [2000,3000).
+    // attempt=2 (unreset) is base 4000 + jitter = [4000,5000). The two ranges
+    // never overlap, so this line alone tells the two behaviours apart.
+    expect(h.sleeps[1]).toBeLessThan(4000);
+
+    h.gw.stop();
+    await run;
+  });
+});
+
 describe('dispatch routing', () => {
   it('hands ordinary dispatch events to onDispatch with the sequence, and keeps READY/RESUMED internal', async () => {
     const h = harness();
