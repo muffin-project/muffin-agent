@@ -38,17 +38,23 @@ export function chatIdFor(channel: string, ownerChatId: number | undefined): num
 }
 
 export function telegramSurface(api: TelegramApi, ownerChatId: number | undefined): Surface {
+  // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
+  // `50 * 1024 * 1024` again instead of reading the number it had already
+  // declared here — two literals that agreed today and had no reason to keep
+  // agreeing tomorrow. One value, read back from the object callers see.
+  const limits = {
+    maxMessageChars: TELEGRAM_MAX,
+    // sendDocument's ceiling on the public Bot API. Photos are 10MB but a
+    // document is how anything that must survive byte-for-byte goes out
+    // (`research/m3-connector-capabilities-telegram-discord.md`: sendPhoto
+    // always recompresses to JPEG), so the document limit is the honest one.
+    maxUploadBytes: 50 * 1024 * 1024,
+    maxDownloadBytes: MAX_DOWNLOAD_BYTES,
+  };
+
   return {
     id: 'telegram',
-    limits: {
-      maxMessageChars: TELEGRAM_MAX,
-      // sendDocument's ceiling on the public Bot API. Photos are 10MB but a
-      // document is how anything that must survive byte-for-byte goes out
-      // (`research/m3-connector-capabilities-telegram-discord.md`: sendPhoto
-      // always recompresses to JPEG), so the document limit is the honest one.
-      maxUploadBytes: 50 * 1024 * 1024,
-      maxDownloadBytes: MAX_DOWNLOAD_BYTES,
-    },
+    limits,
 
     handles: (channel) => chatIdFor(channel, ownerChatId) !== null,
 
@@ -102,8 +108,10 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
       // Checked here, before a multipart upload is even built: failing fast on
       // a file the Bot API would reject anyway is cheaper than discovering it
       // after reading the bytes into memory and opening the connection.
-      if (bytes > 50 * 1024 * 1024) {
-        return notDelivered(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di 50MB di sendDocument`);
+      if (bytes > limits.maxUploadBytes) {
+        return notDelivered(
+          `${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ${(limits.maxUploadBytes / 1e6).toFixed(0)}MB di sendDocument`,
+        );
       }
 
       try {
