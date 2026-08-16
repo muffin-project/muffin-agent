@@ -37,9 +37,9 @@ scenario reale, documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §1
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Integrata: **PR #30** in `dev`, dopo CI verde e secondo judge `MERGE`. Il
-passaggio `dev`→`main`, se aperto, è un checkpoint nuovo e non eredita quel
-verdetto. Il record post-integrazione è **PR #31**.
+Integrate: **PR #30/#31** in `dev`, con CI e judge `MERGE`. Aperta **PR #32**
+`dev`→`main`: è un checkpoint nuovo, non eredita quei verdetti e attende CI più
+un judge sull'insieme completo.
 
 **Decisioni owner ancora aperte.** Scope lettura sandbox · `mcp.*` per-tool ·
 modello di reversibilità · `ricorda` scrive o propone · lingua docs pubblici ·
@@ -549,6 +549,8 @@ ha emesso `MERGE` senza defect o garanzie non provate; CI verde e PR fusa in
 worktree contiene `.codex/` non tracciata, che duplica due suite di hook: il run
 integrato conta quindi 98 file e 1.103 passati, mentre il tree Git pulito e
 byte-identico al merge ne conta 96 e 1.075; in entrambi resta 1 saltato.
+La promozione dell'insieme è aperta separatamente come **PR #32** `dev`→`main`;
+il suo verdetto deve nascere dall'integrazione completa.
 
 ## Sessioni 2026-08-09
 
