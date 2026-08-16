@@ -251,10 +251,14 @@ ancora verificato — **è un debito, non uno stato**).
 > stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
 > e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
 > inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
-> sola suite (12 scenari, **~17s** misurati in locale); gira anche in CI,
-> job separato (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
+> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
+> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
 > `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
-> che governa `ci.yml`).
+> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
+> passi identici a quelli verificati in locale) ma **non ancora eseguito su
+> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
+> anche sul branch di default, quindi la prima corsa reale sarà al merge su
+> `dev`.
 >
 > **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
 > E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →

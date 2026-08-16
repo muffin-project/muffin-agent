@@ -154,6 +154,29 @@ function main(): void {
   let nonProvabile = 0;
   let attesoRossoOraVerde = 0;
 
+  /**
+   * A manifest entry whose row id does not exist in the live inventory.
+   *
+   * The loop below walks `inventory`, not `byRow` — so before this check
+   * existed, a typo'd id (`Z9`) or a row M5-BIS.md renumbered away from under
+   * the manifest simply never got visited: not printed, not counted, exit
+   * code untouched. The header still said "N scenari" (`MANIFEST.length`
+   * does not care), and the row it was supposed to prove looked exactly like
+   * one nobody had written a scenario for yet. Silent, and one level above
+   * the exact class of gap this whole report exists to surface — found by a
+   * judge, not by this file, which is the reason to fix it here rather than
+   * trust a future reader to notice a scenario count that does not add up.
+   */
+  const orphanRows = [...byRow.keys()].filter((row) => !inventory.some((r) => r.id === row));
+  for (const row of orphanRows) {
+    lines.push(
+      `  ORFANO             ${row}  nel manifest ma non in M5-BIS.md — ${byRow
+        .get(row)!
+        .map((s) => s.title)
+        .join('; ')}`,
+    );
+  }
+
   for (const row of inventory) {
     const verdict = verdictFor(row, byRow.get(row.id) ?? [], results);
     switch (verdict.kind) {
@@ -192,18 +215,19 @@ function main(): void {
   process.stdout.write(`${lines.join('\n')}\n\n`);
   process.stdout.write(
     `verde ${verde} · atteso-rosso ${attesoRosso} · rosso-inatteso ${unexpectedRed} · ` +
-      `atteso-rosso→verde ${attesoRossoOraVerde} · non provabile qui ${nonProvabile} · nessuno scenario ${nessunoScenario}\n`,
+      `atteso-rosso→verde ${attesoRossoOraVerde} · non provabile qui ${nonProvabile} · ` +
+      `nessuno scenario ${nessunoScenario} · orfano ${orphanRows.length}\n`,
   );
 
-  if (unexpectedRed > 0 || readyWithoutScenario > 0 || attesoRossoOraVerde > 0) {
+  if (unexpectedRed > 0 || readyWithoutScenario > 0 || attesoRossoOraVerde > 0 || orphanRows.length > 0) {
     process.stdout.write(
       `\nFALLITO: ${unexpectedRed} rosso-inatteso, ${readyWithoutScenario} riga READY senza scenario, ` +
-        `${attesoRossoOraVerde} atteso-rosso da promuovere.\n`,
+        `${attesoRossoOraVerde} atteso-rosso da promuovere, ${orphanRows.length} scenario orfano nel manifest.\n`,
     );
     process.exitCode = 1;
     return;
   }
-  process.stdout.write('\nOK: nessun rosso inatteso, nessuna riga READY scoperta.\n');
+  process.stdout.write('\nOK: nessun rosso inatteso, nessuna riga READY scoperta, nessuno scenario orfano.\n');
 }
 
 main();
