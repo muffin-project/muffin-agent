@@ -1,7 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Embedder } from './embed.js';
-import { recall, recallTaint, renderForPrompt } from './recall.js';
+import { sweepDuplicates } from './maintenance.js';
+import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
 
@@ -341,11 +342,13 @@ describe('recall', () => {
     expect(accountants.map((a) => a.text).join(' ')).not.toContain('Marco');
   });
 
-  it('includeHistory brings the retired belief back, marked as retired, beside the current one', async () => {
+  it("asOf:'all' brings the retired belief back, marked as retired, beside the current one", async () => {
     // `RecallOptions.includeHistory` was declared, threaded through
     // `cli/memory.ts` and `cli/main.ts`, and documented in the USAGE — and
     // `recall()` never read it. `--history` answered exactly like the default
-    // search: silently. This is the wiring test that fails without it.
+    // search: silently. This is the wiring test that fails without it. The
+    // option is now a value of `asOf` rather than a boolean beside it; the
+    // property it guards did not change.
     const { store, vectors } = harness();
     const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
     const ep = episode(store, 'cambio commercialista');
@@ -354,7 +357,7 @@ describe('recall', () => {
     const lucia = store.addFact({ ...base, objectValue: 'Lucia' });
     store.supersede(HOST, marco, lucia, NOW);
 
-    const result = await recall({ store, vectors }, HOST, 'Giusto commercialista', { includeHistory: true });
+    const result = await recall({ store, vectors }, HOST, 'Giusto commercialista', { asOf: EVERY_INSTANT });
     const accountants = result.items.filter((i) => i.kind === 'fact' && /accountant/.test(i.text));
     const retired = accountants.find((a) => a.text.includes('Marco'));
     const current = accountants.find((a) => a.text.includes('Lucia'));
@@ -362,6 +365,10 @@ describe('recall', () => {
     expect(retired?.expired).toBe(true);
     expect(current).toBeDefined();
     expect(current?.expired).toBe(false);
+    // And the retired one says what took its place. Returning "Marco, retired"
+    // and stopping there answers "who was it" with half the sentence: the other
+    // half — who it is now — is the part that makes the first safe to say.
+    expect(retired?.replacedBy?.text).toContain('Lucia');
   });
 
   it('never crosses a tenant, on either half', async () => {
@@ -402,5 +409,550 @@ describe('recall', () => {
     });
     expect(result.items.some((i) => i.kind === 'episode' && i.id === current)).toBe(false);
     expect(result.items.some((i) => i.kind === 'episode' && i.id === prior)).toBe(true);
+  });
+
+  it('answers who X was on a past date, not who X is now — "chi era X a maggio"', async () => {
+    // The acceptance scenario C6 exists to close. Anna is recorded in June,
+    // replaced by Bruno in August; asked about May, the honest answer is Anna —
+    // not because she was already known then, but because nothing had stopped
+    // being true of her yet (`factsAsOf`'s own doc comment walks this exact
+    // pair). Asked about a date after the change, the answer flips.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note aziendali');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'work_contact', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    const anna = store.addFact({ ...base, objectValue: 'Anna', recordedAt: '2026-06-01T10:00:00Z' });
+    const bruno = store.addFact({ ...base, objectValue: 'Bruno', recordedAt: '2026-08-01T10:00:00Z' });
+    store.supersede(HOST, anna, bruno, '2026-08-01T10:00:00Z');
+
+    const may = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-05-15T00:00:00.000Z',
+    });
+    const mayText = may.items.filter((i) => i.kind === 'fact' && /work_contact/.test(i.text)).map((f) => f.text).join(' ');
+    expect(mayText).toContain('Anna');
+    expect(mayText).not.toContain('Bruno');
+
+    const august = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-08-15T00:00:00.000Z',
+    });
+    const augustText = august.items.filter((i) => i.kind === 'fact' && /work_contact/.test(i.text)).map((f) => f.text).join(' ');
+    expect(augustText).toContain('Bruno');
+    expect(augustText).not.toContain('Anna');
+  });
+
+  it('says it does not know, with the nearest thing on record, instead of answering with today', async () => {
+    // The failure this exists to stop: an entity the graph knows about, asked
+    // about an instant before anything on record — silence here used to mean
+    // "today's belief with no mark on it".
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note aziendali');
+    store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'work_contact', objectValue: 'Anna',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-06-01T10:00:00Z',
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto contatto lavoro', {
+      asOf: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]?.entity).toBe('Giusto');
+    expect(result.gaps[0]?.nearest?.text).toContain('Anna');
+
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('lacuna');
+    expect(rendered).toContain('non rispondere con quello che vale oggi');
+  });
+
+  it('filters episodes to a date window', async () => {
+    const { store, vectors } = harness();
+    const early = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria vecchio', trustTier: 0, createdAt: '2026-01-01T10:00:00Z',
+    });
+    const inWindow = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria giusto', trustTier: 0, createdAt: '2026-06-15T10:00:00Z',
+    });
+    const late = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'promemoria nuovo', trustTier: 0, createdAt: '2026-12-01T10:00:00Z',
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'promemoria', {
+      since: '2026-03-01T00:00:00.000Z',
+      until: '2026-09-01T00:00:00.000Z',
+    });
+    const ids = result.items.filter((i) => i.kind === 'episode').map((i) => i.id);
+    expect(ids).toContain(inWindow);
+    expect(ids).not.toContain(early);
+    expect(ids).not.toContain(late);
+    expect(result.strategies.some((s) => s.startsWith('filtro('))).toBe(true);
+  });
+
+  it('filters the semantic half by surface too, not only full text', async () => {
+    // The vector index has no notion of `--surface` on its own; the fix this
+    // guards is in `recall()`'s vector branch reading `connector` back from
+    // `provenanceOf` and dropping the mismatch, not in the index itself.
+    const { store, vectors } = harness();
+    const cliEp = episode(store, 'nota', 0);
+    const tgEp = store.addEpisode({
+      tenantId: HOST, connector: 'telegram', threadKey: 'g', role: 'user',
+      kind: 'message', content: 'nota', trustTier: 2, createdAt: NOW,
+    });
+    // Identical indexed text on both, so only the surface filter — not the
+    // embedding itself — can tell them apart; neither episode's own content
+    // ("nota") shares a word with the query, so full text cannot find either.
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: cliEp, text: 'il weekend di vela' }], NOW);
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: tgEp, text: 'il weekend di vela' }], NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'vela', { surface: 'telegram' });
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.id === tgEp)).toBe(true);
+    expect(result.items.some((i) => i.id === cliEp)).toBe(false);
+  });
+
+  it('U2: gates a retired episode on the semantic half too, not only full text', async () => {
+    // Neither `expired`/`old` retirement gate has a test that fails without
+    // it: `searchEpisodes` (text) already had one to lean on, so an existing
+    // test proving "retired stays out" could pass on the graph/text path
+    // alone and never touch this guard.
+    const { store, vectors } = harness();
+    const id = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'appunto ormai vecchio sulla regata', trustTier: 0, createdAt: NOW,
+    });
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: id, text: 'appunto ormai vecchio sulla regata' }], NOW);
+    store.supersedeEpisodes(HOST, [id], NOW);
+
+    // No shared word with the episode's own text in either query: only the
+    // vector half, matching by meaning, can retrieve this row at all — so a
+    // pass here can only be explained by the guard, not by the text half.
+    const now = await recall({ store, vectors }, HOST, 'vela barca mare');
+    expect(now.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(false);
+    // Non-vacuous: the row really is reachable through this half once history
+    // is asked for, so the negative above is not just "nothing was indexed".
+    const history = await recall({ store, vectors }, HOST, 'vela barca mare', { asOf: EVERY_INSTANT });
+    expect(history.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(true);
+  });
+
+  it('U2: filters the semantic half by a date window too, not only full text', async () => {
+    const { store, vectors } = harness();
+    const id = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'nota fuori finestra sulla regata', trustTier: 0, createdAt: '2026-01-01T10:00:00Z',
+    });
+    await vectors!.index(HOST, [{ kind: 'episode', sourceId: id, text: 'nota fuori finestra sulla regata' }], NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'vela barca mare', {
+      since: '2026-06-01T00:00:00.000Z',
+      until: '2026-09-01T00:00:00.000Z',
+    });
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.kind === 'episode' && i.id === id)).toBe(false);
+  });
+
+  it('U2: does not attach a successor to a fact retired by the duplicate sweep', async () => {
+    // Distinct from the rendering test above: this checks `successorOf`'s own
+    // output (`replacedBy`) directly, the primitive both the graph hop and the
+    // vector half call — not the string `temporalLabel` builds from it.
+    const { store, vectors } = harness(false);
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due letture dello stesso fatto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'lives_in', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const dup = store.addFact({ ...base, objectValue: 'Cagliari' });
+    const keep = store.addFact({ ...base, objectValue: 'Cagliari' });
+    store.supersede(HOST, dup, keep, NOW, null);
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto', { asOf: EVERY_INSTANT });
+    const dupItem = result.items.find((i) => i.kind === 'fact' && i.id === dup);
+    expect(dupItem?.expired).toBe(true);
+    expect(dupItem?.replacedBy).toBeUndefined();
+  });
+
+  it('does not let a superseded fact surface through the semantic half either', async () => {
+    // The vector index never re-embeds on supersede, so the retired text stays
+    // findable by meaning forever. The text half and the graph hop both gate on
+    // `includeSuperseded`; before this fix the semantic half did not, which made
+    // it the one door a retired belief could still walk back through unmarked —
+    // in the *default* search, not only under `--history`.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'mood', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const old = store.addFact({ ...base, objectValue: 'sotto pressione' });
+    const current = store.addFact({ ...base, objectValue: 'sereno' });
+    await vectors!.index(HOST, [{ kind: 'fact', sourceId: old, text: 'Giusto mood sotto pressione' }], NOW);
+    store.supersede(HOST, old, current, NOW);
+
+    // No shared word with "sotto pressione ultimamente" in any episode's own
+    // text and no capitalised word for the graph hop to key on: only the vector
+    // half, matching by meaning, can retrieve this fact at all.
+    const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente');
+    expect(result.strategies).toContain('vector');
+    expect(result.items.some((i) => i.kind === 'fact' && i.id === old)).toBe(false);
+  });
+
+  it('brings the same retired fact back through the semantic half, marked, once history is asked for', async () => {
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'note su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'mood', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const old = store.addFact({ ...base, objectValue: 'sotto pressione' });
+    const current = store.addFact({ ...base, objectValue: 'sereno' });
+    await vectors!.index(HOST, [{ kind: 'fact', sourceId: old, text: 'Giusto mood sotto pressione' }], NOW);
+    store.supersede(HOST, old, current, NOW);
+
+    const result = await recall({ store, vectors }, HOST, 'sotto pressione ultimamente', { asOf: EVERY_INSTANT });
+    const hit = result.items.find((i) => i.kind === 'fact' && i.id === old);
+    expect(hit?.expired).toBe(true);
+    expect(hit?.replacedBy?.text).toContain('sereno');
+  });
+
+  it('labels a fact retired by the duplicate sweep as a duplicate, never as "was true before"', async () => {
+    // D4: `expired_at` alone conflates two different reasons a fact is
+    // retired. `supersede` is called from the judge, closing world time
+    // (`validTo` set) — and from `sweepDuplicates`, which passes `validTo:
+    // null` on purpose, because a duplicate was never a separate truth
+    // (`store.ts` supersede's own doc comment). Rendering both the same way
+    // tells the owner a dedup merge was a change of mind, and under `as-of`
+    // the duplicate row is often the only line left standing.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due letture dello stesso fatto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'lives_in', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    const dup = store.addFact({ ...base, objectValue: 'Cagliari' });
+    store.addFact({ ...base, objectValue: 'Cagliari' }); // exact duplicate: the sweep retires one
+    sweepDuplicates(store, HOST, new Date(NOW));
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto', { asOf: EVERY_INSTANT });
+    // Non-vacuous: the retired row actually reached recall, marked expired,
+    // with the `validTo: null` the sweep wrote.
+    const dupItem = result.items.find((i) => i.kind === 'fact' && i.id === dup);
+    expect(dupItem?.expired).toBe(true);
+    expect(dupItem?.validTo ?? null).toBeNull();
+
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('riga ritirata (duplicato)');
+    // The old label is still correct for a real supersede — nothing in this
+    // fixture is one, so it must not appear at all here.
+    expect(rendered).not.toContain('non più attuale — era vero prima');
+  });
+
+  it('carries the K episodes before and after a match, from its own thread and reading order', async () => {
+    const { store, vectors } = harness(false);
+    const fill = (label: string, minute: number, threadKey = 't') =>
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey, role: 'user',
+        kind: 'message', content: label, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+      });
+    const twoBefore = fill('due prima', 1);
+    const oneBefore = fill('una prima', 2);
+    const anchor = fill('il codice segreto è ZK-9', 3);
+    const oneAfter = fill('una dopo', 4);
+    const twoAfter = fill('due dopo', 5);
+    // Same instant, different thread: must never be treated as a neighbour.
+    const otherThread = fill('non è vicino', 3, 'other-thread');
+
+    const result = await recall({ store, vectors }, HOST, 'codice segreto', { neighbours: 2 });
+    const neighbours = result.items.filter((i) => i.neighbourOf === anchor);
+    expect(neighbours.map((i) => i.id)).toEqual([twoBefore, oneBefore, oneAfter, twoAfter]);
+    expect(neighbours.map((i) => i.text)).toEqual(['due prima', 'una prima', 'una dopo', 'due dopo']);
+    expect(neighbours.some((i) => i.id === otherThread)).toBe(false);
+  });
+
+  it('clamps an oversized neighbours request instead of pulling an unbounded slice of a thread', async () => {
+    // `RecallOptions.neighbours` is a tool argument the model controls; an
+    // unclamped value would let one call pull an unbounded slice of a thread
+    // into context. The cap lives in `recall()` itself (`MAX_NEIGHBOURS`), so
+    // this is a wiring test for the primitive, not for either boundary.
+    const { store, vectors } = harness(false);
+    const anchor = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'ancora qui il codice segreto', trustTier: 0, createdAt: '2026-08-01T10:06:00Z',
+    });
+    for (let i = 0; i < 12; i++) {
+      if (i === 6) continue;
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `riempitivo ${i}`, trustTier: 0,
+        createdAt: `2026-08-01T10:${String(i).padStart(2, '0')}:00Z`,
+      });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'codice segreto', { neighbours: 1000 });
+    expect(result.strategies).toContain('vicinato(5)');
+    const neighbourCount = result.items.filter((i) => i.neighbourOf === anchor).length;
+    expect(neighbourCount).toBeLessThanOrEqual(10);
+  });
+
+  it('clamps the whole result, not only how many messages surround one anchor', async () => {
+    // D2: `MAX_NEIGHBOURS` bounds one anchor's own window; nothing bounded how
+    // many anchors got one, or the size of `limit` itself, which a CLI caller
+    // can set with no cap of its own. `limit:20, around:5` on twenty threads of
+    // thirty messages used to be able to append up to 220 rows — about 24k
+    // tokens — to a tool result `runtime.ts` marks `keepResult: true`, so it
+    // was never compacted, for the rest of the conversation.
+    // One matching message per thread, at a fixed mid-thread position, amid
+    // filler that does not share the query word — so the twenty ranked hits
+    // are spread one-per-thread and their neighbourhoods (the filler either
+    // side) are not already part of `kept`, the way a real "sweep of threads"
+    // would be. Uniform content across every thread would instead rank as one
+    // long tie, and `kept` would silently become "the first twenty rows of
+    // thread zero" — whose own neighbours are already in `kept` — which
+    // proves nothing about the clamp.
+    const { store, vectors } = harness(false);
+    for (let t = 0; t < 20; t++) {
+      for (let m = 0; m < 30; m++) {
+        store.addEpisode({
+          tenantId: HOST, connector: 'cli', threadKey: `t${t}`, role: 'user',
+          kind: 'message',
+          content: m === 15 ? 'regata di stamattina' : `messaggio ${m} senza rilievo`,
+          trustTier: 0,
+          createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+        });
+      }
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 20, neighbours: 5 });
+    // The declared threshold, not a copy of the number: this fails the moment
+    // the constant and the guarantee drift apart.
+    expect(result.items.length).toBeLessThanOrEqual(MAX_CONTEXT_ITEMS);
+    // Non-vacuous: the clamp actually had a neighbourhood to cut down, not an
+    // empty one that would pass regardless of whether the clamp exists.
+    expect(result.items.some((i) => i.neighbourOf !== undefined)).toBe(true);
+  });
+
+  it('names the cap in strategies when the cut actually fires', async () => {
+    // The clamp test above proves the cut with the neighbourhood mechanism;
+    // this one proves it on `limit` alone, so the label is not accidentally
+    // coupled to `neighbours`. A recall that comes back smaller than what
+    // actually matched has to say so — the same rule that already puts
+    // `vector-non-configurato` in `strategies` rather than leaving it silent.
+    const { store, vectors } = harness(false);
+    for (let m = 0; m < 50; m++) {
+      store.addEpisode({
+        tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: 'regata di stamattina', trustTier: 0,
+        createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+      });
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 100 });
+    expect(result.items.length).toBe(MAX_CONTEXT_ITEMS);
+    expect(result.strategies).toContain(`tetto(${MAX_CONTEXT_ITEMS})`);
+  });
+
+  it('gives a neighbourhood to only the first few ranked episodes, not every one', async () => {
+    // The other half of D2, isolated from the size clamp above: kept sits at
+    // 6 items and each neighbourhood adds at most 2, so the total (18) never
+    // approaches `MAX_CONTEXT_ITEMS` and cannot be the thing doing the
+    // cutting here. Only `MAX_NEIGHBOUR_ANCHORS` can explain fewer than six
+    // distinct anchors showing up with context.
+    const { store, vectors } = harness(false);
+    for (let t = 0; t < 6; t++) {
+      for (let m = 0; m < 10; m++) {
+        store.addEpisode({
+          tenantId: HOST, connector: 'cli', threadKey: `t${t}`, role: 'user',
+          kind: 'message',
+          content: m === 5 ? 'regata di stamattina' : `messaggio ${m} senza rilievo`,
+          trustTier: 0,
+          createdAt: `2026-08-01T10:${String(m).padStart(2, '0')}:00Z`,
+        });
+      }
+    }
+
+    const result = await recall({ store, vectors }, HOST, 'regata', { limit: 6, neighbours: 1 });
+    const distinctAnchors = new Set(result.items.filter((i) => i.neighbourOf !== undefined).map((i) => i.neighbourOf));
+    expect(distinctAnchors.size).toBeGreaterThan(0);
+    expect(distinctAnchors.size).toBeLessThanOrEqual(3);
+  });
+
+  it('never lets the neighbourhood reach across a tenant boundary', async () => {
+    const { store, vectors } = harness(false);
+    const mine = episode(store, 'il mio codice è ZK-1');
+    // Same connector and thread key by coincidence must not be enough: a
+    // different tenant's episode must never be adjacent to this one.
+    store.addEpisode({
+      tenantId: 'group:telegram:9', connector: 'cli', threadKey: 't', role: 'user',
+      kind: 'message', content: 'vicino di un altro tenant', trustTier: 2, createdAt: NOW,
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'il mio codice', { neighbours: 2 });
+    expect(result.items.some((i) => i.id === mine)).toBe(true);
+    expect(result.items.map((i) => i.text).join(' ')).not.toContain('altro tenant');
+  });
+});
+
+describe('checkTemporalWindow', () => {
+  const NOW_ISO = '2026-08-16T12:00:00.000Z';
+
+  it('accepts a normal, past window and an as-of no later than now', () => {
+    expect(
+      checkTemporalWindow({ since: '2026-01-01T00:00:00.000Z', until: '2026-02-01T00:00:00.000Z' }, NOW_ISO),
+    ).toBeNull();
+    expect(checkTemporalWindow({ asOf: NOW_ISO }, NOW_ISO)).toBeNull();
+  });
+
+  it('rejects since after until — a window that cannot contain anything', () => {
+    expect(
+      checkTemporalWindow({ since: '2026-06-01T00:00:00.000Z', until: '2026-01-01T00:00:00.000Z' }, NOW_ISO),
+    ).toBe('empty-window');
+  });
+
+  it('rejects an as-of that has not happened yet', () => {
+    expect(checkTemporalWindow({ asOf: '2027-01-01T00:00:00.000Z' }, NOW_ISO)).toBe('future-asof');
+  });
+
+  it('never flags EVERY_INSTANT as a future date', () => {
+    // 'all' sorts after any ISO date string lexicographically ('a' > '2' in
+    // ASCII) — a naive `asOf > now` string comparison would reject `--history`
+    // itself, which is exactly the sentinel this exemption exists to protect.
+    expect(checkTemporalWindow({ asOf: EVERY_INSTANT }, NOW_ISO)).toBeNull();
+  });
+
+  it('does not reject a since/until that simply has not happened yet — that is empty evidence, not a wrong request', () => {
+    expect(checkTemporalWindow({ since: '2027-01-01T00:00:00.000Z' }, NOW_ISO)).toBeNull();
+  });
+});
+
+describe('invariant: a retired fact never comes back looking active', () => {
+  it('holds across every combination of asOf, surface, since/until and neighbours', async () => {
+    // The minimum measure PRACTICES §5 and the mandate both ask for: not one
+    // scenario, but a sweep over the parameter space, on both halves that can
+    // return a fact (graph hop and semantic match).
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'due episodi su Giusto');
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'accountant', episodeId: ep,
+      trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+    };
+    const retired = store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
+    const active = store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+    store.supersede(HOST, retired, active, '2026-08-01T10:00:00Z');
+    // N1: episodes too, not only facts — the two are marked by different
+    // columns (`superseded_at` vs. `expired_at`) and gated by separate code
+    // in `recall()`, so a sweep that only ever seeded a fact could not have
+    // caught a regression specific to the episode path.
+    const retiredEpisode = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 'sweep-retired', role: 'user',
+      kind: 'message', content: 'vecchia nota: Giusto accountant Marco Lucia', trustTier: 0,
+      createdAt: '2026-06-01T10:00:00Z',
+    });
+    store.supersedeEpisodes(HOST, [retiredEpisode], '2026-08-01T10:00:00Z');
+    await vectors!.index(
+      HOST,
+      [
+        { kind: 'fact' as const, sourceId: retired, text: 'Giusto accountant Marco' },
+        { kind: 'fact' as const, sourceId: active, text: 'Giusto accountant Lucia' },
+        { kind: 'episode' as const, sourceId: retiredEpisode, text: 'vecchia nota: Giusto accountant Marco Lucia' },
+      ],
+      NOW,
+    );
+
+    const asOfValues: (string | undefined)[] = [
+      undefined,
+      EVERY_INSTANT,
+      '2026-05-01T00:00:00.000Z',
+      '2026-07-01T00:00:00.000Z',
+      '2026-09-01T00:00:00.000Z',
+    ];
+    const surfaces: (string | undefined)[] = [undefined, 'cli', 'telegram'];
+    const windows: [string | undefined, string | undefined][] = [
+      [undefined, undefined],
+      ['2026-01-01T00:00:00.000Z', '2026-12-31T00:00:00.000Z'],
+    ];
+    const neighboursValues = [0, 2];
+
+    let combinations = 0;
+    let sawRetiredAsActive = 0;
+    let sawRetiredCorrectlyMarked = 0;
+    // N1: the sweep used to measure only the *label* on a returned row — a
+    // regression that let a retired item back into an ordinary "now" search,
+    // correctly marked `expired`, would have counted as a pass here. Presence
+    // is its own property: under the default instant (`asOf === undefined`,
+    // no history asked for) a retired row must not come back at all, marked
+    // or not.
+    let sawRetiredWhenNotAsked = 0;
+    for (const asOf of asOfValues) {
+      for (const surface of surfaces) {
+        for (const [since, until] of windows) {
+          for (const neighbours of neighboursValues) {
+            const result = await recall({ store, vectors }, HOST, 'Giusto accountant Marco Lucia', {
+              ...(asOf === undefined ? {} : { asOf }),
+              ...(surface === undefined ? {} : { surface }),
+              ...(since === undefined ? {} : { since }),
+              ...(until === undefined ? {} : { until }),
+              ...(neighbours === 0 ? {} : { neighbours }),
+            });
+            combinations++;
+            const retiredFactHit = result.items.find((i) => i.kind === 'fact' && i.id === retired);
+            const retiredEpisodeHit = result.items.find((i) => i.kind === 'episode' && i.id === retiredEpisode);
+            for (const hit of [retiredFactHit, retiredEpisodeHit]) {
+              if (!hit) continue;
+              if (hit.expired) sawRetiredCorrectlyMarked++;
+              else sawRetiredAsActive++;
+              if (asOf === undefined) sawRetiredWhenNotAsked++;
+            }
+          }
+        }
+      }
+    }
+
+    expect(combinations).toBe(asOfValues.length * surfaces.length * windows.length * neighboursValues.length);
+    // The property itself: never once, across every combination, does a
+    // retired fact or episode come back looking current.
+    expect(sawRetiredAsActive).toBe(0);
+    // Nor does either come back at all when history was never asked for.
+    expect(sawRetiredWhenNotAsked).toBe(0);
+    // And the property was actually exercised — a sweep that never returns
+    // either retired row at all would make the assertions above vacuous.
+    expect(sawRetiredCorrectlyMarked).toBeGreaterThan(0);
+  });
+});
+
+describe('the default turn pays no temporal-gate cost', () => {
+  it('never calls factsAsOf or episodeNeighbourhood when asOf and neighbours are both absent', async () => {
+    // The PR body claims this by hand ("Turno DEFAULT ... zero costo
+    // aggiunto"), probed once and never proven by a test that could go red —
+    // this is that test. `asOf === undefined` already has its own branch in
+    // the graph hop (`activeFacts`, never `factsAsOf`), and `neighbours`
+    // defaults to 0, which short-circuits the neighbourhood block before it
+    // ever calls the store. An ordinary "now" turn — the one every turn
+    // takes — must never pay for either primitive.
+    const { store, vectors } = harness();
+    const me = store.upsertEntity(HOST, 'Giusto', 'person', NOW);
+    const ep = episode(store, 'Giusto accountant Lucia');
+    store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
+      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const factsAsOfSpy = vi.spyOn(store, 'factsAsOf');
+    const neighbourhoodSpy = vi.spyOn(store, 'episodeNeighbourhood');
+
+    const result = await recall({ store, vectors }, HOST, 'Giusto accountant Lucia', {});
+
+    // The path was actually exercised, not vacuously empty — otherwise zero
+    // calls would prove nothing.
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(factsAsOfSpy).not.toHaveBeenCalled();
+    expect(neighbourhoodSpy).not.toHaveBeenCalled();
   });
 });

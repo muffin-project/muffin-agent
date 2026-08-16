@@ -33,29 +33,34 @@ const update = (over: {
 
 describe('owner identity', () => {
   it('accepts the owner speaking from their own account', () => {
-    const i = parseUpdate(update({ chatId: OWNER, fromId: OWNER }), OWNER);
-    expect(i?.fromOwner).toBe(true);
-    expect(principalFor(i!).principal.kind).toBe('owner');
+    const i = parseUpdate(update({ chatId: OWNER, fromId: OWNER }));
+    expect(principalFor(i!, OWNER).principal.kind).toBe('owner');
   });
 
   it('refuses someone else speaking in a chat that carries the owner id', () => {
     // The exploit: the room matches, the person does not.
-    const i = parseUpdate(update({ chatId: OWNER, fromId: STRANGER }), OWNER);
-    expect(i?.fromOwner).toBe(false);
-    expect(principalFor(i!).principal.kind).toBe('member');
+    const i = parseUpdate(update({ chatId: OWNER, fromId: STRANGER }));
+    expect(principalFor(i!, OWNER).principal.kind).toBe('member');
   });
 
   it('does not promote the owner to host tenant inside a group', () => {
     // Even the owner speaking in a group is a member of that group's tenant:
     // otherwise group content lands in host memory.
-    const i = parseUpdate(update({ chatId: -100, fromId: OWNER, type: 'group' }), OWNER);
-    expect(i?.fromOwner).toBe(false);
-    expect(principalFor(i!).tenant).toBe('group:telegram:-100');
+    const i = parseUpdate(update({ chatId: -100, fromId: OWNER, type: 'group' }));
+    expect(principalFor(i!, OWNER).tenant).toBe('group:telegram:-100');
   });
 
   it('carries an external id on the owner principal, so it is never anonymous', () => {
-    const i = parseUpdate(update({ chatId: OWNER, fromId: OWNER }), OWNER);
-    const p = principalFor(i!).principal;
+    const i = parseUpdate(update({ chatId: OWNER, fromId: OWNER }));
+    const p = principalFor(i!, OWNER).principal;
     expect(p.kind === 'owner' && p.externalId).toBe(String(OWNER));
+  });
+
+  it('has no owner at all while unpaired, even for a message that looks right', () => {
+    // The fail-closed direction that replaced "whoever messaged first". A bot's
+    // username is discoverable, so that was a race, not an election.
+    const i = parseUpdate(update({ chatId: OWNER, fromId: OWNER }));
+    expect(principalFor(i!, undefined).principal.kind).toBe('member');
+    expect(principalFor(i!, undefined).tenant).not.toBe('host');
   });
 });

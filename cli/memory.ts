@@ -3,7 +3,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { paths } from '../core/config/config.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
-import { recall } from '../core/memory/recall.js';
+import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
 import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
 import type { FactOrigin } from '../core/memory/schema.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
@@ -26,7 +26,13 @@ const TENANT = 'host';
 
 export const MEMORY_USAGE = `usage:
   muffin memory why <fact-id>          l'episodio da cui viene un fatto
-  muffin memory search "<query>" [-n N] [--history]
+  muffin memory search "<query>" [-n N] [--history] [--as-of <data>]
+                                 [--surface <connettore>] [--since <data>] [--until <data>] [--around K]
+       --history      ogni istante: anche ciò che è stato superato, con cosa l'ha sostituito
+       --as-of        il grafo com'era a quella data ("chi era X a maggio")
+       --surface      solo ciò che è stato appreso su quel connettore
+       --since/--until  solo evidenza in quella finestra
+       --around K     K episodi prima e dopo ogni risultato, nel suo thread
   muffin memory extract [--limit N]    drena l'arretrato a mano (di norma parte da solo)
   muffin memory review [keep <fact-id>]  le contraddizioni che aspettano te
   muffin memory stats
@@ -134,7 +140,15 @@ export function cmdMemoryWhy(home: string, factId: number): number {
 export async function cmdMemorySearch(
   home: string,
   query: string,
-  options: { limit?: number; history?: boolean },
+  options: {
+    limit?: number;
+    history?: boolean;
+    asOf?: string;
+    surface?: string;
+    since?: string;
+    until?: string;
+    around?: number;
+  },
 ): Promise<number> {
   // Search is the one subcommand that wants the full runtime: the embedder and
   // the reranker live there, and a search that silently skips them would report
@@ -142,17 +156,51 @@ export async function cmdMemorySearch(
   const { buildRuntime } = await import('../agent/runtime.js');
   const runtime = buildRuntime(home);
   try {
+    // `--as-of` and `--history` are two spellings of one parameter, and the
+    // explicit date wins: asking for both is asking for an instant, and the
+    // instant is the more specific of the two.
+    const when = options.asOf ?? (options.history ? EVERY_INSTANT : undefined);
     const result = await recall(runtime.memory.recall, TENANT, query, {
       ...(options.limit ? { limit: options.limit } : {}),
-      ...(options.history ? { includeHistory: true } : {}),
+      ...(when === undefined ? {} : { asOf: when }),
+      ...(options.surface ? { surface: options.surface } : {}),
+      ...(options.since ? { since: options.since } : {}),
+      ...(options.until ? { until: options.until } : {}),
+      ...(options.around ? { neighbours: options.around } : {}),
     });
+    // Printed before the early return, because a gap is the answer to a
+    // temporal question the memory cannot reach — and the run where it is the
+    // *only* output is exactly the run where it matters most.
+    for (const gap of result.gaps) {
+      process.stdout.write(
+        `su ${gap.entity} non ho niente che valga per il ${gap.asOf.slice(0, 10)}` +
+          (gap.nearest
+            ? `; il più vicino è del ${gap.nearest.recordedAt.slice(0, 10)}: ${gap.nearest.text}`
+            : '') +
+          '\n',
+      );
+    }
     if (result.items.length === 0) {
       process.stderr.write(`nessun risultato · strategie: ${result.strategies.join(', ') || 'nessuna'}\n`);
-      return 1;
+      // A gap is a finding, not an empty search: exit 0 so a script can tell
+      // "the memory answered, and the answer is that it does not know" from
+      // "the memory found nothing at all".
+      return result.gaps.length > 0 ? 0 : 1;
     }
     const lines = result.items.map((item) => {
-      const head = `[${item.kind} #${item.id}] ${item.source}${item.expired ? ' · RITIRATO' : ''}`;
-      return `${head}\n   ${item.text.replace(/\n/g, '\n   ')}`;
+      const marks = [
+        item.expired ? 'RITIRATO' : '',
+        item.neighbourOf === undefined ? '' : `intorno a #${item.neighbourOf}`,
+        item.validFrom || item.validTo
+          ? `valido ${item.validFrom?.slice(0, 10) ?? '?'} → ${item.validTo?.slice(0, 10) ?? 'oggi'}`
+          : '',
+      ].filter((m) => m !== '');
+      const head = `[${item.kind} #${item.id}] ${item.source}${marks.length > 0 ? ` · ${marks.join(' · ')}` : ''}`;
+      const body = `   ${item.text.replace(/\n/g, '\n   ')}`;
+      // The successor is what turns "Marco, retired" into an answer: without it
+      // the owner reads a name and has to run `why` to find out what replaced it.
+      const successor = item.replacedBy ? `\n   ↳ sostituito da #${item.replacedBy.id} ${item.replacedBy.text}` : '';
+      return `${head}\n${body}${successor}`;
     });
     process.stdout.write(`${lines.join('\n\n')}\n`);
     process.stderr.write(`\n${result.items.length} risultati · strategie: ${result.strategies.join(', ')}\n`);

@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeSecret } from '../core/config/config.js';
+import { TurnStore } from '../core/turns/store.js';
 import { MemoryStore } from '../core/memory/store.js';
+import {
+  ConsolidationLog,
+  type ConsolidationOutcome,
+  type ConsolidationRun,
+} from '../core/memory/consolidator.js';
 import { seal } from '../core/rot/verify.js';
 import { runInit } from './init.js';
 import { runDoctor, type Check } from './doctor.js';
@@ -175,6 +181,98 @@ describe('doctor runs the root-of-trust readers invariant', () => {
   });
 });
 
+describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
+  /**
+   * `TurnStore.undelivered()` had zero callers and zero tests before this:
+   * B8's own guarantee ("un job che dice inviato è arrivato") was checkable
+   * in principle and unchecked in practice. This is the wiring test —
+   * `runDoctor` is the real production entry point, not `undelivered()`
+   * called directly, so it proves the mechanism is reached rather than only
+   * that its logic is correct.
+   */
+  it('warns, naming the count and the oldest, when a done turn never settled its delivery', () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 3,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+    };
+    // A turn created with a `replyTo` starts `delivery: 'pending'`
+    // (core/turns/store.ts `create`) — exactly what a process dying between
+    // "the answer is ready" and "the surface confirmed it went out" leaves
+    // behind, since nothing but a settled delivery ever moves it off `pending`.
+    store.create({
+      id: 'turn-undelivered-1',
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-1',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    db.close();
+
+    const c = check(dir, 'consegne');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 turni');
+    expect(c?.detail).toContain('turn-undeliv'); // TurnRecord.id.slice(0, 12)
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming none missing, when every delivered turn actually settled', () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const store = new TurnStore(db);
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 3,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+    };
+    store.create({
+      id: 'turn-settled-1',
+      principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
+      tenant: 'host',
+      surface: 'telegram',
+      sessionId: 'sess-1',
+      model: 't',
+      messages: [],
+      taint: 0,
+      counters,
+      replyTo: { chatId: 1, messageId: 1 },
+    });
+    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
+    db.close();
+
+    const c = check(dir, 'consegne');
+    expect(c?.level).toBe('ok');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says nothing at all on a fresh install — no turns table yet, not a fabricated "ok"', () => {
+    // Same posture as the 'turni' check right above this one in doctor.ts: an
+    // absent table means no turn has ever run here, which is the correct
+    // state on day one, not a second thing to report alongside it.
+    const dir = home();
+    expect(check(dir, 'consegne')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor names the spend cap and where it came from', () => {
   it('says the sealed file, with the numbers', () => {
     // Same class of invisible fact as the matrix above, and worse in
@@ -289,6 +387,160 @@ describe('doctor names the memory questions waiting on the owner', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('1 contraddizioni');
     expect(c?.remedy).toContain('muffin memory review');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor tells the four consolidation outcomes apart', () => {
+  /**
+   * The four outcomes are four different facts about the lane, and for a long
+   * time three of them printed the same green line. `budget` had its own branch;
+   * `ran`, `busy` and `error` all fell through to one `ok` that named episodes,
+   * facts and the run count — and never `errors`. So a batch that threw wrote a
+   * blank row and read like a quiet week, and a batch where a third of the
+   * episodes failed to extract read like one where none did.
+   *
+   * `errors` is the count of per-episode failures inside a batch that otherwise
+   * finished (`consolidator.ts`, the `outcome: report.busy ? 'busy' : 'ran'`
+   * write). It is comparable to `episodes` because `episodes` counts *attempts*
+   * (`ingest.ts` §`marked`).
+   */
+  const seedRun = (
+    dir: string,
+    outcome: ConsolidationOutcome,
+    errors = 0,
+    over: Partial<ConsolidationRun> = {},
+  ): void => {
+    const db = new DatabaseCtor(paths(dir).db);
+    new ConsolidationLog(db).record({
+      ranAt: new Date('2026-08-15T09:00:00Z'),
+      trigger: 'idle',
+      outcome,
+      episodes: 12,
+      facts: 3,
+      superseded: 0,
+      indexed: 4,
+      review: 0,
+      errors,
+      ms: 8_000,
+      merged: 0,
+      ...over,
+    });
+    db.close();
+  };
+
+  it('is ok, with the numbers, on a clean run', () => {
+    const dir = home();
+    seedRun(dir, 'ran');
+    const report = runDoctor(dir);
+    const c = report.checks.find((x) => x.name === 'consolidamento');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('12 episodi');
+    expect(c?.detail).toContain('3 fatti');
+    expect(c?.detail).not.toContain('falliti');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names the failed episodes even when it stays green', () => {
+    // The defect, at the size it actually shipped: a third of the batch failed
+    // to extract and the line carried nothing but the successes. Still `ok` on
+    // purpose — a failed extraction is left unmarked and retried next fire, so a
+    // minority of them is the lane healing itself, and an exit 1 over that is
+    // how a line stops being read. The count has to be *there*; it does not have
+    // to be an alarm.
+    const dir = home();
+    seedRun(dir, 'ran', 4);
+    const report = runDoctor(dir);
+    const c = report.checks.find((x) => x.name === 'consolidamento');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('4 falliti');
+    expect(c?.detail).toContain('12 episodi');
+
+    // Against a clean seed rather than against a literal: a fresh install warns
+    // about three unrelated things (sandbox mode, empty vector index, no
+    // gateway), so pinning `exitCode` to a number here would be asserting facts
+    // about checks this block does not test. The claim is the comparison — four
+    // failed episodes move nothing.
+    const clean = home();
+    seedRun(clean, 'ran');
+    expect(report.exitCode).toBe(runDoctor(clean).exitCode);
+
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(clean, { recursive: true, force: true });
+  });
+
+  it('warns when the whole batch went nowhere, because those episodes come back', () => {
+    // What does not heal on its own: every attempted episode failed and nothing
+    // was added, so the same rows fail again next run, and again.
+    const dir = home();
+    seedRun(dir, 'ran', 12, { episodes: 12, facts: 0 });
+    const report = runDoctor(dir);
+    const c = report.checks.find((x) => x.name === 'consolidamento');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('12 errori su 12 episodi');
+    expect(c?.remedy).toContain('muffin memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('stays green when the sweep threw but the batch worked', () => {
+    // `errors >= episodes` alone is not the condition. The maintenance sweep
+    // pushes its own failure into `report.errors`, so a one-episode run that
+    // extracted a fact and then tripped the sweep arrives here as 1 error over 1
+    // episode — and it is not a lane going nowhere.
+    const dir = home();
+    seedRun(dir, 'ran', 1, { episodes: 1, facts: 1 });
+    const c = check(dir, 'consolidamento');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('1 falliti');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fails on a run that threw, instead of printing its blank row as green', () => {
+    // The bigger half of the same defect: `execute` writes zero episodi and zero
+    // fatti when `ingest` throws, which through `ok` is indistinguishable from a
+    // quiet week — the exact confusion this check exists to remove.
+    const dir = home();
+    seedRun(dir, 'error', 1, { episodes: 0, facts: 0 });
+    const report = runDoctor(dir);
+    const c = report.checks.find((x) => x.name === 'consolidamento');
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('fallito');
+    // The row does not keep the message, so the remedy has to be the command
+    // that reproduces it in the foreground.
+    expect(c?.remedy).toContain('muffin memory extract');
+    expect(report.exitCode).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns, naming the cap, when the budget stopped the lane', () => {
+    const dir = home();
+    seedRun(dir, 'budget', 0, { episodes: 0, facts: 0 });
+    const c = check(dir, 'consolidamento');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('budget mensile esaurito');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok on a lock refusal, and says so — it is the guarantee working', () => {
+    // `busy` is the lane lock refusing a second extraction, which is the
+    // opposite of a failure. Green, but the word has to appear: zero episodi and
+    // zero fatti with no explanation is the shape this whole block distrusts.
+    //
+    // `errors: 1`, not 0: in production a lock refusal always carries one row
+    // in `report.errors` — `ingest.ts`'s `acquireIngestLock` rejection pushes
+    // its own message there so the caller can see why nothing ran
+    // (`core/memory/ingest.ts` §busy) — and `consolidator.ts` writes that count
+    // straight into `errors` regardless of outcome. Seeding 0 here hid the
+    // defect: a lock refusal is not a per-episode extraction failure, so it
+    // must never earn the "N falliti, riprovati al prossimo giro" suffix that
+    // means exactly that on a `ran` row.
+    const dir = home();
+    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0 });
+    const c = check(dir, 'consolidamento');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('busy');
+    expect(c?.detail).not.toContain('falliti');
     rmSync(dir, { recursive: true, force: true });
   });
 });

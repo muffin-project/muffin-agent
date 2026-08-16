@@ -116,15 +116,15 @@ ancora verificato — **è un debito, non uno stato**).
 | B5 | Resume | Se muore a metà, riprende? | BLOCKER — nessun resume · substrato pronto 🧱, e un crash ora **si vede** |
 | B6 | Retry | Se fallisce una tool call, recupera? | ? |
 | B7 | Scheduler | I job sopravvivono al riavvio? | ? |
-| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | BLOCKER 🔧 in lavorazione |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
-| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | BLOCKER 🔭 — `sendDocument` scritto, nessun chiamante |
-| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — Telegram usa `from.id`, ma il binding è config ordinaria e il registry multi-surface non è integrato |
-| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — envelope universale assente; parse non significa trusted |
+| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | READY per l'owner — `send_file` (agent/tools/deliver.ts) raggiunge `Surface.deliverFile` su Telegram e Discord; ⚠️ `hostOnly`, un member non può ricevere un proprio file (vedi sotto) |
+| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — `identify()` unica e cablata su Telegram e Discord (provato da impersonation test su entrambe); DM-only enforced su `channel_type` (D1, judge PR #42, 2026-08-16: un GROUP_DM senza `guild_id` non deriva più `direct: true`); resta aperta la metà "protetto": binding ancora in config, non nel RoT — `ownerUserId` vive in `config.json` ordinario, non nel Root of Trust |
+| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — invariato: Discord non legge username/global_name/bio per l'identità (stesso non-conflation di Telegram), ma non esiste ancora l'envelope universale con provenienza/tier per campo che B16 chiede — questa slice non l'ha costruito |
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
 > `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
@@ -167,10 +167,34 @@ ancora verificato — **è un debito, non uno stato**).
 
 > 🔐 **B15 e B16 vengono dalla direttiva owner del 2026-08-16 (ADR-0046).** Sono
 > due garanzie diverse: autenticare chi parla non rende fidato ciò che porta, e
-> parsare un contenuto non lo rende sicuro. Il test di impersonazione Telegram
-> prova già che display name e chat non eleggono l'owner; manca ancora la forma
-> che obblighi ogni futura surface a fare lo stesso e che impedisca a bio,
-> filename, metadata, OCR o trascrizioni di entrare come stringhe senza fonte.
+> parsare un contenuto non lo rende sicuro. **Aggiornamento 2026-08-16
+> (`slice/superfici`):** la "forma che obblighi ogni futura surface" per la
+> prima garanzia è ora `identify()`/`tierOf()` in `core/surface/types.ts` —
+> Telegram e Discord la chiamano entrambe, e l'impersonazione è provata su
+> entrambe (`connectors/{telegram,discord}/impersonation.test.ts`: un
+> `username`/`global_name` che dichiara di essere l'owner non è nemmeno letto
+> nella struttura `Incoming`, non solo ignorato per disciplina). **Correzione
+> 2026-08-16 (judge PR #42, D1):** quella prima metà aveva comunque un buco —
+> un GROUP_DM (`channel_type: 3`) non ha `guild_id` più di quanto ne abbia una
+> DM vera, quindi il check basato solo su `guild_id === undefined` lasciava
+> passare un GROUP_DM come `direct: true`, costante, verso `identify()`. Il
+> check ora legge `channel_type === 1` (fail-closed: assente è rifiutato, non
+> assunto DM) e `direct` è derivato in `parseMessage`, mai riasserito da
+> `principalFor`. Quello che resta aperto per B15 è la seconda metà,
+> "protetto": il binding vive in `config.json` ordinario, non nel Root of
+> Trust — nessuna surface lo cambia ancora. B16 è invariato: nessun envelope
+> universale per bio, filename, metadata, OCR o trascrizioni — questa slice
+> non l'ha costruito.
+
+> 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
+> `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
+> Hermes Agent letta contro il nostro codice. Quel documento non aggiunge solo
+> righe: **cambia la forma del rimedio** di B2 (il turno non va reso asincrono
+> — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`
+> cancella il payload *intero* mentre ogni cap sotto è testa+coda — è un difetto,
+> non una mancanza), di D2/D3 (*non chiedere, fotografare*) e di E1 (contare
+> l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
+> riga per riga cosa sposta.
 
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
@@ -179,13 +203,52 @@ ancora verificato — **è un debito, non uno stato**).
 | C1 | Memory write | Ogni informazione importante viene acquisita? | ? |
 | C2 | Extraction | L'estrazione è automatica? | READY (ADR-0038) |
 | C3 | Consolidation | Si consolida senza intervento? | READY (ADR-0040) |
-| C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — `--history` non fa niente |
+| C4 | Recall | Ripesca il vecchio **e** il superseded? | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) ⚠️ nota sotto |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
-| C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — niente date/surface/vicinato |
+| C6 | Temporal graph | «Chi era X a maggio» | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) |
 | C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
 | C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione |
 | C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
 | C10 | World state | Distingue ciò che vale adesso da episodi, credenze e lavoro? | OUT — post-Gate 1, consumer prima dello schema (ADR-0045) |
+
+> **C4/C6, cosa vuol dire `READY` qui.** `--history` era già stato corretto per
+> i fatti sul solo hop grafo (`d66765d`, già in `dev` prima di questa slice); il
+> gap reale era più stretto di quanto la riga dicesse, ma restava su tre punti:
+> il lato episodi di `--history`, `asOf` come primitiva unica al posto di due
+> manopole, e l'intera C6 (data/superficie/vicinato). Un parametro solo,
+> `asOf: string | 'all' | undefined`, attraversa `recall()` — non un flag in
+> più, la rimozione di una costante (`expired_at IS NULL`/`superseded_at IS
+> NULL`) che nessun chiamante poteva muovere. `factsAsOf`/`nearestFactTo`
+> (`core/memory/store.ts`) rispondono a «chi era X a maggio» dentro le
+> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e
+> vicinato sono le due primitive di `02-ontologia.md` §9, cablate sia in
+> `muffin memory search` sia nel tool `memory_search` che il modello raggiunge
+> — quest'ultimo era il cablaggio mancante reale: lo schema dichiarava
+> `as_of`/`history`/`surface`/`since`/`until`/`around` e l'handler leggeva solo
+> `query`/`limit`. Un fatto superseded torna etichettato con successore e
+> finestra `valid_from → valid_to`, mai come corrente; una domanda temporale
+> fuori portata risponde con una lacuna esplicita invece del presente. Tre
+> percorsi di fallimento espliciti (data malformata, finestra `since`>`until`,
+> `asOf` nel futuro) condivisi da CLI e tool via `checkTemporalWindow`. Un
+> invariante a 60 combinazioni (`asOf`×`surface`×`since/until`×`neighbours`)
+> prova che un fatto ritirato non torna mai attivo; isolamento cross-tenant
+> verificato sul vicinato e sulla modalità storia. Ogni test nuovo verificato
+> **rosso** prima del fix (PRACTICES §5). Dettaglio in `docs/lessons.md`
+> («Una garanzia che regge su due percorsi e non sul terzo non è una
+> garanzia»).
+>
+> ⚠️ **Trovato lavorandoci, non nel mandato originale.** Il mezzo semantico di
+> `recall()` non aveva mai letto `expired_at`: un fatto o un episodio ritirato,
+> una volta indicizzato per vettori, resta trovabile per significato per
+> sempre (niente si ri-indicizza al supersede), e tornava **senza** la marca
+> `expired` su **qualunque** ricerca semanticamente vicina — non solo sotto
+> `--history`. Misurato: 60/60 combinazioni prima del fix, 0/60 dopo. Corretto
+> leggendo il fatto intero via `factById` invece di una seconda query di
+> provenienza più stretta, con la stessa regola `successorOf` del hop grafo
+> (una sola, letta da due punti). `(surface, date_range)` sul mezzo semantico
+> vale solo per gli episodi, mai per i fatti — per costruzione, coerente con
+> `02-ontologia.md` §9 che nomina il filtro come proprietà dell'evidenza, non
+> del grafo.
 
 > **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
 > piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
@@ -236,9 +299,50 @@ ancora verificato — **è un debito, non uno stato**).
 | E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |
 | E2 | Cost | So quanto costa una giornata? | ? |
 | E3 | Tracing | Posso ricostruire cosa è successo? | ? |
-| E4 | Tests | Acceptance test **reali**, non solo unit? | BLOCKER |
+| E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
 | E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | ? 🔭 |
+
+> **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**
+> `evals/acceptance/` lancia `muffin` come **processo vero** (`node --import tsx
+> cli/main.ts`, mai `runTurn()` con dipendenze finte) contro un `$HOME`
+> temporaneo, parlando con un provider HTTP finto e deterministico
+> (`evals/acceptance/provider.ts` — nessuna chiave, nessuna chiamata a
+> pagamento). Lo stato delle **altre** righe di questo inventario è **derivato**,
+> non scritto a mano: `npx tsx evals/acceptance/report.ts` legge questo stesso
+> file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
+> stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
+> e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
+> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
+> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
+> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
+> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
+> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
+> passi identici a quelli verificati in locale) ma **non ancora eseguito su
+> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
+> anche sul branch di default, quindi la prima corsa reale sarà al merge su
+> `dev`.
+>
+> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
+> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
+> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
+> decisione owner ancora aperta su §1, D10 taint→egress →
+> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
+> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
+> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
+> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
+> verificato il rosso, ripristinato — non solo scritto a supporre che
+> avrebbero funzionato.
+>
+> **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
+> corsa invece di nasconderlo: cinque righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (C2, C3, C7, D4, D6) — nessuna era nella lista
+> minima del mandato di questa slice, e chiuderle resta un lavoro futuro, non
+> silenzioso. C8 (audio) è marcata `non provabile qui` col motivo scritto
+> (richiede una trascrizione reale, vietata dalla proprietà "non costa niente"
+> di questa suite). **E4 READY vuol dire "la primitiva esiste, gira contro il
+> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
+> "l'inventario è coperto".**
 
 ---
 
@@ -293,6 +397,35 @@ letto dal turno successivo e accompagnato da un criterio deterministico di
 completamento. Il worktree `slice/turno-sospeso` contiene un'implementazione in
 corso, non committata: finché non passa integrazione, cablaggio e accettazione,
 B2–B5 restano BLOCKER.
+
+> 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
+> §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
+>
+> **Chi decide il `wait`.** Non il modello dentro il turno — lì la decisione è
+> tainted come tutto il resto e attaccabile per injection. Un giudice *fuori* dal
+> turno che legge il registro dei processi vivi (che è fatto nostro, non testo di
+> un terzo: `agent/tools/process.ts` esiste già e non è mai stato collegato a una
+> decisione di controllo) e restituisce `done | continue | wait`, con tre forme di
+> barriera: pid, sessione+pattern, tempo. **Fail-open**: giudice rotto ⇒
+> `continue`, e il freno vero resta il budget di turni.
+>
+> **Un invariante che non avevamo scritto.** *Una barriera scaduta non può mai
+> incastrare il loop*: pid già morto, pid che muore mentre si aspetta, scadenza
+> passata ⇒ la barriera si libera al controllo successivo. Lo stesso pattern del
+> lock del gateway (stale dopo 10 battiti, qualunque sia il pid) mai
+> generalizzato.
+>
+> **Dove vive la durevolezza.** Hermes divide: ciò che è legato a una sessione
+> persiste lo *stato* ma serve un processo vivo per *scattare*; ciò che deve
+> sopravvivere a tutto va nello scheduler. Per noi la divisione costa meno che
+> per loro, perché ADR-0035 ha già deciso che un processo che vive esiste — a
+> patto che un `waiting` orfano si veda al boot, come già fa la riga
+> `interrupted` di ADR-0042.
+>
+> E su `todo`: la loro risposta **non è un tool `todo`**. È un obiettivo
+> persistente + criteri aggiungibili a metà corsa + **gate deterministici** —
+> un comando che deve uscire 0 prima che un giudice venga anche solo chiamato.
+> Il pezzo che fa terminare il ciclo è il gate, non lo stato del todo.
 
 ## §3 · La direzione oltre il Gate 1 non allarga il Gate 1
 

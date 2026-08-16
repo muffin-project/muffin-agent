@@ -17,7 +17,7 @@ import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, fsList, fsRead, fsToolSpecs, fsWrite, type FsScope } from './tools/fs.js';
+import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { Vault } from '../core/vault/vault.js';
@@ -296,24 +296,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const guards = mandatoryGuards(home, cwd);
   const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
   const tools: RegisteredTool[] = [
-    {
-      capability: 'fs.read',
-      spec: fsToolSpecs[0]!,
-      handler: (args) => ({ content: fsRead(scope, String((args as { path: string }).path)) }),
-    },
-    {
-      capability: 'fs.list',
-      spec: fsToolSpecs[1]!,
-      handler: (args) => ({ content: fsList(scope, String((args as { path: string }).path)) }),
-    },
-    {
-      capability: 'fs.write',
-      spec: fsToolSpecs[2]!,
-      handler: (args) => {
-        const a = args as { path: string; content: string };
-        return { content: fsWrite(scope, String(a.path), String(a.content ?? '')) };
-      },
-    },
+    ...makeFsTools(scope),
     {
       capability: memoryCapability.id,
       spec: memorySearchSpec,
@@ -324,6 +307,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // can re-fetch on a whim: clearing it to save context deletes the reason
       // the answer was anchored to anything.
       keepResult: true,
+      // `throwTier: 0` — `searchMemory` (`agent/tools/memory.ts`) never throws
+      // with recalled text; recalled fragments only ever leave through its
+      // fenced `return`, tiered to the worst source pulled in. An escape here
+      // would be `recall()`'s own storage/internal error.
+      throwTier: 0,
     },
     // The other half of "a document enters whole": the vault stores every page
     // and the model is handed an index, so it needs a door back to the text.

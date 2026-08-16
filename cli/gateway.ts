@@ -9,7 +9,7 @@ import { makeJobRunner } from '../agent/scheduler-run.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
-import { Gateway, EXIT_ALREADY_RUNNING } from '../core/gateway/service.js';
+import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
@@ -21,7 +21,9 @@ import {
   STOP_TIMEOUT_SEC,
 } from '../core/gateway/unit.js';
 import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
-import { connectSurfaces } from './surface.js';
+import type { SurfaceRegistry } from '../core/surface/registry.js';
+import { notDelivered } from '../core/surface/types.js';
+import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
  * `muffin gateway` — the process that lives, and the three verbs around it.
@@ -291,7 +293,27 @@ function currentLauncher(): { argv: string[]; warning: string | null } {
  * The process. Invoked by the supervisor, and by `muffin gateway run` when the
  * owner wants to watch it in a terminal.
  */
-export async function cmdGatewayRun(home = paths().home): Promise<number> {
+export async function cmdGatewayRun(
+  home = paths().home,
+  /**
+   * Test-only seam into the one `Gateway` this function builds for real.
+   *
+   * `core/gateway/service.test.ts` drives `Gateway` directly with a fake
+   * `signals`/`tickMs`/`sleep`, and that is real coverage of the class — but
+   * nothing exercised *this* assembly: whether `cmdGatewayRun` actually threads
+   * `recordDelivery` into the `Scheduler` it builds, and the `SurfaceRegistry`
+   * from `connectSurfaces` into the `deliver` the scheduler calls. A day-one
+   * regression there (drop the last constructor argument, say) would compile,
+   * every existing test would stay green, and a job on any real surface would
+   * go back to advancing its schedule on a delivery nobody recorded — silently,
+   * because nothing here called it. Verified: commenting out that argument left
+   * `cli/gateway.test.ts` and `core/gateway/service.test.ts` fully green.
+   */
+  gatewayOverrides: Pick<
+    GatewayDeps,
+    'signals' | 'tickMs' | 'sleep' | 'now' | 'pid' | 'drainBudgetMs'
+  > = {},
+): Promise<number> {
   let runtime;
   try {
     runtime = buildRuntime(home);
@@ -310,10 +332,25 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
 
   const lock = new GatewayLock(runtime.db);
   const notify = createNotifier();
+
+  /**
+   * The registry exists only after the claim is won — `connectSurfaces` starts
+   * polling Telegram, and a second gateway must not do that before it finds out
+   * it lost. So the scheduler is handed an indirection rather than the registry,
+   * and the window before surfaces are up reports itself as what it is.
+   *
+   * "Not connected yet" is a *state*, not the old lie: it comes back as
+   * `{ delivered: false }`, so a job that somehow fires in that window is
+   * recorded as undelivered instead of silently marked run.
+   */
+  let registry: SurfaceRegistry | null = null;
+  const deliver: Deliver = async (channel, text) =>
+    registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
+
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps),
-    gatewayDeliver,
+    deliver,
     // ALWAYS_IDLE by omission, and it is a decision: a gateway has no terminal,
     // so there is no foreground to lose the lane to. When a surface turn becomes
     // able to say "the owner is talking right now" — the `queue`/`steer` slice —
@@ -324,10 +361,16 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
       }
     },
+    undefined,
+    undefined,
+    // The outcome lands on the turn's row, so "did the 08:00 brief arrive" is a
+    // query and not an inference from whether anyone was reading stderr.
+    (turnId, state) => runtime.deps.turns.delivered(turnId, state),
   );
 
   let stopSurfaces: (() => void) | null = null;
   const gateway = new Gateway({
+    ...gatewayOverrides,
     lock,
     notify,
     scheduler,
@@ -356,8 +399,14 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
     );
   }
 
-  const surfaces = connectSurfaces(runtime, home);
+  const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);
   stopSurfaces = surfaces.stop;
+  // The scheduler has been holding an indirection to this since before the
+  // claim; from here on a due job reaches whatever is actually connected.
+  registry = surfaces.registry;
+  // M5-BIS B14, same as runRepl: a file the model produces during a job's
+  // turn can reach the owner as a real attachment.
+  attachSendFile(runtime, home, surfaces.registry);
   let mcpLines: string[] = [];
   try {
     mcpLines = await attachMcp(runtime, home);
@@ -386,18 +435,27 @@ export async function cmdGatewayRun(home = paths().home): Promise<number> {
 }
 
 /**
- * Where a scheduled message goes when there is no terminal.
+ * Where the CLI surface writes inside a gateway.
  *
- * `cli` means stdout, which under a supervisor is the journal — visible with
+ * stdout, which under a supervisor is the journal — visible with
  * `journalctl --user -u muffin-gateway`, and the honest place for a message
- * nobody was there to read. A remote channel is the M4 connect and is not wired
- * (the REPL and `cli/observe.ts` say the same); until it is, the text surfaces
- * here rather than vanishing.
+ * nobody was there to read.
+ *
+ * **What used to be here was the bug this slice exists to remove.** A whole
+ * `Deliver` lived at this spot: `cli` wrote to stdout, and every other channel
+ * wrote *"consegna remota da cablare"* to stderr and **returned normally**. A
+ * normal return meant "delivered", so `markRan` advanced the schedule and the
+ * job reported success — model paid, next fire moved, message never sent, and
+ * nothing anywhere saying so. It is riga B8 of `docs/blueprint/M5-BIS.md` and
+ * it survived three separate reviews because nothing about a `Promise<void>`
+ * looks wrong.
+ *
+ * It is not replaced by a more careful version of itself. It is replaced by not
+ * existing: delivery comes from `connectSurfaces`' registry, so the channels
+ * that are real are the surfaces that are actually connected, and one that is
+ * not returns `{ delivered: false }` — a value, from one place, that the
+ * scheduler cannot read as success.
  */
-const gatewayDeliver: Deliver = async (channel, text) => {
-  if (channel === 'cli') {
-    process.stdout.write(`⏰ ${text}\n`);
-    return;
-  }
-  process.stderr.write(`⏰ [job → ${channel}: consegna remota da cablare]\n${text}\n`);
+const gatewayCliWrite = (text: string): void => {
+  process.stdout.write(`⏰ ${text}\n`);
 };

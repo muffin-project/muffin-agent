@@ -11,6 +11,9 @@ import { SendLock } from '../core/scheduler/sendlock.js';
 import { observe, recordFired, type Observation } from '../core/scheduler/observe.js';
 import { decideProactive } from '../core/scheduler/proactivity.js';
 import type { Deliver } from '../core/scheduler/scheduler.js';
+import type { Runtime } from '../agent/runtime.js';
+import type { SurfaceRegistry } from '../core/surface/registry.js';
+import { connectSurfaces } from './surface.js';
 
 /**
  * `muffin observe` — the two-stage gate with the lights on.
@@ -42,31 +45,37 @@ export type ObserveOverrides = {
 };
 
 /**
- * Delivery, and the reason it throws rather than shrugging.
+ * Delivery for a one-shot command, from the same registry the gateway uses.
  *
- * Remote delivery is the M4 connect and is not wired. Printing the message and
- * returning normally made the caller record the fire — and the rule this slice
- * runs on is that only a message that *reached* the owner burns the anchor.
- * That anchor carries `lastSeen`, which does not move while the entity stays
- * silent, so the occasion would have been spent forever on a message nobody
- * received. The precondition is not exotic — it is any home that has run
- * `muffin surface enable`, which is the point of the slice. (`surfaces.default`
- * documents itself as deliberately not the CLI while `DEFAULT_CONFIG` ships
- * `'cli'`; that contradiction is real and is not this file's to settle, so the
- * argument here rests on the configured case instead of on the docstring.)
+ * The rule this file runs on is that only a message that *reached* the owner
+ * burns the anchor: the anchor carries `lastSeen`, which does not move while the
+ * entity stays silent, so an occasion spent on a message nobody received is
+ * spent forever. That rule was already right here — this file was the one
+ * implementation of three that remembered to signal failure, by throwing. What
+ * it could not do was *succeed* on a remote channel, because delivery was not
+ * wired anywhere; on a home configured to nudge over Telegram, every run
+ * reported "non inviato" no matter how healthy the surface was.
  *
- * The text is printed first regardless. Losing the message entirely would be a
- * worse bug than the one this fixes, and `sendAllowed` turns the throw into
- * "non inviato", exit 1, anchor left open for the next run.
+ * Now the surfaces are built and asked, so a configured Telegram nudge actually
+ * goes out — and one that cannot is a `{ delivered: false }` carrying the reason,
+ * which `sendAllowed` turns into "non inviato", exit 1, anchor left open.
+ *
+ * Built lazily and closed after: `muffin observe` without `--send` must not open
+ * a Telegram connection, and the surfaces it does open must not outlive the
+ * command.
  */
-const printDeliver: Deliver = async (channel, text) => {
-  if (channel === 'cli') {
-    process.stdout.write(`\n${text}\n`);
-    return;
-  }
-  process.stderr.write(`\n[${channel}: consegna remota da cablare]\n${text}\n`);
-  throw new Error(`consegna su "${channel}" non è cablata — il messaggio è qui sopra, non è stato inviato`);
-};
+function printDeliver(registry: SurfaceRegistry): Deliver {
+  return async (channel, text) => {
+    const outcome = await registry.deliver(channel, text);
+    if (!outcome.delivered) {
+      // Printed regardless: losing the message entirely would be a worse bug
+      // than the one being reported, and the owner reading a terminal is the
+      // surface of last resort by definition (L0-1).
+      process.stderr.write(`\n[${channel}: non consegnato — ${outcome.why}]\n${text}\n`);
+    }
+    return outcome;
+  };
+}
 
 /** The numbers, always: a nudge whose evidence is invisible is the old firehose. */
 function evidence(obs: Observation): string {
@@ -209,25 +218,44 @@ async function sendAllowed(
   // Imported here, not at the top: `muffin observe` without --send must not pay
   // for the provider graph, and must work on a home with no API key.
   const { makeAbsenceComposer } = await import('../agent/observe-run.js');
-  let runtime: { deps: LoopDeps; close: () => void } | null = null;
+  let runtime: Runtime | null = null;
+  let stopSurfaces: (() => void) | null = null;
   let deps = over.deps;
-  if (!deps) {
+  let deliver = over.deliver;
+  if (!deps || !deliver) {
     const { buildRuntime } = await import('../agent/runtime.js');
     runtime = buildRuntime(home);
-    deps = runtime.deps;
+    deps = deps ?? runtime.deps;
+    if (!deliver) {
+      // The surfaces this home actually has, connected for the length of this
+      // command. `--send` is the only path that reaches here, which is why a
+      // plain `muffin observe` still opens no connection to anything.
+      const surfaces = connectSurfaces(runtime, home, (text) => process.stdout.write(`\n${text}\n`));
+      stopSurfaces = surfaces.stop;
+      deliver = printDeliver(surfaces.registry);
+    }
   }
 
   const compose = makeAbsenceComposer(deps, channel);
-  const deliver = over.deliver ?? printDeliver;
   let failures = 0;
   try {
     for (const obs of allowed) {
       try {
         const composed = await compose(obs.absence);
-        await deliver(channel, composed.text);
+        const outcome = await deliver(channel, composed.text);
+        if (!outcome.delivered) {
+          // The anchor stays open. This is the whole rule of the file: an
+          // occasion is spent only on a message that reached the owner, and
+          // `lastSeen` does not move while the entity is silent — so a fire
+          // recorded here would silence that entity for ever, on a delivery
+          // that did not happen.
+          failures += 1;
+          sent.set(obs.anchor, `non inviato: ${outcome.why}`);
+          continue;
+        }
         // Both records happen here, after the delivery, and in this order: the
-        // episode is what Muffin said, the fire is that it said it. A throw from
-        // `deliver` must leave neither behind.
+        // episode is what Muffin said, the fire is that it said it. A failed
+        // delivery must leave neither behind.
         composed.record();
         recordFired(fires, obs, now);
         sent.set(obs.anchor, 'inviato');
@@ -237,6 +265,9 @@ async function sendAllowed(
       }
     }
   } finally {
+    // Surfaces before the runtime, the order every other caller uses: a
+    // connector must stop polling before the database under it goes away.
+    stopSurfaces?.();
     runtime?.close();
   }
   return failures;

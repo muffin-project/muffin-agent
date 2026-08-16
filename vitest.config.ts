@@ -10,6 +10,15 @@ export default defineConfig({
     // The pattern used to be `**/.claude/**`, which was wider than its own
     // justification and had a cost: the hooks in `.claude/hooks/` could not be
     // tested at all, so a cap added there shipped with no test and was wrong.
-    exclude: ['**/node_modules/**', '**/.claude/worktrees/**'],
+    //
+    // `evals/acceptance/**/*.accept.ts` never matches vitest's own default
+    // include glob (`*.test.ts`/`*.spec.ts`) — the suffix was chosen so this
+    // exclude is redundant defence, not the only thing keeping the slow e2e
+    // suite off every `npm test`. It is listed anyway: a renamed file that
+    // drifted onto `.test.ts` should still be caught here rather than silently
+    // joining the fast suite and blowing the CI budget nobody would notice
+    // until the bill did. `vitest.acceptance.config.ts` is the separate,
+    // slower command (`npm run test:acceptance`) that runs these on purpose.
+    exclude: ['**/node_modules/**', '**/.claude/worktrees/**', 'evals/acceptance/**/*.accept.ts'],
   },
 });
