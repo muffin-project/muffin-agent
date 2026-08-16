@@ -55,8 +55,8 @@
   ],
   "taint": {
     "tiers": [
-      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:936 (principal.kind !== 'member' starts taint at 0)", "docs/blueprint/03-threat-model.md:19"], "meaning": "owner@host or a system/agent principal acting for it, before any untrusted content entered context" },
-      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/blueprint/03-threat-model.md:19 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
+      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:936 (principal.kind !== 'member' starts taint at 0)", "docs/blueprint/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
+      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/blueprint/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
       { "tier": 2, "name": "gruppo/sconosciuti (group members)", "sources": ["agent/loop.ts:936 (principal.kind === 'member' ? 2 : 0)"], "meaning": "turn started by a non-owner group member" },
       { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts:158 (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint at agent/loop.ts:825" }
     ],

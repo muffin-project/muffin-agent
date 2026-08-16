@@ -78,6 +78,18 @@ Una PR per cosa, con una definizione di completamento **verificabile**. Non si
 scrive «abbiamo implementato memoria, eventi e workspace»: si scrive quali PR,
 e ognuna sopravvive da sola alla domanda «è vero?».
 
+Il checkpoint comincia prima del merge. Appena scope e decisione sono stabili si
+apre una **draft PR**; dopo ogni unità raggiungibile e verificata si fa un commit
+coerente e si aggiorna lo stato, così un compact o un esperimento successivo non
+è l'unico posto in cui il lavoro esiste. La PR diventa reviewable soltanto con
+build, suite, failure path, accettazione dovuta e viste derivate aggiornate.
+
+I quattro checkpoint normativi — decisione, meccanismo raggiunto, slice
+verificata, integrazione — sono in `BRANCHING.md`. Il merge in `dev` richiede il
+verdetto terminale del judge; `dev`→`main` richiede una nuova verifica
+dell'insieme. Frequenza non sostituisce evidenza: commit e PR sono continui,
+merge solo ai checkpoint dichiarati.
+
 ## 5. Lo stato dell'orchestratore, non solo quello del progetto
 
 `STATE.md` dice dov'è il *progetto*. Dopo trenta iterazioni serve anche dov'è
@@ -119,6 +131,14 @@ workspace? serve coinvolgere l'owner? **oppure si ignora** — e ignorare è un
 esito legittimo, non un fallimento. In codice questa proprietà esiste già ed è
 `decideProactive` (`core/scheduler/proactivity.ts`), col suo insieme **chiuso** di
 trigger. Qualunque spina degli eventi nasca dopo, quel cancello resta.
+
+ADR-0045 rende esplicito che questa è la terza dimensione del prodotto:
+**presenza**, accanto a fare e capire. Non introduce un altro loop cognitivo.
+Richiede che il control loop sappia produrre anche `wait`, `defer`, `ignore`,
+`ask`, `refuse`, `revise`, `abandon` e `cancel`, con stato durevole quando resta
+qualcosa dovuto. E richiede di non confondere ciò che è successo (evidenza), ciò
+che Muffin crede, ciò che vale adesso nel mondo e ciò che il lavoro sta ancora
+aspettando: quattro domande diverse, non un blob chiamato “contesto”.
 
 ## 8. Gli eval rispondono a una domanda sola
 
