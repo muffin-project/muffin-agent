@@ -39,6 +39,11 @@
     "line": 133,
     "testo": "export type ApprovalRequest = {"
   },
+  "agent/loop.ts:1088": {
+    "path": "agent/loop.ts",
+    "line": 1088,
+    "testo": "if (!wrote) {"
+  },
   "agent/loop.ts:1546": {
     "path": "agent/loop.ts",
     "line": 1546,
@@ -48,11 +53,6 @@
     "path": "agent/loop.ts",
     "line": 229,
     "testo": "approve?: Approver | undefined;"
-  },
-  "agent/loop.ts:252": {
-    "path": "agent/loop.ts",
-    "line": 399,
-    "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
@@ -119,6 +119,11 @@
     "line": 789,
     "testo": "maxOutputTokens: 4096,"
   },
+  "agent/loop.ts:399": {
+    "path": "agent/loop.ts",
+    "line": 399,
+    "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
+  },
   "agent/loop.ts:402": {
     "path": "agent/loop.ts",
     "line": 812,
@@ -144,6 +149,11 @@
     "line": 876,
     "testo": "snapshot.invalidate();"
   },
+  "agent/loop.ts:477": {
+    "path": "agent/loop.ts",
+    "line": 477,
+    "testo": "export async function resumeTurn("
+  },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
     "line": 892,
@@ -153,6 +163,11 @@
     "path": "agent/loop.ts",
     "line": 898,
     "testo": "if (result.toolCalls.length === 0) {"
+  },
+  "agent/loop.ts:512": {
+    "path": "agent/loop.ts",
+    "line": 512,
+    "testo": "remoteParent(record.id),"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
@@ -209,10 +224,20 @@
     "line": 1288,
     "testo": "function finish("
   },
+  "agent/loop.ts:670": {
+    "path": "agent/loop.ts",
+    "line": 670,
+    "testo": "if (!contextBuilt) {"
+  },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
     "line": 1391,
     "testo": "async function runTool("
+  },
+  "agent/loop.ts:756": {
+    "path": "agent/loop.ts",
+    "line": 756,
+    "testo": "if (barrier !== null) return suspendHere(barrier);"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
@@ -724,6 +749,11 @@
     "line": 98,
     "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
   },
+  "agent/turn-lane.ts:47": {
+    "path": "agent/turn-lane.ts",
+    "line": 47,
+    "testo": "export function makeLaneRunner(deps: LoopDeps, deliver: LaneDeliver = NO_SURFACE): LaneRun {"
+  },
   "budget.ts:127": {
     "path": "core/budget/budget.ts",
     "line": 127,
@@ -746,42 +776,42 @@
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 27,
+    "line": 29,
     "testo": "* `muffin gateway` — the process that lives, and the three verbs around it."
   },
   "cli/gateway.ts:294": {
     "path": "cli/gateway.ts",
-    "line": 294,
+    "line": 296,
     "testo": "export async function cmdGatewayRun(home = paths().home): Promise<number> {"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 297,
+    "line": 299,
     "testo": "runtime = buildRuntime(home);"
   },
   "cli/gateway.ts:359": {
     "path": "cli/gateway.ts",
-    "line": 359,
+    "line": 389,
     "testo": "const surfaces = connectSurfaces(runtime, home);"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 363,
+    "line": 397,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 375,
+    "line": 409,
     "testo": "runtime.bootLines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 397,
+    "line": 431,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
-    "line": 81,
+    "line": 83,
     "testo": "export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {"
   },
   "cli/init.ts:101": {
@@ -1111,32 +1141,32 @@
   },
   "cli/surface.ts:187": {
     "path": "cli/surface.ts",
-    "line": 186,
-    "testo": "export function connectSurfaces(runtime: Runtime, home: string): { lines: string[]; stop: () => void } {"
+    "line": 187,
+    "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:209": {
     "path": "cli/surface.ts",
-    "line": 209,
+    "line": 223,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:44": {
     "path": "cli/surface.ts",
-    "line": 43,
+    "line": 44,
     "testo": "for (const id of ['cli', 'telegram']) {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 76,
+    "line": 77,
     "testo": "export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {"
   },
   "connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
-    "line": 230,
+    "line": 272,
     "testo": "if (!incoming) {"
   },
   "connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
-    "line": 262,
+    "line": 304,
     "testo": "private async tryPair(incoming: Incoming): Promise<boolean> {"
   },
   "connectors/telegram/connector.ts:148": {
@@ -1156,17 +1186,17 @@
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
-    "line": 237,
+    "line": 197,
     "testo": "try {"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 314,
+    "line": 356,
     "testo": "const result = await runTurn(this.deps.loop, {"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 320,
+    "line": 362,
     "testo": "session: this.deps.sessions.open(`telegram:${incoming.chatId}`),"
   },
   "connectors/telegram/media.ts:154": {
@@ -1281,32 +1311,37 @@
   },
   "core/gateway/service.ts:108": {
     "path": "core/gateway/service.ts",
-    "line": 108,
+    "line": 109,
     "testo": "const EXIT_FOR: Record<string, number> = {"
+  },
+  "core/gateway/service.ts:252": {
+    "path": "core/gateway/service.ts",
+    "line": 252,
+    "testo": "this.deps.turnLane.tick(now);"
   },
   "core/gateway/service.ts:264": {
     "path": "core/gateway/service.ts",
-    "line": 264,
+    "line": 299,
     "testo": "beat(now: Date = this.now()): void {"
   },
   "core/gateway/service.ts:332": {
     "path": "core/gateway/service.ts",
-    "line": 332,
+    "line": 367,
     "testo": "async serve(): Promise<number> {"
   },
   "core/gateway/service.ts:57": {
     "path": "core/gateway/service.ts",
-    "line": 57,
+    "line": 58,
     "testo": "export const TICK_MS = HEARTBEAT_MS;"
   },
   "core/gateway/service.ts:92": {
     "path": "core/gateway/service.ts",
-    "line": 92,
+    "line": 93,
     "testo": "export const EXIT_STOPPED = 143;"
   },
   "core/gateway/service.ts:98": {
     "path": "core/gateway/service.ts",
-    "line": 98,
+    "line": 99,
     "testo": "* **0 means \"restart me\"** — SIGUSR1 is the drain-and-come-back signal, and on"
   },
   "core/gateway/unit.ts:232": {
@@ -1924,6 +1959,11 @@
     "line": 94,
     "testo": "attributes: redactAttributes(current),"
   },
+  "core/turns/lane.ts:86": {
+    "path": "core/turns/lane.ts",
+    "line": 86,
+    "testo": "tick(now: Date = this.clock()): void {"
+  },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
     "line": 397,
@@ -2216,7 +2256,7 @@
   },
   "gateway.ts:397": {
     "path": "cli/gateway.ts",
-    "line": 397,
+    "line": 431,
     "testo": "const gatewayDeliver: Deliver = async (channel, text) => {"
   },
   "guards.ts:41": {

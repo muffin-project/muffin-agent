@@ -23,6 +23,8 @@ function harness(
     tickMs?: number;
     /** Pass an array to make it supervised: every datagram lands here. */
     sent?: string[];
+    /** A lane whose `isRunning` this test drives — for the drain that waits on it. */
+    turnLane?: { tick: () => void; isRunning: () => boolean };
   } = {},
 ) {
   const db = new DatabaseCtor(':memory:');
@@ -67,6 +69,12 @@ function harness(
       ? createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p))
       : createNotifier({}, () => {}),
     scheduler,
+    // A lane with nothing in it, so this file keeps testing the lifecycle it is
+    // about. `turnLane` is required on `GatewayDeps` — an optional one is one an
+    // assembly forgets, and a forgotten lane means every suspended turn on that
+    // install sleeps for ever with nobody looking. `gateway-lane.test.ts` is
+    // where the real one is driven.
+    turnLane: over.turnLane ?? { tick: () => {}, isRunning: () => false },
     jobs,
     close: () => {
       closed += 1;
@@ -314,6 +322,7 @@ describe('supervision hooks', () => {
       // involved: the module under test is the cadence, not the socket.
       notify: createNotifier({ NOTIFY_SOCKET: '/run/notify', WATCHDOG_USEC: '4000' }, (p) => sent.push(p)),
       scheduler: new Scheduler(jobs, async () => ({ stopped: 'answered', text: '' }), async () => {}),
+      turnLane: { tick: () => {}, isRunning: () => false },
       jobs,
       close: () => {},
       log: () => {},

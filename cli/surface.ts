@@ -3,6 +3,7 @@ import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
+import type { LaneDeliver } from '../agent/turn-lane.js';
 import {
   loadConfig,
   paths,
@@ -183,9 +184,22 @@ export function cmdSurfaceDisable(home: string, id: string): number {
  * not, because a surface silently missing is how "Muffin non risponde su
  * Telegram" becomes a mystery instead of a line of output.
  */
-export function connectSurfaces(runtime: Runtime, home: string): { lines: string[]; stop: () => void } {
+export function connectSurfaces(
+  runtime: Runtime,
+  home: string,
+): { lines: string[]; stop: () => void; deliver: LaneDeliver } {
   const lines: string[] = [];
   const stops: (() => void)[] = [];
+  /**
+   * How a turn the **lane** finished gets back to whoever asked for it.
+   *
+   * Keyed by `turn.surface`, which is a column on the row: the process that
+   * delivers a resumed turn is not the process that started it, so it cannot
+   * ask a stack frame where the answer goes. This map is filled by whichever
+   * surfaces actually came up, so a turn addressed to a surface that failed to
+   * connect is reported as undeliverable rather than sent nowhere.
+   */
+  const doors = new Map<string, (replyTo: Record<string, unknown>, text: string) => Promise<void>>();
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -248,6 +262,10 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
           process.stderr.write(`\rtelegram: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
         });
         stops.push(() => connector.stop());
+        // The door for the lane. Registered next to the connector that owns it,
+        // so a surface that did not come up simply has none — the honest state,
+        // rather than a door onto a dead poller.
+        doors.set('telegram', (replyTo, text) => connector.deliverTo(replyTo, text));
         lines.push(
           ownerUserId === undefined
             ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
@@ -259,7 +277,29 @@ export function connectSurfaces(runtime: Runtime, home: string): { lines: string
     }
   }
 
-  return { lines, stop: () => stops.forEach((s) => s()) };
+  return {
+    lines,
+    stop: () => stops.forEach((s) => s()),
+    /**
+     * The lane's delivery, over whichever surfaces are up.
+     *
+     * `cli` writes to stdout — under a supervisor that is the journal, which is
+     * the honest place for an answer nobody was there to read, and the same
+     * choice `gatewayDeliver` already makes for a scheduled job. An unknown
+     * surface **throws**, so the row gets `failed:` and the answer stays
+     * visible as owed instead of being reported as sent.
+     */
+    deliver: async (turn, text) => {
+      if (turn.surface === 'cli') {
+        process.stdout.write(`↩︎ ${text}\n`);
+        return;
+      }
+      const door = doors.get(turn.surface);
+      if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
+      await door(turn.replyTo, text);
+    },
+  };
 }
 
 /**
