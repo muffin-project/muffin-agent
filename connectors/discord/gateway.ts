@@ -184,8 +184,17 @@ export class DiscordGateway {
       const url = resuming ? `${this.resumeUrl}/?v=10&encoding=json` : await this.deps.gatewayUrl();
 
       try {
-        const closeCode = await this.connectOnce(url, resuming);
+        const { code: closeCode, sawReadyOrResumed } = await this.connectOnce(url, resuming);
         if (this.stopRequested) return;
+
+        // D4 — a session that reached READY or RESUMED proved the connection
+        // healthy end to end, so the *next* failure is a fresh problem, not a
+        // continuation of whatever caused an earlier one. Without this, five
+        // ordinary reconnects (each individually harmless — a laptop sleeping,
+        // a Discord-side blip) left `attempt` at 5 forever after, and every
+        // later reconnect waited the capped 30s+jitter regardless of how long
+        // the intervening session had run cleanly.
+        if (sawReadyOrResumed) attempt = 0;
 
         const action = nextAction(closeCode);
         this.log(`discord: gateway chiuso (${closeCode}) — ${action.why}`);
@@ -214,8 +223,14 @@ export class DiscordGateway {
     this.ws?.close(1000, 'stop');
   }
 
-  /** One socket's whole life. Resolves with the close code that ended it. */
-  private connectOnce(url: string, resuming: boolean): Promise<number> {
+  /**
+   * One socket's whole life. Resolves with the close code that ended it, and
+   * whether this socket ever reached READY or RESUMED — `run()`'s D4 backoff
+   * reset reads that half; nothing else needs it, but a private field the
+   * caller could not see was exactly what let the reset go unbuilt the first
+   * time, so it is returned instead.
+   */
+  private connectOnce(url: string, resuming: boolean): Promise<{ code: number; sawReadyOrResumed: boolean }> {
     return new Promise((resolve, reject) => {
       let helloReceived = false;
       let sawReadyOrResumed = false;
@@ -242,7 +257,7 @@ export class DiscordGateway {
           reject(new Error(`connessione chiusa prima di Hello (${code})`));
           return;
         }
-        resolve(code);
+        resolve({ code, sawReadyOrResumed });
       });
 
       ws.addEventListener('message', (ev) => {
