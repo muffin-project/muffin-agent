@@ -123,6 +123,26 @@ Quattro agenti in parallelo — review avversariale, ricerca sui parametri numer
 
 Chiuse tutte, più: leak cross-tenant già cablato (`searchMemory` col tenant hardcoded), quattro bypass del containment fs (symlink penzolante, hardlink, case su APFS, `fs_read` che saltava la deny-list e leggeva la chiave API), `draft` eseguito come `allow`, taint azzerato dalla metà vettoriale del recall, sentinel dello spotlighting falsificabile in 5 punti, vault che riciclava il tier con un `mv` e indicizzava i dotfile, sessione REPL che moriva in modo permanente. Aggiunti context compaction (−48% picco token misurato altrove) e **completion-gate deterministico** (−31pp nell'ablation GAIA quando manca; il vecchio Muffin ce l'aveva e non era ricomparso in nessun modulo). **155 test**, accettazione M2 ancora 9/9.
 
+> **Riaperto dall'audit del 16/08** (pinnato e2a47ac, M5-BIS D1/D10): i «quattro
+> bypass» sopra non includevano un **symlink terminale** né un **parent
+> symlinkato con la foglia assente** — su quei due casi `resolveInScope()`
+> risolveva la posizione del link, non il bersaglio, quindi containment e
+> `denyRead` giudicavano un path sempre dentro `root` per costruzione mentre
+> `readFileSync`/`readdirSync`/`writeFileSync` seguivano il link fino al vero
+> bersaglio: `fs_read` su un symlink verso `secrets/` (o fuori macchina)
+> tornava il contenuto vero; `fs_write` di un file nuovo attraverso una
+> directory symlinkata usciva da `root`. **Chiuso in questa slice**
+> (2026-08-17, PR #52 `slice/fs-containment`): `realpathDeepest` risolve
+> sempre il path reale — il bersaglio finale per read/list, il parent per
+> write — e containment/deny-list giudicano quello, mai la posizione del
+> link. Vedi `docs/lessons.md` §"Symlink resolution has to cover the leaf and
+> the parent, not just the middle". E il judge di quella PR ha trovato che
+> «hardlink chiuso» valeva **solo in scrittura**: un hard link dentro `root` a
+> `secrets/provider_api_key` si leggeva verbatim (`realpath` non rivela un
+> secondo nome). Chiuso nello stesso PR: il rifiuto dei file con `nlink > 1`
+> vale ora anche in lettura — un file dell'owner legittimamente hard-linkato
+> dentro `root` non è leggibile da `fs_read`: limite dichiarato.
+
 Sui numeri: quattro dei sei parametri sono **folklore** e la ricerca non offre alternative — `SUPERSEDE_THRESHOLD 0.75` potrebbe proteggere *meno* di quanto sembra (le confidenze LLM sono sovrastimate di 15-27 punti), e `limit=8` + espansione 1-hop inietta il profilo di distrattore peggiore. Entrambi richiedono una misura nostra sul golden set, non altra ricerca.
 
 **Lista dell'audit chiusa** (2026-08-06): kNN-poi-filtra risolto con `PARTITION KEY` di sqlite-vec — verificato con probe, migrazione dei vettori senza re-embedding, e la sequenza è drop-poi-create perché `ALTER TABLE RENAME` su `vec0` lascia gli shadow col nome vecchio. Canale `ask` cablato (REPL chiede, headless esce 3). Isolamento per costruzione nei tre write path che filtravano sul solo id. `AGENTS.md`, config validata con zod, backoff con jitter, abort tra i tool, `fsList` che sopravvive a un symlink rotto.
