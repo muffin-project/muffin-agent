@@ -1,12 +1,12 @@
 {
   "03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 121,
+    "line": 122,
     "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
   "03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 53,
+    "line": 54,
     "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "agent/completion.ts:58": {
@@ -71,7 +71,7 @@
   },
   "agent/loop.ts:1873": {
     "path": "agent/loop.ts",
-    "line": 1969,
+    "line": 1979,
     "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
   },
   "agent/loop.ts:271": {
@@ -591,12 +591,12 @@
   },
   "agent/tools/http.ts:116": {
     "path": "agent/tools/http.ts",
-    "line": 116,
+    "line": 124,
     "testo": "if (hop > 0 && !hostAllowed(current.hostname, policy)) {"
   },
   "agent/tools/http.ts:192": {
     "path": "agent/tools/http.ts",
-    "line": 192,
+    "line": 200,
     "testo": "return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;"
   },
   "agent/tools/http.ts:22": {
@@ -606,12 +606,12 @@
   },
   "agent/tools/http.ts:30": {
     "path": "agent/tools/http.ts",
-    "line": 30,
+    "line": 38,
     "testo": "export const httpCapability: CapabilityDecl = {"
   },
   "agent/tools/http.ts:41": {
     "path": "agent/tools/http.ts",
-    "line": 41,
+    "line": 49,
     "testo": "hostOnly: false,"
   },
   "agent/tools/mcp.ts:104": {
@@ -721,12 +721,12 @@
   },
   "agent/tools/search.ts:48": {
     "path": "agent/tools/search.ts",
-    "line": 48,
+    "line": 52,
     "testo": "export const searchCapability: CapabilityDecl = {"
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 59,
+    "line": 63,
     "testo": "hostOnly: true,"
   },
   "agent/tools/shell.ts:106": {
@@ -1796,112 +1796,112 @@
   },
   "core/policy/decide.test.ts:117": {
     "path": "core/policy/decide.test.ts",
-    "line": 117,
+    "line": 118,
     "testo": "expect(kernel()(req(owner, 'host', 'fs.write', 0))).toMatchObject({ effect: 'draft' });"
   },
   "core/policy/decide.ts:103": {
     "path": "core/policy/decide.ts",
-    "line": 103,
+    "line": 104,
     "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
   },
   "core/policy/decide.ts:111": {
     "path": "core/policy/decide.ts",
-    "line": 111,
+    "line": 112,
     "testo": "if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {"
   },
   "core/policy/decide.ts:119": {
     "path": "core/policy/decide.ts",
-    "line": 119,
+    "line": 120,
     "testo": "// Guard against a caller assembling an incoherent request."
   },
   "core/policy/decide.ts:127": {
     "path": "core/policy/decide.ts",
-    "line": 127,
+    "line": 128,
     "testo": "// rule below behind a wrong refusal."
   },
   "core/policy/decide.ts:128": {
     "path": "core/policy/decide.ts",
-    "line": 128,
+    "line": 129,
     "testo": "if (decl.hostOnly && principal.kind === 'member') {"
   },
   "core/policy/decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 132,
+    "line": 133,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "core/policy/decide.ts:136": {
     "path": "core/policy/decide.ts",
-    "line": 136,
+    "line": 137,
     "testo": "const ceiling = decl.maxTaint ?? ctx.matrix.defaultMaxTaint[decl.risk];"
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 145,
+    "line": 146,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 149,
+    "line": 150,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 195,
+    "line": 229,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
   },
   "core/policy/decide.ts:197": {
     "path": "core/policy/decide.ts",
-    "line": 197,
+    "line": 231,
     "testo": "if (principal.kind === 'system' || principal.kind === 'agent') {"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 201,
+    "line": 235,
     "testo": "switch (decl.risk) {"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 204,
+    "line": 238,
     "testo": "case 'medium':"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 208,
+    "line": 242,
     "testo": "case 'high':"
   },
   "core/policy/decide.ts:91": {
     "path": "core/policy/decide.ts",
-    "line": 91,
+    "line": 92,
     "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/decide.ts:92": {
     "path": "core/policy/decide.ts",
-    "line": 92,
+    "line": 93,
     "testo": "return function decide(req: DecisionRequest): Decision {"
   },
   "core/policy/decide.ts:95": {
     "path": "core/policy/decide.ts",
-    "line": 95,
+    "line": 96,
     "testo": "const decl = ctx.capabilities.get(capability);"
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
-    "line": 162,
+    "line": 191,
     "testo": "/** The stricter of the two, always — the file's only direction is down. */"
   },
   "core/policy/matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 94,
+    "line": 122,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "core/policy/matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 95,
+    "line": 123,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "core/policy/matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 99,
+    "line": 128,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "core/policy/types.ts:40": {
@@ -2101,82 +2101,82 @@
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
-    "line": 120,
+    "line": 121,
     "testo": "const expected = tenantOf(principal);"
   },
   "decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 132,
+    "line": 133,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 145,
+    "line": 146,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 149,
+    "line": 150,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 155,
+    "line": 156,
     "testo": "if (decl.resourceKind === 'url') {"
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 182,
+    "line": 183,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "decide.ts:20": {
     "path": "core/policy/decide.ts",
-    "line": 20,
+    "line": 21,
     "testo": "capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;"
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 205,
+    "line": 239,
     "testo": "return decl.reversible === 'undoable'"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 206,
+    "line": 240,
     "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
   },
   "decide.ts:32": {
     "path": "core/policy/decide.ts",
-    "line": 32,
+    "line": 33,
     "testo": "* On `defaultMaxTaint`: it is the ceiling for declarations that state no"
   },
   "decide.ts:45": {
     "path": "core/policy/decide.ts",
-    "line": 45,
+    "line": 46,
     "testo": "matrix: PolicyMatrix;"
   },
   "decide.ts:55": {
     "path": "core/policy/decide.ts",
-    "line": 55,
+    "line": 56,
     "testo": "budgetExhausted: (tenant: string) => boolean;"
   },
   "decide.ts:60": {
     "path": "core/policy/decide.ts",
-    "line": 60,
+    "line": 61,
     "testo": "hardened: boolean;"
   },
   "decide.ts:67": {
     "path": "core/policy/decide.ts",
-    "line": 67,
+    "line": 68,
     "testo": "safeMode?: boolean;"
   },
   "decide.ts:74": {
     "path": "core/policy/decide.ts",
-    "line": 74,
+    "line": 75,
     "testo": "egressAllowed?: (host: string) => boolean;"
   },
   "decide.ts:96": {
     "path": "core/policy/decide.ts",
-    "line": 96,
+    "line": 97,
     "testo": "if (!decl) {"
   },
   "defaults/rot/budgets.json:4": {
@@ -2206,12 +2206,12 @@
   },
   "defaults/rot/policy.json:5": {
     "path": "defaults/rot/policy.json",
-    "line": 5,
+    "line": 6,
     "testo": "\"neverAtRuntime\": [\"rot.write\"],"
   },
   "defaults/rot/policy.json:6": {
     "path": "defaults/rot/policy.json",
-    "line": 6,
+    "line": 7,
     "testo": "\"forbiddenForSystem\": [\"outward.send\", \"config.ratchet\"]"
   },
   "docs/blueprint/02-ontologia.md:139": {
@@ -2221,7 +2221,7 @@
   },
   "docs/blueprint/03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 121,
+    "line": 122,
     "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
   "docs/blueprint/03-threat-model.md:21": {
@@ -2241,27 +2241,27 @@
   },
   "docs/blueprint/03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 51,
+    "line": 52,
     "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
   },
   "docs/blueprint/03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 53,
+    "line": 54,
     "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "docs/blueprint/03-threat-model.md:68": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 68,
+    "line": 69,
     "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
   },
   "docs/blueprint/03-threat-model.md:69": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 69,
+    "line": 70,
     "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
   },
   "docs/blueprint/03-threat-model.md:70": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 70,
+    "line": 71,
     "testo": "- **Niente side-channel**: il codice dentro il sandbox non ha alcun canale verso i tool del loop — è codice+fs+rete proxata. Il confine di esecuzione è anche un confine di capability. *(Riferimento corretto 2026-08-11: Hermes #4146 era questa classe — sandbox→RPC→tool privilegiato — ma loro l'hanno chiusa TENENDO il canale e propagando l'approvazione giù per i thread (PR #34497); la PR che toglieva la capability fu rifiutata, e la classe si è riaperta due volte (#65592, #74078, aperte a agosto 2026). La nostra scelta è il ramo che loro hanno rifiutato, e la loro storia da allora è l'argomento per il nostro.)*"
   },
   "docs/blueprint/04-roadmap.md:210": {
@@ -2388,11 +2388,6 @@
     "path": "core/rot/guards.ts",
     "line": 9,
     "testo": "* 03 §3-bis: *\"**Mandatory deny paths**: `~/.muffin/rot/`, config, secrets,"
-  },
-  "http.ts:97": {
-    "path": "agent/tools/http.ts",
-    "line": 97,
-    "testo": "handler: async (args) => {"
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
@@ -2536,17 +2531,17 @@
   },
   "matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 94,
+    "line": 122,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 95,
+    "line": 123,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 99,
+    "line": 128,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "mcp.ts:102": {
@@ -2804,15 +2799,20 @@
     "line": 9,
     "testo": "* The invariant that makes the rest work: drop every derived table, replay the"
   },
-  "search.ts:33": {
+  "search.ts:29": {
     "path": "agent/tools/search.ts",
-    "line": 33,
-    "testo": "*  - `resourceKind: 'none'`, and the endpoint checked **once at registration**"
+    "line": 29,
+    "testo": "*  - `hostOnly: true`, unlike `sys.http`. Reading an allowlisted public page"
   },
-  "search.ts:55": {
+  "search.ts:61": {
     "path": "agent/tools/search.ts",
-    "line": 55,
-    "testo": "rerunnable: true,"
+    "line": 61,
+    "testo": "resourceKind: 'query',"
+  },
+  "search.ts:63": {
+    "path": "agent/tools/search.ts",
+    "line": 63,
+    "testo": "hostOnly: true,"
   },
   "skill.ts:114": {
     "path": "agent/tools/skill.ts",
@@ -2881,7 +2881,7 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 104,
+    "line": 113,
     "testo": "*/"
   },
   "types.ts:11": {
@@ -2901,12 +2901,12 @@
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",
-    "line": 67,
+    "line": 76,
     "testo": "/** Already validated against the tool's input schema — never raw model output. */"
   },
   "types.ts:69": {
     "path": "core/policy/types.ts",
-    "line": 69,
+    "line": 78,
     "testo": "/** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */"
   },
   "updates.ts:81": {
