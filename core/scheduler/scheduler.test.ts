@@ -97,6 +97,60 @@ describe('Scheduler.tick', () => {
     expect(store.due(AFTER_FIRE).length).toBe(1);
   });
 
+  describe('stillOwner — P20: this gateway re-verifies its own claim, not just whether some other one exists', () => {
+    it('does not start a due job when the claim is already gone — the tick-start check', async () => {
+      const { store, clock, set } = storeWith();
+      set(AFTER_FIRE);
+      const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
+      const events: SchedulerEvent[] = [];
+      const sched = new Scheduler(
+        store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock, undefined, undefined,
+        new ModelLane(),
+        () => false, // a second gateway already holds the real claim
+      );
+
+      sched.tick();
+      await flush();
+      expect(runJob).not.toHaveBeenCalled();
+      expect(events).toContainEqual({ kind: 'deferred', reason: 'handover' });
+      // Not consumed — the winner's own tick will pick it up.
+      expect(store.due(AFTER_FIRE).length).toBe(1);
+    });
+
+    it('does not deliver a job whose claim was taken over while it was in flight — the pre-delivery check', async () => {
+      // The exact race P20 names: `Gateway.tick` beats once (stillOwner still
+      // true at that instant), the job's run takes seconds to minutes, and a
+      // second gateway wins the claim before this run finishes.
+      const { store, job, clock, set } = storeWith();
+      set(AFTER_FIRE);
+      let stillOwn = true;
+      let release!: () => void;
+      const gateOpen = new Promise<void>((r) => (release = r));
+      const runJob = vi.fn(async (): Promise<JobOutcome> => {
+        await gateOpen;
+        return { stopped: 'answered', text: 'done', turnId: TURN };
+      });
+      const deliver = vi.fn(async () => DELIVERED);
+      const events: SchedulerEvent[] = [];
+      const sched = new Scheduler(
+        store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, undefined,
+        new ModelLane(),
+        () => stillOwn,
+      );
+
+      sched.tick(); // stillOwner is true here — the run starts
+      await flush();
+      stillOwn = false; // a second gateway wins the claim mid-run
+      release();
+      await flush();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(events.some((e) => e.kind === 'yielded')).toBe(true);
+      // markRan did not run either — the fire is still due for the new owner.
+      expect(store.get(job.id)!.lastRunAt).toBeNull();
+    });
+  });
+
   it('a yielded (aborted) job is neither delivered nor marked ran — it retries', async () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);

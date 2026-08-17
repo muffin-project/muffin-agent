@@ -1,5 +1,8 @@
 # C2 — Attacco alla complessità (Fase C, Critico Ostile №2)
 
+> Nota (2026-08-17): le citazioni `STATE.md:6` qui sotto puntano al blocco START HERE del checkpoint owner di inizio agosto nel vecchio repo ("riparti-da-zero sul design", punti 1/5/6), riscritto più volte da allora: quel testo non è più a nessuna riga di `STATE.md`; vale come citazione storica.
+
+
 > Letti integralmente: `00-findings.md`, `01-verdetti.md`, `02-ontologia.md`, `03-threat-model.md`, `04-roadmap.md`, `05-testing-evals.md`, `06-modelli.md`, `07-durevole-vs-impalcatura.md`, `08-assunzioni.md`, `BRIEF.md`, `STATE.md`, i 18 ADR, `research/a1-inventario-codebase.md`, `research/a2-prior-art.md`, `research/a6-brain-hands-sandbox.md`. I numeri e i `file:riga` sotto sono tutti citazioni dirette di questi file letti in questa sessione; le stime di tempo/costo sono giudizio ingegneristico esplicitamente marcato come tale, non misure.
 >
 > Criterio unico: l'owner è UNA persona, di sera, part-time su questo progetto. Ogni pezzo che richiede più di un pomeriggio per essere capito da zero da chi lo manutiene, o che genera una seconda superficie da tenere viva (un secondo processo, una seconda piattaforma, un secondo modello, una seconda tassonomia), parte con l'onere della prova.

@@ -3,36 +3,36 @@
 # Separato da `ci.yml` per una ragione di costo diversa da quella che tiene
 # `ci.yml` a un job solo. Lì il vincolo era il tempo di install (`npm ci` pagato
 # due volte). Qui è la frequenza: questa suite spawna un processo `node --import
-# tsx cli/main.ts` reale per ogni asserzione — misurato in locale, 12 scenari in
-# ~17s — e non ha bisogno del sandbox Linux che `ci.yml` prepara (nessuno
+# tsx cli/main.ts` reale per ogni asserzione — misurato in locale, 17 scenari in
+# ~60s — e non ha bisogno del sandbox Linux che `ci.yml` prepara (nessuno
 # scenario qui chiama `shell_run`), quindi un job condiviso pagherebbe
 # quell'apt-get per niente ogni volta.
 #
-# `pull_request` è deliberatamente assente dal trigger. `ci.yml` gira su ogni
-# push di una PR aperta — è il pattern giusto per typecheck e unit test, che
-# devono essere verdi ad ogni commit. Questa suite gira su push a `dev`/`main`
-# (l'integrazione, dove un rosso conta davvero) e su richiesta
-# (`workflow_dispatch`), non su ogni push di una slice in corso: un owner che
-# itera dieci volte su una PR non deve pagare dieci run da un processo reale
-# per verifica, quando la CI di `dev` la becca comunque prima del merge.
-# Se il costo misurato in pratica risultasse trascurabile anche su
-# `pull_request`, aggiungerlo è una riga — ma si misura, non si assume.
+# `pull_request` (verso `dev`/`main`, come il `push` sotto) è nel trigger.
+# Decisione dell'orchestratore (PR #54, giro 2) — reversibile, non policy di
+# prodotto: prima era deliberatamente assente (vedi git blame), e senza di lei
+# uno scenario rotto o una riga `READY` senza prova restavano invisibili fino
+# al merge su `dev`, dove tornare indietro costa più che fermarli prima. Se il
+# costo misurato in pratica (un owner che itera dieci volte su una PR)
+# risultasse un problema, restringerlo è una riga — ma si misura, non si
+# assume.
 #
-# `npx tsx evals/acceptance/report.ts` non è il gate di questo job: il suo exit
-# code è più severo di quanto serva qui, perché include ogni riga READY
-# dell'inventario senza uno scenario — oggi cinque, nessuna delle quali questa
-# slice ha promesso di chiudere (C2/C3/C7/D4/D6, README della PR). Bloccare il
-# merge su quel numero renderebbe questo job rosso dal primo minuto per un
-# motivo che non riguarda il commit in esame. Il gate vero è la suite stessa:
-# uno scenario `verde` che si rompe, o un `atteso-rosso` che smette di esserlo
-# senza essere promosso (`it.fails` li marca entrambi rosso — vitest.md), fanno
-# fallire lo step `suite` e quindi il job. Il rapporto resta comunque nel log,
-# per intero, perché la domanda "quante righe restano scoperte" non deve
-# sparire solo perché oggi non è quella che decide il verde.
+# `npx tsx evals/acceptance/report.ts` (ultimo step, senza `|| true`) è il
+# **secondo** gate del job, non solo un log informativo: fallisce anche su una
+# riga `READY` dell'inventario senza uno scenario, o con uno scenario ancora
+# `atteso-rosso` — "pronta" e "provata rossa apposta" non possono essere vere
+# insieme (mandato DAY-1 §4.9). Conseguenza nota, non silenziosa: oggi restano
+# sette righe già `READY` senza scenario qui (B14, C2, C3, C6, C7, D4, D6 —
+# dettaglio in `docs/blueprint/M5-BIS.md`), che un'altra slice in corso
+# (`slice/triage-day1`) riclassifica; finché non è integrata questo step resta
+# rosso su `dev` **per verità, non per rottura** — vedi la PR che ha introdotto
+# questo trigger (#54).
 
 name: accettazione
 
 on:
+  pull_request:
+    branches: [dev, main]
   push:
     branches: [dev, main]
   workflow_dispatch:
@@ -58,14 +58,14 @@ jobs:
 
       - run: npm ci
 
-      # Il gate: uno scenario reale che si rompe fa fallire questo step, e
+      # Primo gate: uno scenario reale che si rompe fa fallire questo step, e
       # quindi il job. Senza pipe, per la stessa ragione di `ci.yml`.
       - name: suite di accettazione
         run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot
 
-      # Informativo, non un gate: vedi il commento in testa al file per il
-      # perché. `|| true` così una riga READY scoperta non fa fallire il job,
-      # ma resta scritta nel log — la si nota leggendo, non serve che rompa.
-      - name: rapporto per riga (informativo)
+      # Secondo gate — vedi il commento in testa al file. Senza `|| true`: una
+      # riga READY scoperta, o READY con uno scenario ancora atteso-rosso, ora
+      # fa fallire questo step e quindi il job, non solo il log.
+      - name: rapporto per riga
         if: always()
-        run: npx tsx evals/acceptance/report.ts || true
+        run: npx tsx evals/acceptance/report.ts

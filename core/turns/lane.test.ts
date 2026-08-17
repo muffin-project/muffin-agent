@@ -60,8 +60,8 @@ function world(over: { alive?: (pid: number) => boolean } = {}) {
       if (block) await new Promise<void>((r) => (resolveRun = r));
       // The runner owns claiming — `resumeTurn` does it. Here the row simply
       // leaves the due set, the way a real run leaves it.
-      store.claim(turnId);
-      store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() });
+      const claimed = store.claim(turnId);
+      store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
       return { stopped: 'answered' as const };
     },
     onEvent: (e) => events.push(e),
@@ -114,14 +114,12 @@ describe('la corsia prende le tre code in una', () => {
 
   it('non tocca un turno sospeso prima della sua scadenza, e lo prende dopo (B3)', async () => {
     const w = world();
-    w.store.create(spec('t-waiting'));
-    w.store.suspend('t-waiting', {
-      messages: [],
-      taint: 0,
-      counters: counters(),
-      wakeAt: '2026-08-16T11:00:00.000Z',
-      waitFor: null,
-    });
+    const created = w.store.create(spec('t-waiting'));
+    w.store.suspend(
+      't-waiting',
+      { messages: [], taint: 0, counters: counters(), wakeAt: '2026-08-16T11:00:00.000Z', waitFor: null },
+      created.claimToken,
+    );
 
     w.lane.tick(new Date('2026-08-16T10:59:59.000Z'));
     await settle();
@@ -137,15 +135,19 @@ describe('le barriere a evento', () => {
   it('sveglia in anticipo il turno il cui processo è uscito', async () => {
     // `alive` says no for this pid, which is what "the process exited" is.
     const w = world({ alive: () => false });
-    w.store.create(spec('t-armed'));
-    w.store.suspend('t-armed', {
-      messages: [],
-      taint: 0,
-      counters: counters(),
-      // A week away: only the event can be what woke it.
-      wakeAt: '2026-08-23T10:00:00.000Z',
-      waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
-    });
+    const created = w.store.create(spec('t-armed'));
+    w.store.suspend(
+      't-armed',
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        // A week away: only the event can be what woke it.
+        wakeAt: '2026-08-23T10:00:00.000Z',
+        waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
+      },
+      created.claimToken,
+    );
 
     w.lane.tick(new Date('2026-08-16T10:00:00.000Z'));
     await settle();
@@ -155,14 +157,18 @@ describe('le barriere a evento', () => {
 
   it('lascia dormire il turno il cui processo è ancora vivo', async () => {
     const w = world({ alive: () => true });
-    w.store.create(spec('t-armed'));
-    w.store.suspend('t-armed', {
-      messages: [],
-      taint: 0,
-      counters: counters(),
-      wakeAt: '2026-08-23T10:00:00.000Z',
-      waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
-    });
+    const created = w.store.create(spec('t-armed'));
+    w.store.suspend(
+      't-armed',
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        wakeAt: '2026-08-23T10:00:00.000Z',
+        waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
+      },
+      created.claimToken,
+    );
     w.lane.tick(new Date('2026-08-16T10:00:00.000Z'));
     await settle();
     expect(w.ran).toEqual([]);
@@ -171,16 +177,14 @@ describe('le barriere a evento', () => {
 
   it('una barriera illeggibile degrada alla scadenza invece di far cadere la corsia', async () => {
     const w = world({ alive: () => false });
-    w.store.create(spec('t-junk'));
+    const created = w.store.create(spec('t-junk'));
     // A row from a future version, or edited by hand. The lane may not throw on
     // it: one bad row would stop every suspended turn on the machine.
-    w.store.suspend('t-junk', {
-      messages: [],
-      taint: 0,
-      counters: counters(),
-      wakeAt: '2026-08-23T10:00:00.000Z',
-      waitFor: 'file_changed:/tmp/x',
-    });
+    w.store.suspend(
+      't-junk',
+      { messages: [], taint: 0, counters: counters(), wakeAt: '2026-08-23T10:00:00.000Z', waitFor: 'file_changed:/tmp/x' },
+      created.claimToken,
+    );
     expect(() => w.lane.tick(new Date('2026-08-16T10:00:00.000Z'))).not.toThrow();
     await settle();
     expect(w.ran).toEqual([]);
@@ -219,14 +223,18 @@ describe('una corsia sola, e non si incastra', () => {
     w.lane.tick();
     await settle();
 
-    w.store.create(spec('t-armed'));
-    w.store.suspend('t-armed', {
-      messages: [],
-      taint: 0,
-      counters: counters(),
-      wakeAt: '2026-08-23T10:00:00.000Z',
-      waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
-    });
+    const created = w.store.create(spec('t-armed'));
+    w.store.suspend(
+      't-armed',
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        wakeAt: '2026-08-23T10:00:00.000Z',
+        waitFor: encodeWaitFor({ kind: 'process_exit', pid: 4242 }),
+      },
+      created.claimToken,
+    );
 
     w.lane.tick();
     await settle();
@@ -282,6 +290,30 @@ describe('una corsia sola, e non si incastra', () => {
     await settle();
     expect(ran).toEqual([]);
   });
+
+  it('cede quando la propria rivendicazione del gateway non è più valida — stillOwner (P20)', async () => {
+    // `standDown` answers "has some other gateway shown up", and the
+    // gateway's own turn lane always passes `() => false` for it — this is
+    // the check that gives the gateway's *own* lane any protection at all
+    // against a takeover mid-tick.
+    const store = new TurnStore(new DatabaseCtor(':memory:'));
+    const ran: string[] = [];
+    const events: LaneEvent[] = [];
+    const lane = new TurnLane({
+      turns: store,
+      run: async (id) => (ran.push(id), { stopped: 'answered' as const }),
+      modelLane: new ModelLane(),
+      stillOwner: () => false,
+      onEvent: (e) => events.push(e),
+    });
+    store.enqueue(spec('t-stolen'));
+    lane.tick();
+    await settle();
+    expect(ran).toEqual([]);
+    expect(events).toContainEqual({ kind: 'deferred', reason: 'handover' });
+    // Not consumed — the winner's own tick will pick it up.
+    expect(store.due().length).toBe(1);
+  });
 });
 
 describe('una corsia del modello sola, per davvero', () => {
@@ -329,8 +361,8 @@ describe('una corsia del modello sola, per davvero', () => {
       turns: store,
       run: async (turnId) => {
         await hold();
-        store.claim(turnId);
-        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() });
+        const claimed = store.claim(turnId);
+        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
         return { stopped: 'answered' as const };
       },
       modelLane,
@@ -368,8 +400,8 @@ describe('una corsia del modello sola, per davvero', () => {
       turns: store,
       run: async (turnId) => {
         ran.push(turnId);
-        store.claim(turnId);
-        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() });
+        const claimed = store.claim(turnId);
+        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
         return { stopped: 'answered' as const };
       },
       modelLane,
