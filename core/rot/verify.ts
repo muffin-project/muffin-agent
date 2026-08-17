@@ -67,8 +67,12 @@ export function listRotFiles(rotDir: string): string[] {
   return out;
 }
 
-/** Whether this machine actually delivers what `hardened` claims, and if not, why not. */
-export type HardeningCheck = { holds: true } | { holds: false; why: string };
+/**
+ * Whether this machine actually delivers what `hardened` claims, and if not,
+ * why not. `caveat` names a case where `holds: true` is real but narrower than
+ * usual — today, only "the uid probe could not run on this platform" (P36).
+ */
+export type HardeningCheck = { holds: true; caveat?: string } | { holds: false; why: string };
 
 /**
  * Is the `hardened` claim true of this process, right now?
@@ -84,19 +88,40 @@ export type HardeningCheck = { holds: true } | { holds: false; why: string };
  *
  * The property is not invented here — the docstring at the top of this file
  * already states it in one line: *"hardened — the RoT is owned by another OS
- * user; the runtime cannot write it at all. Prevention."* So that is what gets
- * tested, and `W_OK` is the exact question rather than a proxy for it. Reading
- * uid and mode bits and reasoning about them would re-derive, less accurately,
- * what the kernel will answer directly — and would get ACLs, mounts and
- * `root` all wrong. Running as root fails this check, correctly: root can write
- * anything, so no file is prevention against root.
+ * user; the runtime cannot write it at all. Prevention."* ADR-0003's revision
+ * says the same thing from the other side: *"L'utente OS separato è opt-in...
+ * Prevenzione reale"* — a **separate** OS user is what turns detection into
+ * prevention. So `W_OK` alone is not the whole question: it is the exact
+ * question for "can I write this right now", which is why it stays first and
+ * primary (reasoning about uid/mode bits instead would re-derive, less
+ * accurately, what the kernel answers directly, and would get ACLs, mounts and
+ * `root` wrong). But "not writable right now" is not "not writable, ever, by
+ * this identity": the owner of a file can `chmod` it back to writable at any
+ * moment — `chmod` only requires ownership, never an existing write bit — so a
+ * file merely *made* read-only under the **same** uid this process runs as is
+ * one `chmod +w` away from defeating the claim for the rest of the process's
+ * life (P36 — the audit found `muffin doctor` recommending `--hardened` and
+ * then never checking it delivered more than a same-user `chmod`). When the
+ * uid probe cannot run at all (`process.getuid` is POSIX-only, absent on
+ * Windows), this falls back to the W_OK-only question exactly as before this
+ * check existed — a narrower guarantee, declared as a caveat on the result
+ * rather than silently assumed.
  *
  * The manifest and the anchor are included deliberately. Prevention that
  * covered the sealed files but left the manifest writable would let a process
  * rewrite the hashes rather than the contents, which is the same attack with
  * one more step.
+ *
+ * `stat` and `getuid` are injectable so a test can simulate a genuinely
+ * separate owning uid (and its absence on Windows) without root — the same
+ * shape as `BudgetEngine`'s injected `clock` or the providers' injected
+ * `fetch`, not a second mechanism.
  */
-export function hardeningHolds(homeDir: string): HardeningCheck {
+export function hardeningHolds(
+  homeDir: string,
+  stat: (path: string) => { uid: number; mode: number } = statSync,
+  getuid: () => number | undefined = () => process.getuid?.(),
+): HardeningCheck {
   const rotDir = join(homeDir, 'rot');
   if (!existsSync(rotDir)) return { holds: false, why: `${rotDir} non esiste` };
 
@@ -114,16 +139,42 @@ export function hardeningHolds(homeDir: string): HardeningCheck {
     ...entries.map((f) => join(rotDir, ...f.split('/'))),
   ];
 
+  const myUid = getuid();
+
   for (const path of guarded) {
     if (!existsSync(path)) continue;
     try {
       accessSync(path, constants.W_OK);
     } catch {
-      continue; // not writable by us: this one holds
+      // Not writable by us right now. Still not durable prevention unless the
+      // owner is someone else and no group/other write bit is set — checked in
+      // addition to W_OK, never instead of it (see the docstring above).
+      if (myUid !== undefined) {
+        const st = stat(path);
+        if (st.uid === myUid) {
+          return {
+            holds: false,
+            why:
+              `${relative(homeDir, path) || path} è di proprietà di questo processo (uid ${myUid}): ` +
+              `un chmod dello stesso utente lo renderebbe di nuovo scrivibile senza bisogno di privilegi`,
+          };
+        }
+        if ((st.mode & 0o022) !== 0) {
+          return {
+            holds: false,
+            why:
+              `${relative(homeDir, path) || path} concede scrittura a group/other ` +
+              `(mode ${(st.mode & 0o777).toString(8)}) anche se non a questo processo`,
+          };
+        }
+      }
+      continue; // owned by someone else (or uid unavailable), closed to group/other: this one holds
     }
     return { holds: false, why: `questo processo può scrivere ${relative(homeDir, path) || path}` };
   }
-  return { holds: true };
+  return myUid === undefined
+    ? { holds: true, caveat: 'uid probe non disponibile su questa piattaforma: verificata solo la scrivibilità attuale (W_OK), non la proprietà — vedi ADR-0003' }
+    : { holds: true };
 }
 
 export function buildManifest(rotDir: string, rotVersion: string, installedAt: string): RotManifest {

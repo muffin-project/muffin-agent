@@ -415,7 +415,7 @@ usabile**. Cinque cose, tutte verificate sul codice:
    `profiles`/`digests` hanno zero lettori) e l'audit dei predicati a metà.
    **Rifiutato e non rimandato**: il decadimento della confidenza — nessun tasso
    difendibile, ⬤ nessun lettore (l'unica soglia sulla confidenza è
-   `extract.ts:176`, *prima* della scrittura), e con un lettore sarebbe una
+   `extract.ts:192`, *prima* della scrittura), e con un lettore sarebbe una
    credenza irrecuperabile senza `expired_at` né `superseded_by`, cioè una
    cancellazione senza traccia. Una **passata di scadenza** non è costruita
    perché ⬤ non ha niente da scadere: `valid_to` è scritto solo da `supersede`,

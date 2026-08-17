@@ -97,6 +97,23 @@ describe('acceptance · E · economia e osservabilità', () => {
         if (/\$0(\.0+)? \/ \$80/.test(repl.err)) {
           throw new Error(`/spend mostra $0 dopo un turno che ha speso — non sta leggendo la spesa reale: ${repl.err}`);
         }
+
+        // M5-BIS's E2 asks "so quanto costa una giornata?", not "so quanto
+        // costa il mese?" -- tenantTodayUsd('host') existed in
+        // core/budget/budget.ts with no caller: the per-tenant-daily gate
+        // excludes the owner outright, so nothing ever read the number back.
+        // Parsed and compared numerically, not with a second all-zeros regex:
+        // `\b` right after an optional `(\.0+)?` already matches a bare "$0"
+        // prefix, because the "." that follows is itself a word boundary --
+        // the month check above avoids exactly this by anchoring on the
+        // literal " / $80" that has to follow.
+        const oggi = /oggi: \$(\d+(?:\.\d+)?)/.exec(repl.err);
+        if (!oggi) {
+          throw new Error(`/spend non stampa una riga "oggi": ${JSON.stringify(repl.err)}`);
+        }
+        if (Number(oggi[1]) === 0) {
+          throw new Error(`/spend mostra "oggi: $0" dopo un turno che ha speso oggi: ${repl.err}`);
+        }
       } finally {
         await inst.cleanup();
       }
