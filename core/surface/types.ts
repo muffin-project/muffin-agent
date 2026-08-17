@@ -75,6 +75,33 @@ export type SurfaceLimits = {
 };
 
 /**
+ * How a surface can show an answer arriving — M5-BIS B11, and Hermes's own
+ * finding stated as a conclusion (`research/hermes-documentazione.md` §3.8):
+ * *"streaming is a capability of the surface, not a global flag"*. A boolean
+ * on a config object would have to mean the same thing on a terminal and on
+ * Telegram, and it does not — a terminal writes to its own stdout, Telegram
+ * has nothing to progressively rewrite except a message it already sent.
+ *
+ * - `'stdout'` — the surface can print growing text to a stream it owns
+ *   (the REPL, when stdout is a TTY).
+ * - `'edit'` — the surface can progressively rewrite a message already sent
+ *   (Telegram, on both transports it ends up choosing between — a business
+ *   draft or a plain edit — see `connectors/telegram/presence.ts`).
+ * - `'off'` — no live rewrite; a caller still gets the full answer, just not
+ *   before the turn ends. The honest default for anything not listed above,
+ *   and what a capable surface degrades to on its own (non-TTY stdout,
+ *   `--no-stream`, the first failed edit of a session — Hermes's rule).
+ */
+export type StreamingTransport = 'stdout' | 'edit' | 'off';
+
+export type StreamingCapability = {
+  readonly transport: StreamingTransport;
+};
+
+/** The floor every `Surface` can declare without lying: no live rewrite. */
+export const STREAMING_OFF: StreamingCapability = { transport: 'off' };
+
+/**
  * A place Muffin can be reached and can answer.
  *
  * Deliberately small. Everything a surface does that is *specific* — Telegram's
@@ -86,6 +113,14 @@ export type SurfaceLimits = {
 export interface Surface {
   readonly id: ConnectorId;
   readonly limits: SurfaceLimits;
+  /**
+   * Declared, not discovered — same reasoning as `limits`. Read by the
+   * surface's own turn-running code (the REPL, `TelegramConnector.handle`)
+   * to decide whether to attach `TurnInput.onDelta` at all; `Surface.deliver`
+   * itself never streams; it is always the whole, finished text, which is
+   * why an out-of-band job delivery is unaffected by whatever this says.
+   */
+  readonly streaming: StreamingCapability;
 
   /**
    * Does this surface own this channel, **and can it reach it right now**?

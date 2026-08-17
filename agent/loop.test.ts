@@ -1191,4 +1191,25 @@ describe('agent loop · streaming (B11)', () => {
     expect(received).toEqual([]);
     expect(result.text).toBe('ok senza streaming');
   });
+
+  it('joins the streamed chunks to exactly result.text, even when the wire chunking had leading/trailing whitespace', async () => {
+    // ChatResult.text is `.trim()`-ed once, in both adapters — the raw
+    // wire chunks are not. A surface that concatenates what it received
+    // (`cli/repl.test.ts` asserts exactly this) must see the same trimmed
+    // string a non-streaming call would have returned, not one with a
+    // stray leading blank chunk or a trailing "  " nobody asked for.
+    const provider = new StreamCapableProvider([
+      { chunks: ['  \n', 'ecco ', 'la risposta', '  ', '\n'], result: answer('ecco la risposta') },
+    ]);
+    const { deps: d, store } = deps([], { provider });
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(received.join('')).toBe(result.text);
+    expect(result.text).toBe('ecco la risposta');
+    // Not collapsed into one chunk — internal shape survives, only the two
+    // edges were touched (the leading whitespace-only chunk dropped, the
+    // trailing whitespace-only chunk dropped, nothing in between rewritten).
+    expect(received).toEqual(['ecco ', 'la risposta']);
+  });
 });

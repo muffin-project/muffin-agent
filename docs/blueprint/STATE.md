@@ -44,11 +44,13 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 - Circa trenta righe `?`: da chiudere una alla volta con uno scenario
   dell'harness di accettazione (E4, READY, job CI verde su `dev`).
 
-**Non integrato.** Nessuna slice: le quattro morte il 15/08 sono tutte in `dev`
-(#35, #40, #41, #42). Prossimo checkpoint: `dev`→`main` con verifica integrata
-nuova, così l'owner prova Muffin. Nessun lavoro vale READY prima di integration test, wiring di produzione,
-failure path, scenario reale, documenti/stato e percorso di chiusura di
-`ORCHESTRATION.md` §11.
+**Non integrato.** `slice/streaming` (B11, "la risposta arriva mentre si
+forma"): provider adapter (`chatStream`, entrambi), loop (delta-sink
+bufferizzato sul solo testo finale), REPL/CLI chiusi e testati — PR aperta
+verso `dev`. Divisa in due PR per il tetto ~600 righe: la seconda (Telegram,
+bozza progressiva) segue sulla stessa slice. Nessun lavoro vale READY prima di
+integration test, wiring di produzione, failure path, scenario reale,
+documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →

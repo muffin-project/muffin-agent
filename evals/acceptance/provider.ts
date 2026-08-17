@@ -116,7 +116,19 @@ type Body = {
   model?: unknown;
   messages?: unknown;
   tools?: unknown;
+  stream?: unknown;
 };
+
+/**
+ * Splits `text` into word-sized pieces, each keeping its own trailing
+ * whitespace — so `pieces.join('')` is `text` back exactly, and a scenario
+ * asserting "the surface saw more than one delta" has something real to see.
+ * One piece when there is nothing to split on, never zero.
+ */
+function wordChunks(text: string): string[] {
+  const pieces = text.match(/\S+\s*/g);
+  return pieces && pieces.length > 0 ? pieces : [text];
+}
 
 function record(body: Body): RecordedRequest {
   const raw = Array.isArray(body.messages) ? (body.messages as Array<{ role?: unknown; content?: unknown }>) : [];
@@ -212,6 +224,43 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
           ]
         : [];
       const content = reply.text ?? null;
+      const usage = {
+        prompt_tokens: tokensOf(entry.transcript),
+        completion_tokens: tokensOf(content ?? '') + toolCalls.length * 20,
+        total_tokens: 0,
+        prompt_tokens_details: { cached_tokens: 0 },
+      };
+
+      // SSE — B11. Openai-compat shaped, `data: {...}\n\n` chunks ending in
+      // the wire's own `data: [DONE]`, the same format `agent/providers/
+      // openai-compat.ts#chatStream` parses. This is the "SSE finto" the
+      // slice's own brief names: no scenario reaches a paid endpoint, and a
+      // scenario for B11 gets a real, if coarse, multi-delta stream rather
+      // than one chunk pretending to be several.
+      if (body.stream === true) {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: entry.model };
+        const send = (patch: Record<string, unknown>): void => {
+          res.write(`data: ${JSON.stringify({ ...base, ...patch })}\n\n`);
+        };
+        send({ choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] });
+        if (content) {
+          for (const piece of wordChunks(content)) {
+            send({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] });
+          }
+        }
+        const tc = toolCalls[0];
+        if (tc) {
+          send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: tc.id, type: 'function', function: { name: tc.function.name, arguments: '' } }] }, finish_reason: null }] });
+          send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }] }, finish_reason: null }] });
+        }
+        send({ choices: [{ index: 0, delta: {}, finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop' }] });
+        send({ choices: [], usage });
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
       const payload = {
         id: `chatcmpl-${requests.length}`,
         object: 'chat.completion',
@@ -224,12 +273,7 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
             finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
           },
         ],
-        usage: {
-          prompt_tokens: tokensOf(entry.transcript),
-          completion_tokens: tokensOf(content ?? '') + toolCalls.length * 20,
-          total_tokens: 0,
-          prompt_tokens_details: { cached_tokens: 0 },
-        },
+        usage,
       };
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(payload));
