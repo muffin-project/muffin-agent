@@ -63,6 +63,10 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
   return {
     id: 'discord',
     limits,
+    // B17: Discord is explicitly out of scope for B11. `'off'` is the honest
+    // answer today, not a placeholder for "not implemented yet" — nothing in
+    // this file has ever progressively rewritten a message.
+    streaming: { transport: 'off' },
 
     handles: (channel) => channelIdFor(channel, ownerUserId) !== null,
 

@@ -1185,9 +1185,15 @@ async function drive(
         // provably the one that answers — a round the completion gate nudges
         // never reaches this line at all. `textChunks` replays in the order
         // and granularity `drainStream` buffered it, which is the provider's
-        // own chunking; nothing here re-splits or re-joins it.
+        // own chunking — `trimChunkEdges` is the one adjustment, and it exists
+        // because `text` above is `result.text`, which both adapters `.trim()`
+        // once at the end; the raw chunks are not. Skipping it would mean a
+        // response with incidental leading or trailing whitespace streams one
+        // string and finishes having "said" a different (trimmed) one, which
+        // is exactly the byte-identical guarantee a surface's own test
+        // checks (`cli/repl.test.ts`).
         if (input.onDelta && textChunks.length > 0) {
-          for (const chunk of textChunks) input.onDelta({ type: 'text', text: chunk });
+          for (const chunk of trimChunkEdges(textChunks)) input.onDelta({ type: 'text', text: chunk });
         }
 
         deps.sessions.append(input.session, {
@@ -2152,6 +2158,44 @@ async function drainStream(events: AsyncIterable<StreamEvent>, onChunk: (text: s
   // to `chat()`, `partial: true` because getting this far means every event up
   // to the missing `done` did arrive.
   throw new ProviderStreamError('provider stream ended without a done event', true);
+}
+
+/**
+ * Drops leading/trailing whitespace-only chunks and trims the edges of the
+ * first and last real one — so `chunks.map(c=>c.text).join('')` after this
+ * equals exactly `full.trim()`, chunk boundaries elsewhere untouched.
+ *
+ * Internal whitespace (a blank line the model wrote on purpose) is never
+ * touched: the loop stops walking in from each end at the first chunk that
+ * turns out to have real content, same as `String.prototype.trim` stops at
+ * the first non-whitespace character — this is that same rule applied chunk
+ * by chunk instead of character by character, because a surface streaming
+ * this live has no "whole string" to call `.trim()` on until the end.
+ */
+function trimChunkEdges(chunks: string[]): string[] {
+  const out = [...chunks];
+  while (out.length > 0) {
+    const trimmed = out[0]!.trimStart();
+    if (trimmed === out[0]) break; // no leading whitespace on this chunk — done
+    if (trimmed === '') {
+      out.shift(); // this chunk was whitespace-only — drop it, keep walking
+      continue;
+    }
+    out[0] = trimmed;
+    break;
+  }
+  while (out.length > 0) {
+    const last = out.length - 1;
+    const trimmed = out[last]!.trimEnd();
+    if (trimmed === out[last]) break;
+    if (trimmed === '') {
+      out.pop();
+      continue;
+    }
+    out[last] = trimmed;
+    break;
+  }
+  return out;
 }
 
 /** Sleeps, unless the turn is abandoned first. */

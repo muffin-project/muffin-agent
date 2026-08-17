@@ -3,8 +3,8 @@
     {
       "surface": "CLI REPL",
       "fn": "runRepl",
-      "file": "cli/repl.ts:108",
-      "note": "One session per launch; reads a line from stdin, wraps it in an AbortController, calls runTurn, prints result.text to stdout."
+      "file": "cli/repl.ts:100",
+      "note": "One session per launch; reads a line from stdin, wraps it in an AbortController, calls runTurn. M5-BIS B11: on a TTY (or unless --no-stream), attaches onDelta and writes the answer to stdout as it forms; otherwise prints result.text once, at the end — either way the same bytes."
     },
     {
       "surface": "muffin run",
@@ -341,9 +341,9 @@
     ]
   },
   "streaming": {
-    "declared": "agent/providers/types.ts:107 (campo `stream: boolean` su ChatCall)",
-    "consumed": null,
-    "verdict": "Morto end-to-end: agent/loop.ts:402 manda sempre `stream: false` su ogni singola chiamata, e ne' agent/providers/anthropic.ts (chat(), righe 42-110) ne' agent/providers/openai-compat.ts (chat(), righe 112-180) leggono mai `call.stream` — un grep sull'intero albero agent/ trova solo quella riga 402 come unico uso del token 'stream:'. Entrambi gli adapter chiamano sempre il metodo .create() non-streaming dell'SDK e restituiscono un ChatResult completo in un colpo solo; nessuna superficie (CLI, Telegram, scheduler) mostra mai testo incrementale."
+    "declared": "agent/providers/types.ts:107 (campo `stream: boolean` su ChatCall) + StreamEvent/ProviderStreamError/Provider.chatStream (stesso file)",
+    "consumed": "agent/loop.ts:1027 (`stream: Boolean(input.onDelta && deps.provider.chatStream)`) -> drainStream() legge Provider.chatStream() quando presente; agent/providers/anthropic.ts:76 e agent/providers/openai-compat.ts:173 implementano chatStream() sull'SDK ufficiale (stream:true), non SSE fatto a mano. cli/repl.ts:100 (runRepl) attacca TurnInput.onDelta quando process.stdout.isTTY (o --no-stream lo forza off) e stampa i delta man mano; core/surface/types.ts (Surface.streaming: StreamingCapability) dichiara la capacita' per surface, non un flag globale.",
+    "verdict": "M5-BIS B11: chiuso per CLI/REPL (adapter, loop, superficie, test del cablaggio con provider SSE finto via buildRuntime reale — cli/repl.test.ts). Ancora aperto per Telegram: connectors/telegram/connector.ts non passa ancora onDelta a runTurn — la bozza progressiva (sendMessageDraft o placeholder+edit) e' un passo successivo della stessa slice. `muffin run` (headless) resta non-streaming per scelta, come prima."
   },
   "context": {
     "assembleFn": "agent/loop.ts:1771-1830 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPrompts, una volta al boot)",
@@ -447,9 +447,9 @@
       "why_it_matters": "un'intera classe di rischio che il matrix del kernel chiama 'media, reversibile' e' silenziosamente morta all'ultimo miglio — il verdetto e' dichiarato e prodotto, ma nessuno lo esegue"
     },
     {
-      "what": "`ChatCall.stream` e' dichiarato nel tipo del provider ma il loop manda sempre `stream: false`, e ne' l'adapter Anthropic ne' quello openai-compat leggono mai il campo — lo streaming e' morto end-to-end, non solo disattivato.",
-      "evidence": "agent/providers/types.ts:107; agent/loop.ts:402; zero letture di `call.stream` in agent/providers/anthropic.ts o agent/providers/openai-compat.ts (verificato con grep sull'intero albero agent/)",
-      "why_it_matters": "il tipo suggerisce che esista un interruttore streaming/non-streaming quando nessuna parte del cablaggio lo supporta — ogni superficie aspetta la risposta intera prima di mostrare qualsiasi cosa"
+      "what": "CHIUSO per CLI/REPL (M5-BIS B11, prima meta' di `slice/streaming`): il loop onora `ChatCall.stream`, entrambi gli adapter implementano `Provider.chatStream`, e `runRepl` mostra i delta man mano. Resta aperto per Telegram: `TelegramConnector.handle` non passa ancora `onDelta` a `runTurn`, quindi su quella superficie la risposta arriva ancora tutta insieme a fine turno.",
+      "evidence": "agent/loop.ts:1027 (stream: Boolean(...)); agent/providers/anthropic.ts:76 e agent/providers/openai-compat.ts:173 (chatStream); cli/repl.ts:100 (onDelta attaccato su TTY); connectors/telegram/connector.ts (nessun onDelta nella chiamata a runTurn, verificato per intero)",
+      "why_it_matters": "un owner sul terminale vede gia' la risposta formarsi; lo stesso owner su Telegram aspetta ancora tutto il turno in silenzio (a parte il placeholder di presenza) prima di vedere qualunque testo"
     },
     {
       "what": "CHIUSO per testo (Deliver ora ritorna DeliveryOutcome, core/surface/types.ts) — resta aperto per allegati: SurfaceRegistry.deliverFile esiste ma nessun tool di produzione lo chiama ancora (M5-BIS B14), quindi un file scritto nel vault raggiunge l'owner solo come percorso citato nel testo, non come allegato vero.",

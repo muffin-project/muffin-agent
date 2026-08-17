@@ -36,262 +36,262 @@
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 102,
+    "line": 105,
     "testo": "* handlers in this tree to state a channel they never touch would be noise"
+  },
+  "agent/loop.ts:1027": {
+    "path": "agent/loop.ts",
+    "line": 1027,
+    "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1088,
+    "line": 1169,
     "testo": "if (nudgedForCompletion === false) {"
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 172,
+    "line": 175,
     "testo": "prompt: string;"
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1753,
+    "line": 1851,
     "testo": "* world and an intent row for it would be a lie about what was attempted."
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1771,
+    "line": 1869,
     "testo": "// whole defect: it turned \"this tool said nothing about provenance\" into"
+  },
+  "agent/loop.ts:1790": {
+    "path": "agent/loop.ts",
+    "line": 1790,
+    "testo": "case 'draft':"
   },
   "agent/loop.ts:1873": {
     "path": "agent/loop.ts",
-    "line": 1873,
+    "line": 1971,
     "testo": "* carried: `resourceKind` says what kind of thing this capability acts on and"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 271,
+    "line": 274,
     "testo": "provider: Provider;"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 273,
+    "line": 276,
     "testo": "model: string;"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 289,
+    "line": 292,
     "testo": "*"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 299,
+    "line": 302,
     "testo": "* rows, the tests would still be green, and the model would keep re-deriving"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 316,
+    "line": 314,
     "testo": "/**"
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 320,
+    "line": 323,
     "testo": "recordSpend?: ((entry: SpendEntry) => number) | undefined;"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 338,
+    "line": 341,
     "testo": "* from `resourceKind`/`policyArgs` instead of a hardcoded argument name."
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 351,
+    "line": 354,
     "testo": "*"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 352,
+    "line": 355,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 355,
+    "line": 358,
     "testo": "* contract is narrow on purpose — it is called from `finish`, microseconds"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 363,
+    "line": 366,
     "testo": "* memory of something that did not happen. Here the episode is written at the"
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 374,
+    "line": 377,
     "testo": "};"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 379,
+    "line": 382,
     "testo": "surface: string;"
-  },
-  "agent/loop.ts:402": {
-    "path": "agent/loop.ts",
-    "line": 402,
-    "testo": "*/"
   },
   "agent/loop.ts:425": {
     "path": "agent/loop.ts",
-    "line": 425,
+    "line": 438,
     "testo": "/**"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 428,
+    "line": 414,
     "testo": "*"
   },
   "agent/loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 449,
+    "line": 477,
     "testo": "* How many times a row may be picked back up before we stop trying."
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 453,
+    "line": 481,
     "testo": "* retried by every boot for ever, and the process that dies is never the one"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 466,
+    "line": 494,
     "testo": "* `runTurn`, and the design measured what that costs: a turn **in flight and"
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 482,
+    "line": 510,
     "testo": "deps.turns.enqueue({"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 488,
+    "line": 516,
     "testo": "model: deps.model,"
   },
   "agent/loop.ts:503": {
     "path": "agent/loop.ts",
-    "line": 503,
+    "line": 531,
     "testo": "toolCallsMade: 0,"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 521,
+    "line": 549,
     "testo": "* The record, before anything happens — and **not** inside a try."
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 528,
+    "line": 550,
     "testo": "*"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 529,
+    "line": 557,
     "testo": "* Above the episode write in `drive` below, deliberately, and the two are not"
   },
   "agent/loop.ts:538": {
     "path": "agent/loop.ts",
-    "line": 538,
+    "line": 566,
     "testo": "* which lost the question along with the answer."
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 540,
+    "line": 568,
     "testo": "const record = deps.turns.create({"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 543,
+    "line": 571,
     "testo": "tenant: input.tenant,"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 56,
+    "line": 59,
     "testo": "turnId: string;"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 574,
+    "line": 603,
     "testo": "* Three refusals live here, and none of them is a convenience:"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 595,
+    "line": 624,
     "testo": "const existing = deps.turns.get(turnId);"
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 62,
+    "line": 60,
     "testo": "/**"
   },
   "agent/loop.ts:660": {
     "path": "agent/loop.ts",
-    "line": 660,
+    "line": 689,
     "testo": "span.setAttributes({ 'muffin.turn.resume_refused': 'model_changed' });"
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 696,
+    "line": 725,
     "testo": "session?: SessionRef | undefined;"
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 720,
+    "line": 759,
     "testo": "* is not — and **never** rebuilt by hand."
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 769,
+    "line": 809,
     "testo": "nudgedForCompletion,"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 777,
+    "line": 817,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
-  },
-  "agent/loop.ts:783": {
-    "path": "agent/loop.ts",
-    "line": 783,
-    "testo": ""
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 792,
+    "line": 832,
     "testo": "* call. The build said so; the runtime would have said so on message one."
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 798,
+    "line": 838,
     "testo": "sessionId: input.session.id,"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 805,
+    "line": 845,
     "testo": "// everywhere else."
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 817,
+    "line": 857,
     "testo": "// pure function of the principal and the profile, and the profile follows the"
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 819,
+    "line": 859,
     "testo": "// a tightened permission matrix — is one a resume should *inherit*, not one"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 889,
+    "line": 929,
     "testo": "messages.push(...buildContext(deps, input, recalled, open));"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 925,
+    "line": 965,
     "testo": "// released and nothing holds it while the deadline runs."
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 942,
+    "line": 982,
     "testo": "// `tool_use` keeps its `tool_result` and the request stays well-formed."
   },
   "agent/observe-run.ts:104": {
@@ -356,22 +356,32 @@
   },
   "agent/providers/anthropic.ts:26": {
     "path": "agent/providers/anthropic.ts",
-    "line": 26,
+    "line": 28,
     "testo": "export class AnthropicProvider implements Provider {"
   },
   "agent/providers/anthropic.ts:42": {
     "path": "agent/providers/anthropic.ts",
-    "line": 42,
+    "line": 44,
     "testo": "async chat(call: ChatCall): Promise<ChatResult> {"
+  },
+  "agent/providers/anthropic.ts:76": {
+    "path": "agent/providers/anthropic.ts",
+    "line": 76,
+    "testo": "async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {"
   },
   "agent/providers/openai-compat.ts:112": {
     "path": "agent/providers/openai-compat.ts",
-    "line": 112,
+    "line": 114,
     "testo": "async chat(call: ChatCall): Promise<ChatResult> {"
+  },
+  "agent/providers/openai-compat.ts:173": {
+    "path": "agent/providers/openai-compat.ts",
+    "line": 173,
+    "testo": "async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {"
   },
   "agent/providers/openai-compat.ts:91": {
     "path": "agent/providers/openai-compat.ts",
-    "line": 91,
+    "line": 93,
     "testo": "export class OpenAICompatProvider implements Provider {"
   },
   "agent/providers/types.ts:107": {
@@ -841,137 +851,137 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 101,
+    "line": 104,
     "testo": "const COMMAND_ALIASES: Readonly<Record<string, string>> = {"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 159,
+    "line": 167,
     "testo": "switch (command) {"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 161,
+    "line": 169,
     "testo": "return cmdRun(rest);"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 163,
+    "line": 365,
     "testo": "return runRepl();"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 165,
+    "line": 176,
     "testo": "return cmdInit(rest);"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 167,
+    "line": 178,
     "testo": "return cmdConfig(paths().home, rest);"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 169,
+    "line": 180,
     "testo": "return cmdDoctor(rest);"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 171,
+    "line": 182,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
-    "line": 173,
+    "line": 184,
     "testo": "return cmdUninstall(rest);"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 175,
+    "line": 186,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 177,
+    "line": 188,
     "testo": "return cmdVault(rest);"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 179,
+    "line": 190,
     "testo": "return cmdSurface(rest);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 181,
+    "line": 192,
     "testo": "return cmdMcp(rest);"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 183,
+    "line": 194,
     "testo": "return cmdJobs(rest);"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 185,
+    "line": 196,
     "testo": "return cmdGateway(rest);"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 187,
+    "line": 198,
     "testo": "return cmdObserve(paths().home, rest);"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 189,
+    "line": 200,
     "testo": "return cmdSecret(rest);"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 191,
+    "line": 202,
     "testo": "return cmdTrace(rest);"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 198,
+    "line": 209,
     "testo": "}"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 202,
+    "line": 213,
     "testo": "return 0;"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 245,
+    "line": 256,
     "testo": "// answers and nothing is prompted or copied."
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 258,
+    "line": 269,
     "testo": "// let it through and fail confusingly at the first call to the model."
-  },
-  "cli/main.ts:296": {
-    "path": "cli/main.ts",
-    "line": 296,
-    "testo": ""
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 297,
+    "line": 308,
+    "testo": "await offerGateway();"
+  },
+  "cli/main.ts:308": {
+    "path": "cli/main.ts",
+    "line": 308,
     "testo": "await offerGateway();"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 317,
+    "line": 328,
     "testo": "*/"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 340,
+    "line": 351,
     "testo": "*/"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 505,
+    "line": 516,
     "testo": "const asOf = normaliseDate(values['as-of'], 'end');"
   },
   "cli/mcp.ts:142": {
@@ -1029,54 +1039,54 @@
     "line": 43,
     "testo": "export function chooseProvider("
   },
-  "cli/repl.ts:108": {
+  "cli/repl.ts:100": {
     "path": "cli/repl.ts",
-    "line": 108,
-    "testo": ""
+    "line": 100,
+    "testo": "export async function runRepl("
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 111,
+    "line": 130,
     "testo": "`! safe mode: root of trust diverged (${runtime.safeMode.reason}) — capability sopra il rischio basso negate\\n`,"
   },
   "cli/repl.ts:133": {
     "path": "cli/repl.ts",
-    "line": 133,
+    "line": 172,
     "testo": "let mcpLines: string[] = [];"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 145,
+    "line": 184,
     "testo": "surfaces.lines.map((l) => `${l}\\n`).join('') +"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 157,
+    "line": 196,
     "testo": "// verdict becomes a question instead of a refusal. The wording is the kernel's"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 255,
+    "line": 294,
     "testo": "ticker.unref(); // the timer must not, by itself, keep the process alive"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 286,
+    "line": 325,
     "testo": "process.stderr.write(`${session.id}\\n`);"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 288,
+    "line": 281,
     "testo": "}"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 289,
+    "line": 328,
     "testo": "if (line === '/spend') {"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 300,
+    "line": 339,
     "testo": "controller = new AbortController();"
   },
   "cli/run.ts:26": {
@@ -2341,122 +2351,122 @@
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 112,
+    "line": 115,
     "testo": "*/"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1639,
+    "line": 1737,
     "testo": "toolCallId: call.id,"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 299,
+    "line": 302,
     "testo": "* rows, the tests would still be green, and the model would keep re-deriving"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 309,
+    "line": 312,
     "testo": "*/"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 352,
+    "line": 355,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 355,
+    "line": 358,
     "testo": "* contract is narrow on purpose — it is called from `finish`, microseconds"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 429,
+    "line": 457,
     "testo": "* Returned because the caller may have to **write something derived from this"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 431,
+    "line": 459,
     "testo": "* keeps the taint in a closure that dies with the call, so every caller"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 442,
+    "line": 470,
     "testo": "/** Present when `stopped` is 'ask': what the turn wanted permission for. */"
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 484,
+    "line": 512,
     "testo": "principal: input.principal,"
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 485,
+    "line": 513,
     "testo": "tenant: input.tenant,"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 508,
+    "line": 536,
     "testo": "contextBuilt: false,"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 521,
+    "line": 549,
     "testo": "* The record, before anything happens — and **not** inside a try."
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 574,
+    "line": 603,
     "testo": "* Three refusals live here, and none of them is a convenience:"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 577,
+    "line": 606,
     "testo": "*     to the model that produced it, and ADR-0037 records that sending one to a"
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 594,
+    "line": 623,
     "testo": "): Promise<TurnResult | ResumeRefusal> {"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 602,
+    "line": 631,
     "testo": "const wasWaiting = existing.status === 'waiting';"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 744,
+    "line": 784,
     "testo": "// `resumeTurn` §2. On a fresh turn the two agree by construction, which is"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 747,
+    "line": 787,
     "testo": "const turnClass = tenantClass(input.principal, input.tenant);"
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 769,
+    "line": 809,
     "testo": "nudgedForCompletion,"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 777,
+    "line": 817,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 792,
+    "line": 832,
     "testo": "* call. The build said so; the runtime would have said so on message one."
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 806,
+    "line": 846,
     "testo": "replyChannel: input.replyChannel ?? null,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 842,
+    "line": 882,
     "testo": "}"
   },
   "maintenance.ts:21": {

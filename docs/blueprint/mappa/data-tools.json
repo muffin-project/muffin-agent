@@ -43,7 +43,7 @@
       "taintOut": "tier: 0, declared and not omitted (ADR-0044): the result is this tool's own receipt ('wrote N bytes'), nothing enters the turn. n/a in practice anyway - see wiredNote: the handler (fsWrite) is never reached in production.",
       "wired": true,
       "wiredNote": "Registered via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 (handler at agent/tools/fs.ts:360-373) and exposed to the model - but see gaps: fs.write is declared risk:'medium' + reversible:'undoable' (fs.ts:78-85), and core/policy/decide.ts:204-207 maps every medium+undoable capability to effect:'draft'. agent/loop.ts:777-791 has no undo journal implemented, so 'draft' is turned into an unconditional hard refusal (isError:true) BEFORE fsWrite() ever runs. Confirmed unconditional (owner, taint 0) by core/policy/decide.test.ts:117 and agent/loop.test.ts:527-556. The tool is registered and reachable; it never actually writes.",
-      "onDeny": "Not a policy 'deny' - a 'draft' verdict, refused at agent/loop.ts:783-791: '\"fs.write\" richiede una bozza revocabile e il registro di undo non esiste ancora. Non eseguito: dillo all'owner invece di riprovare.'",
+      "onDeny": "Not a policy 'deny' - a 'draft' verdict, refused at agent/loop.ts:1790-1802: '\"fs.write\" richiede una bozza revocabile e il registro di undo non esiste ancora. Non eseguito: dillo all'owner invece di riprovare.'",
       "oneLine": "Scriverebbe un file, ma il verdetto 'draft' lo blocca sempre."
     },
     {

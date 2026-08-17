@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, type DeliveryOutcome, type FileSpec, type Surface } from './types.js';
+import { DELIVERED, type DeliveryOutcome, type FileSpec, type StreamingCapability, type Surface } from './types.js';
 
 /**
  * The terminal, as a surface like any other.
@@ -37,7 +37,18 @@ export type CliWriter = (text: string) => void;
  * terminal has no message limit, and giving it a fake one would make the
  * splitter cut prose that nothing was going to reject.
  */
-export function cliSurface(write: CliWriter): Surface {
+export function cliSurface(
+  write: CliWriter,
+  opts: {
+    /**
+     * Defaults from `process.stdout.isTTY`, the same signal `cli/repl.ts`
+     * reads to decide whether to attach `TurnInput.onDelta` at all — a caller
+     * that already knows better (a test, `--no-stream`) can say so directly
+     * rather than this file guessing from a flag it has never seen.
+     */
+    streaming?: StreamingCapability;
+  } = {},
+): Surface {
   return {
     id: 'cli',
     limits: {
@@ -53,6 +64,7 @@ export function cliSurface(write: CliWriter): Surface {
       maxUploadBytes: Number.POSITIVE_INFINITY,
       maxDownloadBytes: 0,
     },
+    streaming: opts.streaming ?? { transport: process.stdout.isTTY === true ? 'stdout' : 'off' },
     handles: (channel) => channel === 'cli',
     deliver: async (_channel, text): Promise<DeliveryOutcome> => {
       write(text);
