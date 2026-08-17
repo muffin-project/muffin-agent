@@ -12,6 +12,7 @@ import { ATTR } from '../core/tracing/types.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import { tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
+import { historyTaint, reinjectedHistory, type ReinjectedHistory } from './context/history-taint.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
 import { recoveryStep, type RecoveryFailure } from './profiles/recovery.js';
 import {
@@ -925,15 +926,35 @@ async function drive(
     const open = deps.todos.open(input.tenant, input.session.id);
     snapshot.raiseTaint(planTaint(open));
 
-    messages.length = 0;
-    messages.push(...buildContext(deps, input, recalled, open));
+    /**
+     * The session transcript, and the taint that comes with it — same order,
+     * same reason, one line down from the plan above (ADR-0044 §Revisione,
+     * "la history non lava la provenienza"; MANDATO-DAY-1 invariant 2).
+     *
+     * `reinjectedHistory` is the same cut `buildContext` renders — computed
+     * once here so the two can never disagree about what "reinjected" means
+     * (`agent/context/history-taint.ts`'s own docstring). `taintForIds` is one
+     * query for every `traceId` this window carries, not one per message: a
+     * long session can hand this dozens of rows to resolve.
+     */
+    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
+    const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
+    snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
 
+    messages.length = 0;
+    messages.push(...buildContext(input, recalled, open, spoken));
+
+    // `tier` matches the init rule (`enqueueTurn`/`runTurn`, a few hundred
+    // lines up): the owner's own words are 0, a member's are 2 — never a
+    // literal 0 that would make a group turn's own user line read as clean
+    // once a later turn in the same conversation reinjects it.
     deps.sessions.append(input.session, {
       role: 'user',
       content: input.text,
       surface: input.surface,
       createdAt: now().toISOString(),
       traceId: turn.traceId,
+      tier: input.principal.kind === 'member' ? 2 : 0,
     });
     // Marked before the first model call, so a crash inside recall replays the
     // preamble (one duplicated episode, absorbed by consolidation) while a
@@ -1213,6 +1234,12 @@ async function drive(
           surface: input.surface,
           createdAt: now().toISOString(),
           traceId: turn.traceId,
+          // The turn's taint *right now* — read the same way the memory
+          // episode a few lines down does, and for the same reason (03 §2):
+          // an answer derived from tier-3 content is tier-3 the moment it is
+          // written, not a literal 0 a later turn in this session would
+          // reinject as clean.
+          tier: snapshot.currentTaint(),
         });
         if (deps.memory) {
           deps.memory.store.addEpisode({
@@ -2004,6 +2031,10 @@ async function runTool(
       surface: input.surface,
       createdAt: (deps.now ?? (() => new Date()))().toISOString(),
       traceId: parent.traceId,
+      // The outcome's own declared provenance — not reinjected as history by
+      // `buildContext` today (it filters to user/assistant only), set anyway
+      // so the row is never a silent "clean" for whatever reads it next.
+      tier: outcome.tier,
     } satisfies SessionMessage);
     span.end({ status: outcome.isError ? 'error' : 'ok' });
     return {
@@ -2129,7 +2160,6 @@ function resourceFor(
  * stable content, or the cache prefix is invalidated on every turn.
  */
 function buildContext(
-  deps: LoopDeps,
   input: TurnInput,
   recalled: ContentBlock[],
   /**
@@ -2142,9 +2172,18 @@ function buildContext(
    * caller has the snapshot; this has the strings.
    */
   open: TodoItem[],
+  /**
+   * The session history, already cut to what will actually be reinjected —
+   * **taint-accounted by the caller**, same reasoning as `open` immediately
+   * above and the same reason it is a parameter rather than a re-read here:
+   * `drive` computed `historyTaint` over this exact `kept` set and raised the
+   * snapshot with it before calling this function, so a second, independent
+   * read-and-slice in here could only ever disagree with that one by
+   * accident. See `agent/context/history-taint.ts`'s `reinjectedHistory`.
+   */
+  spoken: ReinjectedHistory,
 ): Message[] {
-  const history = deps.sessions.read(input.session);
-  const spoken = history.filter((m) => m.role === 'user' || m.role === 'assistant');
+  const { kept, dropped } = spoken;
 
   // A REPL session used all afternoon would otherwise grow until the provider
   // refuses the request — and then refuse it again on every following turn,
@@ -2154,9 +2193,6 @@ function buildContext(
   // The cut is at the front and it is announced, so the model knows there is a
   // before rather than believing the conversation started here. Recall is what
   // brings back the parts that mattered, which is the whole reason it exists.
-  const kept = spoken.slice(-MAX_HISTORY_TURNS);
-  const dropped = spoken.length - kept.length;
-
   const messages: Message[] = [];
   if (dropped > 0) {
     messages.push({
