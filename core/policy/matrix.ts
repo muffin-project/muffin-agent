@@ -36,6 +36,8 @@ const PolicyFileSchema = z.object({
   defaultMaxTaint: z
     .object({ low: Tier.optional(), medium: Tier.optional(), high: Tier.optional() })
     .optional(),
+  /** See `PolicyMatrix.paramsMaxTaint` below for what this gates. */
+  paramsMaxTaint: Tier.optional(),
   neverAtRuntime: z.array(z.string().min(1)).optional(),
   forbiddenForSystem: z.array(z.string().min(1)).optional(),
 });
@@ -43,6 +45,32 @@ const PolicyFileSchema = z.object({
 export type PolicyMatrix = {
   /** Ceiling by risk class, for declarations that state no `maxTaint` of their own. */
   readonly defaultMaxTaint: Readonly<Record<RiskClass, TrustTier>>;
+  /**
+   * Ceiling for model-chosen bytes riding out in a resource the model
+   * controls: a `url` resource's query/fragment once its host has already
+   * cleared the egress allowlist, and the full text of a `query` resource
+   * (`sys.search`). One scalar for both, because `decide.ts`'s `gateParams`
+   * asks the identical question of each — is this turn's taint low enough
+   * that a destination already fixed (by the allowlist, or by the search
+   * endpoint's own registration) may also carry bytes the model chose? Above
+   * the ceiling: `ask` for the owner, showing the exact bytes
+   * (`ApprovalRequest.resource`, `agent/loop.ts`); `deny` for anyone else,
+   * always — never a silent allow, the shape `sys.shell` already uses above
+   * its own ceiling (ADR-0044 §revisione).
+   *
+   * Unlike `defaultMaxTaint`, the sealed file may RAISE this, not only lower
+   * it (`merge()` reads it directly, no `tighter()` clamp). Deliberate, not
+   * an oversight of the tighten-only rule one field up: `defaultMaxTaint` is
+   * inherited by every capability that pins no `maxTaint` of its own, so one
+   * widened number in a resealed file silently loosens capabilities nobody
+   * reviewed for it (the `mcp.*` measurement in this file's docstring).
+   * `paramsMaxTaint` has exactly two callers, both named above, and raising
+   * it never grants anyone but the owner anything — it only moves the taint
+   * value at which the owner starts being asked. The floor below ships 1;
+   * whether 2 is the better default for daily use is an open owner decision
+   * (mandato inv. 7, 2026-08-17 — ADR-0044 §emendamento egress-params).
+   */
+  readonly paramsMaxTaint: TrustTier;
   readonly neverAtRuntime: ReadonlySet<CapabilityId>;
   readonly forbiddenForSystem: ReadonlySet<CapabilityId>;
   /** Which of the two produced these numbers. Surfaced by `doctor`. */
@@ -93,6 +121,7 @@ export type PolicyMatrix = {
  */
 export const POLICY_FLOOR: PolicyMatrix = {
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
+  paramsMaxTaint: 1,
   /** No principal may ever exercise these at runtime, whatever the taint. */
   neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
@@ -183,6 +212,9 @@ function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
       medium: tighter(file.defaultMaxTaint?.medium, POLICY_FLOOR.defaultMaxTaint.medium),
       high: tighter(file.defaultMaxTaint?.high, POLICY_FLOOR.defaultMaxTaint.high),
     },
+    // NOT `tighter()` — see the field's own doc comment on `PolicyMatrix` for
+    // why this one threshold may move in both directions from the file.
+    paramsMaxTaint: file.paramsMaxTaint ?? POLICY_FLOOR.paramsMaxTaint,
     // Union, never assignment. Drop the spread of the floor and an owner — or
     // anything that can write one line into a resealed file — deletes the
     // runtime's only prohibition against writing its own root of trust.
