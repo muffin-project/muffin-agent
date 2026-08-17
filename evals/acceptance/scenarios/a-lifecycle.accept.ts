@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, writeFileSync, cpSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
@@ -36,6 +37,26 @@ function pidFrom(statusOut: string): string {
   const match = /pid (\d+)/.exec(statusOut);
   if (!match) throw new Error(`nessun pid nell'output di \`gateway status\`:\n${statusOut}`);
   return match[1]!;
+}
+
+/**
+ * Recursive content hash of a directory — A9's evidence that the real home
+ * is untouched by `init --local`, instead of trusting that nothing *should*
+ * have written there.
+ */
+function hashDir(dir: string): string {
+  const hash = createHash('sha256');
+  const walk = (d: string): void => {
+    for (const entry of readdirSync(d).sort()) {
+      const full = join(d, entry);
+      const st = statSync(full);
+      hash.update(full);
+      if (st.isDirectory()) walk(full);
+      else hash.update(readFileSync(full));
+    }
+  };
+  walk(dir);
+  return hash.digest('hex');
 }
 
 describe('acceptance · A · installazione e ciclo di vita', () => {
@@ -261,6 +282,79 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         if (after.code !== 0) throw new Error(`dopo il ripristino la ricerca fallisce: exit ${after.code}\n${after.err}`);
         if (!after.out.includes('42')) {
           throw new Error(`dopo il ripristino il contenuto non si ritrova più:\n${after.out}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  scenario(
+    'A9',
+    async () => {
+      // A9 (M5-BIS, direttiva owner 16/08): `muffin init --local <dir>` deve
+      // riusare un segreto persistito attraverso la stessa catena che
+      // `locateSecret` già percorre (ADR-0039 decisione 2) — mai copiarlo nella
+      // home nuova — e non deve mai poter atterrare sulla home reale, o dentro
+      // di essa.
+      const inst = await install({ main: [{ text: 'non dovrebbe mai arrivare qui' }] });
+      try {
+        // (a) Un segreto sul backend *persistent* — isolato dall'harness stesso
+        // (`XDG_CONFIG_HOME` nel proprio `install()`, mai quello reale di questa
+        // macchina: vedi il docstring di `install` in harness.ts).
+        const persisted = await inst.muffin(
+          ['secret', 'set', 'provider_api_key', '--persist'],
+          'sk-acceptance-persisted-key\n',
+        );
+        if (persisted.code !== 0) {
+          throw new Error(`\`secret set --persist\` non riuscito: exit ${persisted.code}\n${persisted.err}`);
+        }
+
+        const beforeHash = hashDir(inst.home);
+
+        // (b) Una seconda home pulita, senza --api-key: la chiave deve venire
+        // dalla catena, mai da un prompt o da una copia.
+        const localDir = join(inst.workspace, 'local-clean-home');
+        const local = await inst.muffin(['init', '--local', localDir]);
+        if (local.code !== 0) throw new Error(`\`init --local\` non riuscito: exit ${local.code}\n${local.err}`);
+        if (!/api key\s+già presente \(persistent\)/.test(local.err)) {
+          throw new Error(`init --local non ha trovato la chiave sul backend persistent:\n${local.err}`);
+        }
+        if (!local.err.includes(`export MUFFIN_HOME=${localDir}`)) {
+          throw new Error(`init --local non stampa la riga per usare la nuova home:\n${local.err}`);
+        }
+        // Il punto intero della riga: nessuna seconda copia della chiave.
+        if (existsSync(join(localDir, 'secrets', 'provider_api_key'))) {
+          throw new Error(`init --local ha copiato la chiave nella home locale — non deve mai farlo`);
+        }
+
+        // (c) L'installazione locale è reale: doctor la trova sana, guidato
+        // come farebbe l'owner dopo `export MUFFIN_HOME=...` — mai contro lo
+        // XDG_CONFIG_HOME vero di questa macchina (`muffinAt`, harness.ts).
+        const doctor = await inst.muffinAt(localDir, ['doctor']);
+        if (doctor.code === 2) throw new Error(`doctor in fail sulla home locale:\n${doctor.out}`);
+        if (!/✓ database\s/.test(doctor.out)) {
+          throw new Error(`doctor non riporta 'database' ok sulla home locale:\n${doctor.out}`);
+        }
+        if (!/✓ root of trust\s/.test(doctor.out)) {
+          throw new Error(`doctor non riporta 'root of trust' ok sulla home locale:\n${doctor.out}`);
+        }
+
+        // (e) --local puntato sulla home reale stessa è rifiutato, prima di
+        // scrivere qualunque cosa.
+        const rejected = await inst.muffin(['init', '--local', inst.home]);
+        if (rejected.code !== 78) {
+          throw new Error(`init --local sulla home reale doveva essere rifiutato (78), ricevuto ${rejected.code}:\n${rejected.err}`);
+        }
+        if (!/rifiuto/i.test(rejected.err)) {
+          throw new Error(`init --local sulla home reale non spiega perché rifiuta:\n${rejected.err}`);
+        }
+
+        // (d) La home originale non è mai stata toccata, né dalla (b) né dal
+        // tentativo rifiutato in (e).
+        if (hashDir(inst.home) !== beforeHash) {
+          throw new Error(`la home reale (${inst.home}) è cambiata dopo init --local`);
         }
       } finally {
         await inst.cleanup();

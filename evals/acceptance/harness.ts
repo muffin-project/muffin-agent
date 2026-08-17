@@ -146,6 +146,15 @@ export type Install = {
    * assert that against a process this harness insists on waiting for.
    */
   spawnRaw(args: string[]): { kill: () => void; exited: Promise<number | null> };
+  /**
+   * Same as `muffin()`, against a *different* `MUFFIN_HOME` — every other
+   * isolation (`XDG_CONFIG_HOME`, the scratch workspace) stays this install's
+   * own. A9 (`init --local`) needs this: it builds a second, real home beside
+   * the first and has to run `doctor` against it directly, the way an owner
+   * would after `export MUFFIN_HOME=...` — never against this machine's real
+   * `XDG_CONFIG_HOME`, which a plain ad-hoc spawn would fall back to.
+   */
+  muffinAt(home: string, args: string[], stdin?: string): Promise<Run>;
   /** The home database, read-only, for asserting state instead of prose. */
   db<T>(read: (db: DatabaseCtor.Database) => T): T;
   /** Starts `muffin gateway run` and waits for a line on stderr. */
@@ -212,6 +221,8 @@ export async function install(options: InstallOptions): Promise<Install> {
     workspace,
     provider,
     muffin: run,
+    muffinAt: (homeOverride, args, stdin = '') =>
+      spawnAsync(args, { ...env, MUFFIN_HOME: homeOverride }, workspace, stdin),
     db: (read) => {
       const db = new DatabaseCtor(join(home, 'muffin.db'), { readonly: true });
       try {
