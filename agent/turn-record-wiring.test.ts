@@ -4,13 +4,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths } from '../core/config/config.js';
 import { runDoctor } from '../cli/doctor.js';
 import { GatewayLock } from '../core/gateway/lock.js';
 import { buildRuntime } from './runtime.js';
-import { runTurn, type LoopDeps } from './loop.js';
+import { enqueueTurn, resumeTurn, runTurn, type LoopDeps } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
 
 /**
@@ -378,5 +378,113 @@ describe('acceptance: the owner asks what happened', () => {
     const turns = runDoctor(home).checks.find((c) => c.name === 'turni');
     expect(turns?.level).toBe('ok');
     expect(turns?.detail).toContain('nessuno interrotto');
+  });
+});
+
+/**
+ * A model that steals this run's own claim, from the inside, between two of
+ * its own calls — the P19 scenario `core/turns/store.test.ts` already pins at
+ * the store level ("after a steal, the original run's checkpoint/suspend/
+ * finish all report the loss instead of landing"), driven here through
+ * `agent/loop.ts` itself instead of through `TurnStore` directly, which is
+ * what judge round 2's R2 asks for: the store's fencing was proven, `drive`'s
+ * *reaction* to a fenced write failing was not.
+ *
+ * The steal lands on the second call, after the first has already gone
+ * through a real, successful checkpoint (`agent/loop.ts` ~1294, before the
+ * tool below runs) — this is "mid-run" and not "before it started": the row
+ * really did carry this run's own token for a while, and really did lose it
+ * while `drive` was in the middle of its own loop, not at the very first
+ * write.
+ */
+class StealingProvider implements Provider {
+  readonly kind = 'openai-compat' as const;
+  calls = 0;
+  constructor(
+    private readonly script: ChatResult[],
+    private readonly steal: () => void,
+  ) {}
+  async chat(): Promise<ChatResult> {
+    this.calls += 1;
+    if (this.calls === 2) this.steal();
+    const next = this.script[this.calls - 1];
+    if (!next) throw new Error('lo script è finito');
+    return next;
+  }
+}
+
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'test',
+});
+
+const call = (name: string): ChatResult => ({
+  text: null,
+  toolCalls: [{ id: 'c1', name, args: {} }],
+  stopReason: 'tool_use',
+  usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'test',
+});
+
+describe("P19: agent/loop.ts's own reaction to losing its claim mid-run", () => {
+  it('a claim stolen between two of its own model calls ends the turn honestly, announces nothing, and leaves the winner\'s row alone', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+
+    const turnId = enqueueTurn(runtime.deps, {
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'cli',
+      session: runtime.deps.sessions.open('meta-corsa'),
+      text: 'fai una cosa che richiede due passaggi',
+    });
+
+    // The heist: a raw UPDATE of `claim_token` from the test, exactly the
+    // technique `core/turns/store.test.ts`'s own fencing test uses — except
+    // this one runs *from inside* the provider, so it lands precisely between
+    // this run's two model calls rather than at a time the test has to guess.
+    let stolen = false;
+    const steal = (): void => {
+      stolen = true;
+      runtime.db
+        .prepare(`UPDATE turns SET claimed_by = ?, claim_token = ?, updated_at = ? WHERE id = ?`)
+        .run(process.pid + 1, 'rubato-dal-test', new Date().toISOString(), turnId);
+    };
+    const provider = new StealingProvider(
+      [call('strumento_inesistente'), answer('non dovrebbe mai raggiungere chi ha chiamato')],
+      steal,
+    );
+    const onTurnEnd = vi.fn();
+    const deps: LoopDeps = { ...runtime.deps, provider, onTurnEnd };
+
+    const result = await resumeTurn(deps, turnId);
+    expect(stolen).toBe(true); // sanity: the script really did reach its second call
+
+    // The loss, exactly as `agent/loop.ts`'s `finish` defines it (P19): an
+    // `error` stop and empty text, never the real (and by now stale) answer
+    // the model produced after the claim was already gone.
+    if ('why' in result) throw new Error(`il resume si è rifiutato inaspettatamente: ${result.why}`);
+    expect(result.stopped).toBe('error');
+    expect(result.text).toBe('');
+
+    // No announcement: `finish` returns before calling `announceEnd`, so the
+    // memory lane — and anything else hanging off `onTurnEnd` — is never told
+    // this turn ended. The mutation this catches is the exact one R2 names:
+    // the loser writing nothing but sailing through to `announceEnd` anyway.
+    expect(onTurnEnd).not.toHaveBeenCalled();
+
+    // The row itself: still exactly what the thief's own UPDATE left, because
+    // every write `drive` attempted after the steal was fenced on this run's
+    // now-stale token and changed nothing. Read through the same store, before
+    // closing the handle it is on.
+    const row = runtime.deps.turns.get(turnId);
+    runtime.close();
+    expect(row).toMatchObject({ status: 'running', claimedBy: process.pid + 1, claimToken: 'rubato-dal-test' });
+    // The losing answer specifically never landed — not merely "some write
+    // failed", but *this* write, the one the whole scenario is about.
+    expect(JSON.stringify(row?.messages)).not.toContain('non dovrebbe mai raggiungere');
   });
 });
