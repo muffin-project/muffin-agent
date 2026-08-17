@@ -13,7 +13,7 @@ import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { gatewayStandDown } from './repl.js';
-import { cmdGatewayRun, stopCaveat } from './gateway.js';
+import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -594,5 +594,22 @@ describe('muffin init offers the gateway', () => {
         ? join(dir, 'Library/LaunchAgents/ai.muffin.gateway.plist')
         : join(dir, '.config/systemd/user/muffin-gateway.service');
     expect(existsSync(unit)).toBe(false);
+  });
+});
+
+describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed up a spawned gateway', () => {
+  it('is undefined on everything a real install would ever set', () => {
+    expect(tickMsFromEnv(undefined)).toBeUndefined();
+    expect(tickMsFromEnv('')).toBeUndefined();
+  });
+
+  it('ignores a value that could not possibly be a tick interval', () => {
+    expect(tickMsFromEnv('not-a-number')).toBeUndefined();
+    expect(tickMsFromEnv('0')).toBeUndefined();
+    expect(tickMsFromEnv('-50')).toBeUndefined();
+  });
+
+  it('parses a real override', () => {
+    expect(tickMsFromEnv('250')).toBe(250);
   });
 });
