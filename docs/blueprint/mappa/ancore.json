@@ -69,10 +69,10 @@
     "line": 1886,
     "testo": "case 'draft':"
   },
-  "agent/loop.ts:1873": {
+  "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 1969,
-    "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
+    "line": 1887,
+    "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",

@@ -190,3 +190,37 @@ riusato e non riscritto"* — resta vera; quello che è cambiato è `heldBy` ste
 `claim_token`, la stessa forma dell'`holder_id` di quel file, che fence le tre
 scritture. Il dettaglio pieno — perché, i numeri, le alternative scartate — vive
 in un posto solo: ADR-0035 emendamento №3, non ripetuto qui.
+
+---
+
+**Emendamento, 2026-08-17 — l'intento è una precondizione dell'effetto, non un
+log: `slice/wal-intent`.**
+
+Il punto 6 sopra («Intento e esito per ogni tool call») costruiva le due righe
+e non diceva cosa fare quando la prima non si lascia scrivere. Il codice
+rispondeva con un `try/catch` che inghiottiva l'errore e lasciava partire
+`tool.handler` comunque, motivato allora come lo stesso swallow di
+`checkpoint`: un tool che funziona non va trasformato in un turno fallito da
+una scrittura di contabilità. Il ragionamento resta vero per l'esito
+(`endToolCall`, ancora inghiottito di proposito: una riga di esito persa si
+legge «forse fatta», la direzione innocua) e **non** vale per l'intento: un
+handler lasciato libero di partire senza riga fa sì che una riga mancante
+smetta di significare «mai iniziata» e cominci a significare «iniziata, ma la
+sua stessa ricevuta è andata persa» — per un tool non ri-eseguibile, esattamente
+l'ambiguità che questa riga esiste per togliere. `MANDATO-DAY-1.md` nomina
+questo l'invariante 1, «EFFECT WAL»: nessun effetto può iniziare senza che il
+suo intento sia già durevole, e «provo a scriverlo e se fallisce continuo
+comunque» non soddisfa la proprietà.
+
+`runTool` ora rifiuta la chiamata quando `startToolCall` fallisce — per ogni
+tool, ri-eseguibile o no, un'unica regola, non una per tipo — con un
+`tool_result` d'errore esplicito che il modello legge come qualunque altro
+fallimento di tool: nessun byte è entrato, quindi la taint non sale, e non si
+scrive `endToolCall` per una riga d'intento che non esiste.
+`TurnStore.endToolCall` guadagna anche `tier` obbligatorio nella propria
+firma (audit P05, BLOCKER): opzionale permetteva un `NULL` silenzioso che saltava il bump
+di taint sotto di sé — la stessa forma di difetto un livello più in basso
+(ORCHESTRATION.md §15: il tipo permetteva lo stato sbagliato). Prova a
+mutazione in `agent/turn-record.test.ts`: reintrodurre lo swallow fa cadere i
+due casi nuovi (tool non ri-eseguibile, tool ri-eseguibile) e lascia verdi
+tutti gli altri, compreso il caso felice.
