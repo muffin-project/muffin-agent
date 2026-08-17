@@ -293,6 +293,24 @@ function currentLauncher(): { argv: string[]; warning: string | null } {
 }
 
 /**
+ * The only way to speed up `Gateway`'s beat without editing the source:
+ * `gatewayOverrides.tickMs` is an in-process seam `cli/gateway.test.ts` reaches
+ * by importing `cmdGatewayRun` directly, and `evals/acceptance/` cannot do that
+ * — it spawns the real binary as a child process, which is the whole point of
+ * that suite. Without this, an acceptance scenario waiting on a second beat
+ * (a due job, then a separately-armed suspended turn) pays the real
+ * `HEARTBEAT_MS` interval, thirty seconds a tick. Unset in every real
+ * install — nobody sets this env var by hand — so production keeps the
+ * default cadence; a non-numeric or non-positive value is ignored rather than
+ * crashing a supervised process over a typo in the environment.
+ */
+export function tickMsFromEnv(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
  * The process. Invoked by the supervisor, and by `muffin gateway run` when the
  * owner wants to watch it in a terminal.
  */
@@ -316,6 +334,25 @@ export async function cmdGatewayRun(
     GatewayDeps,
     'signals' | 'tickMs' | 'sleep' | 'now' | 'pid' | 'drainBudgetMs'
   > = {},
+  /**
+   * Test-only: called once, the moment `turnLane` and `lock` exist below,
+   * before `Gateway.start` ever ticks either.
+   *
+   * `TurnLane`'s own `stillOwner` check (a few lines below) only ever runs on
+   * a tick where `Gateway.tick`'s own `lock.beat()` — the *same* `lock` — has
+   * just succeeded, moments earlier, in the same synchronous call: a `beat()`
+   * failure drains the whole process (`core/gateway/service.ts`'s `tick`)
+   * before `turnLane.tick()` can run again. So a black-box test that steals
+   * the claim and waits for `cmdGatewayRun` to react cannot tell this
+   * parameter existing from it being deleted — both drain on the gateway's
+   * own heartbeat, for a reason that has nothing to do with `stillOwner`.
+   * Verified: `cli/gateway.test.ts`'s own claim-heist test still passed with
+   * `stillOwner` deleted from the construction below. Calling `turnLane.tick`
+   * here directly, at a moment of the test's choosing, is the only way to ask
+   * the *lane* the question `stillOwner` exists to answer, independent of
+   * when the gateway's heartbeat would ask it (judge, round 2, R1).
+   */
+  onAssembled?: (parts: { turnLane: TurnLane; lock: GatewayLock }) => void,
 ): Promise<number> {
   let runtime;
   try {
@@ -372,6 +409,17 @@ export async function cmdGatewayRun(
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'yielded') {
+        // P21 (1b)/(2) MEDIUM: an aborted job retries every tick and a job
+        // whose fire was declined by `stillOwner` mid-run both used to reach
+        // no surface at all — under a supervisor, `journalctl` was the only
+        // way to learn a job was stuck in a retry loop or lost a takeover race.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro\n`);
+      } else if (e.kind === 'not_recorded') {
+        // P21 (3) MEDIUM: `markRan`/`recordDelivery` threw. The fire still
+        // happened and the schedule still advanced (see `settle`'s own
+        // comment); this is the one place that says so.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\n`);
       }
     },
     undefined,
@@ -382,6 +430,10 @@ export async function cmdGatewayRun(
     // The same token the turn lane gets below, which is the whole point of
     // building it above rather than letting each lane default to its own.
     modelLane,
+    // P20: a fresh read of this gateway's own claim, re-verified before a job
+    // starts and again before delivery — `standDown` alone gives this
+    // scheduler no protection, since it always answers "no, I own it".
+    () => lock.isCurrentClaim(),
   );
 
   /**
@@ -421,10 +473,18 @@ export async function cmdGatewayRun(
     // The same token the scheduler got, which is the whole point of building it
     // above rather than letting each lane default to its own.
     modelLane,
+    // The same check the scheduler gets, and for the same reason (P20): this
+    // lane has no `standDown` of its own here either, so without this a
+    // takeover mid-resume would go uncaught until the next tick's `due()`
+    // simply found nothing left to claim.
+    stillOwner: () => lock.isCurrentClaim(),
   });
+  onAssembled?.({ turnLane, lock });
 
   let stopSurfaces: (() => void) | null = null;
+  const envTickMs = tickMsFromEnv(process.env['MUFFIN_GATEWAY_TICK_MS']);
   const gateway = new Gateway({
+    ...(envTickMs === undefined ? {} : { tickMs: envTickMs }),
     ...gatewayOverrides,
     lock,
     notify,

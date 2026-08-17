@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths } from '../core/config/config.js';
-import { GatewayLock } from '../core/gateway/lock.js';
+import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
 import { Gateway } from '../core/gateway/service.js';
+import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler } from '../core/scheduler/scheduler.js';
 import { TurnLane } from '../core/turns/lane.js';
@@ -255,14 +256,29 @@ describe('B3 · un turno sospeso si risveglia dalla corsia del gateway', () => {
     // Nothing was said yet — an empty message here would read as an answer.
     expect(delivered).toEqual([]);
 
+    // The wait is an hour; the gateway's own claim only tolerates
+    // `HARD_STALE_MULTIPLIER` heartbeats of silence (P20/P21). A real gateway
+    // beats every 30s the whole time, so this simulates that with a handful of
+    // intermediate ticks rather than one giant jump — jumping `now` straight to
+    // the deadline in one call would make this gateway's *own* claim look
+    // exactly like the stale-but-alive holder P20 exists to protect, and it
+    // would correctly (now) refuse its own beat and drain.
+    const startedAt = Date.now();
+    const wakeAtMs = Date.parse(waiting.wakeAt!);
+    const beatEvery = STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 30_000; // safely inside the hard horizon
+    for (let t = startedAt + beatEvery; t < wakeAtMs - 1000; t += beatEvery) {
+      g.gateway.tick(new Date(t));
+      await settle(g.lane);
+    }
+
     // A beat before the deadline changes nothing.
-    g.gateway.tick(new Date(Date.parse(waiting.wakeAt!) - 1000));
+    g.gateway.tick(new Date(wakeAtMs - 1000));
     await settle(g.lane);
     expect(deps.turns.get(turnId)?.status).toBe('waiting');
     expect(provider.calls).toBe(1);
 
     // A beat after it, and the turn comes back on its own.
-    g.gateway.tick(new Date(Date.parse(waiting.wakeAt!) + 1000));
+    g.gateway.tick(new Date(wakeAtMs + 1000));
     await settle(g.lane);
     const done = deps.turns.get(turnId)!;
     g.close();
