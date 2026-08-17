@@ -156,9 +156,14 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // turn's `taint` is 3 and its `messages` carry the tool_result naming
   // `resource_denied` for the `http_get` call; no row for it in
   // `turn_tool_calls` at all, confirming PR #28's own finding.
+  // Extended (slice/session-taint, MANDATO-DAY-1 invariant 2): a second,
+  // same-session run that reads nothing of its own still inherits taint 3
+  // from the first turn's reply, reinjected as history — the triage probe's
+  // "LAUNDERED" finding, closed and pinned to the real binary.
   verde(
     'D10',
-    'security: a turn that read untrusted content cannot use it to reach an unlisted host',
+    'security: a turn that read untrusted content cannot use it to reach an unlisted host, and a later ' +
+      'clean turn in the same session still carries the inherited taint',
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),

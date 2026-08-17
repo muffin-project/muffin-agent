@@ -228,3 +228,156 @@ di dire sì. Un `ask` che non mostra *cosa* sta approvando è un consenso più
 debole di quanto sembri — e con questa revisione `sys.shell` torna a passare per
 quel canale più spesso, non meno. Non chiuso qui: è nominato come lavoro
 immediatamente successivo, non lasciato per essere ritrovato una terza volta.
+
+## Revisione — 2026-08-17: la history non lava la provenienza
+
+**La domanda negativa di questa ADR era "che tier ha un file", e restava aperta
+la stessa domanda posta a un secondo canale.** Il probe del triage
+(`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md` §3.1,
+MANDATO-DAY-1 invariante 2) l'ha confutata in senso negativo: turno 1 (owner)
+chiama un tool tier 3 e risponde con testo derivato — taint persistita 3,
+corretta. Turno 2, **stessa sessione**, nessuna tool call, testo pulito — taint
+persistita **0**, mentre la risposta del turno 1 era fisicamente presente nella
+richiesta che il turno 2 ha mandato al modello. Verdetto del probe: **LAUNDERED**.
+
+Il meccanismo era lo stesso di §Contesto sopra, spostato di un file:
+`agent/loop.ts` alzava la taint nei punti dove il turno legge qualcosa da fuori
+di sé — recall, il piano — e non nel punto dove legge la propria sessione.
+`buildContext` chiamava `deps.sessions.read(input.session)` e reiniettava i
+messaggi `user`/`assistant` passati **come testo puro**, senza `raiseTaint`.
+`SessionMessage` (`core/session/store.ts`) non aveva un campo tier:
+l'informazione era persa nel momento stesso in cui la risposta veniva scritta
+nella sessione.
+
+### Decisione
+
+**1. La proprietà** (MANDATO-DAY-1 invariante 2, verbatim): *"qualunque byte
+fisicamente presente nel nuovo context conserva il massimo trust tier delle
+fonti da cui deriva. Una sessione/transcript non è una lavanderia del taint."*
+Una sessione che ha letto tier 3 resta a taint 3 finché quel testo — o testo
+derivato da esso — è nella finestra reiniettata. Non finché la sessione esiste:
+finché il contenuto è fisicamente nella richiesta.
+
+**2. `SessionMessage` guadagna `tier?: TrustTier`** (`core/session/store.ts`),
+additivo — JSONL retro-compatibile, nessuna riga vecchia riscritta, come ogni
+altro campo di questo file. Scritto da `agent/loop.ts` a ognuno dei tre
+`sessions.append`: `user` → 0, o 2 se `principal.kind === 'member'` (la stessa
+regola dell'init di `runTurn`/`enqueueTurn`, applicata al messaggio invece che
+al turno); `assistant` → `snapshot.currentTaint()` nell'istante dell'append,
+mai un letterale — lo stesso argomento di 03 §2 già applicato all'episodio di
+memoria in `reply-taint.test.ts` ("un riassunto di contenuto tier-3 è tier-3,
+sempre"), qui applicato alla riga di sessione che quell'episodio non è;
+`tool` → `outcome.tier`, anche se `buildContext` oggi non reinietta mai un
+messaggio `tool` come history (filtra a `user`/`assistant`), scritto comunque
+perché un campo omesso è esattamente l'errore che questa ADR esiste per non
+ripetere una terza volta.
+
+**3. Le righe vecchie, senza `tier`, si risolvono da `traceId` →
+`turns.taint`** (`TurnStore.taintForIds`, una query per l'insieme dei
+`traceId` reiniettati — mai una per riga: una sessione lunga può passarne
+decine in un colpo solo a `agent/context/history-taint.ts`). `turns.id` è lo
+stesso valore di `traceId` per costruzione (`NewTurn.id`'s docstring: "one
+identity, so 'why' is a join") — non serve una tabella nuova, la riga del
+turno che ha scritto quel messaggio esiste già.
+
+**4. Fail-closed, dichiarato invece di indovinato, per una riga senza
+nessuna delle due fonti.** `user` → 0: questo store tiene la sessione di un
+solo tenant, e una riga `user` vecchia è per costruzione le parole
+dell'owner (o della regola `member`, mai un byte che il turno ha letto altrove).
+`assistant`/`tool` → il tetto della scala (3), non `DISK_TIER` (2): il dubbio
+alza e non abbassa (la stessa regola con cui questa ADR ha già scartato
+`tier?` con default sicuro, §"Alternative scartate" sopra), e una riga
+`assistant`/`tool` senza `tier` **e** senza `traceId` risolvibile non ha
+nemmeno il pavimento che un file su disco ha — `stat` non distingue le note
+dell'owner da un allegato di uno sconosciuto, ma almeno è un file *di
+qualcuno sul disco di casa*; una riga di sessione senza provenienza non ha
+neanche quello. `DISK_TIER` resta la risposta giusta per un file; questa riga
+prende il tetto della scala, non la sua metà.
+
+**5. Il punto d'alzata è lo stesso di recall e todo, nello stesso ordine.**
+`agent/loop.ts`, dentro `drive`, subito dopo `snapshot.raiseTaint(planTaint(open))`
+e prima che `buildContext` costruisca i messaggi: si legge la sessione, si
+taglia alla finestra che `buildContext` renderizzerà davvero
+(`reinjectedHistory`, `agent/context/history-taint.ts` — la stessa funzione
+che `buildContext` usa per renderizzare, non una seconda copia del taglio che
+potrebbe disallinearsi), si calcola il tier massimo (`historyTaint`) e si alza
+la snapshot — tutto prima che il kernel decida qualunque cosa in quel turno.
+Il commento già in `agent/loop.ts` sul piano ("`raiseTaint` before the rows
+reach the transcript") vale parola per parola anche qui.
+
+**6. La proprietà è sul contenuto reiniettato, non sulla storia intera.** Un
+messaggio tier 3 abbastanza vecchio da uscire dalla finestra
+(`MAX_HISTORY_TURNS`, oggi 40 turni parlati) non alza la taint del turno nuovo:
+non è fisicamente nella richiesta, quindi non può contaminarla. Questo è
+deliberato e testato (`agent/session-history-taint.test.ts`, scenario "(d)"),
+non un buco lasciato aperto — la via per tornare a qualcosa fuori dalla
+finestra resta memoria/recall, esattamente come l'avviso che `buildContext`
+già stampa quando taglia ("`cercalo in memoria invece di indovinare`").
+
+### Cosa costa, misurato
+
+| scenario | prima | dopo |
+|---|---|---|
+| turno pulito, sessione mai tainted | taint 0 | taint 0 (invariato) |
+| turno pulito, sessione con una risposta derivata da tool tier 3 | **taint 0** | **taint 3** |
+| stesso turno, `http_get` fuori allowlist come sua prima azione | ask (l'owner poteva approvarlo) | **deny/resource_denied** |
+| sessione vecchia, riga `assistant` con `traceId` di un turno a taint 2, nessun `tier` | taint 0 | taint 2 |
+| sessione vecchia, riga `assistant` senza `tier` né `traceId` | taint 0 | taint 3 (fail-closed) |
+| messaggio tier 3 tagliato fuori da `MAX_HISTORY_TURNS` | taint 0 | taint 0 (invariato — §Decisione 6) |
+
+Riga due e tre sono la stessa catena read-then-egress di questa ADR, questa
+volta attraverso un confine di processo: `evals/acceptance/scenarios/
+d-capability.accept.ts` (D10, esteso) lo misura con due `muffin run --session
+<stessa>` separati contro il binario vero, non con `runTurn` e dipendenze
+sostituite a mano.
+
+### Test rosso-prima e mutazione
+
+`agent/session-history-taint.test.ts` riscrive il probe come test permanente,
+con `SessionStore`/`TurnStore` reali su directory temporanee e un provider
+finto — cinque `it`, sui quattro scenari (a)-(d) sopra (due su (a): il valore
+di taint, e la decisione del kernel sulla prima azione del turno). Scritti e
+fatti girare **prima** del cablaggio: quattro rossi con lo stesso sintomo del
+probe (`expected +0 to be 3`, o l'equivalente sull'egress non negato); (d) già
+verde, perché prima di questa revisione niente alzava la taint dalla history,
+quindi "non alzarla per un messaggio tagliato" era vero per il motivo
+sbagliato. Dopo il cablaggio: cinque su cinque verdi.
+
+Mutazione (`docs/JUDGE.md`): commentata la riga
+`snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace))`, rilanciati i
+test — (a) (entrambe le asserzioni), (b) e (c) tornano rossi, (d) resta verde
+per costruzione (l'assenza dell'alzata non può *aggiungere* taint). Confermato
+anche sullo scenario D10 esteso, attraverso il binario reale: con la riga
+commentata il secondo turno risultava a `taint: 0` — e il primo tentativo di
+misurarlo aveva un difetto proprio, corretto durante questa stessa revisione:
+la query del secondo turno condivideva la parola "tutto" con l'episodio di
+memoria piantato dal turno 1, quindi il recall automatico (corretto,
+indipendente da questa modifica) trovava comunque quell'episodio e alzava la
+taint per conto suo — un falso verde che avrebbe dichiarato provata una
+proprietà che il test non isolava. La query è stata cambiata per non
+condividere nessuna parola con l'episodio piantato né con il testo del primo
+turno, e solo allora la mutazione ha fatto fallire l'assert nel punto giusto.
+Ripristinata la riga, cinque su cinque verdi di nuovo.
+
+### Cosa NON copre questa revisione
+
+- **Il rimedio è una sessione nuova, e non tutte le superfici sanno aprirne
+  una.** La CLI ha `--session <id>`: una sessione nuova è un id nuovo, sempre
+  stata così. Telegram non ha equivalente: `connectors/telegram/connector.ts`
+  deriva l'id sessione deterministicamente da `telegram:<chatId>`, per sempre,
+  e non ha nessun comando (`/nuova`, `/reset` o simile) per cambiarlo — verificato
+  leggendo il connector per intero, nessun handling di comandi slash esiste
+  affatto. Un owner che ha fatto leggere qualcosa di tier 3 su Telegram non ha
+  un modo di ripulire la conversazione da lì: deve saperlo e non può farlo
+  dalla superficie su cui si trova. Gap dichiarato, non chiuso qui — non è
+  nel mandato di questa slice (`slice/session-taint`) e tocca la superficie
+  Telegram, non la taint.
+- **Il confine resta il turno che *reinietta*, non il turno che ha letto.**
+  Come già scritto sopra (§"Cosa NON copre" originale): la taint muore con il
+  turno per disegno. Questa revisione non cambia quel confine — allarga solo
+  la definizione di "cosa è fisicamente nel turno nuovo" a ciò che la sessione
+  reinietta, che prima non contava affatto.
+- **Lo spotlighting resta fuori.** Come `fs_read`, il testo della history
+  reiniettata non è delimitato da `fence()` — questa ADR fa il taint, non la
+  difesa del modello dall'istruzione iniettata nel testo stesso. Stessa nota
+  già scritta sopra, stessa slice futura.
