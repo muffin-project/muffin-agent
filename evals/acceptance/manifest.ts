@@ -34,6 +34,22 @@ export type Expectation =
        * is the omission this field exists to close.
        */
       expectFailure: RegExp | ((error: unknown) => boolean);
+    }
+  | {
+      /**
+       * Not "no scenario yet" and not "red on purpose" — a row this suite
+       * structurally cannot have a scenario *for*, because the row's own
+       * claim is "this mechanism exists and runs against the real binary",
+       * and a scenario proving that would be the suite testing itself. What
+       * proves the claim instead is every other `verde` entry in this same
+       * manifest: each one already is `muffin` run as a real process (see
+       * report.ts's module docstring) — that is the evidence, not a missing
+       * one. Judge, PR #54 giro 2: E4 was mis-filed under `nessuno scenario`
+       * next to seven rows that genuinely have none yet.
+       */
+      kind: 'provata-dal-meccanismo';
+      /** Why this row cannot carry a scenario of its own. */
+      reason: string;
     };
 
 export type ScenarioEntry = {
@@ -60,6 +76,12 @@ const rosso = (
   row,
   title: `${row} ${title}`,
   expectation: { kind: 'atteso-rosso', reason, closedBy, expectFailure },
+});
+
+const provataDalMeccanismo = (row: string, title: string, reason: string): ScenarioEntry => ({
+  row,
+  title: `${row} ${title}`,
+  expectation: { kind: 'provata-dal-meccanismo', reason },
 });
 
 export const MANIFEST: readonly ScenarioEntry[] = [
@@ -137,6 +159,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
+  // E4 is this suite's own row ("acceptance test reali, non solo unit?") —
+  // giving it a scenario would mean the acceptance mechanism registering a
+  // test of itself, which proves nothing a passing suite does not already
+  // prove more directly. What actually establishes E4's claim is every verde
+  // row above and below: each spawns `muffin` as a real process against a
+  // real (temp) $HOME, never `runTurn()` with hand-substituted dependencies
+  // (module docstring, report.ts). report.ts/summarize() reads this kind and
+  // counts E4 as covered instead of filing it under `nessuno scenario`.
+  provataDalMeccanismo(
+    'E4',
+    'tests: acceptance tests run for real, against the real binary — not just unit',
+    'la suite di accettazione non può avere uno scenario di sé stessa: ogni riga verde di questo manifest è già la prova che i test sono reali',
+  ),
   // Narrower than E5's own question — see the scenario's own docstring in
   // e-cost.accept.ts. The row stays `?` in M5-BIS.md; only one failure class
   // (the contradiction judge) is proven explicit-and-explained here.

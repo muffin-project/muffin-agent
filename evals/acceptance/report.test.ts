@@ -31,6 +31,15 @@ function verdeScenario(row: string): ScenarioEntry {
   return { row, title: `${row} scenario finto`, expectation: { kind: 'verde' } };
 }
 
+/**
+ * E4's own species: a row whose claim is proven by the acceptance mechanism
+ * existing and running, not by a scenario of its own (a scenario of E4 would
+ * be the suite testing itself — see manifest.ts's `provataDalMeccanismo`).
+ */
+function provataDalMeccanismoScenario(row: string, reason = 'la suite di accettazione non può avere uno scenario di sé stessa'): ScenarioEntry {
+  return { row, title: `${row} scenario finto`, expectation: { kind: 'provata-dal-meccanismo', reason } };
+}
+
 /** A `TestOutcome` keyed the way `verdictFor`'s suffix match expects: the map key is the scenario's own title. */
 function outcomeFor(scenario: ScenarioEntry, outcome: TestOutcome): Map<string, TestOutcome> {
   return new Map([[scenario.title, outcome]]);
@@ -140,5 +149,30 @@ describe('summarize — pre-existing gates stay intact', () => {
     const summary = summarize([blocker('X1')], [scenario], new Map());
     expect(summary.failed).toBe(true);
     expect(summary.counts.orphanRows).toBe(1);
+  });
+});
+
+describe('summarize — provata dal meccanismo (E4: la suite non può testare sé stessa)', () => {
+  it('counts a provata-dal-meccanismo row as covered — never nessuno scenario, never readyWithoutScenario', () => {
+    const scenario = provataDalMeccanismoScenario('E4');
+    // No vitest outcome at all: a provata-dal-meccanismo row never registers a
+    // real `it()` (scenario.ts refuses to — it would be the suite proving
+    // itself), so an empty results map is the only input this kind of row can
+    // ever actually receive from runAcceptanceSuite().
+    const summary = summarize([ready('E4')], [scenario], new Map());
+
+    expect(summary.failed).toBe(false);
+    expect(summary.counts.readyWithoutScenario).toBe(0);
+    expect(summary.counts.nessunoScenario).toBe(0);
+    expect(summary.counts.provataDalMeccanismo).toBe(1);
+    expect(summary.lines.join('\n')).toMatch(/provata dal meccanismo\s+E4/);
+  });
+
+  it('is a distinct verdict even when the row is not READY', () => {
+    const scenario = provataDalMeccanismoScenario('E4');
+    const summary = summarize([blocker('E4')], [scenario], new Map());
+
+    expect(summary.failed).toBe(false);
+    expect(summary.counts.provataDalMeccanismo).toBe(1);
   });
 });

@@ -27,6 +27,18 @@ export function scenario(row: string, fn: () => Promise<void>, timeout?: number)
     it(meta.title, fn, timeout);
     return;
   }
+  if (meta.expectation.kind === 'provata-dal-meccanismo') {
+    // A row filed as `provata-dal-meccanismo` (today only E4) cannot register
+    // a real scenario by construction — see manifest.ts's own comment on the
+    // kind. A caller reaching this branch is a manifest/scenario-file
+    // mismatch, not a legitimate use, so it fails loudly at collection time
+    // instead of silently registering a test whose existence would defeat
+    // the point of the kind.
+    throw new Error(
+      `${row} è 'provata dal meccanismo' nel manifest — non può registrare un proprio scenario (sarebbe la ` +
+        `suite che prova se stessa). Se serve un test reale, cambia la sua specie in manifest.ts.`,
+    );
+  }
   const expectation = meta.expectation;
   it(meta.title, () => guardAttesoRosso(row, fn, expectation), timeout);
 }

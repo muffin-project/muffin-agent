@@ -117,7 +117,7 @@ ancora verificato — **è un debito, non uno stato**).
 | B5 | Resume | Se muore a metà, riprende? | READY — accettazione: processo vero ucciso con SIGKILL a metà turno, riprende al riavvio |
 | B6 | Retry | Se fallisce una tool call, recupera? | ? |
 | B7 | Scheduler | I job sopravvivono al riavvio? | ? |
-| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — canale non connesso → `failed:<why>`, mai `sent`, e `doctor` lo nomina ⚠️ nota sotto |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | READY per CLI/REPL e Telegram (`slice/streaming`, due PR verso `dev`) — Discord resta OUT (B17). Entrambi gli adapter honorano `ChatCall.stream` (`Provider.chatStream`, SDK ufficiali, non SSE fatto a mano); il loop bufferizza i delta per giro e li rilascia solo per quello che risponde davvero (mai durante una tool call — un giro nudged dal completion gate non trapela il suo bozzone). REPL: stampa progressiva byte-identica a fine turno, `--no-stream`. Telegram: bozza dal vivo (`sendMessageDraft`, con `draft_id` — mancava, trovato e corretto in questa slice, vedi ADR-0025 §revisione e `docs/lessons.md`) in chat privata, `editMessageText` sul placeholder in gruppo; spento per sessione al primo edit fallito (Hermes); mai più di un messaggio Telegram per turno (overflow → consegna normale a fine turno). **Nota onesta**: un giro si rilascia in un colpo solo a `done` (mai un punto prima è conoscibile — "streamma e ritira" scartato di proposito), quindi un turno senza tool call produce tipicamente UN aggiornamento dal vivo, non un typewriter — la percezione di attività durante l'attesa viene dal placeholder/typing che precede. Fallback singolo e contato se lo stream del provider si rompe a metà (`ProviderStreamError`). Cablaggio verificato end-to-end con provider SSE finto attraverso `buildRuntime` reale (`cli/repl.test.ts`, `connectors/telegram/streaming.test.ts`), non un `Provider`/`TelegramApi` sostituito a mano. Scenario di accettazione contro il binario vero verde (`evals/acceptance/scenarios/b-streaming.accept.ts`, spawna `muffin repl --stream` come processo reale contro il provider SSE finto e legge la richiesta `stream:true` che il fake ha ricevuto — non un'assunzione dalla risposta arrivata giusta) |
@@ -226,6 +226,22 @@ ancora verificato — **è un debito, non uno stato**).
 > l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
 > riga per riga cosa sposta.
 
+> 🎯 **B8, cosa prova lo scenario — e cosa no.** Lo scenario
+> (`evals/acceptance/scenarios/b-continuity.accept.ts`, righe 73-171) manda un
+> job a un canale `telegram` che questa installazione non connette mai: un
+> `$HOME` fresco non ha token Telegram, quindi `SurfaceRegistry` nasce con zero
+> superfici e `find('telegram')` (`core/surface/registry.ts:28-29`) torna
+> `null` **prima** di toccare una consegna reale. Quello che lo scenario prova
+> è solo la metà negativa: un canale non connesso non fa mai leggere `sent` sul
+> turno — resta `failed:<why>`, e `doctor` (il controllo "consegne" su
+> `TurnStore.undelivered()`, `core/turns/store.ts:912`, cablato in
+> `cli/doctor.ts`) lo nomina per id-turno. La metà positiva — una superficie
+> **davvero connessa**, un `sent` genuino — non è provata qui: arriva dallo
+> scenario A1 rafforzato, in arrivo (`slice/a1-continuita`: gateway vero, job
+> sul canale `cli`, `turns.delivery === 'sent'` e il testo sullo stdout del
+> processo reale), e per Telegram nello specifico dalla journey inbound-unit
+> (`docs/blueprint/gate1/PERCORSO-CRITICO.md` §1.5, in arrivo su `dev`).
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
@@ -279,6 +295,16 @@ ancora verificato — **è un debito, non uno stato**).
 > vale solo per gli episodi, mai per i fatti — per costruzione, coerente con
 > `02-ontologia.md` §9 che nomina il filtro come proprietà dell'evidenza, non
 > del grafo.
+>
+> ⚠️ **Il one-hop grafo parte solo da un nome capitalizzato in query.**
+> `extractCandidateNames` (`core/memory/recall.ts:819-820`) prende come
+> candidato solo una parola che comincia per maiuscola
+> (`/\b[A-ZÀ-Ú][\wÀ-ú'-]{2,}\b/`); lo scenario C4
+> (`evals/acceptance/scenarios/c-memory.accept.ts`) usa di proposito
+> un'entità scritta come nome proprio ("Ristorante preferito") perché è
+> l'unico percorso di ritrovamento che può raggiungere questo fatto (vedi
+> sopra). Una query tutta minuscola ("il mio ristorante preferito") non fa
+> partire l'hop — limite noto, non coperto dal claim di questa riga.
 
 > **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
 > piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
@@ -351,14 +377,15 @@ ancora verificato — **è un debito, non uno stato**).
 > (`ScenarioEntry['expectFailure']`), non contro "ha lanciato qualcosa": uno
 > che fallisce per un motivo diverso da quello scritto è `rosso-inatteso`, non
 > "va bene così". `npm run test:acceptance` gira la sola suite (17 scenari,
-> **~60s** misurati in locale). Job CI dedicato
-> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
-> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
-> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
-> passi identici a quelli verificati in locale) ma **non ancora eseguito su
-> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
-> anche sul branch di default, quindi la prima corsa reale sarà al merge su
-> `dev`.
+> **~60s** misurati in locale). Job CI dedicato scritto
+> (`.github/workflows/accettazione.yml`), ora anche su `pull_request` verso
+> `dev`/`main` oltre che su `push`/`workflow_dispatch` (decisione
+> dell'orchestratore, PR #54 giro 2, reversibile — prima `pull_request` era
+> deliberatamente assente per lo stesso motivo di budget che governa `ci.yml`;
+> vedi il commento in testa al workflow per la conseguenza nota): workflow
+> validato (YAML analizzato con `js-yaml`, passi identici a quelli verificati
+> in locale); con `pull_request` nel trigger questa stessa PR è la prima corsa
+> reale su GitHub Actions, non più rimandata al merge su `dev`.
 >
 > **Oggi, 17 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
 > D2/D3/D10 · E1/E2/E5 — sedici **verde**, un **atteso-rosso** (D3 undo →
@@ -373,14 +400,18 @@ ancora verificato — **è un debito, non uno stato**).
 > scritto a supporre che avrebbero funzionato.
 >
 > **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
-> corsa invece di nasconderlo: otto righe già `READY` per altre ragioni non
-> hanno ancora uno scenario qui (B14, C2, C3, C6, C7, D4, D6, E4) — nessuna era
+> corsa invece di nasconderlo: sette righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (B14, C2, C3, C6, C7, D4, D6) — nessuna era
 > nella lista minima del mandato di questa slice, e chiuderle resta un lavoro
-> futuro, non silenzioso. C8 (audio) è marcata `non provabile qui` col motivo
-> scritto (richiede una trascrizione reale, vietata dalla proprietà "non costa
-> niente" di questa suite). **E4 READY vuol dire "la primitiva esiste, gira
-> contro il binario vero, e lo stato delle altre righe è derivabile da un
-> comando" — non "l'inventario è coperto".**
+> futuro, non silenzioso (`slice/triage-day1`, in corso, le riclassifica). C8
+> (audio) è marcata `non provabile qui` col motivo scritto (richiede una
+> trascrizione reale, vietata dalla proprietà "non costa niente" di questa
+> suite). **E4 stessa non ha, e non può avere, un proprio scenario** — sarebbe
+> la suite di accettazione che prova se stessa — quindi il manifest la marca
+> `provata dal meccanismo`: è ogni riga verde qui sopra a provarla, non uno
+> scenario dedicato. **E4 READY vuol dire "la primitiva esiste, gira contro il
+> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
+> "l'inventario è coperto".**
 
 ---
 
