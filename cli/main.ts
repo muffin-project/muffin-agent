@@ -42,6 +42,7 @@ import {
   type ProviderKind,
 } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
+import { cmdPromptShow, PROMPT_USAGE } from './prompt-show.js';
 import { chooseProvider, describeProviderChoice, keyHint, looksLikeTelegramToken } from './onboarding.js';
 
 /**
@@ -75,6 +76,10 @@ comandi operatore:
                                 nessuna finestra aperta. \`muffin init\` propone
                                 di installarlo; \`run\` lo lancia il supervisore.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
+  muffin prompt show [--surface cli|telegram|discord] [--member] [--tenant ID] [--blocks]
+                                il system prompt che il modello riceverebbe
+                                davvero, sulla home corrente — niente chiamate
+                                al modello, segreti redatti
   muffin secret set NOME [--persist]
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
@@ -214,6 +219,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdGateway(rest);
     case 'observe':
       return cmdObserve(paths().home, rest);
+    case 'prompt':
+      return cmdPrompt(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -612,6 +619,20 @@ async function cmdMemory(argv: string[]): Promise<number> {
   }
 
   process.stderr.write(MEMORY_USAGE);
+  return 78;
+}
+
+/**
+ * `prompt` has one sub-verb today, `show`. A dispatcher rather than a
+ * top-level `cmdPromptShow` in the switch above so a second sub-verb (say,
+ * `prompt diff` against a previous snapshot) has somewhere to land without
+ * touching `main`'s own switch again — the same shape `cmdMemory`/`cmdVault`
+ * already use for their own sub-verbs.
+ */
+function cmdPrompt(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub === 'show') return cmdPromptShow(paths().home, rest);
+  process.stderr.write(PROMPT_USAGE);
   return 78;
 }
 
