@@ -86,8 +86,13 @@ build, suite, failure path, accettazione dovuta e viste derivate aggiornate.
 
 I quattro checkpoint normativi — decisione, meccanismo raggiunto, slice
 verificata, integrazione — sono in `BRANCHING.md`. Il merge in `dev` richiede il
-verdetto terminale del judge; `dev`→`main` richiede una nuova verifica
-dell'insieme. Frequenza non sostituisce evidenza: commit e PR sono continui,
+verdetto terminale di un judge **quando la slice è ambigua** (kernel, RoT,
+schema, concorrenza, sandbox, segreti, primitive nuove); una slice sicura
+(documenti, stato, soli test, correzioni meccaniche) la verifica e la integra
+l'orchestratore da solo, con i comandi eseguiti scritti nella PR — un judge
+serve dove serve un contesto fresco contro l'adulazione, non per un check che
+chi integra può fare da sé (decisione owner 2026-08-17). `dev`→`main` richiede
+una nuova verifica dell'insieme. Frequenza non sostituisce evidenza: commit e PR sono continui,
 merge solo ai checkpoint dichiarati.
 
 ## 5. Lo stato dell'orchestratore, non solo quello del progetto

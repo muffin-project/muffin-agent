@@ -104,8 +104,8 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > `gate1/PERCORSO-CRITICO.md`, non questo file: qui c'è la risposta, lì la
 > sequenza e il perché.
 >
-> **Conteggio finale: 11 READY · 36 BLOCKER · 7 OUT · 0 INVALIDATED** (54
-> righe). Con la PR #54 integrata (`slice/acceptance-truth`): **D10** è READY
+> **Conteggio finale: 11 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED** (55
+> righe, E7 aggiunta dall'owner il 17/08). Con la PR #54 integrata (`slice/acceptance-truth`): **D10** è READY
 > (taint 3 → egress negato, scenario verde), **B8** è READY nel perimetro
 > ristretto che il suo scenario prova, **C4** è READY (scenario verde con
 > entità capitalizzata). **`?` non esiste più come stato: ogni riga ha una
@@ -407,6 +407,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) — è il meccanismo: harness contro il binario vero, provider finto deterministico, ogni verde visto rosso prima. La PR #54 aggiunge nel manifest la specie provata dal meccanismo stesso, chiudendo l'unico "READY senza scenario" rimasto dopo il triage 17/08 |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | BLOCKER — la riga resta di fatto "?" anche nel commento della suite che la tocca: lo scenario `E5` (verde) prova solo la classe del giudice di contraddizione (`e-cost.accept.ts`); fallimento di rete/provider a metà turno, tool che lancia, delivery fallita, job schedulato restano non sintetizzati → nessuna slice singola, dipende dalla chiusura di PC 1.5/3.4/3.6 |
 | E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | BLOCKER — confermato con lettura diretta: `while (iterations < cap)` (`agent/loop.ts:959`) limita solo le iterazioni, mai il numero di tool call per iterazione (`toolCallsMade`, riga 1281, incrementato ma mai confrontato con un tetto); un modello può emettere 200 `tool_use` paralleli in una risposta e sforare `maxToolCallsPerTurn` di un ordine di grandezza → PC 2.4 `slice/audit-mediums` |
+| E7 | Self-inspection | Sa spiegare **tecnicamente** come funziona e cosa sta usando **adesso**, distinguendo architettura/progetto da stato live dell'istanza? | BLOCKER — lacuna aggiunta dall'owner il 17/08 (propriocezione tecnica): oggi il modello può solo recitare ciò che il prompt dice o indovinare; nessuna primitiva read-only lo lascia interrogare runtime, provider/modelli correnti, surface/tenant, RoT/safe mode, sandbox/search/MCP disponibili, capability esposte, blocchi del prompt e provenienza, modalità reale della memoria (indice vettoriale disponibile o degradato), turni aperti/waiting/interrupted, job essenziali. Forma decisa: **`sys.inspect`** first-class e read-only che legge dalle **stesse fonti autorevoli** di `doctor` / `prompt show` / `gateway status` (una sola source of truth, nessuna implementazione divergente, niente documentazione infilata nel system prompt); acceptance: «spiegami tecnicamente come funzioni e cosa stai usando adesso» → cambia una condizione reale (search off, modello diverso, MCP assente) → ripeti: se recita lo stato vecchio è BROKEN, se distingue design e live state è verde → `gate1/PERCORSO-CRITICO.md` 3.10 |
 
 > **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**
 > `evals/acceptance/` lancia `muffin` come **processo vero** (`node --import tsx
