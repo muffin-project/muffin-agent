@@ -490,9 +490,15 @@ const withParamsAllowed = () =>
 describe('params on an allowlisted host — the gate http_get skipped until now (P04-1)', () => {
   const WITH_PARAMS = `https://${ALLOWED_HOST}/collect?q=SECRET-BYTES`;
 
-  it('after a read (taint 2), a query string on an allowlisted host asks the owner and shows the whole URL', async () => {
+  it('after a tier-3 fetch, a query string on an allowlisted host asks the owner and shows the whole URL', async () => {
+    // Il primo passo NON è più `fs_read`: da quando la soglia spedita è 2
+    // (decisione owner 2026-08-17) il disco dell'owner non arma il gate — è
+    // esattamente il punto della decisione. Ciò che lo arma è il tier 3, il
+    // mondo esterno: qui una fetch allowlisted **senza** parametri (che il
+    // gate lascia passare, vedi il test più sotto) il cui risultato torna a
+    // tier 3 e alza il turno.
     const h = harness([
-      callTool('fs_read', { path: 'nota.md' }),
+      callTool('http_get', { url: `https://${ALLOWED_HOST}/pagina` }),
       callTool('http_get', { url: WITH_PARAMS }),
     ]);
     h.deps.decide = withParamsAllowed();
@@ -509,7 +515,7 @@ describe('params on an allowlisted host — the gate http_get skipped until now 
     // `approve` says yes, same as every `ask`-then-approve test above): the
     // owner was asked and shown the exact URL, not just the kernel's prose.
     expect(h.approvals).toEqual([`egress con parametri verso host allowlisted: ${WITH_PARAMS}`]);
-    expect(h.fetched).toEqual([WITH_PARAMS]);
+    expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
   });
 
   it('the same fetch needs no approval at all with no read behind it (taint 0, below the ceiling)', async () => {
@@ -530,7 +536,7 @@ describe('params on an allowlisted host — the gate http_get skipped until now 
 
   it('a host on the allowlist with NO params still needs no approval after the same read (unaffected by this gate)', async () => {
     const h = harness([
-      callTool('fs_read', { path: 'nota.md' }),
+      callTool('web_search', { query: 'qualcosa dal web' }),
       callTool('http_get', { url: `https://${ALLOWED_HOST}/` }),
     ]);
     h.deps.decide = withParamsAllowed();
@@ -566,8 +572,30 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
         return [{ title: 't', url: 'https://search.example.invalid/r', snippet: 's' }];
       },
     };
-    h.deps.capabilities = new Map([...h.deps.capabilities!, [searchCapability.id, searchCapability]]);
-    h.deps.tools = [...h.deps.tools, makeSearchTool(backend)];
+    // Un tool tier-3 per armare il gate: da quando la soglia spedita è 2
+    // (owner, 17/08) il disco non basta più, e in questo describe l'allowlist è
+    // vuota, quindi nemmeno una fetch. Stessa forma del describe della shell.
+    const webish: CapabilityDecl = {
+      id: 'demo.web',
+      risk: 'low',
+      reversible: 'yes',
+      rerunnable: true,
+      resourceKind: 'none',
+      policyArgs: [],
+      hostOnly: false,
+      maxTaint: 3,
+    };
+    h.deps.capabilities = new Map([...h.deps.capabilities!, [searchCapability.id, searchCapability], [webish.id, webish]]);
+    h.deps.tools = [
+      ...h.deps.tools,
+      makeSearchTool(backend),
+      {
+        capability: webish.id,
+        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        throwTier: 0,
+        handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
+      },
+    ];
     h.deps.decide = createDecide({
       matrix: POLICY_FLOOR,
       capabilities: h.deps.capabilities,
@@ -580,7 +608,11 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
 
   it('after a read, a search asks the owner and shows the query — never runs unapproved', async () => {
     const h = searchHarness([
-      callTool('fs_read', { path: 'nota.md' }),
+      // In questo describe l'allowlist è vuota, quindi una fetch non può alzare
+      // il turno: si usa il tool tier-3 dichiarato dall'harness, come fa il
+      // describe della shell più sopra. Il punto resta «il turno ha letto il
+      // mondo esterno», non «quale tool l'ha letto».
+      callTool('web_like', {}),
       callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
     ]);
     // The owner says no this time: the assertion that matters is that the

@@ -325,21 +325,26 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
   });
   const withList = () => kernel({ egressAllowed: (host) => host === 'allowed.example.com' });
 
-  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (default 1)', () => {
+  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (ships 2)', () => {
     expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 1))).toMatchObject({
+      effect: 'allow',
+    });
+    // Tier 2 is the owner's own disk: a search after reading a local file must
+    // not become an ASK (decisione owner 2026-08-17).
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2))).toMatchObject({
       effect: 'allow',
     });
   });
 
   it('http_get: the same URL past the ceiling asks the owner and shows the whole URL', () => {
-    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 2));
+    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3));
     expect(d.effect).toBe('ask');
     if (d.effect === 'ask') expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
   });
 
   it('http_get: the same URL past the ceiling refuses anyone but the owner outright', () => {
     expect(
-      withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=MUFFIN-SECRET', 2)),
+      withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3)),
     ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
   });
 
@@ -353,13 +358,14 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
   });
 
   it('http_get: a fragment alone counts as params too', () => {
-    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/#MUFFIN-SECRET', 2));
+    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/#MUFFIN-SECRET', 3));
     expect(d.effect).toBe('ask');
   });
 
   it('sys.search: the query text is fine at taint <= paramsMaxTaint', () => {
     expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 0))).toMatchObject({ effect: 'allow' });
     expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 1))).toMatchObject({ effect: 'allow' });
+    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 2))).toMatchObject({ effect: 'allow' });
   });
 
   it('sys.search: past the ceiling asks the owner and shows the query', () => {

@@ -1886,22 +1886,22 @@
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
-    "line": 191,
+    "line": 197,
     "testo": "/** The stricter of the two, always — the file's only direction is down. */"
   },
   "core/policy/matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 122,
+    "line": 128,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "core/policy/matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 123,
+    "line": 129,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "core/policy/matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
+    "line": 134,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "core/policy/types.ts:40": {
@@ -2526,17 +2526,17 @@
   },
   "matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 122,
+    "line": 128,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 123,
+    "line": 129,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
+    "line": 134,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "mcp.ts:102": {

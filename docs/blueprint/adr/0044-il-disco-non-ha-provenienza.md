@@ -267,7 +267,7 @@ byte li ha appena scelti un contesto avvelenato?").
    larga.
 
 **La soglia è la stessa forma di `sys.shell`, e il perché è lo stesso.** Sopra
-`paramsMaxTaint` (default **1**), l'owner viene **chiesto** e vede i byte per
+`paramsMaxTaint` (**default 2**, decisione owner 2026-08-17), l'owner viene **chiesto** e vede i byte per
 intero (`prompt` li contiene già; `ApprovalRequest.resource` ora li porta anche
 strutturati — vedi sotto); ogni altro principal è **rifiutato**, sempre, mai un
 `ask`. È la stessa mossa di questa ADR §revisione 2026-08-16 per `sys.shell
@@ -296,10 +296,16 @@ capability mai riviste per quello (la misura su `mcp.*` nel docstring di
 `matrix.ts`); `paramsMaxTaint` ha esattamente le due chiamate sopra, e alzarlo
 non concede niente a nessuno tranne l'owner — sposta solo il taint a cui
 l'owner comincia a essere chiesto, mai verso un auto-allow. Il floor spedito è
-**1**; se **2** sia il default migliore per l'uso quotidiano resta una
-decisione owner aperta, la stessa dichiarata come "in corso" nel mandato di
-questa slice — alzabile in `rot/policy.json` + `muffin rot reseal`, senza
-toccare il codice.
+**2**, e la ragione è una distinzione di sostanza, non un compromesso
+(decisione owner 2026-08-17): **tier 2 è il disco e i dati locali dell'owner**,
+e chiedere per ogni ricerca che segue una lettura di file trasformerebbe l'ASK
+in un riflesso da liquidare — il modo esatto in cui un cancello di sicurezza
+smette di essere letto (mandato §D12). **Tier 3 è il mondo esterno** (web,
+risultati di ricerca, MCP, contenuto inoltrato): è lì che i byte scelti dal
+modello smettono di essere parole dell'owner. Il knob resta nel Root of Trust e
+resta modificabile in `rot/policy.json` + `muffin rot reseal`, senza toccare il
+codice; e a qualunque valore, **un principal non-owner è rifiutato, mai
+chiesto**.
 
 **Chiude in parte il gap che la revisione del 16/08 aveva lasciato scritto qui
 sopra.** `ApprovalRequest.resource` (`agent/loop.ts`) portava il valore della
