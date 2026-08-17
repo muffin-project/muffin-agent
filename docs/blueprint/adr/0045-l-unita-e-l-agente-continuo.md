@@ -140,3 +140,37 @@ La decisione va rivista se almeno una delle seguenti resta vera dopo uso reale:
 - concessioni scoped non riducono conferme senza aumentare danno o false
   autorizzazioni;
 - mesi di accumulo non sostituiscono alcuna interfaccia diretta dell'owner.
+
+## Revisione — 2026-08-17: cinque piani, e le surface sono porte
+
+Direttiva owner, verbatim nella sostanza: «formalizzerei mentalmente cinque
+piani, anche se non necessariamente come moduli — **EVIDENCE** (cosa è
+realmente entrato/uscito), **BELIEFS** (cosa Muffin pensa sia vero), **WORK**
+(cosa è ancora dovuto), **EFFECTS** (cosa sta facendo / forse ha fatto / ha
+fatto al mondo), **AUTHORITY** (cosa può fare). Il modello ragiona sopra questi.
+Le surface sono porte». Estende la Decisione §3 («quattro stati non si
+fondono») con due piani che erano impliciti: gli effetti sul mondo e
+l'autorità.
+
+La regola che ne discende, e che questo repo applicherà a ogni cambiamento
+senza un grande refactor: **nessun nuovo store o tabella può essere due piani
+insieme**. Ogni slice risponde «a quale piano appartiene?»; se la risposta è
+due, c'è una cucitura da capire prima di scrivere codice.
+
+Le tre cuciture già note, nominate perché sono la forma dietro tre invarianti
+del mandato DAY-1 (`gate1/MANDATO-DAY-1.md` §4):
+
+- **`SessionStore`** sembra Evidence ma è usata direttamente come Context, e
+  perde la provenienza: è l'invariante 2 (taint attraverso la session history)
+  — la direzione è che il contesto legga l'evidenza con provenienza e tier, non
+  un trascritto crudo.
+- **`turn_tool_calls`** sta diventando l'Effect ledger (intento prima,
+  esito dopo, `rerunnable`) ma è ancora trattata in parte come bookkeeping: è
+  l'invariante 1 (effect WAL) e la §6 sulla reversibilità (journal riusabile).
+- **La delivery** è un effetto ma ha una semantica propria separata: è
+  l'invariante 5 (durable result + delivery), da valutare con la stessa
+  semantica intento/esito degli altri effetti.
+
+Non si aprono slice «refactor per imporre i piani»: si estraggono i confini
+quando una garanzia del DAY-1 li richiede.
+

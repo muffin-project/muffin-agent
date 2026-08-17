@@ -21,70 +21,62 @@ subject-id stabile autenticato e binding protetto; ogni campo model-visible è
 contenuto parsato con provenienza/taint e resta potenzialmente iniettato.
 L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 
-**Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario completo):
+**Mandato DAY-1 (17/08).** Il testo integrale del goal dell'owner è in
+`gate1/MANDATO-DAY-1.md`: dodici invarianti trasversali da confutare (effect
+WAL, taint attraverso la session history, provenienza degli episodi
+dell'agente, inbound → una sola unità di lavoro, risultato+consegna durevoli,
+containment del filesystem, egress non-interference, lock/lease/fencing,
+acceptance truthfulness, migrazione, ASK dettagliato, osservabilità/segreti/
+costo), la lista delle capability che i quattordici giorni devono coprire, la
+battery di cutover e l'ultimo audit a contesto fresco. «Fallback» è definito in
+`04-roadmap.md` §Gate 1. Cinque piani (ADR-0045 §revisione): Evidence, Beliefs,
+Work, Effects, Authority — nessuno store è due piani.
+
+**Audit avversariale (16/08, pinnato a e2a47ac).** 40 probe;
+`research/audit-2026-08-16/`: 1 CRITICAL (fs_read/fs_list seguono un symlink
+terminale: root e denyRead bypassati, chiave leggibile), 4 HIGH (lane che
+riesegue un turno tenuto da un pid vivo; lock del gateway a orologio senza
+fencing; gateway in sleep che tiene il claim → due scheduler; il rapporto di
+accettazione che non fa fallire una riga READY con scenario atteso-rosso),
+19 MEDIUM — classificati contro `dev`: tutti ancora presenti. Ordine di
+chiusura per rischio nei 14 giorni: fs containment (in corso) → lock/lease/
+fencing → acceptance truth → scheduler/job → egress params → injection nel
+canale fidato (estrazione, skill) → segreti a riposo/trace → standalone.
+
+**Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario):
 
 - A2/A3: `identity.md` è template e manca il taglio persona dell'owner (suoi).
-- B2: turno lungo su Telegram — una chiamata (`enqueueTurn` nel connector); per
-  decisione owner si chiude **al test di prod**. B3/B4/B5 sono READY con #41,
-  B8/B14 con #42, C4/C6 con #35, E4 con #40.
-- B15/B16: binding owner nel RoT e envelope tipizzato universale. Metà fatta
-  con #42 (`identify()` unica su Telegram e Discord, DM-only su `channel_type`);
-  decisione owner: il pairing scrive e **sigilla da solo** il binding.
-- C8: audio — decisione owner: se il modello ha la capability, audio diretto;
-  altrimenti trascrizione locale con whisper/faster-whisper; fornitore per
-  capability scelto dalla CLI (`muffin provider set audio …`), senza plugin.
-- D2/D3/D11: scrittura file, undo, checkpoint — decisione owner: **quattro
-  classi + journal per turno** (copia prima della mutazione in
-  `~/.muffin/undo/<turno>/`, undo che riallinea filesystem e turno); vault
-  resta append-only.
-- D12 (nuova): l'ASK deve mostrare l'azione specifica (comando, URL, pid) e il
-  perché del taint. E1: budget per-job (testato, dinamico).
-- A9 (nuova): `muffin init --local` riusa i segreti persistiti per
-  un'installazione pulita di prova.
-- Circa trenta righe `?`: da chiudere una alla volta con uno scenario
-  dell'harness di accettazione (E4, READY, job CI verde su `dev`).
+  Prompt: da spostare in `defaults/prompts/` con onboarding a stato e
+  `muffin prompt show`.
+- A6/A7/A8: `muffin update`, migrazione da DB popolato, backup+restore provato.
+- A9: `muffin init --local`. B2: al test di prod. B15: il pairing sigilla da
+  solo il binding. B16: envelope tipizzato universale.
+- C8: audio — se il modello ha la capability, diretto; altrimenti
+  whisper/faster-whisper in locale; fornitore per capability da CLI.
+- D2/D3/D11: quattro classi + journal per turno come effect lifecycle
+  riusabile (mandato §6), non un backup dentro `fs_write`.
+- D12: l'ASK mostra l'azione specifica. E1: budget per job.
+- READY senza scenario di accettazione (il rapporto le nomina): B14, C2, C3,
+  C6, C7, D4, D6, E4 — e le righe `?` una alla volta.
 
-**Non integrato.** `slice/streaming` (B11 → READY, "la risposta arriva mentre
-si forma") — due PR verso `dev` per il tetto ~600 righe, nessuna ancora
-mergiata. **PR 1** (`slice/streaming`): provider adapter (`Provider
-.chatStream` su entrambi, SDK ufficiali), loop (delta-sink bufferizzato per
-giro, rilasciato solo al netto del completion gate), REPL/CLI (`Surface
-.streaming`, `--stream`/`--no-stream`). **PR 2** (`slice/streaming-telegram`,
-stack su PR 1): bozza dal vivo Telegram (`sendMessageDraft` — trovato e
-corretto un parametro richiesto mancante, `draft_id`, che faceva fallire ogni
-chiamata in produzione da sempre, inghiottito da `safely()`; vedi ADR-0025
-§revisione e `docs/lessons.md`), `editMessageText` progressivo sul
-placeholder in gruppo, spento per sessione al primo edit fallito. Trovato
-lungo la strada e corretto: `presence.stop()` cancellava un aggiornamento dal
-vivo appena schedulato invece di mandarlo — un turno abbastanza veloce non
-mostrava mai streaming, in silenzio (trovato da un test di cablaggio reale,
-non da lettura del codice). Scenario di accettazione B11 verde contro il
-binario vero. Discord resta OUT (B17). Nessun lavoro vale READY prima di
-integration test, wiring di produzione, failure path, scenario reale,
-documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11 — questa riga
-li ha tutti e sette, per entrambe le superfici.
+**Non integrato.** `slice/fs-containment` (CRITICAL, in corso), PR #49 giudice
+memoria (judge in corso), `slice/mandato-day1` (questo handoff).
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
 integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Il 16/08 sono entrate in `dev` **PR #28/#29/#35/#36/#37/#39/#40/#41/#42/#43** (oltre
-a #30–#34 e a **#32** `dev`→`main` della notte). Metodo corretto dopo la
-giornata: le quattro slice-epic (4–5k righe) hanno richiesto 2–3 giri di judge
-ciascuna e conflitti a ogni merge sui file generati della mappa; da qui in poi
-**una slice = una riga di M5-BIS, ≤ ~500 righe, un judge sonnet, tetto due
-giri, una alla volta**; la meccanica (merge, rigenerazioni, correzioni da una
-riga, stato) la fa l'orchestratore. `dev`→`main` va promossa con una verifica
-integrata nuova.
+Il 16/08 sono entrate **#28/#29/#35/#36/#37/#39/#40/#41/#42/#43/#45/#46** e
+**#44** `dev`→`main` (ceb2579); il 17/08 **#47/#48** (streaming: B11 READY).
+Metodo: una slice = una riga o un invariante, ≤ ~500 righe, un judge sonnet,
+tetto due giri, al massimo due slice non sovrapposte in volo; la meccanica la fa
+l'orchestratore.
 
-**Decisioni owner del 16/08.** Reversibilità: quattro classi + journal per turno
-(sopra). Audio: whisper/faster-whisper locale, fornitore per capability da CLI.
-`sys.shell` dopo una lettura: **ASK**, non deny (`maxTaint: 2`, ADR-0044
-§Revisione). Prompt: tutti i prompt puro-Muffin in `defaults/prompts/*.md`
-importati; `identity.md`/`voice.md` restano in `~/.muffin/` (identity nel RoT) —
-da capire meglio quali, per ora ok. Ancora aperte: scope lettura sandbox ·
-`mcp.*` per-tool · `ricorda` scrive o propone · lingua docs pubblici. Richiesta:
-audit dei comandi CLI e degli slash (tenere/modificare/eliminare, mancanti,
-tenant sugli slash: alcuni solo owner).
+**Decisioni owner (16–17/08).** Reversibilità: quattro classi + journal per turno
+(sopra). Audio: whisper locale, fornitore da CLI. `sys.shell` dopo una lettura:
+ASK (`maxTaint: 2`, ADR-0044 §Revisione). Prompt puro-Muffin in `.md`.
+Ancora aperte: scope lettura sandbox · `mcp.*` per-tool · `ricorda` scrive o
+propone · lingua docs pubblici. Richiesta: audit dei comandi CLI e degli slash
+con tenant.
 
 **File load-bearing — LEGGI PRIMA di lavorare:**
 
