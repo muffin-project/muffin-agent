@@ -75,9 +75,9 @@ describe('acceptance · B · continuità del runtime', () => {
     async () => {
       const inst = await install({ main: [{ text: 'ecco il tuo brief' }] });
       try {
-        // A job addressed to a channel `muffin gateway run` cannot actually
-        // reach yet (`cli/gateway.ts`'s own `gatewayDeliver`: only 'cli' is
-        // wired — everything else is "consegna remota da cablare" on stderr).
+        // A job addressed to a channel this install never connects — a fresh
+        // acceptance home has no Telegram token, so `SurfaceRegistry` comes up
+        // with zero surfaces and `find('telegram')` is always null.
         const added = await inst.muffin([
           'jobs',
           'add',
@@ -107,31 +107,61 @@ describe('acceptance · B · continuità del runtime', () => {
         // The real gateway process: `serve()` ticks once immediately at boot
         // (core/gateway/service.ts), specifically so a job that came due while
         // nothing was running fires without waiting out a full interval.
+        // `cli/gateway.ts` now reports a failed delivery as "consegna fallita"
+        // (the old "consegna remota da cablare" line does not exist any more —
+        // it named the exact bug this scenario used to accept, see git blame),
+        // and it says so only after `Scheduler.settle` has already written the
+        // turn's `delivery` column, which is what makes waiting for this line
+        // a safe signal to then go read that column.
         const gw = await inst.gateway();
         try {
-          await gw.waitFor(/consegna remota da cablare/, 15_000);
+          await gw.waitFor(/consegna fallita/, 15_000);
         } finally {
           await gw.stop();
         }
 
-        // The desired invariant a job "said sent" should have to earn: it is
-        // only recorded as run if delivery actually reached the channel. Today
-        // `Scheduler.run` calls `markRan` unconditionally after the delivery
-        // attempt (core/scheduler/scheduler.ts), whether or not the channel
-        // exists — so this reads `last_run_at` set even though nothing was
-        // delivered anywhere an owner would see it.
+        // What "un job che dice «inviato» è arrivato?" actually asks for, now
+        // that `Deliver` returns a typed `DeliveryOutcome` and `settle` is
+        // `markRan`'s only caller (ADR-0035 §1, PR #42): not that the fire
+        // stops advancing — a failed delivery must not put the job back on
+        // the clock either, since the model has already been paid for and
+        // re-firing would just double the spend to re-send `outcome.text` —
+        // but that the turn's own record never says the message arrived when
+        // it did not.
         const after = new DatabaseCtor(join(inst.home, 'muffin.db'), { readonly: true });
         let lastRunAt: string | null;
+        let turnRow: { id: string; delivery: string | null } | undefined;
         try {
           lastRunAt = (after.prepare(`SELECT last_run_at FROM jobs WHERE id = ?`).get(jobId) as { last_run_at: string | null })
             .last_run_at;
+          turnRow = after.prepare(`SELECT id, delivery FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
+            | { id: string; delivery: string | null }
+            | undefined;
         } finally {
           after.close();
         }
-        if (lastRunAt !== null) {
-          throw new Error(
-            `il job è marcato eseguito (last_run_at=${lastRunAt}) nonostante la consegna non sia mai arrivata al canale`,
-          );
+        // The fire legitimately advances — see the comment above — so this is
+        // a sanity check on the fixture, not the guarantee under test.
+        if (lastRunAt === null) throw new Error('il job non risulta mai partito: la fixture non ha prodotto un fire');
+        if (!turnRow) throw new Error('nessun turno trovato dopo il fire del job');
+        if (turnRow.delivery === 'sent') {
+          throw new Error(`il turno ${turnRow.id} dice "sent" nonostante nessuna superficie servisse "telegram"`);
+        }
+        if (turnRow.delivery === null || !turnRow.delivery.startsWith('failed:')) {
+          throw new Error(`atteso delivery="failed:…" sul turno ${turnRow.id}, trovato ${JSON.stringify(turnRow.delivery)}`);
+        }
+
+        // And the owner-visible half: `doctor`'s "consegne" check
+        // (`core/turns/store.ts`'s `undelivered()`) has to name it too, not
+        // only the database row — a fact nobody reads is not much better than
+        // one that was never recorded (D3, judge PR #42: `undelivered()` had
+        // no caller before this wiring).
+        const doctor = await inst.muffin(['doctor']);
+        if (!/consegne/.test(doctor.out)) {
+          throw new Error(`doctor non nomina il controllo "consegne":\n${doctor.out}`);
+        }
+        if (!doctor.out.includes(turnRow.id.slice(0, 12))) {
+          throw new Error(`doctor non nomina il turno ${turnRow.id} nella riga "consegne":\n${doctor.out}`);
         }
       } finally {
         await inst.cleanup();

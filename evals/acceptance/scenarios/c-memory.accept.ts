@@ -21,6 +21,18 @@ import { MemoryStore } from '../../../core/memory/store.js';
  * same production code the judge itself calls, just without needing a second
  * scripted model round-trip to reach it. What is under test here is the read
  * side: whether `--history` surfaces the retired one.
+ *
+ * The subject is a **capitalised** name ("Ristorante preferito") on purpose,
+ * not styling: a fact written straight through `store.addFact` is never
+ * embedded (the backlog indexing in `core/memory/ingest.ts` is what would do
+ * that, and this fixture deliberately skips it — see C1's docstring above for
+ * why), and `searchEpisodes` (the text half) never returns facts at all — so
+ * the one-hop graph expansion is the only path that can reach this fact, and
+ * `extractCandidateNames` (`core/memory/recall.ts`) only takes a capitalised
+ * word from the query as a candidate. A lower-case query is a real, separate
+ * gap (an owner typing "il mio ristorante preferito" would not get this hop
+ * today) — this scenario is about C4's own claim, superseded-fact recall on
+ * the graph path, not about candidate extraction.
  */
 
 describe('acceptance · C · memoria e acquisizione', () => {
@@ -82,7 +94,7 @@ describe('acceptance · C · memoria e acquisizione', () => {
             trustTier: 0,
             createdAt: now,
           });
-          subjectId = store.upsertEntity('host', 'il ristorante preferito', 'concept', now);
+          subjectId = store.upsertEntity('host', 'Ristorante preferito', 'concept', now);
           oldFactId = store.addFact({
             tenantId: 'host',
             subjectId,
@@ -110,7 +122,7 @@ describe('acceptance · C · memoria e acquisizione', () => {
           db.close();
         }
 
-        const current = await inst.muffin(['memory', 'search', 'ristorante preferito']);
+        const current = await inst.muffin(['memory', 'search', 'Ristorante preferito']);
         if (current.code !== 0) throw new Error(`ricerca senza --history: exit ${current.code}\n${current.err}`);
         if (!current.out.includes('da Luigi')) {
           throw new Error(`la ricerca ordinaria non trova nemmeno il fatto attivo:\n${current.out}`);
@@ -119,7 +131,7 @@ describe('acceptance · C · memoria e acquisizione', () => {
         // The desired property: `--history` surfaces the retired belief too —
         // "da Mario" should appear somewhere in the --history output even
         // though the fact is expired.
-        const withHistory = await inst.muffin(['memory', 'search', 'ristorante preferito', '--history']);
+        const withHistory = await inst.muffin(['memory', 'search', 'Ristorante preferito', '--history']);
         if (withHistory.code !== 0) throw new Error(`ricerca con --history: exit ${withHistory.code}\n${withHistory.err}`);
         if (!withHistory.out.includes('da Mario')) {
           throw new Error(
