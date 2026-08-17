@@ -363,6 +363,95 @@ describe("cmdGatewayRun's own assembly", () => {
       await fake.close();
     }
   });
+
+  /**
+   * A completions server that answers only once released — the seam this next
+   * test needs to steal the gateway's claim *while* a job is genuinely in
+   * flight, the exact window P20 is about: `Gateway.tick` used to beat once
+   * and then run both lanes to completion with nothing re-checking ownership
+   * inside.
+   */
+  function gatedCompletionsServer(): Promise<{ url: string; requests: number; release: () => void; close: () => Promise<void> }> {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const state = { requests: 0 };
+    return new Promise((resolve) => {
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          state.requests += 1;
+          void gate.then(() => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                id: 'fake-1',
+                model: 'fake',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+                usage: { prompt_tokens: 1, completion_tokens: 1 },
+              }),
+            );
+          });
+        });
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+        resolve({
+          url: `http://127.0.0.1:${addr.port}/v1`,
+          get requests() {
+            return state.requests;
+          },
+          release,
+          close: () => new Promise((r) => server.close(() => r())),
+        });
+      });
+    });
+  }
+
+  it('a claim stolen while a job is in flight is caught before delivery — stillOwner (P20)', async () => {
+    const fake = await gatedCompletionsServer();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-stillowner-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      // The job's model call has genuinely reached the server and is held
+      // open by the gate — this is "a run in flight", not a guess about timing.
+      await vi.waitFor(() => expect(fake.requests).toBeGreaterThan(0), { timeout: 5000, interval: 5 });
+
+      // Steal the claim from outside, exactly as a second gateway winning a
+      // legitimate race would leave the row: a fresh pid and a fresh
+      // holder_id, written directly rather than through `GatewayLock.claim`
+      // so this does not depend on this test's own pid being distinguishable
+      // from the real gateway's.
+      const steal = new DatabaseCtor(paths(dir).db);
+      steal
+        .prepare(`UPDATE gateway_lock SET pid = ?, holder_id = ?, taken_at = ? WHERE id = 1`)
+        .run(process.pid + 1, 'a-different-holder', new Date().toISOString());
+      steal.close();
+
+      // Now let the model call resolve. If `stillOwner` were not wired in,
+      // `Scheduler.run` would proceed straight to `deliver` and the turn's
+      // `delivery` column would read `sent`.
+      fake.release();
+      await new Promise((r) => setTimeout(r, 300));
+
+      const check = new DatabaseCtor(paths(dir).db, { readonly: true });
+      const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string | null } | undefined;
+      check.close();
+      expect(turn?.delivery ?? null).not.toBe('sent');
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  }, 10_000);
 });
 
 /**

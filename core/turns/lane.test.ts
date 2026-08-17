@@ -290,6 +290,30 @@ describe('una corsia sola, e non si incastra', () => {
     await settle();
     expect(ran).toEqual([]);
   });
+
+  it('cede quando la propria rivendicazione del gateway non è più valida — stillOwner (P20)', async () => {
+    // `standDown` answers "has some other gateway shown up", and the
+    // gateway's own turn lane always passes `() => false` for it — this is
+    // the check that gives the gateway's *own* lane any protection at all
+    // against a takeover mid-tick.
+    const store = new TurnStore(new DatabaseCtor(':memory:'));
+    const ran: string[] = [];
+    const events: LaneEvent[] = [];
+    const lane = new TurnLane({
+      turns: store,
+      run: async (id) => (ran.push(id), { stopped: 'answered' as const }),
+      modelLane: new ModelLane(),
+      stillOwner: () => false,
+      onEvent: (e) => events.push(e),
+    });
+    store.enqueue(spec('t-stolen'));
+    lane.tick();
+    await settle();
+    expect(ran).toEqual([]);
+    expect(events).toContainEqual({ kind: 'deferred', reason: 'handover' });
+    // Not consumed — the winner's own tick will pick it up.
+    expect(store.due().length).toBe(1);
+  });
 });
 
 describe('una corsia del modello sola, per davvero', () => {

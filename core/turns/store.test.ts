@@ -229,7 +229,11 @@ describe('fencing: a stolen claim cannot write over its thief (P19)', () => {
     // Pid 4242 — still alive, still holding its now-stale token — tries every
     // write the loop makes. All three must change nothing.
     expect(
-      original.checkpoint('turn-1', { messages: [{ role: 'assistant', content: 'work of pid 4242' }], taint: 0, counters: spec().counters }, created.claimToken),
+      original.checkpoint(
+        'turn-1',
+        { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'work of pid 4242' }] }], taint: 0, counters: spec().counters },
+        created.claimToken,
+      ),
     ).toBe(false);
     expect(
       original.suspend(
