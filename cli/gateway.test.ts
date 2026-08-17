@@ -551,6 +551,47 @@ describe('the claim can change under a REPL that is already ticking', () => {
     expect(w.said.join(' ')).toContain('passato al gateway');
   });
 
+  it('a job due while the gateway sleeps past the hard horizon runs exactly once — the REPL takes it, and the waking gateway cannot silently resume', async () => {
+    // The end-to-end shape of P21's fix, in one test: a gateway claimed the
+    // store, then went silent for longer than the hard horizon (a real sleep,
+    // not a kill — `alive` says true throughout). The REPL correctly judges
+    // it gone and runs the due job. When the gateway's own timer next fires —
+    // it "wakes up" — its `beat()` must refuse rather than resume as if
+    // nothing happened, which is exactly the asymmetry the audit found:
+    // `readGateway` already judged this claim absent, but `DurableLock.refresh`
+    // used to be guarded on `pid` alone and would have pushed `taken_at`
+    // forward regardless, resurrecting a claim the REPL had already taken.
+    const w = world();
+    const gatewayLock = new GatewayLock(w.db, () => true);
+    const wedged = new Date(Date.now() - STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 1000);
+    gatewayLock.claim(wedged, 'in attesa', process.pid);
+
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), true);
+    expect(standDown()).toBe(false); // the REPL now owns the ticker
+
+    const runJob = vi.fn(async () => ({ stopped: 'answered' as const, text: 'brief', turnId: 'turn-repl' }));
+    const replScheduler = new Scheduler(
+      w.jobs, runJob, async (_c, t) => (w.delivered.push(t), DELIVERED),
+      undefined, (e) => w.events.push(e), undefined, standDown, undefined, new ModelLane(),
+    );
+    replScheduler.tick();
+    await flush();
+
+    expect(runJob).toHaveBeenCalledOnce();
+    expect(w.delivered).toEqual(['brief']);
+    expect(w.jobs.get(w.job.id)!.lastRunAt).not.toBeNull();
+
+    // Now the gateway "wakes up" and its interval timer fires a beat, exactly
+    // as `Gateway.tick` does before it would ever call `scheduler.tick` again.
+    const wokenBeat = gatewayLock.beat(new Date(), 'in attesa', process.pid);
+    expect(wokenBeat).toBe(false); // P21: cannot resume the claim it already lost
+
+    // So even a scheduler built on the *same* lock, ticking right now, would
+    // find nothing to do either way — the fire already happened once, and
+    // this "gateway" is not the owner any more regardless.
+    expect(w.jobs.due(new Date())).toEqual([]);
+  });
+
   it('a gateway that dies gives the jobs back, and that is announced too', () => {
     // The other direction, and it is the one the old shape could not do at all:
     // a terminal open since before the crash sat there scheduling nothing until
