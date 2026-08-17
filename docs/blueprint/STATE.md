@@ -18,9 +18,9 @@ store è due piani.
 riletto ogni riga A1–E6, i 19 MEDIUM residui dell'audit e le otto proprietà
 trasversali contro `origin/dev` (`research/triage-2026-08-17/`). Conteggio
 finale in `M5-BIS.md`: **9 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED** (54
-righe). `?` non è più uno stato; due eccezioni dichiarate (B8 READY con
-scenario atteso-rosso, D10 ancora `?`) restano intoccate perché le tocca PR
-#54, in giudizio sulla stessa riga.
+righe, poi 55 con E7). `?` non è più uno stato: le due eccezioni di allora —
+B8 con scenario atteso-rosso e D10 — sono state chiuse dall'integrazione di
+#54, che ha promosso B8/C4/D10 e reso il rapporto un gate vero sulle PR.
 
 **`gate1/PERCORSO-CRITICO.md` è la sequenza operativa**, non un secondo
 inventario — una slice alla volta, verificata, giudicata, mergiata. Ordine:
@@ -32,11 +32,24 @@ altro agente (ask, init-local, prompts, provider-retry, pairing,
 telegram-media, budget-per-job, audio); 4) scenari per righe già solide
 (journey J1–J6); 5) OUT/post-Gate 1.
 
-**In volo adesso.** PR #53 `slice/lease-fencing` (lock/lease/fencing,
-giudizio giro 2, judge opus). PR #54 `slice/acceptance-truth`
-(READY+atteso-rosso fa fallire il rapporto; B8/C4/D10 verdi, giudizio giro
-2). `slice/a1-continuita` (A1 nella lettura forte dell'owner: processo
-residente supervisionato).
+**In volo adesso** (riconciliato al merge, `PERCORSO-CRITICO.md` §0 è la fonte).
+Integrate il 17/08: #53 lease/fencing · #54 verità dell'accettazione · #56 A1
+continuità · #57 WAL dell'intento · #58 identità parte 1 · #59 `init --local`.
+Aperte: PR #60 (mappa, FAST) e quattro slice con WIP committato e pushato al
+session limit — `session-taint` (1.2), `egress-params` (1.6), `audit-mediums`
+(2.4), `identita-eval` (A2/A3 parte 2).
+
+**Il workflow è cambiato il 17/08 (direttiva owner).** La verifica è
+proporzionale alla claim e al blast radius: tre profili — FAST, STANDARD,
+CRITICAL — scelti **prima** di implementare e scritti nella PR
+(`ORCHESTRATION.md` §17). FAST e STANDARD li verifica e li integra
+l'orchestratore; solo CRITICAL (effect journal, authority/kernel, taint, egress,
+RoT, segreti, schema durevole, concorrenza, exactly-once, crash recovery,
+sandbox, distruttivo) richiede un judge fresco e un verdetto terminale.
+L'evidenza già osservata non si rifà per rituale; un finding fuori scope diventa
+follow-up (§18); i documenti si aggiornano solo dove diventano stale (§19). Il
+`/loop` carica il minimo e apre gli altri documenti quando la task li rende
+load-bearing (`.claude/loop.md` §1–3).
 
 **Decisioni owner (17/08).** A1: lettura forte, non il boot pulito debole
 che il primo triage proponeva READY — serve il processo residente
@@ -661,7 +674,7 @@ Linux" di D4 era stale dal 15/08. L'orchestratore ha consolidato i tre triage
 in `gate1/PERCORSO-CRITICO.md` (la sequenza operativa, non un secondo
 inventario) e riscritto `M5-BIS.md` riga per riga: **9 READY · 37 BLOCKER · 7
 OUT · 0 INVALIDATED**, zero `?` residui salvo le due eccezioni dichiarate (B8,
-D10) lasciate intoccate perché le tocca PR #54 in giudizio sulla stessa riga.
+D10) allora lasciate intoccate, e chiuse dall'integrazione di #54.
 Decisioni owner prese nella stessa sessione: A1 nella lettura forte (processo
 residente supervisionato, non il boot pulito debole); `job_fires` come ponte
 di identità `(job_id, scheduled_for) → turn_id` per lo scheduler e la metà
