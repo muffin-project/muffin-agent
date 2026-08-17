@@ -105,7 +105,7 @@
     {
       "name": "skill_read",
       "capability": "skill.read",
-      "file": "agent/tools/skill.ts:32-45",
+      "file": "agent/tools/skill.ts:33-45",
       "params": ["name: string (required, max 64 chars)", "file?: string (path relative to the skill dir, max 500 chars)"],
       "risk": "low",
       "reversible": true,
@@ -154,7 +154,7 @@
       "maxTaint": null,
       "taintOut": "3 always, on both success AND error results alike (mcp.ts:106-111: `tier: 3, ...(result.isError?{isError:true}:{})` are set unconditionally) - unlike http_get/web_search, even a remote tool's own error message taints the turn exactly like a success would.",
       "wired": true,
-      "wiredNote": "NOT registered inside buildRuntime()/the synchronous tools array. Registered by attachMcp() (agent/runtime.ts:525-535), a separate async function called after buildRuntime() by every real surface - cli/repl.ts:133, cli/run.ts:47, cli/gateway.ts:363 - which loads rot/mcp.json's registry, connects each server, and for each one that VERIFIES (live tool defs hash-match the owner's pin, mcp.ts:71-88) pushes its tools via Runtime.register() (runtime.ts:464-467, called at runtime.ts:531). A server whose tools don't match its pin is SUSPENDED: zero tools, zero capability, one Italian report line naming what changed (mcp.ts:74-88), and re-approval via `muffin mcp add <server>` is the only way back. Zero MCP capabilities/tools exist until rot/mcp.json lists at least one server.",
+      "wiredNote": "NOT registered inside buildRuntime()/the synchronous tools array. Registered by attachMcp() (agent/runtime.ts:525-535), a separate async function called after buildRuntime() by every real surface - cli/repl.ts:174, cli/run.ts:47, cli/gateway.ts:363 - which loads rot/mcp.json's registry, connects each server, and for each one that VERIFIES (live tool defs hash-match the owner's pin, mcp.ts:71-88) pushes its tools via Runtime.register() (runtime.ts:464-467, called at runtime.ts:531). A server whose tools don't match its pin is SUSPENDED: zero tools, zero capability, one Italian report line naming what changed (mcp.ts:74-88), and re-approval via `muffin mcp add <server>` is the only way back. Zero MCP capabilities/tools exist until rot/mcp.json lists at least one server.",
       "onDeny": "hostOnly:true (mcp.ts:37) so a group member is refused principal_forbidden before risk logic runs. Otherwise medium+reversible:'no' -> core/policy/decide.ts:204-207 allow (never drafts, unlike fs.write). Ceiling is DELIBERATELY inherited (maxTaint omitted) rather than pinned, per mcp.ts:20-28's own warning: pinning is the fallback ONLY if the matrix's downward-clamp (core/policy/matrix.ts `tighter()`) is ever removed.",
       "oneLine": "Chiama un tool di un server MCP remoto, verificato."
     }
