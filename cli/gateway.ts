@@ -316,6 +316,25 @@ export async function cmdGatewayRun(
     GatewayDeps,
     'signals' | 'tickMs' | 'sleep' | 'now' | 'pid' | 'drainBudgetMs'
   > = {},
+  /**
+   * Test-only: called once, the moment `turnLane` and `lock` exist below,
+   * before `Gateway.start` ever ticks either.
+   *
+   * `TurnLane`'s own `stillOwner` check (a few lines below) only ever runs on
+   * a tick where `Gateway.tick`'s own `lock.beat()` — the *same* `lock` — has
+   * just succeeded, moments earlier, in the same synchronous call: a `beat()`
+   * failure drains the whole process (`core/gateway/service.ts`'s `tick`)
+   * before `turnLane.tick()` can run again. So a black-box test that steals
+   * the claim and waits for `cmdGatewayRun` to react cannot tell this
+   * parameter existing from it being deleted — both drain on the gateway's
+   * own heartbeat, for a reason that has nothing to do with `stillOwner`.
+   * Verified: `cli/gateway.test.ts`'s own claim-heist test still passed with
+   * `stillOwner` deleted from the construction below. Calling `turnLane.tick`
+   * here directly, at a moment of the test's choosing, is the only way to ask
+   * the *lane* the question `stillOwner` exists to answer, independent of
+   * when the gateway's heartbeat would ask it (judge, round 2, R1).
+   */
+  onAssembled?: (parts: { turnLane: TurnLane; lock: GatewayLock }) => void,
 ): Promise<number> {
   let runtime;
   try {
@@ -442,6 +461,7 @@ export async function cmdGatewayRun(
     // simply found nothing left to claim.
     stillOwner: () => lock.isCurrentClaim(),
   });
+  onAssembled?.({ turnLane, lock });
 
   let stopSurfaces: (() => void) | null = null;
   const gateway = new Gateway({

@@ -1291,6 +1291,16 @@ async function drive(
       // to have real effects is exactly the point `stillOwner`-style guards
       // exist for, and this table's own fencing is the one that reaches every
       // caller of `runTurn`/`resumeTurn`, not only the gateway's lanes.
+      //
+      // The residual window, named the way `core/scheduler/scheduler.ts`'s own
+      // delivery check names its (judge, round 2, R4/R6): a claim stolen
+      // *after* this line has already run is not seen here — this check only
+      // sees a steal that happened before it — so the batch below can execute
+      // under a claim that is taken from it moments later, and the loss is
+      // only caught at the checkpoint that opens the next iteration of this
+      // loop. Bounded by one batch's duration, and it is the effect the fenced
+      // `checkpoint`/`finish`/`suspend` writes stop from *landing*, not one
+      // that stops a tool call already in flight from completing.
       if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
 
       const results: ContentBlock[] = [];

@@ -56,22 +56,22 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1839,
+    "line": 1849,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1857,
+    "line": 1867,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 1876,
+    "line": 1886,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1873": {
     "path": "agent/loop.ts",
-    "line": 1959,
+    "line": 1969,
     "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
   },
   "agent/loop.ts:271": {
@@ -826,22 +826,22 @@
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 363,
+    "line": 382,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 386,
+    "line": 405,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 392,
+    "line": 411,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 403,
+    "line": 422,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
@@ -1411,7 +1411,7 @@
   },
   "core/lock/durable.ts:93": {
     "path": "core/lock/durable.ts",
-    "line": 191,
+    "line": 209,
     "testo": "export class DurableLock {"
   },
   "core/mcp/registry.ts:58": {
@@ -2416,7 +2416,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1714,
+    "line": 1724,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
