@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import { SendLock, STALE_AFTER_MS, pidAlive } from './sendlock.js';
 
 /**
@@ -91,19 +92,37 @@ describe('SendLock', () => {
     expect(lock.holder()).toBe(4243);
   });
 
-  it('an old claim is stale whatever its pid says', () => {
-    // A pid is weaker evidence than it looks: ordinary reuse after a hard kill
-    // is enough for a dead holder to read as alive, and that happens in hours,
-    // not after 2³² processes. Without this the command wedges permanently while
-    // telling the owner to wait for a send that ended days ago.
+  it('a genuinely alive holder is not stolen just for missing the ordinary horizon (P20)', () => {
+    // Before the fix, `heldBy` asked the wall clock before it ever asked
+    // whether the holder was alive, so a live pid past `STALE_AFTER_MS` was
+    // declared free — the same shape as P20's gateway theft, one lock over.
+    // `alive` says true throughout: this is a holder that is genuinely still
+    // running, not a corpse.
     const lock = new SendLock(db(), () => true);
     lock.acquire(NOW, 4242);
 
     const soon = new Date(NOW.getTime() + STALE_AFTER_MS - 1000);
     expect(lock.acquire(soon, 4243)).toMatchObject({ held: expect.stringContaining('4242') });
 
-    const later = new Date(NOW.getTime() + STALE_AFTER_MS + 1000);
-    expect('release' in lock.acquire(later, 4243)).toBe(true);
+    // Past the ordinary horizon, still alive: must still hold. This is the
+    // exact instant the pre-fix code would have handed the lock to 4243.
+    const pastOrdinary = new Date(NOW.getTime() + STALE_AFTER_MS + 1000);
+    expect(lock.acquire(pastOrdinary, 4243)).toMatchObject({ held: expect.stringContaining('4242') });
+  });
+
+  it('an old claim is stale past the hard horizon, whatever its pid says — the pid-reuse backstop', () => {
+    // The backstop this test actually needs to exercise: `alive` cannot
+    // distinguish "process 4242 is still running" from "some unrelated
+    // process now happens to have pid 4242", so a holder that has not
+    // refreshed in a very long time is treated as gone even though `alive`
+    // still says yes. `HARD_STALE_MULTIPLIER` is what makes this the pid-reuse
+    // case and not the P20 case above: it is set wide enough that no
+    // genuinely-alive holder reaches it in ordinary operation.
+    const lock = new SendLock(db(), () => true);
+    lock.acquire(NOW, 4242);
+
+    const pastHard = new Date(NOW.getTime() + STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1000);
+    expect('release' in lock.acquire(pastHard, 4243)).toBe(true);
     expect(lock.holder()).toBe(4243);
   });
 
