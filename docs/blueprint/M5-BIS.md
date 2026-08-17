@@ -387,8 +387,8 @@ ancora verificato — **è un debito, non uno stato**).
 > in locale); con `pull_request` nel trigger questa stessa PR è la prima corsa
 > reale su GitHub Actions, non più rimandata al merge su `dev`.
 >
-> **Oggi, 17 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
-> D2/D3/D10 · E1/E2/E5 — sedici **verde**, un **atteso-rosso** (D3 undo →
+> **Oggi, 18 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
+> D1/D2/D3/D10 · E1/E2/E5 — diciassette **verde**, un **atteso-rosso** (D3 undo →
 > decisione owner ancora aperta su §1, con una firma di fallimento dichiarata:
 > `muffin undo` resta un comando sconosciuto). B8, C4 e D10 erano
 > `atteso-rosso` con una ragione già falsa (`slice/acceptance-truth`,
