@@ -44,6 +44,14 @@ const rosso = (row: string, title: string, reason: string, closedBy: string): Sc
 
 export const MANIFEST: readonly ScenarioEntry[] = [
   verde('A1', 'boot: a fresh install starts on its own, and a second launch finds its own state'),
+  verde(
+    'A2',
+    "identity: the installed rot/identity.md — this home's own, not defaults/ — reaches the real system prompt sent to the provider, and `muffin prompt show` matches it",
+  ),
+  verde(
+    'A3',
+    'persona: the installed persona.md/voice.md reach the real system prompt in canonical order (persona, identity, voice), and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
+  ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
   verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),

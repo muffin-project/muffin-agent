@@ -97,8 +97,8 @@ ancora verificato — **è un debito, non uno stato**).
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
 | A1 | Boot | Muffin parte da solo e recupera lo stato? | ? |
-| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 template vuoto |
-| A3 | Persona | Il comportamento è definito? | BLOCKER 👤 manca il taglio dell'owner |
+| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 `identity.md` è testo reale dell'owner da c090dce, sigillata nel RoT, e raggiunge il system prompt reale — provato: `slice/identita` parte 1 (`research/prompt-assembly-2026-08-17.md`, `muffin prompt show`, wiring test mutati rosso-prima, scenario di accettazione A2 verde contro il binario vero). Resta BLOCKER: manca il character eval sui modelli Gate 1 (punto 6 mandato owner) → parte 2 |
+| A3 | Persona | Il comportamento è definito? | BLOCKER 👤 `persona.md`/`voice.md` sono testo reale dell'owner da c090dce e raggiungono il system prompt reale nell'ordine canonico (persona → identity → voice) — provato: scenario A3 verde, `muffin prompt show` byte-identico a quanto ricevuto davvero dal provider. Resta BLOCKER: mancano character eval, cross-model e confronto col vecchio `Muffin.ai` (punti 6-8 mandato owner) → parte 2 |
 | A4 | Config | Si configura senza toccare il codice? | ? |
 | A5 | Doctor | Individua **davvero** i problemi? | ? |
 | A6 | Upgrade | Aggiornare il codice non distrugge dati? | ? |
