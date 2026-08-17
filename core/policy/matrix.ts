@@ -66,9 +66,15 @@ export type PolicyMatrix = {
    * reviewed for it (the `mcp.*` measurement in this file's docstring).
    * `paramsMaxTaint` has exactly two callers, both named above, and raising
    * it never grants anyone but the owner anything — it only moves the taint
-   * value at which the owner starts being asked. The floor below ships 1;
-   * whether 2 is the better default for daily use is an open owner decision
-   * (mandato inv. 7, 2026-08-17 — ADR-0044 §emendamento egress-params).
+   * value at which the owner starts being asked.
+   *
+   * **Ships 2** (decisione owner, 2026-08-17): tier 2 is the owner's own disk
+   * and local data, and asking about every search that follows a file read
+   * would make the ASK a reflex to dismiss rather than a decision — the
+   * failure mode the mandate's §D12 names. Tier 3 is the outside world (web,
+   * search results, MCP, forwarded content), and that is the taint at which
+   * model-chosen bytes in a query stop being the owner's own words. Whichever
+   * the value, a non-owner principal is refused, never asked.
    */
   readonly paramsMaxTaint: TrustTier;
   readonly neverAtRuntime: ReadonlySet<CapabilityId>;
@@ -121,7 +127,7 @@ export type PolicyMatrix = {
  */
 export const POLICY_FLOOR: PolicyMatrix = {
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
-  paramsMaxTaint: 1,
+  paramsMaxTaint: 2,
   /** No principal may ever exercise these at runtime, whatever the taint. */
   neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
