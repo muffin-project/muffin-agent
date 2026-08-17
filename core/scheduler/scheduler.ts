@@ -162,6 +162,27 @@ export class Scheduler {
      * that only care about `modelLane` pass `undefined` for the slot before it.
      */
     private readonly modelLane: ModelLane,
+    /**
+     * "Is the claim this process is running under still, right now, the one
+     * it was minted for?" — P20's fix.
+     *
+     * `standDown` answers a different question: "has *some* other gateway
+     * shown up" (the REPL's view, via `readGateway`), and the gateway's own
+     * scheduler always passes `() => false` for it — the gateway's answer to
+     * "do I own this" is structurally always yes, so `standDown` gives the
+     * gateway's own scheduler no protection at all. `stillOwner` is what does:
+     * wired from `cli/gateway.ts` as `() => lock.isCurrentClaim()`, a fresh,
+     * uncached read every call. Checked at the same two points `standDown`
+     * already is — before a job starts (alongside `modelLane.take`) and again
+     * before delivery — because a claim can be taken over *during* a run that
+     * takes minutes, not just at its start (P20: `Gateway.tick` used to check
+     * `beat()` once and then run both lanes with no re-check inside).
+     *
+     * Defaults to always-true: the REPL's own scheduler holds no gateway claim
+     * to re-verify, and most tests do not either — `standDown` alone is their
+     * whole cross-process story, unchanged.
+     */
+    private readonly stillOwner: () => boolean = () => true,
   ) {}
 
   /**
@@ -189,6 +210,14 @@ export class Scheduler {
     const [job] = this.store.due(now);
     if (!job) return;
 
+    // Re-verified right before the job actually starts, the same point
+    // `modelLane.take` is — a claim can be taken over between the top of this
+    // tick and here in principle, and this is the last chance to catch it
+    // before the model is ever called.
+    if (!this.stillOwner()) {
+      this.onEvent({ kind: 'deferred', reason: 'handover' });
+      return;
+    }
     if (this.modelLane.take(LANE_JOBS) !== null) {
       // Somebody took it between the check above and here. Impossible on one
       // event loop today, and cheap insurance against the day it is not.
@@ -232,6 +261,15 @@ export class Scheduler {
      * thing twice, and `markRan` does not move a fire the new owner is about to
      * serve.
      *
+     * `standDown` OR `stillOwner`, not either alone: `standDown` is the REPL's
+     * question ("has some *other* gateway shown up") and is a constant `false`
+     * for the gateway's own scheduler, so on its own it gives the gateway zero
+     * protection against exactly the case named above — a second gateway
+     * claiming mid-run. `stillOwner` (P20) is what answers that one, and it is
+     * the fresh, uncached read a laptop-sleep steal needs: cached state from
+     * the last successful `beat()` would still say "mine" for up to a whole
+     * tick interval after a takeover.
+     *
      * **The residual window is from this line to the `deliver` below** —
      * sub-millisecond, and it is the whole remaining exposure for a duplicate
      * delivery. What it does *not* cover is a duplicate *execution*: between
@@ -242,7 +280,7 @@ export class Scheduler {
      * `markRan` being the only writer of `next_fire_at` is what makes a killed
      * gateway lose no work.
      */
-    if (this.standDown()) {
+    if (this.standDown() || !this.stillOwner()) {
       this.onEvent({ kind: 'yielded', job });
       return;
     }

@@ -31,7 +31,7 @@ l'owner.
    Redis/NATS e il multi-processo, con motivazione esplicita: *«pagheremmo un
    broker e una classe di guasti nuova per coordinare processi che abbiamo deciso
    di non avere»*. Una tabella SQLite in-processo non paga né il broker né i
-   processi, quindi la ragione scritta **non la raggiunge**. Di più: `STATE.md:221`
+   processi, quindi la ragione scritta **non la raggiunge**. Di più: `STATE.md:202`
    elenca *«event-bus soglia→consolidamento»* fra i tre residui di M5, e
    `knowledge/03-observing-spine.md:26` **pretende** che lo Stadio 1 sia
    *«event-driven (non a orologio)»*. Il bus non è un'idea esterna: è un
@@ -57,7 +57,7 @@ produttore (`core/scheduler/observe.ts:109`). `commitment_due`, `deadline_near`,
 `fact_actionable` e `consolidation` esistono nel tipo e in nessun altro posto —
 verificato con grep su tutto `core/`, `agent/`, `cli/`. Il primo lavoro di un bus
 non è aggiungere `kind`: è **produrre i quattro che abbiamo già dichiarato**, che
-è alla lettera il punto (3) dei residui di M5 in `STATE.md:221`.
+è alla lettera il punto (3) dei residui di M5 in `STATE.md:202`.
 
 ---
 
@@ -153,7 +153,7 @@ detto esplicitamente in qualunque decisione futura, perché il verdetto di `§15
 com'è scritto non distingue i due casi e verrà citato contro.
 
 E c'è il verso opposto, che è più forte del permesso: **il bus è già nostro
-lavoro arretrato.** `STATE.md:221` elenca fra i residui di M5 *«(2) event-bus
+lavoro arretrato.** `STATE.md:202` elenca fra i residui di M5 *«(2) event-bus
 soglia→consolidamento (consuma il conteggio episodi della memoria)»*, e
 `knowledge/03-observing-spine.md:26` pretende uno Stadio 1 *«cheap,
 deterministico, event-driven (non a orologio) … aggiornato quando succede
