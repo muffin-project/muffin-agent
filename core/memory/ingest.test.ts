@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { EmbedderUnavailable, type Embedder } from './embed.js';
-import { ingestPending } from './ingest.js';
+import { formatConsolidationLines, ingestPending, type IngestReport } from './ingest.js';
 import { SUPERSEDE_THRESHOLD } from './judge.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
@@ -316,7 +316,191 @@ describe('memory ingestion', () => {
     const report = await ingestPending(deps, HOST);
 
     expect(report.superseded).toBe(0);
-    expect(report.errors.join(' ')).toContain('giudice non disponibile');
+    // Kept apart from `errors` — see `IngestReport.judgeUnavailable` — so a
+    // reader can fold it by (subject, predicate) instead of printing one
+    // line per candidate.
+    expect(report.judgeUnavailable).toEqual([{ subject: 'owner', predicate: 'accountant', reason: 'non-json' }]);
+    expect(report.errors.join(' ')).not.toContain('giudice non disponibile');
+  });
+
+  describe('why the judge could not answer, and what it said', () => {
+    // 2026-08-16, real install: the REPL printed "giudice non disponibile su
+    // owner/interest: tengo entrambi i valori" three times running, and
+    // `muffin memory review` showed nothing to tell the three apart — no
+    // reason, no trace of what the model actually sent back. These three
+    // cases are the ones `judge.ts` can now name, and each has to leave the
+    // model's own words on the durable row, not just the fact that it failed.
+    const scenarios: { name: string; reply: string; reason: string; rawResponse: string }[] = [
+      { name: 'an empty response', reply: '', reason: 'vuota', rawResponse: '' },
+      {
+        name: 'prose with no JSON at all',
+        reply: 'mi dispiace, non riesco a decidere su questo caso',
+        reason: 'non-json',
+        rawResponse: 'mi dispiace, non riesco a decidere su questo caso',
+      },
+      {
+        name: 'JSON with an unrecognised verdict',
+        reply: JSON.stringify({ reasoning: 'boh', verdict: 'chissà', confidence: 0.9 }),
+        reason: 'schema: verdict',
+        rawResponse: JSON.stringify({ reasoning: 'boh', verdict: 'chissà', confidence: 0.9 }),
+      },
+    ];
+
+    it.each(scenarios)('$name → typed reason and the raw response, both on the durable row', async ({ reply, reason, rawResponse }) => {
+      const { store, deps } = harness([
+        facts(fact('owner', 'interest', 'vela')),
+        facts(fact('owner', 'interest', 'windsurf')),
+        reply,
+      ]);
+      episode(store, 'mi piace la vela');
+      episode(store, 'mi piace anche il windsurf');
+      const report = await ingestPending(deps, HOST);
+
+      expect(report.judgeUnavailable).toHaveLength(1);
+      // `reason` is a prefix match for the schema case: the full label also
+      // carries zod's own message, which this test does not pin to wording.
+      expect(report.judgeUnavailable[0]?.reason.startsWith(reason)).toBe(true);
+
+      const persisted = store.pendingReview(HOST);
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.kind).toBe('error');
+      expect(persisted[0]?.subject).toBe('owner');
+      expect(persisted[0]?.predicate).toBe('interest');
+      // Mutation this kills: removing the raw-response line from `detail`.
+      // Without it the row says only "tengo entrambi i valori" — the exact
+      // sentence the owner could not get an explanation from on 2026-08-16.
+      expect(persisted[0]?.detail).toContain(rawResponse === '' ? '(vuota)' : rawResponse);
+      expect(persisted[0]?.detail).toContain(`[${reason}`);
+    });
+  });
+
+  describe('the judge tolerates innocuous formatting instead of failing on it', () => {
+    // Measured against real light-model output shapes, not hypothetical ones:
+    // a quoted confidence, a Title-Cased key, a verdict with stray whitespace
+    // or the wrong case. None of these says less than a correctly-formatted
+    // answer — throwing them away read as "giudice non disponibile" for a
+    // judge that had, in fact, answered.
+    it('accepts confidence sent as a numeric string', async () => {
+      const { store, deps } = harness([
+        facts(fact('Giusto', 'accountant', 'Marco')),
+        facts(fact('Giusto', 'accountant', 'Lucia')),
+        JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: '0.95' }),
+      ]);
+      episode(store, 'Marco è il mio commercialista');
+      episode(store, 'ho cambiato commercialista, ora è Lucia');
+      const report = await ingestPending(deps, HOST);
+
+      expect(report.judgeUnavailable).toEqual([]);
+      expect(report.superseded).toBe(1);
+    });
+
+    it('accepts Title-Cased keys, including the verdict itself', async () => {
+      const { store, deps } = harness([
+        facts(fact('Giusto', 'interest', 'fotografia')),
+        facts(fact('Giusto', 'interest', 'vela')),
+        JSON.stringify({ Reasoning: 'due interessi non si escludono', Verdict: 'COEXIST', Confidence: 0.9 }),
+      ]);
+      episode(store, 'mi piace la fotografia');
+      episode(store, 'mi piace anche la vela');
+      const report = await ingestPending(deps, HOST);
+
+      expect(report.judgeUnavailable).toEqual([]);
+      const me = store.findEntity(HOST, 'Giusto')!;
+      expect(store.activeFacts(HOST, me, 'interest').map((f) => f.objectValue).sort()).toEqual([
+        'fotografia',
+        'vela',
+      ]);
+    });
+
+    it('accepts a verdict with surrounding spaces and mixed case', async () => {
+      const { store, deps } = harness([
+        facts(fact('Giusto', 'accountant', 'Marco')),
+        facts(fact('Giusto', 'accountant', 'Lucia')),
+        JSON.stringify({ reasoning: 'cambio dichiarato', verdict: '  Supersede  ', confidence: 0.9 }),
+      ]);
+      episode(store, 'Marco è il mio commercialista');
+      episode(store, 'ho cambiato commercialista, ora è Lucia');
+      const report = await ingestPending(deps, HOST);
+
+      expect(report.judgeUnavailable).toEqual([]);
+      expect(report.superseded).toBe(1);
+    });
+
+    it('still refuses an unrecognised verdict — tolerance is not permissiveness', async () => {
+      const { store, deps } = harness([
+        facts(fact('owner', 'interest', 'vela')),
+        facts(fact('owner', 'interest', 'windsurf')),
+        JSON.stringify({ reasoning: 'boh', verdict: 'chissà cosa', confidence: 0.9 }),
+      ]);
+      episode(store, 'mi piace la vela');
+      episode(store, 'mi piace anche il windsurf');
+      const report = await ingestPending(deps, HOST);
+
+      expect(report.judgeUnavailable).toHaveLength(1);
+      expect(report.judgeUnavailable[0]?.reason.startsWith('schema: verdict')).toBe(true);
+      const me = store.findEntity(HOST, 'owner')!;
+      expect(store.activeFacts(HOST, me, 'interest')).toHaveLength(2);
+    });
+  });
+
+  describe('the raw response reaching a terminal, safely', () => {
+    it('truncates a very long raw response instead of storing it whole', async () => {
+      const huge = 'x'.repeat(2000);
+      const { store, deps } = harness([
+        facts(fact('owner', 'interest', 'vela')),
+        facts(fact('owner', 'interest', 'windsurf')),
+        `prosa senza json: ${huge}`,
+      ]);
+      episode(store, 'mi piace la vela');
+      episode(store, 'mi piace anche il windsurf');
+      await ingestPending(deps, HOST);
+
+      const detail = store.pendingReview(HOST)[0]?.detail ?? '';
+      expect(detail.length).toBeLessThan(huge.length);
+      expect(detail).toContain('…');
+    });
+
+    it('strips control characters instead of letting them reach a terminal', async () => {
+      // A stray ANSI escape or a NUL in a model's answer would otherwise ride
+      // along into `muffin memory review --verbose` output verbatim.
+      const withControlChars = 'ok\x1b[31mrosso\x1b[0m\x00fine\rsovrascritto';
+      const { store, deps } = harness([
+        facts(fact('owner', 'interest', 'vela')),
+        facts(fact('owner', 'interest', 'windsurf')),
+        `prosa senza json ${withControlChars}`,
+      ]);
+      episode(store, 'mi piace la vela');
+      episode(store, 'mi piace anche il windsurf');
+      await ingestPending(deps, HOST);
+
+      const detail = store.pendingReview(HOST)[0]?.detail ?? '';
+      // eslint-disable-next-line no-control-regex -- asserting these are gone
+      expect(/[\x00-\x08\x0B-\x1F\x7F]/.test(detail)).toBe(false);
+      expect(detail).toContain('rosso');
+      expect(detail).toContain('fine');
+      expect(detail).toContain('sovrascritto');
+    });
+  });
+
+  it('does not double-write a review row when a valid verdict happens to carry confidence 0', async () => {
+    // The pre-existing ambiguity `verdict.failure` retires: the old condition
+    // was `confidence === 0 && downgraded`, true both for an unreadable
+    // answer and for a syntactically valid, self-contradictory
+    // `{verdict:"supersede",confidence:0}` below the threshold — which used
+    // to run this block *and* the `case 'review'` branch for the same call.
+    const { store, deps } = harness([
+      facts(fact('Giusto', 'date_of_birth', '1997-04-02')),
+      facts(fact('Giusto', 'date_of_birth', '1998-04-02')),
+      JSON.stringify({ reasoning: 'non sono sicuro di niente', verdict: 'supersede', confidence: 0 }),
+    ]);
+    episode(store, 'sono del 1997');
+    episode(store, 'forse sono del 1998');
+    const report = await ingestPending(deps, HOST);
+
+    expect(report.judgeUnavailable).toEqual([]);
+    expect(report.needsReview).toHaveLength(1);
+    expect(store.pendingReview(HOST)).toHaveLength(1);
+    expect(store.pendingReview(HOST)[0]?.kind).toBe('contradiction');
   });
 
   it('keeps both values when the judge says two things can be true at once', async () => {
@@ -732,5 +916,76 @@ describe('what the agent said is evidence, not proof', () => {
     const report = await ingestPending(deps, HOST);
     expect(report.skippedAgentOutput).toBe(1);
     expect(report.factsAdded).toBe(1);
+  });
+});
+
+describe('formatConsolidationLines — what a human reads at the end of a round', () => {
+  // Pure function, no store, no provider: this is the renderer that sat
+  // behind `consolidator.ts`'s per-line loop and put "giudice non disponibile
+  // su owner/interest" on an owner's screen three times running on
+  // 2026-08-16, once per candidate fact in one round.
+  const blank: IngestReport = {
+    tenantId: 'host',
+    fetched: 0,
+    marked: 0,
+    episodes: 0,
+    factsAdded: 0,
+    superseded: 0,
+    skippedAgentOutput: 0,
+    skippedDocuments: 0,
+    skippedEmpty: 0,
+    indexed: 0,
+    busy: false,
+    needsReview: [],
+    errors: [],
+    judgeUnavailable: [],
+  };
+
+  it('folds three judge failures on the same pair into one line with a count', () => {
+    const report: IngestReport = {
+      ...blank,
+      judgeUnavailable: [
+        { subject: 'owner', predicate: 'interest', reason: 'vuota' },
+        { subject: 'owner', predicate: 'interest', reason: 'non-json' },
+        { subject: 'owner', predicate: 'interest', reason: 'vuota' },
+      ],
+    };
+    const lines = formatConsolidationLines(report);
+    // The mutation this kills: reverting to `report.errors` verbatim (no
+    // grouping at all) would print three separate lines here, never one
+    // with "×3" — this is exactly what the owner saw.
+    expect(lines).toEqual(['giudice non disponibile su owner/interest ×3 — vedi muffin memory review']);
+  });
+
+  it('keeps two different pairs apart, and omits the multiplier for a singleton', () => {
+    const report: IngestReport = {
+      ...blank,
+      judgeUnavailable: [
+        { subject: 'owner', predicate: 'interest', reason: 'vuota' },
+        { subject: 'owner', predicate: 'asked_to', reason: 'non-json' },
+      ],
+    };
+    const lines = formatConsolidationLines(report);
+    expect(lines).toHaveLength(2);
+    expect(lines).toContain('giudice non disponibile su owner/interest — vedi muffin memory review');
+    expect(lines).toContain('giudice non disponibile su owner/asked_to — vedi muffin memory review');
+  });
+
+  it('passes every other error through unchanged, after the grouped judge lines', () => {
+    const report: IngestReport = {
+      ...blank,
+      judgeUnavailable: [{ subject: 'owner', predicate: 'interest', reason: 'vuota' }],
+      errors: ['estrazione fallita su episodio 7: risposta non parsabile', 'indice vettoriale: connessione rifiutata'],
+    };
+    const lines = formatConsolidationLines(report);
+    expect(lines).toEqual([
+      'giudice non disponibile su owner/interest — vedi muffin memory review',
+      'estrazione fallita su episodio 7: risposta non parsabile',
+      'indice vettoriale: connessione rifiutata',
+    ]);
+  });
+
+  it('says nothing extra on a clean round', () => {
+    expect(formatConsolidationLines(blank)).toEqual([]);
   });
 });

@@ -67,6 +67,11 @@ sembra ovvia che non ce la si fa.
   condividono il contratto? Una seconda fixture con valori diversi spezza la
   garanzia?
 
+**A quale piano appartiene?**
+- Evidence, Beliefs, Work, Effects o Authority (ADR-0045 §revisione
+  2026-08-17)? Se il diff fa vivere due piani nello stesso store o nella stessa
+  riga, è una cucitura non capita: reperto, anche se ogni test è verde.
+
 **Costa?**
 - Token per turno. Questa roba sta nel prefisso cacheabile o nella coda volatile?
 - Chiamate al modello per turno. Soldi al mese.

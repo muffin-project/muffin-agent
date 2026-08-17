@@ -95,6 +95,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
+  // Narrower than E5's own question — see the scenario's own docstring in
+  // e-cost.accept.ts. The row stays `?` in M5-BIS.md; only one failure class
+  // (the contradiction judge) is proven explicit-and-explained here.
+  verde('E5', 'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim'),
 ] as const;
 
 export function entry(row: string): ScenarioEntry {
