@@ -940,13 +940,19 @@ async function drive(
     // crash anywhere after it does not. The window is the microseconds between
     // two synchronous SQLite writes.
     contextBuilt = true;
-    checkpoint();
+    // Lost the claim before the turn even got going — reachable only if
+    // `resumeTurn`'s own `claim()` won a row a steal then immediately took
+    // back, a vanishingly narrow window. `finish` re-attempts its own fenced
+    // write, finds the same fencing failure, and returns the honest
+    // lost-claim result without pretending anything was said.
+    if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
   } else if (options.resumed === true) {
     // A resumed turn re-enters a transcript that a crash may have left with a
     // question and no answer. Repairing it is not optional: a `tool_use` block
     // without its `tool_result` is a malformed request, and the provider says
     // so on the very first call.
-    await reconcile();
+    const lostClaim = await reconcile();
+    if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
       const waitFor = decodeWaitFor(record.waitFor);
       const why = waitFor !== null && satisfied(waitFor) ? 'event' : 'timer';
@@ -968,7 +974,12 @@ async function drive(
       // this saves is the state a process that dies here would otherwise take
       // with it — the transcript, the taint it has climbed to, and how much of
       // each budget is spent.
-      checkpoint();
+      //
+      // This is also the checkpoint most likely to catch a lost claim: it runs
+      // once per iteration, so a turn stolen mid-flight (P19 — a live pid past
+      // the hard horizon, or a genuine crash-and-reclaim elsewhere) discovers
+      // it here, before the next model call rather than after it.
+      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
       if (deps.budgetExhausted(input.tenant)) {
         return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
       }
@@ -1275,7 +1286,12 @@ async function drive(
       // `tool_use` blocks in it — and `reconcile` below would have nothing to
       // repair, while the intent rows in `turn_tool_calls` described calls the
       // transcript did not contain. Two records of one batch, disagreeing.
-      checkpoint();
+      //
+      // Checked before the tool calls below are allowed to run: a batch about
+      // to have real effects is exactly the point `stillOwner`-style guards
+      // exist for, and this table's own fencing is the one that reaches every
+      // caller of `runTurn`/`resumeTurn`, not only the gateway's lanes.
+      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
 
       const results: ContentBlock[] = [];
       toolCallsMade += result.toolCalls.length;
@@ -1331,24 +1347,35 @@ async function drive(
   /**
    * The turn's state, saved at a point where nothing is in flight.
    *
-   * Swallowed, and this is the one place in this file where swallowing is the
-   * right call — with the reason, because "caught and ignored" is how guards
-   * here have died before. A checkpoint that fails leaves the row **stale**,
-   * not wrong: the next one overwrites it, and a process that dies before then
-   * is reclaimed as interrupted, which is exactly what it was. Rethrowing would
-   * instead take down a turn that is still perfectly able to answer, over a
-   * write whose only job is to make a *future* failure cheaper. `Gateway.drain`
-   * closing the database under a long turn is not hypothetical — it is the
-   * measured crash in `core/scheduler/scheduler.ts:174-181`.
+   * An **exception** is still swallowed, and this is the one place in this
+   * file where swallowing it is the right call — with the reason, because
+   * "caught and ignored" is how guards here have died before. A checkpoint
+   * that throws leaves the row **stale**, not wrong: the next one overwrites
+   * it, and a process that dies before then is reclaimed as interrupted,
+   * which is exactly what it was. Rethrowing would instead take down a turn
+   * that is still perfectly able to answer, over a write whose only job is to
+   * make a *future* failure cheaper. `Gateway.drain` closing the database
+   * under a long turn is not hypothetical — it is the measured crash in
+   * `core/scheduler/scheduler.ts:174-181`. The failure is on the span, so
+   * "the record stopped being written" is visible in a trace instead of being
+   * inferred from a stale row.
    *
-   * The failure is on the span, so "the record stopped being written" is
-   * visible in a trace instead of being inferred from a stale row.
+   * A **fenced-out write** (P19) is a different fact and is not swallowed: it
+   * means another process's claim is on this row now, not that the write
+   * merely failed. Returns `false`, and every caller checks it — a checkpoint
+   * that could not land is the caller's cue to stop the turn without any
+   * further effect, not to keep iterating against a row it no longer owns.
    */
-  function checkpoint(): void {
+  function checkpoint(): boolean {
     try {
-      deps.turns.checkpoint(record.id, { messages, taint: snapshot.currentTaint(), counters: counters() });
+      return deps.turns.checkpoint(
+        record.id,
+        { messages, taint: snapshot.currentTaint(), counters: counters() },
+        record.claimToken,
+      );
     } catch (error) {
       turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      return true;
     }
   }
 
@@ -1366,13 +1393,17 @@ async function drive(
   function suspendHere(spec: WaitSpec): TurnResult {
     const wrote = (() => {
       try {
-        return deps.turns.suspend(record.id, {
-          messages,
-          taint: snapshot.currentTaint(),
-          counters: counters(),
-          wakeAt: spec.wakeAt,
-          waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
-        });
+        return deps.turns.suspend(
+          record.id,
+          {
+            messages,
+            taint: snapshot.currentTaint(),
+            counters: counters(),
+            wakeAt: spec.wakeAt,
+            waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
+          },
+          record.claimToken,
+        );
       } catch (error) {
         turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
         return false;
@@ -1380,6 +1411,13 @@ async function drive(
     })();
 
     if (!wrote) {
+      // Covers two different facts with one fallback, and that is deliberate:
+      // a genuine write failure (the pre-existing case) and a fenced-out write
+      // — the claim is gone (P19) — both mean "the wait cannot be honoured",
+      // and `finish` below independently re-checks its own fencing. If the
+      // claim really is gone, `finish`'s own write fails too and it returns
+      // the honest lost-claim result instead of this text — so the message
+      // here only ever reaches an owner when the *first* case is what happened.
       return finish(
         turn,
         'error',
@@ -1441,12 +1479,18 @@ async function drive(
    *  - **not started** — neither row. Run it, through the same kernel path as
    *    any other call, because the permission matrix may have tightened while
    *    the turn was dead and a resume should inherit that.
+   *
+   * Returns `null` to continue normally, or a `TurnResult` when its own final
+   * checkpoint discovers the claim is gone (P19): the repair above may itself
+   * have run tool calls with real effects, so by the time that is discovered
+   * there is nothing left to do but stop and say so, exactly like the
+   * checkpoints in the main loop.
    */
-  async function reconcile(): Promise<void> {
+  async function reconcile(): Promise<TurnResult | null> {
     const last = messages[messages.length - 1];
-    if (last === undefined || last.role !== 'assistant') return;
+    if (last === undefined || last.role !== 'assistant') return null;
     const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (pending.length === 0) return;
+    if (pending.length === 0) return null;
 
     const recorded = deps.turns.recordedOutcomes(record.id);
     const uncertain = new Map(deps.turns.uncertainCalls(record.id).map((c) => [c.callId, c]));
@@ -1516,25 +1560,36 @@ async function drive(
     }
 
     messages.push({ role: 'user', content: repaired });
-    checkpoint();
+    return checkpoint() ? null : finish(turn, 'error', '', iterations, usage);
   }
 
-  /** The single write that ends the row. Same swallow, same reason, one caveat. */
-  function closeRecord(outcome: TurnOutcome): void {
+  /**
+   * The single write that ends the row. Same exception-swallow, same reason,
+   * one caveat — and, since P19, a second return path that is not swallowed.
+   *
+   * Returns whether the write actually landed. `false` means fenced out: the
+   * claim on this row belongs to someone else now, and `finish` (below) turns
+   * that into the honest lost-claim result instead of returning a `TurnResult`
+   * that claims an outcome this row does not, in fact, record.
+   */
+  function closeRecord(outcome: TurnOutcome): boolean {
     try {
-      deps.turns.finish(record.id, {
-        outcome,
-        messages,
-        taint: snapshot.currentTaint(),
-        counters: counters(),
-      });
+      return deps.turns.finish(
+        record.id,
+        { outcome, messages, taint: snapshot.currentTaint(), counters: counters() },
+        record.claimToken,
+      );
     } catch (error) {
       // The caveat: unlike a checkpoint, nothing comes after this one. The row
       // stays `running` and the next boot reclaims it as interrupted — a turn
       // that answered, reported as "we cannot say". That is the safe direction
       // of the two, and it is not silent: the attribute below is the trace's
-      // record that the outcome could not be written.
+      // record that the outcome could not be written. An exception is treated
+      // as "could not write" (the pre-existing behaviour, `true`), never as
+      // "lost the claim" — those are different facts and only the second one
+      // is what a fenced `changes === 0` means.
       turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      return true;
     }
   }
 
@@ -1596,7 +1651,27 @@ async function drive(
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
-    closeRecord(stopped);
+    const written = closeRecord(stopped);
+    if (!written) {
+      // The claim is gone (P19): every caller of `finish` above already
+      // detected this from its *own* fenced write (a checkpoint, a suspend
+      // that fell back here) or is discovering it only now, right at the end.
+      // Either way the row does not, in fact, say what `stopped`/`text` claim
+      // — some other process's write is what is really on it — so neither may
+      // be returned. No `announceEnd`: the process that now owns this row is
+      // the one whose job it is to say the turn ended, not this one.
+      span.setAttributes({ 'muffin.turn.lost_claim': true });
+      span.end({ status: 'error' });
+      return {
+        text: '',
+        iterations: iters,
+        traceId: span.traceId,
+        turnId: record.id,
+        stopped: 'error',
+        taint: snapshot.currentTaint(),
+        usage: used,
+      };
+    }
     span.end({ status: stopped === 'error' ? 'error' : 'ok' });
     // Last thing before the return, so the span is closed and the result is
     // built: the hook is not allowed to see a half-finished turn, and it is not
@@ -1640,12 +1715,23 @@ function closeRow(
   detail: string,
 ): void {
   try {
-    deps.turns.finish(record.id, {
-      outcome,
-      messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
-      taint: record.taint,
-      counters: record.counters,
-    });
+    // `record.claimToken` is the one `claim()` just handed back a moment ago
+    // in `resumeTurn` — both callers of this function run immediately after a
+    // winning claim, before anything could plausibly steal it. If something
+    // did (an exceptionally narrow race), the write is fenced out the same as
+    // anywhere else: `changes === 0`, nothing overwritten, and there is
+    // nothing further this function needs to do about it — the refusal it
+    // reports to its own caller does not depend on this write having landed.
+    deps.turns.finish(
+      record.id,
+      {
+        outcome,
+        messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
+        taint: record.taint,
+        counters: record.counters,
+      },
+      record.claimToken,
+    );
   } catch (error) {
     span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
   }

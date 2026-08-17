@@ -161,14 +161,18 @@ export function heldBy(
  * Adds a column to an already-installed table, the way every store in this
  * repo that has ever needed one has: `PRAGMA table_info` first, `ALTER TABLE
  * ... ADD COLUMN` only if it is missing. `CREATE TABLE IF NOT EXISTS` is a
- * no-op on a table that already exists, so `holder_id` below would otherwise
- * never reach a `send_lock`/`ingest_lock`/`gateway_lock` written before this
- * change — the exact gap the audit's P27 finding names for `turns`/`jobs`.
- * `core/memory/store.ts` carries its own copy of this same five-line pattern;
- * generalising the two into one shared helper is that finding's fix, not this
- * one's, and is left for the slice that closes it.
+ * no-op on a table that already exists, so `holder_id` below (and
+ * `core/turns/store.ts`'s `claim_token`, the same mechanism one table over)
+ * would otherwise never reach a database written before this change — the
+ * exact gap the audit's P27 finding names for `turns`/`jobs`/the lock tables.
+ *
+ * `core/memory/store.ts` carries its own copy of this same five-line pattern,
+ * predating this one. Exported so the fencing columns this slice adds do not
+ * add a *third* copy; folding all of them into one shared helper — P27's own
+ * fix — is a smaller, separate change than this slice's mandate and is left
+ * for it.
  */
-function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }

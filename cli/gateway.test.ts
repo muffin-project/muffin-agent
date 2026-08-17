@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
+import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
@@ -418,22 +419,44 @@ describe('the claim can change under a REPL that is already ticking', () => {
     expect(w.said.join(' ')).toContain(`passato al gateway (pid ${process.pid})`);
   });
 
-  it('the laptop lid: a stale claim reads free, and the wake-up beat takes it back', async () => {
-    // A suspended gateway stops beating, so on wake its claim is older than ten
-    // heartbeats and reads as dead — correctly, on the evidence a REPL opened at
-    // that moment has. Seconds later the gateway resumes and beats, and this
-    // session has to give the store back. Boot-time reading gets this exactly
-    // backwards: it decides "no gateway" and keeps that answer for the session.
+  it('the laptop lid, briefly: a live-but-quiet claim still reads present — P20', async () => {
+    // Before the fix, `heldBy` asked the wall clock before it ever asked
+    // whether the holder was alive, so ten missed heartbeats alone — a laptop
+    // asleep for a few minutes, not dead — read as "no gateway" and this
+    // session would start a second scheduler underneath a gateway that was
+    // about to resume. `alive` says true throughout: the process object is
+    // still there, exactly what a genuine sleep (not a kill) looks like.
     const w = world();
     const lock = new GatewayLock(w.db, () => true);
     const asleep = new Date(Date.now() - STALE_AFTER_MS - 1000);
     lock.claim(asleep, 'in attesa', process.pid);
 
-    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
-    expect(standDown()).toBe(false); // stale: this session is right to tick
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), true);
+    // Past the ordinary heartbeat horizon, still alive: still deferred to.
+    // This exact instant is where the pre-fix code declared it gone.
+    expect(standDown()).toBe(true);
+  });
 
-    // The gateway wakes up and beats.
-    lock.beat(new Date(), 'in attesa', process.pid);
+  it('a claim past the hard horizon reads free, and a fresh claim takes the store back', async () => {
+    // Once genuinely past the hard horizon — the pid-reuse backstop, wide
+    // enough that no realistically-long sleep or stall reaches it — the claim
+    // is correctly read as gone and this session ticks. `alive` still says
+    // true (a wedged process, or an ordinary reused pid): the horizon, not
+    // liveness, is what is being exercised here.
+    const w = world();
+    const lock = new GatewayLock(w.db, () => true);
+    const wedged = new Date(Date.now() - STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 1000);
+    lock.claim(wedged, 'in attesa', process.pid);
+
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
+    expect(standDown()).toBe(false); // past the hard horizon: this session is right to tick
+
+    // A gateway claims fresh — a supervisor restart, or the same process
+    // finally re-claiming from scratch rather than resuming as if its old
+    // claim were still good (which P21's `refresh` fix now refuses: the same
+    // stale claim beating instead of re-claiming would not reach this point
+    // at all, see `core/lock/durable.test.ts`'s refresh-horizon tests).
+    new GatewayLock(w.db, () => true).claim(new Date(), 'in attesa', process.pid);
 
     expect(standDown()).toBe(true);
     expect(w.said.join(' ')).toContain('passato al gateway');
