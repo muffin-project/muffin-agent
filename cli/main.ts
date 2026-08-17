@@ -55,6 +55,9 @@ const USAGE = `muffin — agente personale, sempre acceso
 alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
   muffin (o: muffin repl)       avvia l'agente: REPL + ogni surface abilitata
+                                [--no-stream] la risposta arriva solo a fine
+                                turno invece che mentre si forma (di default
+                                su un terminale reale, sì; su una pipe, mai)
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -149,8 +152,13 @@ function loadDotenvIfPresent(): void {
   }
 }
 
-async function main(argv: string[]): Promise<number> {
+async function main(rawArgv: string[]): Promise<number> {
   loadDotenvIfPresent();
+  // B11: stripped before the switch below, not parsed per-branch, so it
+  // reads the same whether it rides with a bare `muffin` (`command` ends up
+  // `undefined`, not the string `--no-stream`) or with `muffin repl`.
+  const noStream = rawArgv.includes('--no-stream');
+  const argv = noStream ? rawArgv.filter((a) => a !== '--no-stream') : rawArgv;
   const [typed, ...rest] = argv;
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
@@ -160,7 +168,10 @@ async function main(argv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      return runRepl();
+      // `noStream` only ever forces `false`. Never `true`: absent means "let
+      // `runRepl` decide from `process.stdout.isTTY`", and passing `true`
+      // here would override that autodetection and stream onto a pipe.
+      return runRepl(paths().home, noStream ? { stream: false } : {});
     case 'init':
       return cmdInit(rest);
     case 'config':
@@ -194,7 +205,7 @@ async function main(argv: string[]): Promise<number> {
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl();
+      return runRepl(paths().home, noStream ? { stream: false } : {});
     }
     case '--help':
     case '-h':

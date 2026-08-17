@@ -16,10 +16,13 @@ import { iterationCap, type Profile } from './profiles/profile.js';
 import { recoveryStep, type RecoveryFailure } from './profiles/recovery.js';
 import {
   ProviderError,
+  ProviderStreamError,
   type ChatCall,
+  type ChatResult,
   type ContentBlock,
   type Message,
   type Provider,
+  type StreamEvent,
   type ToolSpec,
 } from './providers/types.js';
 
@@ -401,7 +404,32 @@ export type TurnInput = {
    * always has.
    */
   replyChannel?: string | undefined;
+  /**
+   * Where the *final* answer's text arrives while it is still forming — M5-BIS
+   * B11. Per-turn, not per-runtime: a REPL prints to its own stdout, a
+   * Telegram chat edits its own draft, and a job with no live surface passes
+   * nothing at all, which is also the default that keeps `stream: false` on
+   * the wire exactly as before this field existed (see `drive`, the call to
+   * `deps.provider.chatStream`).
+   *
+   * **Only the round that ends the turn ever reaches this.** A round that
+   * calls a tool is the model "thinking aloud" between tool calls, not the
+   * answer, and the loop cannot tell which a round will be until it is over —
+   * `content_block_start` can be text for several blocks and then a
+   * `tool_use` at the very end. So every round is buffered internally and
+   * flushed here only once `result.toolCalls.length === 0` is already known,
+   * which is also the one branch that immediately finishes the turn — a
+   * suspend can only be armed by a tool call, so a round that streamed here
+   * can never be followed by one that suspends. "Stream, then retract" was
+   * the alternative and is rejected on purpose: it would mean a surface
+   * un-showing text it already showed, which is a worse promise than showing
+   * it late.
+   */
+  onDelta?: ((delta: TurnDelta) => void) | undefined;
 };
+
+/** One increment of the final answer's text, already past the tool-call filter above. */
+export type TurnDelta = { type: 'text'; text: string };
 
 export type TurnResult = {
   text: string;
@@ -557,6 +585,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     session: input.session,
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
+    ...(input.onDelta ? { onDelta: input.onDelta } : {}),
   });
 }
 
@@ -708,6 +737,16 @@ async function drive(
      * `toolContext` is built below.
      */
     replyChannel?: string | undefined;
+    /**
+     * Same story as `replyChannel`, immediately above: live only on a fresh
+     * turn, absent on a resume for the same reason — a process that picks a
+     * suspended turn back up (the gateway's lane, a reboot) is not the one
+     * holding whatever REPL or Telegram chat asked the *previous* attempt to
+     * stream. See `TurnInput.onDelta` for why that is never a gap in what the
+     * owner sees: no delta can have reached a surface on a round that goes on
+     * to suspend.
+     */
+    onDelta?: ((delta: TurnDelta) => void) | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -732,6 +771,7 @@ async function drive(
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
+    ...(options.onDelta ? { onDelta: options.onDelta } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -979,7 +1019,12 @@ async function drive(
         // an explicit `undefined` can still be a key on the wire, an absent
         // key never is.
         ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
-        stream: false,
+        // B11: streaming is requested exactly when someone can hear it. A turn
+        // with no `onDelta` sink (a job, a headless `muffin run`, a provider
+        // that never implements `chatStream`) sends this `false`, the request
+        // is byte-identical to before this field could ever be `true`, and
+        // `requestChatResult` below never touches `chatStream` at all.
+        stream: Boolean(input.onDelta && deps.provider.chatStream),
         ...(input.signal ? { signal: input.signal } : {}),
       };
 
@@ -989,9 +1034,45 @@ async function drive(
         turn,
       );
 
+      /**
+       * This round's text, in the granularity it actually arrived on the
+       * wire — released to `input.onDelta` only once this round is confirmed
+       * to be the one that answers (below, past the completion gate). Reset
+       * every iteration on purpose: a round the completion gate nudges and
+       * retries must not leak its (superseded) draft into the round that
+       * replaces it, and `textChunks` being declared inside the loop body is
+       * what guarantees that without an explicit clear.
+       */
+      let textChunks: string[] = [];
+
+      /**
+       * One call, whichever door gets there. Streams when `call.stream` says
+       * to and the provider can; a stream that breaks mid-flight falls back
+       * to a single plain `chat()` for *this* attempt only — a transport
+       * retry on a *later* iteration rebuilds `call` fresh and may stream
+       * again, which is not "twice silently": each attempt is its own
+       * `muffin.chat_call` span. `textChunks` is cleared before falling back
+       * because a broken stream's partial text belongs to a request that
+       * never finished, not to the one that replaces it.
+       */
+      const requestChatResult = async (): Promise<ChatResult> => {
+        if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(call);
+        try {
+          return await drainStream(deps.provider.chatStream(call), (text) => textChunks.push(text));
+        } catch (error) {
+          if (!(error instanceof ProviderStreamError)) throw error;
+          textChunks = [];
+          chatSpan.setAttributes({
+            'muffin.stream.fell_back_to_non_stream': true,
+            'muffin.stream.partial': error.partial,
+          });
+          return deps.provider.chat({ ...call, stream: false });
+        }
+      };
+
       let result;
       try {
-        result = await deps.provider.chat(call);
+        result = await requestChatResult();
       } catch (error) {
         chatSpan.end({ error });
         // Two failures wearing one type, and they take different doors.
@@ -1096,6 +1177,23 @@ async function drive(
           // It stands. Recorded rather than corrected: silently editing the
           // answer would be a second dishonesty stacked on the first.
           turn.setAttributes({ 'muffin.completion.unresolved': true });
+        }
+
+        // B11, and the one line that makes `TurnInput.onDelta`'s contract
+        // true rather than aspirational: **here**, past the `continue` above,
+        // is the earliest point in the whole function that a round is
+        // provably the one that answers — a round the completion gate nudges
+        // never reaches this line at all. `textChunks` replays in the order
+        // and granularity `drainStream` buffered it, which is the provider's
+        // own chunking — `trimChunkEdges` is the one adjustment, and it exists
+        // because `text` above is `result.text`, which both adapters `.trim()`
+        // once at the end; the raw chunks are not. Skipping it would mean a
+        // response with incidental leading or trailing whitespace streams one
+        // string and finishes having "said" a different (trimmed) one, which
+        // is exactly the byte-identical guarantee a surface's own test
+        // checks (`cli/repl.test.ts`).
+        if (input.onDelta && textChunks.length > 0) {
+          for (const chunk of trimChunkEdges(textChunks)) input.onDelta({ type: 'text', text: chunk });
         }
 
         deps.sessions.append(input.session, {
@@ -2033,6 +2131,71 @@ function makeSnapshot(
 function retryDelayMs(attempt: number): number {
   const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
   return Math.floor(Math.random() * ceiling);
+}
+
+/**
+ * The loop's one and only extraction point for `Provider.chatStream` — every
+ * caller of a provider's stream goes through this, so "what counts as a text
+ * delta" and "what does `done` mean" are answered once.
+ *
+ * `onChunk` receives each `text_delta` in the exact granularity the provider
+ * yielded it — the buffer `requestChatResult` above later replays, unchanged,
+ * to `input.onDelta`. `thinking_delta`, `tool_call_delta` and `usage` events
+ * are consumed and dropped here: nothing downstream of this function has ever
+ * needed a tool call before it is complete (the loop reads `result.toolCalls`,
+ * already parsed, off the `done` event), and a surface receives text only —
+ * see `TurnDelta`.
+ */
+async function drainStream(events: AsyncIterable<StreamEvent>, onChunk: (text: string) => void): Promise<ChatResult> {
+  for await (const event of events) {
+    if (event.type === 'text_delta') onChunk(event.text);
+    if (event.type === 'done') return event.result;
+  }
+  // A well-behaved provider's last event is always `done` (its own contract —
+  // see `Provider.chatStream`'s docstring). An iterable that ends without one
+  // is exactly the shape of transport this repo has no other name for than a
+  // broken stream, so it takes the same door: the caller's one-time fallback
+  // to `chat()`, `partial: true` because getting this far means every event up
+  // to the missing `done` did arrive.
+  throw new ProviderStreamError('provider stream ended without a done event', true);
+}
+
+/**
+ * Drops leading/trailing whitespace-only chunks and trims the edges of the
+ * first and last real one — so `chunks.map(c=>c.text).join('')` after this
+ * equals exactly `full.trim()`, chunk boundaries elsewhere untouched.
+ *
+ * Internal whitespace (a blank line the model wrote on purpose) is never
+ * touched: the loop stops walking in from each end at the first chunk that
+ * turns out to have real content, same as `String.prototype.trim` stops at
+ * the first non-whitespace character — this is that same rule applied chunk
+ * by chunk instead of character by character, because a surface streaming
+ * this live has no "whole string" to call `.trim()` on until the end.
+ */
+function trimChunkEdges(chunks: string[]): string[] {
+  const out = [...chunks];
+  while (out.length > 0) {
+    const trimmed = out[0]!.trimStart();
+    if (trimmed === out[0]) break; // no leading whitespace on this chunk — done
+    if (trimmed === '') {
+      out.shift(); // this chunk was whitespace-only — drop it, keep walking
+      continue;
+    }
+    out[0] = trimmed;
+    break;
+  }
+  while (out.length > 0) {
+    const last = out.length - 1;
+    const trimmed = out[last]!.trimEnd();
+    if (trimmed === out[last]) break;
+    if (trimmed === '') {
+      out.pop();
+      continue;
+    }
+    out[last] = trimmed;
+    break;
+  }
+  return out;
 }
 
 /** Sleeps, unless the turn is abandoned first. */
