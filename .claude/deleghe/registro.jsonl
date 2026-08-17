@@ -154,3 +154,7 @@
 {"id":"aad6d529cafac7aa0","branch":"slice/fs-containment","quando":"2026-08-17T08:06:55.367Z"}
 {"id":"aa7eb82e2f5525d99","slug":"audit-classificazione","cosa":"classificazione dei 24 finding critical/high/medium dell'audit e2a47ac contro dev: STILL PRESENT/FIXED/…; raggruppamento in slice per invariante; README in research/audit-2026-08-16 (sonnet)","quando":"2026-08-17T08:06:55.420Z"}
 {"id":"aa7eb82e2f5525d99","branch":"slice/mandato-day1","quando":"2026-08-17T08:06:55.472Z"}
+{"id":"ae3ae14d50bf400a2","chiuso":"slice/giudice-risposta-grezza completata: PR #49 ready (a102478 + 0b05655: righe di consolidamento non piu' doppie su extract manuale); 120 file/1388 pass, acceptance 18/18; scenario E5","quando":"2026-08-17T08:24:05.744Z"}
+{"id":"aa7eb82e2f5525d99","chiuso":"classificazione dei 24 finding: 23 STILL PRESENT + 2 CHANGED BUT STILL PRESENT, 0 fixed; repro eseguiti P29/P19/P20/P21; ordine consigliato lock→acceptance-truth→scheduler→fs→egress→injection→segreti (README in research/audit-2026-08-16)","quando":"2026-08-17T08:24:05.790Z"}
+{"id":"a3ada7594a686cac2","slug":"judge-pr49-giudice","cosa":"judge (sonnet) della PR #49 giudice memoria: verdetto mai indulgente, risposta grezza sanificata, reconcile su failure, raggruppamento, logger manuale, E5 in harness, nessuno schema","quando":"2026-08-17T08:24:05.835Z"}
+{"id":"a3ada7594a686cac2","branch":"slice/giudice-risposta-grezza","quando":"2026-08-17T08:24:05.880Z"}
