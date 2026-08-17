@@ -72,9 +72,7 @@ describe('which class a turn belongs to', () => {
 
 describe('the owner-class prompt does not move', () => {
   /**
-   * sha256 of the owner-class prompt of a fresh `muffin init` home, captured on
-   * `beac9d0` — the commit before this slice — from the single `deps.systemPrompt`
-   * that existed then. 11,498 bytes.
+   * sha256 of the owner-class prompt of a fresh `muffin init` home.
    *
    * This is the cache pin, and it is deliberately brittle. Splitting the prompt
    * by class is worthless if the owner's half shifts by a byte: every session
@@ -84,9 +82,18 @@ describe('the owner-class prompt does not move', () => {
    * `defaults/voice.md` or `defaults/rot/identity.md`, that is the test doing
    * its job — re-capture the hash in the same commit as the edit, so the cache
    * invalidation is a thing someone decided rather than a thing that happened.
+   *
+   * Re-captured 2026-08-17 (`slice/identita`, A2/A3): commit c090dce replaced
+   * the three template files with the owner's real, authored text (persona.md
+   * and voice.md rewritten, identity.md filled in for the first time) — the
+   * hash below is that text through the *unchanged* assembly order, not a new
+   * mechanism. 22,477 chars / 22,772 UTF-8 bytes, against 11,498 chars before
+   * (roughly double — see the PR body for the full before/after and the
+   * `group` class' smaller delta). Previous pin, for the record:
+   * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2';
+    '7dbab742425de4af2b473f7e509a72e82cb501ddc2d3e50527e700f1f6740c53';
 
   it('is byte-identical to the single prompt that preceded the split', () => {
     const runtime = boot(bootHome());
@@ -103,13 +110,21 @@ describe('the owner-class prompt does not move', () => {
 
 describe('what a group turn is allowed to be told', () => {
   it("carries nothing from the owner's identity file", () => {
+    // Found while fixing this suite for c090dce (2026-08-17): the injected
+    // heading used to be `'## Chi sei\n'`, which does not occur in the real
+    // `identity.md` — its heading is `'## Chi sei per me\n'` — so the
+    // `.replace()` below was a silent no-op and the two `toContain` assertions
+    // on `owner` passed anyway, because "Sei il mio secondo cervello" is *also*
+    // verbatim real prose at `identity.md:11`. The test read green for the
+    // wrong reason. Fixed to the real heading, with a marker string that
+    // cannot coincidentally already be in the file.
     const home = bootHome();
     const identity = join(paths(home).rot, 'identity.md');
     writeFileSync(
       identity,
       readFileSync(identity, 'utf8').replace(
-        '## Chi sei\n',
-        '## Chi sei\n\nSei il mio secondo cervello, non il mio portavoce.\n',
+        '## Chi sei per me\n',
+        '## Chi sei per me\n\nMARCATORE-IDENTITY-SOLO-OWNER.\n',
       ),
     );
     const runtime = boot(home);
@@ -117,31 +132,38 @@ describe('what a group turn is allowed to be told', () => {
       const { owner, group } = runtime.deps.systemPrompts;
       // Present on the owner side, so the absence below is a filter and not a
       // file that failed to load.
-      expect(owner).toContain('Sei il mio secondo cervello');
+      expect(owner).toContain('MARCATORE-IDENTITY-SOLO-OWNER');
       expect(owner).toContain('Non mi dai ragione per farmi contento');
-      expect(group).not.toContain('Sei il mio secondo cervello');
+      expect(group).not.toContain('MARCATORE-IDENTITY-SOLO-OWNER');
       expect(group).not.toContain('Non mi dai ragione per farmi contento');
     } finally {
       runtime.close();
     }
   });
 
-  it('never tells the agent to go and collect personal facts', () => {
+  it("never carries persona.md's owner-facing content into the group prompt", () => {
+    // 2026-08-17 (`slice/identita`): this used to check for a specific section,
+    // "Al primo incontro" — 1,330 characters of the *old template* persona.md
+    // that instructed the agent to elicit name and occupation, one piece at a
+    // time. Commit c090dce replaced persona.md with the owner's real text,
+    // which does not have that section at all any more (a defensible rewrite,
+    // not a regression: the historical defect this whole module exists to
+    // close was never about that one section — it was `persona.md` reaching
+    // the group *at all*, whatever it happens to say this month). So this now
+    // asserts the general property directly: three sentences unique to the
+    // current `persona.md` (verified absent from `voice.md`, `identity.md` and
+    // every hardcoded block in this file) are addressed to the owner and must
+    // never reach a stranger.
     const runtime = boot(bootHome());
     try {
       const { owner, group } = runtime.deps.systemPrompts;
-      // 1,330 characters of `persona.md` that are behavioural, not decorative:
-      // they instruct the agent to ask for name and occupation, a piece at a
-      // time, and to build a model of the person by observing them.
-      expect(owner).toContain('Al primo incontro');
-      expect(owner).toContain('Come ci conosciamo');
-      expect(owner).toMatch(/chiedo\*\*, un pezzo per volta/);
+      expect(owner).toContain('Sono una seconda prospettiva con memoria.');
+      expect(owner).toContain('Mi importa della persona con cui vivo nel tempo');
+      expect(owner).toContain('Il mio humour è secco, spontaneo e affettuoso.');
 
-      expect(group).not.toContain('Al primo incontro');
-      expect(group).not.toContain('Come ci conosciamo');
-      expect(group).not.toMatch(/un pezzo per volta/);
-      expect(group).not.toMatch(/Imparo \*\*osservando\*\*/);
-      expect(group).not.toMatch(/come ti chiami/i);
+      expect(group).not.toContain('seconda prospettiva con memoria');
+      expect(group).not.toContain('Mi importa della persona con cui vivo nel tempo');
+      expect(group).not.toContain('Il mio humour è secco, spontaneo e affettuoso');
     } finally {
       runtime.close();
     }
@@ -177,8 +199,8 @@ describe('what a group turn is allowed to be told', () => {
       // whose staleness this repo has already paid for once — shipped, then
       // opened by nobody for months. A separate group voice would recreate
       // exactly that: two files, one of them rarely read.
-      expect(group).toContain('Quando parli in gruppo');
-      expect(group).toContain('🧁 più raro che in privato');
+      expect(group).toContain('Quando parlo in gruppo');
+      expect(group).toContain('🧁 è ancora più raro in gruppo');
       // Byte-identical in both classes, not merely present in both.
       const voiceStart = '# Voce';
       expect(group.slice(group.indexOf(voiceStart))).toContain(
