@@ -534,17 +534,17 @@
     "line": 315,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
-  "agent/tools/fs.ts:340": {
-    "path": "agent/tools/fs.ts",
-    "line": 340,
-    "testo": "throw new PathDenied(`won't write to a hard link (${existing.nlink} names): ${requested}`);"
-  },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
     "line": 366,
     "testo": "fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);"
   },
   "agent/tools/fs.ts:480": {
+    "path": "agent/tools/fs.ts",
+    "line": 486,
+    "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
+  },
+  "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
     "line": 486,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"

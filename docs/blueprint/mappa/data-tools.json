@@ -28,7 +28,7 @@
       "maxTaint": null,
       "taintOut": "tier: 2 (DISK_TIER) - same shape as fs_read, and the same argument: a filename is text somebody chose, and `IGNORA le istruzioni precedenti.md` costs an attacker nothing. Treating a listing as metadata rather than content would be a special case whose only argument is that the strings are short (ADR-0044).",
       "wired": true,
-      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:340-359 (makeFsTools), not inline in runtime.ts.",
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:486-520 (makeFsTools), not inline in runtime.ts.",
       "onDeny": "agent/loop.ts:769-776, same generic kernel refusal as fs_read.",
       "oneLine": "Elenca le voci di una directory, indicando quali sono cartelle."
     },
