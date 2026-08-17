@@ -76,7 +76,7 @@
       "name": "RoT / sigillo",
       "file": "core/rot/verify.ts:156-213 (verify), core/rot/verify.ts:99-127 (hardeningHolds), core/rot/readers.ts:261-354 (checkRotReaders)",
       "guards": "hash-chain (manifest.json + external anchor) over every file under rot/; two modes — hardened (refuse boot on divergence) vs single-user (degrade to safe mode); a second, independent invariant that every sealed file has a real production reader",
-      "holds": "hardened is no longer a config self-report — hardeningHolds() actually probes W_OK on the RoT dir, the anchor, the manifest and every sealed file (verify.ts:99-127), wired at agent/runtime.ts:132-143 so a falsely-hardened install degrades to single-user semantics and tells the owner why. checkRotReaders (readers.ts) strips comments and imports before matching, specifically because a prior version was fooled by a docstring naming a file with no code opening it (readers.ts:204-222).",
+      "holds": "hardened is no longer a config self-report — hardeningHolds() actually probes W_OK on the RoT dir, the anchor, the manifest and every sealed file (verify.ts:99-127), wired at agent/runtime.ts:135-146 so a falsely-hardened install degrades to single-user semantics and tells the owner why. checkRotReaders (readers.ts) strips comments and imports before matching, specifically because a prior version was fooled by a docstring naming a file with no code opening it (readers.ts:204-222).",
       "gap": "forbiddenForSystem (matrix.ts:99: outward.send/outward.*/config.ratchet) is checked only for principal.kind==='system' (decide.ts:132), never for 'agent' — this matches the threat-model's literal wording ('escluse... da system@scheduler', 03-threat-model.md:53) but is a narrower guarantee than a reader might assume; currently moot only because no outward.* capability is registered yet (grep confirms zero declarations)."
     },
     {
@@ -84,7 +84,7 @@
       "file": "core/vault/vault.ts:95-338",
       "guards": "content-hash identity (hashOf, sha256) decides changed-vs-unchanged, not mtime; trust tier is inherited from the existing indexed row or from any other path with identical content, never lowered by a rename; a fixed filename/dotfile denylist keeps certain files from ever becoming indexed content, checked on the symlink-resolved real path",
       "holds": "vault.ts:219-227 — tier = existing-row-tier ?? maxTierForContent(hash) ?? caller default, so a tier-3 file renamed or copied cannot launder down to whatever tier the next reindex call defaults to; skipReason (vault.ts:58-67) runs on realpathSync'd segments specifically so a symlink named 'appunti' pointing at ~/.ssh cannot dodge the filter by its display name; audit() (core/vault/vault.ts:420-337) independently cross-checks disk vs index and reports missing/stale/orphaned rather than trusting the incremental updater's own bookkeeping.",
-      "gap": "NEVER_CONTENT (vault.ts:48-51) is a fixed 9-name list (id_rsa, id_ed25519, id_ecdsa, credentials, credentials.json, secrets.json, service-account.json, keyfile.json, authorized_keys) — filename-based only. A credential pasted into an ordinarily-named note (e.g. notes.md) is chunked, embedded and made recallable into any future prompt; the vault pipeline never reuses core/tracing/redact.ts's value-shape secret net, and vault.ts:26-30 explicitly documents that documents are 'never mined for facts' — but that design goal is about belief-extraction, not about secret-shaped strings reaching the embedder."
+      "gap": "NEVER_CONTENT (core/vault/vault.ts:74-77) is a fixed 9-name list (id_rsa, id_ed25519, id_ecdsa, credentials, credentials.json, secrets.json, service-account.json, keyfile.json, authorized_keys) — filename-based only. A credential pasted into an ordinarily-named note (e.g. notes.md) is chunked, embedded and made recallable into any future prompt; the vault pipeline never reuses core/tracing/redact.ts's value-shape secret net, and vault.ts:26-30 explicitly documents that documents are 'never mined for facts' — but that design goal is about belief-extraction, not about secret-shaped strings reaching the embedder."
     },
     {
       "name": "Sandbox",
@@ -142,7 +142,7 @@
       "doc": "core/rot/verify.ts:16-24 (restates ADR-0003)",
       "real": "now independently verified with a real W_OK probe against every sealed path before the kernel is told hardened:true, instead of trusting the config string",
       "verdict": "HOLDS",
-      "evidence": "core/rot/verify.ts:99-127; agent/runtime.ts:132-143"
+      "evidence": "core/rot/verify.ts:99-127; agent/runtime.ts:135-146"
     },
     {
       "claim": "Mandatory deny paths: RoT, config, secrets, .git/hooks, shell dotfiles",
@@ -212,7 +212,7 @@
     },
     {
       "what": "vault secret filtering is a 9-name filename denylist, not content inspection",
-      "evidence": "core/vault/vault.ts:48-51 (NEVER_CONTENT), core/vault/vault.ts:58-67 (skipReason)",
+      "evidence": "core/vault/vault.ts:74-77 (NEVER_CONTENT), core/vault/vault.ts:58-67 (skipReason)",
       "why_it_matters": "a credential pasted into any ordinarily-named note is chunked, embedded, and becomes recallable into future prompts; the vault never reuses core/tracing/redact.ts's value-shape secret net."
     },
     {
