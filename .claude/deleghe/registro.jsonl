@@ -150,3 +150,7 @@
 {"id":"a3124a2933b040cb1","chiuso":"judge #46: ADJUST su recency-vs-importance e chiusura orfana → corretti (cde5eac); mergiata 6c621aa","quando":"2026-08-17T07:01:52.787Z"}
 {"id":"ae3ae14d50bf400a2","slug":"giudice-risposta-grezza","cosa":"slice/giudice-risposta-grezza (E5 sul giudice memoria): review conserva la risposta grezza + ragione tipizzata, parser tollerante senza indulgenza, REPL raggruppa; da osservazione owner 16/08 (sonnet, worktree isolato)","quando":"2026-08-17T07:01:52.829Z"}
 {"id":"ae3ae14d50bf400a2","branch":"slice/giudice-risposta-grezza","quando":"2026-08-17T07:01:52.872Z"}
+{"id":"aad6d529cafac7aa0","slug":"fs-containment","cosa":"slice/fs-containment: CRITICAL audit P29 (fs_read/list seguono symlink terminale: root+denyRead bypass, chiave leggibile) + P28 (fs_write via parent symlinkato) — invariante 6 del mandato (sonnet, worktree isolato)","quando":"2026-08-17T08:06:55.314Z"}
+{"id":"aad6d529cafac7aa0","branch":"slice/fs-containment","quando":"2026-08-17T08:06:55.367Z"}
+{"id":"aa7eb82e2f5525d99","slug":"audit-classificazione","cosa":"classificazione dei 24 finding critical/high/medium dell'audit e2a47ac contro dev: STILL PRESENT/FIXED/…; raggruppamento in slice per invariante; README in research/audit-2026-08-16 (sonnet)","quando":"2026-08-17T08:06:55.420Z"}
+{"id":"aa7eb82e2f5525d99","branch":"slice/mandato-day1","quando":"2026-08-17T08:06:55.472Z"}
