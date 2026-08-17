@@ -128,6 +128,7 @@ export type RowVerdict =
   | { kind: 'atteso-rosso'; reason: string; closedBy: string }
   | { kind: 'atteso-rosso-ora-verde'; reason: string; closedBy: string }
   | { kind: 'non-provabile-qui'; reason: string }
+  | { kind: 'provata-dal-meccanismo'; reason: string }
   | { kind: 'nessuno-scenario' };
 
 export function verdictFor(
@@ -143,6 +144,13 @@ export function verdictFor(
   // is reported on the first, since a mixed verdict across scenarios for the
   // same row would need its own presentation this suite does not need yet.
   const scenario = scenariosForRow[0]!;
+  // `provata-dal-meccanismo` never registers a real `it()` (scenario.ts
+  // refuses to — see its own comment), so there is no vitest outcome to look
+  // up for it and looking would always miss, mis-filing it as `nessuno
+  // scenario` next to rows that genuinely have no coverage at all.
+  if (scenario.expectation.kind === 'provata-dal-meccanismo') {
+    return { kind: 'provata-dal-meccanismo', reason: scenario.expectation.reason };
+  }
   // vitest's fullName joins the describe block and the it title with a space —
   // a suffix match is what survives that without hard-coding the describe text
   // here too.
@@ -184,6 +192,7 @@ export type Summary = {
     unexpectedRed: number;
     attesoRossoOraVerde: number;
     nonProvabile: number;
+    provataDalMeccanismo: number;
     nessunoScenario: number;
     readyWithoutScenario: number;
     readyWithAttesoRosso: number;
@@ -211,6 +220,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
   let attesoRosso = 0;
   let nessunoScenario = 0;
   let nonProvabile = 0;
+  let provataDalMeccanismo = 0;
   let attesoRossoOraVerde = 0;
 
   /**
@@ -275,6 +285,10 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
         nonProvabile++;
         lines.push(`  non provabile qui  ${row.id}  ${row.area} — ${verdict.reason}`);
         break;
+      case 'provata-dal-meccanismo':
+        provataDalMeccanismo++;
+        lines.push(`  provata dal meccanismo  ${row.id}  ${row.area} — ${verdict.reason}`);
+        break;
       case 'nessuno-scenario':
         nessunoScenario++;
         if (row.stato === 'READY') readyWithoutScenario++;
@@ -294,6 +308,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
       unexpectedRed,
       attesoRossoOraVerde,
       nonProvabile,
+      provataDalMeccanismo,
       nessunoScenario,
       readyWithoutScenario,
       readyWithAttesoRosso,
@@ -308,12 +323,19 @@ function main(): void {
   const results = runAcceptanceSuite();
   const { lines, counts, failed } = summarize(inventory, MANIFEST, results);
 
-  process.stdout.write(`Accettazione M5-BIS — ${inventory.length} righe, ${MANIFEST.length} scenari\n\n`);
+  // `MANIFEST.length` alone would count E4 too, but a `provata-dal-meccanismo`
+  // entry never registers a real `it()` (scenario.ts refuses to) — counting it
+  // here would make this header disagree with what `npm run test:acceptance`
+  // actually runs, which is exactly the kind of stale count this report exists
+  // to prevent elsewhere.
+  const scenariReali = MANIFEST.filter((s) => s.expectation.kind !== 'provata-dal-meccanismo').length;
+  process.stdout.write(`Accettazione M5-BIS — ${inventory.length} righe, ${scenariReali} scenari\n\n`);
   process.stdout.write(`${lines.join('\n')}\n\n`);
   process.stdout.write(
     `verde ${counts.verde} · atteso-rosso ${counts.attesoRosso} · rosso-inatteso ${counts.unexpectedRed} · ` +
       `atteso-rosso→verde ${counts.attesoRossoOraVerde} · non provabile qui ${counts.nonProvabile} · ` +
-      `nessuno scenario ${counts.nessunoScenario} · orfano ${counts.orphanRows}\n`,
+      `provata dal meccanismo ${counts.provataDalMeccanismo} · nessuno scenario ${counts.nessunoScenario} · ` +
+      `orfano ${counts.orphanRows}\n`,
   );
 
   if (failed) {
