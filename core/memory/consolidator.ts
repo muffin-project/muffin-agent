@@ -720,7 +720,21 @@ export class Consolidator {
     // Grouped, not one line per candidate — see `formatConsolidationLines`
     // for why: this is the exact spot that put "giudice non disponibile su
     // owner/interest" on the owner's screen three times running.
-    for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
+    //
+    // Skipped on `manual`: its one caller, `cmdMemoryExtract`
+    // (`cli/memory.ts`), already holds this exact `report` and prints its
+    // own summary from it — logging here too meant every line appeared
+    // twice, once as "consolidamento: X" from here and once as "  ! X" from
+    // there. The automatic triggers (idle/ceiling/drain) have no caller
+    // waiting on the report: `notify`/`fire` return nothing, so this line is
+    // the only place an owner watching REPL/gateway stderr ever sees it —
+    // which is why they keep it. The two `deps.log` calls above (budget
+    // skipped, batch threw) stay unconditional on purpose: `cmdMemoryExtract`
+    // explicitly relies on one of them having already said which, and never
+    // reaches this far to duplicate them (both return with `report: null`).
+    if (trigger !== 'manual') {
+      for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
+    }
 
     // The drain. Both halves, and the `busy` exclusion: a lane lock refusal
     // fetched nothing, so `fetched === limit` is false anyway — but stating it

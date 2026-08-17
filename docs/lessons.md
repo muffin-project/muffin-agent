@@ -872,4 +872,11 @@ coercion (removing `z.coerce.number()` or the key-normalisation turns the
 "tolerates innocuous formatting" tests red on exactly the shape it was meant
 to fix), and `core/memory/ingest.test.ts`'s `formatConsolidationLines`
 suite (reverting to `report.errors` verbatim reproduces the three-line
-symptom in the test itself).
+symptom in the test itself). A fourth, smaller instance of the same family
+turned up wiring this fix in: `Consolidator.execute()`'s own internal logger
+and `cli/memory.ts`'s `cmdMemoryExtract` each printed the grouped line
+independently, so a hand-typed `muffin memory extract` still showed it
+twice until the internal logger learned to stay quiet on `trigger:
+'manual'` — caught by running the real binary
+(`evals/acceptance/scenarios/e-cost.accept.ts`, E5), not by either unit
+suite alone, because each printer's own test only ever looked at itself.
