@@ -44,13 +44,25 @@ L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
 - Circa trenta righe `?`: da chiudere una alla volta con uno scenario
   dell'harness di accettazione (E4, READY, job CI verde su `dev`).
 
-**Non integrato.** `slice/streaming` (B11, "la risposta arriva mentre si
-forma"): provider adapter (`chatStream`, entrambi), loop (delta-sink
-bufferizzato sul solo testo finale), REPL/CLI chiusi e testati — PR aperta
-verso `dev`. Divisa in due PR per il tetto ~600 righe: la seconda (Telegram,
-bozza progressiva) segue sulla stessa slice. Nessun lavoro vale READY prima di
+**Non integrato.** `slice/streaming` (B11 → READY, "la risposta arriva mentre
+si forma") — due PR verso `dev` per il tetto ~600 righe, nessuna ancora
+mergiata. **PR 1** (`slice/streaming`): provider adapter (`Provider
+.chatStream` su entrambi, SDK ufficiali), loop (delta-sink bufferizzato per
+giro, rilasciato solo al netto del completion gate), REPL/CLI (`Surface
+.streaming`, `--stream`/`--no-stream`). **PR 2** (`slice/streaming-telegram`,
+stack su PR 1): bozza dal vivo Telegram (`sendMessageDraft` — trovato e
+corretto un parametro richiesto mancante, `draft_id`, che faceva fallire ogni
+chiamata in produzione da sempre, inghiottito da `safely()`; vedi ADR-0025
+§revisione e `docs/lessons.md`), `editMessageText` progressivo sul
+placeholder in gruppo, spento per sessione al primo edit fallito. Trovato
+lungo la strada e corretto: `presence.stop()` cancellava un aggiornamento dal
+vivo appena schedulato invece di mandarlo — un turno abbastanza veloce non
+mostrava mai streaming, in silenzio (trovato da un test di cablaggio reale,
+non da lettura del codice). Scenario di accettazione B11 verde contro il
+binario vero. Discord resta OUT (B17). Nessun lavoro vale READY prima di
 integration test, wiring di produzione, failure path, scenario reale,
-documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11.
+documenti/stato e percorso di chiusura di `ORCHESTRATION.md` §11 — questa riga
+li ha tutti e sette, per entrambe le superfici.
 
 **Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
 → commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
