@@ -37,13 +37,18 @@ non sovrapposte in volo.
 - **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
   pushato: character eval a proprietà, cross-model, confronto col vecchio Muffin.
   Da riprendere; la corsa reale sui modelli costa e va proposta all'owner.
-- **PR #63** `slice/workflow-evidence-budget` (FAST) — questa: i tre profili di
-  verifica, il firewall di scope, il budget dei documenti, e la riconciliazione
-  del handoff resa meccanica (`.claude/riconcilia.mjs`).
+- **`slice/audit-mediums`** → **PR #61** (STANDARD) — cluster di MEDIUM
+  dell'audit (P34-1, P35, P36, P25, P33, E2), verificata dall'orchestratore,
+  in attesa della CI.
+- **`slice/egress-params`** (PC 1.6, CRITICAL) — implementazione e scenari già
+  scritti, `dev` mergiato: da rifinire e mandare a un judge fresco.
+- **`slice/session-taint`** (PC 1.2, CRITICAL) — WIP da riprendere.
+- **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP da riprendere; la
+  corsa reale sui modelli costa e va proposta all'owner.
 
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
-`init --local` · #60 citazioni della mappa.
+`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica).
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
