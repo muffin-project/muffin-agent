@@ -72,6 +72,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
       'up before --history is even asked',
     'evals/acceptance/scenarios/c-memory.accept.ts (harness fixture — no slice scheduled yet)',
   ),
+  verde(
+    'D1',
+    'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
+  ),
   verde('D2', 'file write: asking to write a file gets an honest refusal, not a silent no-op'),
   rosso(
     'D3',
