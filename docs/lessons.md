@@ -902,3 +902,45 @@ red; one that does not is `rosso-inatteso`, not "va bene così".
 > **A test that can pass no matter what broke is not weaker evidence than no
 > test — it is evidence with the sign flipped, because the row it covers now
 > reads "verified" to everyone who has not read the assertion.**
+
+## Symlink resolution has to cover the leaf and the parent, not just the middle **(this build)**
+
+`agent/tools/fs.ts`'s `resolveInScope()` already had a test named exactly for
+this — *"is not fooled by a symlink that leaves the scope"* — and it passed,
+on every commit, while two other symlink shapes walked straight through.
+
+The function resolved a symlink that sat in the *middle* of a path (a
+directory somewhere above the file actually being touched) correctly from the
+start: `realpathSync` on a longer path always resolves an intermediate
+component, so nothing special had to be written for that case and nothing
+was. What it never resolved was the *exact path requested* — the terminal
+component — nor a symlinked *ancestor found by walking up* because the
+requested file did not exist yet. Both took the same branch, written for a
+third, narrower case (a write must refuse a terminal symlink outright,
+never resolve it), and that branch returned the link's own location with its
+parent canonicalised — never the target. So `resolveInScope` computed a path
+that was inside `root` by construction, on exactly the two shapes where the
+underlying `readFileSync`/`readdirSync`/`writeFileSync` does not stop at the
+link: it follows it, all the way, because that is what the terminal
+component of a path means to the OS. A `denyRead` secrets directory reached
+by a symlink placed anywhere inside `root` was readable verbatim; `fs_write`
+of a *new* file through a symlinked parent directory landed wherever the
+link pointed. Both shipped past a green suite and past `STATE.md`'s own
+record of "closed" (2026-08-06: *"quattro bypass del containment fs
+[...] chiusi"* — dangling symlink, hard link, case, and the read-side
+deny-list skip; none of those four is a terminal symlink or a symlinked
+parent). Found by the 2026-08-16 adversarial audit (P29 CRITICAL, P28
+MEDIUM), closed in `slice/fs-containment`.
+
+**Instead:** when a function's job is "resolve whatever the OS will actually
+touch", enumerate the path's own components explicitly — *the exact
+requested path*, *every ancestor reached by walking up*, *every intermediate
+component along an existing prefix* — and ask the symlink question of each
+one by name, rather than writing one branch and trusting it to fire on
+every case a single test happened to construct. A test named for the general
+property ("is not fooled by a symlink") tests the one shape its author
+built a fixture for; the shape the author did not think of stays green by
+never being asked. `docs/PRACTICES.md` §5's "test the wiring, not the logic"
+is usually read as "does production call this at all" — the same rule
+applies one level down, to whether a test's *fixture* actually exercises
+every branch its *name* claims to cover.
