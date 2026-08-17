@@ -315,6 +315,41 @@ describe('the review register, read at last', () => {
   });
 
   /**
+   * `detail` for a judge-unavailable row carries the model's raw response
+   * (`ingest.ts`), which is free to differ on every call even for the exact
+   * same recurring failure on the exact same (subject, predicate) — unlike
+   * "estrazione fallita su episodio 7", above, whose text is deterministic
+   * because the episode id and the error are both fixed. Folding on the
+   * literal text, as the case above does, would stop grouping this kind of
+   * row at all: `subject`/`predicate` are the stable key instead.
+   */
+  it('folds judge failures by (subject, predicate) even though every raw response differs', () => {
+    const h = harness();
+    const details = [
+      'giudice non disponibile su owner/interest: tengo entrambi i valori [vuota]\nrisposta grezza: (vuota)',
+      'giudice non disponibile su owner/interest: tengo entrambi i valori [non-json]\nrisposta grezza: boh',
+      'giudice non disponibile su owner/interest: tengo entrambi i valori [schema: verdict — Invalid option]\nrisposta grezza: {"verdict":"chissà"}',
+    ];
+    details.forEach((detail, i) => {
+      h.store.recordReview({
+        tenantId: HOST,
+        kind: 'error',
+        subject: 'owner',
+        predicate: 'interest',
+        detail,
+        createdAt: `2026-08-1${i}T10:00:00Z`,
+      });
+    });
+
+    const groups = errorGroups(h.store, HOST);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.count).toBe(3);
+    // The most recent occurrence's text — the freshest raw response — since
+    // that is what a reader looking at this group right now wants to see.
+    expect(groups[0]?.detail).toContain('schema: verdict');
+  });
+
+  /**
    * The readonly reader `doctor` uses. Null and zero are different findings and
    * the distinction is the same one `readConsolidation` makes: on a home written
    * before the register existed, the table is simply not there, and reporting
