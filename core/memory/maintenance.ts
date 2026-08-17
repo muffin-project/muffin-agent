@@ -229,7 +229,8 @@ export function openContradictions(store: MemoryStore, tenantId: string, limit =
 export type ErrorGroup = { detail: string; count: number; firstAt: string; lastAt: string };
 
 /**
- * Pipeline errors, folded by message.
+ * Pipeline errors, folded by (subject, predicate) when the row has one,
+ * otherwise by message.
  *
  * Folded and not listed, because of a repeat this register makes possible: an
  * episode whose extraction fails **permanently** is deliberately left unmarked
@@ -241,18 +242,35 @@ export type ErrorGroup = { detail: string; count: number; firstAt: string; lastA
  * Folding is done here, on the read side, and not by suppressing the write. The
  * write is the honest record of what happened and how often; a reader that
  * cannot see "this failed 400 times since June" is missing the finding.
+ *
+ * **Why the key is not always `detail`.** A judge-unavailable row's `detail`
+ * carries the model's own raw response (`ingest.ts`), which is free to differ
+ * on every call even for the exact same recurring failure — three unreadable
+ * answers on `owner/interest` are not required to be the same three
+ * characters. Folding on that text verbatim would stop grouping the one kind
+ * of row this register most needs to group. `subject`/`predicate` are stable
+ * for the same pair regardless of what the model said this time, and
+ * `recordReview` already writes them as columns for exactly this case, so the
+ * key is available without parsing `detail`. Rows with neither — a failed
+ * extraction, a dead vector index — keep folding on the message, unchanged:
+ * that text is deterministic per failure (the episode id and the error are
+ * both fixed), which is what made folding on it correct in the first place.
  */
 export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): ErrorGroup[] {
-  const byDetail = new Map<string, ErrorGroup>();
+  const groups = new Map<string, ErrorGroup>();
   for (const item of store.pendingReview(tenantId, 500)) {
     if (item.kind !== 'error') continue;
-    const seen = byDetail.get(item.detail);
+    const key = item.subject && item.predicate ? `${item.subject}\t${item.predicate}` : item.detail;
+    const seen = groups.get(key);
     if (seen) {
       seen.count += 1;
       // `pendingReview` returns newest first, so a later row is always older.
       seen.firstAt = item.createdAt;
     } else {
-      byDetail.set(item.detail, {
+      groups.set(key, {
+        // The newest occurrence's text — the freshest raw response, when
+        // there is one — since this is the first (and therefore most recent,
+        // per the newest-first order above) row seen for this key.
         detail: item.detail,
         count: 1,
         firstAt: item.createdAt,
@@ -260,7 +278,7 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
       });
     }
   }
-  return [...byDetail.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
+  return [...groups.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
 }
 
 /**

@@ -2,6 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { paths } from '../core/config/config.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
+import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
 import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
@@ -34,7 +35,10 @@ export const MEMORY_USAGE = `usage:
        --since/--until  solo evidenza in quella finestra
        --around K     K episodi prima e dopo ogni risultato, nel suo thread
   muffin memory extract [--limit N]    drena l'arretrato a mano (di norma parte da solo)
-  muffin memory review [keep <fact-id>]  le contraddizioni che aspettano te
+  muffin memory review [keep <fact-id>] [--verbose]
+                                 le contraddizioni e i problemi della pipeline
+                                 che aspettano te. --verbose aggiunge la
+                                 risposta grezza del giudice quando non era leggibile
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
 `;
@@ -252,11 +256,17 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       total.skippedEmpty += report.skippedEmpty;
       total.indexed += report.indexed;
       total.review += report.needsReview.length;
-      total.errors += report.errors.length;
+      // Both counts, same reasoning as `consolidator.ts`: a judge failure is
+      // a problem this round exactly as much as anything in `errors`, and
+      // the exit code below has to see the whole total, not half of it.
+      total.errors += report.errors.length + report.judgeUnavailable.length;
       for (const r of report.needsReview) {
         process.stderr.write(`  ? ${r.subject} ${r.predicate}: "${r.existing}" vs "${r.incoming}" — ${r.why}\n`);
       }
-      for (const e of report.errors) process.stderr.write(`  ! ${e}\n`);
+      // Grouped by (subject, predicate), same renderer the automatic lane
+      // uses (`consolidator.ts`) — a hand-typed run should not see three
+      // copies of the same judge failure just because it was not automatic.
+      for (const line of formatConsolidationLines(report)) process.stderr.write(`  ! ${line}\n`);
       rounds += 1;
       // The same stop condition as the automatic drain, from the same two
       // fields — and that is the point of it being the same. This used to be a
@@ -285,6 +295,18 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
 }
 
 /**
+ * `detail`'s first line is the summary every reader sees; a judge-unavailable
+ * row appends the model's raw response after it (`ingest.ts`) — free text,
+ * not a second column, per `store.ts`'s `ReviewItemInput.detail`. A row with
+ * nothing appended (every other kind of pipeline error) yields an empty
+ * `rawResponse`, which prints nothing extra either way.
+ */
+function splitReviewDetail(detail: string): { headline: string; rawResponse: string[] } {
+  const [headline, ...rest] = detail.split('\n');
+  return { headline: headline ?? detail, rawResponse: rest };
+}
+
+/**
  * The read side of `memory_review`, which had none.
  *
  * The judge's `review` verdict — the deliberate *"a human should decide"* — has
@@ -300,8 +322,14 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
  * Opens nothing but the database: no provider, no key, no network. Same
  * argument as `check` — the moment you need this is not a moment to require the
  * model to be configured.
+ *
+ * `verbose` reveals the judge's raw response on a row it could not read
+ * (`ingest.ts` writes it as everything in `detail` after the first line) —
+ * off by default because a light model's answer can run to hundreds of
+ * characters, and the summary line already names the typed reason
+ * (`describeFailureReason` in `judge.ts`: "vuota" · "non-json" · "schema: …").
  */
-export function cmdMemoryReview(home: string): number {
+export function cmdMemoryReview(home: string, verbose = false): number {
   const { db, store } = openStore(home);
   try {
     const summary = reviewSummary(store, TENANT);
@@ -327,7 +355,11 @@ export function cmdMemoryReview(home: string): number {
           e.count === 1
             ? e.lastAt.slice(0, 10)
             : `${e.count}× · ${e.firstAt.slice(0, 10)} → ${e.lastAt.slice(0, 10)}`;
-        out.push(`   ${span}  ${e.detail}`);
+        const { headline, rawResponse } = splitReviewDetail(e.detail);
+        out.push(`   ${span}  ${headline}`);
+        if (verbose) {
+          for (const line of rawResponse) out.push(`        ${line}`);
+        }
       }
       out.push('');
     }
