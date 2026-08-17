@@ -932,12 +932,17 @@ export class TurnStore {
    * one transaction, because a tier-3 result raises the taint of the turn and
    * the two facts must not be able to land separately: a crash between them
    * would leave a record that had read the web at a tier that says it had not.
+   *
+   * `tier` is mandatory in this signature — audit P05 (BLOCKER): it used to be
+   * optional, so an omitted argument wrote a silent `NULL` and skipped the
+   * taint bump below with no error anywhere. `ToolOutcome.tier` was already
+   * required upstream (ADR-0044), but the guarantee lived in the caller, not
+   * in this method's type, which is exactly the gap ORCHESTRATION.md §15 warns
+   * about. Every real caller already passes it (`agent/loop.ts`'s success and
+   * throw paths both do); a future one that does not now fails `tsc` instead
+   * of shipping an underestimated taint.
    */
-  endToolCall(
-    turnId: string,
-    callId: string,
-    result: { content: string; isError: boolean; tier?: TrustTier | undefined },
-  ): void {
+  endToolCall(turnId: string, callId: string, result: { content: string; isError: boolean; tier: TrustTier }): void {
     const now = this.clock().toISOString();
     const write = this.db.transaction(() => {
       this.outcomeStmt.run({
@@ -945,10 +950,10 @@ export class TurnStore {
         callId,
         content: result.content,
         isError: result.isError ? 1 : 0,
-        tier: result.tier ?? null,
+        tier: result.tier,
         now,
       });
-      if (result.tier !== undefined) this.taintStmt.run({ id: turnId, taint: result.tier, now });
+      this.taintStmt.run({ id: turnId, taint: result.tier, now });
     });
     write();
   }
