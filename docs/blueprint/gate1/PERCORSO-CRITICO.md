@@ -1,6 +1,6 @@
 # Percorso critico minimo verso DAY 1
 
-**Aggiornato**: 2026-08-17 · base `dev` @ `3068ece` + PR #53/#54 in giudizio.
+**Aggiornato**: 2026-08-17 (pomeriggio) · base `dev` @ `98e4787`.
 Questo file è la sequenza operativa che il `/loop` segue: una slice alla volta,
 piccola, verificata, giudicata e mergiata prima della successiva. Nasce dal
 triage evidence-only del 17/08 (tre worker in sola lettura, tutti i BLOCKER,
@@ -22,29 +22,39 @@ non sovrapposte in volo.
 
 ## 0 · In volo adesso
 
-- **PR #53** `slice/lease-fencing` — proprietà trasversale 5 (lock/lease/fencing:
-  liveness prima dell'orologio, `holder_id`, `claim_token` sui turni,
-  `stillOwner` prima di ogni effetto). Judge opus.
-- **PR #54** `slice/acceptance-truth` — proprietà 8 (READY + scenario
-  atteso-rosso fa fallire il rapporto; `expectFailure` obbligatorio; B8/C4/D10
-  verdi sul percorso attuale). Judge sonnet. Nota aperta: la CI esegue il
-  rapporto con `|| true`.
-- **`slice/a1-continuita`** — A1 nella lettura forte dell'owner (processo
-  residente supervisionato: SIGKILL del gateway vero + riavvio → turno sospeso e
-  job dovuto ripresi **una sola volta**, `status`/`doctor` sani; Telegram che
-  riprova `getMe()` finché la rete non c'è; `doctor` che verifica unit/plist,
-  enable, linger). Il reboot reale della macchina è battery §10.
+*(Questa sezione è verificata meccanicamente: `node .claude/riconcilia.mjs` esce
+≠ 0 se qui compare una PR già mergiata o un branch già cancellato. Va aggiornata
+**nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4.)*
+
+- **`slice/session-taint`** (PC 1.2, CRITICAL) — WIP committato e pushato al
+  session limit del 17/08: tier per messaggio di sessione, la history reiniettata
+  alza la taint prima del kernel. Da riprendere.
+- **`slice/egress-params`** (PC 1.6, CRITICAL) — WIP committato e pushato:
+  il kernel ispeziona query/URL, `sys.search` entra nel ramo egress. Da
+  riprendere.
+- **`slice/audit-mediums`** (PC 2.4, STANDARD) — WIP committato e pushato:
+  cluster di MEDIUM piccoli (P34-1, P35, P36, P25, P33, E2). Da riprendere.
+- **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
+  pushato: character eval a proprietà, cross-model, confronto col vecchio Muffin.
+  Da riprendere; la corsa reale sui modelli costa e va proposta all'owner.
+- **PR #63** `slice/workflow-evidence-budget` (FAST) — questa: i tre profili di
+  verifica, il firewall di scope, il budget dei documenti, e la riconciliazione
+  del handoff resa meccanica (`.claude/riconcilia.mjs`).
+
+**Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
+#56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
+`init --local` · #60 citazioni della mappa.
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
 | # | Slice | Cosa chiude | Evidenza del difetto oggi | Costo |
 |---|---|---|---|---|
-| 1.1 | `slice/wal-intent` | Mandato inv. 1 e prima verifica pre-D2/D3/D11: **fallita persistenza di `startToolCall` ⇒ l'handler NON esegue**. Oggi `recordIntent` inghiotte l'errore e `tool.handler` parte comunque. Insieme: `tier` obbligatorio nella firma di `endToolCall` (audit P05: `NULL` silenzioso salta il bump di taint). | `agent/loop.ts` `recordIntent` (try/catch senza throw) → `await tool.handler(args, ctx)` incondizionato; `core/turns/store.ts` `endToolCall(tier?)` | S |
-| 1.2 | `slice/session-taint` | Mandato inv. 2: la history di sessione reiniettata alza la taint del turno al tier massimo del contenuto che riporta (probe eseguito: turno 2 pulito nella stessa sessione di un turno tier 3 → taint 0, testo tier 3 presente nella richiesta al modello — **LAUNDERED**). Serve il tier per messaggio di sessione (colonna additiva su `SessionMessage`, o derivazione da `TurnStore` per `sessionId` — scelta tecnica del worker, dichiarata nella PR). | `agent/loop.ts` `taint: principal.kind==='member' ? 2 : 0`; `buildContext` inietta `sessions.read()` come testo; `core/session/store.ts` senza tier | M |
+| 1.1 | ~~`slice/wal-intent`~~ **fatto (#57)** | Mandato inv. 1 e prima verifica pre-D2/D3/D11: **fallita persistenza di `startToolCall` ⇒ l'handler NON esegue**. Oggi `recordIntent` inghiotte l'errore e `tool.handler` parte comunque. Insieme: `tier` obbligatorio nella firma di `endToolCall` (audit P05: `NULL` silenzioso salta il bump di taint). | `agent/loop.ts` `recordIntent` (try/catch senza throw) → `await tool.handler(args, ctx)` incondizionato; `core/turns/store.ts` `endToolCall(tier?)` | S |
+| 1.2 | `slice/session-taint` **(in volo, WIP)** | Mandato inv. 2: la history di sessione reiniettata alza la taint del turno al tier massimo del contenuto che riporta (probe eseguito: turno 2 pulito nella stessa sessione di un turno tier 3 → taint 0, testo tier 3 presente nella richiesta al modello — **LAUNDERED**). Serve il tier per messaggio di sessione (colonna additiva su `SessionMessage`, o derivazione da `TurnStore` per `sessionId` — scelta tecnica del worker, dichiarata nella PR). | `agent/loop.ts` `taint: principal.kind==='member' ? 2 : 0`; `buildContext` inietta `sessions.read()` come testo; `core/session/store.ts` senza tier | M |
 | 1.3 | `slice/recall-speaker` | Mandato inv. 3: un episodio `role='agent'` richiamato non è mai «tu» (probe eseguito: `source: "tu via cli"` per una frase mai detta dall'owner — **CONFLATED**). `describeTier` riceve il ruolo; `searchEpisodes` seleziona `role`; rendering `[muffin, …]`. Stesso file: audit P23 (ricerca a parola chiave e vicinato non marcano RITIRATO i fatti superseduti). | `core/memory/recall.ts` `describeTier(tier→'tu')`; `core/memory/store.ts` `searchEpisodes` senza `role`; `schema.ts` trigger FTS senza filtro | M |
 | 1.4 | `slice/ingress-forward` (B16 minimo, non l'envelope universale) | Mandato inv. 3 lato ingresso: un messaggio **inoltrato** dall'owner da un estraneo entra oggi a tier 0, byte-identico alle parole dell'owner (audit P14); caption/filename entrano fusi nel testo. Minimo: `forward_origin` → contenuto a tier 2 recintato; caption e filename come campi tipizzati con provenienza. L'envelope completo (nomi, bio, entities, poll, contact) resta post-Gate 1 con ragione scritta in M5-BIS. | `connectors/telegram/connector.ts` `parseUpdate` (`text ?? caption`, nessun `forward_origin`) | M |
 | 1.5 | `slice/job-fires` + `slice/inbound-unit` — **decisione owner presa (17/08): A, `job_fires` come ponte di identità** | Mandato inv. 4 e 5 (proprietà 3 e 4). Proprietà voluta dall'owner: «ogni occorrenza stabile `(job_id, scheduled_for)` mappa a UNA sola identità durevole di lavoro/turno; dopo un crash Muffin continua o conclude quella stessa identità, non crea un secondo turno e non abbandona il primo». `job_fires` è un **ponte di identità/idempotenza verso `turns`** (`(job_id, scheduled_for) → turn_id`), non un secondo TurnStore; `scheduled_for` è l'occorrenza dovuta, mai l'ora in cui il processo l'ha presa. Matrice di fault minima: crash prima del fire → si crea; dopo il fire prima del turno → completa il binding, non perde il fire; dopo la creazione del turno → riprende lo stesso `turn_id`; a metà turno → recovery normale del turno/effect WAL; turno `done` prima di `markRan` → non richiama il modello, completa il settlement; delivery incerta → non rifà la computazione; **solo dopo il settlement** avanza la schedule. Niente trigger framework; deve **comporre** con la stessa proprietà Telegram `update_id → exactly one durable turn` (oggi `drain()` → `handle()` → `runTurn` con id fresco: crash fra `handle()` e `markProcessed` = secondo turno, secondo giro modello, seconda consegna). Una forma più piccola che garantisca esattamente queste proprietà è ammessa. Prova: fault-chain con Bot API finto e SIGKILL reale in quattro punti (dopo accept / dopo runTurn / dopo sendMessage / dopo recordDelivery) e per i job nei sette punti della matrice. Chiude B7, B1 (metà Telegram), la parte Telegram di B8, e apre B2 alla prova di prod. | `core/scheduler/scheduler.ts` `markRan`; `connectors/telegram/connector.ts` `drain()`/`handle()`; `core/turns/store.ts` (nessuna chiave d'origine) | L (una slice per il ponte job, una per Telegram, una per la journey) |
-| 1.6 | `slice/egress-params` | Mandato inv. 7 (proprietà 6): il kernel guarda solo l'host; byte a tier ≥ 2 nel path/query di `http_get` verso host allowlisted passano (P04-1); `sys.search` dichiara `resourceKind:'none'` e non entra mai nel ramo egress (P04-2, D7). Chiude D7 e la journey egress (D6/D7/D10 nello stesso file di scenario). | `core/policy/decide.ts` ramo `resourceKind==='url'`; `agent/tools/http.ts`; `agent/tools/search.ts:57` | M |
+| 1.6 | `slice/egress-params` **(in volo, WIP)** | Mandato inv. 7 (proprietà 6): il kernel guarda solo l'host; byte a tier ≥ 2 nel path/query di `http_get` verso host allowlisted passano (P04-1); `sys.search` dichiara `resourceKind:'none'` e non entra mai nel ramo egress (P04-2, D7). Chiude D7 e la journey egress (D6/D7/D10 nello stesso file di scenario). | `core/policy/decide.ts` ramo `resourceKind==='url'`; `agent/tools/http.ts`; `agent/tools/search.ts:57` | M |
 
 ## 2 · Forma durevole prima dei dati reali (priorità 2)
 
@@ -53,7 +63,7 @@ non sovrapposte in volo.
 | 2.1 | `slice/schema-evolution` (A7 + P27, proprietà 7) | `ensureColumn` generalizzato (già metà fatto da #53 in `core/lock/durable.ts`) e applicato a `turns`/`jobs`/`todos`; **un test che parte da un `muffin.db` allo schema di `b9ab672` popolato** (turni, job, episodi, fatti) e applica HEAD: boot, `doctor`, un turno, `memory search`, tick dello scheduler — zero `no such column`, zero righe perse. `episodes.kind` CHECK: la strada dichiarata (rebuild guidato o CHECK allargato prima del giorno 1) scritta in ADR. | M |
 | 2.2 | `slice/update-backup` (A6 + A8) | `muffin update` (A6: nuovo artifact, stesso home, `doctor` dopo; naming `build` vs `compile` che non lascia credere di aver costruito `dist`); `muffin backup` con `wal_checkpoint(TRUNCATE)` o stop-copia-riavvio dichiarato, `restore` documentato; scenario J2 backup **a caldo** con gateway vivo → distruzione → restore → `doctor` + `memory search`. | M |
 | 2.3 | `slice/undo-journal` (D2/D3/D11, forma decisa dall'owner 16/08: quattro classi + journal per turno in `~/.muffin/undo/<turno>/`) — dopo 1.1 | Effect lifecycle riusabile (mandato §6): policy → intent durevole → snapshot pre-effect (mai sovrascritto da un retry: guardia idempotente per `call_id`) → effetto → outcome durevole → `muffin undo` che riallinea filesystem **e** riga turno. `draft` diventa eseguibile; `fs_write` smette di rifiutare il 100%. Journey J4. Probabile split in due PR (journal+snapshot; `undo` CLI + reconcile). | L |
-| 2.4 | `slice/audit-mediums` (cluster di S indipendenti, un solo PR) | P34-1 `span.error` non redatto; P35 cache-write fatturato 0.25× invece di 1.25×; P36 «hardened» = probe W_OK, aggiungere `uid` check; P25 filtro lessicale sui fatti estratti; P33 fencing a nonce delle skill nel prompt (D9); E6 tetto sulle tool call per turno indipendente da `iterations`; E2 spesa **di oggi** in `/spend` (`tenantTodayUsd` esiste). Ogni voce con test rosso-prima. | S×7 |
+| 2.4 | `slice/audit-mediums` **(in volo, WIP)** (cluster di S indipendenti, un solo PR) | P34-1 `span.error` non redatto; P35 cache-write fatturato 0.25× invece di 1.25×; P36 «hardened» = probe W_OK, aggiungere `uid` check; P25 filtro lessicale sui fatti estratti; P33 fencing a nonce delle skill nel prompt (D9); E6 tetto sulle tool call per turno indipendente da `iterations`; E2 spesa **di oggi** in `/spend` (`tenantTodayUsd` esiste). Ogni voce con test rosso-prima. | S×7 |
 | 2.5 | **Decisione owner**: P34-2 segreti a riposo in `turns.messages`/`turn_tool_calls.content` (mai pruned, righe mai cancellate). Redazione in scrittura? prune con età? Finché non decide: nessuna slice; nota in E3. | — |
 
 ## 3 · Capability che costringerebbero a un altro agente (priorità 3)
@@ -61,8 +71,8 @@ non sovrapposte in volo.
 | # | Slice | Cosa chiude | Costo |
 |---|---|---|---|
 | 3.1 | `slice/ask-dice-cosa` (D12) | L'ASK porta l'azione specifica (comando+cwd, URL, pid+nome) e la ragione del taint; le richieste `turn_outcome='ask'` non risolte restano visibili (`doctor`/comando) finché l'owner non decide. Meglio dopo 2.3 (stessa famiglia decisione+registro). | M |
-| 3.2 | `slice/init-local` (A9) | `muffin init --local` riusa il segreto persistito senza `--api-key`. | S |
-| 3.3 | `slice/prompts-md` | Prompt puro-Muffin in `defaults/prompts/*.md` importati (identity/voice a casa, identity nel RoT), onboarding come nudge a stato, tracciabilità sezione→doc. **`muffin prompt show` e il contenuto di A2/A3 sono già chiusi** (`slice/identita` parte 1, 2026-08-17: `research/prompt-assembly-2026-08-17.md` — la plumbing era già canonica, nessuna duplicazione trovata). Resta solo lo spostamento delle tre stringhe hardcoded in `agent/context/assemble.ts` (`GROUP_PERSONA`, `WORK_RULES`, `SAFE_MODE_NOTE`, catalogate nella ricerca) e l'onboarding. A2/A3 restano BLOCKER per il character eval, non per il contenuto — `slice/identita` parte 2. | S |
+| 3.2 | ~~`slice/init-local` (A9)~~ **fatto (#59)** | `muffin init --local` riusa il segreto persistito senza `--api-key`. | S |
+| 3.3 | `slice/prompts-md` — **parte 1 fatta (#58)**: `prompt show`, home canonica, wiring; resta l'onboarding a stato e i prompt puro-Muffin in `defaults/prompts/` | Prompt puro-Muffin in `defaults/prompts/*.md` importati (identity/voice a casa, identity nel RoT), onboarding come nudge a stato, tracciabilità sezione→doc. **`muffin prompt show` e il contenuto di A2/A3 sono già chiusi** (`slice/identita` parte 1, 2026-08-17: `research/prompt-assembly-2026-08-17.md` — la plumbing era già canonica, nessuna duplicazione trovata). Resta solo lo spostamento delle tre stringhe hardcoded in `agent/context/assemble.ts` (`GROUP_PERSONA`, `WORK_RULES`, `SAFE_MODE_NOTE`, catalogate nella ricerca) e l'onboarding. A2/A3 restano BLOCKER per il character eval, non per il contenuto — `slice/identita` parte 2. | S |
 | 3.4 | `slice/provider-retry` (B6) | 429/5xx/rete a metà turno: retry con backoff nell'adapter, fallimento esplicito oltre il tetto (mai silenzioso). | S |
 | 3.5 | `slice/pairing-sigilla` (B15) | Il pairing sigilla da solo il binding; manomissione di `config.json` non sigillato rilevata. | S/M |
 | 3.6 | `slice/telegram-media` (B10) | Foto → modello con visione se la capability c'è, altrimenti rifiuto esplicito; errori Telegram visibili. | S/M |
