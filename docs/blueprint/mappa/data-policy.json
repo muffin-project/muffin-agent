@@ -64,7 +64,7 @@
     "maxTaintDefaults": "core/policy/matrix.ts:94-102 (POLICY_FLOOR.defaultMaxTaint = { low: 3, medium: 1, high: 1 }), mirrored verbatim in the shipped seal at defaults/rot/policy.json:4. A sealed rot/policy.json may only tighten these (core/policy/matrix.ts:162-165 tighter(), 181-185 merge()) — never raise them, even if the file says so."
   },
   "denyPaths": [
-    { "pattern": "~/.muffin/rot/ (p.rot)", "file": "core/rot/guards.ts:69", "enforced": true, "note": "enforced in agent/tools/fs.ts:196-203 (resolveInScope) and core/sandbox/executor.ts:118-120,139 (filesystem.denyWrite, both base and per-call config)" },
+    { "pattern": "~/.muffin/rot/ (p.rot)", "file": "core/rot/guards.ts:69", "enforced": true, "note": "enforced in agent/tools/fs.ts:315-345 (resolveInScope) and core/sandbox/executor.ts:118-120,139 (filesystem.denyWrite, both base and per-call config)" },
     { "pattern": "config (p.config)", "file": "core/rot/guards.ts:71", "enforced": true, "note": "same two enforcement sites as above" },
     { "pattern": "secrets — both ADR-0039 links: secretDir('home'), secretDir('persistent')", "file": "core/rot/guards.ts:73-74", "enforced": true, "note": "in BOTH denyWrite and denyRead (guards.ts:82-83); also fed into SandboxExecutor.denyRead" },
     { "pattern": ".git/hooks (join(cwd,'.git','hooks'))", "file": "core/rot/guards.ts:76", "enforced": true, "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites" },
@@ -149,7 +149,7 @@
       "doc": "docs/blueprint/03-threat-model.md:69",
       "real": "all five categories present in one shared guard object and enforced at both the fs tool and the sandbox executor",
       "verdict": "HOLDS",
-      "evidence": "core/rot/guards.ts:64-88; agent/tools/fs.ts:192-203; core/sandbox/executor.ts:117-120,136-140"
+      "evidence": "core/rot/guards.ts:64-88; agent/tools/fs.ts:315-345; core/sandbox/executor.ts:117-120,136-140"
     },
     {
       "claim": "filesystem write-scope = workspace del turno + tmp di sessione",

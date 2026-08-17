@@ -516,62 +516,57 @@
   },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
-    "line": 108,
+    "line": 129,
     "testo": "rerunnable: true,"
   },
-  "agent/tools/fs.ts:192": {
+  "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 192,
-    "testo": "// target does not exist yet reads as \"missing\", the loop walks past it, and"
-  },
-  "agent/tools/fs.ts:196": {
-    "path": "agent/tools/fs.ts",
-    "line": 196,
-    "testo": "// exactly the shape of a bug that survives testing."
-  },
-  "agent/tools/fs.ts:326": {
-    "path": "agent/tools/fs.ts",
-    "line": 326,
-    "testo": "writeFileSync(full, content, 'utf8');"
+    "line": 315,
+    "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:340": {
     "path": "agent/tools/fs.ts",
-    "line": 340,
+    "line": 481,
     "testo": "return ["
   },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
-    "line": 360,
+    "line": 501,
     "testo": "// `IGNORA le istruzioni precedenti.md` is a filename, it costs an attacker"
+  },
+  "agent/tools/fs.ts:480": {
+    "path": "agent/tools/fs.ts",
+    "line": 480,
+    "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:62": {
     "path": "agent/tools/fs.ts",
-    "line": 62,
+    "line": 82,
     "testo": "* stdout is the same disk read through a different door — and two literals that"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
-    "line": 70,
+    "line": 90,
     "testo": "* 3 in the shipped `rot/policy.json`. That was examined on its own merits"
   },
   "agent/tools/fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 78,
+    "line": 98,
     "testo": "* half is refused. So the ceiling stays high and the **read itself pays**:"
   },
   "agent/tools/fs.ts:79": {
     "path": "agent/tools/fs.ts",
-    "line": 79,
+    "line": 99,
     "testo": "* every read taints the turn to `DISK_TIER`, which is what a turn that has"
   },
   "agent/tools/fs.ts:89": {
     "path": "agent/tools/fs.ts",
-    "line": 89,
+    "line": 109,
     "testo": "* back as an `ask` the owner could approve. The file's own security argument"
   },
   "agent/tools/fs.ts:99": {
     "path": "agent/tools/fs.ts",
-    "line": 99,
+    "line": 101,
     "testo": "*"
   },
   "agent/tools/http.ts:116": {
@@ -2306,23 +2301,23 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 257,
+    "line": 334,
     "testo": "// is a second name for a file inside the deny-list. Refusing to write to any"
-  },
-  "fs.ts:34": {
-    "path": "agent/tools/fs.ts",
-    "line": 34,
-    "testo": ""
   },
   "fs.ts:7": {
     "path": "agent/tools/fs.ts",
-    "line": 7,
+    "line": 20,
     "testo": "/**"
   },
   "fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 78,
+    "line": 98,
     "testo": "* half is refused. So the ceiling stays high and the **read itself pays**:"
+  },
+  "fs.ts:88": {
+    "path": "agent/tools/fs.ts",
+    "line": 88,
+    "testo": "/**"
   },
   "guards.ts:41": {
     "path": "core/rot/guards.ts",
