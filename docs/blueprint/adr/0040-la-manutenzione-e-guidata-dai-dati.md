@@ -221,7 +221,7 @@ rappresentabile. È che ha **tre** problemi e ognuno da solo basterebbe:
   15-27 punti (audit 2026-08-06) — è un **offset di calibrazione costante**, non
   una costante di tempo. Far decadere un numero non calibrato compone due errori.
 - **Non ha un lettore.** ⬤ L'unica soglia sulla confidenza in tutto il repo è
-  `extract.ts:176` (`>= 0.4`), applicata all'output del modello **prima** della
+  `extract.ts:192` (`>= 0.4`), applicata all'output del modello **prima** della
   scrittura. Dopo, `confidence` viene solo *mostrata* (`muffin memory why`).
   Farla decadere sarebbe una mutazione senza consumatore: il tredicesimo membro
   della famiglia «dichiarato e collegato a niente».
