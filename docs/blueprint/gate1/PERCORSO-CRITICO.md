@@ -24,26 +24,24 @@ non sovrapposte in volo.
 
 *(Questa sezione è verificata meccanicamente: `node .claude/riconcilia.mjs` esce
 ≠ 0 se qui compare una PR già mergiata o un branch già cancellato. Va aggiornata
-**nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4.)*
+**nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4. Il
+controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 
-- **`slice/session-taint`** (PC 1.2, CRITICAL) — WIP committato e pushato al
-  session limit del 17/08: tier per messaggio di sessione, la history reiniettata
-  alza la taint prima del kernel. Da riprendere.
-- **`slice/egress-params`** (PC 1.6, CRITICAL) — WIP committato e pushato:
-  il kernel ispeziona query/URL, `sys.search` entra nel ramo egress. Da
-  riprendere.
-- **`slice/audit-mediums`** (PC 2.4, STANDARD) — WIP committato e pushato:
-  cluster di MEDIUM piccoli (P34-1, P35, P36, P25, P33, E2). Da riprendere.
+- **`slice/egress-params`** (PC 1.6, **CRITICAL**) — implementazione, wiring e
+  scenari già scritti prima del session limit; `origin/dev` mergiato e mappa
+  rigenerata. Resta: rifinire, riverificare per mutazione il gate sui parametri,
+  judge fresco, verdetto terminale.
+- **`slice/session-taint`** (PC 1.2, **CRITICAL**) — WIP committato e pushato:
+  tier per messaggio di sessione, la history reiniettata alza la taint prima del
+  kernel. Da riprendere allo stesso modo.
 - **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
-  pushato: character eval a proprietà, cross-model, confronto col vecchio Muffin.
-  Da riprendere; la corsa reale sui modelli costa e va proposta all'owner.
-- **PR #63** `slice/workflow-evidence-budget` (FAST) — questa: i tre profili di
-  verifica, il firewall di scope, il budget dei documenti, e la riconciliazione
-  del handoff resa meccanica (`.claude/riconcilia.mjs`).
+  pushato: character eval a proprietà, cross-model, confronto qualitativo col
+  vecchio Muffin. La corsa reale sui modelli costa e va proposta all'owner prima
+  di lanciarla.
 
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
-`init --local` · #60 citazioni della mappa.
+`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica) · #61 cluster di MEDIUM dell'audit (P34-1, P35, P36, P25, P33, E2).
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
@@ -63,7 +61,7 @@ non sovrapposte in volo.
 | 2.1 | `slice/schema-evolution` (A7 + P27, proprietà 7) | `ensureColumn` generalizzato (già metà fatto da #53 in `core/lock/durable.ts`) e applicato a `turns`/`jobs`/`todos`; **un test che parte da un `muffin.db` allo schema di `b9ab672` popolato** (turni, job, episodi, fatti) e applica HEAD: boot, `doctor`, un turno, `memory search`, tick dello scheduler — zero `no such column`, zero righe perse. `episodes.kind` CHECK: la strada dichiarata (rebuild guidato o CHECK allargato prima del giorno 1) scritta in ADR. | M |
 | 2.2 | `slice/update-backup` (A6 + A8) | `muffin update` (A6: nuovo artifact, stesso home, `doctor` dopo; naming `build` vs `compile` che non lascia credere di aver costruito `dist`); `muffin backup` con `wal_checkpoint(TRUNCATE)` o stop-copia-riavvio dichiarato, `restore` documentato; scenario J2 backup **a caldo** con gateway vivo → distruzione → restore → `doctor` + `memory search`. | M |
 | 2.3 | `slice/undo-journal` (D2/D3/D11, forma decisa dall'owner 16/08: quattro classi + journal per turno in `~/.muffin/undo/<turno>/`) — dopo 1.1 | Effect lifecycle riusabile (mandato §6): policy → intent durevole → snapshot pre-effect (mai sovrascritto da un retry: guardia idempotente per `call_id`) → effetto → outcome durevole → `muffin undo` che riallinea filesystem **e** riga turno. `draft` diventa eseguibile; `fs_write` smette di rifiutare il 100%. Journey J4. Probabile split in due PR (journal+snapshot; `undo` CLI + reconcile). | L |
-| 2.4 | `slice/audit-mediums` **(in volo, WIP)** (cluster di S indipendenti, un solo PR) | P34-1 `span.error` non redatto; P35 cache-write fatturato 0.25× invece di 1.25×; P36 «hardened» = probe W_OK, aggiungere `uid` check; P25 filtro lessicale sui fatti estratti; P33 fencing a nonce delle skill nel prompt (D9); E6 tetto sulle tool call per turno indipendente da `iterations`; E2 spesa **di oggi** in `/spend` (`tenantTodayUsd` esiste). Ogni voce con test rosso-prima. | S×7 |
+| 2.4 | ~~`slice/audit-mediums`~~ **fatto (#61)** (cluster di S indipendenti, un solo PR) | P34-1 `span.error` non redatto; P35 cache-write fatturato 0.25× invece di 1.25×; P36 «hardened» = probe W_OK, aggiungere `uid` check; P25 filtro lessicale sui fatti estratti; P33 fencing a nonce delle skill nel prompt (D9); E6 tetto sulle tool call per turno indipendente da `iterations`; E2 spesa **di oggi** in `/spend` (`tenantTodayUsd` esiste). Ogni voce con test rosso-prima. | S×7 |
 | 2.5 | **Decisione owner**: P34-2 segreti a riposo in `turns.messages`/`turn_tool_calls.content` (mai pruned, righe mai cancellate). Redazione in scrittura? prune con età? Finché non decide: nessuna slice; nota in E3. | — |
 
 ## 3 · Capability che costringerebbero a un altro agente (priorità 3)
