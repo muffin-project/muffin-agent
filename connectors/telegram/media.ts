@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import type { Message } from '@grammyjs/types';
-import type { TelegramApi } from './api.js';
+import type { TelegramApiLike } from './api.js';
 
 /**
  * Files in and files out.
@@ -107,7 +107,7 @@ export type Downloaded = {
  * real one is what lands on the disk.
  */
 export async function downloadToVault(
-  api: TelegramApi,
+  api: TelegramApiLike,
   vaultRoot: string,
   spec: MediaSpec,
   updateId: number,
@@ -159,7 +159,7 @@ export class MediaTooLarge extends Error {
  * decision, which is different from a forgotten one.
  */
 export async function sendDocument(
-  api: TelegramApi,
+  api: TelegramApiLike,
   chatId: number,
   absolutePath: string,
   options: { caption?: string; filename?: string } = {},

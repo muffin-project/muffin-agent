@@ -779,6 +779,41 @@ against the original vector-half code with the gate temporarily removed and
 confirmed to fail before being restored (`core/memory/recall.test.ts`, "does
 not let a superseded fact surface through the semantic half either").
 
+## A required parameter missing from a call site is invisible when the failure is swallowed by design **(this build)**
+
+`connectors/telegram/api.ts#sendMessageDraft` sent `{chat_id, text, parse_mode}`
+to Telegram's Bot API. The method's real contract — verified against Context7's
+mirror of the official reference and the changelog, 2026-08-17, while building
+M5-BIS B11 — requires a fourth field, `draft_id`, non-zero. Every call this
+adapter ever made was missing it, so every call answered 400.
+
+Nothing noticed, for one reason: `connectors/telegram/presence.ts` calls this
+method only inside `safely()`, a wrapper written on purpose to swallow any
+presence failure — "a typing indicator that takes the turn down with it has
+inverted its own priority" — because showing the owner a real answer must never
+be blocked by a decorative heartbeat failing. That design is correct. Its
+consequence, unexamined, is that a call which *always* fails looks identical to
+one that occasionally does: no error surfaces anywhere, `doctor` has no probe
+for it (there is no token to probe with in development, and PRACTICES §2's own
+rule for that case — do not assume, drop the dependency — was not applied
+here; it was assumed instead), and the docstring above the call read "the
+keepalive exists from day one," stated as if day one had ever worked.
+
+The claim was inherited, not verified: `docs/blueprint/adr/0025-transport-
+telegram.md` described `sendMessageDraft`'s contract from the old Muffin
+system's own history (its ADR-133/138) and was never checked against the
+current Bot API in this repository. The inherited fact carried the missing
+parameter along with it.
+
+**Instead:** the signature is now `sendMessageDraft(chatId, draftId, text)`,
+matching the verified contract, and `ADR-0025` carries a dated §revisione
+naming exactly what was corrected and what could not be re-verified either way
+(the draft's exact TTL-refresh behaviour — no token to probe with, so the
+mitigation is a conservative call cadence rather than an assumed number). The
+general lesson: a swallowed failure needs a *positive* signal that the
+mechanism it guards ever succeeds — a counter, a trace attribute, something a
+`doctor` check or a test can read — not only the absence of a visible one.
+
 ## Cleanup after a merge is conditional on the merge, not on the intent to merge
 
 `gh pr merge 39` failed (the map file had been regenerated on both sides), the
