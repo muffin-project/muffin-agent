@@ -278,6 +278,12 @@ export async function runRepl(
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'yielded') {
+        // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
+        // an aborted job retried silently on every tick before this.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro\n`);
+      } else if (e.kind === 'not_recorded') {
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\n`);
       }
     },
     undefined,
