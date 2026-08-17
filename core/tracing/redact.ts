@@ -76,6 +76,28 @@ export function redactValue(value: AttributeValue): AttributeValue {
   return value;
 }
 
+/**
+ * The same shapes as `redactValue`, applied to a block of prose instead of a
+ * single attribute.
+ *
+ * `redactValue` answers "is this whole value a secret", which is right for a
+ * span attribute — a key either is the value or it is not. `muffin prompt
+ * show` (`cli/prompt-show.ts`) needed the other question: a multi-kilobyte
+ * system prompt is not itself a secret, but must not carry one *inside* it if
+ * an owner ever pastes a key into `persona.md`/`voice.md`/`identity.md`. Every
+ * match is replaced in place — collapsing the whole prompt to one marker on a
+ * single hit would defeat the command's own point, which is to show what the
+ * model actually receives.
+ */
+export function redactText(text: string): string {
+  let out = text;
+  for (const shape of SECRET_VALUE_SHAPES) {
+    const flags = shape.flags.includes('g') ? shape.flags : `${shape.flags}g`;
+    out = out.replace(new RegExp(shape.source, flags), (match) => marker(match.length));
+  }
+  return out;
+}
+
 export function redactAttributes(
   attributes: Readonly<Record<string, AttributeValue>>,
 ): Record<string, AttributeValue> {
