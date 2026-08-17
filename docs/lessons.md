@@ -826,3 +826,50 @@ re-pushed, so nothing was lost; the PR had to be reopened by hand.
 `git merge-base --is-ancestor`), never in the same breath as the merge command.
 The rule was already written for the reverse case (`cmd | tail` hides the exit
 status): the mistake here was acting on the *plan* rather than on the *state*.
+
+## A line of error that saves our own sentence and not the model's answer is a failure that cannot be explained **(this build)**
+
+Real install, 2026-08-16, OpenRouter with light = `anthropic/claude-haiku-4.5`.
+The REPL printed `consolidamento: giudice non disponibile su owner/interest:
+tengo entrambi i valori` three times running, once for `owner/asked_to`, and
+`muffin memory review` showed 4 rows in the archive, 0 to decide. Nothing
+distinguished the four occurrences: same sentence, no model output, no
+reason. `judge.ts` builds that sentence itself, in the code, whenever the
+light model's answer could not be turned into a verdict — an empty response,
+prose with no JSON, or JSON the schema rejects were three different problems
+and all three produced the identical fallback text. The durable
+`memory_review` row that was supposed to be the record of what happened
+recorded only what *we* say when we do not know what happened.
+
+The repeat count compounded the opacity rather than adding information:
+`core/memory/consolidator.ts`'s per-round log printed one line per candidate
+fact `reconcile` judged, not one per distinct failure, so three candidates on
+the same (subject, predicate) that each failed the judge produced three
+copies of a sentence that already said nothing.
+
+**Instead:** the judge distinguishes *why* it could not answer
+(`JudgeFailureReason` in `core/memory/judge.ts`: empty · non-JSON · a named
+schema field) and carries the model's own sanitised, truncated response
+alongside it; `ingest.ts` writes both into the review row's `detail` — first
+line the typed summary, everything after it the raw answer, so
+`muffin memory review` shows the reason by default and `--verbose` reveals
+the model's words without a second column or a migration (`detail` stays
+free text, per `store.ts`'s own note that a register tracking more than that
+would be the workflow engine this was asked not to become). Before writing
+any of that off as "unavailable", the schema now tolerates the innocuous
+shapes a light model actually produces — a quoted `confidence`, a
+Title-Cased key, `"  Supersede  "` — via typed zod coercion, so a real
+answer is not thrown into the same bucket as no answer at all; an
+unrecognised verdict still is, deliberately. The per-round log folds
+repeats by (subject, predicate) instead of printing one line per candidate,
+which is the direct fix for the three-times-running symptom above.
+
+Each of the three claims — the raw response reaches the row, the tolerant
+parsing does not swallow real verdicts, the log stops repeating — has a
+mutation-tested regression: `core/memory/ingest.test.ts` (typed reasons and
+raw response; removing the save turns the assertions red), `judge.ts`'s
+coercion (removing `z.coerce.number()` or the key-normalisation turns the
+"tolerates innocuous formatting" tests red on exactly the shape it was meant
+to fix), and `core/memory/ingest.test.ts`'s `formatConsolidationLines`
+suite (reverting to `report.errors` verbatim reproduces the three-line
+symptom in the test itself).

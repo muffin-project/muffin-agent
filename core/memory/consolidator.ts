@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { TenantId } from '../policy/types.js';
-import { CONSOLIDATION_PRINCIPAL, type IngestReport } from './ingest.js';
+import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, type IngestReport } from './ingest.js';
 
 /**
  * What makes consolidation start by itself.
@@ -707,12 +707,20 @@ export class Consolidator {
       superseded: report.superseded,
       indexed: report.indexed,
       review: report.needsReview.length,
-      errors: report.errors.length,
+      // Both counts: a judge failure is exactly as much "a problem this
+      // round" as any entry in `errors`, and `nothingGotThrough` in
+      // `cli/doctor.ts` compares this against `episodes` to tell a lane that
+      // is healing itself from one that is stuck — it needs the total, not
+      // half of it.
+      errors: report.errors.length + report.judgeUnavailable.length,
       ms: Date.now() - started,
       merged,
     };
     this.write(run);
-    for (const e of report.errors) this.deps.log?.(`consolidamento: ${e}`);
+    // Grouped, not one line per candidate — see `formatConsolidationLines`
+    // for why: this is the exact spot that put "giudice non disponibile su
+    // owner/interest" on the owner's screen three times running.
+    for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
 
     // The drain. Both halves, and the `busy` exclusion: a lane lock refusal
     // fetched nothing, so `fetched === limit` is false anyway — but stating it

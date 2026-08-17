@@ -4,7 +4,7 @@ import type { SpanHandle, Tracer } from '../tracing/types.js';
 import type { VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
 import { extractFacts } from './extract.js';
-import { judgeContradiction, type JudgeOutcome } from './judge.js';
+import { describeFailureReason, judgeContradiction, type JudgeOutcome } from './judge.js';
 import { EXTRACTION_VERSION } from './schema.js';
 import type { MemoryStore } from './store.js';
 
@@ -111,8 +111,73 @@ export type IngestReport = {
    */
   busy: boolean;
   needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
+  /**
+   * Everything that went wrong this round **except** a judge whose answer
+   * could not be read — that one entry per candidate lives in
+   * `judgeUnavailable` below instead, kept apart rather than folded in here.
+   * A caller that wants "how many problems this round" adds both lengths,
+   * the same way `fetched`/`marked` already coexist as two related-but-
+   * distinct counts in this file: one flat list a caller can sum, one that
+   * carries the structure (subject, predicate) a reader needs to fold by.
+   */
   errors: string[];
+  /**
+   * One entry per judge call whose answer could not be turned into a
+   * verdict — never folded here. Folding by (subject, predicate) is a
+   * read-side concern: `formatConsolidationLines` below, for the boot line
+   * printed once per round, and `errorGroups` in `maintenance.ts`, for
+   * `muffin memory review` folding across every round on the durable
+   * register. Both derive counts from these raw occurrences (or from the
+   * `memory_review` rows they produced) rather than from a count kept here,
+   * which could drift from what actually happened.
+   */
+  judgeUnavailable: JudgeUnavailable[];
 };
+
+/** One judge call this round that could not be turned into a verdict. */
+export type JudgeUnavailable = {
+  subject: string;
+  predicate: string;
+  /** `describeFailureReason` output: "vuota" · "non-json" · "schema: <campo> — <messaggio>". */
+  reason: string;
+};
+
+/**
+ * What a human reads at the end of a consolidation round — grouped, not one
+ * line per candidate.
+ *
+ * `judgeUnavailable` carries one entry per candidate because the write is
+ * the honest count of what happened, the same argument `errorGroups`
+ * (`maintenance.ts`) makes for the durable register it feeds. Printing it
+ * verbatim is what put "giudice non disponibile su owner/interest" on the
+ * owner's screen three times in a row for three candidates in the same
+ * round (2026-08-16) — the same failure, not three of them. This folds it
+ * by (subject, predicate) before anything reaches a terminal, once per
+ * round, and points at `muffin memory review` for the raw response instead
+ * of repeating it inline — which is exactly what the durable row is for.
+ *
+ * Every other error passes through unchanged: an extraction failure, a lock
+ * refusal, a dead vector index. None of those is observed to repeat within a
+ * single round the way a judge failure can (`reconcile` calls the judge once
+ * per candidate fact, and one episode can carry several) — folding them here
+ * too would hide a count instead of showing one. `errorGroups` already folds
+ * the ones that *do* repeat, across rounds, on the durable register.
+ */
+export function formatConsolidationLines(report: IngestReport): string[] {
+  const groups = new Map<string, { subject: string; predicate: string; count: number }>();
+  for (const j of report.judgeUnavailable) {
+    const key = JSON.stringify([j.subject, j.predicate]);
+    const existing = groups.get(key);
+    if (existing) existing.count += 1;
+    else groups.set(key, { subject: j.subject, predicate: j.predicate, count: 1 });
+  }
+  const judgeLines = [...groups.values()].map(
+    (g) =>
+      `giudice non disponibile su ${g.subject}/${g.predicate}` +
+      `${g.count > 1 ? ` ×${g.count}` : ''} — vedi muffin memory review`,
+  );
+  return [...judgeLines, ...report.errors];
+}
 
 export async function ingestPending(
   deps: IngestDeps,
@@ -134,6 +199,7 @@ export async function ingestPending(
     busy: false,
     needsReview: [],
     errors: [],
+    judgeUnavailable: [],
   };
 
   // One extractor at a time. A hand-typed `muffin memory extract` overlapping
@@ -426,13 +492,25 @@ async function reconcile(
 
   const newId = insert();
 
-  // A judge that could not answer at all reads as `coexist` with zero
-  // confidence. The outcome is the safe one, but it is not a decision, and
-  // letting it look like one is how "the memory just accumulates" becomes
-  // something nobody can explain months later.
-  if (verdict.confidence === 0 && verdict.downgraded) {
-    const detail = `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori`;
-    report.errors.push(detail);
+  // A judge whose answer could not be turned into a verdict at all reads as
+  // `coexist` with zero confidence. The outcome is the safe one, but it is
+  // not a decision, and letting it look like one — a durable row that says
+  // only "tengo entrambi i valori" — is how "the memory just accumulates"
+  // becomes something nobody can explain months later. This is what an
+  // owner running a real install saw three times in a row on 2026-08-16,
+  // for a light model that had answered but not in a shape the schema could
+  // read, with the row itself unable to say which of three problems it was.
+  //
+  // Keyed on `verdict.failure`, not on `confidence === 0`: a legitimately
+  // parsed `supersede` can itself carry confidence 0 (the model is allowed
+  // to say so), and that case is the threshold downgrade inside
+  // `judgeContradiction` — a considered `review`, not a failure to read the
+  // answer. The old condition could not tell the two apart and would run
+  // both this block and the `case 'review'` branch below for the same
+  // candidate, writing two review rows for one judge call.
+  if (verdict.failure) {
+    const reason = describeFailureReason(verdict.failure.reason);
+    report.judgeUnavailable.push({ subject: fact.subject, predicate: fact.predicate, reason });
     deps.store.recordReview({
       tenantId,
       kind: 'error',
@@ -440,7 +518,13 @@ async function reconcile(
       predicate: fact.predicate,
       existingFactId: candidate.id,
       incomingFactId: newId,
-      detail,
+      // First line is the summary `errorGroups` (`maintenance.ts`) folds on
+      // and `muffin memory review` always shows; everything after it is the
+      // model's own words, shown only with `--verbose` — free text, not a
+      // second column (`store.ts` `ReviewItemInput.detail`).
+      detail:
+        `giudice non disponibile su ${fact.subject}/${fact.predicate}: tengo entrambi i valori [${reason}]\n` +
+        `risposta grezza: ${verdict.failure.rawResponse || '(vuota)'}`,
       createdAt: now.toISOString(),
     });
   }

@@ -36,6 +36,7 @@ const empty = (over: Partial<IngestReport> = {}): IngestReport => ({
   busy: false,
   needsReview: [],
   errors: [],
+  judgeUnavailable: [],
   ...over,
 });
 
