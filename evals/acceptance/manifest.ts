@@ -85,9 +85,16 @@ const provataDalMeccanismo = (row: string, title: string, reason: string): Scena
 });
 
 export const MANIFEST: readonly ScenarioEntry[] = [
-  verde('A1', 'boot: a fresh install starts on its own, and a second launch finds its own state'),
+  verde(
+    'A1',
+    'continuity: a gateway SIGKILLed mid-life is replaced by a supervisor-started one that resumes a suspended turn and fires a due job, each exactly once',
+  ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
   verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
+  verde(
+    'A9',
+    'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
+  ),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),

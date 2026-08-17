@@ -15,8 +15,8 @@
     {
       "surface": "Telegram",
       "fn": "TelegramConnector.run / .handle",
-      "file": "connectors/telegram/connector.ts:179",
-      "note": "Polls getUpdates, durably stores each batch before advancing the offset, then drains pending updates one at a time through handle() -> runTurn."
+      "file": "connectors/telegram/connector.ts:198",
+      "note": "Retries getMe() with capped, jittered backoff until connected or stopped (A1, ADR-0035 Emendamento №3 — a boot-time network gap used to kill this surface for the process's whole life). Then polls getUpdates, durably stores each batch before advancing the offset, then drains pending updates one at a time through handle() -> runTurn."
     },
     {
       "surface": "scheduler",
@@ -42,7 +42,7 @@
       "n": 1,
       "id": "message-arrives",
       "title": "Surface receives raw message",
-      "file": "connectors/telegram/connector.ts:179-211; cli/repl.ts:255-257",
+      "file": "connectors/telegram/connector.ts:198-253; cli/repl.ts:255-257",
       "what": "La CLI legge una riga da stdin (rl.question). Telegram fa polling di getUpdates, scrive ogni batch nell'inbox SQLite in una transazione e SOLO DOPO avanza l'offset (updates.ts:81-106) — perche' Telegram non re-invia mai un update confermato. Poi drena i pending uno alla volta.",
       "taint": "non ancora assegnato — deciso al passo successivo da chi sta parlando",
       "branches": [
