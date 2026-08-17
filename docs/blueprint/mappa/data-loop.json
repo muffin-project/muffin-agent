@@ -307,7 +307,7 @@
       "n": 17,
       "id": "turn-finishes",
       "title": "finish(): span chiuso, lane di memoria notificata",
-      "file": "agent/loop.ts:660-674; agent/runtime.ts:490",
+      "file": "agent/loop.ts:1653-1707; agent/runtime.ts:619",
       "what": "finish() marca stop reason e conteggio iterazioni sullo span di trace, lo chiude, poi chiama onTurnEnd in modo sincrono e non-bloccante — cablato in produzione a consolidation.notify(tenant), che arma il timer della lane di estrazione memoria. Scatta su ogni fine turno, incluso 'error' e 'aborted', perche' le parole dell'owner erano gia' state registrate prima ancora di chiedere qualcosa al modello.",
       "taint": "n/a",
       "branches": []
