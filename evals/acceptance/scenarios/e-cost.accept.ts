@@ -160,7 +160,17 @@ describe('acceptance · E · economia e osservabilità', () => {
         // The manual drain's own summary line is the grouped one
         // (`formatConsolidationLines`), not the ungrouped `report.errors` —
         // proven here, not assumed, since only one candidate failed and the
-        // multiplier only appears above one.
+        // multiplier only appears above one. Exactly once, not twice: before
+        // the fix in this same PR, `cmdMemoryExtract`'s own summary loop and
+        // `Consolidator.execute()`'s internal logger both printed it —
+        // `Consolidator.execute()` now stays quiet on `trigger: 'manual'`
+        // because this caller already holds the report and prints it below.
+        const judgeLineHits = extract.err.split('giudice non disponibile su owner/accountant').length - 1;
+        if (judgeLineHits !== 1) {
+          throw new Error(
+            `la riga di consolidamento dovrebbe comparire una volta sola, trovata ${judgeLineHits} volte: ${JSON.stringify(extract.err)}`,
+          );
+        }
         if (!extract.err.includes('giudice non disponibile su owner/accountant — vedi muffin memory review')) {
           throw new Error(`la riga di consolidamento non è quella attesa: ${JSON.stringify(extract.err)}`);
         }

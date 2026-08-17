@@ -535,6 +535,55 @@ describe('the run log', () => {
   });
 });
 
+/**
+ * `cmdMemoryExtract` (`cli/memory.ts`) calls `runNow('manual', …)`, already
+ * holds the returned `report`, and prints its own summary from it — `?` for
+ * `needsReview`, `!` for `formatConsolidationLines(report)`. Logging the same
+ * grouped lines here too, unconditionally, meant a hand-typed `muffin memory
+ * extract` printed every one of them twice: once as "consolidamento: X" from
+ * this internal logger, once as "  ! X" from that summary. Confirmed by
+ * running the real binary (`evals/acceptance/scenarios/e-cost.accept.ts`,
+ * E5) before this fix landed.
+ */
+describe("the manual trigger's own summary, not printed twice", () => {
+  it('does not log the per-round lines on a manual run — its one caller already prints them', async () => {
+    const h = harness({
+      report: empty({ judgeUnavailable: [{ subject: 'owner', predicate: 'interest', reason: 'vuota' }] }),
+    });
+    await h.consolidator.runNow('manual');
+    expect(h.lines.some((l) => l.includes('giudice non disponibile'))).toBe(false);
+  });
+
+  it('still logs them on every automatic trigger — nobody else is watching', async () => {
+    for (const trigger of ['idle', 'ceiling', 'drain'] as const) {
+      const h = harness({
+        report: empty({ judgeUnavailable: [{ subject: 'owner', predicate: 'interest', reason: 'vuota' }] }),
+      });
+      await h.consolidator.runNow(trigger);
+      expect(h.lines.some((l) => l.includes('giudice non disponibile su owner/interest'))).toBe(true);
+    }
+  });
+
+  it('still logs the budget-skipped and threw lines on manual — its caller relies on them', async () => {
+    const exhausted = harness({ exhausted: true });
+    await exhausted.consolidator.runNow('manual');
+    expect(exhausted.lines).toContain('consolidamento: saltato, budget mensile esaurito');
+
+    const db = new DatabaseCtor(':memory:');
+    const lines: string[] = [];
+    const throwing = new Consolidator({
+      db,
+      ingest: async () => {
+        throw new Error('embedder giù');
+      },
+      budgetExhausted: () => false,
+      log: (line) => lines.push(line),
+    });
+    await throwing.runNow('manual');
+    expect(lines.some((l) => l.startsWith('consolidamento: fallito'))).toBe(true);
+  });
+});
+
 describe('stop', () => {
   it('disarms, so a shutdown cannot fire a batch against a closed database', async () => {
     const h = harness();
