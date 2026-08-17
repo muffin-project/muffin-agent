@@ -7,19 +7,17 @@
 > l'obiettivo successivo.
 
 <!-- INIZIO BLOCCO -->
-**Aggiornato**: 2026-08-16
+**Aggiornato**: 2026-08-17
 
-**Obiettivo**: DAY-1 READY → 14 giorni personali → gruppi. Ordine: turno > permessi > superficie privata > memoria > acceptance.
+**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md` (12 invarianti, capability §5, battery di cutover, ultimo audit). Fallback definito in `04-roadmap.md` §Gate 1.
 
-**Inventario**: `M5-BIS.md` autoritativo. Oggi READY: E4, C4/C6, B3/B4/B5, B8/B14; #28 chiude la catena fs_read→egress (non e' una riga). Restano ~30 `?`: uno scenario ciascuno.
+**Audit e2a47ac**: 1 CRITICAL, 4 HIGH, 19 MEDIUM, tutti ancora presenti (`research/audit-2026-08-16/README.md`). Ordine: fs containment (in corso) → lock/lease/fencing → acceptance truth → scheduler/job → egress params → injection canale fidato → segreti a riposo → standalone.
 
-**Non integrato**: nessuna slice (#35/#40/#41/#42 in dev). Ora `dev`→`main` con verifica integrata, poi l'owner prova.
+**In volo**: `slice/fs-containment` (CRITICAL P29/P28) · #49 giudice memoria (judge). Poi una alla volta (max 2 non sovrapposte).
 
-**Metodo (16/08 sera)**: una slice = una riga, ≤500 righe, un judge sonnet, 2 giri max, una alla volta; meccanica all'orchestratore.
+**Capability §5 aperte**: A2/A3 (owner) · A6/A7/A8 update/migrazione/backup · A9 · D2/D3/D11 journal · D12 ASK · B15 · C8 · E1 · prompt in `defaults/prompts/` · audit CLI/slash · B2 al test di prod.
 
-**Prossime slice**: A9 `init --local` · D12 «l'ASK dice cosa» · D2/D3/D11 journal per turno · prompt in `defaults/prompts/` · audit CLI+slash · C8 whisper · E1 budget per-job.
-
-**Decisioni owner prese**: reversibilità (4 classi+journal) · audio (whisper) · shell dopo lettura = ASK · prompt in .md. **Aperte**: sandbox scope · `mcp.*` per-tool · `ricorda` · lingua doc.
+**Piani (ADR-0045 §rev. 17/08)**: Evidence · Beliefs · Work · Effects · Authority — nessuno store è due piani; SessionStore/turn_tool_calls/delivery sono le cuciture note.
 <!-- FINE BLOCCO -->
 
 ---

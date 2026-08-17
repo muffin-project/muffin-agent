@@ -482,10 +482,15 @@ async function cmdMemory(argv: string[]): Promise<number> {
   if (sub === 'stats') return cmdMemoryStats(home);
 
   if (sub === 'review') {
-    const [verb, id] = rest;
-    if (verb === undefined) return cmdMemoryReview(home);
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: { verbose: { type: 'boolean' } },
+      allowPositionals: true,
+    });
+    const [verb, id] = positionals;
+    if (verb === undefined) return cmdMemoryReview(home, values.verbose === true);
     if (verb !== 'keep') {
-      process.stderr.write(`usage: muffin memory review [keep <fact-id>]\n`);
+      process.stderr.write(`usage: muffin memory review [keep <fact-id>] [--verbose]\n`);
       return 78;
     }
     const factId = Number(id);

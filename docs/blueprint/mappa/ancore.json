@@ -1021,7 +1021,7 @@
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 532,
+    "line": 537,
     "testo": "const asOf = normaliseDate(values['as-of'], 'end');"
   },
   "cli/mcp.ts:142": {
@@ -1046,22 +1046,22 @@
   },
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
-    "line": 175,
+    "line": 179,
     "testo": "process.stdout.write("
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 256,
+    "line": 263,
     "testo": "for (const r of report.needsReview) {"
   },
   "cli/memory.ts:27": {
     "path": "cli/memory.ts",
-    "line": 27,
+    "line": 28,
     "testo": "export const MEMORY_USAGE = `usage:"
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 326,
+    "line": 354,
     "testo": "const span ="
   },
   "cli/observe.ts:67": {
@@ -1491,67 +1491,67 @@
   },
   "core/memory/ingest.test.ts:363": {
     "path": "core/memory/ingest.test.ts",
-    "line": 363,
+    "line": 547,
     "testo": "expect(store.isFunctional('accountant')).toBe(false);"
   },
   "core/memory/ingest.ts:117": {
     "path": "core/memory/ingest.ts",
-    "line": 117,
+    "line": 182,
     "testo": "export async function ingestPending("
   },
   "core/memory/ingest.ts:176": {
     "path": "core/memory/ingest.ts",
-    "line": 176,
+    "line": 242,
     "testo": "if (!episode.content) {"
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 235,
+    "line": 301,
     "testo": "const subjectId = deps.store.upsertEntity("
   },
   "core/memory/ingest.ts:266": {
     "path": "core/memory/ingest.ts",
-    "line": 266,
+    "line": 263,
     "testo": "mark(episode.id);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 272,
+    "line": 338,
     "testo": "if (deps.vectors) {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 304,
+    "line": 370,
     "testo": "async function reconcile("
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 321,
+    "line": 387,
     "testo": "const existing = deps.store.activeFacts(tenantId, subjectId, fact.predicate);"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 323,
+    "line": 389,
     "testo": "const insert = () =>"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 324,
+    "line": 390,
     "testo": "deps.store.addFact({"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 448,
+    "line": 532,
     "testo": "switch (verdict.verdict) {"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 449,
+    "line": 533,
     "testo": "case 'supersede':"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 463,
+    "line": 547,
     "testo": "case 'review':"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1571,7 +1571,7 @@
   },
   "core/memory/judge.ts:105": {
     "path": "core/memory/judge.ts",
-    "line": 105,
+    "line": 227,
     "testo": "export async function judgeContradiction("
   },
   "core/memory/maintenance.ts:132": {
@@ -2401,7 +2401,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 362,
+    "line": 428,
     "testo": "// a review. `isFunctional` now means what it says — predicates where two"
   },
   "ingest.ts:39": {
@@ -2411,7 +2411,7 @@
   },
   "judge.ts:44": {
     "path": "core/memory/judge.ts",
-    "line": 44,
+    "line": 153,
     "testo": "export const SUPERSEDE_THRESHOLD = 0.75;"
   },
   "loop.ts:112": {
