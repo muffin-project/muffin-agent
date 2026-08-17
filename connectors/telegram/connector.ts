@@ -79,6 +79,12 @@ export type ConnectorDeps = {
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
+  /**
+   * Injectable so a test never waits for real. Same seam as
+   * `connectors/discord/gateway.ts`'s own `sleep`, deliberately not shared
+   * across the two connectors — three lines is not yet worth a module.
+   */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 /** What one update turns into, or null when it is not ours to handle. */
@@ -164,8 +170,11 @@ export function principalFor(incoming: Incoming, ownerUserId: number | undefined
 
 export class TelegramConnector {
   private running = false;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
-  constructor(private readonly deps: ConnectorDeps) {}
+  constructor(private readonly deps: ConnectorDeps) {
+    this.sleep = deps.sleep ?? sleep;
+  }
 
   /**
    * Polls until stopped.
@@ -173,37 +182,72 @@ export class TelegramConnector {
    * The order inside the loop is the load-bearing part: fetch, **store**,
    * confirm, then process. Processing after confirmation is safe because the
    * evidence is already on disk; processing before storing would lose it.
+   *
+   * **`getMe()` used to run once, outside any retry** — a plain `await` before
+   * `this.running` was even set. At boot, before the network or DNS is ready
+   * (`Wants=network-online.target` does not guarantee it; a laptop's Wi-Fi
+   * regularly comes up after the unit does), it threw, and the throw escaped
+   * this whole function. `connectSurfaces` (`cli/surface.ts`) only `.catch`es
+   * the returned promise into a log line ("telegram: caduta"): the surface was
+   * dead for the rest of the process's life while the gateway stayed up — lock
+   * held, scheduler ticking, `doctor` reporting a healthy gateway with nobody
+   * reachable on it. Found proving ADR-0035's "continuity belongs to Muffin,
+   * not the pid" for real Telegram reconnection, not only for the gateway's
+   * own process.
    */
   async run(signal?: AbortSignal): Promise<void> {
     const log = this.deps.log ?? (() => {});
-    const me = await this.deps.api.getMe();
-    log(`telegram: connesso come @${me.username ?? me.id}`);
+    // Set before the first `getMe()`, not after: `stop()` has to be observable
+    // by the retry loop below even if it is called while still connecting.
     this.running = true;
+    // A function, not the inline comparison repeated at each call site: `tsc`
+    // narrows `signal.aborted` from the first check and (wrongly — an abort
+    // can land during the `await` in between) treats it as still narrowed at
+    // the second, which is a real `--strict` false positive on this exact
+    // shape. A call is opaque to that narrowing; the property is re-read live
+    // either way.
+    const shouldStop = (): boolean => !this.running || signal?.aborted === true;
+
+    let me: Awaited<ReturnType<TelegramApiLike['getMe']>> | undefined;
+    for (let attempt = 0; me === undefined; attempt++) {
+      if (shouldStop()) return;
+      try {
+        me = await this.deps.api.getMe();
+      } catch (error) {
+        if (shouldStop()) return;
+        const wait = backoffMs(attempt);
+        log(
+          `telegram: connessione fallita (${error instanceof Error ? error.message : String(error)}) — riprovo fra ${Math.round(wait / 1000)}s`,
+        );
+        await this.sleep(wait, signal);
+      }
+    }
+    log(`telegram: connesso come @${me.username ?? me.id}`);
 
     // Anything left pending from a previous life comes first, before new work.
     await this.drain();
 
     while (this.running && signal?.aborted !== true) {
-      let updates: Update[];
+      // Everything the beat does lives in one `try`, not only the network call:
+      // `inbox.accept`/`drain()` throwing used to escape uncaught too, and a
+      // bookkeeping error is exactly as unfit to kill the poller as a network
+      // one. Same rule as `drain`'s own per-update `try` — report, continue.
       try {
-        updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset());
+        const updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset());
+        if (updates.length > 0) {
+          const { stored, duplicates } = this.deps.inbox.accept(updates, this.now());
+          if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
+          if (stored > 0) await this.drain();
+        }
       } catch (error) {
         if (error instanceof TelegramError && error.status === 409) {
           // Another poller holds the token — usually the previous process not
           // yet gone. Waiting is the correct move; racing it is not.
           log('telegram: 409, un altro getUpdates è attivo — attendo');
-          await sleep(5000, signal);
-          continue;
+        } else {
+          log(`telegram: polling fallito (${error instanceof Error ? error.message : String(error)})`);
         }
-        log(`telegram: polling fallito (${error instanceof Error ? error.message : String(error)})`);
-        await sleep(5000, signal);
-        continue;
-      }
-
-      if (updates.length > 0) {
-        const { stored, duplicates } = this.deps.inbox.accept(updates, this.now());
-        if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
-        if (stored > 0) await this.drain();
+        await this.sleep(5000, signal);
       }
     }
   }
@@ -528,4 +572,16 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
     }, { once: true });
   });
+}
+
+/**
+ * Backoff for the `getMe()` reconnect loop. Capped, with jitter so a shared
+ * outage (the owner's router rebooting, a DNS blip) does not make every retry
+ * land in the same instant. Same shape as `connectors/discord/gateway.ts`'s
+ * own `backoffMs`, kept local rather than shared: two three-line functions
+ * across two connectors is not yet a module.
+ */
+function backoffMs(attempt: number): number {
+  const base = Math.min(1000 * 2 ** attempt, 30_000);
+  return base + Math.floor(Math.random() * 1000);
 }
