@@ -259,7 +259,7 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
     const home = bootHome();
     const ws = workspace();
     const runtime = buildRuntime(home, ws);
-    runtime.deps.turns.create({
+    const created = runtime.deps.turns.create({
       id: 'sospeso',
       principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
@@ -280,23 +280,27 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
         contextBuilt: true,
       },
     });
-    runtime.deps.turns.suspend('sospeso', {
-      messages: [],
-      taint: 0,
-      counters: {
-        iterations: 1,
-        recoveriesUsed: 0,
-        transportRetriesLeft: 2,
-        toolCallsMade: 0,
-        nudgedForCompletion: false,
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        spentUsd: 0,
-        resumes: 0,
-        contextBuilt: true,
+    runtime.deps.turns.suspend(
+      'sospeso',
+      {
+        messages: [],
+        taint: 0,
+        counters: {
+          iterations: 1,
+          recoveriesUsed: 0,
+          transportRetriesLeft: 2,
+          toolCallsMade: 0,
+          nudgedForCompletion: false,
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          spentUsd: 0,
+          resumes: 0,
+          contextBuilt: true,
+        },
+        wakeAt: '2026-08-16T11:00:00.000Z',
+        waitFor: null,
       },
-      wakeAt: '2026-08-16T11:00:00.000Z',
-      waitFor: null,
-    });
+      created.claimToken,
+    );
     runtime.close();
     return home;
   }
