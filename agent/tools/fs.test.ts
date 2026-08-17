@@ -272,6 +272,25 @@ describe('filesystem primitives', () => {
     expect(readFileSync(join(root, 'rot', 'identity.md'), 'utf8')).toContain('identità');
   });
 
+  it('does not read through a hard link to a deny-listed secret (judge of PR #52)', () => {
+    // The write side already refused multiply-linked files; the read side did
+    // not, and a hard link inside root to `secrets/provider_api_key` returned
+    // the key verbatim — `realpath` cannot reveal a second name. Same one-line
+    // guard, both directions.
+    const { scope, root } = scoped();
+    linkSync(join(root, 'secrets', 'provider_api_key'), join(root, 'nota-innocua.txt'));
+    expect(() => fsRead(scope, 'nota-innocua.txt')).toThrow(/hard link/);
+  });
+
+  it('opens the resolved leaf with O_NOFOLLOW on both read and write (the judge found no test noticed its removal)', () => {
+    // The race between resolution and open cannot be reproduced deterministically;
+    // what can be pinned is that the two production opens carry the flag, so
+    // removing it is a diff someone has to argue for.
+    const src = readFileSync(new URL('./fs.ts', import.meta.url), 'utf8');
+    const opens = src.match(/openSync\([^)]*O_NOFOLLOW[^)]*\)/g) ?? [];
+    expect(opens.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('is not fooled by the case of a deny path where the filesystem is not', () => {
     const { scope, root } = scoped();
     if (!existsSync(join(root, 'ROT'))) return; // case-sensitive volume: nothing to bypass
