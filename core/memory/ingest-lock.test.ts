@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import { IngestLock, STALE_AFTER_MS } from './ingest-lock.js';
 
 /**
@@ -68,15 +69,26 @@ describe('IngestLock', () => {
     expect(lock.acquire(NOW, 333)).toMatchObject({ held: expect.stringContaining('pid 222') });
   });
 
-  it('an old claim is stale whatever its pid says', () => {
+  it('a genuinely alive holder is not stolen just for missing the ordinary horizon (P20)', () => {
+    // `alive` says true throughout — a batch that is genuinely still running,
+    // not a corpse. Before the fix, the wall clock alone decided this at
+    // `STALE_AFTER_MS`, never consulting `alive` at all.
     const lock = new IngestLock(db(), () => true);
     lock.acquire(NOW, 111);
 
     const soon = new Date(NOW.getTime() + STALE_AFTER_MS - 1000);
     expect(lock.acquire(soon, 222)).toMatchObject({ held: expect.stringContaining('111') });
 
-    const later = new Date(NOW.getTime() + STALE_AFTER_MS + 1000);
-    expect('release' in lock.acquire(later, 222)).toBe(true);
+    const pastOrdinary = new Date(NOW.getTime() + STALE_AFTER_MS + 1000);
+    expect(lock.acquire(pastOrdinary, 222)).toMatchObject({ held: expect.stringContaining('111') });
+  });
+
+  it('an old claim is stale past the hard horizon, whatever its pid says — the pid-reuse backstop', () => {
+    const lock = new IngestLock(db(), () => true);
+    lock.acquire(NOW, 111);
+
+    const pastHard = new Date(NOW.getTime() + STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1000);
+    expect('release' in lock.acquire(pastHard, 222)).toBe(true);
   });
 
   it('survives a home that has never taken it', () => {
