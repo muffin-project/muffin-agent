@@ -210,7 +210,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
     // (core/turns/store.ts `create`) — exactly what a process dying between
     // "the answer is ready" and "the surface confirmed it went out" leaves
     // behind, since nothing but a settled delivery ever moves it off `pending`.
-    store.create({
+    const undelivered = store.create({
       id: 'turn-undelivered-1',
       principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
       tenant: 'host',
@@ -222,7 +222,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters }, undelivered.claimToken);
     db.close();
 
     const c = check(dir, 'consegne');
@@ -247,7 +247,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       resumes: 0,
       contextBuilt: false,
     };
-    store.create({
+    const settled = store.create({
       id: 'turn-settled-1',
       principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
       tenant: 'host',
@@ -259,7 +259,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters }, settled.claimToken);
     store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
     db.close();
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../agent/providers/types.js';
+import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import type { Principal } from '../policy/types.js';
 import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, readTurnHealth, type NewTurn } from './store.js';
 
@@ -55,7 +56,7 @@ describe('the turn record', () => {
 
   it('keeps the transcript verbatim — thinking blocks and their signatures included', () => {
     const s = store();
-    s.create(spec());
+    const created = s.create(spec());
     // The exact shape ADR-0037 requires to be sent back unmodified. A record
     // that loses these is not a record of the turn: the loss makes no noise at
     // the API, so nothing downstream would ever report it.
@@ -70,7 +71,7 @@ describe('the turn record', () => {
         ],
       },
     ];
-    s.checkpoint('turn-1', { messages, taint: 0, counters: spec().counters });
+    expect(s.checkpoint('turn-1', { messages, taint: 0, counters: spec().counters }, created.claimToken)).toBe(true);
     expect(s.get('turn-1')?.messages).toEqual(messages);
   });
 
@@ -99,16 +100,17 @@ describe('the turn record', () => {
 
   it('finishing records how the turn went and releases the claim', () => {
     const s = store();
-    s.create(spec());
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 1, counters: spec().counters });
-    expect(s.get('turn-1')).toMatchObject({ status: 'done', outcome: 'answered', claimedBy: null, taint: 1 });
+    const created = s.create(spec());
+    expect(created.claimToken).not.toBeNull();
+    expect(s.finish('turn-1', { outcome: 'answered', messages: [], taint: 1, counters: spec().counters }, created.claimToken)).toBe(true);
+    expect(s.get('turn-1')).toMatchObject({ status: 'done', outcome: 'answered', claimedBy: null, taint: 1, claimToken: null });
   });
 
   it('keeps the two outcomes apart: a failed delivery leaves the turn answered', () => {
     const s = store();
-    s.create(spec({ replyTo: { chatId: 7, messageId: 9 } }));
+    const created = s.create(spec({ replyTo: { chatId: 7, messageId: 9 } }));
     expect(s.get('turn-1')?.delivery).toBe('pending');
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters });
+    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
     s.delivered('turn-1', 'failed:429 Too Many Requests');
     const row = s.get('turn-1');
     // The property `core/scheduler/scheduler.ts:166-171` already paid for: the
@@ -154,18 +156,35 @@ describe('reclaiming what a dead process was holding', () => {
     expect(s.get('turn-1')?.status).toBe('running');
   });
 
-  it('reclaims past the horizon even when the pid reads as alive — pids get reused', () => {
+  it('does not reclaim a live pid past the ordinary horizon — P19', () => {
+    // Before the fix, `reclaim()` asked `heldBy` which asked the wall clock
+    // before `alive` — a live pid past `TURN_STALE_AFTER_MS` (with no
+    // checkpoint to push the horizon out) was reclaimed exactly like a
+    // corpse, and the row it left `interrupted` was immediately claimable by
+    // a second process while the first was still executing it.
     const start = new Date('2026-08-15T10:00:00.000Z');
     const s = store(() => true, () => start);
     s.create(spec(), 4242);
     expect(s.reclaim(new Date(start.getTime() + TURN_STALE_AFTER_MS - 1))).toEqual([]);
-    expect(s.reclaim(new Date(start.getTime() + TURN_STALE_AFTER_MS + 1))).toHaveLength(1);
+    // Past the ordinary horizon, still alive: still not reclaimed. This exact
+    // instant is where the pre-fix code handed the row to a second claimant.
+    expect(s.reclaim(new Date(start.getTime() + TURN_STALE_AFTER_MS + 1))).toEqual([]);
+    expect(s.get('turn-1')?.status).toBe('running');
+  });
+
+  it('reclaims past the hard horizon whatever the pid says — pids get reused', () => {
+    const start = new Date('2026-08-15T10:00:00.000Z');
+    const s = store(() => true, () => start);
+    s.create(spec(), 4242);
+    const pastHard = new Date(start.getTime() + TURN_STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1);
+    expect(s.reclaim(pastHard)).toHaveLength(1);
+    expect(s.get('turn-1')?.status).toBe('interrupted');
   });
 
   it('a finished turn is never reclaimed, whoever wrote it', () => {
     const s = store(() => false);
-    s.create(spec(), 99999);
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters });
+    const created = s.create(spec(), 99999);
+    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
     expect(s.reclaim()).toEqual([]);
   });
 
@@ -183,6 +202,62 @@ describe('reclaiming what a dead process was holding', () => {
     expect(reported).toHaveLength(1);
     first.close();
     second.close();
+  });
+});
+
+describe('fencing: a stolen claim cannot write over its thief (P19)', () => {
+  it("after a steal, the original run's checkpoint/suspend/finish all report the loss instead of landing", () => {
+    // The exact scenario the audit's P19 probe demonstrated as broken: a
+    // legitimately long turn (pid 4242, still alive) goes 61+ minutes without
+    // a checkpoint, a second process reclaims and claims the row (pid 777).
+    // Before this fix, pid 4242's writes carried no holder guard — only a
+    // status one — so its `suspend`/`finish` landed on the row pid 777 was
+    // now executing, silently overwriting the winner's transcript
+    // (store.ts:471-481,579 in the audit's citation).
+    const file = join(mkdtempSync(join(tmpdir(), 'muffin-fencing-')), 'muffin.db');
+    const start = new Date('2026-08-16T10:00:00.000Z');
+    const original = new TurnStore(new DatabaseCtor(file), () => start, () => true);
+    const created = original.create(spec(), 4242);
+    expect(created.claimToken).not.toBeNull();
+
+    const thief = new TurnStore(new DatabaseCtor(file), () => new Date(start.getTime() + TURN_STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1), () => true);
+    expect(thief.reclaim()).toHaveLength(1);
+    const stolen = thief.claim('turn-1', 777);
+    expect(stolen).toMatchObject({ status: 'running', claimedBy: 777 });
+    expect(stolen?.claimToken).not.toBe(created.claimToken);
+
+    // Pid 4242 — still alive, still holding its now-stale token — tries every
+    // write the loop makes. All three must change nothing.
+    expect(
+      original.checkpoint(
+        'turn-1',
+        { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'work of pid 4242' }] }], taint: 0, counters: spec().counters },
+        created.claimToken,
+      ),
+    ).toBe(false);
+    expect(
+      original.suspend(
+        'turn-1',
+        { messages: [], taint: 0, counters: spec().counters, wakeAt: new Date(start.getTime() + 3_600_000).toISOString(), waitFor: null },
+        created.claimToken,
+      ),
+    ).toBe(false);
+    expect(
+      original.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken),
+    ).toBe(false);
+
+    // The row still reads exactly as pid 777 left it — none of the three
+    // writes above touched it.
+    expect(thief.get('turn-1')).toMatchObject({ status: 'running', claimedBy: 777, claimToken: stolen?.claimToken });
+  });
+
+  it('every claim mints its own token — two turns never share one', () => {
+    const s = store();
+    const first = s.create(spec({ id: 'turn-a' }), 4242);
+    const second = s.create(spec({ id: 'turn-b' }), 4243);
+    expect(first.claimToken).not.toBeNull();
+    expect(second.claimToken).not.toBeNull();
+    expect(first.claimToken).not.toBe(second.claimToken);
   });
 });
 

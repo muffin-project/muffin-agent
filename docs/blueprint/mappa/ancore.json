@@ -41,12 +41,12 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1027,
+    "line": 1038,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1088,
+    "line": 1099,
     "testo": "// model at all."
   },
   "agent/loop.ts:172": {
@@ -56,22 +56,22 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1753,
+    "line": 1849,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1771,
+    "line": 1867,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 1790,
+    "line": 1886,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1873": {
     "path": "agent/loop.ts",
-    "line": 1873,
+    "line": 1969,
     "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
   },
   "agent/loop.ts:271": {
@@ -826,22 +826,22 @@
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 381,
+    "line": 400,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 393,
+    "line": 423,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 399,
+    "line": 429,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 406,
+    "line": 440,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
@@ -1106,22 +1106,22 @@
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 286,
+    "line": 292,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 288,
+    "line": 294,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 289,
+    "line": 295,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 300,
+    "line": 306,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
@@ -1361,7 +1361,7 @@
   },
   "core/gateway/lock.ts:63": {
     "path": "core/gateway/lock.ts",
-    "line": 63,
+    "line": 64,
     "testo": "export class GatewayLock {"
   },
   "core/gateway/notify.ts:105": {
@@ -1411,7 +1411,7 @@
   },
   "core/lock/durable.ts:93": {
     "path": "core/lock/durable.ts",
-    "line": 93,
+    "line": 209,
     "testo": "export class DurableLock {"
   },
   "core/mcp/registry.ts:58": {
@@ -2011,7 +2011,7 @@
   },
   "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 240,
+    "line": 278,
     "testo": "* duration, it is money and not correctness, and closing it would require"
   },
   "core/session/store.ts:35": {
@@ -2071,7 +2071,7 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 86,
+    "line": 97,
     "testo": "* construction site — instead of a silent regression a judge has to"
   },
   "core/vault/vault.ts:238": {
@@ -2316,7 +2316,7 @@
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 253,
+    "line": 302,
     "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
   },
   "executor.ts:112": {
@@ -2416,7 +2416,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1639,
+    "line": 1724,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {

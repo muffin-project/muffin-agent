@@ -57,9 +57,10 @@ export const STALE_AFTER_MS = 30 * 60 * 1000;
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS ingest_lock (
-  id       INTEGER PRIMARY KEY CHECK (id = 1),
-  pid      INTEGER,
-  taken_at TEXT
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  pid       INTEGER,
+  taken_at  TEXT,
+  holder_id TEXT
 );
 `;
 

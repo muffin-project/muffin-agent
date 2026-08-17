@@ -1,86 +1,68 @@
 # Stato esecuzione blueprint Muffin
 
-> ⭐ **START HERE — handoff (sopravvive al compact). Aggiornato 2026-08-16.**
+> ⭐ **START HERE — handoff (sopravvive al compact). Aggiornato 2026-08-17.**
 
 **Dove siamo.** M0–M5 è substrato costruito, non MVP. Gate 1 si chiude solo
-quando l'owner usa Muffin per **14 giorni consecutivi** senza tornare al vecchio
-(gruppi esclusi), non quando una checklist sembra piena. Repo autoritativa:
-`~/dev/muffin-agent`; il vecchio `~/dev/Muffin` resta solo produzione fino al
-cutover. Il dettaglio del chiuso è nella cronaca sotto; qui resta l'aperto.
+quando l'owner usa Muffin per **14 giorni consecutivi** senza tornare al
+vecchio (gruppi esclusi). Repo autoritativa: `~/dev/muffin-agent`; il vecchio
+`~/dev/Muffin` resta solo produzione fino al cutover.
 
-**Sequenza operativa.** Prima si raggiunge **DAY-1 READY**: zero BLOCKER e zero
-`?` in M5-bis, installazione reale, stato recuperabile. Poi partono i 14 giorni;
-fix e build continuano, mentre gruppi/M6/M7 avanzano in parallelo. I gruppi si
-riattivano dopo la finestra, ma ogni primitiva costruita prima resta
-tenant/surface-agnostic: single-user è un default, non un hardcode.
+**Mandato DAY-1** (`gate1/MANDATO-DAY-1.md`, 17/08): dodici invarianti da
+confutare, le capability che i 14 giorni devono coprire, la battery di
+cutover, l'ultimo audit a contesto fresco. Non è "chiudi M5-BIS": è "cosa,
+oggi, mi impedirebbe concretamente di vivere con Muffin?". Cinque piani
+(ADR-0045 §revisione): Evidence, Beliefs, Work, Effects, Authority — nessuno
+store è due piani.
 
-**Direzione (ADR-0045/0046).** Un solo agente continuo attraversa modello,
-sessione e device: fare · capire · essere presente. Evidence, beliefs, world
-state e work state sono piani distinti. Le surface sono porte: owner solo da
-subject-id stabile autenticato e binding protetto; ogni campo model-visible è
-contenuto parsato con provenienza/taint e resta potenzialmente iniettato.
-L'autonomia futura è scoped, revocabile e non allarga kernel o Root of Trust.
+**Triage evidence-only 17/08 — fatto.** Tre worker in sola lettura hanno
+riletto ogni riga A1–E6, i 19 MEDIUM residui dell'audit e le otto proprietà
+trasversali contro `origin/dev` (`research/triage-2026-08-17/`). Conteggio
+finale in `M5-BIS.md`: **9 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED** (54
+righe). `?` non è più uno stato; due eccezioni dichiarate (B8 READY con
+scenario atteso-rosso, D10 ancora `?`) restano intoccate perché le tocca PR
+#54, in giudizio sulla stessa riga.
 
-**Mandato DAY-1 (17/08).** Il testo integrale del goal dell'owner è in
-`gate1/MANDATO-DAY-1.md`: dodici invarianti trasversali da confutare (effect
-WAL, taint attraverso la session history, provenienza degli episodi
-dell'agente, inbound → una sola unità di lavoro, risultato+consegna durevoli,
-containment del filesystem, egress non-interference, lock/lease/fencing,
-acceptance truthfulness, migrazione, ASK dettagliato, osservabilità/segreti/
-costo), la lista delle capability che i quattordici giorni devono coprire, la
-battery di cutover e l'ultimo audit a contesto fresco. «Fallback» è definito in
-`04-roadmap.md` §Gate 1. Cinque piani (ADR-0045 §revisione): Evidence, Beliefs,
-Work, Effects, Authority — nessuno store è due piani.
+**`gate1/PERCORSO-CRITICO.md` è la sequenza operativa**, non un secondo
+inventario — una slice alla volta, verificata, giudicata, mergiata. Ordine:
+1) invarianti trasversali che invaliderebbero più READY (wal-intent,
+session-taint, recall-speaker, ingress-forward, job-fires, egress-params);
+2) forma durevole prima dei dati reali (schema-evolution, update-backup,
+undo-journal, cluster audit-mediums); 3) capability che costringerebbero un
+altro agente (ask, init-local, prompts, provider-retry, pairing,
+telegram-media, budget-per-job, audio); 4) scenari per righe già solide
+(journey J1–J6); 5) OUT/post-Gate 1.
 
-**Audit avversariale (16/08, pinnato a e2a47ac).** 40 probe;
-`research/audit-2026-08-16/`: 1 CRITICAL (fs_read/fs_list seguono un symlink
-terminale: root e denyRead bypassati, chiave leggibile), 4 HIGH (lane che
-riesegue un turno tenuto da un pid vivo; lock del gateway a orologio senza
-fencing; gateway in sleep che tiene il claim → due scheduler; il rapporto di
-accettazione che non fa fallire una riga READY con scenario atteso-rosso),
-19 MEDIUM — classificati contro `dev`: tutti ancora presenti. Ordine di
-chiusura per rischio nei 14 giorni: fs containment (in corso) → lock/lease/
-fencing → acceptance truth → scheduler/job → egress params → injection nel
-canale fidato (estrazione, skill) → segreti a riposo/trace → standalone.
+**In volo adesso.** PR #53 `slice/lease-fencing` (lock/lease/fencing,
+giudizio giro 2, judge opus). PR #54 `slice/acceptance-truth`
+(READY+atteso-rosso fa fallire il rapporto; B8/C4/D10 verdi, giudizio giro
+2). `slice/a1-continuita` (A1 nella lettura forte dell'owner: processo
+residente supervisionato).
 
-**Blocker Gate 1 visibili adesso** (`M5-BIS.md` è l'inventario):
+**Decisioni owner (17/08).** A1: lettura forte, non il boot pulito debole
+che il primo triage proponeva READY — serve il processo residente
+supervisionato (SIGKILL gateway reale + riavvio, turno sospeso e job ripresi
+una sola volta, Telegram che riprova al boot, doctor supervisore).
+Scheduler/Telegram: `job_fires` come ponte di identità `(job_id,
+scheduled_for) → turn_id`, non un secondo TurnStore — chiude B7 e la metà
+Telegram di B1/B8, apre B2 alla prova di prod.
 
-- A2/A3: `identity.md` è template e manca il taglio persona dell'owner (suoi).
-  Prompt: da spostare in `defaults/prompts/` con onboarding a stato e
-  `muffin prompt show`.
-- A6/A7/A8: `muffin update`, migrazione da DB popolato, backup+restore provato.
-- A9: `muffin init --local`. B2: al test di prod. B15: il pairing sigilla da
-  solo il binding. B16: envelope tipizzato universale.
-- C8: audio — se il modello ha la capability, diretto; altrimenti
-  whisper/faster-whisper in locale; fornitore per capability da CLI.
-- D2/D3/D11: quattro classi + journal per turno come effect lifecycle
-  riusabile (mandato §6), non un backup dentro `fs_write`.
-- D12: l'ASK mostra l'azione specifica. E1: budget per job.
-- READY senza scenario di accettazione (il rapporto le nomina): B14, C2, C3,
-  C6, C7, D4, D6, E4 — e le righe `?` una alla volta.
+**Decisioni owner ancora aperte.** P34-2 (segreti a riposo in
+`turns.messages`/`turn_tool_calls.content`: redazione o prune?); audio nei
+14 giorni sì/no (C8, `PERCORSO-CRITICO.md` §3.8, ultima); scope lettura
+sandbox; `mcp.*` per-tool; `ricorda` scrive o propone; lingua dei doc
+pubblici.
 
-**Non integrato.** `slice/fs-containment` (CRITICAL, in corso), PR #49 giudice
-memoria (judge in corso), `slice/mandato-day1` (questo handoff).
-
-**Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità raggiungibile
-→ commit coerente; build+suite+failure+stato → review; solo judge `MERGE` →
-integrazione in `dev`. `dev`→`main` richiede una verifica e un verdetto separati.
-Il 16/08 sono entrate **#28/#29/#35/#36/#37/#39/#40/#41/#42/#43/#45/#46** e
-**#44** `dev`→`main` (ceb2579); il 17/08 **#47/#48** (streaming: B11 READY).
-Metodo: una slice = una riga o un invariante, ≤ ~500 righe, un judge sonnet,
-tetto due giri, al massimo due slice non sovrapposte in volo; la meccanica la fa
-l'orchestratore.
-
-**Decisioni owner (16–17/08).** Reversibilità: quattro classi + journal per turno
-(sopra). Audio: whisper locale, fornitore da CLI. `sys.shell` dopo una lettura:
-ASK (`maxTaint: 2`, ADR-0044 §Revisione). Prompt puro-Muffin in `.md`.
-Ancora aperte: scope lettura sandbox · `mcp.*` per-tool · `ricorda` scrive o
-propone · lingua docs pubblici. Richiesta: audit dei comandi CLI e degli slash
-con tenant.
+**Checkpoint.** `BRANCHING.md`: decisione fissata → draft PR; unità
+raggiungibile → commit coerente; build+suite+failure+stato → review; solo
+judge `MERGE` → integrazione in `dev`; `dev`→`main` richiede verifica e
+verdetto separati. Metodo: una slice = una riga o un invariante, ≤ ~500
+righe, judge sonnet (opus solo su concorrenza/kernel/segreti), tetto due
+giri, al massimo due slice non sovrapposte in volo.
 
 **File load-bearing — LEGGI PRIMA di lavorare:**
 
-- `STATE.md`, `LAVORO.md`, `04-roadmap.md`, `M5-BIS.md`, `03-threat-model.md`,
+- `STATE.md`, `LAVORO.md`, `gate1/PERCORSO-CRITICO.md`,
+  `gate1/MANDATO-DAY-1.md`, `M5-BIS.md`, `03-threat-model.md`,
   `09-contratti-m0-m1.md`, `BRANCHING.md`, `ORCHESTRATION.md`, `JUDGE.md`.
 - `knowledge/README.md`, `knowledge/03-observing-spine.md`,
   `knowledge/04-learn-from-absence.md`.
@@ -665,6 +647,27 @@ allegato di gruppo importava anche note host e file di altri gruppi. L'ingresso
 ora chiama `reindexPath(tenant, savedPath)`; il full scan resta manutenzione.
 La prova integrata prepara tre domini nello stesso vault e diventa rossa se il
 cablaggio di produzione torna alla scansione completa.
+
+## Sessione 2026-08-17 — triage evidence-only e percorso critico
+
+Direttiva owner del mattino: convergenza, non altra esplorazione. Tre worker
+in sola lettura (`research/triage-2026-08-17/{a-b,c-d,e-audit-trasversali}.md`)
+hanno riletto ogni riga A1–E6 di `M5-BIS.md`, i 19 MEDIUM residui dell'audit
+del 16/08 e le otto proprietà trasversali del mandato contro `origin/dev`,
+eseguendo dal vivo gli scenari di accettazione dove il budget lo permetteva
+(non solo leggendo prosa) — trovando che B8 era `READY` con uno scenario che
+lo dimostra rotto (finding maggiore, invariante 9 del mandato) e che "? su
+Linux" di D4 era stale dal 15/08. L'orchestratore ha consolidato i tre triage
+in `gate1/PERCORSO-CRITICO.md` (la sequenza operativa, non un secondo
+inventario) e riscritto `M5-BIS.md` riga per riga: **9 READY · 37 BLOCKER · 7
+OUT · 0 INVALIDATED**, zero `?` residui salvo le due eccezioni dichiarate (B8,
+D10) lasciate intoccate perché le tocca PR #54 in giudizio sulla stessa riga.
+Decisioni owner prese nella stessa sessione: A1 nella lettura forte (processo
+residente supervisionato, non il boot pulito debole); `job_fires` come ponte
+di identità `(job_id, scheduled_for) → turn_id` per lo scheduler e la metà
+Telegram di B1/B8. Aggiornati anche `research/audit-2026-08-16/README.md`
+(colonna "Stato 17/08" sui 24 reperti, nessuna riga cancellata) e
+`LAVORO.md`.
 
 ## Sessioni 2026-08-09
 

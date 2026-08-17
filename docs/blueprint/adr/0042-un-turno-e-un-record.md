@@ -176,3 +176,17 @@ segue è solo ciò che di questo testo va letto diversamente adesso.
   cui questa ADR ha reso la taint una colonna del turno: un piano scritto da un
   turno sporco, riletto pulito dal turno dopo, è la stessa scalata di privilegio
   che avevamo chiuso da un lato e lasciato aperta dall'altro.
+
+**Emendamento, 2026-08-17 — `claimed_by` da solo non bastava: ADR-0035
+emendamento №3.** L'audit avversariale (P19, `docs/blueprint/research/audit-2026-08-16/`)
+ha trovato che `checkpoint`/`finish`/`suspend` — le tre scritture che questo ADR
+descrive sopra — erano guardate solo su `id` (le prime due) o `id`+`status` (la
+terza), mai sul detentore: dopo un furto della riga (`reclaim()` che giudicava
+"morto" un processo ancora vivo, la stessa forma di bug del lock del gateway),
+il processo perdente poteva sovrascrivere in silenzio il lavoro del vincitore.
+La riga sopra — *"Il giudizio di liveness è `heldBy` di `core/lock/durable.ts`,
+riusato e non riscritto"* — resta vera; quello che è cambiato è `heldBy` stessa
+(ordine liveness-poi-orizzonte, orizzonte duro) e una colonna nuova,
+`claim_token`, la stessa forma dell'`holder_id` di quel file, che fence le tre
+scritture. Il dettaglio pieno — perché, i numeri, le alternative scartate — vive
+in un posto solo: ADR-0035 emendamento №3, non ripetuto qui.
