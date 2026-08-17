@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal, TrustTier } from '../core/policy/types.js';
@@ -354,5 +354,79 @@ describe('when the record cannot be written', () => {
     // an answer the model already produced, over a bookkeeping write.
     expect(result.stopped).toBe('answered');
     expect(result.text).toBe('risposta comunque');
+  });
+});
+
+describe('EFFECT WAL: an intent that cannot be written never reaches the handler', () => {
+  /**
+   * MANDATO-DAY-1 invariant 1. Stubbed with `vi.spyOn` rather than closing the
+   * database (as the block above does): only `startToolCall` fails here, so
+   * the assertion is about the gate itself and not a side effect of the whole
+   * store going away. The block above already proves the DB-wide case; this
+   * one isolates the one write the invariant is actually about.
+   */
+  function toolResultOf(h: Harness, turnId: string): { content: string; isError?: boolean } | undefined {
+    const blocks = (h.deps.turns.get(turnId)?.messages ?? []).flatMap((m) => m.content);
+    return blocks.find((b) => b.type === 'tool_result') as { content: string; isError?: boolean } | undefined;
+  }
+
+  it('(a) a non-rerunnable tool: the handler never runs, and no row is left behind', async () => {
+    const handler = vi.fn(() => ({ content: 'inviato', tier: 0 as const }));
+    const h = harness([callTool('demo_send'), answer('capito')], {
+      tools: [
+        {
+          capability: 'demo.send', // declared `rerunnable: false` in `decls` above
+          spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
+          handler,
+        },
+      ],
+    });
+    vi.spyOn(h.deps.turns, 'startToolCall').mockImplementation(() => {
+      throw new Error('disco pieno');
+    });
+
+    const result = await runTurn(h.deps, input(h.sessions));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.calls()).toHaveLength(0); // no intent row, so nothing for endToolCall to have closed either
+    expect(toolResultOf(h, result.turnId)).toMatchObject({ isError: true, content: expect.stringContaining('non eseguita') });
+    // The refusal is information for the model, not a crash for the turn.
+    expect(result.stopped).toBe('answered');
+  });
+
+  it('(b) a rerunnable tool: the same gate applies — one rule, not one per tool', async () => {
+    const handler = vi.fn(() => ({ content: 'letto', tier: 0 as const }));
+    const h = harness([callTool('demo_read'), answer('capito')], { tools: [readTool('demo_read', handler)] });
+    vi.spyOn(h.deps.turns, 'startToolCall').mockImplementation(() => {
+      throw new Error('disco pieno');
+    });
+
+    const result = await runTurn(h.deps, input(h.sessions));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.calls()).toHaveLength(0);
+    expect(toolResultOf(h, result.turnId)).toMatchObject({ isError: true, content: expect.stringContaining('non eseguita') });
+  });
+
+  it('(c) the happy path is unchanged: intent written, handler runs, outcome closes it', async () => {
+    const handler = vi.fn(() => ({ content: 'inviato', tier: 0 as const }));
+    const h = harness([callTool('demo_send'), answer('fatto')], {
+      tools: [
+        {
+          capability: 'demo.send',
+          spec: { name: 'demo_send', description: 's', inputSchema: { type: 'object', properties: {} } },
+          throwTier: 0,
+          handler,
+        },
+      ],
+    });
+
+    await runTurn(h.deps, input(h.sessions));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(h.calls()).toHaveLength(1);
+    expect(h.calls()[0]).toMatchObject({ tool: 'demo_send', rerunnable: 0 });
+    expect(h.calls()[0]?.ended_at).not.toBeNull();
   });
 });
