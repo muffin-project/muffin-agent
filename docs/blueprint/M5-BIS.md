@@ -104,13 +104,12 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > `gate1/PERCORSO-CRITICO.md`, non questo file: qui c'è la risposta, lì la
 > sequenza e il perché.
 >
-> **Conteggio finale: 9 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED** (54
-> righe). Due eccezioni dichiarate, non un ritorno del `?`: **D10** resta `?`
-> e **B8** resta READY con scenario `atteso-rosso` — entrambe le righe le
-> tocca PR #54 (`slice/acceptance-truth`, in giudizio, giro 2); editarle qui
-> avrebbe prodotto un conflitto di merge sulla stessa riga, non un disaccordo
-> di sostanza. A parte queste due, **`?` non esiste più come stato: ogni riga
-> ha una delle quattro risposte con evidenza.**
+> **Conteggio finale: 11 READY · 36 BLOCKER · 7 OUT · 0 INVALIDATED** (54
+> righe). Con la PR #54 integrata (`slice/acceptance-truth`): **D10** è READY
+> (taint 3 → egress negato, scenario verde), **B8** è READY nel perimetro
+> ristretto che il suo scenario prova, **C4** è READY (scenario verde con
+> entità capitalizzata). **`?` non esiste più come stato: ogni riga ha una
+> delle quattro risposte con evidenza.**
 
 Stato: `READY` · `OUT` (fuori dal Gate 1, con ragione) · `BLOCKER` (con cosa
 manca e la slice del percorso critico che la chiude) · `INVALIDATED`
@@ -142,7 +141,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | B5 | Resume | Se muore a metà, riprende? | READY — accettazione: processo vero ucciso con SIGKILL a metà turno, riprende al riavvio |
 | B6 | Retry | Se fallisce una tool call, recupera? | BLOCKER — retry esiste solo a livello trasporto/modello (`agent/loop.ts:1089-1103`, `MAX_TRANSPORT_RETRIES=2`); nessun tool (`http.ts`, `search.ts`, `fs.ts`) implementa retry proprio; nessuno scenario → PC 3.4 `slice/provider-retry` |
 | B7 | Scheduler | I job sopravvivono al riavvio? | BLOCKER — il dato sopravvive ma la garanzia no: `heldBy()` giudica stale dal solo wall-clock mai da `alive(pid)` (audit P19/P20, HIGH); nessun fire-claim sul job (P21-4); `yielded` senza consumer (P21-2); decisione owner 17/08: `job_fires` come ponte di identità `(job_id, scheduled_for)→turn_id` — crash prima del fire crea, dopo il fire completa il binding senza perderlo, dopo la creazione riprende lo stesso `turn_id`, turno `done` prima di `markRan` non richiama il modello, delivery incerta non rifà la computazione → PC 1.5 `slice/job-fires` |
-| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — canale non connesso → `failed:<why>`, mai `sent`, e `doctor` lo nomina ⚠️ nota sotto |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | OUT — post-Gate 1: nessuna capability §5 dei 14 giorni dipende da trigger proattivi; `ProactiveKind` ha oggi 4 valori (non 5, `consolidation` rimosso da ADR-0038), solo `gone_quiet` ha un produttore reale (`core/scheduler/observe.ts:109,128`) ed è cablato ma solo su invocazione manuale (`muffin observe --send`); i tre mancanti (`commitment_due`, `deadline_near`, `fact_actionable`) restano fuori finché non emerge un consumer reale → PC §5 |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | BLOCKER — messaggi e documenti ok (provato, vedi C7); immagini bloccate: scaricate ma mai indicizzate (`core/vault/vault.ts:334-337` le salta) e nessun content-block immagine verso il provider (`agent/providers/types.ts` senza `ImageBlock`); errori gestiti a pezzi, non come proprietà unica; nessuno scenario dedicato → PC 3.6 `slice/telegram-media` |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | READY per CLI/REPL e Telegram (`slice/streaming`, due PR verso `dev`) — Discord resta OUT (B17). Entrambi gli adapter honorano `ChatCall.stream` (`Provider.chatStream`, SDK ufficiali, non SSE fatto a mano); il loop bufferizza i delta per giro e li rilascia solo per quello che risponde davvero (mai durante una tool call — un giro nudged dal completion gate non trapela il suo bozzone). REPL: stampa progressiva byte-identica a fine turno, `--no-stream`. Telegram: bozza dal vivo (`sendMessageDraft`, con `draft_id` — mancava, trovato e corretto in questa slice, vedi ADR-0025 §revisione e `docs/lessons.md`) in chat privata, `editMessageText` sul placeholder in gruppo; spento per sessione al primo edit fallito (Hermes); mai più di un messaggio Telegram per turno (overflow → consegna normale a fine turno). **Nota onesta**: un giro si rilascia in un colpo solo a `done` (mai un punto prima è conoscibile — "streamma e ritira" scartato di proposito), quindi un turno senza tool call produce tipicamente UN aggiornamento dal vivo, non un typewriter — la percezione di attività durante l'attesa viene dal placeholder/typing che precede. Fallback singolo e contato se lo stream del provider si rompe a metà (`ProviderStreamError`). Cablaggio verificato end-to-end con provider SSE finto attraverso `buildRuntime` reale (`cli/repl.test.ts`, `connectors/telegram/streaming.test.ts`), non un `Provider`/`TelegramApi` sostituito a mano. Scenario di accettazione contro il binario vero verde (`evals/acceptance/scenarios/b-streaming.accept.ts`, spawna `muffin repl --stream` come processo reale contro il provider SSE finto e legge la richiesta `stream:true` che il fake ha ricevuto — non un'assunzione dalla risposta arrivata giusta) |
@@ -257,6 +256,22 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
 > riga per riga cosa sposta.
 
+> 🎯 **B8, cosa prova lo scenario — e cosa no.** Lo scenario
+> (`evals/acceptance/scenarios/b-continuity.accept.ts`, righe 73-171) manda un
+> job a un canale `telegram` che questa installazione non connette mai: un
+> `$HOME` fresco non ha token Telegram, quindi `SurfaceRegistry` nasce con zero
+> superfici e `find('telegram')` (`core/surface/registry.ts:28-29`) torna
+> `null` **prima** di toccare una consegna reale. Quello che lo scenario prova
+> è solo la metà negativa: un canale non connesso non fa mai leggere `sent` sul
+> turno — resta `failed:<why>`, e `doctor` (il controllo "consegne" su
+> `TurnStore.undelivered()`, `core/turns/store.ts:912`, cablato in
+> `cli/doctor.ts`) lo nomina per id-turno. La metà positiva — una superficie
+> **davvero connessa**, un `sent` genuino — non è provata qui: arriva dallo
+> scenario A1 rafforzato, in arrivo (`slice/a1-continuita`: gateway vero, job
+> sul canale `cli`, `turns.delivery === 'sent'` e il testo sullo stdout del
+> processo reale), e per Telegram nello specifico dalla journey inbound-unit
+> (`docs/blueprint/gate1/PERCORSO-CRITICO.md` §1.5, in arrivo su `dev`).
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
@@ -264,7 +279,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | C1 | Memory write | Ogni informazione importante viene acquisita? | READY — scenario `C1` verde (`c-memory.accept.ts:27-58`): turno 1 scrive un fatto, turno 2 su sessione diversa lo recupera via memoria (non transcript di sessione, quello è B1); acquisizione "evidence first" (`agent/loop.ts:872`, `core/memory/store.ts:201`) |
 | C2 | Extraction | L'estrazione è automatica? | BLOCKER — solo scenario mancante: consolidamento cablato a fine turno (`agent/runtime.ts:619`, `core/memory/ingest.ts:182`), debounce 20s misurato sul corpus reale; nessuno scenario di accettazione → PC §4 (J1) |
 | C3 | Consolidation | Si consolida senza intervento? | BLOCKER — solo scenario mancante: drain a pagina piena, dedup a chiave esatta, `muffin memory review` (`core/memory/consolidator.ts`), misurato per STATE.md ma non provato in `evals/acceptance/`; nessuno scenario → PC §4 (J1) |
-| C4 | Recall | Ripesca il vecchio **e** il superseded? | BLOCKER — scenario `C4` esiste ed è realmente rosso (`c-memory.accept.ts:60-134`, `it.fails` conferma l'assertion ancora fallita): il fixture scrive via `addFact`/`supersede` saltando `indexBacklog` (`core/memory/ingest.ts:340`), quindi il percorso reale turno→estrazione→giudice→supersede non è mai stato provato → PC §4 (J1) |
+| C4 | Recall | Ripesca il vecchio **e** il superseded? | READY — scenario `C4` **verde** sul binario vero dopo la PR #54 (`evals/acceptance/scenarios/c-memory.accept.ts`, entità capitalizzata: `--history` ritrova il fatto superseduto, la ricerca ordinaria quello attivo); meccanismo in PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35) (`factsAsOf`/`nearestFactTo`, `asOf` unico) ⚠️ limite noto: il one-hop del grafo parte solo da un nome capitalizzato (nota sotto); il percorso turno→estrazione→supersede è provato da J1 con C2/C3, non qui |
 | C5 | Provenance | Posso capire **perché** crede una cosa? | BLOCKER — `muffin memory why` esiste per l'owner (`cli/memory.ts:29`, `core/memory/store.ts:918 provenanceOf`), ma non è esposto come tool-agente (`agent/tools/memory.ts` ha solo `memorySearchSpec`); nessuno scenario → PC §4 (J2) |
 | C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — solo scenario mancante: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts:545,581`) e `asOf` come parametro unico (`core/memory/recall.ts:167-236`) cablati sia in CLI sia nel tool; nessuno scenario di accettazione → PC §4 (J1) |
 | C7 | PDF | Acquisisce documenti utili? | BLOCKER — solo scenario mancante: PDF/DOCX/testo interi (`core/documents/extract.ts`), percorso allegato→vault→reindex→episodio provato da `connectors/telegram/document-arrival.test.ts` (non-acceptance, 326 righe); fallimento esplicito su scansioni senza testo; manca lo scenario in `evals/acceptance/` → PC §4 (J2) |
@@ -314,14 +329,23 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > `02-ontologia.md` §9 che nomina il filtro come proprietà dell'evidenza, non
 > del grafo.
 >
-> **Aggiornamento 17/08.** Il triage evidence-only ha eseguito dal vivo lo
-> scenario `C4` (`c-memory.accept.ts:60-134`): resta rosso — il fixture
-> scrive via `addFact`/`supersede` diretti, saltando `indexBacklog`
-> (`core/memory/ingest.ts:340`), quindi non prova il percorso reale
-> turno→estrazione→giudice→supersede descritto sopra. C4 e C6 restano
-> `BLOCKER` finché quel percorso non ha uno scenario vero (`gate1/
-> PERCORSO-CRITICO.md` §4, journey J1) — il meccanismo qui sopra non è in
-> discussione.
+> ⚠️ **Il one-hop grafo parte solo da un nome capitalizzato in query.**
+> `extractCandidateNames` (`core/memory/recall.ts:819-820`) prende come
+> candidato solo una parola che comincia per maiuscola
+> (`/\b[A-ZÀ-Ú][\wÀ-ú'-]{2,}\b/`); lo scenario C4
+> (`evals/acceptance/scenarios/c-memory.accept.ts`) usa di proposito
+> un'entità scritta come nome proprio ("Ristorante preferito") perché è
+> l'unico percorso di ritrovamento che può raggiungere questo fatto (vedi
+> sopra). Una query tutta minuscola ("il mio ristorante preferito") non fa
+> partire l'hop — limite noto, non coperto dal claim di questa riga.
+>
+> **Aggiornamento 17/08.** Il triage evidence-only aveva trovato lo scenario
+> `C4` rosso perché il fixture scriveva via `addFact`/`supersede` diretti; la PR
+> #54 lo ha riscritto (entità capitalizzata, vedi sopra) ed è **verde** sul
+> binario vero: C4 è READY nel perimetro dichiarato. Il percorso completo
+> turno→estrazione→giudice→supersede resta da provare per **C2/C3** (`gate1/
+> PERCORSO-CRITICO.md` §4, journey J1); C6 (`asOf`) resta BLOCKER solo per
+> scenario mancante nella stessa journey.
 
 > **C7 — cosa il meccanismo prova.** Riclassificata `BLOCKER` il 17/08 per
 > mancanza dello scenario di accettazione, non per un difetto nel meccanismo
@@ -369,7 +393,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | D7 | Web search | Funziona end-to-end? | BLOCKER — `sys.search` dichiara `resourceKind:'none'` (`agent/tools/search.ts:57`) e non raggiunge mai il ramo egress del kernel (`core/policy/decide.ts:155`, identico a audit P04-2): l'intera query esce senza ispezione di policy → PC 1.6 `slice/egress-params` (J5) |
 | D8 | MCP | Gestisce drift e revoca? | OUT — revoca calda: pinning e sospensione su drift sono solidi (`core/mcp/registry.ts:125 verifyTools`, `agent/tools/mcp.ts:11-24`), ma `muffin mcp remove` lo dice già onestamente («spariscono al prossimo avvio», `cli/mcp.ts:142-152`); il riavvio è un verbo del supervisore (coerente con la lettura forte di A1) → PC §5 |
 | D9 | Skills | Scopre e usa le skill? | BLOCKER — scoperta funziona (`core/skills/skills.ts`, zod, skip rumoroso), ma l'injection non è recintata: `skillsPromptSection` (`core/skills/skills.ts:126`) è uno splice diretto senza escaping nel system prompt owner cache-pinned (audit P33) — `core/mcp/*.ts` recinta già le descrizioni terze con nonce, stesso pattern da riusare → PC 2.4 `slice/audit-mediums` |
-| D10 | Security | Nessuna capability escape? | ? |
+| D10 | Security | Nessuna capability escape? | READY — taint in ingresso chiuso (`slice/taint-in-ingresso`, ADR-0044, giro 2 PR #28: STATE.md "Taint in ingresso — chiuso"); un turno a taint 3 che tenta `http_get` fuori allowlist riceve `deny/resource_denied` dal kernel, mai `ask` — provato end-to-end (`evals/acceptance/scenarios/d-capability.accept.ts`, scenario D10) |
 | D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava, e non solo: `recordIntent` inghiotte il fallimento di `startToolCall` e l'handler parte comunque (`agent/loop.ts:1862-1867,1936-1947`) — l'invariante EFFECT WAL del mandato è falsificato oggi sul percorso generico di `runTool`, non solo assente sul registro undo; `draft` resta ineseguibile da ogni percorso (vedi D2) → PC 1.1 `slice/wal-intent`, poi PC 2.3 `slice/undo-journal` |
 | D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando (`describe()` ritorna `'(no resource)'`, `core/policy/decide.ts:218-220`, audit P03); "ASK-in-coda" non è una coda durevole, `turn_outcome='ask'` persistito ma nessun consumer lo rilegge (`agent/scheduler-run.ts:54-61`) → PC 3.1 `slice/ask-dice-cosa` |
 
@@ -394,47 +418,58 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
 > stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
 > e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
-> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
-> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
-> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
-> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
-> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
-> passi identici a quelli verificati in locale) ma **non ancora eseguito su
-> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
-> anche sul branch di default, quindi la prima corsa reale sarà al merge su
-> `dev`.
+> inatteso, su una riga `READY` scoperta, o su una riga `READY` il cui scenario
+> è ancora `atteso-rosso` (mandato DAY-1 §4.9 — le due affermazioni non possono
+> essere vere insieme). Un `atteso-rosso` a sua volta è verificato contro la
+> firma di fallimento che il manifest dichiara
+> (`ScenarioEntry['expectFailure']`), non contro "ha lanciato qualcosa": uno
+> che fallisce per un motivo diverso da quello scritto è `rosso-inatteso`, non
+> "va bene così". `npm run test:acceptance` gira la sola suite (17 scenari,
+> **~60s** misurati in locale). Job CI dedicato scritto
+> (`.github/workflows/accettazione.yml`), ora anche su `pull_request` verso
+> `dev`/`main` oltre che su `push`/`workflow_dispatch` (decisione
+> dell'orchestratore, PR #54 giro 2, reversibile — prima `pull_request` era
+> deliberatamente assente per lo stesso motivo di budget che governa `ci.yml`;
+> vedi il commento in testa al workflow per la conseguenza nota): workflow
+> validato (YAML analizzato con `js-yaml`, passi identici a quelli verificati
+> in locale); con `pull_request` nel trigger questa stessa PR è la prima corsa
+> reale su GitHub Actions, non più rimandata al merge su `dev`.
 >
-> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
-> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
-> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
-> decisione owner ancora aperta su §1, D10 taint→egress →
-> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
-> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
-> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
-> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
-> verificato il rosso, ripristinato — non solo scritto a supporre che
-> avrebbero funzionato.
+> **Oggi, 18 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
+> D1/D2/D3/D10 · E1/E2/E5 — diciassette **verde**, un **atteso-rosso** (D3 undo →
+> decisione owner ancora aperta su §1, con una firma di fallimento dichiarata:
+> `muffin undo` resta un comando sconosciuto). B8, C4 e D10 erano
+> `atteso-rosso` con una ragione già falsa (`slice/acceptance-truth`,
+> `docs/lessons.md` "An atteso-rosso that accepts any error…"). Ogni verde è
+> stato visto cadere per davvero prima di essere lasciato verde — rotto il
+> cablaggio in produzione che ciascuno prova (`TurnStore.create`, `verify()`,
+> `SessionStore.append`, `renderForPrompt`, il caso `draft` del kernel,
+> `BudgetEngine.exhausted`), verificato il rosso, ripristinato — non solo
+> scritto a supporre che avrebbero funzionato.
 >
 > **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
-> corsa invece di nasconderlo: al momento in cui questa nota è stata scritta,
-> otto righe già `READY` per altre ragioni non avevano ancora uno scenario qui
-> (B14, C2, C3, C6, C7, D4, D6, E4 stessa) — nessuna era nella lista minima del
-> mandato di questa slice. C8 (audio) è marcata `non provabile qui` col motivo
-> scritto (richiede una trascrizione reale, vietata dalla proprietà "non costa
-> niente" di questa suite). **E4 READY vuol dire "la primitiva esiste, gira
-> contro il binario vero, e lo stato delle altre righe è derivabile da un
-> comando" — non "l'inventario è coperto".**
+> corsa invece di nasconderlo: sette righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (B14, C2, C3, C6, C7, D4, D6) — nessuna era
+> nella lista minima del mandato di questa slice, e chiuderle resta un lavoro
+> futuro, non silenzioso (`slice/triage-day1`, in corso, le riclassifica). C8
+> (audio) è marcata `non provabile qui` col motivo scritto (richiede una
+> trascrizione reale, vietata dalla proprietà "non costa niente" di questa
+> suite). **E4 stessa non ha, e non può avere, un proprio scenario** — sarebbe
+> la suite di accettazione che prova se stessa — quindi il manifest la marca
+> `provata dal meccanismo`: è ogni riga verde qui sopra a provarla, non uno
+> scenario dedicato. **E4 READY vuol dire "la primitiva esiste, gira contro il
+> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
+> "l'inventario è coperto".**
 >
 > **Aggiornamento 17/08.** Il triage evidence-only ha riclassificato le sette
-> righe non-E4 di quella lista (`B14, C2, C3, C6, C7, D4, D6`) da `READY` a
-> `BLOCKER` «solo scenario mancante», ciascuna con la journey che la chiude
-> (`gate1/PERCORSO-CRITICO.md` §4). `E4` resta l'unica riga `READY` senza
-> scenario nel rapporto — per costruzione, essendo il meccanismo che gli
-> scenari li fa girare — e la chiude PR #54 aggiungendo la propria voce al
-> manifest. Nessuna riga di questo inventario è `INVALIDATED`: il triage non
-> ha trovato una sola domanda Gate 1 la cui premessa non regga più contro il
-> sistema reale — ogni riga BLOCKER manca ancora implementazione, cablaggio o
-> scenario, mai la ragione d'essere della domanda stessa.
+> righe (`B14, C2, C3, C6, C7, D4, D6`) da `READY` a `BLOCKER` «solo scenario
+> mancante», ciascuna con la journey che la chiude (`gate1/PERCORSO-CRITICO.md`
+> §4); con la PR #54 mergiata (E4 `provata dal meccanismo`) il rapporto non ha
+> più righe READY senza scenario. Nessuna riga di questo inventario è
+> `INVALIDATED`: il triage non ha trovato una sola domanda Gate 1 la cui
+> premessa non regga più contro il sistema reale — ogni riga BLOCKER manca
+> ancora implementazione, cablaggio o scenario, mai la ragione d'essere della
+> domanda stessa.
 
 ---
 
