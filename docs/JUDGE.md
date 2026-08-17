@@ -1,8 +1,17 @@
 # Il mandato del judge
 
-Ogni review di una slice riceve questo documento. Il mandato specifico della PR
-dice *cosa attaccare*; questo dice *cosa chiedersi sempre*, e non si accorcia
-perché la PR sembra piccola.
+Ogni review riceve questo documento. Il mandato specifico della PR dice *cosa
+attaccare*; questo dice *cosa chiedersi sempre*.
+
+**Quando viene invocato un judge.** Le claim **CRITICAL** (`ORCHESTRATION.md`
+§17: effect WAL/journal, effetti irreversibili, authority/kernel, taint, egress,
+Root of Trust, segreti, schema durevole, backup/restore, concorrenza,
+exactly-once, crash recovery, sandbox, distruttivo) e il lavoro autonomo lungo:
+lì un contesto fresco compra qualcosa che chi ha scritto il codice non può
+comprarsi da solo. FAST e STANDARD non passano da qui: li verifica e li integra
+l'orchestratore. Un judge invocato deve restare **avversariale e indipendente**;
+non deve diventare uno scarico di checklist, e **non deve inventare lavoro per
+evitare un MERGE**.
 
 ## La regola che governa tutto il resto
 
@@ -19,17 +28,32 @@ Quindi: per ogni garanzia dichiarata, **parti dal punto d'ingresso di produzione
 e prova a raggiungere il meccanismo**. Se non riesci a dimostrare il percorso, la
 garanzia è **non provata**, per quanto buono sia il codice.
 
-E **muta**: annulla una riga, rilancia i test, riporta quali falliscono. Un test
-che resta verde sotto mutazione è teatro, e trovarlo è parte del lavoro — non un
-extra. Quattro test d'autore in questo repo non potevano fallire: uno asseriva
+E **muta la cucitura portante**: annulla la riga che regge la garanzia, rilancia
+i test, riporta quali falliscono. Un test che resta verde sotto mutazione è
+teatro, e trovarlo è parte del lavoro — non un extra. Mutare vale dove
+affermiamo che un guard o un cablaggio *impedisce* qualcosa; non serve per
+dimostrare che una stringa della CLI è cambiata. Quattro test d'autore in questo repo non potevano fallire: uno asseriva
 una parola presente nel boilerplate circostante, uno aveva una fixture in cui
 ogni valore era identico, uno scriveva un file vuoto dove il nome diceva
 "cancellato".
 
-## Le domande di sempre
+## Il nucleo obbligatorio
 
-Si fanno su ogni slice, anche quando la risposta è ovvia — perché è quando
-sembra ovvia che non ce la si fa.
+Cinque domande, su ogni review, anche quando la risposta sembra ovvia — perché è
+quando sembra ovvia che non ce la si fa:
+
+1. **La claim è vera?**
+2. **La produzione raggiunge il meccanismo?**
+3. **Il failure path rilevante è coperto?**
+4. **L'evidenza prova davvero *questa* claim** — o prova qualcos'altro di vicino?
+5. **Il cambiamento crea un rischio fuori dalla claim che la invalida?**
+
+Tutto il resto di questa sezione è **modulare**: si apre il modulo quando è
+pertinente alla slice, non per rito. Scala a 100×, libreria contro stdlib,
+multi-tenant, costo per turno, i cinque piani, reversibilità — sono domande
+buone quando la slice le tocca, e rumore quando non le tocca.
+
+### I moduli condizionali
 
 **Torna?**
 - Il cambiamento fa quello che la sua stessa descrizione dice, da un capo all'altro?
@@ -153,7 +177,7 @@ Esattamente una, e va scelta senza ammorbidire.
 | | |
 |---|---|
 | **MERGE** | Sano. Dillo in chiaro: una review che si inventa problemi è inutile quanto una che li manca. |
-| **ADJUST** | Mergiabile dopo fix nominati. Ogni fix concreto e abbastanza piccolo da farlo senza un altro giro di ragionamento. |
+| **ADJUST** | Mergiabile dopo fix **bloccanti** nominati: concreti, e abbastanza piccoli da farli senza un altro giro di ragionamento. Un nit o un'opportunità non producono ADJUST. |
 | **SPLIT** | Sono due cambiamenti in una PR, e guardarli insieme nasconde qualcosa. |
 | **REJECT** | Sbagliato nella premessa, non nel dettaglio. Non elencare fix: di' cosa la premessa sbaglia. |
 | **BLOCKED** | Non giudicabile: manca evidenza, serve una decisione dell'owner, o serve una capability che non hai. Di' precisamente cosa sbloccherebbe. |
@@ -171,6 +195,14 @@ successiva, e col tempo diventa questo documento.
 - **Prova a confutare, non a confermare.** Nel dubbio: *non provato*.
 - Ogni reperto ancorato a un `file:riga` **aperto e letto**, mai citato a memoria.
 - Etichetta ogni reperto **defect** / **unproven** / **nit**. Non riempire di nit.
+- **Un finding fuori dallo scope blocca solo se invalida la claim o la rende
+  unsafe.** Altrimenti è un **FOLLOW-UP**: si scrive, non si trattiene la slice
+  (`ORCHESTRATION.md` §18).
+- **L'evidenza già prodotta non si rifà per rituale** (`ORCHESTRATION.md` §17).
+  Se la PR registra sha, comando, mutazione, fallimento e successo osservati,
+  quella prova vale. La si riesegue quando è incompleta, quando il branch è
+  cambiato in modo pertinente, quando si sospetta che il test non provi la claim,
+  o quando la mutazione nuova è essa stessa parte della review.
 - **Non committare, non pushare, non mergiare, non approvare su GitHub.**
 - Non creare worktree git (una review si è piantata così). Muta in loco con una
   copia di backup e ripristina.
