@@ -128,6 +128,33 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
   ),
   verde('D2', 'file write: asking to write a file gets an honest refusal, not a silent no-op'),
+  // New (slice/egress-params, mandato inv. 7 / audit P04-1): the row's own
+  // BLOCKER text said "solo scenario mancante" — the mechanism (allowlist,
+  // redirect recheck, SSRF floor) was already `impl solida`. This scenario is
+  // that missing proof, extended to cover the gap the audit found: the
+  // allowlist checked the HOST only, so a tainted turn could still put chosen
+  // bytes in an allowlisted URL's query string. Does not promote the row —
+  // see the note on D7 below and the PR body: a live "allow, fetch succeeds"
+  // leg stays unproven at this layer (would need a real reachable host),
+  // unrelated to what this scenario closes.
+  verde(
+    'D6',
+    'http: a query string on an allowlisted host answers to the same params ceiling as an unlisted host — after tainted content, ask for the owner and never fetched without one',
+  ),
+  // New (slice/egress-params, mandato inv. 7 / audit P04-2): `sys.search`
+  // declared `resourceKind: 'none'` and never reached the kernel's egress
+  // branch at all — the query left with zero policy inspection at any taint.
+  // Proves the fix reaches the real binary: after tainted content, `ask` is
+  // the decision on record and the search backend is never called. Per the
+  // mandate, this does NOT promote D7 to READY — the happy path (a real
+  // search actually returning results) is still unproven at this layer,
+  // because `tavilyBackend`'s endpoint is a compiled constant with no seam to
+  // point at a fake server from a subprocess, and hitting the real Tavily API
+  // from this suite is out of scope (no real providers).
+  verde(
+    'D7',
+    'web search: the query now answers to the kernel — after tainted content, a search asks the owner and the backend is never called unapproved',
+  ),
   rosso(
     'D3',
     'undo: a file modification the model made can be reverted by the owner',
