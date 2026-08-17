@@ -1,12 +1,12 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { paths } from '../core/config/config.js';
+import { paths, secretDir } from '../core/config/config.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
-import { runTurn, type LoopDeps } from './loop.js';
+import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
 
@@ -167,6 +167,92 @@ describe('the tier of a file read reaches the kernel', () => {
 
     expect(fetched).toEqual([]);
     expect(asked).toEqual([]);
+  });
+});
+
+describe('a symlink cannot walk fs_read out of the containment the real runtime builds', () => {
+  /**
+   * P29 (2026-08-16 audit, CRITICAL), reproduced through `buildRuntime`
+   * itself — the audit's own ask, one level up from `agent/tools/fs.test.ts`:
+   * "un fs_read di un symlink verso secrets/ è rifiutato" through the real
+   * `fs_read` handler, the real sealed guards, the real kernel. Same
+   * discipline as the describe block above (own handler, own egress.json,
+   * only the model and the observation point substituted) — the defect this
+   * closes could otherwise hide exactly the way `runtime-wiring.test.ts`'s
+   * own docstring warns about: `agent/tools/fs.ts` resolving correctly in
+   * isolation while `buildRuntime` wires something else in front of it.
+   */
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  it('a terminal symlink inside the workspace pointing at secrets/ is refused, not followed', async () => {
+    // The muffin home nested *inside* the workspace, deliberately — the
+    // ordinary default (`cwd` is `$HOME`, home is `$HOME/.muffin`,
+    // `agent/tools/fs.ts`'s own docstring names it) and the shape in which
+    // plain containment alone would not catch this symlink at all: the
+    // secrets directory is genuinely inside `root`. Only `denyRead` does,
+    // which is the more precise reproduction of what the audit asked for
+    // ("un fs_read di un symlink verso secrets/ è rifiutato") than a
+    // same-level `home`/`workspace` pair would have been, where the symlink
+    // would already be refused as merely "outside root".
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-symlink-'));
+    const home = join(workspace, '.muffin');
+    runInit({ home, apiKey: 'sk-never-called' });
+    const egress = join(paths(home).rot, 'egress.json');
+    const policy = JSON.parse(readFileSync(egress, 'utf8'));
+    policy.allow = ['ok.example.com'];
+    writeFileSync(egress, JSON.stringify(policy, null, 2));
+    seal(home, '1', new Date());
+
+    // The real secret `runInit` just persisted, not a fixture standing in for
+    // it — the same file `mandatoryGuards` puts in `denyRead`.
+    const secretFile = join(secretDir('home', home), 'provider_api_key');
+    symlinkSync(secretFile, join(workspace, 'link-al-segreto'));
+
+    const runtime = buildRuntime(home, workspace);
+    const observed: Array<{ isError: boolean; content: string }> = [];
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider: new Scripted([
+        {
+          text: null,
+          toolCalls: [{ id: 'r1', name: 'fs_read', args: { path: 'link-al-segreto' } }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 't',
+        },
+      ]),
+      // Wrapped, not replaced: the point is to observe what the *real*
+      // fs_read handler decides, never to substitute a fake one the way the
+      // http_get tests above do for a capability this file does not own.
+      tools: runtime.deps.tools.map((t) =>
+        t.spec.name === 'fs_read'
+          ? {
+              ...t,
+              handler: async (args: unknown, ctx: ToolContext) => {
+                try {
+                  const result = await t.handler(args, ctx);
+                  observed.push({ isError: false, content: result.content });
+                  return result;
+                } catch (error) {
+                  observed.push({ isError: true, content: error instanceof Error ? error.message : String(error) });
+                  throw error;
+                }
+              },
+            }
+          : t,
+      ),
+    };
+
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('w-symlink-1'), text: 'leggi link-al-segreto',
+    });
+    runtime.close();
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.isError).toBe(true);
+    expect(observed[0]?.content).not.toContain('sk-never-called');
+    expect(observed[0]?.content).toMatch(/denied by the root of trust/);
   });
 });
 

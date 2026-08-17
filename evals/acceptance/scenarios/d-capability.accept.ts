@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
@@ -11,6 +12,59 @@ import { MemoryStore } from '../../../core/memory/store.js';
  */
 
 describe('acceptance · D · capability e sicurezza', () => {
+  scenario(
+    'D1',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'fs_read', args: { path: 'scorciatoia' } } },
+          { text: 'non riesco a leggere quel percorso' },
+        ],
+      });
+      try {
+        // 2026-08-16 audit, P29 CRITICAL: a symlink inside the workspace
+        // whose *terminal* component points outside it — planted directly on
+        // disk, the same way D10 plants a tainted episode straight into the
+        // store, because what is under test is resolveInScope's own
+        // containment through the real binary, not whatever creates
+        // symlinks in ordinary use today.
+        const outsideDir = mkdtempSync(join(tmpdir(), 'muffin-d1-outside-'));
+        const secretPath = join(outsideDir, 'segreto.txt');
+        writeFileSync(secretPath, 'SEGRETO-FUORI-SCOPE\n');
+        symlinkSync(secretPath, join(inst.workspace, 'scorciatoia'));
+
+        const r = await inst.muffin(['run', '--timeout', '20', 'leggi scorciatoia']);
+        if (r.code !== 0) throw new Error(`il turno non completa (dovrebbe: il rifiuto è un tool result, non un crash): exit ${r.code}\n${r.err}`);
+
+        // The strongest assertion this scenario can make: the byte string
+        // outside the workspace never reaches the final answer, whatever the
+        // exact refusal wording turns out to be.
+        if (r.out.includes('SEGRETO-FUORI-SCOPE')) {
+          throw new Error(`il contenuto fuori scope è arrivato nella risposta finale: ${JSON.stringify(r.out)}`);
+        }
+
+        const call = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT tool, content, is_error AS isError FROM turn_tool_calls ORDER BY started_at DESC LIMIT 1`)
+              .get() as { tool: string; content: string | null; isError: number | null } | undefined,
+        );
+        if (!call || call.tool !== 'fs_read') {
+          throw new Error(`nessuna fs_read registrata: ${JSON.stringify(call)}`);
+        }
+        if (call.isError !== 1) {
+          throw new Error(`fs_read attraverso un symlink terminale fuori scope non è stato negato: ${JSON.stringify(call)}`);
+        }
+        if (!/outside the working directory|denied by the root of trust/.test(call.content ?? '')) {
+          throw new Error(`il rifiuto non si legge come un containment denial: ${JSON.stringify(call)}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
   scenario(
     'D2',
     async () => {
