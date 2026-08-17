@@ -10,11 +10,28 @@ import { paths } from '../core/config/config.js';
  * The persona reaches the turn.
  *
  * Asserted through `buildRuntime` — the production assembly — and not against
- * `buildSystemPrompt` directly, because the thing that was wrong was never the
- * function: `voice.md` was written, shipped, installed by `muffin init` and
- * opened by nobody. A test of the builder in isolation would have passed for
- * months while every rule in that file was unreachable. This is the wiring
- * test, and it is the shape practice §5 asks for.
+ * `buildSystemPromptBlocks` directly, because the thing that was wrong was
+ * never the function: `voice.md` was written, shipped, installed by `muffin
+ * init` and opened by nobody. A test of the builder in isolation would have
+ * passed for months while every rule in that file was unreachable. This is the
+ * wiring test, and it is the shape practice §5 asks for.
+ *
+ * 2026-08-17 (A2/A3, `slice/identita`): `defaults/persona.md`, `defaults/voice.md`
+ * and `defaults/rot/identity.md` stopped being templates and became the
+ * owner's real, authored text (commit c090dce). Several assertions here used
+ * to depend on the *shape* of a template — empty headings, HTML comments
+ * meant for a human editor, a placeholder sentence — none of which the real
+ * files carry any more. Where the mechanism (`authored()` in
+ * `agent/context/assemble.ts`) still needs exercising, the fixture now writes
+ * its own synthetic content instead of relying on defaults/ happening to be
+ * template-shaped — the same pattern the "keeps a section" test already used
+ * correctly. One of these was found silently passing for the wrong reason
+ * while fixing the rest: `'Sei il mio secondo cervello'`, the sentence a test
+ * injected into `## Chi sei\n`, is *also* verbatim real prose at
+ * `identity.md:11` — so the injection was a no-op (the real heading is
+ * `## Chi sei per me\n`) and the assertion passed on pre-existing content
+ * regardless. Fixed below with a marker string that cannot coincidentally
+ * already be in the file.
  */
 
 function bootHome(): string {
@@ -40,19 +57,22 @@ describe('persona in the system prompt', () => {
   });
 
   it('gives a fresh install a character, without the owner having written a word', () => {
-    // identity.md ships empty on purpose. Before persona.md existed, that meant
-    // a first run had three bullet points and a set of formatting rules where
-    // the personality should be — which is what "it feels like a mockup" was.
+    // identity.md ships empty by default (see A9 in M5-BIS.md) — on an install
+    // that has not adopted this repo's committed pact, a first run has three
+    // bullet points and a set of formatting rules where the personality should
+    // be, unless persona.md alone already reads as Muffin. That is what this
+    // proves: `home` here has no edits to identity.md at all.
     const home = bootHome();
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).toContain('Sono Muffin');
-    // The two load-bearing promises: complement the owner's memory rather than
-    // echo it, and never claim a capability the turn does not actually have.
-    expect(prompt).toMatch(/la completo dove è debole/);
-    expect(prompt).toMatch(/i tool di questo turno/);
-    // And the said/inferred discipline the memory layer now enforces in SQL.
-    expect(prompt).toContain('Detto e dedotto');
+    // Two load-bearing promises persona.md makes about itself: a second
+    // perspective with memory, not a mirror of whatever was just said — and
+    // honest about whether an action actually happened.
+    expect(prompt).toMatch(/seconda prospettiva con memoria/);
+    expect(prompt).toMatch(/Non descrivo un'azione come fatta se non l'ho fatta davvero/);
+    // The said/inferred discipline the memory layer enforces in SQL.
+    expect(prompt).toContain('quello che ho inferito');
   });
 
   it("puts the owner's file after the shared one, so it reads as an overlay", () => {
@@ -68,29 +88,36 @@ describe('persona in the system prompt', () => {
     expect(shared).toBeLessThan(owner);
   });
 
-  it('does not hand the model the instructions written for the owner', () => {
-    // Both persona files ship as templates whose HTML comments address a human:
-    // "Questo file è tuo. Scrivilo com'è." Injected verbatim, that scaffolding
-    // became the identity on a fresh install — the agent was given a page about
-    // how someone should write its character, and nothing else.
+  it('strips HTML-comment scaffolding meant for the human editor, not the model', () => {
+    // Neither shipped file carries a template comment any more — identity.md
+    // is the owner's real text (0 occurrences of `<!--`, checked 2026-08-17).
+    // Constructed here so the stripping mechanism in `authored()` stays tested
+    // independently of what defaults/ happens to contain today.
     const home = bootHome();
+    const identity = join(paths(home).rot, 'identity.md');
+    const original = readFileSync(identity, 'utf8');
+    writeFileSync(
+      identity,
+      `${original}\n\n<!-- MARCATORE-SOLO-PER-UMANI: riscrivi questa sezione. -->\n\nMARCATORE-DOPO-COMMENTO resta.\n`,
+    );
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-
-    expect(readFileSync(join(paths(home).rot, 'identity.md'), 'utf8')).toContain('Questo file è tuo');
-    expect(prompt).not.toContain('Questo file è tuo');
-    expect(prompt).not.toContain('Riscrivile, tagliale, ribaltale');
-    // The authored content of the same file is still there.
+    expect(prompt).not.toContain('MARCATORE-SOLO-PER-UMANI');
+    expect(prompt).toContain('MARCATORE-DOPO-COMMENTO resta');
+    // The authored content already in the file is untouched by the stripping.
     expect(prompt).toContain('Non mi dai ragione per farmi contento');
   });
 
-  it('drops the sections the owner has not filled in yet', () => {
-    // An untouched template carries three empty headings. A bare title with
-    // nothing under it reads as a section the model should have opinions about.
+  it('drops a heading the owner has left empty', () => {
+    // An untouched template used to carry empty headings by construction; the
+    // real identity.md answers all of its own, so this constructs one rather
+    // than relying on the shipped file having an unfilled section. A bare
+    // title with nothing under it would otherwise read to the model as a
+    // section it is expected to have opinions about.
     const home = bootHome();
+    const identity = join(paths(home).rot, 'identity.md');
+    writeFileSync(identity, `${readFileSync(identity, 'utf8')}\n\n## MARCATORE-SEZIONE-VUOTA\n`);
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-
-    expect(prompt).not.toMatch(/##\s*Chi sei\s*\n/);
-    expect(prompt).not.toMatch(/##\s*Il limite che ti do io/);
+    expect(prompt).not.toContain('MARCATORE-SEZIONE-VUOTA');
   });
 
   it('keeps a section as soon as the owner writes in it', () => {
@@ -99,14 +126,13 @@ describe('persona in the system prompt', () => {
     writeFileSync(
       identity,
       readFileSync(identity, 'utf8').replace(
-        '## Chi sei\n',
-        '## Chi sei\n\nSei il mio secondo cervello, non il mio portavoce.\n',
+        '## Chi sei per me\n',
+        '## Chi sei per me\n\nMARCATORE-SCRITTO-DALLOWNER.\n',
       ),
     );
-
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-    expect(prompt).toContain('Sei il mio secondo cervello');
-    expect(prompt).toContain('## Chi sei');
+    expect(prompt).toContain('MARCATORE-SCRITTO-DALLOWNER');
+    expect(prompt).toContain('## Chi sei per me');
   });
 
   it('survives a home where the persona files are actually gone', () => {
@@ -122,42 +148,54 @@ describe('persona in the system prompt', () => {
     expect(() => buildRuntime(home, workspace)).not.toThrow();
   });
 
-  it("ships no personal name to an install that is not the author's", () => {
-    // The voice file was written for one owner and named him three times. It
-    // was inert while nothing read it; wiring it into the prompt shipped his
-    // private register to every install — PRACTICES §9, violated by the change
-    // that routes the file rather than by the file.
+  it('keeps the owner name out of the pure-muffin files', () => {
+    // PRACTICES.md §9: persona.md and voice.md ship to every install and must
+    // carry no fact about a specific owner. identity.md is this owner's own
+    // pact — it lives in the Root of Trust exactly because it is personal —
+    // and is allowed to name him (it does, at identity.md:86). This used to
+    // check the whole owner prompt for the name, which broke the day
+    // identity.md stopped being an empty template: the owner's name reaches
+    // the owner prompt legitimately now, through identity.md. Reading the two
+    // pure-muffin files directly is the claim that is actually supposed to hold.
     const home = bootHome();
-    const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-    expect(prompt).not.toMatch(/Giusto/);
+    expect(readFileSync(paths(home).persona, 'utf8')).not.toMatch(/Giusto/);
+    expect(readFileSync(paths(home).voice, 'utf8')).not.toMatch(/Giusto/);
   });
 
-  it('keeps a heading whose answer lives in its subsections', () => {
-    // "Unfilled" meant "nothing before the next heading of any level", so a
-    // parent answered in `###` subsections was deleted and its children
-    // orphaned. identity.md ships such a heading.
+  it('keeps a heading whose answer lives only in a subsection', () => {
+    // "Unfilled" means "nothing before the next heading of any level", so a
+    // parent answered only in `###` subsections must not be deleted and its
+    // children orphaned. Constructed synthetically: identity.md's own headings
+    // all carry direct content now, so reusing one would not isolate this
+    // branch of `authored()` from "kept because of direct content".
     const home = bootHome();
     const identity = join(paths(home).rot, 'identity.md');
     writeFileSync(
       identity,
-      readFileSync(identity, 'utf8').replace(
-        '## Come ti comporti quando è difficile\n',
-        '## Come ti comporti quando è difficile\n\n### Quando non sai\n\nLo dici.\n',
-      ),
+      `${readFileSync(identity, 'utf8')}\n\n## MARCATORE-SOLO-SOTTOSEZIONE\n\n### Sotto\n\nMARCATORE-CONTENUTO-FIGLIO\n`,
     );
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-    expect(prompt).toContain('## Come ti comporti quando è difficile');
-    expect(prompt).toContain('Lo dici.');
+    expect(prompt).toContain('## MARCATORE-SOLO-SOTTOSEZIONE');
+    expect(prompt).toContain('MARCATORE-CONTENUTO-FIGLIO');
   });
 
-  it('drops the whole block rather than leak it when a comment is unterminated', () => {
-    // One missing `-->` and the regex matches nothing, putting the owner-facing
-    // scaffolding back into the identity — the precise defect this function
-    // exists to prevent, one character away.
+  it('drops the whole tail rather than leak it when a comment is unterminated', () => {
+    // One missing `-->` and the comment-stripping regex matches nothing, so an
+    // orphaned `<!--` would otherwise sail straight into the prompt — cutting
+    // from the opener is the fail-safe direction (losing authored text is
+    // recoverable; shipping scaffolding as identity is what this exists to
+    // stop). Constructed synthetically, per the class docstring above.
     const home = bootHome();
     const identity = join(paths(home).rot, 'identity.md');
-    writeFileSync(identity, readFileSync(identity, 'utf8').replace('-->', ''));
+    const original = readFileSync(identity, 'utf8');
+    writeFileSync(
+      identity,
+      `${original}\n\n<!-- MARCATORE-COMMENTO-NON-CHIUSO senza terminatore\nAncora testo dopo.\n`,
+    );
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
-    expect(prompt).not.toContain('Questo file è tuo');
+    expect(prompt).not.toContain('MARCATORE-COMMENTO-NON-CHIUSO');
+    expect(prompt).not.toContain('Ancora testo dopo');
+    // Everything authored before the orphan comment survives the cut.
+    expect(prompt).toContain('Non mi dai ragione per farmi contento');
   });
 });
