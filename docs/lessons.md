@@ -826,3 +826,55 @@ re-pushed, so nothing was lost; the PR had to be reopened by hand.
 `git merge-base --is-ancestor`), never in the same breath as the merge command.
 The rule was already written for the reverse case (`cmd | tail` hides the exit
 status): the mistake here was acting on the *plan* rather than on the *state*.
+
+## Staleness checked before liveness steals a claim from someone alive **(this build)**
+
+`core/lock/durable.ts`'s `heldBy()` — the one function every lock in this repo
+shares (`send_lock`, `gateway_lock`, `ingest_lock`, and `turns.claimed_by`
+through the same helper) — asked the wall clock first: `if (now - takenAt >
+staleAfterMs) return null`, and only reached `alive(pid)` when that was false.
+Free, dead and stale were meant to collapse to one answer by design; what
+actually happened is that stale *pre-empted* dead-or-alive, so a process that
+was genuinely still running — a laptop asleep mid-turn, one synchronous batch
+past the horizon, a single long tool call — read exactly like a corpse the
+moment it missed a heartbeat. A second process then claimed the same row and
+ran it too: P19 (a turn's tool calls executed twice), P20 (a gateway's
+delivery raced a second gateway's), P21 (a REPL and a sleeping gateway both
+ticking one job store). Adversarial audit found all three from the same
+five-line function, on 2026-08-16.
+
+The second half of the same defect: none of the three writes that end a
+turn's claim (`checkpoint`, `finish`, `suspend` in `core/turns/store.ts`) were
+guarded on *who* held it — only `id`, or `id` plus `status`. So even the rare,
+narrow case where a steal *was* legitimate (the true horizon, not the bug)
+still let the loser overwrite the winner's transcript, silently, because
+nothing on the write path had ever been told to check.
+
+A bare `pid` guard would not have been enough to fix either half on its own:
+pids are reused by the OS within hours on a busy machine, so "is this pid
+alive" and "is this the same holder that took the claim" are different
+questions, and a naive fix (compare `alive(pid)` first, nothing else) would
+have quietly re-opened the reuse case the original wall-clock check was
+guarding against, in the other direction. The fix that held both properties at
+once: liveness gates first (dead is free immediately, no horizon needed), a
+live holder is protected until a *hard* horizon several times wider than the
+lock's own normal cadence (long enough that a real stall never trips it, short
+enough that a genuinely wedged or reused pid does not wedge the claim
+forever), and every acquisition mints a random holder token that every
+subsequent write must carry back — `changes === 0` on a fenced write is the
+caller's own proof that its claim is gone, independent of any clock.
+
+**Found while fixing it, not while breaking it:** `agent/lane-wiring.test.ts`'s
+B3 test simulated an hour of wait time by jumping `Gateway.tick()`'s injected
+clock forward in one call, with zero beats in between. Under the old,
+buggy `heldBy` this was harmless — nothing ever checked whether *this*
+process's own claim had gone stale from its own perspective. Once the fix
+made `refresh()` apply the same rule to the gateway's own heartbeat, that
+same test started failing: from the gateway's point of view, its own claim
+had gone unrefreshed for the "elapsed" hour, so it correctly refused to
+believe it still owned the lock and drained. The test's shortcut had been
+silently relying on the exact bug being fixed. **Instead:** a test that
+simulates elapsed time across a claim-holding loop has to simulate the
+*heartbeats* too, not just the deadline the heartbeats exist to protect —
+otherwise the test is only proof that the bug lets a wide clock-jump go
+unnoticed, dressed up as proof that the feature works.
