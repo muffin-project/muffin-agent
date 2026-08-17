@@ -104,6 +104,124 @@ describe('filesystem primitives', () => {
     expect(() => fsRead(scope, 'scorciatoia/segreto.txt')).toThrow(PathDenied);
   });
 
+  /**
+   * 2026-08-16 audit (pinned e2a47ac), P29 CRITICAL and P28 MEDIUM. The two
+   * `BROKEN:` cases from `zz-P29-fs-tool-boundaries.test.ts` and the
+   * new-file case from `zz-p28-vault-documents.test.ts`, brought over and
+   * adapted to this file's fixtures. Mutation check: put the old
+   * `realpathDeepest` (single-arg, `isSymlink(current) ? realpathSync(dirname
+   * (current)) + sep + basename(current) : realpathSync(current)`) back and
+   * every test in this block goes red.
+   */
+  describe('a symlink at the exact requested path, not just in the middle', () => {
+    it('BROKEN before this slice: a terminal symlink read the file it pointed at outside root, not the link', () => {
+      // The old resolveInScope() only ever resolved a symlink that was an
+      // intermediate component (the case above). A terminal symlink took a
+      // branch that returned the *link's own* location — inside root by
+      // construction — while readFileSync followed it to the real target.
+      const { scope, root, outside } = scoped();
+      symlinkSync(join(outside, 'segreto.txt'), join(root, 'scorciatoia-terminale'));
+      expect(() => fsRead(scope, 'scorciatoia-terminale')).toThrow(PathDenied);
+      expect(() => fsRead(scope, 'scorciatoia-terminale')).toThrow(/outside the working directory/);
+    });
+
+    it('BROKEN before this slice: a terminal symlink read a denyRead secret verbatim', () => {
+      // The audit's sharpest case: the containment check even *passes* here
+      // (the link's own path is inside root), so only the deny-list stood
+      // between a tainted turn and the provider key — and it was judging the
+      // wrong path too.
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'secrets', 'provider_api_key'), join(root, 'leak'));
+      expect(() => fsRead(scope, 'leak')).toThrow(PathDenied);
+      expect(() => fsRead(scope, 'leak')).toThrow(/read denied/);
+    });
+
+    it('a symlink terminal to an absolute system file outside root is refused the same way', () => {
+      // Not everything outside root has a helpful `outside` fixture next to
+      // it — a symlink can point anywhere on the machine.
+      const { scope, root } = scoped();
+      symlinkSync('/etc/hosts', join(root, 'etc-hosts'));
+      expect(() => fsRead(scope, 'etc-hosts')).toThrow(PathDenied);
+    });
+
+    it('BROKEN before this slice: fs_list enumerated a denyRead directory reached through a symlink', () => {
+      // The non-terminal case (`sneak/provider_api_key`) was already caught:
+      // the intermediate component gets resolved on the way through. Listing
+      // the symlinked directory *itself* is the terminal case, and it is the
+      // one that was broken.
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'secrets'), join(root, 'sneak'));
+      expect(() => fsRead(scope, 'sneak/provider_api_key')).toThrow(/read denied/); // already worked
+      expect(() => fsList(scope, 'sneak')).toThrow(PathDenied);
+      expect(() => fsList(scope, 'sneak')).toThrow(/read denied/);
+    });
+
+    it('BROKEN before this slice: fs_list enumerated a directory reached through a symlink pointing outside root', () => {
+      const { scope, root, outside } = scoped();
+      symlinkSync(outside, join(root, 'fuori'));
+      expect(() => fsList(scope, 'fuori')).toThrow(/outside the working directory/);
+    });
+
+    it('lists a symlink entry pointing outside scope as "fuori dallo scope", without following it', () => {
+      const { scope, root, outside } = scoped();
+      symlinkSync(join(outside, 'segreto.txt'), join(root, 'punta-fuori'));
+      const listing = fsList(scope, '.');
+      expect(listing).toContain('punta-fuori → (fuori dallo scope)');
+    });
+
+    it('lists a symlink entry pointing at a denied file as "fuori dallo scope" too', () => {
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'secrets', 'provider_api_key'), join(root, 'punta-al-segreto'));
+      const listing = fsList(scope, '.');
+      expect(listing).toContain('punta-al-segreto → (fuori dallo scope)');
+    });
+
+    it('still lists a symlink entry pointing inside scope normally — the legitimate case stays green', () => {
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'nota.md'), join(root, 'alias-legittimo'));
+      const listing = fsList(scope, '.');
+      expect(listing).toContain('alias-legittimo →');
+      expect(listing).not.toContain('alias-legittimo → (fuori dallo scope)');
+    });
+
+    it('a symlink read directly still reads the real file fine when both ends are in scope', () => {
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'nota.md'), join(root, 'alias-interno'));
+      expect(fsRead(scope, 'alias-interno')).toBe('ciao\n');
+    });
+
+    it('refuses a dangling symlink explicitly, rather than a raw ENOENT from readFileSync', () => {
+      const { scope, root } = scoped();
+      symlinkSync(join(root, 'non-esiste-ancora.txt'), join(root, 'penzolante'));
+      expect(() => fsRead(scope, 'penzolante')).toThrow(PathDenied);
+      expect(() => fsRead(scope, 'penzolante')).toThrow(/dangling symlink/);
+    });
+
+    it('BROKEN before this slice: fs_write of a NEW file through a symlinked parent directory escaped root', () => {
+      // P28: the leaf (`nuovo.txt`) does not exist yet, so resolution walks
+      // up past it and finds the symlinked *parent* — which took the same
+      // non-resolving branch the terminal case did, so the write followed the
+      // link while the containment check judged the link's own (in-scope)
+      // path.
+      const { scope, root, outside } = scoped();
+      symlinkSync(outside, join(root, 'parent-symlinkato'));
+      expect(() => fsWrite(scope, 'parent-symlinkato/nuovo.txt', 'INIETTATO')).toThrow(PathDenied);
+      expect(existsSync(join(outside, 'nuovo.txt'))).toBe(false);
+    });
+
+    it('fs_write of an EXISTING file through a symlinked parent directory is refused too', () => {
+      // This half already worked before this slice (the leaf exists, so the
+      // very first lstat in the walk lands on a real file, not the link) —
+      // kept here so the two cases stay next to each other and one cannot
+      // regress without the other being visibly still green.
+      const { scope, root, outside } = scoped();
+      writeFileSync(join(outside, 'esistente.txt'), 'ORIGINALE');
+      symlinkSync(outside, join(root, 'altro-parent-symlinkato'));
+      expect(() => fsWrite(scope, 'altro-parent-symlinkato/esistente.txt', 'SOVRASCRITTO')).toThrow(PathDenied);
+      expect(readFileSync(join(outside, 'esistente.txt'), 'utf8')).toBe('ORIGINALE');
+    });
+  });
+
   it('never writes into the root of trust, even from inside the scope', () => {
     const { scope } = scoped();
     expect(fsRead(scope, 'rot/identity.md')).toContain('identità'); // reading is fine

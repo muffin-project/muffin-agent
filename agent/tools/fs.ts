@@ -1,4 +1,17 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
@@ -53,10 +66,17 @@ export type FsScope = {
  * owner's own notes in the same bucket as an untrusted MCP server.
  *
  * **Not per-path** (`~/.muffin` clean, everywhere else dirty), which was the
- * tempting one: it is a rule you evade by *moving a file*, it buys almost
- * nothing (the readable parts of the muffin home have their own door in
- * `skill.read`, which declares its own tier, and the rest is `denyRead`), and it
- * would launder a poisoned file the moment anything wrote it inside the home.
+ * tempting one: it is a rule you evade by *moving a file*, and it buys less
+ * than it looks like. `skill.read` already gives the readable parts of the
+ * muffin home their own door and their own tier; `denyRead` already blocks
+ * the parts that must not be read (`secrets/`, the working directory's
+ * `.env`) by name. **`rot/` and `config.json` are deliberately readable at
+ * the same tier as anything else on disk — only `denyWrite` names them** —
+ * because a read-only agent inspecting its own policy or config is not the
+ * threat `denyRead` exists for (2026-08-16 audit, P29 LOW: this paragraph
+ * used to say the opposite). A per-path rule would draw a line `denyRead`
+ * already draws, one level up, and it would still launder a poisoned file the
+ * moment anything wrote it inside the home.
  *
  * One constant, imported by `agent/tools/shell.ts` too, because a command's
  * stdout is the same disk read through a different door — and two literals that
@@ -91,11 +111,12 @@ export const fsCapabilities: CapabilityDecl[] = [
    * `agent/read-then-egress.test.ts` is the thing that fails if it stops.
    *
    * **The precondition that makes it true, stated so it can be falsified.** The
-   * ceiling is defensible because no secret is reachable inside `root`:
+   * ceiling is defensible because no *secret* is reachable inside `root`:
    * `denyRead` covers both secret stores and the working-directory `.env`
-   * (`agent/runtime.ts`). If a secret ever becomes readable there again, this
-   * argument stops holding and the number has to be revisited — that, and not
-   * the taint value, is the thing to watch.
+   * (`agent/runtime.ts`) — not `rot/` or `config.json`, which stay readable on
+   * purpose (see the per-path rejection above). If a secret ever becomes
+   * readable there again, this argument stops holding and the number has to
+   * be revisited — that, and not the taint value, is the thing to watch.
    *
    * Deliberately *not* pinned to 3 in the declaration: pinning would override an
    * owner who lowered `defaultMaxTaint.low` in `rot/policy.json`, and the file's
@@ -183,30 +204,70 @@ export class PathDenied extends Error {
  * the scope pointing outside would sail straight through a containment check
  * built on it. So we resolve the deepest ancestor that actually exists and
  * re-attach the rest, which also works for a file about to be created.
+ *
+ * `lstat`, not `existsSync`, drives the walk: the latter follows a link, so a
+ * symlink whose target does not exist yet reads as "missing" and the loop
+ * would walk straight past it.
+ *
+ * `terminal` governs only the *exact* path requested — the first thing this
+ * function looks at, before any walking up:
+ *  - `'follow'` (reads and lists): a terminal symlink is resolved through to
+ *    its real target, exactly as `readFileSync`/`readdirSync` resolve it. A
+ *    dangling symlink (target does not exist) is refused explicitly rather
+ *    than left to surface as a raw `ENOENT` two frames up.
+ *  - `'reject'` (writes): a terminal symlink throws outright, wherever it
+ *    points — a write has no legitimate reason to go through a link, and
+ *    refusing it means there is nothing to resolve correctly or not.
+ *
+ * **2026-08-16 audit, P29 (CRITICAL) and P28 (MEDIUM).** The previous version
+ * of this function special-cased *any* symlink it found — the exact path
+ * requested, or an ancestor reached by walking up — to never fully resolve:
+ * `realpathSync(dirname(current)) + sep + basename(current)`, i.e. the link's
+ * *own* location with its parent canonicalised, never the target. That was
+ * written for the write-terminal case (P28's precursor: a write must not
+ * silently follow a link), but it ran unconditionally, for reads too (P29)
+ * and for ancestors too (P28): `resolveInScope`'s containment and `denyRead`
+ * checks ran on a path that was always inside `root` by construction — the
+ * link's own — while `readFileSync`/`readdirSync`/`writeFileSync` followed it
+ * to wherever it actually pointed. Every ancestor found by walking up is now
+ * *unconditionally* resolved with plain `realpathSync`, which follows the
+ * whole chain above it, symlinked or not — there is exactly one place left
+ * that treats a symlink specially, and it is the terminal component, on
+ * purpose, governed by `terminal`.
  */
-function realpathDeepest(target: string): string {
+function realpathDeepest(target: string, terminal: 'follow' | 'reject'): string {
   const missing: string[] = [];
   let current = target;
+  let isTerminal = true;
   for (;;) {
-    // `lstat`, not `existsSync`: the latter follows the link, so a symlink whose
-    // target does not exist yet reads as "missing", the loop walks past it, and
-    // the check ends up judging the link's own path — while the write follows
-    // the link and lands wherever it points. The first write is the one that
-    // escapes; from the second on the file exists and the check works, which is
-    // exactly the shape of a bug that survives testing.
-    if (lstatSync(current, { throwIfNoEntry: false }) !== undefined) {
-      const resolved = isSymlink(current) ? realpathSync(dirname(current)) + sep + basename(current) : realpathSync(current);
-      return join(resolved, ...missing.reverse());
+    const st = lstatSync(current, { throwIfNoEntry: false });
+    if (st !== undefined) {
+      if (isTerminal && st.isSymbolicLink() && terminal === 'reject') {
+        throw new PathDenied(`won't write through a symlink: ${target}`);
+      }
+      try {
+        return join(realpathSync(current), ...missing.reverse());
+      } catch {
+        // Only reachable when `current` is a symlink whose target does not
+        // exist: `lstat` above succeeded on the link itself, and `realpath`
+        // then failed trying to follow it.
+        throw new PathDenied(`won't follow a dangling symlink: ${target}`);
+      }
     }
     const parent = dirname(current);
-    if (parent === current) return target; // reached the root without finding anything
+    if (parent === current) {
+      // Walked all the way to the filesystem root without ever finding an
+      // entry that exists. Failing closed here — rather than the old
+      // `return target` — matters because a caller receiving `target` back
+      // unresolved would have no way to tell "this is already real" from
+      // "nothing to resolve was found"; audit note, out of scope of P29/P28
+      // but named there.
+      throw new PathDenied(`can't resolve within the filesystem: ${target}`);
+    }
     missing.push(current.slice(parent.length + 1));
     current = parent;
+    isTerminal = false;
   }
-}
-
-function isSymlink(path: string): boolean {
-  return lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true;
 }
 
 /**
@@ -218,39 +279,55 @@ function isSymlink(path: string): boolean {
 const CASE_BLIND = process.platform === 'darwin' || process.platform === 'win32';
 const norm = (p: string): string => (CASE_BLIND ? p.toLowerCase() : p);
 
+/** Is `target` (already real) inside `base` (already real)? */
+function containmentCheck(base: string, target: string): boolean {
+  const rel = relative(base, target);
+  return !(rel.startsWith('..') || (rel !== '' && isAbsolute(rel)));
+}
+
+/**
+ * Is `target` (already real) on one of `scope`'s deny-lists?
+ *
+ * Shared by `resolveInScope` (the path a tool is about to touch) and `fsList`
+ * (each entry it is about to *describe*) — a directory listing must not show
+ * more about a denied path than a read of that same path would allow.
+ */
+function isDenied(scope: FsScope, target: string, forWrite: boolean): boolean {
+  const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);
+  const t = norm(target);
+  return denied.some((path) => {
+    const deniedAbs = norm(realpathDeepest(resolve(path), 'follow'));
+    return t === deniedAbs || t.startsWith(deniedAbs + sep);
+  });
+}
+
 /**
  * Resolves before deciding. `../`, symlinks, hard links and the case of a
- * filename are the four ways a path that looks contained stops being contained,
- * so the check happens on the resolved real path, never on the string the model
- * wrote.
+ * filename are the four ways a path that looks contained stops being
+ * contained, so the check happens on the resolved real path — the one the OS
+ * will actually touch — never on the string the model wrote.
+ *
+ * `forWrite` picks `realpathDeepest`'s terminal policy: `'reject'` for a
+ * write (a link is never written through, wherever it points), `'follow'`
+ * for a read or a list (the OS follows it, so the check has to run on where
+ * it leads — see that function's docstring for the audit finding this closes).
  */
 export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {
   const base = realpathSync(resolve(scope.root));
-  const target = realpathDeepest(resolve(isAbsolute(requested) ? requested : join(base, requested)));
+  const requestedFull = resolve(isAbsolute(requested) ? requested : join(base, requested));
+  const target = realpathDeepest(requestedFull, forWrite ? 'reject' : 'follow');
 
-  const rel = relative(base, target);
-  if (rel.startsWith('..') || (rel !== '' && isAbsolute(rel))) {
+  if (!containmentCheck(base, target)) {
     throw new PathDenied(`outside the working directory: ${requested}`);
   }
 
-  // A symlink is never written through, wherever it points. Resolving it would
-  // work for the paths we can enumerate; refusing it works for the ones we
-  // cannot, and a tool has no legitimate need to write through a link.
-  if (forWrite && isSymlink(target)) {
-    throw new PathDenied(`won't write through a symlink: ${requested}`);
-  }
-
-  // Writes check the full deny-list; reads check the narrower one. Both sides go
-  // through realpath or the comparison silently stops matching the moment either
-  // contains a symlink — on macOS /var alone is enough — and both are compared
-  // case-blind where the filesystem is.
-  const denied = forWrite ? [...scope.denyWrite, ...(scope.denyRead ?? [])] : (scope.denyRead ?? []);
-  const t = norm(target);
-  for (const path of denied) {
-    const deniedAbs = norm(realpathDeepest(resolve(path)));
-    if (t === deniedAbs || t.startsWith(deniedAbs + sep)) {
-      throw new PathDenied(`${forWrite ? 'write' : 'read'} denied by the root of trust: ${requested}`);
-    }
+  // Writes check the full deny-list; reads check the narrower one — see
+  // `FsScope.denyRead`'s own comment for why the two differ. Both sides
+  // compare against `target`, which is now always the resolved real path
+  // (never the unresolved location of a symlink), case-blind where the
+  // filesystem is.
+  if (isDenied(scope, target, forWrite)) {
+    throw new PathDenied(`${forWrite ? 'write' : 'read'} denied by the root of trust: ${requested}`);
   }
 
   // A hard link has its own realpath, so no amount of resolving reveals that it
@@ -269,15 +346,36 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
 
 export function fsRead(scope: FsScope, path: string): string {
   const full = resolveInScope(scope, path, false);
-  if (!existsSync(full)) throw new PathDenied(`no such file: ${path}`);
-  const stat = statSync(full);
-  if (stat.isDirectory()) throw new PathDenied(`${path} is a directory — use fs_list`);
-  // A model that asks for a 2 GB file gets a refusal rather than the process
-  // getting an out-of-memory kill and the turn dying without a trace.
-  if (stat.size > MAX_READ_BYTES) {
-    throw new PathDenied(`${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+  // Opened with `O_NOFOLLOW` rather than checked-then-read on a path string:
+  // `resolveInScope` above and this open are still two syscalls (a TOCTOU
+  // window the PR notes as a known limit), but the one race that mattered —
+  // something replacing the resolved leaf with a symlink in the gap between
+  // the check and the read — now fails the open (`ELOOP`) instead of
+  // silently following it. `full` is already fully realpath'd, so a
+  // legitimate call never has a symlink sitting at this exact path to trip
+  // over; verified against Node's own docs and a throwaway probe before
+  // relying on it (`O_NOFOLLOW` is POSIX-wide, no macOS/Linux split).
+  let fd: number;
+  try {
+    fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new PathDenied(`no such file: ${path}`);
+    if (code === 'ELOOP') throw new PathDenied(`a symlink appeared at ${path} between the check and the read`);
+    throw error;
   }
-  return readFileSync(full, 'utf8');
+  try {
+    const stat = fstatSync(fd);
+    if (stat.isDirectory()) throw new PathDenied(`${path} is a directory — use fs_list`);
+    // A model that asks for a 2 GB file gets a refusal rather than the process
+    // getting an out-of-memory kill and the turn dying without a trace.
+    if (stat.size > MAX_READ_BYTES) {
+      throw new PathDenied(`${path} is ${(stat.size / 1e6).toFixed(1)}MB, over the ${MAX_READ_BYTES / 1e6}MB read limit`);
+    }
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Large enough for any source file or note, small enough not to blow the context. */
@@ -287,6 +385,10 @@ export function fsList(scope: FsScope, path: string): string {
   const full = resolveInScope(scope, path, false);
   if (!existsSync(full)) throw new PathDenied(`no such directory: ${path}`);
   if (!statSync(full).isDirectory()) throw new PathDenied(`${path} is a file — use fs_read`);
+  // For the same reason `resolveInScope` needs it: describing an entry that
+  // is itself a symlink means resolving it and checking the result the same
+  // way a read of that entry would be checked.
+  const base = realpathSync(resolve(scope.root));
   return readdirSync(full)
     .sort()
     .map((entry) => {
@@ -305,10 +407,26 @@ export function fsList(scope: FsScope, path: string): string {
       // already does, which is what makes `throwTier: 0` below true rather
       // than assumed.
       try {
-        const stat = lstatSync(join(full, entry), { throwIfNoEntry: false });
+        const entryPath = join(full, entry);
+        const stat = lstatSync(entryPath, { throwIfNoEntry: false });
         if (stat === undefined) return `${entry} (illeggibile)`;
         if (stat.isSymbolicLink()) {
-          const target = statSync(join(full, entry), { throwIfNoEntry: false });
+          // 2026-08-16 audit, P29 OUT_OF_SCOPE note: a listing used to show a
+          // symlink's target type (file or directory) with no check at all —
+          // enumerating what a denied or out-of-scope link points at is its
+          // own small leak, even though `fs_read` would already have refused
+          // it. Resolved and checked exactly as `resolveInScope` checks a
+          // read, so the listing never says more than a read would allow.
+          let resolved: string;
+          try {
+            resolved = realpathSync(entryPath);
+          } catch {
+            return `${entry} (link rotto)`;
+          }
+          if (!containmentCheck(base, resolved) || isDenied(scope, resolved, false)) {
+            return `${entry} → (fuori dallo scope)`;
+          }
+          const target = statSync(entryPath, { throwIfNoEntry: false });
           if (target === undefined) return `${entry} (link rotto)`;
           return target.isDirectory() ? `${entry}/ →` : `${entry} →`;
         }
@@ -323,7 +441,30 @@ export function fsList(scope: FsScope, path: string): string {
 export function fsWrite(scope: FsScope, path: string, content: string): string {
   const full = resolveInScope(scope, path, true);
   mkdirSync(dirname(full), { recursive: true });
-  writeFileSync(full, content, 'utf8');
+  // Same `O_NOFOLLOW` hardening as `fsRead`, and it closes the write half of
+  // the TOCTOU window that matters more here: `resolveInScope` already
+  // refuses an *existing* terminal symlink outright, so the only race left is
+  // something creating one at this exact path between that check and this
+  // open. `O_NOFOLLOW` turns that into a failed open instead of a write
+  // through it — the P28 escape, at the syscall that would have done it.
+  let fd: number;
+  try {
+    fd = openSync(
+      full,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+      0o666,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new PathDenied(`a symlink appeared at ${path} between the check and the write`);
+    }
+    throw error;
+  }
+  try {
+    writeFileSync(fd, content, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
   return `wrote ${content.length} bytes to ${path}`;
 }
 
