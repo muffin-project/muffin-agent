@@ -175,13 +175,23 @@ function sse(events: { event: string; data: unknown }[]): string {
 function streamedResponse(chunks: string[], breakAfter?: number): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
-    start(controller) {
+    // `async` and a tick between each `enqueue`, not a synchronous loop: a
+    // spec-conformant `ReadableStream` discards its queued-but-unread chunks
+    // the moment `controller.error()` runs (verified with a throwaway probe
+    // against the real SDK, 2026-08-16 — the synchronous version delivered
+    // zero events before throwing, every time, regardless of `breakAfter`).
+    // The delay lets the SDK's reader actually pull each chunk before the
+    // next one arrives, so a `breakAfter` in the middle of the list genuinely
+    // exercises "some events arrived, then the connection died" instead of
+    // "died before anything did."
+    async start(controller) {
       for (const [i, chunk] of chunks.entries()) {
         if (breakAfter !== undefined && i === breakAfter) {
           controller.error(new Error('socket hang up'));
           return;
         }
         controller.enqueue(encoder.encode(chunk));
+        await new Promise((resolve) => setTimeout(resolve, 5));
       }
       controller.close();
     },
