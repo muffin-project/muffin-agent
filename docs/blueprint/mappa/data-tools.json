@@ -14,7 +14,7 @@
       "maxTaint": null,
       "taintOut": "tier: 2 (DISK_TIER, agent/tools/fs.ts) on every read - ADR-0044. Until that ADR this handler returned {content} with no `tier` key and a file's content was treated as fully trusted whatever its provenance; the map recorded that as a finding (see gaps) and it is now closed. 2 because `stat` cannot tell the owner's own note from something that arrived in ~/Downloads: under that uncertainty the fail-closed reading is the only honest one.",
       "wired": true,
-      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:326-339 (makeFsTools), not inline in runtime.ts (the three fs handlers were unified into one factory, used by both runtime.ts and evals/floor/run.ts, so the fix could not stay in the tool file without reaching production).",
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:480-539 (makeFsTools), not inline in runtime.ts (the three fs handlers were unified into one factory, used by both runtime.ts and evals/floor/run.ts, so the fix could not stay in the tool file without reaching production).",
       "onDeny": "Generic kernel refusal at agent/loop.ts:769-776: 'Rifiutato dal kernel dei permessi (<code>). Non insistere: serve una decisione dell'owner.' Most likely code in practice: taint_exceeded once turn taint > 3 (defaultMaxTaint.low, core/policy/matrix.ts:95).",
       "oneLine": "Legge un file di testo dentro la working directory."
     },
@@ -167,7 +167,7 @@
       "maxTaint": null,
       "file": "agent/tools/fs.ts:62-69",
       "hasTool": true,
-      "note": "1:1 with fs_read. No maxTaint declared -> inherits defaultMaxTaint.low = 3 (core/policy/matrix.ts:95), deliberately not pinned so an owner who lowers policy.json's low ceiling is obeyed (fs.ts:34-61 argues this at length: the alternative would break search-then-read-notes in one turn)."
+      "note": "1:1 with fs_read. No maxTaint declared -> inherits defaultMaxTaint.low = 3 (core/policy/matrix.ts:95), deliberately not pinned so an owner who lowers policy.json's low ceiling is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
     },
     {
       "id": "fs.list",
