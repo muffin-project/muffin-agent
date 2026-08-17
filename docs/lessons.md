@@ -944,3 +944,61 @@ never being asked. `docs/PRACTICES.md` §5's "test the wiring, not the logic"
 is usually read as "does production call this at all" — the same rule
 applies one level down, to whether a test's *fixture* actually exercises
 every branch its *name* claims to cover.
+
+## A swallowed intent write makes "not started" and "started" indistinguishable **(this build)**
+
+`agent/loop.ts`'s two-phase tool record (ADR-0042 §6) exists to turn a crash
+mid-call into a fact instead of a guess: an intent row with no outcome row
+reads as "maybe done", and a non-rerunnable tool's resume refuses to repeat it
+for exactly that reason — the whole point of writing the intent row *before*
+the handler runs. `runTool` wrote that row through `deps.turns.startToolCall`
+inside a `try/catch` that swallowed the error and let `tool.handler` run
+regardless, justified by a comment that reasoned from `checkpoint`'s own
+swallow: a tool that worked must not be turned into a failed turn by a
+bookkeeping write.
+
+That reasoning holds for the *outcome* write and does not hold for the
+*intent* write, because the two are not symmetric. A crashed outcome write
+leaves the row open, which a resume already treats as uncertain — the
+harmless direction, and `recordOutcome` still swallows on purpose today. A
+crashed **intent** write, with the handler left free to run anyway, leaves
+*no row at all* — which a resume reads as "never started" and reruns. For a
+non-rerunnable tool (a message send, a shell command) that is the exact
+double-effect the two-phase record was built to prevent, produced by the
+mechanism meant to prevent it. `docs/blueprint/gate1/MANDATO-DAY-1.md` names
+this invariant 1, "EFFECT WAL", and states the failing shape verbatim:
+*"Provo a registrare l'intent e, se fallisce, continuo" NON soddisfa la
+proprietà* — which is a description of the code as it stood, not a
+hypothetical.
+
+A companion gap sat one level down in the same table: `TurnStore.
+endToolCall`'s `tier` parameter was optional, so a caller that omitted it
+wrote a silent `NULL` and skipped the taint bump with no error anywhere
+(audit P05, BLOCKER,
+`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md:153`) —
+even though `ToolOutcome.tier` was already required one level up (ADR-0044).
+The guarantee lived in the caller's discipline, not in the callee's type:
+ORCHESTRATION.md §15's exact shape of "the type permits the wrong state",
+where the fix is the same move it names — a form that fails on its own, not
+one that depends on someone remembering.
+
+*Found and fixed in `slice/wal-intent`, following the 2026-08-17 triage that
+named it the first item on Gate 1's critical path.*
+
+**Instead:** `runTool` now treats the intent write as a precondition, not a
+courtesy — `startToolCall` failing refuses the call outright, before
+`tool.handler` is ever reached, for every tool alike (`rerunnable` decides
+nothing here; the gate sits upstream of that question, one rule instead of
+one per tool). The refusal is an honest `tool_result` error the model reads
+like any other tool failure, at tier 0 — no byte entered this process for the
+call, so nothing raises taint — and there is no `endToolCall` for a call that
+never got an intent row to close. `endToolCall`'s `tier` became mandatory in
+the signature; every real caller already passed it, so `tsc` was the only
+thing that needed to check.
+
+`agent/turn-record.test.ts` proves the gate by mutation, not just by
+addition: reintroducing the swallowed `try/catch` turns the new
+non-rerunnable and rerunnable cases red (the spy handler is called even
+though `startToolCall` threw) while every other test in the file, including
+the happy path, stays green — the failure is specific to the removed gate,
+not a side effect of a broader breakage.
