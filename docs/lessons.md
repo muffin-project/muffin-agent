@@ -922,3 +922,40 @@ never being asked. `docs/PRACTICES.md` §5's "test the wiring, not the logic"
 is usually read as "does production call this at all" — the same rule
 applies one level down, to whether a test's *fixture* actually exercises
 every branch its *name* claims to cover.
+
+## A surface can die for the life of the process while everything around it reports healthy **(this build)**
+
+`TelegramConnector.run()` called `getMe()` once, outside any retry loop and
+before `this.running` was even set. At boot, before the network or DNS is
+ready — `Wants=network-online.target` in the generated systemd unit does not
+guarantee it, and on a laptop the Wi-Fi routinely comes up after the unit
+does — that call threw. The throw escaped `run()` whole. `connectSurfaces`
+(`cli/surface.ts`) started the connector with `void connector.run().catch(…)`,
+which is correct for *"a crash of the surface must not take the REPL down"*
+and wrong for everything past that: the `.catch` printed one line
+("telegram: caduta") and returned, and nothing ever called `run()` again.
+
+The gateway around it kept reporting exactly what it should: the lock held,
+`muffin gateway status` showing a live pid, the scheduler ticking, `doctor`
+naming a healthy gateway. Every one of those checks was true. None of them
+asked whether the *surface* the owner actually talks to was still there.
+A dead poller and a live gateway produce the identical process-level signal
+— a running pid — and nothing in this codebase compared the two before this
+slice, the same shape `AGENTS.md`'s own opening lesson names for a written,
+tested, documented mechanism reached by nothing: here the mechanism was
+reached once, failed once, and nothing was left standing to reach it again.
+
+**Instead:** a component whose job is "stay connected to something outside
+this process" needs its own retry loop from the moment it starts, not a
+`.catch` at the call site — a `.catch` answers "did starting it throw", never
+"is it still working a minute from now". And a supervisor question ("is a
+process alive") is not the same question as a capability question ("is the
+thing that process is supposed to provide still reachable") — `doctor`'s new
+`supervisore` check (`core/gateway/supervisor.ts`) is the same distinction
+one level up: a live gateway pid and a supervised one are two different
+facts, and conflating them is exactly how "attivo" stopped meaning
+"reachable". Fixed with a capped, jittered backoff around `getMe()` plus a
+poll-loop `try` that also covers `inbox.accept`/`drain()` — no throw inside
+the loop is allowed to end it, only `stop()`/an aborted signal is — and
+proved red on the pre-fix code before the fix landed
+(`connectors/telegram/reconnect.test.ts`).

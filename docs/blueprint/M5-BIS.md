@@ -96,7 +96,7 @@ ancora verificato — **è un debito, non uno stato**).
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| A1 | Boot | Muffin parte da solo e recupera lo stato? | ? |
+| A1 | Boot | Muffin parte da solo e recupera lo stato? | READY — accettazione: gateway vero SIGKILLato a metà vita, un secondo processo lo sostituisce e riprende un turno sospeso (`wait`) più un job dovuto, ciascuno consegnato **una sola volta** (righe `turns`/`turns.delivery`/`jobs.last_run_at` provate, non assunte — mutation-testato: `markRan` disattivato a mano rifà partire il job all'infinito e lo scenario va rosso, `evals/acceptance/scenarios/a-lifecycle.accept.ts`), `muffin gateway status`/`doctor` sani prima e dopo, `SIGTERM` drena ed esce `EXIT_STOPPED`. Due gap chiusi con test: `TelegramConnector.run()` riprova `getMe()` con backoff invece di morire una volta sola quando la rete non è pronta al boot (`connectors/telegram/reconnect.test.ts`, rosso confermato pre-fix); `doctor` verifica il **supervisore** (unit/plist al suo posto + enable/linger su Linux o launchd su macOS), non solo il processo (`core/gateway/supervisor.ts`, mai `fail`, sempre un rimedio) — un `muffin gateway run` a mano ora si legge distinto da uno supervisionato. Reboot reale della macchina target = battery §10 di `gate1/MANDATO-DAY-1.md`, non provato qui. ADR-0035 §Continuità appartiene a Muffin, non al pid. |
 | A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 template vuoto |
 | A3 | Persona | Il comportamento è definito? | BLOCKER 👤 manca il taglio dell'owner |
 | A4 | Config | Si configura senza toccare il codice? | ? |
