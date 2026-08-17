@@ -3,8 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { MANIFEST, type ScenarioEntry } from './manifest.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
 
 /**
  * The command M5-BIS.md's state is derived from, instead of asserted by hand.
@@ -19,20 +19,31 @@ import { MANIFEST, type ScenarioEntry } from './manifest.js';
  * inventory has to be able to say instead of mis-filing them as "no scenario".
  *
  * Runs the acceptance vitest project as a real subprocess (`npx vitest run
- * --reporter=json`) rather than re-implementing pass/fail: vitest's own
- * `it.fails` already tells the difference between "broke for real" and "still
- * red on purpose" (verified against the installed 2.1.9 with a throwaway probe
- * before relying on it — `it.fails` reports a thrown assertion as `passed` in
- * the JSON output and a non-throwing one as `failed`). This script only has to
- * cross-reference that against the manifest and the inventory.
+ * --reporter=json`) rather than re-implementing pass/fail: `scenario.ts`
+ * turns an `atteso-rosso` row's failure into an ordinary vitest pass/fail —
+ * pass when the error matches the manifest's own `expectFailure`, fail
+ * (with a distinguishing message) otherwise — so this script reads
+ * `failureMessages` out of the JSON reporter's own output (verified against
+ * the installed vitest 2.1.9 with a throwaway probe file: `failureMessages:
+ * string[]` carries the thrown `Error`'s message, one entry per assertion)
+ * rather than re-implementing pass/fail itself. Mandato DAY-1 §4.9 (P39): a
+ * scenario that is red is not automatically "fine" — it has to be red for
+ * the reason the manifest names, or this report has to say so.
+ *
+ * `parseInventory`/`runAcceptanceSuite` are the only functions here that
+ * touch disk or spawn a process; everything downstream of them (`verdictFor`,
+ * `summarize`) is pure, exported, and what `report.test.ts` drives directly
+ * with synthetic rows and results — real M5-BIS.md text and a real vitest
+ * subprocess would make "does the gate fire" a ~60s integration test instead
+ * of a millisecond one, for a question that does not need either.
  */
 
 const REPO = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const M5_BIS = join(REPO, 'docs', 'blueprint', 'M5-BIS.md');
 
-type Stato = 'READY' | 'OUT' | 'BLOCKER' | '?';
+export type Stato = 'READY' | 'OUT' | 'BLOCKER' | '?';
 
-type InventoryRow = { id: string; area: string; question: string; stato: Stato; rawStato: string };
+export type InventoryRow = { id: string; area: string; question: string; stato: Stato; rawStato: string };
 
 /**
  * Reads the inventory tables directly from the live document — never a copy —
@@ -70,13 +81,18 @@ const NOT_PROVABLE_HERE: Record<string, string> = {
   C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
 };
 
+export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
+
+/** One assertion's outcome, plus whatever it threw — the input `verdictFor` needs to tell "promote" apart from "wrong reason". */
+export type TestOutcome = { status: VitestStatus; failureMessages: string[] };
+
 type VitestJsonResult = {
   testResults: Array<{
-    assertionResults: Array<{ fullName: string; status: 'passed' | 'failed' | 'pending' | 'skipped' }>;
+    assertionResults: Array<{ fullName: string; status: VitestStatus; failureMessages?: string[] }>;
   }>;
 };
 
-function runAcceptanceSuite(): Map<string, 'passed' | 'failed' | 'pending' | 'skipped'> {
+function runAcceptanceSuite(): Map<string, TestOutcome> {
   const outFile = join(mkdtempSync(join(tmpdir(), 'muffin-accept-report-')), 'results.json');
   const result = spawnSync(
     'npx',
@@ -97,22 +113,29 @@ function runAcceptanceSuite(): Map<string, 'passed' | 'failed' | 'pending' | 'sk
   } finally {
     rmSync(join(outFile, '..'), { recursive: true, force: true });
   }
-  const byTitle = new Map<string, 'passed' | 'failed' | 'pending' | 'skipped'>();
+  const byTitle = new Map<string, TestOutcome>();
   for (const file of json.testResults) {
-    for (const a of file.assertionResults) byTitle.set(a.fullName.trim(), a.status);
+    for (const a of file.assertionResults) {
+      byTitle.set(a.fullName.trim(), { status: a.status, failureMessages: a.failureMessages ?? [] });
+    }
   }
   return byTitle;
 }
 
-type RowVerdict =
+export type RowVerdict =
   | { kind: 'verde' }
   | { kind: 'rosso-inatteso'; detail: string }
   | { kind: 'atteso-rosso'; reason: string; closedBy: string }
   | { kind: 'atteso-rosso-ora-verde'; reason: string; closedBy: string }
   | { kind: 'non-provabile-qui'; reason: string }
+  | { kind: 'provata-dal-meccanismo'; reason: string }
   | { kind: 'nessuno-scenario' };
 
-function verdictFor(row: InventoryRow, scenariosForRow: ScenarioEntry[], results: Map<string, string>): RowVerdict {
+export function verdictFor(
+  row: InventoryRow,
+  scenariosForRow: ScenarioEntry[],
+  results: Map<string, TestOutcome>,
+): RowVerdict {
   if (scenariosForRow.length === 0) {
     const reason = NOT_PROVABLE_HERE[row.id];
     return reason ? { kind: 'non-provabile-qui', reason } : { kind: 'nessuno-scenario' };
@@ -121,37 +144,83 @@ function verdictFor(row: InventoryRow, scenariosForRow: ScenarioEntry[], results
   // is reported on the first, since a mixed verdict across scenarios for the
   // same row would need its own presentation this suite does not need yet.
   const scenario = scenariosForRow[0]!;
+  // `provata-dal-meccanismo` never registers a real `it()` (scenario.ts
+  // refuses to — see its own comment), so there is no vitest outcome to look
+  // up for it and looking would always miss, mis-filing it as `nessuno
+  // scenario` next to rows that genuinely have no coverage at all.
+  if (scenario.expectation.kind === 'provata-dal-meccanismo') {
+    return { kind: 'provata-dal-meccanismo', reason: scenario.expectation.reason };
+  }
   // vitest's fullName joins the describe block and the it title with a space —
   // a suffix match is what survives that without hard-coding the describe text
   // here too.
-  const status = [...results.entries()].find(([full]) => full.endsWith(scenario.title))?.[1];
-  if (status === undefined) {
+  const outcome = [...results.entries()].find(([full]) => full.endsWith(scenario.title))?.[1];
+  if (outcome === undefined) {
     return { kind: 'nessuno-scenario' }; // registered in the manifest, but vitest never ran it
   }
+  const { status, failureMessages } = outcome;
   if (scenario.expectation.kind === 'verde') {
     return status === 'passed' ? { kind: 'verde' } : { kind: 'rosso-inatteso', detail: `stato vitest: ${status}` };
   }
-  // atteso-rosso: `it.fails` reports `passed` when the assertion threw as
-  // expected, `failed` the day it stops throwing — see the module docstring.
-  return status === 'passed'
-    ? { kind: 'atteso-rosso', reason: scenario.expectation.reason, closedBy: scenario.expectation.closedBy }
-    : { kind: 'atteso-rosso-ora-verde', reason: scenario.expectation.reason, closedBy: scenario.expectation.closedBy };
+  const { reason, closedBy } = scenario.expectation;
+  if (status === 'passed') return { kind: 'atteso-rosso', reason, closedBy };
+  // Not passed: `scenario.ts` wraps every atteso-rosso body in a plain `it`
+  // now, so this is either the promotion marker (the function stopped
+  // throwing) or a failure that did not match `expectFailure` — and only the
+  // marker means "promote". Anything else, including a status this map
+  // cannot even see the message for, is `rosso-inatteso`: never the silent
+  // default of "must be fine".
+  return failureMessages.some((m) => m.includes(promoteMarker(row.id)))
+    ? { kind: 'atteso-rosso-ora-verde', reason, closedBy }
+    : {
+        kind: 'rosso-inatteso',
+        detail: `atteso-rosso con una firma diversa da quella dichiarata ("${reason}") — ${firstLine(failureMessages[0])}`,
+      };
 }
 
-function main(): void {
-  const inventory = parseInventory();
-  const results = runAcceptanceSuite();
+/** The message's own first line, without the stack trace `failureMessages` also carries. */
+function firstLine(message: string | undefined): string {
+  if (message === undefined) return '(nessun dettaglio di fallimento nel reporter JSON)';
+  return message.split('\n')[0]!;
+}
 
+export type Summary = {
+  lines: string[];
+  counts: {
+    verde: number;
+    attesoRosso: number;
+    unexpectedRed: number;
+    attesoRossoOraVerde: number;
+    nonProvabile: number;
+    provataDalMeccanismo: number;
+    nessunoScenario: number;
+    readyWithoutScenario: number;
+    readyWithAttesoRosso: number;
+    orphanRows: number;
+  };
+  /** Whether the report should fail the process — the gate, as one boolean instead of scattered across counters. */
+  failed: boolean;
+};
+
+/**
+ * Cross-references the inventory against the manifest and a suite's results,
+ * and decides pass/fail. Pure and synchronous on purpose — this is the whole
+ * gate, and `report.test.ts` calls it directly with synthetic inputs rather
+ * than through a real M5-BIS.md and a real vitest subprocess.
+ */
+export function summarize(inventory: InventoryRow[], manifest: readonly ScenarioEntry[], results: Map<string, TestOutcome>): Summary {
   const byRow = new Map<string, ScenarioEntry[]>();
-  for (const s of MANIFEST) byRow.set(s.row, [...(byRow.get(s.row) ?? []), s]);
+  for (const s of manifest) byRow.set(s.row, [...(byRow.get(s.row) ?? []), s]);
 
   const lines: string[] = [];
   let unexpectedRed = 0;
   let readyWithoutScenario = 0;
+  let readyWithAttesoRosso = 0;
   let verde = 0;
   let attesoRosso = 0;
   let nessunoScenario = 0;
   let nonProvabile = 0;
+  let provataDalMeccanismo = 0;
   let attesoRossoOraVerde = 0;
 
   /**
@@ -160,7 +229,7 @@ function main(): void {
    * The loop below walks `inventory`, not `byRow` — so before this check
    * existed, a typo'd id (`Z9`) or a row M5-BIS.md renumbered away from under
    * the manifest simply never got visited: not printed, not counted, exit
-   * code untouched. The header still said "N scenari" (`MANIFEST.length`
+   * code untouched. The header still said "N scenari" (`manifest.length`
    * does not care), and the row it was supposed to prove looked exactly like
    * one nobody had written a scenario for yet. Silent, and one level above
    * the exact class of gap this whole report exists to surface — found by a
@@ -190,7 +259,20 @@ function main(): void {
         break;
       case 'atteso-rosso':
         attesoRosso++;
-        lines.push(`  atteso-rosso       ${row.id}  ${row.area} — ${verdict.reason} (chiude: ${verdict.closedBy})`);
+        // Mandato DAY-1 §4.9 (P39): a row this inventory calls `READY` —
+        // "implementata, cablata, provata, e il percorso reale ci arriva" —
+        // cannot also carry a scenario that is still red on purpose. One of
+        // the two statements is wrong, and the report has to say which
+        // rather than print both and let a reader average them.
+        if (row.stato === 'READY') {
+          readyWithAttesoRosso++;
+          lines.push(
+            `  atteso-rosso       ${row.id}  ${row.area} — ${verdict.reason} (chiude: ${verdict.closedBy})  ` +
+              `⚠️  READY ma scenario atteso-rosso: promuovi o degrada`,
+          );
+        } else {
+          lines.push(`  atteso-rosso       ${row.id}  ${row.area} — ${verdict.reason} (chiude: ${verdict.closedBy})`);
+        }
         break;
       case 'atteso-rosso-ora-verde':
         attesoRossoOraVerde++;
@@ -203,6 +285,10 @@ function main(): void {
         nonProvabile++;
         lines.push(`  non provabile qui  ${row.id}  ${row.area} — ${verdict.reason}`);
         break;
+      case 'provata-dal-meccanismo':
+        provataDalMeccanismo++;
+        lines.push(`  provata dal meccanismo  ${row.id}  ${row.area} — ${verdict.reason}`);
+        break;
       case 'nessuno-scenario':
         nessunoScenario++;
         if (row.stato === 'READY') readyWithoutScenario++;
@@ -211,23 +297,66 @@ function main(): void {
     }
   }
 
-  process.stdout.write(`Accettazione M5-BIS — ${inventory.length} righe, ${MANIFEST.length} scenari\n\n`);
+  const failed =
+    unexpectedRed > 0 || readyWithoutScenario > 0 || readyWithAttesoRosso > 0 || attesoRossoOraVerde > 0 || orphanRows.length > 0;
+
+  return {
+    lines,
+    counts: {
+      verde,
+      attesoRosso,
+      unexpectedRed,
+      attesoRossoOraVerde,
+      nonProvabile,
+      provataDalMeccanismo,
+      nessunoScenario,
+      readyWithoutScenario,
+      readyWithAttesoRosso,
+      orphanRows: orphanRows.length,
+    },
+    failed,
+  };
+}
+
+function main(): void {
+  const inventory = parseInventory();
+  const results = runAcceptanceSuite();
+  const { lines, counts, failed } = summarize(inventory, MANIFEST, results);
+
+  // `MANIFEST.length` alone would count E4 too, but a `provata-dal-meccanismo`
+  // entry never registers a real `it()` (scenario.ts refuses to) — counting it
+  // here would make this header disagree with what `npm run test:acceptance`
+  // actually runs, which is exactly the kind of stale count this report exists
+  // to prevent elsewhere.
+  const scenariReali = MANIFEST.filter((s) => s.expectation.kind !== 'provata-dal-meccanismo').length;
+  process.stdout.write(`Accettazione M5-BIS — ${inventory.length} righe, ${scenariReali} scenari\n\n`);
   process.stdout.write(`${lines.join('\n')}\n\n`);
   process.stdout.write(
-    `verde ${verde} · atteso-rosso ${attesoRosso} · rosso-inatteso ${unexpectedRed} · ` +
-      `atteso-rosso→verde ${attesoRossoOraVerde} · non provabile qui ${nonProvabile} · ` +
-      `nessuno scenario ${nessunoScenario} · orfano ${orphanRows.length}\n`,
+    `verde ${counts.verde} · atteso-rosso ${counts.attesoRosso} · rosso-inatteso ${counts.unexpectedRed} · ` +
+      `atteso-rosso→verde ${counts.attesoRossoOraVerde} · non provabile qui ${counts.nonProvabile} · ` +
+      `provata dal meccanismo ${counts.provataDalMeccanismo} · nessuno scenario ${counts.nessunoScenario} · ` +
+      `orfano ${counts.orphanRows}\n`,
   );
 
-  if (unexpectedRed > 0 || readyWithoutScenario > 0 || attesoRossoOraVerde > 0 || orphanRows.length > 0) {
+  if (failed) {
     process.stdout.write(
-      `\nFALLITO: ${unexpectedRed} rosso-inatteso, ${readyWithoutScenario} riga READY senza scenario, ` +
-        `${attesoRossoOraVerde} atteso-rosso da promuovere, ${orphanRows.length} scenario orfano nel manifest.\n`,
+      `\nFALLITO: ${counts.unexpectedRed} rosso-inatteso, ${counts.readyWithoutScenario} riga READY senza scenario, ` +
+        `${counts.readyWithAttesoRosso} riga READY con scenario atteso-rosso (promuovi o degrada), ` +
+        `${counts.attesoRossoOraVerde} atteso-rosso da promuovere, ${counts.orphanRows} scenario orfano nel manifest.\n`,
     );
     process.exitCode = 1;
     return;
   }
-  process.stdout.write('\nOK: nessun rosso inatteso, nessuna riga READY scoperta, nessuno scenario orfano.\n');
+  process.stdout.write(
+    '\nOK: nessun rosso inatteso, nessuna riga READY scoperta o in contraddizione con un atteso-rosso, ' +
+      'nessuno scenario orfano.\n',
+  );
 }
 
-main();
+// Only run the real thing (parse the live M5-BIS.md, spawn the real suite)
+// when this file is the process entrypoint — never on import. `report.test.ts`
+// imports `verdictFor`/`summarize` for their pure logic; without this guard
+// that import would trigger a ~60s subprocess spawn as a side effect of
+// loading the module, once per test file.
+const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntrypoint) main();
