@@ -58,9 +58,18 @@ sono decisi **prima** del lavoro e hanno una prova osservabile:
 3. **Slice verificata** — `npm run build`, `npx vitest run`, scenario di
    fallimento, accettazione richiesta, documenti/stato e viste derivate sono
    aggiornati. La PR esce da draft e chiede il verdetto di `JUDGE.md`.
-4. **Integrazione** — solo un verdetto terminale `MERGE` autorizza il merge in
-   `dev`. Il passaggio `dev`→`main` è un checkpoint separato: suite sull'insieme
-   integrato e nuovo verdetto terminale.
+4. **Integrazione** — due classi, decise dall'orchestratore e scritte nella PR
+   (decisione owner 2026-08-17): una slice **sicura** — documenti e stato,
+   aggiunte di soli test, correzioni meccaniche di una riga, merge di `dev`,
+   rigenerazione della mappa, tutto ciò che l'orchestratore può verificare da
+   solo con comandi (build, suite, accettazione, mutazione, ancore) senza
+   bisogno di un contesto fresco anti-adulazione — la integra l'orchestratore
+   dopo quelle verifiche, riportandole nella PR. Una slice **ambigua** —
+   kernel/taint/policy, Root of Trust, schema durevole, concorrenza/lock,
+   sandbox, segreti, una primitiva nuova, una garanzia che si legge male da
+   dentro — richiede un verdetto terminale `MERGE` di un judge nuovo
+   (`JUDGE.md`). Il passaggio `dev`→`main` resta un checkpoint separato: suite
+   sull'insieme integrato e nuovo verdetto terminale.
 
 “Commit continuo” non significa un commit per ogni file: significa che nessuna
 unità verificabile o passaggio rischioso vive soltanto nel worktree. Un commit
