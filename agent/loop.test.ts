@@ -11,10 +11,10 @@ import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
-import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { runTurn, type LoopDeps, type RegisteredTool, type TurnDelta } from './loop.js';
 import { CONSERVATIVE, type Profile, type RecoveryStrategy } from './profiles/profile.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { ProviderError, type ChatCall, type ChatResult, type Provider } from './providers/types.js';
+import { ProviderError, ProviderStreamError, type ChatCall, type ChatResult, type Provider, type StreamEvent } from './providers/types.js';
 
 /** A provider that replays a script, so the loop is tested and not the model. */
 class ScriptedProvider implements Provider {
@@ -1066,5 +1066,129 @@ describe('the loop hands the model its own reasoning back', () => {
     // …and every reasoning block is byte-identical to what came out.
     const kept = third.messages.flatMap((m) => m.content).filter((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
     expect(kept).toEqual([THINKING, REDACTED, THINKING, REDACTED]);
+  });
+});
+
+/**
+ * A provider that can also stream — kept apart from `ScriptedProvider` above
+ * because its script has a second axis (what `chatStream` yields before its
+ * `done`) that the 41 non-streaming tests above have no use for, and because
+ * counting `chat()` calls separately from `chatStream()` calls is the whole
+ * assertion in the fallback tests below ("never two paid calls silently").
+ */
+class StreamCapableProvider implements Provider {
+  readonly kind = 'openai-compat' as const;
+  streamCalls = 0;
+  chatCalls = 0;
+
+  constructor(
+    /** One entry per expected `chatStream` call, consumed in order. */
+    private readonly streamScript: ({ chunks: string[]; result: ChatResult } | { chunks: string[]; breaks: true })[],
+    /** What a *fallback* (plain `chat()`) call answers, consumed in order — a separate list because a broken stream's fallback is a second, distinct request. */
+    private readonly chatScript: ChatResult[] = [],
+  ) {}
+
+  async chat(_call: ChatCall): Promise<ChatResult> {
+    const next = this.chatScript[this.chatCalls++];
+    if (!next) throw new Error('StreamCapableProvider: chat() script esaurito');
+    return next;
+  }
+
+  async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
+    const step = this.streamScript[this.streamCalls++];
+    if (!step) throw new Error('StreamCapableProvider: chatStream() script esaurito');
+    for (const chunk of step.chunks) yield { type: 'text_delta', text: chunk };
+    if ('breaks' in step) throw new ProviderStreamError('rotto a metà', true);
+    yield { type: 'done', result: step.result };
+  }
+}
+
+describe('agent loop · streaming (B11)', () => {
+  it('streams the final round\'s text to onDelta, in the chunks the provider yielded', async () => {
+    const provider = new StreamCapableProvider([{ chunks: ['ecco ', 'la ', 'risposta'], result: answer('ecco la risposta') }]);
+    const { deps: d, store } = deps([], { provider });
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(received).toEqual(['ecco ', 'la ', 'risposta']);
+    expect(result).toMatchObject({ stopped: 'answered', text: 'ecco la risposta' });
+    expect(provider.streamCalls).toBe(1);
+    expect(provider.chatCalls).toBe(0);
+  });
+
+  it('never streams a round that ends in a tool call — the model "thinking aloud" is not the answer', async () => {
+    const provider = new StreamCapableProvider([
+      { chunks: ['sto per chiamare un tool...'], result: callTool('demo_read', { q: 1 }) },
+      { chunks: ['ecco il risultato'], result: answer('ecco il risultato') },
+    ]);
+    const { deps: d, store, calls } = deps([], { provider });
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(calls).toEqual(['demo_read:{"q":1}']);
+    // Only the second round's text ever reaches the surface. The first
+    // round's "sto per chiamare un tool..." is exactly the text this
+    // mechanism exists to withhold.
+    expect(received).toEqual(['ecco il risultato']);
+    expect(result.text).toBe('ecco il risultato');
+  });
+
+  it('does not leak a completion-nudged round\'s draft — only the round that stands streams', async () => {
+    // Same trigger the non-streaming test above uses (a narrated call the
+    // turn never made), so this is the streaming twin of "nudges once when
+    // the answer narrates a call it never made" — proving the *nudged*
+    // round's chunks never reach a surface, which that test cannot see at
+    // all since it has no onDelta to check.
+    const provider = new StreamCapableProvider([
+      { chunks: ['[Eseguo ', '`demo_write`] fatto'], result: answer('[Eseguo `demo_write`] fatto') },
+      { chunks: ['scritto ', 'per davvero'], result: answer('scritto per davvero') },
+    ]);
+    const { deps: d, store } = deps([], { provider });
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(received).toEqual(['scritto ', 'per davvero']);
+    expect(result.text).toBe('scritto per davvero');
+  });
+
+  it('never calls chatStream with no onDelta sink — the default turn is the same request as before this field existed', async () => {
+    // Only `chatScript` is reachable here: with no sink, `call.stream` is
+    // `false` and `requestChatResult` goes straight to `chat()` — a
+    // `streamScript` entry sitting unconsumed is itself part of the proof.
+    const provider = new StreamCapableProvider([{ chunks: ['x'], result: answer('mai visto') }], [answer('ecco')]);
+    const { deps: d, store } = deps([], { provider });
+    const result = await runTurn(d, input(store)); // no onDelta
+
+    expect(provider.streamCalls).toBe(0);
+    expect(provider.chatCalls).toBe(1);
+    expect(result.text).toBe('ecco');
+  });
+
+  it('falls back to exactly one non-streaming call when the stream breaks mid-round, never a silent second attempt', async () => {
+    const provider = new StreamCapableProvider(
+      [{ chunks: ['parte rotta'], breaks: true }],
+      [answer('risposta di ripiego')],
+    );
+    const { deps: d, store } = deps([], { provider });
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(provider.streamCalls).toBe(1);
+    expect(provider.chatCalls).toBe(1); // exactly one fallback — the whole point of ProviderStreamError
+    expect(result.stopped).toBe('answered');
+    expect(result.text).toBe('risposta di ripiego');
+    // The broken attempt's partial text never reached the surface, and the
+    // fallback is not itself streamed — this round is delivered normally at
+    // the end, same as a turn with no sink at all. Never "half a draft".
+    expect(received).toEqual([]);
+  });
+
+  it('does not stream when the provider has no chatStream at all, even with a sink attached', async () => {
+    const { deps: d, store } = deps([answer('ok senza streaming')]); // ScriptedProvider has no chatStream
+    const received: string[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+
+    expect(received).toEqual([]);
+    expect(result.text).toBe('ok senza streaming');
   });
 });
