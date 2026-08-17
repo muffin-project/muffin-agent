@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Message } from '../../agent/providers/types.js';
-import { heldBy, pidAlive } from '../lock/durable.js';
+import { ensureColumn, heldBy, pidAlive } from '../lock/durable.js';
 import type { Principal, TrustTier } from '../policy/types.js';
 
 /**
@@ -210,6 +210,17 @@ export type TurnRecord = {
   waitFor: string | null;
   claimedBy: number | null;
   claimedAt: string | null;
+  /**
+   * The fencing token this claim was minted with — `null` on a row nobody
+   * currently holds. The same mechanism as `core/lock/durable.ts`'s
+   * `holder_id`, one table over: `claim()` mints a fresh, random one on every
+   * successful claim, first or stolen alike, and `checkpoint`/`finish`/
+   * `suspend` must be given it back. A write whose token does not match the
+   * row's current one changes zero rows — the caller has lost the claim and
+   * must stop, not overwrite whatever the new holder is doing (P19's second
+   * finding: these three writes used to be guarded on `id` alone).
+   */
+  claimToken: string | null;
   outcome: TurnOutcome | null;
   delivery: DeliveryState | null;
   createdAt: string;
@@ -327,6 +338,7 @@ CREATE TABLE IF NOT EXISTS turns (
   wait_for      TEXT,
   claimed_by    INTEGER,
   claimed_at    TEXT,
+  claim_token   TEXT,
   turn_outcome  TEXT,
   delivery      TEXT,
   created_at    TEXT NOT NULL,
@@ -379,6 +391,7 @@ type Row = {
   wait_for: string | null;
   claimed_by: number | null;
   claimed_at: string | null;
+  claim_token: string | null;
   turn_outcome: string | null;
   delivery: string | null;
   created_at: string;
@@ -402,6 +415,7 @@ function toRecord(row: Row): TurnRecord {
     waitFor: row.wait_for,
     claimedBy: row.claimed_by,
     claimedAt: row.claimed_at,
+    claimToken: row.claim_token,
     outcome: row.turn_outcome as TurnOutcome | null,
     delivery: row.delivery as DeliveryState | null,
     createdAt: row.created_at,
@@ -456,28 +470,40 @@ export class TurnStore {
     private readonly alive: (pid: number) => boolean = pidAlive,
   ) {
     db.exec(SCHEMA);
+    // Additive, for a database written before `claim_token` existed — see
+    // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
+    ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
     // `@status` and a nullable `@pid`, where both used to be the literal
     // `'running'` and this process: a connector that creates the row and
     // returns (B2) writes a turn nobody is executing yet, and a row claimed by
     // a pid that is not running it would be reclaimed as *interrupted* the
     // moment that pid dies — reporting a crash for work that had not started.
+    // `@claimToken` travels with `@pid`: a row created already `running` (a
+    // fresh `runTurn`) needs a token from the start, exactly as much as one
+    // `claim()` hands the lane later — see `insert`.
     this.insertStmt = db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters,
-                          reply_to, status, claimed_by, claimed_at, delivery, created_at, updated_at)
+                          reply_to, status, claimed_by, claimed_at, claim_token, delivery, created_at, updated_at)
        VALUES (@id, @principal, @tenant, @surface, @sessionId, @model, @messages, @taint, @counters,
-               @replyTo, @status, @pid, @claimedAt, @delivery, @now, @now)`,
+               @replyTo, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
+    // Fenced on `claim_token` (P19's second finding): a checkpoint from a
+    // process that has been stolen from must change zero rows, not overwrite
+    // whatever the new holder has already written. `changes` is read back by
+    // `checkpoint()` below; `agent/loop.ts` stops the turn when it is 0.
     this.checkpointStmt = db.prepare(
       `UPDATE turns SET messages = @messages, taint = @taint, counters = @counters, updated_at = @now
-       WHERE id = @id`,
+       WHERE id = @id AND claim_token = @claimToken`,
     );
-    // One write advances the state, and `claimed_by` goes with it: a finished
-    // turn is nobody's, so the reclaim below can never see it as abandoned.
+    // One write advances the state, and `claimed_by`/`claim_token` go with it:
+    // a finished turn is nobody's, so the reclaim below can never see it as
+    // abandoned, and no stale token can ever fence a write back in later.
+    // Fenced the same way as `checkpoint` — see that statement's comment.
     this.finishStmt = db.prepare(
       `UPDATE turns SET status = 'done', turn_outcome = @outcome, messages = @messages, taint = @taint,
-                        counters = @counters, claimed_by = NULL, updated_at = @now
-       WHERE id = @id`,
+                        counters = @counters, claimed_by = NULL, claim_token = NULL, updated_at = @now
+       WHERE id = @id AND claim_token = @claimToken`,
     );
     this.deliveryStmt = db.prepare(`UPDATE turns SET delivery = @delivery, updated_at = @now WHERE id = @id`);
     this.intentStmt = db.prepare(
@@ -489,14 +515,26 @@ export class TurnStore {
       `UPDATE turn_tool_calls SET ended_at = @now, content = @content, is_error = @isError, tier = @tier
        WHERE turn_id = @turnId AND call_id = @callId`,
     );
+    // Deliberately *not* fenced on `claim_token`, unlike checkpoint/finish/
+    // suspend above: taint must only ever rise, never be silently under-
+    // reported, and a tool call this row's process actually made is true
+    // regardless of who holds the claim by the time it returns. Fencing this
+    // write would let a legitimate taint escalation from the losing side of a
+    // steal go unrecorded on the winner's row — the unsafe direction. Intent
+    // and outcome rows (`intentStmt`/`outcomeStmt`) are the same call: their
+    // own `(turn_id, call_id)` key already scopes them to one specific call,
+    // which is a different, already-adequate guard than "who currently owns
+    // the row".
     this.taintStmt = db.prepare(
       `UPDATE turns SET taint = max(taint, @taint), updated_at = @now WHERE id = @id`,
     );
     this.staleStmt = db.prepare(
       `SELECT id, claimed_by AS pid, updated_at AS takenAt FROM turns WHERE status = 'running'`,
     );
+    // Clears `claim_token` along with `claimed_by`: the row is nobody's now,
+    // so no write fenced on the old token may land on it later either.
     this.interruptStmt = db.prepare(
-      `UPDATE turns SET status = 'interrupted', claimed_by = NULL, updated_at = @now
+      `UPDATE turns SET status = 'interrupted', claimed_by = NULL, claim_token = NULL, updated_at = @now
        WHERE id = @id AND status = 'running'`,
     );
     this.openCallsStmt = db.prepare(
@@ -558,9 +596,15 @@ export class TurnStore {
      * and one `changes: 0`. The guard on `status` is what makes it a claim
      * rather than an assignment — a row somebody is already running has left
      * the set and cannot be taken.
+     *
+     * `@token` is a fresh id `claim()` mints for every winning claim (first
+     * claim or a steal after `reclaim()` alike) — the fencing token every
+     * subsequent write on this row must carry back. Not read here, only
+     * written: the atomicity that makes this claim safe is the `status IN
+     * (...)` guard, exactly as before token existed.
      */
     this.claimStmt = db.prepare(
-      `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, updated_at = @now
+      `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token, updated_at = @now
        WHERE id = @id AND status IN ('runnable','waiting','interrupted')`,
     );
     /**
@@ -570,13 +614,19 @@ export class TurnStore {
      * ADR-0035 §1's property (`markRan` the only writer of `next_fire_at`)
      * applied here. A suspended row must not keep a pid, or the next boot would
      * reclaim it as interrupted the moment that process exits — turning every
-     * `wait` that outlives its process into a reported crash.
+     * `wait` that outlives its process into a reported crash. `claim_token`
+     * leaves with it, for the same reason `claimed_by` does: nobody holds a
+     * `waiting` row, so no fenced write may land on it later either. Fenced on
+     * the incoming token exactly as `checkpoint`/`finish` are — a suspend from
+     * a process that has been stolen from must change zero rows, same as those
+     * two (`status = 'running'` already guarded this; the token guards it
+     * against the same holder's pid winning a *later*, unrelated claim too).
      */
     this.suspendStmt = db.prepare(
       `UPDATE turns SET status = 'waiting', wake_at = @wakeAt, wait_for = @waitFor,
                         messages = @messages, taint = @taint, counters = @counters,
-                        claimed_by = NULL, updated_at = @now
-       WHERE id = @id AND status = 'running'`,
+                        claimed_by = NULL, claim_token = NULL, updated_at = @now
+       WHERE id = @id AND status = 'running' AND claim_token = @claimToken`,
     );
     /**
      * What the lane may pick up, oldest first.
@@ -644,6 +694,11 @@ export class TurnStore {
 
   private insert(spec: NewTurn, status: TurnStatus, pid: number | null): TurnRecord {
     const now = this.clock().toISOString();
+    // A row created already `running` needs a fencing token from the start,
+    // for the same reason `claim()` mints one below: `checkpoint`, the very
+    // first one, is only a few lines away. `enqueue` (pid `null`) gets none —
+    // nobody holds the row yet, so there is nothing to fence.
+    const token = pid === null ? null : randomUUID();
     this.insertStmt.run({
       id: spec.id,
       principal: JSON.stringify(spec.principal),
@@ -661,6 +716,7 @@ export class TurnStore {
       status,
       pid,
       claimedAt: pid === null ? null : now,
+      claimToken: token,
       now,
     });
     const created = this.get(spec.id);
@@ -676,10 +732,17 @@ export class TurnStore {
    * the REPL stands down), and the loser simply has nothing to do. What it must
    * never be is *both* — a turn executed twice re-runs its tool calls, which is
    * the effect duplication the whole record exists to prevent.
+   *
+   * A fresh `claimToken` is minted on every winning claim, exactly as
+   * `core/lock/durable.ts`'s `holder_id` is on every `acquire` — first claim
+   * or a steal via `reclaim()` alike. The caller must hold onto
+   * `record.claimToken` and hand it back to `checkpoint`/`finish`/`suspend`;
+   * `agent/loop.ts` is the one caller that does, threading it through `drive`.
    */
   claim(id: string, pid: number = process.pid, now: Date = this.clock()): TurnRecord | null {
     const at = now.toISOString();
-    if (this.claimStmt.run({ id, pid, now: at }).changes === 0) return null;
+    const token = randomUUID();
+    if (this.claimStmt.run({ id, pid, token, now: at }).changes === 0) return null;
     return this.get(id);
   }
 
@@ -693,6 +756,13 @@ export class TurnStore {
    * (`research/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
    * even when an event barrier is also armed: whichever comes first wins, and
    * neither can be absent.
+   *
+   * `claimToken` fences the write (P19's second finding): it must be the value
+   * `claim()`/`create()` handed the caller. A `false` return already meant
+   * "the write did not land" before fencing existed (the `status = 'running'`
+   * guard); it now also covers "landed on the wrong holder's claim", and the
+   * caller (`agent/loop.ts`) treats both identically — stop, do not pretend
+   * the state was saved.
    */
   suspend(
     id: string,
@@ -703,6 +773,7 @@ export class TurnStore {
       wakeAt: string;
       waitFor: string | null;
     },
+    claimToken: string | null,
   ): boolean {
     return (
       this.suspendStmt.run({
@@ -712,6 +783,7 @@ export class TurnStore {
         counters: JSON.stringify(patch.counters),
         wakeAt: patch.wakeAt,
         waitFor: patch.waitFor,
+        claimToken,
         now: this.clock().toISOString(),
       }).changes === 1
     );
@@ -775,15 +847,30 @@ export class TurnStore {
     return row ? toRecord(row) : null;
   }
 
-  /** The state at a suspension point: transcript, taint and counters together. */
-  checkpoint(id: string, patch: { messages: Message[]; taint: TrustTier; counters: TurnCounters }): void {
-    this.checkpointStmt.run({
-      id,
-      messages: JSON.stringify(patch.messages),
-      taint: patch.taint,
-      counters: JSON.stringify(patch.counters),
-      now: this.clock().toISOString(),
-    });
+  /**
+   * The state at a suspension point: transcript, taint and counters together.
+   *
+   * Fenced on `claimToken` (P19's second finding) and now returns whether it
+   * landed: `false` means this process's claim is gone — someone else's write
+   * is on the row now — and the caller must stop rather than keep checkpointing
+   * (and eventually finishing) a turn it no longer owns. `agent/loop.ts` is the
+   * one caller; every one of its three call sites checks the return.
+   */
+  checkpoint(
+    id: string,
+    patch: { messages: Message[]; taint: TrustTier; counters: TurnCounters },
+    claimToken: string | null,
+  ): boolean {
+    return (
+      this.checkpointStmt.run({
+        id,
+        messages: JSON.stringify(patch.messages),
+        taint: patch.taint,
+        counters: JSON.stringify(patch.counters),
+        claimToken,
+        now: this.clock().toISOString(),
+      }).changes === 1
+    );
   }
 
   /**
@@ -793,19 +880,30 @@ export class TurnStore {
    * only writer of `next_fire_at`. This is the same property on this table: one
    * write moves the status, so a second writer added later cannot advance a
    * turn past an outcome nobody recorded.
+   *
+   * Fenced on `claimToken`, same as `checkpoint`, and for the same reason: a
+   * `finish` from the losing side of a steal must not overwrite whatever the
+   * new holder has already recorded. Returns whether the write landed;
+   * `agent/loop.ts`'s `finish` closure treats `false` as "the claim is gone,
+   * report nothing further" rather than retrying or pretending the outcome
+   * this call was about to record is now durable.
    */
   finish(
     id: string,
     end: { outcome: TurnOutcome; messages: Message[]; taint: TrustTier; counters: TurnCounters },
-  ): void {
-    this.finishStmt.run({
-      id,
-      outcome: end.outcome,
-      messages: JSON.stringify(end.messages),
-      taint: end.taint,
-      counters: JSON.stringify(end.counters),
-      now: this.clock().toISOString(),
-    });
+    claimToken: string | null,
+  ): boolean {
+    return (
+      this.finishStmt.run({
+        id,
+        outcome: end.outcome,
+        messages: JSON.stringify(end.messages),
+        taint: end.taint,
+        counters: JSON.stringify(end.counters),
+        claimToken,
+        now: this.clock().toISOString(),
+      }).changes === 1
+    );
   }
 
   /** The other outcome. Never merged with the one above — see `DeliveryState`. */
