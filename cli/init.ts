@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { seal } from '../core/rot/verify.js';
@@ -42,6 +43,54 @@ export type InitOptions = {
 };
 
 export type InitStep = { name: string; done: boolean; detail: string };
+
+/**
+ * `--local`'s default and its explicit form (M5-BIS A9). Just a path — never a
+ * claim about whether it exists yet: `runInit` creates it below the same way
+ * it creates a first-run home.
+ */
+export function resolveLocalHome(dirArg: string | undefined): string {
+  return dirArg !== undefined ? resolve(dirArg) : join(homedir(), '.muffin-local');
+}
+
+/**
+ * The realpath of `target`, resolved even when it — or an ancestor — does not
+ * exist yet: walks up to the deepest entry that does, resolves *that* through
+ * any symlink, and re-attaches whatever was still missing. `isSameOrNestedPath`
+ * needs this because the directory `--local` names is usually about to be
+ * created, so a plain `realpathSync` would throw `ENOENT` on the one case that
+ * matters most (a first rehearsal of a fresh install).
+ */
+function realishPath(target: string): string {
+  let current = resolve(target);
+  const missing: string[] = [];
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return current; // filesystem root: nothing left to resolve against
+    missing.unshift(basename(current));
+    current = parent;
+  }
+  return missing.length > 0 ? join(realpathSync(current), ...missing) : realpathSync(current);
+}
+
+// macOS and Windows volumes are case-insensitive by default — `~/.Muffin` and
+// `~/.muffin` name the same directory, and a plain string compare would miss it.
+const CASE_BLIND = process.platform === 'darwin' || process.platform === 'win32';
+
+/**
+ * True when `candidate` is `base`, or sits somewhere inside it — compared
+ * through symlinks, never the literal strings. The guard `--local` runs
+ * before it ever calls `mkdirSync`: a throwaway rehearsal home must never be
+ * able to land on, or under, the real home it exists to leave untouched.
+ */
+export function isSameOrNestedPath(candidate: string, base: string): boolean {
+  const norm = (p: string): string => (CASE_BLIND ? p.toLowerCase() : p);
+  const c = norm(realishPath(candidate));
+  const b = norm(realishPath(base));
+  if (c === b) return true;
+  const rel = relative(b, c);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
 
 export function runInit(options: InitOptions = {}): InitStep[] {
   const home = options.home ?? paths().home;
