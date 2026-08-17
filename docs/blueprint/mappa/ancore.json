@@ -541,12 +541,12 @@
   },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
-    "line": 360,
+    "line": 366,
     "testo": "fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 480,
+    "line": 486,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:62": {
