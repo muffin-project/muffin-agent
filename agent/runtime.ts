@@ -11,7 +11,7 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { buildSystemPrompts } from './context/assemble.js';
+import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
 import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
@@ -97,6 +97,14 @@ export type Runtime = {
   consolidation: Consolidator;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
+  /**
+   * The named blocks `deps.systemPrompts` was rendered from — the same call,
+   * not a second one. `muffin prompt show --blocks` (`cli/prompt-show.ts`)
+   * reads this for provenance instead of re-deriving which file produced which
+   * span of the string, which would be a second description of the assembly
+   * next to the real one.
+   */
+  promptBlocks: SystemPromptBlocks;
   /**
    * Boot-visible notes a surface should print before the first turn — today,
    * skills that failed to load and why. Empty means nothing was skipped.
@@ -562,6 +570,18 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     log: (line) => process.stderr.write(`${line}\n`),
   });
 
+  // One prompt per tenant class, assembled here and never per turn: the class
+  // a turn belongs to is a property of who is speaking, and `runTurn` picks.
+  // Built once so each class keeps its own warm cache prefix. Computed as
+  // blocks first and joined once (`renderSystemPrompts`) so `deps.systemPrompts`
+  // and `promptBlocks` below describe the identical assembly rather than two
+  // calls that could drift apart.
+  const promptBlocks = buildSystemPromptBlocks(
+    home,
+    safeMode !== null,
+    skillsPromptSection(skillScan.skills),
+  );
+
   return {
     config,
     budget,
@@ -569,6 +589,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     db,
     consolidation,
     safeMode,
+    promptBlocks,
     bootLines: [
       ...turnNotes,
       ...waitingNotes,
@@ -617,14 +638,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // hand-typed caller it has had since M2 — which is why an install's facts
       // stay at zero and recall stays keyword-only for its whole life.
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
-      // One prompt per tenant class, assembled here and never per turn: the
-      // class a turn belongs to is a property of who is speaking, and `runTurn`
-      // picks. Built once so each class keeps its own warm cache prefix.
-      systemPrompts: buildSystemPrompts(
-        home,
-        safeMode !== null,
-        skillsPromptSection(skillScan.skills),
-      ),
+      systemPrompts: renderSystemPrompts(promptBlocks),
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
