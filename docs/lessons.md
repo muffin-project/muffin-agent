@@ -996,3 +996,98 @@ never being asked. `docs/PRACTICES.md` §5's "test the wiring, not the logic"
 is usually read as "does production call this at all" — the same rule
 applies one level down, to whether a test's *fixture* actually exercises
 every branch its *name* claims to cover.
+
+## A surface can die for the life of the process while everything around it reports healthy **(this build)**
+
+`TelegramConnector.run()` called `getMe()` once, outside any retry loop and
+before `this.running` was even set. At boot, before the network or DNS is
+ready — `Wants=network-online.target` in the generated systemd unit does not
+guarantee it, and on a laptop the Wi-Fi routinely comes up after the unit
+does — that call threw. The throw escaped `run()` whole. `connectSurfaces`
+(`cli/surface.ts`) started the connector with `void connector.run().catch(…)`,
+which is correct for *"a crash of the surface must not take the REPL down"*
+and wrong for everything past that: the `.catch` printed one line
+("telegram: caduta") and returned, and nothing ever called `run()` again.
+
+The gateway around it kept reporting exactly what it should: the lock held,
+`muffin gateway status` showing a live pid, the scheduler ticking, `doctor`
+naming a healthy gateway. Every one of those checks was true. None of them
+asked whether the *surface* the owner actually talks to was still there.
+A dead poller and a live gateway produce the identical process-level signal
+— a running pid — and nothing in this codebase compared the two before this
+slice, the same shape `AGENTS.md`'s own opening lesson names for a written,
+tested, documented mechanism reached by nothing: here the mechanism was
+reached once, failed once, and nothing was left standing to reach it again.
+
+**Instead:** a component whose job is "stay connected to something outside
+this process" needs its own retry loop from the moment it starts, not a
+`.catch` at the call site — a `.catch` answers "did starting it throw", never
+"is it still working a minute from now". And a supervisor question ("is a
+process alive") is not the same question as a capability question ("is the
+thing that process is supposed to provide still reachable") — `doctor`'s new
+`supervisore` check (`core/gateway/supervisor.ts`) is the same distinction
+one level up: a live gateway pid and a supervised one are two different
+facts, and conflating them is exactly how "attivo" stopped meaning
+"reachable". Fixed with a capped, jittered backoff around `getMe()` plus a
+poll-loop `try` that also covers `inbox.accept`/`drain()` — no throw inside
+the loop is allowed to end it, only `stop()`/an aborted signal is — and
+proved red on the pre-fix code before the fix landed
+(`connectors/telegram/reconnect.test.ts`).
+
+## A swallowed intent write makes "not started" and "started" indistinguishable **(this build)**
+
+`agent/loop.ts`'s two-phase tool record (ADR-0042 §6) exists to turn a crash
+mid-call into a fact instead of a guess: an intent row with no outcome row
+reads as "maybe done", and a non-rerunnable tool's resume refuses to repeat it
+for exactly that reason — the whole point of writing the intent row *before*
+the handler runs. `runTool` wrote that row through `deps.turns.startToolCall`
+inside a `try/catch` that swallowed the error and let `tool.handler` run
+regardless, justified by a comment that reasoned from `checkpoint`'s own
+swallow: a tool that worked must not be turned into a failed turn by a
+bookkeeping write.
+
+That reasoning holds for the *outcome* write and does not hold for the
+*intent* write, because the two are not symmetric. A crashed outcome write
+leaves the row open, which a resume already treats as uncertain — the
+harmless direction, and `recordOutcome` still swallows on purpose today. A
+crashed **intent** write, with the handler left free to run anyway, leaves
+*no row at all* — which a resume reads as "never started" and reruns. For a
+non-rerunnable tool (a message send, a shell command) that is the exact
+double-effect the two-phase record was built to prevent, produced by the
+mechanism meant to prevent it. `docs/blueprint/gate1/MANDATO-DAY-1.md` names
+this invariant 1, "EFFECT WAL", and states the failing shape verbatim:
+*"Provo a registrare l'intent e, se fallisce, continuo" NON soddisfa la
+proprietà* — which is a description of the code as it stood, not a
+hypothetical.
+
+A companion gap sat one level down in the same table:
+`TurnStore.endToolCall`'s `tier` parameter was optional, so a caller that
+omitted it wrote a silent `NULL` and skipped the taint bump with no error anywhere
+(audit P05, BLOCKER,
+`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md:153`) —
+even though `ToolOutcome.tier` was already required one level up (ADR-0044).
+The guarantee lived in the caller's discipline, not in the callee's type:
+ORCHESTRATION.md §15's exact shape of "the type permits the wrong state",
+where the fix is the same move it names — a form that fails on its own, not
+one that depends on someone remembering.
+
+*Found and fixed in `slice/wal-intent`, following the 2026-08-17 triage that
+named it the first item on Gate 1's critical path.*
+
+**Instead:** `runTool` now treats the intent write as a precondition, not a
+courtesy — `startToolCall` failing refuses the call outright, before
+`tool.handler` is ever reached, for every tool alike (`rerunnable` decides
+nothing here; the gate sits upstream of that question, one rule instead of
+one per tool). The refusal is an honest `tool_result` error the model reads
+like any other tool failure, at tier 0 — no byte entered this process for the
+call, so nothing raises taint — and there is no `endToolCall` for a call that
+never got an intent row to close. `endToolCall`'s `tier` became mandatory in
+the signature; every real caller already passed it, so `tsc` was the only
+thing that needed to check.
+
+`agent/turn-record.test.ts` proves the gate by mutation, not just by
+addition: reintroducing the swallowed `try/catch` turns the new
+non-rerunnable and rerunnable cases red (the spy handler is called even
+though `startToolCall` threw) while every other test in the file, including
+the happy path, stays green — the failure is specific to the removed gate,
+not a side effect of a broader breakage.

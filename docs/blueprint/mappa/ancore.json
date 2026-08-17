@@ -1,13 +1,13 @@
 {
   "03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 122,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
+    "line": 121,
+    "testo": ""
   },
   "03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 54,
-    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
+    "line": 53,
+    "testo": "- **Regola dei trigger**: un'azione proattiva (scheduler) può nascere solo da evidenza tier ≤1. Un fatto tier-2 non arma mai un trigger — il \"ricordo dormiente\" resta un dato, non diventa un piano."
   },
   "agent/completion.ts:58": {
     "path": "agent/completion.ts",
@@ -41,13 +41,13 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1038,
-    "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
+    "line": 1027,
+    "testo": "// never omitted it. 'unset' is the profile value that reaches the"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1099,
-    "testo": "// model at all."
+    "line": 1088,
+    "testo": "chatSpan.end({ error });"
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
@@ -56,23 +56,23 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1849,
-    "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
+    "line": 1753,
+    "testo": "* `Tracer.start` derives the trace id from its parent, and a resumed turn has"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1867,
-    "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
+    "line": 1771,
+    "testo": "for (let i = messages.length - 1; i >= 0; i--) {"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 1886,
-    "testo": "case 'draft':"
+    "line": 1790,
+    "testo": "* against the `never` parameter here and the file compiles. The day a case is"
   },
-  "agent/loop.ts:1873": {
+  "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 1979,
-    "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
+    "line": 1887,
+    "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
@@ -536,13 +536,13 @@
   },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
-    "line": 366,
-    "testo": "fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);"
+    "line": 360,
+    "testo": "// silently following it. `full` is already fully realpath'd, so a"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 486,
-    "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
+    "line": 480,
+    "testo": "* They used to be three object literals in `agent/runtime.ts` and three more in"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
@@ -591,13 +591,13 @@
   },
   "agent/tools/http.ts:116": {
     "path": "agent/tools/http.ts",
-    "line": 124,
-    "testo": "if (hop > 0 && !hostAllowed(current.hostname, policy)) {"
+    "line": 116,
+    "testo": "}"
   },
   "agent/tools/http.ts:192": {
     "path": "agent/tools/http.ts",
-    "line": 200,
-    "testo": "return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;"
+    "line": 192,
+    "testo": "/** Every resolved address must be public — one private answer vetoes the hop. */"
   },
   "agent/tools/http.ts:22": {
     "path": "agent/tools/http.ts",
@@ -606,13 +606,13 @@
   },
   "agent/tools/http.ts:30": {
     "path": "agent/tools/http.ts",
-    "line": 38,
-    "testo": "export const httpCapability: CapabilityDecl = {"
+    "line": 30,
+    "testo": "* The allowlist only ever checked the HOST. On an allowlisted host the kernel"
   },
   "agent/tools/http.ts:41": {
     "path": "agent/tools/http.ts",
-    "line": 49,
-    "testo": "hostOnly: false,"
+    "line": 41,
+    "testo": "reversible: 'yes',"
   },
   "agent/tools/mcp.ts:104": {
     "path": "agent/tools/mcp.ts",
@@ -721,13 +721,13 @@
   },
   "agent/tools/search.ts:48": {
     "path": "agent/tools/search.ts",
-    "line": 52,
-    "testo": "export const searchCapability: CapabilityDecl = {"
+    "line": 48,
+    "testo": "*"
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 63,
-    "testo": "hostOnly: true,"
+    "line": 59,
+    "testo": "rerunnable: true,"
   },
   "agent/tools/shell.ts:106": {
     "path": "agent/tools/shell.ts",
@@ -802,12 +802,12 @@
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
     "line": 248,
-    "testo": "if (options.online) {"
+    "testo": "} else {"
   },
-  "cli/doctor.ts:44": {
+  "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 44,
-    "testo": ""
+    "line": 52,
+    "testo": "export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {"
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
@@ -817,32 +817,32 @@
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
     "line": 296,
-    "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
+    "testo": "* The only way to speed up `Gateway`'s beat without editing the source:"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
     "line": 297,
-    "testo": "* owner wants to watch it in a terminal."
+    "testo": "* `gatewayOverrides.tickMs` is an in-process seam `cli/gateway.test.ts` reaches"
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 382,
-    "testo": "const scheduler = new Scheduler("
+    "line": 363,
+    "testo": "process.stderr.write(`→ ${error.remedy}\\n`);"
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 405,
-    "testo": "}"
+    "line": 375,
+    "testo": "/**"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 411,
-    "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
+    "line": 381,
+    "testo": "* work in the same tick against one provider and one budget — while both"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 422,
-    "testo": "* The turn lane, on the gateway's own beat."
+    "line": 388,
+    "testo": "* polling Telegram, and a second gateway must not do that before it finds out"
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
@@ -852,32 +852,32 @@
   "cli/init.ts:101": {
     "path": "cli/init.ts",
     "line": 101,
-    "testo": "apiKeyRef: 'secret://provider_api_key',"
+    "testo": "for (const dir of [p.home, p.rot, p.vault, p.traces, p.sessions, p.secrets]) {"
   },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
     "line": 104,
-    "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
+    "testo": "step('directories', p.home);"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
     "line": 136,
-    "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
+    "testo": "const found = locateSecret('secret://provider_api_key', home);"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
     "line": 137,
-    "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
+    "testo": "if (found) {"
   },
   "cli/init.ts:46": {
     "path": "cli/init.ts",
     "line": 46,
-    "testo": "export function runInit(options: InitOptions = {}): InitStep[] {"
+    "testo": ""
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
     "line": 99,
-    "testo": "kind: options.provider ?? 'anthropic',"
+    "testo": "const step = (name: string, detail: string, done = true) => steps.push({ name, done, detail });"
   },
   "cli/jobs.ts:63": {
     "path": "cli/jobs.ts",
@@ -887,137 +887,137 @@
   "cli/main.ts:101": {
     "path": "cli/main.ts",
     "line": 101,
-    "testo": "* where Italian has the word an owner would actually say — not a translation"
+    "testo": "/**"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
     "line": 159,
-    "testo": "* which is what a real terminal always gets. `--stream` exists for the"
+    "testo": "* `--stream`/`--no-stream` → the explicit override `runRepl`'s own"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
     "line": 161,
-    "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
+    "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
     "line": 163,
-    "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
+    "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
     "line": 165,
-    "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
+    "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
     "line": 167,
-    "testo": "*/"
+    "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
     "line": 169,
-    "testo": "if (argv.includes('--no-stream')) return false;"
+    "testo": "*/"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
     "line": 171,
-    "testo": "return undefined;"
+    "testo": "if (argv.includes('--no-stream')) return false;"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
     "line": 173,
-    "testo": ""
+    "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
     "line": 175,
-    "testo": "loadDotenvIfPresent();"
+    "testo": ""
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
     "line": 177,
-    "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
+    "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
     "line": 179,
-    "testo": "const stream = streamOverride(rawArgv);"
+    "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
     "line": 181,
-    "testo": "const [typed, ...rest] = argv;"
+    "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
     "line": 183,
-    "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
+    "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
     "line": 185,
-    "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
+    "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
     "line": 187,
-    "testo": "case 'run':"
+    "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
     "line": 189,
-    "testo": "case 'repl':"
+    "testo": "case 'run':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
     "line": 191,
-    "testo": "case 'init':"
+    "testo": "case 'repl':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
     "line": 198,
-    "testo": "return cmdRot(rest);"
+    "testo": "return cmdDoctor(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
     "line": 202,
-    "testo": "return cmdMemory(rest);"
+    "testo": "return cmdUninstall(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
     "line": 245,
-    "testo": "options: {"
+    "testo": "const { values, positionals } = parseArgs({"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
     "line": 258,
-    "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
+    "testo": "});"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
     "line": 297,
-    "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
+    "testo": "// a loop again now that the key no longer has to sit in a `.env` the agent can"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
     "line": 308,
-    "testo": "...(values.hardened ? { hardened: true } : {}),"
+    "testo": "process.stderr.write(keyHint(providerFlag, values['base-url']));"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
     "line": 317,
-    "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
+    "testo": "`! sembra il token di un bot Telegram, non una chiave del modello — non la salvo.\\n` +"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
     "line": 340,
-    "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
+    "testo": "...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
     "line": 505,
-    "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
+    "testo": "}"
   },
   "cli/mcp.ts:142": {
     "path": "cli/mcp.ts",
@@ -1106,23 +1106,23 @@
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 292,
-    "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
+    "line": 286,
+    "testo": "process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\\n`);"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 294,
-    "testo": "// so there is nothing to share this token with — a fresh instance still"
+    "line": 288,
+    "testo": "},"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 295,
-    "testo": "// serialises this scheduler against itself, which is the whole property"
+    "line": 289,
+    "testo": "undefined,"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 306,
-    "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
+    "line": 300,
+    "testo": "ticker.unref(); // the timer must not, by itself, keep the process alive"
   },
   "cli/run.ts:26": {
     "path": "cli/run.ts",
@@ -1207,7 +1207,7 @@
   "connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
     "line": 354,
-    "testo": "const onDelta = (delta: TurnDelta): void => {"
+    "testo": "pairing: null,"
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
@@ -1217,47 +1217,47 @@
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
     "line": 153,
-    "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
+    "testo": "*"
   },
   "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
     "line": 165,
-    "testo": "export class TelegramConnector {"
+    "testo": "direct: incoming.isPrivate,"
   },
-  "connectors/telegram/connector.ts:179": {
+  "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 179,
-    "testo": "const me = await this.deps.api.getMe();"
+    "line": 198,
+    "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
     "line": 223,
-    "testo": "*"
+    "testo": "}"
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
     "line": 230,
-    "testo": "*"
+    "testo": "while (this.running && signal?.aborted !== true) {"
   },
   "connectors/telegram/connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
     "line": 255,
-    "testo": "}"
+    "testo": "stop(): void {"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
     "line": 307,
-    "testo": "this.deps.savePairing({"
+    "testo": "if (!incoming) {"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
     "line": 313,
-    "testo": "this.deps.config.ownerChatId = incoming.chatId;"
+    "testo": ""
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
     "line": 354,
-    "testo": "const onDelta = (delta: TurnDelta): void => {"
+    "testo": "pairing: null,"
   },
   "consolidator.ts:109": {
     "path": "core/memory/consolidator.ts",
@@ -1361,8 +1361,8 @@
   },
   "core/gateway/lock.ts:63": {
     "path": "core/gateway/lock.ts",
-    "line": 64,
-    "testo": "export class GatewayLock {"
+    "line": 63,
+    "testo": ""
   },
   "core/gateway/notify.ts:105": {
     "path": "core/gateway/notify.ts",
@@ -1411,8 +1411,8 @@
   },
   "core/lock/durable.ts:93": {
     "path": "core/lock/durable.ts",
-    "line": 209,
-    "testo": "export class DurableLock {"
+    "line": 93,
+    "testo": ""
   },
   "core/mcp/registry.ts:58": {
     "path": "core/mcp/registry.ts",
@@ -1796,113 +1796,113 @@
   },
   "core/policy/decide.test.ts:117": {
     "path": "core/policy/decide.test.ts",
-    "line": 118,
-    "testo": "expect(kernel()(req(owner, 'host', 'fs.write', 0))).toMatchObject({ effect: 'draft' });"
+    "line": 117,
+    "testo": "// fetch-then-act path, and it must close as the taint rises mid-turn."
   },
   "core/policy/decide.ts:103": {
     "path": "core/policy/decide.ts",
-    "line": 104,
-    "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
+    "line": 103,
+    "testo": "// generously."
   },
   "core/policy/decide.ts:111": {
     "path": "core/policy/decide.ts",
-    "line": 112,
-    "testo": "if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {"
+    "line": 111,
+    "testo": ""
   },
   "core/policy/decide.ts:119": {
     "path": "core/policy/decide.ts",
-    "line": 120,
-    "testo": "// Guard against a caller assembling an incoherent request."
+    "line": 119,
+    "testo": ""
   },
   "core/policy/decide.ts:127": {
+    "path": "core/policy/decide.ts",
+    "line": 127,
+    "testo": "// scheduler runs on the host. Denying it here would have hidden the queueing"
+  },
+  "core/policy/decide.ts:128": {
     "path": "core/policy/decide.ts",
     "line": 128,
     "testo": "// rule below behind a wrong refusal."
   },
-  "core/policy/decide.ts:128": {
-    "path": "core/policy/decide.ts",
-    "line": 129,
-    "testo": "if (decl.hostOnly && principal.kind === 'member') {"
-  },
   "core/policy/decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 133,
-    "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
+    "line": 132,
+    "testo": ""
   },
   "core/policy/decide.ts:136": {
     "path": "core/policy/decide.ts",
-    "line": 137,
-    "testo": "const ceiling = decl.maxTaint ?? ctx.matrix.defaultMaxTaint[decl.risk];"
+    "line": 136,
+    "testo": ""
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 146,
-    "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
+    "line": 145,
+    "testo": ""
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 150,
-    "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
+    "line": 149,
+    "testo": ""
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 229,
-    "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
+    "line": 195,
+    "testo": "// tier-2+ content could still put those bytes in the query string or"
   },
   "core/policy/decide.ts:197": {
     "path": "core/policy/decide.ts",
-    "line": 231,
-    "testo": "if (principal.kind === 'system' || principal.kind === 'agent') {"
+    "line": 197,
+    "testo": "// 2026-08-16, P04-1). A clean host is not the same claim as a clean"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 235,
-    "testo": "switch (decl.risk) {"
+    "line": 201,
+    "testo": "principal,"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 238,
-    "testo": "case 'medium':"
+    "line": 204,
+    "testo": "`egress con parametri verso host allowlisted: ${resource.value}`,"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 242,
-    "testo": "case 'high':"
+    "line": 208,
+    "testo": "}"
   },
   "core/policy/decide.ts:91": {
+    "path": "core/policy/decide.ts",
+    "line": 91,
+    "testo": ""
+  },
+  "core/policy/decide.ts:92": {
     "path": "core/policy/decide.ts",
     "line": 92,
     "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
-  "core/policy/decide.ts:92": {
-    "path": "core/policy/decide.ts",
-    "line": 93,
-    "testo": "return function decide(req: DecisionRequest): Decision {"
-  },
   "core/policy/decide.ts:95": {
     "path": "core/policy/decide.ts",
-    "line": 96,
-    "testo": "const decl = ctx.capabilities.get(capability);"
+    "line": 95,
+    "testo": ""
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
-    "line": 191,
-    "testo": "/** The stricter of the two, always — the file's only direction is down. */"
+    "line": 162,
+    "testo": ""
   },
   "core/policy/matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 122,
-    "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
+    "line": 94,
+    "testo": "* may add prohibitions, it may not remove them."
   },
   "core/policy/matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 123,
-    "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
+    "line": 95,
+    "testo": "*"
   },
   "core/policy/matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
-    "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
+    "line": 99,
+    "testo": "* judge measured what that bought: `{\"medium\":3}` in a resealed policy.json"
   },
   "core/policy/types.ts:40": {
     "path": "core/policy/types.ts",
@@ -2011,8 +2011,8 @@
   },
   "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 278,
-    "testo": "* duration, it is money and not correctness, and closing it would require"
+    "line": 240,
+    "testo": "text: `job fallito: ${error instanceof Error ? error.message : String(error)}`,"
   },
   "core/session/store.ts:35": {
     "path": "core/session/store.ts",
@@ -2071,8 +2071,8 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 97,
-    "testo": "* construction site — instead of a silent regression a judge has to"
+    "line": 86,
+    "testo": "*"
   },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
@@ -2101,83 +2101,83 @@
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
-    "line": 121,
-    "testo": "const expected = tenantOf(principal);"
+    "line": 120,
+    "testo": "// Guard against a caller assembling an incoherent request."
   },
   "decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 133,
-    "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
+    "line": 132,
+    "testo": ""
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 146,
-    "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
+    "line": 145,
+    "testo": ""
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 150,
-    "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
+    "line": 149,
+    "testo": ""
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 156,
-    "testo": "if (decl.resourceKind === 'url') {"
+    "line": 155,
+    "testo": "// let a poisoned context do at 2am."
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 183,
-    "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
+    "line": 182,
+    "testo": "}"
   },
   "decide.ts:20": {
     "path": "core/policy/decide.ts",
-    "line": 21,
-    "testo": "capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;"
+    "line": 20,
+    "testo": "export type PolicyContext = {"
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 239,
-    "testo": "return decl.reversible === 'undoable'"
+    "line": 205,
+    "testo": ");"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 240,
-    "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
+    "line": 206,
+    "testo": "if (gated) return gated;"
   },
   "decide.ts:32": {
     "path": "core/policy/decide.ts",
-    "line": 33,
-    "testo": "* On `defaultMaxTaint`: it is the ceiling for declarations that state no"
+    "line": 32,
+    "testo": "*"
   },
   "decide.ts:45": {
     "path": "core/policy/decide.ts",
-    "line": 46,
-    "testo": "matrix: PolicyMatrix;"
+    "line": 45,
+    "testo": "*/"
   },
   "decide.ts:55": {
     "path": "core/policy/decide.ts",
-    "line": 56,
-    "testo": "budgetExhausted: (tenant: string) => boolean;"
+    "line": 55,
+    "testo": "*/"
   },
   "decide.ts:60": {
     "path": "core/policy/decide.ts",
-    "line": 61,
-    "testo": "hardened: boolean;"
+    "line": 60,
+    "testo": "*/"
   },
   "decide.ts:67": {
     "path": "core/policy/decide.ts",
-    "line": 68,
-    "testo": "safeMode?: boolean;"
+    "line": 67,
+    "testo": "*/"
   },
   "decide.ts:74": {
     "path": "core/policy/decide.ts",
-    "line": 75,
-    "testo": "egressAllowed?: (host: string) => boolean;"
+    "line": 74,
+    "testo": "*/"
   },
   "decide.ts:96": {
     "path": "core/policy/decide.ts",
-    "line": 97,
-    "testo": "if (!decl) {"
+    "line": 96,
+    "testo": "const decl = ctx.capabilities.get(capability);"
   },
   "defaults/rot/budgets.json:4": {
     "path": "defaults/rot/budgets.json",
@@ -2206,13 +2206,13 @@
   },
   "defaults/rot/policy.json:5": {
     "path": "defaults/rot/policy.json",
-    "line": 6,
-    "testo": "\"neverAtRuntime\": [\"rot.write\"],"
+    "line": 5,
+    "testo": "\"paramsMaxTaint\": 1,"
   },
   "defaults/rot/policy.json:6": {
     "path": "defaults/rot/policy.json",
-    "line": 7,
-    "testo": "\"forbiddenForSystem\": [\"outward.send\", \"config.ratchet\"]"
+    "line": 6,
+    "testo": "\"neverAtRuntime\": [\"rot.write\"],"
   },
   "docs/blueprint/02-ontologia.md:139": {
     "path": "docs/blueprint/02-ontologia.md",
@@ -2221,8 +2221,8 @@
   },
   "docs/blueprint/03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 122,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
+    "line": 121,
+    "testo": ""
   },
   "docs/blueprint/03-threat-model.md:21": {
     "path": "docs/blueprint/03-threat-model.md",
@@ -2241,28 +2241,28 @@
   },
   "docs/blueprint/03-threat-model.md:51": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 52,
-    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
+    "line": 51,
+    "testo": "- **La riga egress, emendata (2026-08-17, `slice/egress-params`, mandato inv. 7).** «Niente dati del tenant host nei parametri» era la frase, e fino a questa slice nessun codice la applicava (audit P04-1/P04-2): il ramo `resourceKind==='url'` del kernel (`core/policy/decide.ts`) verificava solo l'hostname contro l'allowlist, mai la query string o il fragment; `sys.search` dichiarava `resourceKind:'none'` e non entrava mai in quel ramo, a nessun taint. Ora entrambi rispondono a `paramsMaxTaint` (default 1, `rot/policy.json`): sopra la soglia, un `http_get` con parametri su host allowlisted o una query di `sys.search` fanno `ask` per l'owner — che vede i byte per intero — e `deny` secco per chiunque altro, mai un auto-allow. Stessa forma della riga sotto: la capability che *chiede* resta raggiungibile dopo una lettura, quella che *agisce senza chiedere* non si allarga. Dettaglio in ADR-0044 §emendamento 2026-08-17."
   },
   "docs/blueprint/03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 54,
-    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
+    "line": 53,
+    "testo": "- **Regola dei trigger**: un'azione proattiva (scheduler) può nascere solo da evidenza tier ≤1. Un fatto tier-2 non arma mai un trigger — il \"ricordo dormiente\" resta un dato, non diventa un piano."
   },
   "docs/blueprint/03-threat-model.md:68": {
+    "path": "docs/blueprint/03-threat-model.md",
+    "line": 68,
+    "testo": ""
+  },
+  "docs/blueprint/03-threat-model.md:69": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 69,
     "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
   },
-  "docs/blueprint/03-threat-model.md:69": {
+  "docs/blueprint/03-threat-model.md:70": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 70,
     "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
-  },
-  "docs/blueprint/03-threat-model.md:70": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 71,
-    "testo": "- **Niente side-channel**: il codice dentro il sandbox non ha alcun canale verso i tool del loop — è codice+fs+rete proxata. Il confine di esecuzione è anche un confine di capability. *(Riferimento corretto 2026-08-11: Hermes #4146 era questa classe — sandbox→RPC→tool privilegiato — ma loro l'hanno chiusa TENENDO il canale e propagando l'approvazione giù per i thread (PR #34497); la PR che toglieva la capability fu rifiutata, e la classe si è riaperta due volte (#65592, #74078, aperte a agosto 2026). La nostra scelta è il ramo che loro hanno rifiutato, e la loro storia da allora è l'argomento per il nostro.)*"
   },
   "docs/blueprint/04-roadmap.md:210": {
     "path": "docs/blueprint/04-roadmap.md",
@@ -2316,8 +2316,8 @@
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 302,
-    "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
+    "line": 253,
+    "testo": "> — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`"
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
@@ -2411,8 +2411,8 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1724,
-    "testo": "outcome: TurnOutcome,"
+    "line": 1639,
+    "testo": "if (strategy === undefined) return false;"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
@@ -2531,18 +2531,18 @@
   },
   "matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 122,
-    "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
+    "line": 94,
+    "testo": "* may add prohibitions, it may not remove them."
   },
   "matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 123,
-    "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
+    "line": 95,
+    "testo": "*"
   },
   "matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
-    "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
+    "line": 99,
+    "testo": "* judge measured what that bought: `{\"medium\":3}` in a resealed policy.json"
   },
   "mcp.ts:102": {
     "path": "agent/tools/mcp.ts",
@@ -2881,8 +2881,8 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 113,
-    "testo": "*/"
+    "line": 104,
+    "testo": "* Required, not optional, and that is the point: a tool arriving without an"
   },
   "types.ts:11": {
     "path": "core/policy/types.ts",
@@ -2901,13 +2901,13 @@
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",
-    "line": 76,
-    "testo": "/** Already validated against the tool's input schema — never raw model output. */"
+    "line": 67,
+    "testo": "| { effect: 'ask'; ask: { audience: 'owner'; prompt: string } }"
   },
   "types.ts:69": {
     "path": "core/policy/types.ts",
-    "line": 78,
-    "testo": "/** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */"
+    "line": 69,
+    "testo": "| { effect: 'deny'; code: DenyCode; detail?: string };"
   },
   "updates.ts:81": {
     "path": "connectors/telegram/updates.ts",

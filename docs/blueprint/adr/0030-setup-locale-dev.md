@@ -51,3 +51,32 @@ solo in una directory diversa.
 servisse un `.env` a percorso fisso indipendente dalla CWD»* — è quel domani, e
 il percorso è XDG. Dettagli, migrazione e le altre due decisioni della stessa
 slice: **ADR-0039**.
+
+---
+
+## Emendamento 2026-08-17 — `--local`: la seconda home riusa la catena, mai una copia (M5-BIS A9)
+
+`muffin init --local [<dir>]` (default `~/.muffin-local`) è il verbo che questa
+ADR anticipava senza costruirlo: una home di prova separata, per ripetere
+un'installazione «da utente nuovo» senza reincollare la chiave. Il principio
+resta esattamente quello del punto 2, dopo l'emendamento di ADR-0039: la chiave
+vive fuori dalla home che un reset cancella. `--local` non aggiunge un secondo
+posto — legge la stessa catena a due backend (ADR-0039 decisione 2,
+`locateSecret`) contro quella seconda home invece che contro la reale, e non
+scrive mai nulla nella home locale: se il passo «api key» la trova, dice
+`già presente (persistent)` e basta. Con la chiave scritta una volta con
+`muffin secret set NOME --persist`, ogni `--local` successivo la ritrova — lo
+stesso loop che il punto 2 descriveva per `uninstall && init`, ora anche per
+una home che non è mai stata quella reale.
+
+**Guardia, non fiducia.** `--local` rifiuta un `<dir>` che coincide con la home
+reale o le sta annidato sotto — confrontati per realpath, non per stringa, così
+un symlink non basta ad aggirarla — prima di scrivere qualunque cosa
+(`cli/init.ts:47-93`, guardia invocata da `cli/main.ts:271-288`). Non installa
+mai il gateway di sistema (`cmdGatewayInstall` punta comunque alla home reale,
+mai a quella passata a `init`): proporlo per una home usa-e-getta sarebbe
+scrivere un unit systemd/launchd sbagliato.
+
+Codice: `cli/init.ts` (`resolveLocalHome`, `isSameOrNestedPath`), `cli/main.ts`
+(`cmdInit`). Scenario di accettazione:
+`evals/acceptance/scenarios/a-lifecycle.accept.ts:293-364` (A9).

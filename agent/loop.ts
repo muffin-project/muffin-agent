@@ -1957,13 +1957,27 @@ async function runTool(
    * world and an intent row for it would be a lie about what was attempted.
    */
   const decl = deps.capabilities?.get(capability);
-  recordIntent(deps, ctx.turnId, span, {
+  const intentError = recordIntent(deps, ctx.turnId, span, {
     callId: call.id,
     tool: call.name,
     capability,
     rerunnable: decl?.rerunnable === true,
     args,
   });
+  if (intentError !== null) {
+    // EFFECT WAL (MANDATO-DAY-1 invariant 1): the write above did not land, so
+    // the handler must not run — a missing intent row has to mean "never
+    // started", never "started, but its own receipt got lost". No byte has
+    // left this process for this call, so nothing raises taint, and there is
+    // no `recordOutcome` here either: there is no intent row for it to close.
+    span.end({ status: 'error', error: intentError });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Intento non registrabile sul record durevole: chiamata non eseguita — ${intentError}`,
+      isError: true,
+    };
+  }
 
   try {
     // `ctx` carries everything `input.tenant`/`input.principal`/`replyChannel`
@@ -2031,27 +2045,44 @@ async function runTool(
 }
 
 /**
- * The two record writes, with their failure swallowed for the same reason
- * `checkpoint` swallows its own: a tool that worked must not be turned into a
- * failed turn by a bookkeeping write. What a lost write costs is stated where
- * it lands — a missing intent row reads as "not started" (the resume calls the
- * handler again, which for a non-re-runnable tool is the very thing the row
- * exists to prevent), a missing outcome row reads as "maybe done" (the resume
- * is too careful, which is the harmless direction).
+ * The write-ahead half — a gate now, not a courtesy.
+ *
+ * This used to swallow the failure the same way `checkpoint` swallows its
+ * own, on the reasoning that a tool which goes on to work must not be turned
+ * into a failed turn by a bookkeeping write. That reasoning missed what a lost
+ * write actually costs here: with the handler left free to run anyway, a
+ * missing intent row stopped meaning "never started" and started meaning
+ * "started, but its own receipt did not survive" — for a non-rerunnable tool,
+ * exactly the ambiguity this row exists to remove (ADR-0042 §6). MANDATO-DAY-1
+ * names this invariant 1, "EFFECT WAL": no side effect may start unless its
+ * intent is durable first, and "I tried to record it and carried on anyway"
+ * does not satisfy that. So the failure is returned instead, and the caller
+ * below refuses the call rather than guess which way is safe to fail.
  */
 function recordIntent(
   deps: LoopDeps,
   turnId: string,
   span: SpanHandle,
   call: { callId: string; tool: string; capability: string; rerunnable: boolean; args: unknown },
-): void {
+): string | null {
   try {
     deps.turns.startToolCall(turnId, call);
+    return null;
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    const detail = error instanceof Error ? error.message : String(error);
+    span.setAttributes({ 'muffin.turn.record_error': detail });
+    return detail;
   }
 }
 
+/**
+ * The outcome write — failure still swallowed, deliberately asymmetric with
+ * `recordIntent` above. A tool that already worked must not be turned into a
+ * failed turn by a bookkeeping write on the way out, and what a lost write
+ * costs here is stated where it lands: a missing outcome row reads as "maybe
+ * done" (the resume is too careful, which is the harmless direction) —
+ * never as "not started", which would be the false reading.
+ */
 function recordOutcome(
   deps: LoopDeps,
   turnId: string,

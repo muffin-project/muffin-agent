@@ -1,7 +1,10 @@
-import { readFileSync, writeFileSync, cpSync, rmSync } from 'node:fs';
+import DatabaseCtor from 'better-sqlite3';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
-import { install } from '../harness.js';
+import { EXIT_STOPPED } from '../../../core/gateway/service.js';
+import { install, type Install, type Run } from '../harness.js';
 import { scenario } from '../scenario.js';
 
 /**
@@ -11,46 +14,205 @@ import { scenario } from '../scenario.js';
  * an owner actually runs, never `runInit`/`buildRuntime` called by hand.
  */
 
+/**
+ * Polls `muffin gateway status` until its exit code matches. Local rather
+ * than reaching for `harness.ts`'s `until`: that helper takes a synchronous
+ * `check`, and this condition is a whole child process — spawning one ten
+ * lines here beats reshaping shared infrastructure for a single caller.
+ */
+async function pollGatewayStatus(inst: Install, wantCode: 0 | 1, timeoutMs = 15_000): Promise<Run> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const r = await inst.muffin(['gateway', 'status']);
+    if (r.code === wantCode) return r;
+    if (Date.now() > deadline) {
+      throw new Error(`\`gateway status\` non ha mai risposto ${wantCode} (ultimo: ${r.code})\n${r.out}${r.err}`);
+    }
+    await new Promise((r2) => setTimeout(r2, 150));
+  }
+}
+
+/** The pid `describe()` (cli/gateway.ts) prints in `attivo · pid 1234 · dal …`. */
+function pidFrom(statusOut: string): string {
+  const match = /pid (\d+)/.exec(statusOut);
+  if (!match) throw new Error(`nessun pid nell'output di \`gateway status\`:\n${statusOut}`);
+  return match[1]!;
+}
+
+/**
+ * Recursive content hash of a directory — A9's evidence that the real home
+ * is untouched by `init --local`, instead of trusting that nothing *should*
+ * have written there.
+ */
+function hashDir(dir: string): string {
+  const hash = createHash('sha256');
+  const walk = (d: string): void => {
+    for (const entry of readdirSync(d).sort()) {
+      const full = join(d, entry);
+      const st = statSync(full);
+      hash.update(full);
+      if (st.isDirectory()) walk(full);
+      else hash.update(readFileSync(full));
+    }
+  };
+  walk(dir);
+  return hash.digest('hex');
+}
+
 describe('acceptance · A · installazione e ciclo di vita', () => {
   scenario(
     'A1',
     async () => {
-      const inst = await install({ main: [{ text: 'ciao, sono Muffin' }] });
+      // Owner directive (M5-BIS A1, this slice's mandate): continuity belongs
+      // to Muffin, not to the gateway's pid. The property this proves: a real
+      // gateway process, SIGKILLed, is replaced by a second one that resumes
+      // a suspended turn and fires a due job — each exactly once — with
+      // status/doctor honest throughout, then stops on request for real.
+      //
+      // `MUFFIN_GATEWAY_TICK_MS` (cli/gateway.ts) is what keeps this under the
+      // suite's usual budget without touching HEARTBEAT_MS itself: the real
+      // beat is 30s, and this scenario needs two of them.
+      const inst = await install({
+        main: [
+          { tool: { name: 'wait', args: { seconds: 3600, why: 'aspetto un evento' } } },
+          { text: 'ecco il tuo brief' },
+          { text: 'fatto, sono tornato' },
+        ],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
       try {
-        const first = await inst.muffin(['run', '--timeout', '20', 'ciao']);
-        if (first.code !== 0) throw new Error(`primo avvio: exit ${first.code}\n${first.err}`);
-        if (!first.out.includes('ciao, sono Muffin')) {
-          throw new Error(`primo avvio non ha risposto come atteso: ${JSON.stringify(first.out)}`);
-        }
-
-        // "Al secondo avvio ritrova il suo stato": a brand-new process, same
-        // home, no session in common with the first — the boot-level claim
-        // (config, root of trust, database) rather than conversational
-        // continuity, which is B1's separate claim. `doctor` never calls the
-        // model, so a fake-provider exhaustion cannot hide a real boot failure.
+        // --- (a) two pieces of durable work, neither due yet ---------------
         //
-        // Exit 1 is expected here, not a failure: a brand-new install has real
-        // `warn`-level lines (no vector index yet, consolidation never run,
-        // no gateway installed) that doctor is right to surface even though
-        // nothing is broken. Exit 2 (`fail`) is the level that would mean the
-        // second launch could not find what the first one wrote.
-        const second = await inst.muffin(['doctor']);
-        if (second.code === 2) {
-          throw new Error(`il secondo avvio non trova un'installazione sana: exit ${second.code}\n${second.out}`);
+        // A turn that suspends on `wait`, straight from the CLI — no gateway
+        // involved, same shape as B3. An hour out is "clearly not due yet",
+        // not a real wait: backdated below, once no gateway is alive to race.
+        const suspended = await inst.muffin(['run', '--session', 'a1-recovery', '--timeout', '20', 'avvisami fra un’ora']);
+        if (suspended.code !== 6) {
+          throw new Error(`atteso exit 6 (sospeso) dal turno che aspetta, ricevuto ${suspended.code}\n${suspended.err}`);
         }
-        if (!/✓ root of trust/.test(second.out) || !/✓ database/.test(second.out)) {
-          throw new Error(`il secondo avvio non conferma di aver ritrovato config/rot/db intatti:\n${second.out}`);
+        const waitTurnId = inst.db((db) => (db.prepare(`SELECT id FROM turns`).get() as { id: string } | undefined)?.id);
+        if (!waitTurnId) throw new Error('nessuna riga turns dopo il turno sospeso');
+
+        // A job due tomorrow-ish — same `jobs add` + backdate shape as B8,
+        // `--channel cli` so delivery is real and observable on stdout rather
+        // than B8's own (unrelated) "consegna remota da cablare" gap.
+        const added = await inst.muffin(['jobs', 'add', '--cron', '0 8 * * *', '--channel', 'cli', 'manda il brief']);
+        if (added.code !== 0) throw new Error(`jobs add: exit ${added.code}\n${added.err}`);
+        const jobId = inst.db((db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id);
+        if (!jobId) throw new Error('nessuna riga jobs dopo `jobs add`');
+
+        // --- (b) the first gateway: a real process, a real claim -----------
+        //
+        // Neither the turn nor the job is due yet, so whatever this process's
+        // own ticks find before it dies is nothing — deliberately. The window
+        // this scenario must stay outside of is "job executed but markRan not
+        // yet called" (riga B7, decision `job_fires`, owned elsewhere): racing
+        // a kill against a real HTTP round trip to the fake provider could
+        // land inside it by chance, and the only way to rule that out for
+        // certain — rather than get lucky — is for nothing to be due while
+        // this process is alive to fire it.
+        const victim = inst.spawnRaw(['gateway', 'run']);
+        const firstUp = await pollGatewayStatus(inst, 0);
+        const firstPid = pidFrom(firstUp.out);
+
+        // --- (c) SIGKILL -----------------------------------------------------
+        //
+        // No handler, no drain, no `finally` — the shape B5 already proves on
+        // a turn, here on the gateway process that owns the claim itself.
+        victim.kill();
+        await victim.exited;
+
+        // --- (d) pid morto = claim libero, subito ---------------------------
+        //
+        // `heldBy` (core/lock/durable.ts) judges liveness before staleness, so
+        // this does not wait out STALE_AFTER_MS (five minutes) — a crash frees
+        // the claim on the very next read.
+        await pollGatewayStatus(inst, 1);
+
+        // Only now — with no gateway alive to race — make both pieces of
+        // durable work due. Same direct-SQL shape B8 already uses for
+        // `next_fire_at`; `wake_at` gets the same treatment for the same
+        // reason: a real hour-long wait shortened to a few seconds is exactly
+        // the kind of thing a slow CI runner turns into a flake.
+        const past = new Date(Date.now() - 60_000).toISOString();
+        const backdate = new DatabaseCtor(join(inst.home, 'muffin.db'));
+        try {
+          backdate.prepare(`UPDATE turns SET wake_at = ? WHERE id = ?`).run(past, waitTurnId);
+          backdate.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(past, jobId);
+        } finally {
+          backdate.close();
         }
 
-        // The one turn that did run is on the durable record ADR-0042 built —
-        // not something that only looks persistent from inside one process.
-        const turnCount = inst.db((db) => (db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n);
-        if (turnCount !== 1) throw new Error(`atteso 1 turno registrato, trovati ${turnCount}`);
+        // --- (e) restart — what a supervisor would do -----------------------
+        const gw2 = await inst.gateway();
+        try {
+          // The job fires on the very first tick (`serve()` ticks once at
+          // boot, precisely so a fire that came due while nothing was running
+          // does not wait out a full interval) — before the suspended turn,
+          // whose resume needs a *later* tick once this one frees the shared
+          // model lane (`Gateway.tick` runs the scheduler, then the turn lane,
+          // on the same beat — never both at once).
+          await gw2.waitFor(/⏰ ecco il tuo brief/, 15_000);
+          await gw2.waitFor(/nessun indirizzo di risposta/, 15_000);
+
+          const state = inst.db((db) => ({
+            turnRows: (db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n,
+            waitTurn: db.prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id = ?`).get(waitTurnId) as
+              | { status: string; delivery: string | null; turn_outcome: string | null }
+              | undefined,
+            jobTurn: db.prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id != ?`).get(waitTurnId) as
+              | { status: string; delivery: string | null; turn_outcome: string | null }
+              | undefined,
+            job: db.prepare(`SELECT last_run_at, next_fire_at FROM jobs WHERE id = ?`).get(jobId) as {
+              last_run_at: string | null;
+              next_fire_at: string;
+            },
+          }));
+
+          // Exactly once, both directions: two rows total (the resumed one +
+          // the job's fresh one), never zero and never a duplicate of either.
+          if (state.turnRows !== 2) {
+            throw new Error(`atteso 2 righe in turns (il turno ripreso + quello del job), trovate ${state.turnRows}`);
+          }
+          if (state.waitTurn?.status !== 'done' || state.waitTurn.delivery !== 'undeliverable') {
+            throw new Error(`il turno sospeso non risulta ripreso e contabilizzato una sola volta: ${JSON.stringify(state.waitTurn)}`);
+          }
+          if (state.jobTurn?.status !== 'done' || state.jobTurn.delivery !== 'sent') {
+            // This is B8's own "consegna genuina su superficie connessa" half,
+            // proved here for real: `--channel cli` reaches `cliSurface`, which
+            // is always connected (L0-1), so `sent` — not "consegna remota da
+            // cablare" — is the honest outcome for this channel.
+            throw new Error(`il turno del job non risulta consegnato: ${JSON.stringify(state.jobTurn)}`);
+          }
+          if (state.job.last_run_at === null) throw new Error('il job non risulta eseguito (last_run_at nullo)');
+          if (Date.parse(state.job.next_fire_at) <= Date.now()) {
+            throw new Error(`next_fire_at non è avanzato oltre ora (markRan lo ricalcola da ora, non dal vecchio orario): ${state.job.next_fire_at}`);
+          }
+          // The delivered text reached stdout exactly once — not a second
+          // time from a duplicate fire. Mutation-tested (see the PR): this is
+          // the assertion that goes red when the job's claim is disabled.
+          const deliveries = gw2.stdout().split('⏰ ecco il tuo brief').length - 1;
+          if (deliveries !== 1) throw new Error(`il testo del job è comparso ${deliveries} volte su stdout, non 1`);
+
+          const upAgain = await inst.muffin(['gateway', 'status']);
+          if (upAgain.code !== 0) throw new Error(`atteso status exit 0 dopo il riavvio, ricevuto ${upAgain.code}\n${upAgain.out}`);
+          const secondPid = pidFrom(upAgain.out);
+          if (secondPid === firstPid) throw new Error(`atteso un pid diverso dal primo gateway (${firstPid}), trovato lo stesso`);
+
+          const doctor = await inst.muffin(['doctor']);
+          if (doctor.code === 2) throw new Error(`doctor in fail dopo il riavvio:\n${doctor.out}`);
+        } finally {
+          // --- (f) drain-and-stop, exit code included -----------------------
+          const exitCode = await gw2.stop();
+          if (exitCode !== EXIT_STOPPED) {
+            throw new Error(`atteso EXIT_STOPPED (${EXIT_STOPPED}) da un gateway drenato via SIGTERM, ricevuto ${exitCode}`);
+          }
+        }
       } finally {
         await inst.cleanup();
       }
     },
-    30_000,
+    60_000,
   );
 
   scenario(
@@ -120,6 +282,79 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         if (after.code !== 0) throw new Error(`dopo il ripristino la ricerca fallisce: exit ${after.code}\n${after.err}`);
         if (!after.out.includes('42')) {
           throw new Error(`dopo il ripristino il contenuto non si ritrova più:\n${after.out}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  scenario(
+    'A9',
+    async () => {
+      // A9 (M5-BIS, direttiva owner 16/08): `muffin init --local <dir>` deve
+      // riusare un segreto persistito attraverso la stessa catena che
+      // `locateSecret` già percorre (ADR-0039 decisione 2) — mai copiarlo nella
+      // home nuova — e non deve mai poter atterrare sulla home reale, o dentro
+      // di essa.
+      const inst = await install({ main: [{ text: 'non dovrebbe mai arrivare qui' }] });
+      try {
+        // (a) Un segreto sul backend *persistent* — isolato dall'harness stesso
+        // (`XDG_CONFIG_HOME` nel proprio `install()`, mai quello reale di questa
+        // macchina: vedi il docstring di `install` in harness.ts).
+        const persisted = await inst.muffin(
+          ['secret', 'set', 'provider_api_key', '--persist'],
+          'sk-acceptance-persisted-key\n',
+        );
+        if (persisted.code !== 0) {
+          throw new Error(`\`secret set --persist\` non riuscito: exit ${persisted.code}\n${persisted.err}`);
+        }
+
+        const beforeHash = hashDir(inst.home);
+
+        // (b) Una seconda home pulita, senza --api-key: la chiave deve venire
+        // dalla catena, mai da un prompt o da una copia.
+        const localDir = join(inst.workspace, 'local-clean-home');
+        const local = await inst.muffin(['init', '--local', localDir]);
+        if (local.code !== 0) throw new Error(`\`init --local\` non riuscito: exit ${local.code}\n${local.err}`);
+        if (!/api key\s+già presente \(persistent\)/.test(local.err)) {
+          throw new Error(`init --local non ha trovato la chiave sul backend persistent:\n${local.err}`);
+        }
+        if (!local.err.includes(`export MUFFIN_HOME=${localDir}`)) {
+          throw new Error(`init --local non stampa la riga per usare la nuova home:\n${local.err}`);
+        }
+        // Il punto intero della riga: nessuna seconda copia della chiave.
+        if (existsSync(join(localDir, 'secrets', 'provider_api_key'))) {
+          throw new Error(`init --local ha copiato la chiave nella home locale — non deve mai farlo`);
+        }
+
+        // (c) L'installazione locale è reale: doctor la trova sana, guidato
+        // come farebbe l'owner dopo `export MUFFIN_HOME=...` — mai contro lo
+        // XDG_CONFIG_HOME vero di questa macchina (`muffinAt`, harness.ts).
+        const doctor = await inst.muffinAt(localDir, ['doctor']);
+        if (doctor.code === 2) throw new Error(`doctor in fail sulla home locale:\n${doctor.out}`);
+        if (!/✓ database\s/.test(doctor.out)) {
+          throw new Error(`doctor non riporta 'database' ok sulla home locale:\n${doctor.out}`);
+        }
+        if (!/✓ root of trust\s/.test(doctor.out)) {
+          throw new Error(`doctor non riporta 'root of trust' ok sulla home locale:\n${doctor.out}`);
+        }
+
+        // (e) --local puntato sulla home reale stessa è rifiutato, prima di
+        // scrivere qualunque cosa.
+        const rejected = await inst.muffin(['init', '--local', inst.home]);
+        if (rejected.code !== 78) {
+          throw new Error(`init --local sulla home reale doveva essere rifiutato (78), ricevuto ${rejected.code}:\n${rejected.err}`);
+        }
+        if (!/rifiuto/i.test(rejected.err)) {
+          throw new Error(`init --local sulla home reale non spiega perché rifiuta:\n${rejected.err}`);
+        }
+
+        // (d) La home originale non è mai stata toccata, né dalla (b) né dal
+        // tentativo rifiutato in (e).
+        if (hashDir(inst.home) !== beforeHash) {
+          throw new Error(`la home reale (${inst.home}) è cambiata dopo init --local`);
         }
       } finally {
         await inst.cleanup();
