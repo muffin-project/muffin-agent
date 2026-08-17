@@ -851,137 +851,137 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 104,
+    "line": 105,
     "testo": "const COMMAND_ALIASES: Readonly<Record<string, string>> = {"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 167,
+    "line": 186,
     "testo": "switch (command) {"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 169,
+    "line": 188,
     "testo": "return cmdRun(rest);"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 365,
+    "line": 381,
     "testo": "return runRepl();"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 176,
+    "line": 192,
     "testo": "return cmdInit(rest);"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 178,
+    "line": 194,
     "testo": "return cmdConfig(paths().home, rest);"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 180,
+    "line": 196,
     "testo": "return cmdDoctor(rest);"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 182,
+    "line": 198,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:173": {
     "path": "cli/main.ts",
-    "line": 184,
+    "line": 200,
     "testo": "return cmdUninstall(rest);"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 186,
+    "line": 202,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 188,
+    "line": 204,
     "testo": "return cmdVault(rest);"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 190,
+    "line": 206,
     "testo": "return cmdSurface(rest);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 192,
+    "line": 208,
     "testo": "return cmdMcp(rest);"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 194,
+    "line": 210,
     "testo": "return cmdJobs(rest);"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 196,
+    "line": 212,
     "testo": "return cmdGateway(rest);"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 198,
+    "line": 214,
     "testo": "return cmdObserve(paths().home, rest);"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 200,
+    "line": 216,
     "testo": "return cmdSecret(rest);"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 202,
+    "line": 218,
     "testo": "return cmdTrace(rest);"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 209,
+    "line": 225,
     "testo": "}"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 213,
+    "line": 229,
     "testo": "return 0;"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 256,
+    "line": 272,
     "testo": "// answers and nothing is prompted or copied."
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 269,
+    "line": 285,
     "testo": "// let it through and fail confusingly at the first call to the model."
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 308,
+    "line": 324,
     "testo": "await offerGateway();"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 308,
+    "line": 324,
     "testo": "await offerGateway();"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 328,
+    "line": 344,
     "testo": "*/"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 351,
+    "line": 344,
     "testo": "*/"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 516,
+    "line": 532,
     "testo": "const asOf = normaliseDate(values['as-of'], 'end');"
   },
   "cli/mcp.ts:142": {
@@ -1169,6 +1169,11 @@
     "line": 77,
     "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
+  "connector.ts:354": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 354,
+    "testo": "const onDelta = (delta: TurnDelta): void => {"
+  },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
     "line": 139,
@@ -1213,6 +1218,11 @@
     "path": "connectors/telegram/connector.ts",
     "line": 313,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
+  },
+  "connectors/telegram/connector.ts:354": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 354,
+    "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
     "path": "core/memory/consolidator.ts",
@@ -2543,6 +2553,16 @@
     "path": "agent/tools/memory.ts",
     "line": 48,
     "testo": "* kept every retired belief on purpose had no path by which any of them could"
+  },
+  "presence.ts:238": {
+    "path": "connectors/telegram/presence.ts",
+    "line": 238,
+    "testo": "streamText,"
+  },
+  "presence.ts:240": {
+    "path": "connectors/telegram/presence.ts",
+    "line": 240,
+    "testo": "async stop() {"
   },
   "pricing.ts:43": {
     "path": "core/budget/pricing.ts",

@@ -55,9 +55,10 @@ const USAGE = `muffin — agente personale, sempre acceso
 alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
   muffin (o: muffin repl)       avvia l'agente: REPL + ogni surface abilitata
-                                [--no-stream] la risposta arriva solo a fine
-                                turno invece che mentre si forma (di default
-                                su un terminale reale, sì; su una pipe, mai)
+                                [--stream|--no-stream] forza la risposta a
+                                comparire mentre si forma, o solo a fine
+                                turno (di default: sì su un terminale reale,
+                                mai su una pipe)
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -152,13 +153,31 @@ function loadDotenvIfPresent(): void {
   }
 }
 
+/**
+ * `--stream`/`--no-stream` → the explicit override `runRepl`'s own
+ * `opts.stream` takes — absent means "decide from `process.stdout.isTTY`",
+ * which is what a real terminal always gets. `--stream` exists for the
+ * mirror-image case autodetection cannot see: a pipe that still wants the
+ * progressive text (`muffin repl --stream | tee log`, and the acceptance
+ * scenario for B11, which drives the real binary over a pipe and has no TTY
+ * to autodetect from). `--no-stream` wins if a script passes both — the
+ * conservative direction, matching how a config hierarchy resolves a
+ * conflicting pair elsewhere in this CLI (flag beats flag, most restrictive
+ * beats least).
+ */
+function streamOverride(argv: string[]): boolean | undefined {
+  if (argv.includes('--no-stream')) return false;
+  if (argv.includes('--stream')) return true;
+  return undefined;
+}
+
 async function main(rawArgv: string[]): Promise<number> {
   loadDotenvIfPresent();
-  // B11: stripped before the switch below, not parsed per-branch, so it
-  // reads the same whether it rides with a bare `muffin` (`command` ends up
-  // `undefined`, not the string `--no-stream`) or with `muffin repl`.
-  const noStream = rawArgv.includes('--no-stream');
-  const argv = noStream ? rawArgv.filter((a) => a !== '--no-stream') : rawArgv;
+  // Stripped before the switch below, not parsed per-branch, so reading them
+  // is the same whether they ride with a bare `muffin` (`command` ends up
+  // `undefined`, not the flag string) or with `muffin repl`.
+  const stream = streamOverride(rawArgv);
+  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream');
   const [typed, ...rest] = argv;
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
@@ -168,10 +187,7 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      // `noStream` only ever forces `false`. Never `true`: absent means "let
-      // `runRepl` decide from `process.stdout.isTTY`", and passing `true`
-      // here would override that autodetection and stream onto a pipe.
-      return runRepl(paths().home, noStream ? { stream: false } : {});
+      return runRepl(paths().home, stream !== undefined ? { stream } : {});
     case 'init':
       return cmdInit(rest);
     case 'config':
@@ -205,7 +221,7 @@ async function main(rawArgv: string[]): Promise<number> {
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl(paths().home, noStream ? { stream: false } : {});
+      return runRepl(paths().home, stream !== undefined ? { stream } : {});
     }
     case '--help':
     case '-h':
