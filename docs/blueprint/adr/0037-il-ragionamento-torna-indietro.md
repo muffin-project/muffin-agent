@@ -247,7 +247,7 @@ i blocchi escano identici.
 
 ### Da persistere altrove (PRACTICES §12)
 
-`docs/blueprint/04-roadmap.md` §M5-bis punto 2 e `docs/blueprint/STATE.md:103`
+`docs/blueprint/04-roadmap.md` §M5-bis punto 2 e `docs/blueprint/STATE.md:415`
 descrivono ancora il difetto come "`thinking` dichiarato e mai passato" con il
 rimedio sbagliato. Vanno corretti: il rimedio era *passarlo nella forma nuova*,
 e c'era un terzo difetto (il `temperature`) sulla stessa riga. Non toccati qui
@@ -331,7 +331,7 @@ Sonnet 5"* §Sampling parameters not accepted, letta 2026-08-13: *"Setting
 error."* Non era una tabella non misurata; era la pagina sbagliata citata.
 
 `docs/blueprint/04-roadmap.md` §M5-bis punto 2 corretto nella stessa sessione.
-`docs/blueprint/STATE.md:103` ha ancora la stessa frase stantia — fuori dal
+`docs/blueprint/STATE.md:415` ha ancora la stessa frase stantia — fuori dal
 perimetro di questa correzione (file di un'altra slice in corso al momento di
 scrivere), segnalato separatamente.
 
