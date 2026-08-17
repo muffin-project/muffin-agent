@@ -40,7 +40,27 @@ export type SendOptions = {
   preview?: boolean;
 };
 
-export class TelegramApi {
+/**
+ * The subset of `TelegramApi` every caller actually uses — extracted so a
+ * test can hand `presence.ts`/`connector.ts` a fake that records calls and
+ * timing (M5-BIS B11) without instantiating the real class, which `private
+ * readonly token` would otherwise make impossible: TypeScript's structural
+ * typing treats private members as nominal, so a plain object literal can
+ * never satisfy `TelegramApi` itself, only an interface like this one.
+ */
+export interface TelegramApiLike {
+  call<T>(method: string, payload?: Record<string, unknown>, attempt?: number): Promise<T>;
+  upload<T>(method: string, body: FormData): Promise<T>;
+  getMe(): Promise<User>;
+  getUpdates(offset: number, allowed?: string[]): Promise<Update[]>;
+  sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
+  editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  sendChatAction(chatId: number, action?: string): Promise<boolean>;
+  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
+  fileUrl(fileId: string): Promise<string>;
+}
+
+export class TelegramApi implements TelegramApiLike {
   constructor(
     private readonly token: string,
     private readonly baseUrl = 'https://api.telegram.org',
@@ -160,12 +180,31 @@ export class TelegramApi {
   }
 
   /**
-   * The ephemeral draft bubble. Private chats only — groups answer
-   * `TEXTDRAFT_PEER_INVALID` — and its TTL is about thirty seconds, fixed,
-   * extended by nothing. See `presence.ts` for why that matters.
+   * The ephemeral draft bubble — M5-BIS B11. Bot API 9.3 (2025-12-31,
+   * business bots only), opened to every bot in 9.5 (2026-03-01) —
+   * verified against the official changelog and reference,
+   * platform.claude's Context7 mirror of core.telegram.org/bots/api,
+   * 2026-08-16. Private chats only (`chat_id` is documented as "the target
+   * **private** chat"; there is no declared group behaviour to name, so
+   * none is claimed here). `draft_id` is **required and must be non-zero**
+   * — the parameter this method was missing before this slice, silently:
+   * every call landed a 400 that `presence.ts`'s `safely()` wrapper
+   * swallowed, so the keepalive this method backs had never actually
+   * refreshed anything in production. Reuse the same `draftId` across calls
+   * that update one ongoing preview; a fresh one per turn is `presence.ts`'s
+   * job, not this method's.
+   *
+   * The doc calls the preview "a temporary 30-second preview" without
+   * stating whether a repeat call *resets* that window — but repeat calls
+   * are the method's own stated purpose ("stream a partial message... while
+   * being generated"), so a preview that could not outlive 30 seconds
+   * regardless of how often it is refreshed would make the method useless
+   * for exactly the case it says it is for. Not asserted as fact — only
+   * `presence.ts`'s own choice to call this at least once a second either
+   * way, comfortably inside any reading of "30 seconds," is asserted.
    */
-  sendMessageDraft(chatId: number, text: string): Promise<boolean> {
-    return this.call<boolean>('sendMessageDraft', { chat_id: chatId, text, parse_mode: 'HTML' });
+  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean> {
+    return this.call<boolean>('sendMessageDraft', { chat_id: chatId, draft_id: draftId, text, parse_mode: 'HTML' });
   }
 
   /**

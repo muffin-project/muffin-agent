@@ -50,6 +50,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
   verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
+  verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
   rosso(
     'B8',
     'delivery: a job whose remote delivery is not actually wired is still marked as run',

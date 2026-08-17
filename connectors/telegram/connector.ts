@@ -1,10 +1,10 @@
 import type { Message, Update } from '@grammyjs/types';
-import { runTurn, type LoopDeps } from '../../agent/loop.js';
+import { runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
-import { TelegramApi, TelegramError } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForTelegram } from './render.js';
@@ -62,7 +62,7 @@ export type ConnectorDeps = {
   }) => void) | undefined;
   sessions: SessionStore;
   inbox: UpdateInbox;
-  api: TelegramApi;
+  api: TelegramApiLike;
   /**
    * Where attachments land. Absent means the connector still answers, and says
    * plainly that it cannot keep files — a degradation the owner can see rather
@@ -344,6 +344,18 @@ export class TelegramConnector {
         ? await this.ingest(incoming, incoming.attachment, tenant, tierOf(principal))
         : null;
 
+      // M5-BIS B11: fed to `presence.streamText`, which owns the rate limit,
+      // the coalescing and the transport choice (draft vs. edit) — this
+      // closure only accumulates, exactly like the REPL's own `onDelta` does
+      // for `process.stdout` (`cli/repl.ts`). `deltaText` grows to
+      // `result.text` byte for byte (`agent/loop.ts`'s `trimChunkEdges`),
+      // which is what lets the finalisation below compare the two directly.
+      let deltaText = '';
+      const onDelta = (delta: TurnDelta): void => {
+        deltaText += delta.text;
+        presence.streamText(deltaText);
+      };
+
       const result = await runTurn(this.deps.loop, {
         principal,
         tenant,
@@ -373,7 +385,15 @@ export class TelegramConnector {
         // `telegram` alone would mean, and which is the owner's chat
         // regardless of which group this turn is actually in).
         replyChannel: `telegram:${incoming.chatId}`,
+        onDelta,
       });
+
+      // B11: no more live updates once the turn itself is over. Called here,
+      // explicitly, before any finalisation network call below — not only in
+      // the `finally` — because `stop()` is idempotent and this is what
+      // cancels a coalesced, still-pending live update before it can race
+      // the final edit and land after it with stale, mid-turn text.
+      await presence.stop();
 
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
@@ -389,7 +409,16 @@ export class TelegramConnector {
         for (const [i, part] of parts.entries()) {
           // The placeholder becomes the first part rather than sitting above it.
           if (i === 0 && presence.editMessageId !== undefined) {
-            await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
+            // B11: if live streaming already left this message showing
+            // exactly the finished answer, skip the edit rather than send a
+            // knowably-redundant one. Whether Telegram treats an edit with
+            // unchanged content as a harmless no-op or an error is not
+            // something this environment can verify (no token to probe
+            // with — PRACTICES §2) — dropping the call removes the
+            // dependency on the answer instead of assuming either one.
+            if (presence.lastStreamedRaw() !== result.text) {
+              await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
+            }
           } else {
             await this.deps.api.sendMessage(incoming.chatId, part, {
               ...(i === 0 ? { replyTo: incoming.messageId } : {}),
