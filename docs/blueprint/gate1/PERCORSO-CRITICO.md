@@ -62,7 +62,7 @@ non sovrapposte in volo.
 |---|---|---|---|
 | 3.1 | `slice/ask-dice-cosa` (D12) | L'ASK porta l'azione specifica (comando+cwd, URL, pid+nome) e la ragione del taint; le richieste `turn_outcome='ask'` non risolte restano visibili (`doctor`/comando) finché l'owner non decide. Meglio dopo 2.3 (stessa famiglia decisione+registro). | M |
 | 3.2 | `slice/init-local` (A9) | `muffin init --local` riusa il segreto persistito senza `--api-key`. | S |
-| 3.3 | `slice/prompts-md` | Prompt puro-Muffin in `defaults/prompts/*.md` importati (identity/voice a casa, identity nel RoT), onboarding come nudge a stato, `muffin prompt show`, tracciabilità sezione→doc; A2/A3 restano contenuto dell'owner: mostrare esattamente cosa manca. | M |
+| 3.3 | `slice/prompts-md` | Prompt puro-Muffin in `defaults/prompts/*.md` importati (identity/voice a casa, identity nel RoT), onboarding come nudge a stato, tracciabilità sezione→doc. **`muffin prompt show` e il contenuto di A2/A3 sono già chiusi** (`slice/identita` parte 1, 2026-08-17: `research/prompt-assembly-2026-08-17.md` — la plumbing era già canonica, nessuna duplicazione trovata). Resta solo lo spostamento delle tre stringhe hardcoded in `agent/context/assemble.ts` (`GROUP_PERSONA`, `WORK_RULES`, `SAFE_MODE_NOTE`, catalogate nella ricerca) e l'onboarding. A2/A3 restano BLOCKER per il character eval, non per il contenuto — `slice/identita` parte 2. | S |
 | 3.4 | `slice/provider-retry` (B6) | 429/5xx/rete a metà turno: retry con backoff nell'adapter, fallimento esplicito oltre il tetto (mai silenzioso). | S |
 | 3.5 | `slice/pairing-sigilla` (B15) | Il pairing sigilla da solo il binding; manomissione di `config.json` non sigillato rilevata. | S/M |
 | 3.6 | `slice/telegram-media` (B10) | Foto → modello con visione se la capability c'è, altrimenti rifiuto esplicito; errori Telegram visibili. | S/M |
@@ -103,7 +103,9 @@ multi-hop, computer-use (mandato §7).
 
 ## 6 · Solo l'owner
 
-- A2/A3 identity/persona (contenuto).
+- ~~A2/A3 identity/persona (contenuto)~~ dato il 17/08: `persona.md`/`voice.md`/`identity.md`
+  reali, commit c090dce. Quello che resta su A2/A3 (character eval, punti 6-8 del mandato) è
+  lavoro di verifica, non più una decisione che aspetta solo l'owner — `slice/identita` parte 2.
 - ~~Schema di 1.5~~ decisa il 17/08: A, `job_fires` come ponte di identità (vedi 1.5).
 - P34-2 segreti a riposo (2.5).
 - Audio nei 14 giorni sì/no (3.8).

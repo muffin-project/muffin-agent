@@ -70,7 +70,11 @@
         "stats",
         "check"
       ],
+<<<<<<< HEAD
       "file": "cli/main.ts:174-175,441-500 -> cli/memory.ts",
+=======
+      "file": "cli/main.ts:178-179,441-500 -> cli/memory.ts",
+>>>>>>> origin/dev
       "what": "Ispeziona la memoria: perche' un fatto, cerca, statistiche, contraddizioni.",
       "wired": true,
       "note": "Alias italiano: `muffin memoria` (cli/main.ts:101). `why`/`stats`/`review`/`check` aprono solo il DB, nessun provider."

@@ -2,9 +2,10 @@ import DatabaseCtor from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe } from 'vitest';
+import { afterAll, beforeAll, describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { install, type Install, type Run } from '../harness.js';
+import type { RecordedRequest } from '../provider.js';
 import { scenario } from '../scenario.js';
 
 /**
@@ -214,7 +215,114 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
     },
     60_000,
   );
+});
 
+/**
+ * A2/A3 · identity + persona reach the real system prompt, and `prompt show`
+ * does not describe them from a second, parallel assembly.
+ *
+ * One install, one real `muffin run` against the fake provider, one real
+ * `muffin prompt show` — shared across both rows in `beforeAll` because they
+ * are two readings of the *same* evidence (M5-BIS: A2 "sa chi è e quali
+ * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is
+ * `persona.md`'s), not two independent turns. Every marker is read from the
+ * files this install actually wrote under `inst.home` — never from
+ * `defaults/`, which is only the seed `muffin init` copies from once.
+ */
+describe('acceptance · A2/A3 · identity + persona wiring', () => {
+  let inst: Install;
+  /** The real request the fake provider received for the one turn this suite runs. */
+  let sent: RecordedRequest;
+  /** `muffin prompt show` on the very same home, after the turn. */
+  let shown: string;
+
+  const IDENTITY_MARKER = 'Non mi dai ragione per farmi contento.';
+  const PERSONA_MARKER = 'Sono una seconda prospettiva con memoria.';
+  const VOICE_MARKER = 'Niente meta-commentary';
+
+  beforeAll(async () => {
+    inst = await install({ main: [{ text: 'ciao, sono Muffin' }] });
+    const run = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+    if (run.code !== 0) throw new Error(`turno iniziale: exit ${run.code}\n${run.err}`);
+
+    const mainCalls = inst.provider.main();
+    const last = mainCalls[mainCalls.length - 1];
+    if (!last) throw new Error('il provider finto non ha registrato nessuna request del lane principale');
+    sent = last;
+
+    const promptShow = await inst.muffin(['prompt', 'show']);
+    if (promptShow.code !== 0) throw new Error(`muffin prompt show: exit ${promptShow.code}\n${promptShow.err}`);
+    shown = promptShow.out;
+  }, 30_000);
+
+  afterAll(async () => {
+    await inst.cleanup();
+  });
+
+  scenario('A2', async () => {
+    // The fixture check first: if the installed file itself lost the marker,
+    // every assertion below would pass or fail for the wrong reason.
+    const installedIdentity = readFileSync(join(inst.home, 'rot', 'identity.md'), 'utf8');
+    if (!installedIdentity.includes(IDENTITY_MARKER)) {
+      throw new Error(`fixture rotta: l'identity.md installato non contiene "${IDENTITY_MARKER}"`);
+    }
+    if (!sent.system.includes(IDENTITY_MARKER)) {
+      throw new Error(
+        `il system prompt che il provider ha ricevuto davvero non contiene identity.md:\n${sent.system.slice(0, 500)}`,
+      );
+    }
+    if (!shown.includes(IDENTITY_MARKER)) {
+      throw new Error(`muffin prompt show sulla stessa home non contiene identity.md`);
+    }
+  });
+
+  scenario('A3', async () => {
+    const installedPersona = readFileSync(join(inst.home, 'persona.md'), 'utf8');
+    const installedVoice = readFileSync(join(inst.home, 'voice.md'), 'utf8');
+    if (!installedPersona.includes(PERSONA_MARKER)) {
+      throw new Error(`fixture rotta: il persona.md installato non contiene "${PERSONA_MARKER}"`);
+    }
+    if (!installedVoice.includes(VOICE_MARKER)) {
+      throw new Error(`fixture rotta: il voice.md installato non contiene "${VOICE_MARKER}"`);
+    }
+
+    for (const [name, marker] of [
+      ['persona.md', PERSONA_MARKER],
+      ['voice.md', VOICE_MARKER],
+    ] as const) {
+      if (!sent.system.includes(marker)) {
+        throw new Error(`il system prompt inviato al provider non contiene ${name} ("${marker}")`);
+      }
+      if (!shown.includes(marker)) {
+        throw new Error(`muffin prompt show non contiene ${name} ("${marker}")`);
+      }
+    }
+
+    // The canonical order (agent/context/assemble.ts buildSystemPromptBlocks):
+    // persona, then identity, then voice.
+    const iPersona = sent.system.indexOf(PERSONA_MARKER);
+    const iIdentity = sent.system.indexOf(IDENTITY_MARKER);
+    const iVoice = sent.system.indexOf(VOICE_MARKER);
+    if (!(iPersona < iIdentity && iIdentity < iVoice)) {
+      throw new Error(
+        `ordine canonico violato — atteso persona < identity < voice, trovato persona@${iPersona} ` +
+          `identity@${iIdentity} voice@${iVoice}`,
+      );
+    }
+
+    // The truthfulness claim `prompt show` exists for: byte-identical to what
+    // the provider actually received, modulo the one trailing newline the
+    // command appends to its stdout (a plain text stream ends with one; the
+    // wire request that reached the fake provider does not carry one).
+    if (shown !== `${sent.system}\n`) {
+      throw new Error(
+        "muffin prompt show diverge dal system prompt realmente inviato al provider — non e' più una descrizione fedele",
+      );
+    }
+  });
+});
+
+describe('acceptance · A · doctor, backup', () => {
   scenario(
     'A5',
     async () => {
