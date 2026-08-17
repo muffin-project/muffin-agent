@@ -1,7 +1,8 @@
 {
-  "_comment": "Permission matrix, read at boot by core/policy/matrix.ts. Part of the Root of Trust: the agent loop cannot change this at runtime, and your own edits take effect after `muffin rot reseal` and a restart. The two deny lists may only grow — removing a shipped entry from them does nothing.",
+  "_comment": "Permission matrix, read at boot by core/policy/matrix.ts. Part of the Root of Trust: the agent loop cannot change this at runtime, and your own edits take effect after `muffin rot reseal` and a restart. The two deny lists may only grow — removing a shipped entry from them does nothing. `paramsMaxTaint` is the one ceiling here the file may also RAISE, not just lower (see core/policy/matrix.ts) — it gates model-chosen bytes in a URL's query/fragment or a search query, above which the owner is asked and everyone else is refused.",
   "schemaVersion": 1,
   "defaultMaxTaint": { "low": 3, "medium": 1, "high": 1 },
+  "paramsMaxTaint": 1,
   "neverAtRuntime": ["rot.write"],
   "forbiddenForSystem": ["outward.send", "config.ratchet"]
 }
