@@ -369,7 +369,8 @@
       ],
       "gaps": [
         "l'intera superficie e' on/off (muffin surface enable/disable telegram): non esiste un modo per abilitarla per un singolo gruppo o disabilitare un gruppo specifico",
-        "send_file e' hostOnly: un member non puo' ricevere un file prodotto nel proprio turno — il vault e' una directory fisica condivisa fra tenant e l'egress non ha ancora lo stesso scoping per-tenant che C7 ha costruito per l'ingresso (agent/tools/deliver.ts, vedi il suo stesso docstring)"
+        "send_file e' hostOnly: un member non puo' ricevere un file prodotto nel proprio turno — il vault e' una directory fisica condivisa fra tenant e l'egress non ha ancora lo stesso scoping per-tenant che C7 ha costruito per l'ingresso (agent/tools/deliver.ts, vedi il suo stesso docstring)",
+        "M5-BIS B11 (slice/streaming, prima meta'): telegramSurface dichiara streaming:{transport:'edit'} (connectors/telegram/surface.ts) ma TelegramConnector.handle non passa ancora onDelta a runTurn — la risposta arriva ancora tutta insieme a fine turno, come prima di questa slice. La bozza progressiva (sendMessageDraft o placeholder+edit, connectors/telegram/presence.ts) e' il passo successivo della stessa slice."
       ]
     },
     {
@@ -543,7 +544,7 @@
     {
       "n": 6,
       "step": "offerta di installare il gateway",
-      "file": "cli/main.ts:296,317-333",
+      "file": "cli/main.ts:308,329-345",
       "what": "Y/n una sola volta, dentro lo stesso setup; su pipe stampa solo il comando, non installa nulla di silenzioso."
     },
     {

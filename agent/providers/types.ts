@@ -139,9 +139,87 @@ export type ChatResult = {
   model: string;
 };
 
+/**
+ * One increment of a streamed response, on the wire between an adapter and the
+ * loop. Five kinds, matching what the two adapters can actually produce:
+ *
+ * - `text_delta` / `thinking_delta` — a fragment of prose. The loop buffers
+ *   these; see `agent/loop.ts` for why they never reach a surface directly.
+ * - `tool_call_delta` — a fragment of one tool call's JSON arguments, keyed by
+ *   `index` because both wire formats interleave several calls by position,
+ *   not by id (the id itself only arrives on the first fragment for that
+ *   index — see each adapter's `chatStream`).
+ * - `usage` — partial token counts, when the wire reports them before `done`.
+ *   `Partial<Usage>` because neither adapter's mid-stream usage is complete
+ *   (Anthropic's `message_delta` has only `output_tokens`; OpenAI's mid-stream
+ *   chunks have none at all — see `stream_options.include_usage`).
+ * - `done` — always last, always exactly once, and it carries the *same*
+ *   `ChatResult` `chat()` would have returned for an identical, non-streamed
+ *   call. This is the whole contract: streaming is a side-channel of deltas
+ *   riding alongside the ordinary computation, not a second way of arriving
+ *   at an answer. A consumer that ignores every event but `done` gets exactly
+ *   today's behaviour.
+ */
+export type StreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'tool_call_delta'; index: number; id?: string; name?: string; argsDelta?: string }
+  | { type: 'usage'; usage: Partial<Usage> }
+  | { type: 'done'; result: ChatResult };
+
+/**
+ * The stream itself broke — a reset connection, a chunk that failed its zod
+ * schema, a stream that ended without the wire's own terminal event
+ * (`message_stop` / `[DONE]`).
+ *
+ * Deliberately **not** a `ProviderError`: that type's `retryable` answers "is
+ * this worth another attempt at the same request", and retrying the same
+ * streamed request is exactly the wrong remedy for a broken *transport* — the
+ * caller's answer is a single, one-time fallback to `chat()` (non-streaming),
+ * per docs/blueprint/M5-BIS.md B11. A distinct class is what lets the loop
+ * tell "the SSE framing failed" apart from "the server said 429" without
+ * inspecting a string.
+ */
+export class ProviderStreamError extends Error {
+  constructor(
+    message: string,
+    /**
+     * Did anything at all arrive before this broke? Distinguishes "the
+     * request itself never became a stream" (treat like any other
+     * transport failure — a 401 does not become fixable by trying without
+     * `stream: true`) from "we were mid-stream and it died" (the one case
+     * this type exists for). Adapters set it from their own first-event
+     * bookkeeping; see `chatStream` in each.
+     */
+    readonly partial: boolean,
+    // Native `Error.cause` (ES2022) rather than a parameter property of the
+    // same name: `Error` already declares `cause`, and a parameter property
+    // shadowing it needs `override` — reusing the built-in chain is simpler
+    // than opting into that just to hold one field.
+    cause?: unknown,
+  ) {
+    super(message, cause !== undefined ? { cause } : undefined);
+    this.name = 'ProviderStreamError';
+  }
+}
+
 export interface Provider {
   readonly kind: 'anthropic' | 'openai-compat';
   chat(call: ChatCall): Promise<ChatResult>;
+  /**
+   * Optional: a provider that can stream implements this. Absent means "this
+   * provider cannot stream" and the loop falls back to `chat()` unconditionally
+   * — never a runtime error, because a provider that never implements this is
+   * exactly as valid as one that does (ADR-0008: degrade declaredly).
+   *
+   * The final yielded event is always `{type:'done', result}`, and `result` is
+   * byte-for-byte what `chat()` would have returned for the same `call` — see
+   * `StreamEvent`. A caller that only wants the boundary the two share (the
+   * loop, on a turn with no `onDelta` sink) can therefore keep calling `chat()`
+   * and never construct this at all, which is why `chat()` stays the required
+   * member and this the optional one.
+   */
+  chatStream?(call: ChatCall): AsyncIterable<StreamEvent>;
 }
 
 /**

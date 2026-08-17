@@ -120,7 +120,7 @@ ancora verificato — **è un debito, non uno stato**).
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
 | B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
-| B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | ? |
+| B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | IN CORSO — CLI/REPL chiuso e testato (`slice/streaming`, PR verso `dev`): entrambi gli adapter honorano `ChatCall.stream` (`Provider.chatStream`), il loop bufferizza i delta per giro e li rilascia solo per quello che risponde davvero (mai durante una tool call — un giro nudged dal completion gate non trapela il suo bozzone), un fallback singolo e contato se lo stream si rompe a metà. Cablaggio verificato con provider SSE finto attraverso `buildRuntime` reale, non un `Provider` sostituito a mano. Manca Telegram (bozza progressiva, `sendMessageDraft` o placeholder+edit) per chiudere la riga — stessa slice, PR successiva |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
 | B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | READY per l'owner — `send_file` (agent/tools/deliver.ts) raggiunge `Surface.deliverFile` su Telegram e Discord; ⚠️ `hostOnly`, un member non può ricevere un proprio file (vedi sotto) |
