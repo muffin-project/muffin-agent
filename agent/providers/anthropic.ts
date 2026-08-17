@@ -1,11 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import {
   ProviderError,
+  ProviderStreamError,
   type ChatCall,
   type ChatResult,
   type ContentBlock,
   type Provider,
   type StopReason,
+  type StreamEvent,
   type ThinkingBlock,
 } from './types.js';
 
@@ -41,73 +43,232 @@ export class AnthropicProvider implements Provider {
 
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
-      const response = await this.client.messages.create(
-        {
-          model: call.model,
-          max_tokens: call.maxOutputTokens,
-          // Spread, not `temperature: call.temperature`: on Opus 4.7 and later
-          // the parameter was removed and any non-default value is a 400, so
-          // the absent case has to be an absent *field*, not `undefined`.
-          ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
-          system: call.system.map(toSystemBlock),
-          messages: call.messages.map((m) => ({
-            role: m.role,
-            content: m.content.map(toContentBlock),
-          })),
-          ...(call.tools && call.tools.length > 0
-            ? {
-                tools: call.tools.map((t) => ({
-                  name: t.name,
-                  description: t.description,
-                  input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-                })),
-                tool_choice: { type: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const) },
-              }
-            : {}),
-          // `{type:'enabled', budget_tokens}` used to stand here. It is
-          // deprecated on the 4.6 models and a 400 on 4.7 and later — Opus 5,
-          // Sonnet 5, Fable 5, i.e. exactly the models frontier.json matches —
-          // so the roadmap's old remedy ("the loop doesn't pass it") would have
-          // broken every frontier turn the moment it was wired. `effort` is
-          // deliberately not sent: `"high"` is the API default and sending the
-          // default is identical to omitting it, so adding the field would only
-          // give us a value to drift.
-          ...(call.thinking
-            ? { thinking: { type: call.thinking === 'off' ? ('disabled' as const) : ('adaptive' as const) } }
-            : {}),
-        },
-        call.signal ? { signal: call.signal } : {},
-      );
-
-      const text = response.content
-        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-        .map((b) => b.text)
-        .join('')
-        .trim();
-
-      return {
-        text: text.length > 0 ? text : null,
-        toolCalls: response.content
-          .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
-          .map((b) => ({ id: b.id, name: b.name, args: b.input })),
-        // In response order and both kinds, because this filter is the exact
-        // one the docs name as the way the protocol breaks: `type === 'thinking'`
-        // alone silently drops `redacted_thinking`. `content` was previously
-        // filtered to text+tool_use here and everything else fell on the floor.
-        thinking: response.content.flatMap(toThinkingBlock),
-        stopReason: mapStopReason(response.stop_reason),
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-          cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
-        },
-        model: response.model,
-      };
+      const response = await this.client.messages.create(requestBody(call), call.signal ? { signal: call.signal } : {});
+      return toChatResult(response);
     } catch (error) {
       throw wrap(error);
     }
   }
+
+  /**
+   * SSE, over the SDK the file already depends on rather than hand-parsed
+   * bytes: `messages.create({..., stream: true})` returns
+   * `Stream<RawMessageStreamEvent>` — the SDK owns framing (`event: <type>` /
+   * `data: <json>` lines, verified against
+   * platform.claude.com/docs/en/api/messages-streaming, 2026-08-16) and this
+   * function owns only the six-member union
+   * (`message_start | content_block_start | content_block_delta |
+   * content_block_stop | message_delta | message_stop` —
+   * `RawMessageStreamEvent`, `node_modules/@anthropic-ai/sdk` v0.115.0). A
+   * `ping` event exists on the wire and is filtered out before it reaches
+   * this loop — the union has no case for it, so there is nothing to ignore
+   * on purpose here.
+   *
+   * Reconstructs content blocks by hand rather than using the SDK's own
+   * `client.messages.stream()` accumulator (which would hand back exactly
+   * this for free via `.finalMessage()`): that helper owns its own
+   * `AbortController` and event-listener machinery, and mixing two stream
+   * abstractions in one adapter — one for `chat()`'s signal handling, a
+   * different one here — is its own source of drift. `create({stream:true})`
+   * keeps this method's request-shape and signal-passing identical to
+   * `chat()`'s, which is the boundary that matters.
+   */
+  async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {
+    let stream: AsyncIterable<Anthropic.RawMessageStreamEvent>;
+    try {
+      stream = await this.client.messages.create(
+        { ...requestBody(call), stream: true },
+        call.signal ? { signal: call.signal } : {},
+      );
+    } catch (error) {
+      // Nothing was ever streamed — this is `chat()`'s own failure shape
+      // (a 401, a refused connection), not the stream breaking mid-flight, so
+      // it takes `chat()`'s door: the loop's ordinary transport-retry cascade,
+      // never the one-time stream→non-stream fallback that exists for a
+      // *different* failure (see `ProviderStreamError`).
+      throw wrap(error);
+    }
+
+    // Reconstructed by index, the same key every event in the union uses to
+    // say which block it is about. `unknown` blocks (a future content type
+    // this file does not model, e.g. `citations_delta`'s block) are left as
+    // whatever `content_block_start` gave them — the same content the
+    // non-streaming path already drops silently (`toContentBlock` below has
+    // no case for it either).
+    const blocks: Anthropic.ContentBlock[] = [];
+    // `input_json_delta` fragments, kept apart from `blocks` because a tool's
+    // `input` is typed as the *parsed* value — concatenating into it directly
+    // would mean parsing partial, invalid JSON on every delta instead of once,
+    // at the block's `content_block_stop`, which is where `chat()`'s own
+    // non-streaming JSON already gets its one parse.
+    const toolJson = new Map<number, string>();
+    let stopReason: string | null = null;
+    let usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    let model = call.model;
+    // See `ProviderStreamError.partial`: the only fact that changes how a
+    // failure below is classified.
+    let receivedAnyEvent = false;
+
+    try {
+      for await (const event of stream) {
+        receivedAnyEvent = true;
+        switch (event.type) {
+          case 'message_start':
+            model = event.message.model;
+            usage.input_tokens = event.message.usage.input_tokens;
+            break;
+          case 'content_block_start':
+            blocks[event.index] = event.content_block;
+            if (event.content_block.type === 'tool_use') {
+              toolJson.set(event.index, '');
+              yield { type: 'tool_call_delta', index: event.index, id: event.content_block.id, name: event.content_block.name };
+            }
+            break;
+          case 'content_block_delta': {
+            const block = blocks[event.index];
+            const delta = event.delta;
+            if (delta.type === 'text_delta' && block?.type === 'text') {
+              block.text += delta.text;
+              yield { type: 'text_delta', text: delta.text };
+            } else if (delta.type === 'thinking_delta' && block?.type === 'thinking') {
+              block.thinking += delta.thinking;
+              yield { type: 'thinking_delta', text: delta.thinking };
+            } else if (delta.type === 'signature_delta' && block?.type === 'thinking') {
+              block.signature += delta.signature;
+            } else if (delta.type === 'input_json_delta' && block?.type === 'tool_use') {
+              toolJson.set(event.index, (toolJson.get(event.index) ?? '') + delta.partial_json);
+              yield { type: 'tool_call_delta', index: event.index, argsDelta: delta.partial_json };
+            }
+            // `citations_delta` has no slot in `ContentBlock` — dropped here,
+            // same as the non-streaming path has always dropped citations.
+            break;
+          }
+          case 'content_block_stop': {
+            const block = blocks[event.index];
+            if (block?.type === 'tool_use') {
+              const raw = toolJson.get(event.index) ?? '';
+              try {
+                block.input = raw.length > 0 ? JSON.parse(raw) : {};
+              } catch {
+                // The model's own doing, not the transport's — routed to the
+                // profile's recovery cascade exactly like a non-streaming
+                // malformed tool call (`openai-compat.ts`'s own JSON.parse),
+                // never to the stream→non-stream fallback below.
+                throw new ProviderError(`malformed tool arguments from ${block.name}`, true, undefined, 'output');
+              }
+            }
+            break;
+          }
+          case 'message_delta':
+            stopReason = event.delta.stop_reason;
+            usage.output_tokens = event.usage.output_tokens;
+            yield { type: 'usage', usage: { outputTokens: event.usage.output_tokens } };
+            break;
+          case 'message_stop':
+            break;
+        }
+      }
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
+    }
+
+    yield { type: 'done', result: toChatResult({ content: blocks, stop_reason: stopReason, usage, model }) };
+  }
+}
+
+/** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
+function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStreaming, 'stream'> {
+  return {
+    model: call.model,
+    max_tokens: call.maxOutputTokens,
+    // Spread, not `temperature: call.temperature`: on Opus 4.7 and later
+    // the parameter was removed and any non-default value is a 400, so
+    // the absent case has to be an absent *field*, not `undefined`.
+    ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+    system: call.system.map(toSystemBlock),
+    messages: call.messages.map((m) => ({
+      role: m.role,
+      content: m.content.map(toContentBlock),
+    })),
+    ...(call.tools && call.tools.length > 0
+      ? {
+          tools: call.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+          })),
+          tool_choice: { type: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const) },
+        }
+      : {}),
+    // `{type:'enabled', budget_tokens}` used to stand here. It is
+    // deprecated on the 4.6 models and a 400 on 4.7 and later — Opus 5,
+    // Sonnet 5, Fable 5, i.e. exactly the models frontier.json matches —
+    // so the roadmap's old remedy ("the loop doesn't pass it") would have
+    // broken every frontier turn the moment it was wired. `effort` is
+    // deliberately not sent: `"high"` is the API default and sending the
+    // default is identical to omitting it, so adding the field would only
+    // give us a value to drift.
+    ...(call.thinking
+      ? { thinking: { type: call.thinking === 'off' ? ('disabled' as const) : ('adaptive' as const) } }
+      : {}),
+  };
+}
+
+/**
+ * One response, in the shape both `chat()` and `chatStream()`'s reconstructed
+ * blocks share — a `Message` for the first, a hand-assembled lookalike for the
+ * second. Pulled out because it used to exist only inside `chat()`'s body,
+ * which is exactly the code `chatStream()` needs and must not fork: streaming
+ * is a delta side-channel, not a second way of computing `ChatResult`.
+ */
+/**
+ * Deliberately not `Pick<Anthropic.Message, …>`: the SDK's own `Usage` type
+ * carries fields (`cache_creation`, `service_tier`, …) that a real response
+ * always has and a hand-assembled streaming one does not bother filling in,
+ * because nothing here reads them — the four fields below are the ones
+ * `ChatResult.usage` has room for. `mapStopReason` already takes `string |
+ * null` rather than the SDK's own `StopReason` enum for the same reason:
+ * decoupled from a type this file does not own the evolution of.
+ */
+type ResultSource = {
+  content: Anthropic.ContentBlock[];
+  stop_reason: string | null;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+  };
+  model: string;
+};
+
+function toChatResult(response: ResultSource): ChatResult {
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+    .trim();
+
+  return {
+    text: text.length > 0 ? text : null,
+    toolCalls: response.content
+      .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+      .map((b) => ({ id: b.id, name: b.name, args: b.input })),
+    // In response order and both kinds, because this filter is the exact
+    // one the docs name as the way the protocol breaks: `type === 'thinking'`
+    // alone silently drops `redacted_thinking`. `content` was previously
+    // filtered to text+tool_use here and everything else fell on the floor.
+    thinking: response.content.flatMap(toThinkingBlock),
+    stopReason: mapStopReason(response.stop_reason),
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+    },
+    model: response.model,
+  };
 }
 
 function toSystemBlock(block: ContentBlock): Anthropic.TextBlockParam {
