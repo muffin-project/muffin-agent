@@ -319,7 +319,7 @@ ancora verificato — **è un debito, non uno stato**).
 | D7 | Web search | Funziona end-to-end? | ? |
 | D8 | MCP | Gestisce drift e revoca? | ? — pinning solo all'attach |
 | D9 | Skills | Scopre e usa le skill? | ? |
-| D10 | Security | Nessuna capability escape? | ? |
+| D10 | Security | Nessuna capability escape? | READY — taint in ingresso chiuso (`slice/taint-in-ingresso`, ADR-0044, giro 2 PR #28: STATE.md "Taint in ingresso — chiuso"); un turno a taint 3 che tenta `http_get` fuori allowlist riceve `deny/resource_denied` dal kernel, mai `ask` — provato end-to-end (`evals/acceptance/scenarios/d-capability.accept.ts`, scenario D10) |
 | D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
 | D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando |
 
@@ -344,8 +344,14 @@ ancora verificato — **è un debito, non uno stato**).
 > file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
 > stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
 > e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
-> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
-> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
+> inatteso, su una riga `READY` scoperta, o su una riga `READY` il cui scenario
+> è ancora `atteso-rosso` (mandato DAY-1 §4.9 — le due affermazioni non possono
+> essere vere insieme). Un `atteso-rosso` a sua volta è verificato contro la
+> firma di fallimento che il manifest dichiara
+> (`ScenarioEntry['expectFailure']`), non contro "ha lanciato qualcosa": uno
+> che fallisce per un motivo diverso da quello scritto è `rosso-inatteso`, non
+> "va bene così". `npm run test:acceptance` gira la sola suite (17 scenari,
+> **~60s** misurati in locale). Job CI dedicato
 > scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
 > `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
 > che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
@@ -354,26 +360,27 @@ ancora verificato — **è un debito, non uno stato**).
 > anche sul branch di default, quindi la prima corsa reale sarà al merge su
 > `dev`.
 >
-> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
-> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
-> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
-> decisione owner ancora aperta su §1, D10 taint→egress →
-> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
-> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
-> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
-> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
-> verificato il rosso, ripristinato — non solo scritto a supporre che
-> avrebbero funzionato.
+> **Oggi, 17 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
+> D2/D3/D10 · E1/E2/E5 — sedici **verde**, un **atteso-rosso** (D3 undo →
+> decisione owner ancora aperta su §1, con una firma di fallimento dichiarata:
+> `muffin undo` resta un comando sconosciuto). B8, C4 e D10 erano
+> `atteso-rosso` con una ragione già falsa (`slice/acceptance-truth`,
+> `docs/lessons.md` "An atteso-rosso that accepts any error…"). Ogni verde è
+> stato visto cadere per davvero prima di essere lasciato verde — rotto il
+> cablaggio in produzione che ciascuno prova (`TurnStore.create`, `verify()`,
+> `SessionStore.append`, `renderForPrompt`, il caso `draft` del kernel,
+> `BudgetEngine.exhausted`), verificato il rosso, ripristinato — non solo
+> scritto a supporre che avrebbero funzionato.
 >
 > **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
-> corsa invece di nasconderlo: cinque righe già `READY` per altre ragioni non
-> hanno ancora uno scenario qui (C2, C3, C7, D4, D6) — nessuna era nella lista
-> minima del mandato di questa slice, e chiuderle resta un lavoro futuro, non
-> silenzioso. C8 (audio) è marcata `non provabile qui` col motivo scritto
-> (richiede una trascrizione reale, vietata dalla proprietà "non costa niente"
-> di questa suite). **E4 READY vuol dire "la primitiva esiste, gira contro il
-> binario vero, e lo stato delle altre righe è derivabile da un comando" — non
-> "l'inventario è coperto".**
+> corsa invece di nasconderlo: otto righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (B14, C2, C3, C6, C7, D4, D6, E4) — nessuna era
+> nella lista minima del mandato di questa slice, e chiuderle resta un lavoro
+> futuro, non silenzioso. C8 (audio) è marcata `non provabile qui` col motivo
+> scritto (richiede una trascrizione reale, vietata dalla proprietà "non costa
+> niente" di questa suite). **E4 READY vuol dire "la primitiva esiste, gira
+> contro il binario vero, e lo stato delle altre righe è derivabile da un
+> comando" — non "l'inventario è coperto".**
 
 ---
 
