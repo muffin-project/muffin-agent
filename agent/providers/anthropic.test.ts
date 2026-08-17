@@ -271,6 +271,63 @@ describe('anthropic adapter · chatStream (B11)', () => {
     expect(done.result.stopReason).toBe('tool_use');
   });
 
+  it('reconstructs a thinking block from thinking_delta/signature_delta fragments, matching the ChatResult chat() returns for the same content', async () => {
+    // ADR-0038: a thinking block dropped or mangled at the streaming boundary
+    // is exactly as bad as one dropped in `chat()` — the response the loop
+    // echoes back must carry the same `signature`, or the server may strip
+    // reasoning from the next turn (see the file docstring, point 1). This
+    // test is that same guarantee, proven for `chatStream()` by building both
+    // results from identical content and comparing them, not by asserting a
+    // hand-typed literal that could drift from what `chat()` actually does.
+    const THINKING = 'primo pensiero, poi secondo pensiero';
+    const SIGNATURE = 'sig-stream-thinking';
+    const TEXT = 'ecco la risposta';
+
+    const nonStreamMessage = {
+      id: 'msg_thinking_stream',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-sonnet-5',
+      content: [
+        { type: 'thinking', thinking: THINKING, signature: SIGNATURE },
+        { type: 'text', text: TEXT },
+      ],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 12, output_tokens: 9 },
+    };
+    const nonStreamResult = await harness(nonStreamMessage).provider.chat(CALL);
+    // The baseline itself has to be the non-trivial thing we think it is —
+    // otherwise a match against it below would be vacuous.
+    expect(nonStreamResult.thinking).toEqual([{ type: 'thinking', thinking: THINKING, signature: SIGNATURE }]);
+
+    const stream = sse([
+      { event: 'message_start', data: { type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: 'claude-sonnet-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 0 } } } },
+      { event: 'content_block_start', data: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } } },
+      { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'primo pensiero, ' } } },
+      { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'poi secondo pensiero' } } },
+      { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: SIGNATURE } } },
+      { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+      { event: 'content_block_start', data: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } },
+      { event: 'content_block_delta', data: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: TEXT } } },
+      { event: 'content_block_stop', data: { type: 'content_block_stop', index: 1 } },
+      { event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 9 } } },
+      { event: 'message_stop', data: { type: 'message_stop' } },
+    ]);
+    const provider = streamHarness(streamedResponse([stream]));
+    const events = await collect(provider.chatStream(CALL));
+
+    const thinkingDeltas = events.filter((e) => e.type === 'thinking_delta').map((e) => (e as { text: string }).text);
+    expect(thinkingDeltas).toEqual(['primo pensiero, ', 'poi secondo pensiero']);
+
+    const done = events[events.length - 1]!;
+    if (done.type !== 'done') throw new Error('unreachable');
+    // The point of this test: what the stream reconstructs is equal to what
+    // the non-streaming call produces for the same content — not merely
+    // plausible-looking, but the identical value chat() would hand the loop.
+    expect(done.result.thinking).toEqual(nonStreamResult.thinking);
+    expect(done.result).toEqual(nonStreamResult);
+  });
+
   it('breaks the connection mid-stream and throws ProviderStreamError, not a retryable ProviderError', async () => {
     // A fresh Response per attempt: `Response.body` is a `ReadableStream` and
     // can only be consumed once, so a test that iterated the same one twice
