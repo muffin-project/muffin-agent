@@ -293,6 +293,24 @@ function currentLauncher(): { argv: string[]; warning: string | null } {
 }
 
 /**
+ * The only way to speed up `Gateway`'s beat without editing the source:
+ * `gatewayOverrides.tickMs` is an in-process seam `cli/gateway.test.ts` reaches
+ * by importing `cmdGatewayRun` directly, and `evals/acceptance/` cannot do that
+ * — it spawns the real binary as a child process, which is the whole point of
+ * that suite. Without this, an acceptance scenario waiting on a second beat
+ * (a due job, then a separately-armed suspended turn) pays the real
+ * `HEARTBEAT_MS` interval, thirty seconds a tick. Unset in every real
+ * install — nobody sets this env var by hand — so production keeps the
+ * default cadence; a non-numeric or non-positive value is ignored rather than
+ * crashing a supervised process over a typo in the environment.
+ */
+export function tickMsFromEnv(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
  * The process. Invoked by the supervisor, and by `muffin gateway run` when the
  * owner wants to watch it in a terminal.
  */
@@ -424,7 +442,9 @@ export async function cmdGatewayRun(
   });
 
   let stopSurfaces: (() => void) | null = null;
+  const envTickMs = tickMsFromEnv(process.env['MUFFIN_GATEWAY_TICK_MS']);
   const gateway = new Gateway({
+    ...(envTickMs === undefined ? {} : { tickMs: envTickMs }),
     ...gatewayOverrides,
     lock,
     notify,
