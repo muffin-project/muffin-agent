@@ -1,4 +1,7 @@
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { BudgetEngine } from '../../core/budget/budget.js';
+import { costUsd } from '../../core/budget/pricing.js';
 import { AnthropicProvider } from './anthropic.js';
 import { ProviderStreamError, type ChatCall, type StreamEvent } from './types.js';
 
@@ -358,5 +361,113 @@ describe('anthropic adapter · chatStream (B11)', () => {
       });
     const provider = new AnthropicProvider('sk-bad', 'https://api.anthropic.test', { fetch: fetchFake as never });
     await expect(collect(provider.chatStream(CALL))).rejects.not.toBeInstanceOf(ProviderStreamError);
+  });
+});
+
+/**
+ * P35 (audit-2026-08-16 #18): `core/budget/pricing.ts`'s `costUsd()` treats
+ * `Tokens.inputTokens` as the GRAND TOTAL of input processed — fresh +
+ * cache-read + cache-write — which is true of the OpenRouter-compat wire's
+ * `prompt_tokens`. It is not true of the native Anthropic API: `input_tokens`
+ * there is only the remainder AFTER the last cache breakpoint, excluding both
+ * `cache_read_input_tokens` and `cache_creation_input_tokens` (confirmed
+ * against platform.claude.com's prompt-caching docs, 2026-08-17: "input_tokens
+ * ... tokens after your last breakpoint (not eligible for cache)"; total input
+ * is the sum of all three fields). Passing `input_tokens` straight through
+ * broke `costUsd()` in two ways it does not expect: `fresh = inputTokens -
+ * cached` double-subtracts the cache read (often clamped to zero, since a
+ * pinned system prompt's cache read routinely exceeds the short remainder),
+ * and cache-write tokens billed at the file's flat 0.25× surcharge alone
+ * instead of an effective 1.25× (1× folded into a correctly-summed `fresh`,
+ * plus the 0.25× surcharge already in the formula) — a 5× undercount on
+ * writes, per the file's own comment at pricing.ts:79.
+ *
+ * The fix is entirely in this adapter (`toChatResult`, plus the streaming
+ * accumulator that feeds it): normalize `inputTokens` to the sum of the three
+ * raw fields, matching the convention `costUsd()` already assumes. Nothing in
+ * pricing.ts changes — its formula was already correct for that convention.
+ */
+describe('anthropic adapter · usage normalization at the boundary (P35)', () => {
+  const USAGE = {
+    input_tokens: 100_000,
+    output_tokens: 10_000,
+    cache_read_input_tokens: 200_000,
+    cache_creation_input_tokens: 50_000,
+  };
+  // Hand-computed at claude-sonnet-5 list price (3/15 per MTok, cache read
+  // 0.1×, cache write 1.25×):
+  //   100_000 * 3 + 200_000 * 0.3 + 50_000 * 1.25 * 3 + 10_000 * 15, all /1e6
+  //   = 300_000 + 60_000 + 187_500 + 150_000, /1e6 = 0.6975
+  const EXPECTED_USD = 0.6975;
+
+  it('sums input_tokens + cache_read + cache_creation into ChatResult.usage.inputTokens (non-streaming)', async () => {
+    const h = harness({ ...A_MESSAGE, usage: USAGE });
+    const result = await h.provider.chat(CALL);
+
+    expect(result.usage).toEqual({
+      inputTokens: 350_000,
+      outputTokens: 10_000,
+      cacheReadTokens: 200_000,
+      cacheWriteTokens: 50_000,
+    });
+  });
+
+  it('bills the normalized usage at the textbook 1×/0.1×/1.25× rates, and BudgetEngine records that same number', async () => {
+    const h = harness({ ...A_MESSAGE, usage: USAGE });
+    const result = await h.provider.chat(CALL);
+
+    const usd = costUsd(result.model, result.usage);
+    expect(usd).toBeCloseTo(EXPECTED_USD, 6);
+
+    // The rest of the pipeline: `agent/runtime.ts`'s recordSpend does exactly
+    // this — costUsd() then budget.record({...entry, usd}) — so a BudgetEngine
+    // fed through the same two calls has to see the same number, not a second,
+    // independently-computed one.
+    const budget = new BudgetEngine(new DatabaseCtor(':memory:'), { monthlyUsd: 100, perTenantDailyUsd: 100 });
+    budget.record({
+      tenant: 'host',
+      capability: 'chat',
+      model: result.model,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      usd,
+    });
+    expect(budget.monthToDateUsd()).toBeCloseTo(EXPECTED_USD, 6);
+  });
+
+  it('normalizes the same way over chatStream, where the raw fields arrive on message_start', async () => {
+    const stream = sse([
+      {
+        event: 'message_start',
+        data: {
+          type: 'message_start',
+          message: {
+            id: 'm', type: 'message', role: 'assistant', model: 'claude-sonnet-5',
+            content: [], stop_reason: null, stop_sequence: null,
+            usage: USAGE,
+          },
+        },
+      },
+      { event: 'content_block_start', data: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } },
+      { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } } },
+      { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } },
+      {
+        event: 'message_delta',
+        data: { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: USAGE.output_tokens } },
+      },
+      { event: 'message_stop', data: { type: 'message_stop' } },
+    ]);
+    const provider = streamHarness(streamedResponse([stream]));
+    const events = await collect(provider.chatStream(CALL));
+
+    const done = events[events.length - 1]!;
+    if (done.type !== 'done') throw new Error('unreachable');
+    expect(done.result.usage).toEqual({
+      inputTokens: 350_000,
+      outputTokens: 10_000,
+      cacheReadTokens: 200_000,
+      cacheWriteTokens: 50_000,
+    });
+    expect(costUsd(done.result.model, done.result.usage)).toBeCloseTo(EXPECTED_USD, 6);
   });
 });

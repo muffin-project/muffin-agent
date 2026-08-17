@@ -34,11 +34,27 @@ in parallel but group activation waits until that window completes. A
 single-user default must still use the general tenant/surface/capability shape:
 "groups later" never authorizes a host-only shortcut.
 
+## How much verification this change needs — read this before working
+
+Pick the profile **before** implementing, and write it in the PR: **FAST**
+(docs, state, generated views, tests-only, mechanical fixes), **STANDARD**
+(ordinary reversible product/runtime work), **CRITICAL** (effect journal,
+irreversible effects, authority/kernel, taint, egress, Root of Trust, secrets,
+durable schema, backup/restore, concurrency, exactly-once, crash recovery,
+sandbox, destructive operations). The rule and the evidence each profile owes
+are `docs/ORCHESTRATION.md` §17; the classification procedure a zero-context
+session follows is `.claude/loop.md` §3. Only CRITICAL needs a fresh judge.
+
+Context is a resource: this file is a map, not a manual. Load a document when
+the task makes it load-bearing (`.claude/loop.md` §2), not on every iteration.
+
 ## Map — don't duplicate, point
 
 | You want… | Go to |
 |---|---|
 | Where we are · the MVP push · load-bearing files | `docs/blueprint/STATE.md` (**first**) |
+| **How much verification this change needs** (FAST/STANDARD/CRITICAL) | `docs/ORCHESTRATION.md` §17 · `.claude/loop.md` §3 |
+| The sequence toward Day 1 · what is in flight | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
 | The two gates (MVP, cutover) + roadmap M0–M7 | `docs/blueprint/04-roadmap.md` |
 | Architecture + the *why* of each decision | `docs/blueprint/` + `docs/blueprint/adr/` |
 | Normative contracts (types, formats, floors) | `docs/blueprint/09-contratti-m0-m1.md` |

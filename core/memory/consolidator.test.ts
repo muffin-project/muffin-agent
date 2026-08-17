@@ -28,6 +28,7 @@ const empty = (over: Partial<IngestReport> = {}): IngestReport => ({
   marked: 1,
   episodes: 1,
   factsAdded: 1,
+  rejected: 0,
   superseded: 0,
   skippedAgentOutput: 0,
   skippedDocuments: 0,

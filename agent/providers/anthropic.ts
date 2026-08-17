@@ -116,6 +116,11 @@ export class AnthropicProvider implements Provider {
           case 'message_start':
             model = event.message.model;
             usage.input_tokens = event.message.usage.input_tokens;
+            // Cache token counts are decided before generation starts, so they
+            // are already final on message_start — required for toChatResult's
+            // normalization below to see anything but zero on this path (P35).
+            usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens ?? 0;
+            usage.cache_creation_input_tokens = event.message.usage.cache_creation_input_tokens ?? 0;
             break;
           case 'content_block_start':
             blocks[event.index] = event.content_block;
@@ -249,6 +254,8 @@ function toChatResult(response: ResultSource): ChatResult {
     .map((b) => b.text)
     .join('')
     .trim();
+  const cacheReadTokens = response.usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = response.usage.cache_creation_input_tokens ?? 0;
 
   return {
     text: text.length > 0 ? text : null,
@@ -262,10 +269,18 @@ function toChatResult(response: ResultSource): ChatResult {
     thinking: response.content.flatMap(toThinkingBlock),
     stopReason: mapStopReason(response.stop_reason),
     usage: {
-      inputTokens: response.usage.input_tokens,
+      // core/budget/pricing.ts's costUsd() treats inputTokens as the GRAND
+      // TOTAL of input processed (true of the OpenRouter-compat wire's
+      // prompt_tokens). The native Anthropic API's input_tokens is only the
+      // remainder AFTER the last cache breakpoint — it excludes both fields
+      // below by definition (platform.claude.com, prompt caching, verified
+      // 2026-08-17) — so it has to be normalized to that total here, at the
+      // adapter boundary, or costUsd() double-subtracts the cache read and
+      // undercounts the cache-write premium 5× (P35).
+      inputTokens: response.usage.input_tokens + cacheReadTokens + cacheWriteTokens,
       outputTokens: response.usage.output_tokens,
-      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens,
+      cacheWriteTokens,
     },
     model: response.model,
   };
