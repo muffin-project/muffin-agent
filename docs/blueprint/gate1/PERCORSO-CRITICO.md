@@ -37,12 +37,13 @@ non sovrapposte in volo.
 - **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
   pushato: character eval a proprietà, cross-model, confronto col vecchio Muffin.
   Da riprendere; la corsa reale sui modelli costa e va proposta all'owner.
-- **PR #60** `slice/map-resourcefor` (FAST) — citazioni della mappa che seguono
-  il codice; nessuna ancora su riga vuota.
+- **PR #63** `slice/workflow-evidence-budget` (FAST) — questa: i tre profili di
+  verifica, il firewall di scope, il budget dei documenti, e la riconciliazione
+  del handoff resa meccanica (`.claude/riconcilia.mjs`).
 
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
-`init --local`.
+`init --local` · #60 citazioni della mappa.
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
