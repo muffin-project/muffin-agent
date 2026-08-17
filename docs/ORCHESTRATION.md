@@ -322,6 +322,11 @@ Prima del piano, l'orchestratore fa una **passata d'impatto**:
 3. segue almeno un percorso di produzione e il suo failure path da capo a capo;
 4. verifica quali contratti, ADR, inventario, mappa e handoff devono cambiare;
 5. distingue il default operativo da un invariante architetturale.
+6. nomina **il piano** a cui il cambiamento appartiene — Evidence, Beliefs,
+   Work, Effects, Authority (ADR-0045 §revisione 2026-08-17). Se la risposta è
+   due piani, c'è una cucitura da capire prima di scrivere: uno store che è
+   insieme evidenza e contesto perde la provenienza; una tabella che è insieme
+   bookkeeping ed effect ledger mente su ciò che è successo al mondo.
 
 Il criterio non è «nessuna costante»: magic number e default legittimi
 esistono. È **nessuna decisione locale travestita da forma universale**. Tenant,
