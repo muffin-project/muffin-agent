@@ -16,7 +16,7 @@ import type { TelegramApiLike } from './api.js';
  * mechanism is reached, not only that its pieces compile.
  */
 
-type Recorded = { method: string; at: number; text?: string };
+type Recorded = { method: string; at: number; text?: string; draftId?: number };
 
 /**
  * `makeOverrides` gets `calls` too, not just a plain object to spread in —
@@ -49,8 +49,8 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
       calls.push({ method: 'sendChatAction', at: Date.now() });
       return true;
     },
-    sendMessageDraft: async (_chatId, _draftId, text) => {
-      calls.push({ method: 'sendMessageDraft', at: Date.now(), text });
+    sendMessageDraft: async (_chatId, draftId, text) => {
+      calls.push({ method: 'sendMessageDraft', at: Date.now(), text, draftId });
       return true;
     },
     fileUrl: async () => 'https://example.test/file',
@@ -89,6 +89,39 @@ describe('telegram presence · streaming (B11)', () => {
       expect(t1! - t0!).toBeGreaterThanOrEqual(1000);
 
       await presence.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends a non-zero, stable draft_id on every sendMessageDraft call — the Bot API rejects draft_id 0 with a 400 (api.ts)', async () => {
+    // Every fake above (and in streaming.test.ts) took `sendMessageDraft`'s
+    // draftId parameter and threw it away, so `nextDraftId()` regressing to
+    // "always 0" broke no test: the fakes answered `true` regardless of what
+    // they were called with. This test is the one that actually looks at the
+    // argument, the same way the real Bot API does.
+    vi.useFakeTimers();
+    try {
+      const { api, calls } = fakeApi();
+      const presence = await startPresence(api, 1, { isPrivate: true });
+
+      presence.streamText('ciao');
+      await vi.advanceTimersByTimeAsync(0);
+      presence.streamText('ciao mondo');
+      // Past DRAFT_RENEW_MS (22s) too, so this covers both the live-content
+      // draft and the empty-text keepalive renewal — `api.ts`'s docstring
+      // says a renewal must reuse the same draftId as the preview it renews.
+      await vi.advanceTimersByTimeAsync(23_000);
+      await presence.stop();
+
+      const draftCalls = calls.filter((c) => c.method === 'sendMessageDraft');
+      expect(draftCalls.length).toBeGreaterThan(1);
+      const draftIds = draftCalls.map((c) => c.draftId);
+      expect(draftIds.every((id) => typeof id === 'number' && id !== 0)).toBe(true);
+      // Stable: one presence is one ongoing preview, so every call it makes —
+      // live update or keepalive — has to carry the same draft_id, not a
+      // fresh one each time.
+      expect(new Set(draftIds).size).toBe(1);
     } finally {
       vi.useRealTimers();
     }
