@@ -12,6 +12,7 @@ import {
   type ConsolidationRun,
 } from '../core/memory/consolidator.js';
 import { seal } from '../core/rot/verify.js';
+import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { runDoctor, type Check } from './doctor.js';
 
@@ -209,7 +210,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
     // (core/turns/store.ts `create`) — exactly what a process dying between
     // "the answer is ready" and "the surface confirmed it went out" leaves
     // behind, since nothing but a settled delivery ever moves it off `pending`.
-    store.create({
+    const undelivered = store.create({
       id: 'turn-undelivered-1',
       principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
       tenant: 'host',
@@ -221,7 +222,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters }, undelivered.claimToken);
     db.close();
 
     const c = check(dir, 'consegne');
@@ -246,7 +247,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       resumes: 0,
       contextBuilt: false,
     };
-    store.create({
+    const settled = store.create({
       id: 'turn-settled-1',
       principal: { kind: 'owner', connector: 'telegram', externalId: '1' },
       tenant: 'host',
@@ -258,7 +259,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
       counters,
       replyTo: { chatId: 1, messageId: 1 },
     });
-    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters });
+    store.finish('turn-settled-1', { outcome: 'answered', messages: [], taint: 0, counters }, settled.claimToken);
     store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
     db.close();
 
@@ -598,6 +599,66 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('busy');
     expect(c?.detail).not.toContain('falliti');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor asks whether a supervisor, not just a process, is behind the gateway', () => {
+  // A1 (ADR-0035, owner's words): `readGateway` alone is true for a bare
+  // `muffin gateway run` in a terminal, exactly the state that does not
+  // survive a reboot or a logout. `unitFileExists` is always stubbed here —
+  // never left to the real probe — because its default reads the *actual*
+  // machine's `~/Library/LaunchAgents` or `~/.config/systemd/user`, and a
+  // test whose result depends on whether the developer running it has ever
+  // installed a real unit is not a test (this file's own header names the
+  // same trap for XDG_CONFIG_HOME).
+
+  it('warns with the install command when nothing is installed and no gateway runs', () => {
+    const dir = home();
+    const report = runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const c = report.checks.find((x) => x.name === 'supervisore');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non riparte da solo');
+    expect(c?.remedy).toContain('gateway install --write');
+    // Never the ceiling severity — a missing supervisor does not fail doctor.
+    expect(report.exitCode).not.toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names the live-but-unsupervised case when a gateway is actually running', () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    // The same shape `readGateway` reads: a pid this process can truthfully
+    // call `kill(pid, 0)` on — its own — is what makes the row a *live*
+    // claim rather than a dead one.
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS gateway_lock (id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, taken_at TEXT, since TEXT, status TEXT)`,
+    );
+    db.prepare(`INSERT INTO gateway_lock (id, pid, taken_at, since, status) VALUES (1, ?, ?, ?, 'in attesa')`).run(
+      process.pid,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    db.close();
+
+    const report = runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const gateway = report.checks.find((x) => x.name === 'gateway');
+    const supervisor = report.checks.find((x) => x.name === 'supervisore');
+    expect(gateway?.level).toBe('ok'); // sanity: the fixture really did register as a live gateway
+    expect(supervisor?.level).toBe('warn');
+    expect(supervisor?.detail).toContain('vive finché il terminale');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok once the unit is installed and the platform confirms it is engaged', () => {
+    const dir = home();
+    const engaged: Partial<SupervisorProbes> =
+      process.platform === 'darwin'
+        ? { unitFileExists: () => true, launchdLoaded: () => true }
+        : { unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true };
+    const report = runDoctor(dir, { supervisorProbes: engaged });
+    const supervisor = report.checks.find((x) => x.name === 'supervisore');
+    expect(supervisor?.level).toBe('ok');
     rmSync(dir, { recursive: true, force: true });
   });
 });

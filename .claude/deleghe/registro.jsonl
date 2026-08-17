@@ -158,3 +158,34 @@
 {"id":"aa7eb82e2f5525d99","chiuso":"classificazione dei 24 finding: 23 STILL PRESENT + 2 CHANGED BUT STILL PRESENT, 0 fixed; repro eseguiti P29/P19/P20/P21; ordine consigliato lock→acceptance-truth→scheduler→fs→egress→injection→segreti (README in research/audit-2026-08-16)","quando":"2026-08-17T08:24:05.790Z"}
 {"id":"a3ada7594a686cac2","slug":"judge-pr49-giudice","cosa":"judge (sonnet) della PR #49 giudice memoria: verdetto mai indulgente, risposta grezza sanificata, reconcile su failure, raggruppamento, logger manuale, E5 in harness, nessuno schema","quando":"2026-08-17T08:24:05.835Z"}
 {"id":"a3ada7594a686cac2","branch":"slice/giudice-risposta-grezza","quando":"2026-08-17T08:24:05.880Z"}
+{"id":"ae4998a4bcd5d7ef3","slug":"lease-fencing","cosa":"slice/lease-fencing: invariante 8 — lease con generation/holder_id, fencing sulle scritture di stato del turno e su markRan/delivery, refresh che rispetta l'orizzonte, fire-claim del job (audit HIGH P19/P20/P21) (sonnet, worktree isolato) [ri-registrata: la riga originale era in un worktree rimosso prima del commit]","quando":"2026-08-17T08:40:42.080Z"}
+{"id":"ae4998a4bcd5d7ef3","branch":"slice/lease-fencing","quando":"2026-08-17T08:40:42.129Z"}
+{"id":"a834b53034f1189e6","slug":"judge-pr50-51","cosa":"judge (sonnet) delle PR #50 mandato/audit/piani e #51 riga mappa shell: MERGE entrambe (campione classificazione verificato; evidence byte per byte)","quando":"2026-08-17T08:40:42.177Z"}
+{"id":"a834b53034f1189e6","chiuso":"MERGE #50 (mergiata 08:35Z) e #51 (mergiata 08:40Z); nit ereditato: #28/#29 sono del 15/08 nella frase del checkpoint","quando":"2026-08-17T08:40:42.225Z"}
+{"id":"a3ada7594a686cac2","chiuso":"judge #49: MERGE (5 mutazioni rosse, nessuno schema, E5 in harness); mergiata 08:36Z","quando":"2026-08-17T08:40:42.274Z"}
+{"id":"aad6d529cafac7aa0","chiuso":"slice/fs-containment: PR #52 ready (a1b8632): symlink terminale risolto/rifiutato, ancestor realpath'd, fs_list non enumera fuori scope, O_NOFOLLOW sul leaf, D1 scenario verde; 120 file/1401 pass, acceptance 19; TOCTOU intermedio dichiarato","quando":"2026-08-17T09:03:12.640Z"}
+{"id":"aa543e1e31960d8b9","slug":"judge-pr52-fs","cosa":"judge (sonnet) della PR #52 fs containment: catena via buildRuntime, probe symlink a catena/relativo/penzolante/hardlink, O_NOFOLLOW, D1 READY onesto","quando":"2026-08-17T09:03:12.687Z"}
+{"id":"aa543e1e31960d8b9","branch":"slice/fs-containment","quando":"2026-08-17T09:03:12.735Z"}
+{"id":"ac9a424b4c6e43b0f","slug":"acceptance-truth","cosa":"slice/acceptance-truth: invariante 9 — gate READY-con-atteso-rosso nel rapporto, firma di fallimento sugli attesi-rossi, riconciliazione B8/C4/D10 (audit HIGH P39) (sonnet, worktree isolato)","quando":"2026-08-17T09:04:13.146Z"}
+{"id":"ac9a424b4c6e43b0f","branch":"slice/acceptance-truth","quando":"2026-08-17T09:04:13.191Z"}
+{"id":"a7470ae4992dbdda5","slug":"triage-AB","cosa":"triage evidence-only righe A1-A9 e B1-B17 (sonnet, sola lettura, scratchpad/triage-AB.md)","quando":"2026-08-17T09:48:06.399Z"}
+{"id":"ad55c08c729c7818d","slug":"triage-CD","cosa":"triage evidence-only righe C1-C10 e D1-D12 con le tre verifiche pre-journal (sonnet, scratchpad/triage-CD.md)","quando":"2026-08-17T09:48:06.531Z"}
+{"id":"a7597d795712caa6f","slug":"triage-E-audit","cosa":"triage evidence-only righe E1-E6, 19 MEDIUM audit (chiudi vs OUT per failure plausibile nei 14 giorni), 8 proprietà trasversali (sonnet, scratchpad/triage-E-audit-trasversali.md)","quando":"2026-08-17T09:48:06.670Z"}
+{"id":"ae4998a4bcd5d7ef3","chiuso":"PR #53 aperta (lease/fencing P19/P20/P21), dev mergiato da me, judge opus ab6d82c5034cc39eb","quando":"2026-08-17T10:09:40.358Z"}
+{"id":"ac9a424b4c6e43b0f","chiuso":"PR #54 aperta (acceptance truth P39), dev mergiato da me, judge sonnet a53d8ae3bce12eb8c","quando":"2026-08-17T10:09:40.409Z"}
+{"id":"a7470ae4992dbdda5","chiuso":"triage A+B consegnato in scratchpad/triage-AB.md (6 READY/19 BLOCKER/1 OUT; B8 da rileggere)","quando":"2026-08-17T10:09:40.458Z"}
+{"id":"ab6d82c5034cc39eb","slug":"judge-53","cosa":"judge opus PR #53 lease/fencing (sicurezza/concorrenza)","quando":"2026-08-17T10:09:40.505Z"}
+{"id":"a53d8ae3bce12eb8c","slug":"judge-54","cosa":"judge sonnet PR #54 acceptance truth","quando":"2026-08-17T10:09:40.552Z"}
+{"id":"a81fac055ab426204","slug":"slice-a1-continuita","cosa":"A1 continuità come processo residente: scenario forte kill+restart, Telegram run() retry al boot, doctor supervisore, ADR-0035, M5-BIS A1 (sonnet, slice/a1-continuita)","quando":"2026-08-17T10:11:26.255Z"}
+{"id":"a81fac055ab426204","chiuso":"morto per session limit prima di qualsiasi commit; rilanciato come delega nuova","quando":"2026-08-17T11:35:33.515Z"}
+{"id":"ad55c08c729c7818d","chiuso":"triage C+D consegnato (scratchpad → research/triage-2026-08-17/c-d.md); scoperta WAL intent","quando":"2026-08-17T11:39:16.887Z"}
+{"id":"a7597d795712caa6f","chiuso":"triage E + 14 MEDIUM + 8 trasversali consegnato (research/triage-2026-08-17/e-audit-trasversali.md)","quando":"2026-08-17T11:39:16.934Z"}
+{"id":"ab6d82c5034cc39eb","chiuso":"judge #53: ADJUST (R1 stillOwner lane non provato, R2 loop lost-claim non provato, R3 multiplier non pinnato)","quando":"2026-08-17T11:39:16.979Z"}
+{"id":"a53d8ae3bce12eb8c","chiuso":"judge #54: ADJUST (gate CI || true non ferma nulla; B8 promossa oltre lo scenario)","quando":"2026-08-17T11:39:17.027Z"}
+{"id":"a6370b7d7df1dc8d8","slug":"slice-a1-continuita","cosa":"A1 lettura forte (rilancio dopo session limit): scenario SIGKILL gateway + riavvio, Telegram retry al boot, doctor supervisore (sonnet, slice/a1-continuita)","quando":"2026-08-17T11:39:17.076Z"}
+{"id":"a644ee96f04881ba9","slug":"pr53-giro2","cosa":"PR #53 giro 2: test per stillOwner lane (R1), loop alla perdita del claim (R2), pin multiplier (R3), skew doc (R4) (sonnet)","quando":"2026-08-17T11:39:17.123Z"}
+{"id":"a84a95a95ad601916","slug":"pr54-giro2","cosa":"PR #54 giro 2: gate CI pull_request senza || true, E4 provata dal meccanismo, nota B8 ristretta, nota C4 (sonnet)","quando":"2026-08-17T11:39:17.170Z"}
+{"id":"a285665f95d378d78","slug":"slice-triage-day1","cosa":"slice di stato: M5-BIS senza ?, audit README, STATE, LAVORO (sonnet, slice/triage-day1)","quando":"2026-08-17T11:39:17.216Z"}
+{"id":"a836264bdb9089252","slug":"slice-identita-1","cosa":"A2/A3 parte 1: ricostruzione assemblaggio prompt, home canonica per persona/voice/identity, muffin prompt show truthful, RoT, wiring/mutation test, scenario A2/A3 (sonnet, slice/identita)","quando":"2026-08-17T12:08:59.283Z"}
+{"id":"a84a95a95ad601916","chiuso":"PR #54 giro 2 fatto; re-judge MERGE; mergiata 12:16Z","quando":"2026-08-17T12:16:59.212Z"}
+{"id":"abb73a1be911184f0","chiuso":"re-judge #54: MERGE","quando":"2026-08-17T12:16:59.264Z"}

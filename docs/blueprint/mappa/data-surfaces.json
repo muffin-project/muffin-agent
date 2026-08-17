@@ -35,7 +35,7 @@
     {
       "cmd": "muffin doctor",
       "sub": [],
-      "file": "cli/main.ts:167-168,396-405 -> cli/doctor.ts:44",
+      "file": "cli/main.ts:167-168,396-405 -> cli/doctor.ts:52",
       "what": "Diagnosi che esegue i controlli invece di assumerli.",
       "wired": true,
       "note": "--online e' un flag accettato ma inerte: 'online check not implemented in M0' (cli/doctor.ts:248). Nessun check sulle skill (vedi gaps)."

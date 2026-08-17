@@ -9,15 +9,15 @@
 <!-- INIZIO BLOCCO -->
 **Aggiornato**: 2026-08-17
 
-**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md` (12 invarianti, capability §5, battery di cutover, ultimo audit). Fallback definito in `04-roadmap.md` §Gate 1.
+**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md`; sequenza in `gate1/PERCORSO-CRITICO.md`.
 
-**Audit e2a47ac**: 1 CRITICAL, 4 HIGH, 19 MEDIUM, tutti ancora presenti (`research/audit-2026-08-16/README.md`). Ordine: fs containment (in corso) → lock/lease/fencing → acceptance truth → scheduler/job → egress params → injection canale fidato → segreti a riposo → standalone.
+**Triage 17/08 fatto**: `M5-BIS.md` riscritto riga per riga — 9 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED (54 righe). `?` ritirato salvo B8/D10 (li tocca #54, in giudizio sulla stessa riga).
 
-**In volo**: `slice/fs-containment` (CRITICAL P29/P28) · #49 giudice memoria (judge). Poi una alla volta (max 2 non sovrapposte).
+**In volo**: PR #53 `slice/lease-fencing` e PR #54 `slice/acceptance-truth` (giudizio g2, non in scrittura) · `slice/a1-continuita` (A1 lettura forte, l'unica slice attiva — tetto due non sovrapposte).
 
-**Capability §5 aperte**: A2/A3 (owner) · A6/A7/A8 update/migrazione/backup · A9 · D2/D3/D11 journal · D12 ASK · B15 · C8 · E1 · prompt in `defaults/prompts/` · audit CLI/slash · B2 al test di prod.
+**Prossime tre slice (PC §1)**: `wal-intent` (1.1, intent WAL per tool call) · `session-taint` (1.2, taint attraverso la history) · `recall-speaker` (1.3, episodio agente ≠ "tu").
 
-**Piani (ADR-0045 §rev. 17/08)**: Evidence · Beliefs · Work · Effects · Authority — nessuno store è due piani; SessionStore/turn_tool_calls/delivery sono le cuciture note.
+**Decisioni owner aperte**: P34-2 segreti a riposo · audio nei 14gg sì/no · scope lettura sandbox · `mcp.*` per-tool · `ricorda` scrive/propone · lingua doc pubblici.
 <!-- FINE BLOCCO -->
 
 ---

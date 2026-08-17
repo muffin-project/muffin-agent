@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import { GatewayLock, readGateway, STALE_AFTER_MS } from './lock.js';
 
 /**
@@ -40,11 +41,12 @@ describe('GatewayLock', () => {
     expect(readGateway(database, at(1000), () => true)?.pid).toBe(4243);
   });
 
-  it('a claim nobody refreshed goes stale whatever its pid says', () => {
-    // The pid-reuse backstop, inherited from the send lock: after a hard kill
-    // the pid can be handed to an unrelated process within hours, and a bare
-    // pid check would then report a gateway that died days ago — refusing every
-    // `muffin gateway run` forever.
+  it('a genuinely alive gateway is not stolen just for missing the ordinary horizon (P20)', () => {
+    // P20: `heldBy` used to ask the wall clock *before* it ever asked whether
+    // the holder was alive, so a gateway that was genuinely still running —
+    // mid-sleep, mid-batch, one long synchronous stall — but had missed its
+    // heartbeat by more than `STALE_AFTER_MS` read exactly like a corpse.
+    // `alive` says true throughout here: this is that holder.
     const database = db();
     const lock = new GatewayLock(database, () => true);
     lock.claim(T0, 'in attesa', 4242);
@@ -52,7 +54,26 @@ describe('GatewayLock', () => {
     expect(lock.claim(at(STALE_AFTER_MS - 1000), 'in attesa', 4243)).toMatchObject({
       held: expect.stringContaining('4242'),
     });
-    expect('release' in lock.claim(at(STALE_AFTER_MS + 1000), 'in attesa', 4243)).toBe(true);
+    // Past the ordinary horizon, still alive: still held. This exact instant
+    // is where the pre-fix code handed the claim to 4243.
+    expect(lock.claim(at(STALE_AFTER_MS + 1000), 'in attesa', 4243)).toMatchObject({
+      held: expect.stringContaining('4242'),
+    });
+  });
+
+  it('a claim nobody refreshed goes stale past the hard horizon, whatever its pid says — the pid-reuse backstop', () => {
+    // The backstop this test exercises: `alive` cannot distinguish "pid 4242
+    // is still the same gateway" from "pid 4242 was reused by an unrelated
+    // process", so a claim that has not been refreshed in a very long time is
+    // treated as gone even though `alive` still says yes. Wide enough
+    // (`HARD_STALE_MULTIPLIER`) that no genuinely-alive gateway reaches it in
+    // ordinary operation — see the test above for that half.
+    const database = db();
+    const lock = new GatewayLock(database, () => true);
+    lock.claim(T0, 'in attesa', 4242);
+
+    const pastHard = at(STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1000);
+    expect('release' in lock.claim(pastHard, 'in attesa', 4243)).toBe(true);
   });
 
   it('a heartbeat pushes the horizon out, so a live gateway is never stale', () => {
