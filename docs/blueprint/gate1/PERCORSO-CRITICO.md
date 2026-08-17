@@ -24,24 +24,20 @@ non sovrapposte in volo.
 
 *(Questa sezione è verificata meccanicamente: `node .claude/riconcilia.mjs` esce
 ≠ 0 se qui compare una PR già mergiata o un branch già cancellato. Va aggiornata
-**nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4.)*
+**nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4. Il
+controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 
-- **`slice/session-taint`** (PC 1.2, CRITICAL) — WIP committato e pushato al
-  session limit del 17/08: tier per messaggio di sessione, la history reiniettata
-  alza la taint prima del kernel. Da riprendere.
-- **`slice/egress-params`** (PC 1.6, CRITICAL) — WIP committato e pushato:
-  il kernel ispeziona query/URL, `sys.search` entra nel ramo egress. Da
-  riprendere.
-- **`slice/audit-mediums`** (PC 2.4, STANDARD) — WIP committato e pushato:
-  cluster di MEDIUM piccoli (P34-1, P35, P36, P25, P33, E2). Da riprendere.
+- **`slice/egress-params`** (PC 1.6, **CRITICAL**) — implementazione, wiring e
+  scenari già scritti prima del session limit; `origin/dev` mergiato e mappa
+  rigenerata. Resta: rifinire, riverificare per mutazione il gate sui parametri,
+  judge fresco, verdetto terminale.
+- **`slice/session-taint`** (PC 1.2, **CRITICAL**) — WIP committato e pushato:
+  tier per messaggio di sessione, la history reiniettata alza la taint prima del
+  kernel. Da riprendere allo stesso modo.
 - **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
-  pushato: character eval a proprietà, cross-model, confronto col vecchio Muffin.
-  Da riprendere; la corsa reale sui modelli costa e va proposta all'owner.
-- **`slice/egress-params`** (PC 1.6, CRITICAL) — implementazione e scenari già
-  scritti, `dev` mergiato: da rifinire e mandare a un judge fresco.
-- **`slice/session-taint`** (PC 1.2, CRITICAL) — WIP da riprendere.
-- **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP da riprendere; la
-  corsa reale sui modelli costa e va proposta all'owner.
+  pushato: character eval a proprietà, cross-model, confronto qualitativo col
+  vecchio Muffin. La corsa reale sui modelli costa e va proposta all'owner prima
+  di lanciarla.
 
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
