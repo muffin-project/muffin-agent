@@ -372,6 +372,17 @@ export async function cmdGatewayRun(
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'yielded') {
+        // P21 (1b)/(2) MEDIUM: an aborted job retries every tick and a job
+        // whose fire was declined by `stillOwner` mid-run both used to reach
+        // no surface at all — under a supervisor, `journalctl` was the only
+        // way to learn a job was stuck in a retry loop or lost a takeover race.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro\n`);
+      } else if (e.kind === 'not_recorded') {
+        // P21 (3) MEDIUM: `markRan`/`recordDelivery` threw. The fire still
+        // happened and the schedule still advanced (see `settle`'s own
+        // comment); this is the one place that says so.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\n`);
       }
     },
     undefined,
@@ -382,6 +393,10 @@ export async function cmdGatewayRun(
     // The same token the turn lane gets below, which is the whole point of
     // building it above rather than letting each lane default to its own.
     modelLane,
+    // P20: a fresh read of this gateway's own claim, re-verified before a job
+    // starts and again before delivery — `standDown` alone gives this
+    // scheduler no protection, since it always answers "no, I own it".
+    () => lock.isCurrentClaim(),
   );
 
   /**
@@ -421,6 +436,11 @@ export async function cmdGatewayRun(
     // The same token the scheduler got, which is the whole point of building it
     // above rather than letting each lane default to its own.
     modelLane,
+    // The same check the scheduler gets, and for the same reason (P20): this
+    // lane has no `standDown` of its own here either, so without this a
+    // takeover mid-resume would go uncaught until the next tick's `due()`
+    // simply found nothing left to claim.
+    stillOwner: () => lock.isCurrentClaim(),
   });
 
   let stopSurfaces: (() => void) | null = null;

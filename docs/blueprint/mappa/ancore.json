@@ -41,12 +41,12 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1027,
+    "line": 1038,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1169,
+    "line": 1180,
     "testo": "if (nudgedForCompletion === false) {"
   },
   "agent/loop.ts:172": {
@@ -56,22 +56,22 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1851,
+    "line": 1937,
     "testo": "* world and an intent row for it would be a lie about what was attempted."
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1869,
+    "line": 1955,
     "testo": "// whole defect: it turned \"this tool said nothing about provenance\" into"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 1790,
+    "line": 1876,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1873": {
     "path": "agent/loop.ts",
-    "line": 1971,
+    "line": 2057,
     "testo": "* carried: `resourceKind` says what kind of thing this capability acts on and"
   },
   "agent/loop.ts:271": {
@@ -286,12 +286,12 @@
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 965,
+    "line": 971,
     "testo": "// released and nothing holds it while the deadline runs."
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 982,
+    "line": 993,
     "testo": "// `tool_use` keeps its `tool_result` and the request stays well-formed."
   },
   "agent/observe-run.ts:104": {
@@ -796,17 +796,17 @@
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 375,
+    "line": 386,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 381,
+    "line": 392,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 388,
+    "line": 403,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
@@ -1066,27 +1066,27 @@
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 294,
+    "line": 300,
     "testo": "ticker.unref(); // the timer must not, by itself, keep the process alive"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 325,
+    "line": 331,
     "testo": "process.stderr.write(`${session.id}\\n`);"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 281,
+    "line": 287,
     "testo": "}"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 328,
+    "line": 334,
     "testo": "if (line === '/spend') {"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 339,
+    "line": 345,
     "testo": "controller = new AbortController();"
   },
   "cli/run.ts:26": {
@@ -1326,7 +1326,7 @@
   },
   "core/gateway/lock.ts:63": {
     "path": "core/gateway/lock.ts",
-    "line": 63,
+    "line": 64,
     "testo": "export class GatewayLock {"
   },
   "core/gateway/notify.ts:105": {
@@ -1376,7 +1376,7 @@
   },
   "core/lock/durable.ts:93": {
     "path": "core/lock/durable.ts",
-    "line": 93,
+    "line": 191,
     "testo": "export class DurableLock {"
   },
   "core/mcp/registry.ts:58": {
@@ -1971,7 +1971,7 @@
   },
   "core/scheduler/scheduler.ts:240": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 240,
+    "line": 278,
     "testo": "* duration, it is money and not correctness, and closing it would require"
   },
   "core/session/store.ts:35": {
@@ -2031,7 +2031,7 @@
   },
   "core/turns/lane.ts:86": {
     "path": "core/turns/lane.ts",
-    "line": 86,
+    "line": 97,
     "testo": "* construction site — instead of a silent regression a judge has to"
   },
   "core/vault/vault.ts:238": {
@@ -2366,7 +2366,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1737,
+    "line": 1823,
     "testo": "toolCallId: call.id,"
   },
   "loop.ts:299": {
