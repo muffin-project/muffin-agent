@@ -8,6 +8,7 @@ import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
@@ -40,6 +41,12 @@ export type DoctorOptions = {
   online?: boolean;
   /** Test-only: overrides the shipped `agent/profiles/` directory. */
   profilesDir?: string;
+  /**
+   * Test-only: overrides the real OS probes `checkSupervisor` reaches for
+   * (`realSupervisorProbes`) — `systemctl`, `loginctl`, `launchctl`. Merged
+   * over the real ones, so a test only has to name the probe it is driving.
+   */
+  supervisorProbes?: Partial<SupervisorProbes>;
 };
 
 export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
@@ -536,6 +543,21 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         'nessun processo attivo: i job schedulati girano solo mentre una sessione `muffin` è aperta',
         'run `muffin gateway install` (o `muffin init`, che te lo propone)',
       );
+    }
+
+    // A5's own question asked of the *supervisor* rather than the process:
+    // `readGateway` above is true for a `muffin gateway run` typed by hand,
+    // which is exactly the state ADR-0035 (A1, owner's words) says continuity
+    // must not depend on. Never `fail` (see supervisor.ts) — a missing unit is
+    // a gap to close before trusting a reboot, not a broken install today.
+    const supervisor = checkSupervisor(process.platform, home, gateway !== null, {
+      ...realSupervisorProbes(),
+      ...options.supervisorProbes,
+    });
+    if (supervisor.engaged) {
+      ok('supervisore', supervisor.detail);
+    } else {
+      warn('supervisore', supervisor.detail, supervisor.remedy);
     }
     db.close();
   } catch (error) {
