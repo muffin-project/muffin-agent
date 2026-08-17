@@ -933,6 +933,28 @@ twice until the internal logger learned to stay quiet on `trigger:
 (`evals/acceptance/scenarios/e-cost.accept.ts`, E5), not by either unit
 suite alone, because each printer's own test only ever looked at itself.
 
+## An atteso-rosso that accepts any error is a test that cannot notice it has become false **(this build)**
+
+`evals/acceptance/scenario.ts` ran every M5-BIS row still marked "missing" as
+`it.fails`, which only answers "did it throw". D10's manifest reason named
+`slice/taint-in-ingresso` as the branch that would close it; that slice
+merged 2026-08-15 and a judge on PR #28 closed its failure-path gap the next
+day, but the row stayed "atteso-rosso" for two more days because the
+scenario's own assertion queried `turn_tool_calls` for a call the kernel
+*denies* — which never reaches `runTool`'s execution path, so it never wrote
+that row even on the day the fix landed. The scenario kept throwing, for a
+reason unrelated to the one the manifest named, and `it.fails` cannot tell
+the two apart.
+
+**Instead:** `atteso-rosso` entries now carry a required
+`expectFailure: RegExp | ((error) => boolean)`, checked against the actual
+thrown error inside a plain `it`. A throw that matches is still correctly
+red; one that does not is `rosso-inatteso`, not "va bene così".
+
+> **A test that can pass no matter what broke is not weaker evidence than no
+> test — it is evidence with the sign flipped, because the row it covers now
+> reads "verified" to everyone who has not read the assertion.**
+
 ## Symlink resolution has to cover the leaf and the parent, not just the middle **(this build)**
 
 `agent/tools/fs.ts`'s `resolveInScope()` already had a test named exactly for

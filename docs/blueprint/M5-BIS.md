@@ -60,19 +60,27 @@ installazione con dentro qualcosa).
 Il che stringe la sequenza invece di allargarla: **ogni decisione di schema va
 chiusa prima del giorno 1**, non prima dell'open source.
 
-## La regola delle tre risposte
+## La regola delle quattro risposte
 
-Ogni riga di questo inventario deve avere **una** di queste tre, e la quarta non
-esiste:
+> **Aggiornata dal triage evidence-only del 17/08** — vedi il blocco in cima
+> all'inventario. `?` smette di essere una risposta legittima: era un debito
+> travestito da stato, non una quarta categoria.
+
+Ogni riga di questo inventario deve avere **una** di queste quattro, e una
+quinta non esiste:
 
 - **READY** — implementata, cablata, provata, e il percorso reale ci arriva.
-- **FUORI DAL GATE 1** — deliberatamente non serve per i 14 giorni, **con la
-  ragione scritta**.
+- **FUORI DAL GATE 1** (`OUT`) — deliberatamente non serve per i 14 giorni,
+  **con la ragione scritta**.
 - **BLOCKER** — impedisce i 14 giorni.
+- **INVALIDATED** — la premessa della riga non regge più: la domanda Gate 1
+  che poneva non ha più senso contro il sistema reale, con la ragione scritta
+  e cosa la sostituisce.
 
-> **«Non ci avevamo pensato» è la quarta categoria, ed è precisamente quella che
-> ci ha portati a M5-bis.** Se durante il lavoro emerge una lacuna nuova, non si
-> nasconde: si aggiunge qui.
+> **«Non ci avevamo pensato» è la quinta categoria che non esiste, ed è
+> precisamente quella che ci ha portati a M5-bis.** Se durante il lavoro emerge
+> una lacuna nuova, non si nasconde: si aggiunge qui con una delle quattro
+> risposte sopra — mai un `?` lasciato a fare da segnaposto.
 
 ## Cosa significa «chiuso»
 
@@ -89,43 +97,59 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 
 ## L'inventario
 
-Stato: `READY` · `OUT` (fuori dal Gate 1, con ragione) · `BLOCKER` · `?` (non
-ancora verificato — **è un debito, non uno stato**).
+> **Triage evidence-only 17/08.** Tre worker in sola lettura hanno riletto ogni
+> riga A1–E6, i 19 MEDIUM residui dell'audit e le otto proprietà trasversali
+> del mandato contro `origin/dev` — `research/triage-2026-08-17/{a-b,c-d,
+> e-audit-trasversali}.md`. L'ordine in cui le righe BLOCKER si chiudono è
+> `gate1/PERCORSO-CRITICO.md`, non questo file: qui c'è la risposta, lì la
+> sequenza e il perché.
+>
+> **Conteggio finale: 11 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED** (55
+> righe, E7 aggiunta dall'owner il 17/08). Con la PR #54 integrata (`slice/acceptance-truth`): **D10** è READY
+> (taint 3 → egress negato, scenario verde), **B8** è READY nel perimetro
+> ristretto che il suo scenario prova, **C4** è READY (scenario verde con
+> entità capitalizzata). **`?` non esiste più come stato: ogni riga ha una
+> delle quattro risposte con evidenza.**
+
+Stato: `READY` · `OUT` (fuori dal Gate 1, con ragione) · `BLOCKER` (con cosa
+manca e la slice del percorso critico che la chiude) · `INVALIDATED`
+(premessa non più valida, con ragione). `?` è ritirato dal 17/08 — le due
+eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 
 ### A · Installazione e ciclo di vita → `gate1/a-installazione.md`
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| A1 | Boot | Muffin parte da solo e recupera lo stato? | ? |
-| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 template vuoto |
-| A3 | Persona | Il comportamento è definito? | BLOCKER 👤 manca il taglio dell'owner |
-| A4 | Config | Si configura senza toccare il codice? | ? |
-| A5 | Doctor | Individua **davvero** i problemi? | ? |
-| A6 | Upgrade | Aggiornare il codice non distrugge dati? | ? |
-| A7 | Migration | Lo schema evolve senza perdere memoria? | ? ⚠️ `episodes.kind` ha un CHECK non alterabile |
-| A8 | Backup | La memoria si salva e si ripristina? | ? |
-| A9 | Setup locale | `muffin init --local` riusa i segreti persistiti per un'installazione pulita di prova? | BLOCKER 👤 — richiesto dall'owner (16/08): senza, ogni prova «da utente nuovo» costa reincollare le chiavi |
+| A1 | Boot | Muffin parte da solo e recupera lo stato? | BLOCKER — boot pulito e riavvio pulito sono provati (`evals/acceptance/scenarios/a-lifecycle.accept.ts:14-54`, verde), ma la lettura forte dell'owner (17/08) chiede il processo residente supervisionato: SIGKILL del gateway vero + riavvio, turno sospeso e job dovuti ripresi una sola volta, `status`/`doctor` sani, Telegram che riprova `getMe()` finché la rete non c'è, `doctor` che verifica unit/plist/enable/linger — nessuno di questi ancora provato → PC §0 `slice/a1-continuita` |
+| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 template vuoto — `defaults/rot/identity.md` ha le sezioni vive ancora vuote (commenti HTML, proposte A-H da tagliare/riscrivere); nessun check `doctor` segnala "identity è ancora il template"; manca solo il contenuto dell'owner → PC §6 (solo owner) |
+| A3 | Persona | Il comportamento è definito? | BLOCKER 👤 manca il taglio dell'owner — `defaults/persona.md` §«Al primo incontro» porta il proprio commento «SBAGLIATA E VA RIFATTA (owner, 2026-08-09)»; manca solo il taglio dell'owner → PC §6 (solo owner) |
+| A4 | Config | Si configura senza toccare il codice? | BLOCKER — solo scenario mancante: `muffin config` è read-only per disegno (ADR-0036, `cli/config.ts:7,22-37`), validazione zod rumorosa al caricamento (`core/config/config.ts:35-63`), ma nessuno scenario prova l'hand-edit di `config.json` + `muffin rot reseal` end-to-end → PC §4 |
+| A5 | Doctor | Individua **davvero** i problemi? | READY — manomissione reale di `rot/policy.json`, `doctor` la rileva e nomina il file con un rimedio azionabile (`evals/acceptance/scenarios/a-lifecycle.accept.ts:56-94`, verde); ogni check esegue, non assume (`cli/doctor.ts:45-568`) |
+| A6 | Upgrade | Aggiornare il codice non distrugge dati? | BLOCKER — nessun verbo `update`/`upgrade` in `cli/main.ts`; `ensureColumn` esiste solo per 3 colonne di `core/memory/store.ts` (audit P27), `turns`/`jobs` non hanno l'equivalente; nessuno scenario da schema popolato preesistente → PC 2.1 `slice/schema-evolution` |
+| A7 | Migration | Lo schema evolve senza perdere memoria? | BLOCKER ⚠️ `episodes.kind` ha un CHECK a 5 valori che SQLite non altera (`core/turns/store.ts:34-35` lo cita come trappola); stessa causa radice di A6 (nessun migration runner condiviso); nessun test da schema popolato → PC 2.1 `slice/schema-evolution` |
+| A8 | Backup | La memoria si salva e si ripristina? | BLOCKER — lo scenario (`evals/acceptance/scenarios/a-lifecycle.accept.ts:96-129`, verde) prova solo la copia a freddo (processo fermo); il gateway è un processo residente quindi il backup reale è a caldo, sotto scrittura WAL (`cli/init.ts:109-111`); nessun verbo `muffin backup`/`restore` → PC 2.2 `slice/update-backup` |
+| A9 | Setup locale | `muffin init --local` riusa i segreti persistiti per un'installazione pulita di prova? | BLOCKER — richiesto dall'owner (16/08): senza, ogni prova «da utente nuovo» costa reincollare le chiavi; nessun flag `--local` in `cli/init.ts`/`cli/main.ts`, il meccanismo di lettura del segreto esiste già (`locateSecret`/`readSecret`) → PC 3.2 `slice/init-local` |
 
 ### B · Continuità del runtime → `gate1/b-continuita.md`
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| B1 | Conversation | CLI e Telegram condividono **davvero** sessione e memoria? | ? |
-| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — meccanismo costruito e provato end-to-end, resta **una chiamata** nel connettore 🪡 |
+| B1 | Conversation | CLI e Telegram condividono **davvero** sessione e memoria? | BLOCKER — lo scenario (`b-continuity.accept.ts:19-71`, verde) prova **solo la metà CLI** (il file lo dichiara: "no real Telegram bot is reachable"); le sessioni non sono la stessa per costruzione (`--session` vs `telegram:${chatId}`, `connectors/telegram/connector.ts:365`), solo la memoria tenant-scoped le collega, mai provata dal lato Telegram → PC 1.5 |
+| B2 | Long-running | Un turno può durare minuti senza rompere il connector? | BLOCKER — meccanismo costruito e provato end-to-end, resta **una chiamata** nel connettore 🪡 (`connectors/telegram/connector.ts:359`, `runTurn` invece di `enqueueTurn`); rimandato di proposito per non entrare in conflitto con `slice/superfici`, chiuso solo al test di prod → PC 3.9 |
 | B3 | Wait | Può aspettare **senza bloccare il runtime**? | READY — `wait` sospende la riga e RILASCIA il runtime; la corsia del gateway la risveglia, e `doctor` avverte se non ne gira nessuna |
 | B4 | Todo | Mantiene lavoro multi-step persistente? | READY — tabella `todos` con `tier`, letta nel contesto di **ogni** turno della sessione |
 | B5 | Resume | Se muore a metà, riprende? | READY — accettazione: processo vero ucciso con SIGKILL a metà turno, riprende al riavvio |
-| B6 | Retry | Se fallisce una tool call, recupera? | ? |
-| B7 | Scheduler | I job sopravvivono al riavvio? | ? |
-| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — `Deliver` ritorna `DeliveryOutcome`, `Scheduler.settle` è l'unico chiamante di `markRan` |
-| B9 | Proactivity | Agisce spontaneamente secondo i gate? | ? ⚠️ 4 dei 5 `ProactiveKind` non hanno produttore |
-| B10 | Telegram | Messaggi, file, immagini, **errori** | ? |
+| B6 | Retry | Se fallisce una tool call, recupera? | BLOCKER — retry esiste solo a livello trasporto/modello (`agent/loop.ts:1089-1103`, `MAX_TRANSPORT_RETRIES=2`); nessun tool (`http.ts`, `search.ts`, `fs.ts`) implementa retry proprio; nessuno scenario → PC 3.4 `slice/provider-retry` |
+| B7 | Scheduler | I job sopravvivono al riavvio? | BLOCKER — il dato sopravvive ma la garanzia no: `heldBy()` giudica stale dal solo wall-clock mai da `alive(pid)` (audit P19/P20, HIGH); nessun fire-claim sul job (P21-4); `yielded` senza consumer (P21-2); decisione owner 17/08: `job_fires` come ponte di identità `(job_id, scheduled_for)→turn_id` — crash prima del fire crea, dopo il fire completa il binding senza perderlo, dopo la creazione riprende lo stesso `turn_id`, turno `done` prima di `markRan` non richiama il modello, delivery incerta non rifà la computazione → PC 1.5 `slice/job-fires` |
+| B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — canale non connesso → `failed:<why>`, mai `sent`, e `doctor` lo nomina ⚠️ nota sotto |
+| B9 | Proactivity | Agisce spontaneamente secondo i gate? | OUT — post-Gate 1: nessuna capability §5 dei 14 giorni dipende da trigger proattivi; `ProactiveKind` ha oggi 4 valori (non 5, `consolidation` rimosso da ADR-0038), solo `gone_quiet` ha un produttore reale (`core/scheduler/observe.ts:109,128`) ed è cablato ma solo su invocazione manuale (`muffin observe --send`); i tre mancanti (`commitment_due`, `deadline_near`, `fact_actionable`) restano fuori finché non emerge un consumer reale → PC §5 |
+| B10 | Telegram | Messaggi, file, immagini, **errori** | BLOCKER — messaggi e documenti ok (provato, vedi C7); immagini bloccate: scaricate ma mai indicizzate (`core/vault/vault.ts:334-337` le salta) e nessun content-block immagine verso il provider (`agent/providers/types.ts` senza `ImageBlock`); errori gestiti a pezzi, non come proprietà unica; nessuno scenario dedicato → PC 3.6 `slice/telegram-media` |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | READY per CLI/REPL e Telegram (`slice/streaming`, due PR verso `dev`) — Discord resta OUT (B17). Entrambi gli adapter honorano `ChatCall.stream` (`Provider.chatStream`, SDK ufficiali, non SSE fatto a mano); il loop bufferizza i delta per giro e li rilascia solo per quello che risponde davvero (mai durante una tool call — un giro nudged dal completion gate non trapela il suo bozzone). REPL: stampa progressiva byte-identica a fine turno, `--no-stream`. Telegram: bozza dal vivo (`sendMessageDraft`, con `draft_id` — mancava, trovato e corretto in questa slice, vedi ADR-0025 §revisione e `docs/lessons.md`) in chat privata, `editMessageText` sul placeholder in gruppo; spento per sessione al primo edit fallito (Hermes); mai più di un messaggio Telegram per turno (overflow → consegna normale a fine turno). **Nota onesta**: un giro si rilascia in un colpo solo a `done` (mai un punto prima è conoscibile — "streamma e ritira" scartato di proposito), quindi un turno senza tool call produce tipicamente UN aggiornamento dal vivo, non un typewriter — la percezione di attività durante l'attesa viene dal placeholder/typing che precede. Fallback singolo e contato se lo stream del provider si rompe a metà (`ProviderStreamError`). Cablaggio verificato end-to-end con provider SSE finto attraverso `buildRuntime` reale (`cli/repl.test.ts`, `connectors/telegram/streaming.test.ts`), non un `Provider`/`TelegramApi` sostituito a mano. Scenario di accettazione contro il binario vero verde (`evals/acceptance/scenarios/b-streaming.accept.ts`, spawna `muffin repl --stream` come processo reale contro il provider SSE finto e legge la richiesta `stream:true` che il fake ha ricevuto — non un'assunzione dalla risposta arrivata giusta) |
-| B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | ? |
-| B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | ? 🔭 |
-| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | READY per l'owner — `send_file` (agent/tools/deliver.ts) raggiunge `Surface.deliverFile` su Telegram e Discord; ⚠️ `hostOnly`, un member non può ricevere un proprio file (vedi sotto) |
-| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — `identify()` unica e cablata su Telegram e Discord (provato da impersonation test su entrambe); DM-only enforced su `channel_type` (D1, judge PR #42, 2026-08-16: un GROUP_DM senza `guild_id` non deriva più `direct: true`); resta aperta la metà "protetto": binding ancora in config, non nel RoT — `ownerUserId` vive in `config.json` ordinario, non nel Root of Trust |
-| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER — invariato: Discord non legge username/global_name/bio per l'identità (stesso non-conflation di Telegram), ma non esiste ancora l'envelope universale con provenienza/tier per campo che B16 chiede — questa slice non l'ha costruito |
+| B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | OUT — UX/polish, non blocca i 14 giorni: `agent/context/compact.ts:89-101` sostituisce l'intero payload con un placeholder invece di troncare testa+coda (un difetto noto, non solo una mancanza); nessun overflow-a-file esiste; B11 (streaming) copre già il segnale di presenza durante l'attesa → PC §5 |
+| B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | OUT — UX/polish: il dato strutturale esiste già (`turns.updated_at`, `core/turns/store.ts:333,779-790`) ma nessun consumer lo legge come segnale di vita; B11 copre la presenza percepita → PC §5 |
+| B14 | Attachment | Un file prodotto arriva come **allegato**, o come percorso da copiare a mano? | BLOCKER — solo scenario mancante: `send_file` (`agent/tools/deliver.ts:58`) raggiunge `Surface.deliverFile` (`core/surface/registry.ts:58-61`) su Telegram e Discord, `hostOnly` dichiarato (⚠️ un member non può ricevere un proprio file, vedi sotto); manca lo scenario di accettazione → PC §4 |
+| B15 | Owner binding | Ogni surface riconosce l'owner solo da un subject-id stabile autenticato e protetto? | BLOCKER — `identify()` unica e cablata su Telegram e Discord (provato da impersonation test su entrambe); DM-only enforced su `channel_type` (D1, judge PR #42, 2026-08-16: un GROUP_DM senza `guild_id` non deriva più `direct: true`); resta aperta la metà "protetto": binding ancora in config, non nel RoT — `ownerUserId` vive in `config.json` ordinario (`core/config/config.ts:80`), non nel Root of Trust → PC 3.5 `slice/pairing-sigilla` |
+| B16 | Ingress parsing | **Ogni** campo letto entra tipizzato con provenienza/taint, inclusi nomi, bio, metadata, immagini e derivati? | BLOCKER nel minimo di PC 1.4: un messaggio **inoltrato** entra oggi a tier 0, byte-identico alle parole dell'owner (audit P14, `connectors/telegram/connector.ts` `parseUpdate`); manca `forward_origin` → tier 2 recintato e caption/filename come campi tipizzati con provenienza → PC 1.4 `slice/ingress-forward`. L'envelope universale oltre il minimo (nomi, bio, entità, poll, contatti) resta OUT/post-Gate 1: nessuna capability dei 14 giorni lo richiede oltre l'ingresso minimo |
 | B17 | Ripresa su Discord | Un turno sospeso (`wait`) su Discord riceve la risposta quando riprende? | OUT — Discord non è nella finestra dei 14 giorni; prima di attivarlo servono `DiscordConnector.deliverTo` e la porta nel `SurfaceRegistry` (oggi la ripresa registra `failed:`; trovato dal judge integrato di #44). Il connettore non manda più una risposta fantasma su un turno sospeso |
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
@@ -215,6 +239,12 @@ ancora verificato — **è un debito, non uno stato**).
 > Trust — nessuna surface lo cambia ancora. B16 è invariato: nessun envelope
 > universale per bio, filename, metadata, OCR o trascrizioni — questa slice
 > non l'ha costruito.
+>
+> **Aggiornamento 17/08 (`gate1/PERCORSO-CRITICO.md` §1.4).** B16 si
+> scompone in due parti con destini diversi: il minimo (`forward_origin` →
+> tier 2 recintato, caption/filename tipizzati) resta BLOCKER e ha una slice
+> dedicata (`slice/ingress-forward`); l'envelope universale oltre quel minimo
+> è OUT/post-Gate 1 — nessuna capability dei 14 giorni personali lo richiede.
 
 > 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
 > `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
@@ -226,22 +256,41 @@ ancora verificato — **è un debito, non uno stato**).
 > l'atto patologico costa meno che stimare i token). Il §5 di quel file elenca
 > riga per riga cosa sposta.
 
+> 🎯 **B8, cosa prova lo scenario — e cosa no.** Lo scenario
+> (`evals/acceptance/scenarios/b-continuity.accept.ts`, righe 73-171) manda un
+> job a un canale `telegram` che questa installazione non connette mai: un
+> `$HOME` fresco non ha token Telegram, quindi `SurfaceRegistry` nasce con zero
+> superfici e `find('telegram')` (`core/surface/registry.ts:28-29`) torna
+> `null` **prima** di toccare una consegna reale. Quello che lo scenario prova
+> è solo la metà negativa: un canale non connesso non fa mai leggere `sent` sul
+> turno — resta `failed:<why>`, e `doctor` (il controllo "consegne" su
+> `TurnStore.undelivered()`, `core/turns/store.ts:912`, cablato in
+> `cli/doctor.ts`) lo nomina per id-turno. La metà positiva — una superficie
+> **davvero connessa**, un `sent` genuino — non è provata qui: arriva dallo
+> scenario A1 rafforzato, in arrivo (`slice/a1-continuita`: gateway vero, job
+> sul canale `cli`, `turns.delivery === 'sent'` e il testo sullo stdout del
+> processo reale), e per Telegram nello specifico dalla journey inbound-unit
+> (`docs/blueprint/gate1/PERCORSO-CRITICO.md` §1.5, in arrivo su `dev`).
+
 ### C · Memoria e acquisizione → `gate1/c-memoria.md`
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| C1 | Memory write | Ogni informazione importante viene acquisita? | ? |
-| C2 | Extraction | L'estrazione è automatica? | READY (ADR-0038) |
-| C3 | Consolidation | Si consolida senza intervento? | READY (ADR-0040) |
-| C4 | Recall | Ripesca il vecchio **e** il superseded? | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) ⚠️ nota sotto |
-| C5 | Provenance | Posso capire **perché** crede una cosa? | ? |
-| C6 | Temporal graph | «Chi era X a maggio» | READY (PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35)) |
-| C7 | PDF | Acquisisce documenti utili? | READY (ADR-0043) ⚠️ niente OCR |
-| C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione; **decisione owner 16/08**: se il modello ha la capability audio va diretto, altrimenti whisper/faster-whisper in locale sulla VPS; fornitore per capability scelto dalla CLI |
-| C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | ? 🔭 |
+| C1 | Memory write | Ogni informazione importante viene acquisita? | READY — scenario `C1` verde (`c-memory.accept.ts:27-58`): turno 1 scrive un fatto, turno 2 su sessione diversa lo recupera via memoria (non transcript di sessione, quello è B1); acquisizione "evidence first" (`agent/loop.ts:872`, `core/memory/store.ts:201`) |
+| C2 | Extraction | L'estrazione è automatica? | BLOCKER — solo scenario mancante: consolidamento cablato a fine turno (`agent/runtime.ts:619`, `core/memory/ingest.ts:182`), debounce 20s misurato sul corpus reale; nessuno scenario di accettazione → PC §4 (J1) |
+| C3 | Consolidation | Si consolida senza intervento? | BLOCKER — solo scenario mancante: drain a pagina piena, dedup a chiave esatta, `muffin memory review` (`core/memory/consolidator.ts`), misurato per STATE.md ma non provato in `evals/acceptance/`; nessuno scenario → PC §4 (J1) |
+| C4 | Recall | Ripesca il vecchio **e** il superseded? | READY — scenario `C4` **verde** sul binario vero dopo la PR #54 (`evals/acceptance/scenarios/c-memory.accept.ts`, entità capitalizzata: `--history` ritrova il fatto superseduto, la ricerca ordinaria quello attivo); meccanismo in PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35) (`factsAsOf`/`nearestFactTo`, `asOf` unico) ⚠️ limite noto: il one-hop del grafo parte solo da un nome capitalizzato (nota sotto); il percorso turno→estrazione→supersede è provato da J1 con C2/C3, non qui |
+| C5 | Provenance | Posso capire **perché** crede una cosa? | BLOCKER — `muffin memory why` esiste per l'owner (`cli/memory.ts:29`, `core/memory/store.ts:918 provenanceOf`), ma non è esposto come tool-agente (`agent/tools/memory.ts` ha solo `memorySearchSpec`); nessuno scenario → PC §4 (J2) |
+| C6 | Temporal graph | «Chi era X a maggio» | BLOCKER — solo scenario mancante: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts:545,581`) e `asOf` come parametro unico (`core/memory/recall.ts:167-236`) cablati sia in CLI sia nel tool; nessuno scenario di accettazione → PC §4 (J1) |
+| C7 | PDF | Acquisisce documenti utili? | BLOCKER — solo scenario mancante: PDF/DOCX/testo interi (`core/documents/extract.ts`), percorso allegato→vault→reindex→episodio provato da `connectors/telegram/document-arrival.test.ts` (non-acceptance, 326 righe); fallimento esplicito su scansioni senza testo; manca lo scenario in `evals/acceptance/` → PC §4 (J2) |
+| C8 | Audio | Gestisce le note vocali? | BLOCKER — nessuna trascrizione: `media.ts` salva il vocale come binario opaco, `vault.ts` lo salta senza estrattore, zero righe di whisper/faster-whisper nel repo; se le note vocali servono nei 14 giorni — decisione owner pendente (PC 3.8, ultima) |
+| C9 | Pressure | L'agente sa **quanto spazio gli resta**, dentro il prompt? | OUT — post-Gate 1: la forma del segnale ("spazio residuo") è ancora da decidere e cambierebbe il prefisso cacheabile owner (`agent/context/assemble.ts`, pinnato a sha256); nessuna capability dei 14 giorni ne dipende → PC §5 |
 | C10 | World state | Distingue ciò che vale adesso da episodi, credenze e lavoro? | OUT — post-Gate 1, consumer prima dello schema (ADR-0045) |
 
-> **C4/C6, cosa vuol dire `READY` qui.** `--history` era già stato corretto per
+> **C4/C6 — cosa il meccanismo prova.** Riclassificate `BLOCKER` il 17/08 per
+> mancanza/rossore dello scenario di accettazione (C4 ha uno scenario reale
+> ma ancora rosso, `it.fails` conferma; C6 non ne ha uno) — non per un difetto
+> nel meccanismo sotto, che resta quello descritto qui. `--history` era già stato corretto per
 > i fatti sul solo hop grafo (`d66765d`, già in `dev` prima di questa slice); il
 > gap reale era più stretto di quanto la riga dicesse, ma restava su tre punti:
 > il lato episodi di `--history`, `asOf` come primitiva unica al posto di due
@@ -279,8 +328,28 @@ ancora verificato — **è un debito, non uno stato**).
 > vale solo per gli episodi, mai per i fatti — per costruzione, coerente con
 > `02-ontologia.md` §9 che nomina il filtro come proprietà dell'evidenza, non
 > del grafo.
+>
+> ⚠️ **Il one-hop grafo parte solo da un nome capitalizzato in query.**
+> `extractCandidateNames` (`core/memory/recall.ts:819-820`) prende come
+> candidato solo una parola che comincia per maiuscola
+> (`/\b[A-ZÀ-Ú][\wÀ-ú'-]{2,}\b/`); lo scenario C4
+> (`evals/acceptance/scenarios/c-memory.accept.ts`) usa di proposito
+> un'entità scritta come nome proprio ("Ristorante preferito") perché è
+> l'unico percorso di ritrovamento che può raggiungere questo fatto (vedi
+> sopra). Una query tutta minuscola ("il mio ristorante preferito") non fa
+> partire l'hop — limite noto, non coperto dal claim di questa riga.
+>
+> **Aggiornamento 17/08.** Il triage evidence-only aveva trovato lo scenario
+> `C4` rosso perché il fixture scriveva via `addFact`/`supersede` diretti; la PR
+> #54 lo ha riscritto (entità capitalizzata, vedi sopra) ed è **verde** sul
+> binario vero: C4 è READY nel perimetro dichiarato. Il percorso completo
+> turno→estrazione→giudice→supersede resta da provare per **C2/C3** (`gate1/
+> PERCORSO-CRITICO.md` §4, journey J1); C6 (`asOf`) resta BLOCKER solo per
+> scenario mancante nella stessa journey.
 
-> **C7, cosa vuol dire `READY` qui.** PDF, DOCX e testo entrano **interi** nel
+> **C7 — cosa il meccanismo prova.** Riclassificata `BLOCKER` il 17/08 per
+> mancanza dello scenario di accettazione, non per un difetto nel meccanismo
+> sotto. PDF, DOCX e testo entrano **interi** nel
 > piano evidence (`core/documents/`, `unpdf` 1.8.1), pagina per pagina, e il
 > percorso vero ci arriva: allegato Telegram → `vault/inbox/` → `reindexPath` →
 > episodi `kind='document'`, nello stesso tenant risolto dal connector. Il turno
@@ -305,34 +374,40 @@ ancora verificato — **è un debito, non uno stato**).
 > Insieme all'OCR resta fuori la **struttura visiva**: due colonne e le celle di
 > una tabella arrivano come testo di seguito (misurato in ADR-0043), il contenuto
 > tutto, la forma no.
+>
+> **Aggiornamento 17/08.** `document-arrival.test.ts` prova il meccanismo ma
+> non gira in `evals/acceptance/`: il lavoro che resta è incapsulare un test
+> già passante nell'harness di accettazione, non scrivere nuova logica
+> (`gate1/PERCORSO-CRITICO.md` §4, journey J2, con C5).
 
 ### D · Capability e sicurezza → `gate1/d-capability.md`
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| D1 | File read | Legge file reali? | ? |
-| D2 | File write | Modifica file reali **in sicurezza**? | BLOCKER — rifiuta ogni draft |
-| D3 | Undo | Posso recuperare una modifica? | BLOCKER — registro assente |
-| D4 | Shell | Esegue comandi nel sandbox? | READY su macOS · ? su Linux 🔧 |
-| D5 | Process | Gestisce processi lunghi? | ? |
-| D6 | HTTP | Naviga secondo policy? | READY (estrazione in #8) |
-| D7 | Web search | Funziona end-to-end? | ? |
-| D8 | MCP | Gestisce drift e revoca? | ? — pinning solo all'attach |
-| D9 | Skills | Scopre e usa le skill? | ? |
-| D10 | Security | Nessuna capability escape? | ? |
-| D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava |
-| D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando |
+| D1 | File read | Legge file reali? | READY — scenario `D1` verde (`d-capability.accept.ts:15-66`): symlink che punta fuori dal workspace, `fs_read` lo rifiuta (`is_error=1`); `realpathDeepest` risolve il path reale anche per hard link in lettura (PR #52, `agent/tools/fs.ts:238`); CI Linux verde sullo stesso HEAD (run 32016357127) |
+| D2 | File write | Modifica file reali **in sicurezza**? | BLOCKER — rifiuta ogni draft: ogni capability col verdetto kernel `draft` (es. `fs.write`) è rifiutata a priori con messaggio fisso, mai eseguita (`agent/loop.ts:1790-1802`); `fs_write` non scrive mai un file reale oggi → PC 2.3 `slice/undo-journal` |
+| D3 | Undo | Posso recuperare una modifica? | BLOCKER — registro assente: `muffin undo` non esiste come comando (scenario `D3` atteso-rosso confermato, `d-capability.accept.ts:105-126`); la forma è decisa (§1, quattro classi + journal per turno) ma zero righe di implementazione → PC 2.3 `slice/undo-journal` |
+| D4 | Shell | Esegue comandi nel sandbox? | BLOCKER — solo scenario mancante: "? su Linux" è stale, chiuso il 15/08 (PR #13 `slice/sandbox-linux`); CI Linux verde su `dev@3068ece` (run 32016357127, job `verifica`, 2026-08-17T09:39:47Z); la prova vive in CI, va portata nell'harness di accettazione o dichiarata equivalente → PC §4 (J6) |
+| D5 | Process | Gestisce processi lunghi? | BLOCKER — solo scenario mancante per list/kill: `process_list`/`process_kill` tipizzati (`agent/tools/process.ts:47-97`), `sys.process.kill` è ASK in single-user; nessuno scenario → PC §4 (J6). Avviare processi propri in background resta OUT (nessuna capability dei 14 giorni lo richiede) |
+| D6 | HTTP | Naviga secondo policy? | BLOCKER — solo scenario mancante: `resourceKind:'url'` raggiunge davvero il kernel (`agent/tools/http.ts:39`, `core/policy/decide.ts:155-193`), allowlist per label esatta, redirect ricontrollato a ogni hop, SSRF floor verificato; nessuno scenario di accettazione → PC 1.6 `slice/egress-params` (J5) |
+| D7 | Web search | Funziona end-to-end? | BLOCKER — `sys.search` dichiara `resourceKind:'none'` (`agent/tools/search.ts:57`) e non raggiunge mai il ramo egress del kernel (`core/policy/decide.ts:155`, identico a audit P04-2): l'intera query esce senza ispezione di policy → PC 1.6 `slice/egress-params` (J5) |
+| D8 | MCP | Gestisce drift e revoca? | OUT — revoca calda: pinning e sospensione su drift sono solidi (`core/mcp/registry.ts:125 verifyTools`, `agent/tools/mcp.ts:11-24`), ma `muffin mcp remove` lo dice già onestamente («spariscono al prossimo avvio», `cli/mcp.ts:142-152`); il riavvio è un verbo del supervisore (coerente con la lettura forte di A1) → PC §5 |
+| D9 | Skills | Scopre e usa le skill? | BLOCKER — scoperta funziona (`core/skills/skills.ts`, zod, skip rumoroso), ma l'injection non è recintata: `skillsPromptSection` (`core/skills/skills.ts:126`) è uno splice diretto senza escaping nel system prompt owner cache-pinned (audit P33) — `core/mcp/*.ts` recinta già le descrizioni terze con nonce, stesso pattern da riusare → PC 2.4 `slice/audit-mediums` |
+| D10 | Security | Nessuna capability escape? | READY — taint in ingresso chiuso (`slice/taint-in-ingresso`, ADR-0044, giro 2 PR #28: STATE.md "Taint in ingresso — chiuso"); un turno a taint 3 che tenta `http_get` fuori allowlist riceve `deny/resource_denied` dal kernel, mai `ask` — provato end-to-end (`evals/acceptance/scenarios/d-capability.accept.ts`, scenario D10) |
+| D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — è la forma che §1 cercava, e non solo: `recordIntent` inghiotte il fallimento di `startToolCall` e l'handler parte comunque (`agent/loop.ts:1862-1867,1936-1947`) — l'invariante EFFECT WAL del mandato è falsificato oggi sul percorso generico di `runTool`, non solo assente sul registro undo; `draft` resta ineseguibile da ogni percorso (vedi D2) → PC 1.1 `slice/wal-intent`, poi PC 2.3 `slice/undo-journal` |
+| D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando (`describe()` ritorna `'(no resource)'`, `core/policy/decide.ts:218-220`, audit P03); "ASK-in-coda" non è una coda durevole, `turn_outcome='ask'` persistito ma nessun consumer lo rilegge (`agent/scheduler-run.ts:54-61`) → PC 3.1 `slice/ask-dice-cosa` |
 
 ### E · Economia e osservabilità → `gate1/e-osservabilita.md`
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
-| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste |
-| E2 | Cost | So quanto costa una giornata? | ? |
-| E3 | Tracing | Posso ricostruire cosa è successo? | ? |
-| E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) |
-| E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | ? |
-| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | ? 🔭 |
+| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste: solo `monthlyUsd` e `perTenantDailyUsd` (quest'ultimo escluso per `host`, `core/budget/budget.ts`); nessuna colonna `perJobUsd` su `jobs` → PC 3.7 `slice/budget-per-job` |
+| E2 | Cost | So quanto costa una giornata? | BLOCKER — declassato da READY-per-scenario: lo scenario `E2` (verde) prova solo `/spend` mensile (`cli/repl.ts:328`), mai il dato di **oggi**; `tenantTodayUsd()` esiste già (`core/budget/budget.ts`) ma non è esposto → PC 2.4 `slice/audit-mediums` |
+| E3 | Tracing | Posso ricostruire cosa è successo? | BLOCKER — cablato (`cli/trace.ts`, `muffin trace tail/grep`) ma: nessuno scenario di accettazione; `span.error` non redatto (`core/tracing/tracer.ts:94,98`, audit P34-1); risultati tool in chiaro per sempre in `turns.messages`/`turn_tool_calls.content`, mai pruned (P34-2, decisione owner pendente, PC §2.5) → PC 2.4, poi scenario "trace senza segreti" (PC §4) |
+| E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) — è il meccanismo: harness contro il binario vero, provider finto deterministico, ogni verde visto rosso prima. La PR #54 aggiunge nel manifest la specie provata dal meccanismo stesso, chiudendo l'unico "READY senza scenario" rimasto dopo il triage 17/08 |
+| E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | BLOCKER — la riga resta di fatto "?" anche nel commento della suite che la tocca: lo scenario `E5` (verde) prova solo la classe del giudice di contraddizione (`e-cost.accept.ts`); fallimento di rete/provider a metà turno, tool che lancia, delivery fallita, job schedulato restano non sintetizzati → nessuna slice singola, dipende dalla chiusura di PC 1.5/3.4/3.6 |
+| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | BLOCKER — confermato con lettura diretta: `while (iterations < cap)` (`agent/loop.ts:959`) limita solo le iterazioni, mai il numero di tool call per iterazione (`toolCallsMade`, riga 1281, incrementato ma mai confrontato con un tetto); un modello può emettere 200 `tool_use` paralleli in una risposta e sforare `maxToolCallsPerTurn` di un ordine di grandezza → PC 2.4 `slice/audit-mediums` |
+| E7 | Self-inspection | Sa spiegare **tecnicamente** come funziona e cosa sta usando **adesso**, distinguendo architettura/progetto da stato live dell'istanza? | BLOCKER — lacuna aggiunta dall'owner il 17/08 (propriocezione tecnica): oggi il modello può solo recitare ciò che il prompt dice o indovinare; nessuna primitiva read-only lo lascia interrogare runtime, provider/modelli correnti, surface/tenant, RoT/safe mode, sandbox/search/MCP disponibili, capability esposte, blocchi del prompt e provenienza, modalità reale della memoria (indice vettoriale disponibile o degradato), turni aperti/waiting/interrupted, job essenziali. Forma decisa: **`sys.inspect`** first-class e read-only che legge dalle **stesse fonti autorevoli** di `doctor` / `prompt show` / `gateway status` (una sola source of truth, nessuna implementazione divergente, niente documentazione infilata nel system prompt); acceptance: «spiegami tecnicamente come funzioni e cosa stai usando adesso» → cambia una condizione reale (search off, modello diverso, MCP assente) → ripeti: se recita lo stato vecchio è BROKEN, se distingue design e live state è verde → `gate1/PERCORSO-CRITICO.md` 3.10 |
 
 > **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**
 > `evals/acceptance/` lancia `muffin` come **processo vero** (`node --import tsx
@@ -344,36 +419,58 @@ ancora verificato — **è un debito, non uno stato**).
 > file e la registrazione degli scenari (`evals/acceptance/manifest.ts`) e
 > stampa, per riga, `verde` / `rosso-inatteso` / `atteso-rosso` (con la ragione
 > e la slice che lo chiude) / `nessuno scenario` — con exit code ≠ 0 su un rosso
-> inatteso o su una riga `READY` scoperta. `npm run test:acceptance` gira la
-> sola suite (12 scenari, **~17s** misurati in locale). Job CI dedicato
-> scritto (`.github/workflows/accettazione.yml`, su push `dev`/`main` e
-> `workflow_dispatch` — non su ogni push di PR, per lo stesso motivo di budget
-> che governa `ci.yml`): workflow validato (YAML analizzato con `js-yaml`,
-> passi identici a quelli verificati in locale) ma **non ancora eseguito su
-> GitHub Actions** — `workflow_dispatch` risponde 404 finché il file non è
-> anche sul branch di default, quindi la prima corsa reale sarà al merge su
-> `dev`.
+> inatteso, su una riga `READY` scoperta, o su una riga `READY` il cui scenario
+> è ancora `atteso-rosso` (mandato DAY-1 §4.9 — le due affermazioni non possono
+> essere vere insieme). Un `atteso-rosso` a sua volta è verificato contro la
+> firma di fallimento che il manifest dichiara
+> (`ScenarioEntry['expectFailure']`), non contro "ha lanciato qualcosa": uno
+> che fallisce per un motivo diverso da quello scritto è `rosso-inatteso`, non
+> "va bene così". `npm run test:acceptance` gira la sola suite (17 scenari,
+> **~60s** misurati in locale). Job CI dedicato scritto
+> (`.github/workflows/accettazione.yml`), ora anche su `pull_request` verso
+> `dev`/`main` oltre che su `push`/`workflow_dispatch` (decisione
+> dell'orchestratore, PR #54 giro 2, reversibile — prima `pull_request` era
+> deliberatamente assente per lo stesso motivo di budget che governa `ci.yml`;
+> vedi il commento in testa al workflow per la conseguenza nota): workflow
+> validato (YAML analizzato con `js-yaml`, passi identici a quelli verificati
+> in locale); con `pull_request` nel trigger questa stessa PR è la prima corsa
+> reale su GitHub Actions, non più rimandata al merge su `dev`.
 >
-> **Oggi, 12 scenari**: A1/A5/A8 (installazione) · B1/B8 · C1/C4 · D2/D3/D10 ·
-> E1/E2 — otto **verde**, quattro **atteso-rosso** (B8 delivery →
-> `slice/superfici`, C4 recall storico → `slice/memoria-nel-tempo`, D3 undo →
-> decisione owner ancora aperta su §1, D10 taint→egress →
-> `slice/taint-in-ingresso`). Ogni verde è stato visto cadere per davvero prima
-> di essere lasciato verde — rotto il cablaggio in produzione che ciascuno
-> prova (`TurnStore.create`, `verify()`, `SessionStore.append`,
-> `renderForPrompt`, il caso `draft` del kernel, `BudgetEngine.exhausted`),
-> verificato il rosso, ripristinato — non solo scritto a supporre che
-> avrebbero funzionato.
+> **Oggi, 18 scenari**: A1/A5/A8 (installazione) · B1/B3/B4/B5/B8/B11 · C1/C4 ·
+> D1/D2/D3/D10 · E1/E2/E5 — diciassette **verde**, un **atteso-rosso** (D3 undo →
+> decisione owner ancora aperta su §1, con una firma di fallimento dichiarata:
+> `muffin undo` resta un comando sconosciuto). B8, C4 e D10 erano
+> `atteso-rosso` con una ragione già falsa (`slice/acceptance-truth`,
+> `docs/lessons.md` "An atteso-rosso that accepts any error…"). Ogni verde è
+> stato visto cadere per davvero prima di essere lasciato verde — rotto il
+> cablaggio in produzione che ciascuno prova (`TurnStore.create`, `verify()`,
+> `SessionStore.append`, `renderForPrompt`, il caso `draft` del kernel,
+> `BudgetEngine.exhausted`), verificato il rosso, ripristinato — non solo
+> scritto a supporre che avrebbero funzionato.
 >
 > **Quello che questo READY non copre**, e il rapporto lo dice da solo ad ogni
-> corsa invece di nasconderlo: cinque righe già `READY` per altre ragioni non
-> hanno ancora uno scenario qui (C2, C3, C7, D4, D6) — nessuna era nella lista
-> minima del mandato di questa slice, e chiuderle resta un lavoro futuro, non
-> silenzioso. C8 (audio) è marcata `non provabile qui` col motivo scritto
-> (richiede una trascrizione reale, vietata dalla proprietà "non costa niente"
-> di questa suite). **E4 READY vuol dire "la primitiva esiste, gira contro il
+> corsa invece di nasconderlo: sette righe già `READY` per altre ragioni non
+> hanno ancora uno scenario qui (B14, C2, C3, C6, C7, D4, D6) — nessuna era
+> nella lista minima del mandato di questa slice, e chiuderle resta un lavoro
+> futuro, non silenzioso (`slice/triage-day1`, in corso, le riclassifica). C8
+> (audio) è marcata `non provabile qui` col motivo scritto (richiede una
+> trascrizione reale, vietata dalla proprietà "non costa niente" di questa
+> suite). **E4 stessa non ha, e non può avere, un proprio scenario** — sarebbe
+> la suite di accettazione che prova se stessa — quindi il manifest la marca
+> `provata dal meccanismo`: è ogni riga verde qui sopra a provarla, non uno
+> scenario dedicato. **E4 READY vuol dire "la primitiva esiste, gira contro il
 > binario vero, e lo stato delle altre righe è derivabile da un comando" — non
 > "l'inventario è coperto".**
+>
+> **Aggiornamento 17/08.** Il triage evidence-only ha riclassificato le sette
+> righe (`B14, C2, C3, C6, C7, D4, D6`) da `READY` a `BLOCKER` «solo scenario
+> mancante», ciascuna con la journey che la chiude (`gate1/PERCORSO-CRITICO.md`
+> §4); con la PR #54 mergiata (E4 `provata dal meccanismo`) il rapporto non ha
+> più righe READY senza scenario. Nessuna riga di questo inventario è
+> `INVALIDATED`: il triage non ha trovato una sola domanda Gate 1 la cui
+> premessa non regga più contro il sistema reale — ogni riga BLOCKER manca
+> ancora implementazione, cablaggio o scenario, mai la ragione d'essere della
+> domanda stessa.
 
 ---
 
@@ -487,7 +584,8 @@ Tre confini restano già decisi:
 
 ---
 
-**Il lavoro finisce quando l'inventario ha zero BLOCKER e ogni voce è READY o
-FUORI DAL GATE 1 con la ragione scritta.** Solo allora si propone il Gate 1 —
-e da lì lo sviluppo lo guidano i problemi che l'owner incontra vivendoci, non le
-feature immaginate davanti a una lavagna.
+**Il lavoro finisce quando l'inventario ha zero BLOCKER e ogni voce è READY,
+FUORI DAL GATE 1 o INVALIDATA, ciascuna con la ragione o l'evidenza scritta.**
+Solo allora si propone il Gate 1 — e da lì lo sviluppo lo guidano i problemi
+che l'owner incontra vivendoci, non le feature immaginate davanti a una
+lavagna.
