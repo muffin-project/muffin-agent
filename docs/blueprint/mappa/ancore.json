@@ -49,6 +49,11 @@
     "line": 1099,
     "testo": "// model at all."
   },
+  "agent/loop.ts:1653": {
+    "path": "agent/loop.ts",
+    "line": 1653,
+    "testo": "function finish("
+  },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
     "line": 172,
@@ -73,6 +78,11 @@
     "path": "agent/loop.ts",
     "line": 1887,
     "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
+  },
+  "agent/loop.ts:2110": {
+    "path": "agent/loop.ts",
+    "line": 2110,
+    "testo": "function resourceFor("
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
@@ -228,11 +238,6 @@
     "path": "agent/loop.ts",
     "line": 62,
     "testo": "* a plan that died with the turn that wrote it would not be a plan."
-  },
-  "agent/loop.ts:660": {
-    "path": "agent/loop.ts",
-    "line": 660,
-    "testo": ""
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
@@ -394,10 +399,10 @@
     "line": 112,
     "testo": "bootLines: string[];"
   },
-  "agent/runtime.ts:132": {
+  "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 132,
-    "testo": ""
+    "line": 135,
+    "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
@@ -464,11 +469,6 @@
     "line": 496,
     "testo": "...processCapabilities,"
   },
-  "agent/runtime.ts:490": {
-    "path": "agent/runtime.ts",
-    "line": 498,
-    "testo": "// Declared next to the tools above, in the same commit: a tool whose"
-  },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
     "line": 502,
@@ -493,6 +493,11 @@
     "path": "agent/runtime.ts",
     "line": 542,
     "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
+  },
+  "agent/runtime.ts:619": {
+    "path": "agent/runtime.ts",
+    "line": 619,
+    "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
@@ -769,11 +774,6 @@
     "line": 22,
     "testo": "export const skillCapability: CapabilityDecl = {"
   },
-  "agent/tools/skill.ts:32": {
-    "path": "agent/tools/skill.ts",
-    "line": 32,
-    "testo": ""
-  },
   "agent/tools/skill.ts:33": {
     "path": "agent/tools/skill.ts",
     "line": 33,
@@ -801,7 +801,7 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 255,
+    "line": 260,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -851,32 +851,32 @@
   },
   "cli/init.ts:101": {
     "path": "cli/init.ts",
-    "line": 101,
+    "line": 150,
     "testo": "apiKeyRef: 'secret://provider_api_key',"
   },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
-    "line": 104,
+    "line": 153,
     "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 136,
+    "line": 185,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 137,
+    "line": 186,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:46": {
     "path": "cli/init.ts",
-    "line": 46,
+    "line": 95,
     "testo": "export function runInit(options: InitOptions = {}): InitStep[] {"
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
-    "line": 99,
+    "line": 148,
     "testo": "kind: options.provider ?? 'anthropic',"
   },
   "cli/jobs.ts:63": {
@@ -886,137 +886,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 106,
+    "line": 108,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 164,
+    "line": 166,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 166,
+    "line": 168,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 168,
+    "line": 170,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 170,
+    "line": 172,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 172,
+    "line": 174,
     "testo": "*/"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 174,
+    "line": 176,
     "testo": "if (argv.includes('--no-stream')) return false;"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 176,
+    "line": 178,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 180,
+    "line": 182,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 182,
+    "line": 184,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
-  },
-  "cli/main.ts:178": {
-    "path": "cli/main.ts",
-    "line": 178,
-    "testo": ""
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 184,
+    "line": 186,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 186,
+    "line": 188,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 188,
+    "line": 190,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 190,
+    "line": 192,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 192,
+    "line": 194,
     "testo": "case 'run':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 194,
+    "line": 196,
     "testo": "case 'repl':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 196,
+    "line": 198,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 203,
+    "line": 205,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 207,
+    "line": 209,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 252,
+    "line": 254,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 265,
+    "line": 273,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 304,
+    "line": 333,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 315,
+    "line": 344,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 324,
+    "line": 354,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 347,
+    "line": 385,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 512,
+    "line": 550,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1049,10 +1044,10 @@
     "line": 256,
     "testo": "total.skippedEmpty += report.skippedEmpty;"
   },
-  "cli/memory.ts:27": {
+  "cli/memory.ts:28": {
     "path": "cli/memory.ts",
-    "line": 27,
-    "testo": ""
+    "line": 28,
+    "testo": "export const MEMORY_USAGE = `usage:"
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
@@ -1084,11 +1079,6 @@
     "line": 111,
     "testo": "* Where the readline interface reads from. Injectable for the same reason"
   },
-  "cli/repl.ts:133": {
-    "path": "cli/repl.ts",
-    "line": 133,
-    "testo": ""
-  },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
     "line": 145,
@@ -1098,6 +1088,11 @@
     "path": "cli/repl.ts",
     "line": 157,
     "testo": "* possible (`--no-stream`), and the capability object has no room to carry"
+  },
+  "cli/repl.ts:174": {
+    "path": "cli/repl.ts",
+    "line": 174,
+    "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
@@ -1474,79 +1469,79 @@
     "line": 87,
     "testo": "export const CONSOLIDATION_IDLE_MS = 20_000;"
   },
-  "core/memory/extract.ts:132": {
+  "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 132,
-    "testo": "export async function extractFacts("
+    "line": 150,
+    "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
     "path": "core/memory/ingest-lock.ts",
     "line": 58,
     "testo": "export const SCHEMA = `"
   },
-  "core/memory/ingest.test.ts:363": {
+  "core/memory/ingest.test.ts:547": {
     "path": "core/memory/ingest.test.ts",
-    "line": 363,
-    "testo": ""
+    "line": 547,
+    "testo": "expect(store.isFunctional('accountant')).toBe(false);"
   },
   "core/memory/ingest.ts:117": {
     "path": "core/memory/ingest.ts",
-    "line": 117,
+    "line": 126,
     "testo": "* `judgeUnavailable` below instead, kept apart rather than folded in here."
   },
   "core/memory/ingest.ts:176": {
     "path": "core/memory/ingest.ts",
-    "line": 176,
+    "line": 185,
     "testo": "`giudice non disponibile su ${g.subject}/${g.predicate}` +"
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 235,
+    "line": 245,
     "testo": "// would read as \"stuck\" on exactly the page that was working."
   },
-  "core/memory/ingest.ts:266": {
+  "core/memory/ingest.ts:237": {
     "path": "core/memory/ingest.ts",
-    "line": 266,
-    "testo": ""
+    "line": 247,
+    "testo": "deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 272,
+    "line": 282,
     "testo": "if (episode.kind === 'document') {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 304,
+    "line": 316,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 321,
+    "line": 333,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 323,
+    "line": 335,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 324,
+    "line": 336,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 448,
+    "line": 460,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 449,
+    "line": 461,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 463,
+    "line": 475,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1568,6 +1563,11 @@
     "path": "core/memory/judge.ts",
     "line": 105,
     "testo": "/**"
+  },
+  "core/memory/judge.ts:153": {
+    "path": "core/memory/judge.ts",
+    "line": 153,
+    "testo": "export const SUPERSEDE_THRESHOLD = 0.75;"
   },
   "core/memory/maintenance.ts:132": {
     "path": "core/memory/maintenance.ts",
@@ -1694,10 +1694,10 @@
     "line": 48,
     "testo": "export function fence(label: string, body: string, note?: string): Fence {"
   },
-  "core/memory/store.test.ts:106": {
+  "core/memory/store.test.ts:124": {
     "path": "core/memory/store.test.ts",
-    "line": 106,
-    "testo": ""
+    "line": 124,
+    "testo": "expect(s.isFunctional('interest')).toBe(false);"
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
@@ -1959,20 +1959,20 @@
     "line": 261,
     "testo": "export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READERS): RotReadersResult {"
   },
+  "core/rot/verify.ts:120": {
+    "path": "core/rot/verify.ts",
+    "line": 120,
+    "testo": "export function hardeningHolds("
+  },
   "core/rot/verify.ts:156": {
     "path": "core/rot/verify.ts",
-    "line": 156,
+    "line": 207,
     "testo": "export function verify(homeDir: string, mode: RotMode): VerifyOutcome {"
   },
   "core/rot/verify.ts:16": {
     "path": "core/rot/verify.ts",
     "line": 16,
     "testo": "*   hardened     — the RoT is owned by another OS user; the runtime cannot write"
-  },
-  "core/rot/verify.ts:99": {
-    "path": "core/rot/verify.ts",
-    "line": 99,
-    "testo": "export function hardeningHolds(homeDir: string): HardeningCheck {"
   },
   "core/sandbox/executor.test.ts:173": {
     "path": "core/sandbox/executor.test.ts",
@@ -2026,32 +2026,32 @@
   },
   "core/skills/skills.ts:124": {
     "path": "core/skills/skills.ts",
-    "line": 124,
+    "line": 134,
     "testo": "export function skillsPromptSection(skills: SkillInfo[]): string {"
   },
   "core/skills/skills.ts:18": {
     "path": "core/skills/skills.ts",
-    "line": 18,
+    "line": 19,
     "testo": "* --debug. Here it is SKIPPED and the reason is reported at boot and in"
   },
   "core/skills/skills.ts:53": {
     "path": "core/skills/skills.ts",
-    "line": 53,
+    "line": 54,
     "testo": "export function skillsRoot(home: string): string {"
   },
   "core/skills/skills.ts:59": {
     "path": "core/skills/skills.ts",
-    "line": 59,
+    "line": 60,
     "testo": "export function discoverSkills(home: string): SkillScan {"
   },
   "core/skills/skills.ts:69": {
     "path": "core/skills/skills.ts",
-    "line": 69,
+    "line": 70,
     "testo": "if (!existsSync(file)) {"
   },
   "core/skills/skills.ts:81": {
     "path": "core/skills/skills.ts",
-    "line": 81,
+    "line": 82,
     "testo": "export function parseSkill(content: string, dirName: string, dir: string): SkillInfo | { problem: string } {"
   },
   "core/tracing/redact.ts:1": {
@@ -2084,15 +2084,15 @@
     "line": 420,
     "testo": "report.chunks += 1;"
   },
-  "core/vault/vault.ts:48": {
-    "path": "core/vault/vault.ts",
-    "line": 48,
-    "testo": ""
-  },
   "core/vault/vault.ts:58": {
     "path": "core/vault/vault.ts",
     "line": 58,
     "testo": "* than by how many megabytes of images it carries."
+  },
+  "core/vault/vault.ts:74": {
+    "path": "core/vault/vault.ts",
+    "line": 74,
+    "testo": "const NEVER_CONTENT = new Set(["
   },
   "core/vault/vault.ts:95": {
     "path": "core/vault/vault.ts",
@@ -2334,15 +2334,15 @@
     "line": 168,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
-  "extract.ts:176": {
+  "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 176,
-    "testo": ".filter((f) => f.confidence >= 0.4),"
+    "line": 187,
+    "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
-  "extract.ts:186": {
+  "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 186,
-    "testo": "export function canonicalPredicate(raw: string): string {"
+    "line": 192,
+    "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
     "path": "core/memory/extract.ts",
@@ -2396,18 +2396,13 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 362,
+    "line": 356,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
     "path": "core/memory/ingest.ts",
     "line": 39,
     "testo": "export const CONSOLIDATION_PRINCIPAL = {"
-  },
-  "judge.ts:44": {
-    "path": "core/memory/judge.ts",
-    "line": 44,
-    "testo": ""
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
@@ -2924,11 +2919,6 @@
     "line": 26,
     "testo": "*"
   },
-  "vault.ts:48": {
-    "path": "core/vault/vault.ts",
-    "line": 48,
-    "testo": ""
-  },
   "vault.ts:58": {
     "path": "core/vault/vault.ts",
     "line": 58,
@@ -2944,9 +2934,9 @@
     "line": 67,
     "testo": "private migrateUnpartitioned(): void {"
   },
-  "verify.ts:99": {
+  "verify.ts:120": {
     "path": "core/rot/verify.ts",
-    "line": 99,
-    "testo": "export function hardeningHolds(homeDir: string): HardeningCheck {"
+    "line": 120,
+    "testo": "export function hardeningHolds("
   }
 }

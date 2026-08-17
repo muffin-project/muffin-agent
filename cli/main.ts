@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
-import { runInit } from './init.js';
+import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
@@ -66,6 +66,8 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
               [--base-url URL] [--model NOME] [--light-model NOME] [--api-key CHIAVE]
+              [--local [DIR]]  home di prova separata (default ~/.muffin-local),
+                                riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
@@ -247,7 +249,7 @@ async function main(rawArgv: string[]): Promise<number> {
 }
 
 async function cmdInit(argv: string[]): Promise<number> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: argv,
     options: {
       hardened: { type: 'boolean' },
@@ -257,14 +259,39 @@ async function cmdInit(argv: string[]): Promise<number> {
       model: { type: 'string' },
       'light-model': { type: 'string' },
       'api-key': { type: 'string' },
+      local: { type: 'boolean' },
     },
-    allowPositionals: false,
+    allowPositionals: true,
   });
+
+  if (!values.local && positionals.length > 0) {
+    process.stderr.write(`muffin init: argomento posizionale "${positionals[0]}" ha senso solo con --local\n`);
+    return 78;
+  }
 
   const providerFlag = values.provider as ProviderKind | undefined;
   if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {
     process.stderr.write(`--provider deve essere anthropic o openai-compat\n`);
     return 78;
+  }
+
+  // --local (M5-BIS A9): a throwaway second home for a "fresh install"
+  // rehearsal, resolved and guarded before anything below reads or writes
+  // through it. `home` replaces every default `paths().home` call for the
+  // rest of this function; when `--local` is absent it is that same default,
+  // so the non-local path behaves exactly as before.
+  const realHome = paths().home;
+  let home = realHome;
+  if (values.local) {
+    const local = resolveLocalHome(positionals[0]);
+    if (isSameOrNestedPath(local, realHome)) {
+      process.stderr.write(
+        `--local ${local} coincide con la home reale (${realHome}) o ci sta dentro — rifiuto.\n` +
+          `Scegli una directory fuori da ${realHome}.\n`,
+      );
+      return 78;
+    }
+    home = local;
   }
 
   // Acquire the key: flag > env > an already-stored secret > an interactive
@@ -276,9 +303,11 @@ async function cmdInit(argv: string[]): Promise<number> {
   // The stored-secret step is what makes `muffin uninstall --yes && muffin init`
   // a loop again now that the key no longer has to sit in a `.env` the agent can
   // read: `--persist` put it outside the home the wipe reaches, so the chain
-  // answers and nothing is prompted or copied.
+  // answers and nothing is prompted or copied. `--local` reads that very same
+  // chain against its own `home` below — never a copy (ADR-0030's `--local`
+  // amendment).
   let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
-  const stored = apiKey ? null : locateSecret('secret://provider_api_key');
+  const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
   }
@@ -319,6 +348,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     ...(values.model ? { mainModel: values.model } : {}),
     ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
     ...(apiKey ? { apiKey } : {}),
+    home,
   });
 
   for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
@@ -328,7 +358,15 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 1;
   }
 
-  await offerGateway();
+  if (values.local) {
+    // Never `offerGateway()` here: it installs a *system* unit pointed at
+    // `paths().home` unconditionally (`cli/gateway.ts`'s `planUnit`) — the
+    // real home, not this one — which is exactly backwards for a directory
+    // that exists to be thrown away.
+    process.stderr.write(`\nPer usarla: export MUFFIN_HOME=${home}\n`);
+  } else {
+    await offerGateway();
+  }
   process.stderr.write(`\nOra: muffin doctor\n`);
   return 0;
 }
