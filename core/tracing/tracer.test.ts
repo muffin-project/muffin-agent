@@ -24,7 +24,7 @@ describe('SimpleTracer — span.error redaction (P34-1)', () => {
     const handle = tracer.start('muffin.tool_call');
     handle.end({ error: new Error(message) });
 
-    const [file] = readdirSync(join(home, 'traces'));
+    const file = readdirSync(join(home, 'traces'))[0]!;
     const line = readFileSync(join(home, 'traces', file), 'utf8').trim();
     const span = JSON.parse(line) as { error?: string };
 
@@ -39,7 +39,7 @@ describe('SimpleTracer — span.error redaction (P34-1)', () => {
     const handle = tracer.start('muffin.tool_call');
     handle.end({ error: new Error('connection reset') });
 
-    const [file] = readdirSync(join(home, 'traces'));
+    const file = readdirSync(join(home, 'traces'))[0]!;
     const span = JSON.parse(readFileSync(join(home, 'traces', file), 'utf8').trim()) as { error?: string };
     expect(span.error).toBe('connection reset');
   });
@@ -52,7 +52,7 @@ describe('SimpleTracer — span.error redaction (P34-1)', () => {
     const handle = tracer.start('muffin.tool_call');
     handle.end({ error: `rejected token ${leakedKey}` });
 
-    const [file] = readdirSync(join(home, 'traces'));
+    const file = readdirSync(join(home, 'traces'))[0]!;
     const line = readFileSync(join(home, 'traces', file), 'utf8').trim();
     expect(line, 'a secret-shaped string reached the trace file in clear text').not.toContain(leakedKey);
   });

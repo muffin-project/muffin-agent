@@ -74,9 +74,9 @@
   "surfaces": [
     {
       "name": "RoT / sigillo",
-      "file": "core/rot/verify.ts:156-213 (verify), core/rot/verify.ts:99-127 (hardeningHolds), core/rot/readers.ts:261-354 (checkRotReaders)",
+      "file": "core/rot/verify.ts:156-213 (verify), core/rot/verify.ts:120-178 (hardeningHolds), core/rot/readers.ts:261-354 (checkRotReaders)",
       "guards": "hash-chain (manifest.json + external anchor) over every file under rot/; two modes — hardened (refuse boot on divergence) vs single-user (degrade to safe mode); a second, independent invariant that every sealed file has a real production reader",
-      "holds": "hardened is no longer a config self-report — hardeningHolds() actually probes W_OK on the RoT dir, the anchor, the manifest and every sealed file (verify.ts:99-127), wired at agent/runtime.ts:124-135 so a falsely-hardened install degrades to single-user semantics and tells the owner why. checkRotReaders (readers.ts) strips comments and imports before matching, specifically because a prior version was fooled by a docstring naming a file with no code opening it (readers.ts:204-222).",
+      "holds": "hardened is no longer a config self-report — hardeningHolds() probes W_OK on the RoT dir, the anchor, the manifest and every sealed file, AND (P36, since a same-uid file is one same-user chmod away from writable regardless of current mode) that the owning uid differs from this process's own and no group/other write bit is set (verify.ts:120-178), wired at agent/runtime.ts:124-135 so a falsely-hardened install degrades to single-user semantics and tells the owner why. checkRotReaders (readers.ts) strips comments and imports before matching, specifically because a prior version was fooled by a docstring naming a file with no code opening it (readers.ts:204-222).",
       "gap": "forbiddenForSystem (matrix.ts:99: outward.send/outward.*/config.ratchet) is checked only for principal.kind==='system' (decide.ts:132), never for 'agent' — this matches the threat-model's literal wording ('escluse... da system@scheduler', 03-threat-model.md:53) but is a narrower guarantee than a reader might assume; currently moot only because no outward.* capability is registered yet (grep confirms zero declarations)."
     },
     {
@@ -140,9 +140,9 @@
     {
       "claim": "hardened: RoT owned by another OS user, runtime cannot write it — Prevention",
       "doc": "core/rot/verify.ts:16-24 (restates ADR-0003)",
-      "real": "now independently verified with a real W_OK probe against every sealed path before the kernel is told hardened:true, instead of trusting the config string",
+      "real": "now independently verified with a real W_OK probe, plus an owning-uid and group/other-mode check (P36), against every sealed path before the kernel is told hardened:true, instead of trusting the config string",
       "verdict": "HOLDS",
-      "evidence": "core/rot/verify.ts:99-127; agent/runtime.ts:124-135"
+      "evidence": "core/rot/verify.ts:120-178; agent/runtime.ts:124-135"
     },
     {
       "claim": "Mandatory deny paths: RoT, config, secrets, .git/hooks, shell dotfiles",
