@@ -69,9 +69,9 @@
     "line": 1790,
     "testo": "case 'draft':"
   },
-  "agent/loop.ts:1873": {
+  "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 1873,
+    "line": 1887,
     "testo": "// The outcome and the taint it dragged in, in one transaction: a tier-3"
   },
   "agent/loop.ts:271": {
