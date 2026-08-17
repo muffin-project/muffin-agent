@@ -136,7 +136,12 @@ Chiuse tutte, più: leak cross-tenant già cablato (`searchMemory` col tenant ha
 > sempre il path reale — il bersaglio finale per read/list, il parent per
 > write — e containment/deny-list giudicano quello, mai la posizione del
 > link. Vedi `docs/lessons.md` §"Symlink resolution has to cover the leaf and
-> the parent, not just the middle".
+> the parent, not just the middle". E il judge di quella PR ha trovato che
+> «hardlink chiuso» valeva **solo in scrittura**: un hard link dentro `root` a
+> `secrets/provider_api_key` si leggeva verbatim (`realpath` non rivela un
+> secondo nome). Chiuso nello stesso PR: il rifiuto dei file con `nlink > 1`
+> vale ora anche in lettura — un file dell'owner legittimamente hard-linkato
+> dentro `root` non è leggibile da `fs_read`: limite dichiarato.
 
 Sui numeri: quattro dei sei parametri sono **folklore** e la ricerca non offre alternative — `SUPERSEDE_THRESHOLD 0.75` potrebbe proteggere *meno* di quanto sembra (le confidenze LLM sono sovrastimate di 15-27 punti), e `limit=8` + espansione 1-hop inietta il profilo di distrattore peggiore. Entrambi richiedono una misura nostra sul golden set, non altra ricerca.
 

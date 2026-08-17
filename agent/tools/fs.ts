@@ -331,14 +331,20 @@ export function resolveInScope(scope: FsScope, requested: string, forWrite: bool
   }
 
   // A hard link has its own realpath, so no amount of resolving reveals that it
-  // is a second name for a file inside the deny-list. Refusing to write to any
+  // is a second name for a file inside the deny-list. Refusing any
   // multiply-linked file is blunt and cheap: legitimate files in a working
-  // directory have one name.
-  if (forWrite) {
-    const existing = lstatSync(target, { throwIfNoEntry: false });
-    if (existing?.isFile() && existing.nlink > 1) {
-      throw new PathDenied(`won't write to a hard link (${existing.nlink} names): ${requested}`);
-    }
+  // directory have one name. It applies to reads as much as to writes — the
+  // judge of PR #52 read the provider key verbatim through a hard link inside
+  // root while the write-only guard below stood; the deny-list is a read
+  // guard first (`denyRead` covers the secret stores and `.env`), so the same
+  // one line must stand on the read path. Cost: an owner's legitimately
+  // hard-linked file inside root is unreadable through fs_read; named as a
+  // limit, not hidden.
+  const existing = lstatSync(target, { throwIfNoEntry: false });
+  if (existing?.isFile() && existing.nlink > 1) {
+    throw new PathDenied(
+      `won't ${forWrite ? 'write to' : 'read'} a hard link (${existing.nlink} names): ${requested}`,
+    );
   }
 
   return target;
