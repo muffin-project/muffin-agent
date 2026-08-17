@@ -1,13 +1,13 @@
 {
-  "03-threat-model.md:116": {
+  "03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 116,
-    "testo": "| Rubber-stamping delle PR generate da Muffin (volume che cresce, reviewer sempre uno) | il collo è umano per design | path del RoT sotto CODEOWNERS + diff isolato obbligatorio + CI che segnala le PR che li toccano (C1-9); mai RoT mescolato ad altre modifiche in una stessa PR |"
+    "line": 121,
+    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
-  "03-threat-model.md:51": {
+  "03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 51,
-    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
+    "line": 53,
+    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "agent/completion.ts:58": {
     "path": "agent/completion.ts",
@@ -514,10 +514,20 @@
     "line": 44,
     "testo": "text:"
   },
+  "agent/tools/fs.ts:105": {
+    "path": "agent/tools/fs.ts",
+    "line": 105,
+    "testo": "id: 'fs.read',"
+  },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
     "line": 108,
     "testo": "rerunnable: true,"
+  },
+  "agent/tools/fs.ts:123": {
+    "path": "agent/tools/fs.ts",
+    "line": 123,
+    "testo": "id: 'fs.write',"
   },
   "agent/tools/fs.ts:192": {
     "path": "agent/tools/fs.ts",
@@ -548,6 +558,16 @@
     "path": "agent/tools/fs.ts",
     "line": 62,
     "testo": "* stdout is the same disk read through a different door — and two literals that"
+  },
+  "agent/tools/fs.ts:65": {
+    "path": "agent/tools/fs.ts",
+    "line": 65,
+    "testo": "export const DISK_TIER: TrustTier = 2;"
+  },
+  "agent/tools/fs.ts:69": {
+    "path": "agent/tools/fs.ts",
+    "line": 69,
+    "testo": "* `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
@@ -674,6 +694,11 @@
     "line": 23,
     "testo": "{"
   },
+  "agent/tools/process.ts:24": {
+    "path": "agent/tools/process.ts",
+    "line": 24,
+    "testo": "id: 'sys.process.list',"
+  },
   "agent/tools/process.ts:28": {
     "path": "agent/tools/process.ts",
     "line": 28,
@@ -683,6 +708,11 @@
     "path": "agent/tools/process.ts",
     "line": 32,
     "testo": "},"
+  },
+  "agent/tools/process.ts:34": {
+    "path": "agent/tools/process.ts",
+    "line": 34,
+    "testo": "id: 'sys.process.kill',"
   },
   "agent/tools/process.ts:42": {
     "path": "agent/tools/process.ts",
@@ -723,6 +753,16 @@
     "path": "agent/tools/shell.ts",
     "line": 42,
     "testo": "policyArgs: ['command'],"
+  },
+  "agent/tools/shell.ts:45": {
+    "path": "agent/tools/shell.ts",
+    "line": 45,
+    "testo": "// Owner decision, 2026-08-16 (ADR-0044 §revisione; PR #28): pinned to 2,"
+  },
+  "agent/tools/shell.ts:53": {
+    "path": "agent/tools/shell.ts",
+    "line": 53,
+    "testo": "maxTaint: 2,"
   },
   "agent/tools/skill.ts:114": {
     "path": "agent/tools/skill.ts",
@@ -1814,6 +1854,11 @@
     "line": 195,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
   },
+  "core/policy/decide.ts:197": {
+    "path": "core/policy/decide.ts",
+    "line": 197,
+    "testo": "if (principal.kind === 'system' || principal.kind === 'agent') {"
+  },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
     "line": 201,
@@ -2179,10 +2224,10 @@
     "line": 139,
     "testo": "- **Identità cross-connector** (il problema della community): `identities` per-connector restano separate di default; il link a una `entity` persona avviene solo `proposed→confirmed` — proposta automatica su evidenza forte, conferma dell'owner o dell'interessato **tramite canale out-of-band** (codice generato su un canale e inserito sull'altro: una risposta \"sì sono io\" sul canale nuovo non è una conferma — C1-16). **In v1 la tabella e gli stati esistono ma il flusso non si costruisce** (C2-#2): con un solo connector remoto il merge cross-connector non può accadere; le colonne sono fondamenta strutturali, il flusso arriva col secondo connector. **Mai merge silenzioso**: l'evidenza dice che il falso-positivo di merge è il fallimento peggiore perché invisibile (A4 §9, \"Sakura Sushi\"). Se il sistema sbaglia un link confermato: `link_status` torna `unlinked`, i fatti restano attribuiti alle identità originarie (lo permettono `speaker_id` + provenienza — niente da \"smescolare\")."
   },
-  "docs/blueprint/03-threat-model.md:116": {
+  "docs/blueprint/03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 116,
-    "testo": "| Rubber-stamping delle PR generate da Muffin (volume che cresce, reviewer sempre uno) | il collo è umano per design | path del RoT sotto CODEOWNERS + diff isolato obbligatorio + CI che segnala le PR che li toccano (C1-9); mai RoT mescolato ad altre modifiche in una stessa PR |"
+    "line": 121,
+    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
   },
   "docs/blueprint/03-threat-model.md:21": {
     "path": "docs/blueprint/03-threat-model.md",
@@ -2203,6 +2248,11 @@
     "path": "docs/blueprint/03-threat-model.md",
     "line": 51,
     "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
+  },
+  "docs/blueprint/03-threat-model.md:53": {
+    "path": "docs/blueprint/03-threat-model.md",
+    "line": 53,
+    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
   "docs/blueprint/03-threat-model.md:68": {
     "path": "docs/blueprint/03-threat-model.md",
@@ -2263,6 +2313,11 @@
     "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
     "line": 262,
     "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
+  },
+  "docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md:180": {
+    "path": "docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md",
+    "line": 180,
+    "testo": "## Revisione — 2026-08-16"
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
