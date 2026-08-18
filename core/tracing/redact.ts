@@ -121,6 +121,21 @@ const SECRET_VALUE_SHAPES: readonly RegExp[] = [
   /\b(?:api[_-]?key|token|password|passwd)=[^\s"&]{6,}/i, // token=value — query string or form, unquoted, threshold 6
 ];
 
+/**
+ * Il valore **ha la forma** di una credenziale? Classe 3 (ADR-0048): non è una
+ * garanzia, è un riconoscimento a vista — chi vuole la garanzia usa il backend
+ * dei segreti e fa viaggiare `secret://nome`.
+ *
+ * Esportato perché un secondo posto deve fare la stessa domanda senza
+ * ricopiarsi la lista delle forme: lo schema del registro MCP
+ * (`core/mcp/registry.ts`), dove un `env` scritto a mano potrebbe contenere un
+ * token letterale.
+ */
+export function looksLikeSecretValue(value: string): boolean {
+  if (SECRET_REF.test(value)) return false;
+  return SECRET_VALUE_SHAPES.some((shape) => shape.test(value));
+}
+
 export function redactValue(value: AttributeValue): AttributeValue {
   if (typeof value !== 'string') return value;
   if (SECRET_REF.test(value)) return value;

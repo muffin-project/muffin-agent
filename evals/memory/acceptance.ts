@@ -57,11 +57,14 @@ const steps: Step[] = [];
 let turns = 0;
 
 /** One CLI invocation = one process. Returns stdout, stderr and the exit code. */
-function muffin(args: string[]): { code: number; out: string; err: string } {
+function muffin(args: string[], stdin?: string): { code: number; out: string; err: string } {
   const result = spawnSync('npx', ['tsx', CLI, ...args], {
     env: { ...process.env, MUFFIN_HOME: HOME },
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
+    // La chiave arriva da stdin, mai da argv: in argv sarebbe nel `ps` di
+    // chiunque e nella history (direttiva owner 2026-08-18).
+    ...(stdin === undefined ? {} : { input: stdin }),
   });
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
@@ -112,10 +115,10 @@ process.stderr.write(`accettazione M2 · ${MODEL} + ${LIGHT}\nhome: ${HOME}\n\n`
 try {
   // ---- setup ----------------------------------------------------------------
   let t = Date.now();
-  const init = muffin([
-    'init', '--provider', 'openai-compat', '--base-url', BASE_URL,
-    '--model', MODEL, '--light-model', LIGHT, '--api-key', apiKey,
-  ]);
+  const init = muffin(
+    ['init', '--provider', 'openai-compat', '--base-url', BASE_URL, '--model', MODEL, '--light-model', LIGHT],
+    apiKey,
+  );
   record('init', t, init.code === 0, init.code === 0 ? 'home creata e sigillata' : init.err.slice(-200));
   if (init.code !== 0) process.exit(2);
 
