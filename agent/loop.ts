@@ -506,6 +506,45 @@ export type TurnResult = {
 };
 
 /**
+ * The text a live turn would have delivered, reconstructed for one a later
+ * pass found already `done` — shared by every caller that resolves a durable
+ * identity bound *before* the model runs (`agent/scheduler-run.ts`'s
+ * `makeJobRunner`, `connectors/telegram/connector.ts`'s `resolveBound`;
+ * ADR-0035 emendamento №5/№6). One function rather than two copies: the two
+ * callers must agree on what "recovered" means, and a repo whose typical
+ * defect is silent divergence between two things doing the same job
+ * (`docs/JUDGE.md`) is exactly where that copy would drift first.
+ *
+ * `TurnRecord.messages` does not hold it: `drive` below only appends the
+ * model's final text-only round to the **session file** (`deps.sessions.append`,
+ * the `'answered'` branch) — the in-turn transcript stops at the last tool
+ * round, because nothing needs to feed a finished turn's own answer back into
+ * its own next model call. The session file is exactly what that branch wrote,
+ * verbatim, so reading it back is not a reconstruction for the common case —
+ * it is the same string.
+ *
+ * For any other outcome (`ask`, `error`, `cap`, `budget`) the original wording
+ * genuinely is not recoverable this way — `ask`'s "In coda per te…" text, for
+ * one, is built from `ApprovalRequest`, which is never persisted — and
+ * inventing a plausible-looking one would be exactly the kind of claim
+ * `docs/JUDGE.md` asks not to make. Named honestly instead.
+ */
+export function recoveredText(deps: LoopDeps, record: TurnRecord): string {
+  if (record.outcome === 'answered') {
+    const ref = deps.sessions.open(record.sessionId);
+    const messages = deps.sessions.read(ref);
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role === 'assistant' && m.content.trim() !== '') return m.content;
+    }
+  }
+  return (
+    `Il turno ha concluso con esito "${record.outcome ?? 'sconosciuto'}" prima che la consegna fosse ` +
+    `registrata; il testo originale non è stato recuperato dopo un riavvio.`
+  );
+}
+
+/**
  * How many times a row may be picked back up before we stop trying.
  *
  * Three (ADR-0047 §1), and the bound exists because the failure it guards is

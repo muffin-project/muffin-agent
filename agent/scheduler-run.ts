@@ -2,8 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
-import type { TurnRecord } from '../core/turns/store.js';
-import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { recoveredText, runTurn, type LoopDeps, type TurnResult } from './loop.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -102,39 +101,6 @@ export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
 async function testStall(envVar: string): Promise<void> {
   const ms = Number(process.env[envVar]);
   if (Number.isFinite(ms) && ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * The text a live turn would have delivered, reconstructed for one a later
- * tick found already `done`.
- *
- * `TurnRecord.messages` does not hold it: `drive` (`agent/loop.ts`) only
- * appends the model's final text-only round to the **session file**
- * (`deps.sessions.append`, the `'answered'` branch) — the in-turn transcript
- * stops at the last tool round, because nothing needs to feed a finished
- * turn's own answer back into its own next model call. The session file is
- * exactly what that branch wrote, verbatim, so reading it back is not a
- * reconstruction for the common case — it is the same string.
- *
- * For any other outcome (`ask`, `error`, `cap`, `budget`) the original wording
- * genuinely is not recoverable this way — `ask`'s "In coda per te…" text, for
- * one, is built from `ApprovalRequest`, which is never persisted — and
- * inventing a plausible-looking one would be exactly the kind of claim
- * `docs/JUDGE.md` asks not to make. Named honestly instead.
- */
-function recoveredText(deps: LoopDeps, record: TurnRecord): string {
-  if (record.outcome === 'answered') {
-    const ref = deps.sessions.open(record.sessionId);
-    const messages = deps.sessions.read(ref);
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.role === 'assistant' && m.content.trim() !== '') return m.content;
-    }
-  }
-  return (
-    `Il job ha concluso con esito "${record.outcome ?? 'sconosciuto'}" prima che la consegna fosse ` +
-    `registrata; il testo originale non è stato recuperato dopo un riavvio.`
-  );
 }
 
 /**
