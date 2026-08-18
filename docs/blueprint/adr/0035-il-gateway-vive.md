@@ -208,3 +208,57 @@ Parole dell'owner, verbatim, mandato di questa slice: *"Muffin deve esistere com
 7. **Telegram torna raggiungibile senza intervento owner.** Provato al livello del meccanismo, non dell'installazione reale: `TelegramConnector.run()` (`connectors/telegram/connector.ts`) ora riprova `getMe()` con backoff invece di morire una volta sola quando la rete non è pronta al boot — confermato rosso pre-fix, verde post-fix (`connectors/telegram/reconnect.test.ts`). Non riverificato con un token e una rete reali: quella prova, quando le credenziali sono disponibili, è la battery §10 di `gate1/MANDATO-DAY-1.md`.
 
 **Il gap trovato e chiuso, nominato perché nessuno lo vedeva.** Prima di questa slice `connectSurfaces` (`cli/surface.ts:382`) avviava `TelegramConnector.run()` con `void connector.run().catch(...)`: un `getMe()` fallito al boot (rete non ancora pronta — `Wants=network-online.target` non lo garantisce, e su un laptop il Wi-Fi arriva dopo il boot) lanciava fuori da `run()` per intero, il `.catch` lo trasformava in una riga di log ("telegram: caduta"), e **la superficie restava morta per tutta la vita del processo** mentre il gateway restava su — lock tenuto, scheduler vivo, `doctor` che riportava un gateway sano con nessuno raggiungibile sopra. Vedi `docs/lessons.md` per la lezione in forma breve.
+
+## Emendamento №5 — `job_fires`, il ponte di identità che chiude №3 (2026-08-18, `slice/job-fires`)
+
+**Il punto lasciato aperto.** L'emendamento №3 elencava, fra "cosa resta fuori": *"il fire-claim idempotente sul percorso job, prima di chiamare il modello, e una riga durevole quando `turnId` è `null` — in entrambi i casi una decisione di schema, non presa in quella slice."* B7 (`M5-BIS.md`) nominava lo stesso buco dal lato dell'owner: *"un crash fra l'esecuzione del job e `markRan` rifà il fire per intero."* Decisione owner, verbatim: *"ogni occorrenza stabile `(job_id, scheduled_for)` deve mappare a UNA sola identità durevole di lavoro/turno; dopo crash Muffin continua o conclude quella stessa identità, non crea un secondo turn e non abbandona il primo."*
+
+**La forma scelta, e perché non l'alternativa.** Una tabella nuova, additiva (`CREATE TABLE IF NOT EXISTS`, come ogni altro store di questo repo), non una colonna `origin_key` su `turns`. Le due alternative erano concrete — l'owner stesso le ha nominate entrambe — e la scelta si è decisa su una proprietà che una colonna su `turns` non può avere: **l'occorrenza deve poter esistere prima del turno.** `job_fires.claim(job_id, scheduled_for)` scrive una riga con `turn_id NULL` nell'istante in cui l'occorrenza diventa dovuta — prima che qualunque turno sia mai stato creato — così un crash in quella stessa finestra (fault point 2 sotto) trova comunque un'occorrenza registrata a cui completare il legame. Una colonna `origin_key` su `turns` non ha questo grado zero: non esiste alcuna riga finché il turno non esiste, quindi non c'è nulla su cui un secondo processo possa fare `INSERT OR IGNORE` per "prenotare" l'identità prima di crearla. La tabella separata è la forma minima che l'owner chiedeva esplicitamente di cercare ("se trovi una forma ancora più piccola... va bene"): tre colonne oltre alla chiave, tre metodi (`claim`, `bind`, `settle`), zero conoscenza di cosa sia un turno oltre al suo id.
+
+**La forma, letterale.** `core/scheduler/job-fires.ts`:
+
+```sql
+CREATE TABLE IF NOT EXISTS job_fires (
+  job_id        TEXT NOT NULL,
+  scheduled_for TEXT NOT NULL,
+  turn_id       TEXT,
+  settled_at    TEXT,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (job_id, scheduled_for)
+);
+```
+
+`scheduled_for` è `job.nextFireAt` letto **una sola volta**, nell'istante in cui `due()` lo restituisce — mai l'orologio di quando un processo se ne accorge, per costruzione: il valore attraversa `agent/scheduler-run.ts`'s `makeJobRunner` come parametro, non viene mai ricalcolato durante la risoluzione di un'occorrenza.
+
+**Il percorso.** `makeJobRunner` (`agent/scheduler-run.ts`), non `Scheduler.tick`: la decisione — quale identità usare, se richiamare il modello o no — resta nel file che il proprio docstring già rivendicava come *"the one piece with a decision in it, tested without a model"*. `Scheduler` (`core/scheduler/scheduler.ts`) resta la meccanica attorno: sa solo interpretare tre esiti possibili da `RunJob` — un `JobOutcome` normale (consegna+settle come sempre), `FireDeferred` (non fa nulla: né consegna né `markRan`, l'occorrenza resta dovuta per il prossimo giro), `FireSettleOnly` (salta la consegna — qualcun altro l'ha già fatta — e chiama solo `settleFire`+`markRan`). `settleFire`, nuovo parametro opzionale del costruttore (default no-op, quindi ogni sito di costruzione pre-esistente e ogni test pre-esistente restano invariati), viene chiamato **immediatamente prima** di ogni `markRan` in questo file — mai dopo, in nessuno dei tre punti che oggi chiamano `markRan` (`settle`, il ramo sospeso di `run`, e implicitamente `FireSettleOnly`).
+
+**La matrice dei sette punti dell'owner, e dove ciascuno è provato.**
+
+| # | Punto | Dove è provato |
+|---|---|---|
+| 1 | crash prima del fire → si crea | `core/scheduler/job-fires.test.ts` — `claim` idempotente, e il vincolo UNIQUE è dello schema, non della convenzione (un `INSERT` grezzo duplicato lancia) |
+| 2 | dopo il fire prima del turno → completa il binding, non lo perde | **binario vero**: `evals/acceptance/scenarios/job-fires.accept.ts`, primo `SIGKILL`, nella finestra resa osservabile da `MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS` |
+| 3 | dopo la creazione del turno → riprende lo stesso `turn_id` | store: `job-fires.test.ts` (`bind` first-writer-wins); runner: `agent/scheduler-run.test.ts` ("un occorrenza che arriva già legata... mai una id concorrente"); binario vero: lo stesso scenario, fra il primo e il secondo `SIGKILL` — il riavvio completa il legame con l'id **originale**, non uno nuovo (provato per mutazione: minare quella riga a mano fa scadere il secondo `waitForDb` in timeout, per la ragione esatta — l'id atteso non raggiunge mai `done`) |
+| 4 | a metà turno → recovery normale del turno/effect WAL | invariato, meccanismo pre-esistente (B5); `agent/scheduler-run.test.ts` prova che il runner **non** lo tocca (`running`/`interrupted`/`waiting` → `FireDeferred`, zero chiamate al modello) |
+| 5 | turno `done` prima di `markRan` → non richiama il modello, completa il settlement | store+runner: `agent/scheduler-run.test.ts`; **binario vero**: lo stesso scenario, secondo `SIGKILL`, nella finestra `MUFFIN_JOB_FIRES_STALL_AFTER_DONE_MS` — il terzo avvio recupera il testo dal file di sessione e consegna, il log delle request del provider finto conta **una** chiamata in tutto lo scenario |
+| 6 | delivery incerta → non rifà la computazione | `agent/scheduler-run.test.ts` ("la STESSA occorrenza risolta due volte... non richiama mai il modello") e `core/scheduler/scheduler.test.ts` (`FireSettleOnly` non chiama mai `deliver`) |
+| 7 | solo dopo il settlement avanza la schedule | `core/scheduler/scheduler.test.ts` — `settleFire` prima di `markRan`, provato per mutazione su **entrambi** i punti che chiamano `markRan` (`settle` e il ramo sospeso), osservato rosso, ripristinato. Trovato scrivendo questa prova: il test pre-esistente equivalente per `recordDelivery`/`markRan` inferiva l'ordine dall'evento `'ran'` invece che dalla chiamata reale a `store.markRan` — una mutazione non l'avrebbe mai fatto scattare, perché l'evento arriva comunque dopo entrambe le scritture indipendentemente dal loro ordine reciproco. Corretto nello stesso giro (`core/scheduler/scheduler.test.ts`), non lasciato silenzioso accanto alla prova nuova. |
+
+**Cosa NON chiude.** Il ramo sospeso (`outcome.stopped === 'suspended'`) segna il fire "settled" nello stesso istante in cui chiama `markRan`, invariato da prima di questa slice: la *occorrenza* è gestita (turno creato, legato, ceduto alla corsia) anche se il *turno* non ha ancora risposto — le due cose restano domande diverse, e la consegna eventuale resta un fatto sulla riga del turno (`delivery`), non su `job_fires`. Non è un buco: è la stessa proprietà del §"suspended turn" pre-esistente, solo ora osservabile anche dal lato dell'occorrenza.
+
+**Comporre con Telegram.** Non implementato qui — è `slice/inbound-unit` — ma la forma lo ospita direttamente: `update_id → turn_id` è la stessa domanda con una chiave diversa (un intero singolo invece della coppia `(job_id, scheduled_for)`), quindi la strada naturale è una tabella gemella, non una generalizzazione prematura:
+
+```sql
+CREATE TABLE IF NOT EXISTS telegram_updates (
+  update_id  INTEGER PRIMARY KEY,
+  turn_id    TEXT,
+  settled_at TEXT,
+  created_at TEXT NOT NULL
+);
+```
+
+con lo stesso `claim`/`bind`/`settle` di `JobFireStore`, alla lettera: `drain()` (`connectors/telegram/connector.ts`) chiamerebbe `claim(update.update_id)` prima di leggere l'update, `handle()` legherebbe il `turn_id` prima di chiamare `runTurn`/`enqueueTurn` esattamente come `runFresh` fa qui, e la finestra che l'owner ha nominato esplicitamente — *"crash fra `handle()` e `markProcessed` = secondo turno, secondo giro modello, seconda consegna"* — si chiude nello stesso modo: l'identità esiste prima dell'effetto. Una singola tabella condivisa con un discriminatore (`source: 'job' | 'telegram'`) o un helper generico sopra `claim`/`bind`/`settle` (sul modello di `core/lock/durable.ts`'s `DurableLock`, che generalizza *l'algoritmo* e non la tabella, per la stessa ragione documentata lì) restano scelte legittime **quando** esiste un terzo consumatore — due istanze non lo giustificano ancora, e inventare l'astrazione ora sarebbe esattamente il "trigger framework" che il mandato di questa slice chiedeva di non costruire.
+
+**Alternative scartate.** *Colonna `origin_key` su `turns`* — vedi sopra: non può rappresentare un'occorrenza prima che il turno esista, che è la proprietà che rende il fault point 2 chiudibile. *Riverificare l'identità dentro ogni tool call della corsa* (come l'emendamento №3 aveva scartato per `stillOwner`) — stesso ragionamento, costo molto più alto per una finestra già chiusa dal binding-prima-del-modello. *Un contatore/generazione monotona invece del binding first-writer-wins* — stessa proprietà di `bind`'s `UPDATE … WHERE turn_id IS NULL`, nessun vantaggio misurabile, una scrittura in più da tenere sincrona nella stessa transazione.
+
+**Segnale che questa forma era sbagliata**, contato e non percepito: un secondo consumatore di `claim`/`bind`/`settle` (Telegram, o altro) rende la duplicazione fra le due tabelle costosa da tenere in sincrono — nel qual caso l'estrazione dell'algoritmo condiviso, non della tabella, è il passo successivo, già indicato sopra.
