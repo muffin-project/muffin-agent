@@ -206,6 +206,13 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
+  // Narrower than E3's own question ("posso ricostruire cosa è successo?") —
+  // it does not promote the row past the acceptance-scenario gap M5-BIS
+  // still names for it. What it proves is the P34-2 half ADR-0048 closes: a
+  // tool result that happens to contain a secret-shaped string never reaches
+  // `turn_tool_calls.content` in the clear, through the real binary and a
+  // real home database, not a unit-level fake.
+  verde('E3', 'tracing: a tool result that looks like a secret is redacted before it reaches the durable record'),
   // E4 is this suite's own row ("acceptance test reali, non solo unit?") —
   // giving it a scenario would mean the acceptance mechanism registering a
   // test of itself, which proves nothing a passing suite does not already
