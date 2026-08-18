@@ -235,12 +235,45 @@ history ha già scritto la chiave, e la finestra è esattamente quella.
 3. **`secret://provider_api_key` già registrato** — la catena dei backend, che è
    ciò che rende `muffin uninstall --yes && muffin init` un ciclo senza
    reincollare niente (ADR-0030 §`--local`).
-4. `MUFFIN_API_KEY` nell'ambiente **del processo che lancia `init`**. Resta, ed è
-   una scelta dichiarata, non una svista: su Linux `/proc/<pid>/environ` è
-   leggibile solo dal proprietario, mentre `/proc/<pid>/cmdline` è leggibile da
-   chiunque sulla macchina — non sono lo stesso rischio. Se l'owner vuole
-   chiudere anche quella porta è una riga, ma è una sua decisione: qui è scritta,
-   non assunta.
+4. ~~`MUFFIN_API_KEY` nell'ambiente~~ — **chiusa anche questa** (decisione owner,
+   2026-08-18): *«la regola "mai mostrabile" vale anche per l'environment del
+   processo principale. Il fatto che `/proc/.../environ` abbia permessi più
+   stretti di `cmdline` riduce il rischio, ma non cambia la forma: env resta un
+   generic carrier del secret.»* Se la variabile è presente, `init` **fallisce
+   chiuso** e il messaggio nomina **solo la variabile** e i rimedi: mai il
+   valore, mai un prefisso, mai la lunghezza — «mostrabile» include
+   «deducibile». Nessun `*_REF` nuovo: per il Gate 1 il backend che esiste
+   basta, e un consumatore che lo richieda non c'è.
+
+**La forma della garanzia, nelle parole dell'owner.** Il valore *deve* esistere
+in RAM: un provider HTTP e Telegram devono materializzare la credenziale per
+autenticarsi. La proprietà non è «il segreto non esiste», è **da dove passa**:
+
+```
+secret backend  →  consumatore privilegiato  →  sink di autenticazione
+```
+
+senza mai passare da: model · env generico · argv · risultato di tool · DB ·
+log · superficie · approvazione. È forte e mantenibile perché nomina un
+percorso, non un'assenza.
+
+**Anche i server MCP.** `muffin mcp add --env K=VALORE` era l'unico modo
+documentato di dare una chiave a un server MCP, e la metteva in `argv`
+(reperto del judge di questa PR). Ora `--env` accetta **solo** riferimenti
+`secret://nome`: il registro su disco tiene il nome, e il valore si risolve
+al momento della connessione dentro `core/mcp/connect.ts` — il sink
+privilegiato che avvia il figlio — e finisce nell'**environment del figlio**,
+mai in `argv`. `core/config/secret-boundary.test.ts` dichiara questo quarto
+chiamante di `readSecret` con la sua ragione. Nota che l'env **del figlio** è
+il sink autorizzato di quel consumatore, mentre l'env **del processo
+principale** non lo è: la differenza è chi lo riceve, non il meccanismo.
+
+**Il percorso stdin funziona anche con un produttore lento.** `process.stdin.isTTY`
+mette fd 0 in non-blocking: con `pass show`/`op read`/`gpg -d` a monte,
+`readFileSync(0)` lanciava **EAGAIN**, il `catch` lo inghiottiva e `init`
+proseguiva **senza chiave, in silenzio** (misurato dal judge:
+`(sleep 3; printf 'sk-…') | muffin init` non salvava niente). Ora si usa
+`isatty(0)` da `node:tty`, che non tocca lo stream.
 
 **Cosa è stato migrato**: harness di accettazione, `evals/memory/acceptance.ts`
 e i test della CLI passano la chiave da stdin. Nessun chiamante di produzione o

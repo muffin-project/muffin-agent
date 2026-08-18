@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
@@ -258,7 +259,12 @@ async function main(rawArgv: string[]): Promise<number> {
  * `muffin secret set`, e un `init` in CI non ha un TTY su cui aprire un prompt.
  */
 function readKeyFromStdin(): string | undefined {
-  if (process.stdin.isTTY) return undefined;
+  // `isatty(0)` e **non** `process.stdin.isTTY`: toccare `process.stdin` mette
+  // fd 0 in non-blocking, e allora `readFileSync(0)` su un produttore lento
+  // (`pass show`, `op read`, `gpg -d`) lancia EAGAIN — il catch la inghiottiva
+  // e `init` proseguiva senza chiave, in silenzio. Misurato dal judge di questa
+  // slice: `(sleep 3; printf 'sk-…') | muffin init` non salvava niente.
+  if (isatty(0)) return undefined;
   try {
     const value = readFileSync(0, 'utf8').trim();
     return value === '' ? undefined : value;
@@ -340,9 +346,25 @@ async function cmdInit(argv: string[]): Promise<number> {
     );
     return 78;
   }
+  // **Nemmeno dall'environment** (decisione owner 2026-08-18). `environ` ha
+  // permessi piu stretti di `cmdline`, ma la forma non cambia: un env generico
+  // e un vettore generico, e la garanzia dice che il valore va dal backend dei
+  // segreti al consumatore privilegiato al sink di autenticazione, senza
+  // passare da model, env generico, argv, risultati di tool, DB, log, superfici
+  // o approvazioni. Fail closed, e il messaggio nomina **solo la variabile**:
+  // mai il valore, mai la lunghezza, mai un prefisso.
+  if (process.env['MUFFIN_API_KEY'] !== undefined) {
+    process.stderr.write(
+      `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+        `  Oppure passala a init:  echo -n "$KEY" | muffin init\n` +
+        `  Poi togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
+    );
+    return 78;
+  }
   // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
   // `secret set` usa da sempre.
-  let apiKey = readKeyFromStdin() ?? process.env['MUFFIN_API_KEY'];
+  let apiKey = readKeyFromStdin();
   const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
@@ -745,7 +767,24 @@ async function cmdMcp(argv: string[]): Promise<number> {
         return 78;
       }
       const eq = flags[i + 1]!.indexOf('=');
-      env[flags[i + 1]!.slice(0, eq)] = flags[i + 1]!.slice(eq + 1);
+      const key = flags[i + 1]!.slice(0, eq);
+      const value = flags[i + 1]!.slice(eq + 1);
+      // Solo riferimenti, mai valori (direttiva owner 2026-08-18): `--env
+      // GITHUB_TOKEN=ghp_…` metteva il token nel `ps` di chiunque e nella shell
+      // history, ed era l'unico modo documentato di dare una chiave a un server
+      // MCP. Ora si registra con `muffin secret set` (stdin) e qui viaggia il
+      // nome: `--env GITHUB_TOKEN=secret://mcp_gh_token`, risolto al momento
+      // della connessione dentro il sink privilegiato (`core/mcp/connect.ts`).
+      if (!value.startsWith('secret://')) {
+        process.stderr.write(
+          `--env ${key}=… non accetta un valore: finirebbe nel ps di chiunque e nella shell history.\n` +
+            `  Registra il segreto:  echo -n "$TOKEN" | muffin secret set mcp_${key.toLowerCase()}\n` +
+            `  Poi passa il riferimento:  --env ${key}=secret://mcp_${key.toLowerCase()}\n` +
+            `  Un valore che non è un segreto (un flag, un percorso) mettilo negli argomenti del comando, dopo --.\n`,
+        );
+        return 78;
+      }
+      env[key] = value;
       i++;
     }
     return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env);
