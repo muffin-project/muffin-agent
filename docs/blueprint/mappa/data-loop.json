@@ -323,7 +323,7 @@
         {
           "cond": "nessuna superficie del registro gestisce il canale (es. un indirizzo scritto male, o una superficie disabilitata)",
           "goto": "exit",
-          "note": "SurfaceRegistry.deliver ritorna {delivered:false, why} con l'elenco delle superfici connesse — core/surface/registry.ts; Scheduler.settle scrive l'esito sulla riga del turno prima di markRan (core/scheduler/scheduler.ts:240)"
+          "note": "SurfaceRegistry.deliver ritorna {delivered:false, why} con l'elenco delle superfici connesse — core/surface/registry.ts; Scheduler.settle scrive l'esito sulla riga del turno prima di markRan (core/scheduler/scheduler.ts:458)"
         }
       ]
     }
@@ -437,7 +437,7 @@
     {
       "what": "CHIUSO (era: consegna remota non implementata per nessun canale tranne 'cli'). Un job su un canale non gestito da nessuna superficie del registro ora produce {delivered:false, why} — mai un'eccezione, mai un log muto — e markRan avanza SOLO dopo che Scheduler.settle ha scritto l'esito sulla riga del turno.",
       "consequence": "Resta un buco reale e diverso: Discord non e' ancora una superficie del registro (M5-BIS B15/B16), quindi un job con channel='discord:<id>' oggi ritorna {delivered:false, why:'nessuna superficie serve...'} finche' connectors/discord/ non e' cablato in cli/surface.ts — visibile, non silenzioso, ma comunque non consegnato.",
-      "evidence": "core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:240 (settle), :268 (unico markRan); cli/surface.ts:199 (connectSurfaces costruisce il registry da cio' che e' davvero abilitato)"
+      "evidence": "core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:458 (settle), :491 (il suo markRan); cli/surface.ts:199 (connectSurfaces costruisce il registry da cio' che e' davvero abilitato)"
     }
   ],
   "gaps": [

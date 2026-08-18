@@ -373,7 +373,11 @@ describe('un job che aspetta non perde la risposta', () => {
 
     const jobs = new Jobs(runtime.db);
     const job = jobs.add({ goal: 'controlla il backup', cron: '0 9 * * *', timezone: 'Europe/Rome', channel: 'cli' });
-    const outcome = await makeJobRunner(deps)(jobs.get(job.id)!, undefined);
+    const outcome = await makeJobRunner(deps, runtime.jobFires)(jobs.get(job.id)!, undefined);
+    // A fresh fire, run once: never the `FireDeferred`/`FireSettleOnly`
+    // sentinels B7 added, which only ever come back for an occurrence a
+    // *previous* call already bound.
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     // The scheduler is told it has not ended, so it neither delivers an empty
     // message nor leaves the fire due for a second turn.
     expect(outcome.stopped).toBe('suspended');

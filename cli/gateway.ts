@@ -399,7 +399,7 @@ export async function cmdGatewayRun(
 
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps),
+    makeJobRunner(runtime.deps, runtime.jobFires),
     deliver,
     // ALWAYS_IDLE by omission, and it is a decision: a gateway has no terminal,
     // so there is no foreground to lose the lane to. When a surface turn becomes
@@ -434,6 +434,10 @@ export async function cmdGatewayRun(
     // starts and again before delivery — `standDown` alone gives this
     // scheduler no protection, since it always answers "no, I own it".
     () => lock.isCurrentClaim(),
+    // B7: the last write before `markRan`, every time `markRan` is about to
+    // run — never a required rewire, just the one thing this store still
+    // needed to know before advancing a schedule it also gates.
+    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
   );
 
   /**
