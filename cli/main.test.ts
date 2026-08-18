@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,7 +39,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init', '--api-key', 'sk-or-v1-realistic-openrouter-key'],
+      ['init'], 'sk-or-v1-realistic-openrouter-key',
     );
     expect(r.code).toBe(0);
     // Said, not just done: ADR-0036's "never decide silently" half of the fix.
@@ -53,7 +53,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
 
   it('an Anthropic-shaped key ends up as anthropic, and says so', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init', '--api-key', 'sk-ant-api03-realistic']);
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-api03-realistic');
     expect(r.code).toBe(0);
     expect(r.err).toContain('dedotto dalla chiave');
 
@@ -64,7 +64,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
 
   it('an unrecognised key still defaults to anthropic, but now names the reason instead of staying silent', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init', '--api-key', 'xoxb-unknown-shape']);
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'xoxb-unknown-shape');
     expect(r.code).toBe(0);
     expect(r.err).toContain('provider');
     expect(r.err).toMatch(/non è sk-or|default/);
@@ -77,7 +77,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init', '--provider', 'anthropic', '--api-key', 'sk-or-v1-would-have-inferred-openai-compat'],
+      ['init', '--provider', 'anthropic'], 'sk-or-v1-would-have-inferred-openai-compat',
     );
     expect(r.code).toBe(0);
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
@@ -93,7 +93,7 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const { dir, xdg } = scratchHome();
     const r = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
-      ['init', '--provider', 'anthropic', '--api-key', '8712345678:AAExampleBotTokenLooksLikeThis_abcdef'],
+      ['init', '--provider', 'anthropic'], '8712345678:AAExampleBotTokenLooksLikeThis_abcdef',
     );
     expect(r.err).toContain('token');
     expect(r.err.toLowerCase()).toContain('telegram');
@@ -134,7 +134,7 @@ describe('selective Italian command aliases (ADR-0036)', () => {
   it('lavori behaves exactly like jobs', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    muffin(env, ['init', '--api-key', 'sk-ant-fixture']);
+    muffin(env, ['init'], 'sk-ant-fixture');
     const alias = muffin(env, ['lavori', 'list']);
     const canonical = muffin(env, ['jobs', 'list']);
     expect(alias.code).toBe(canonical.code);
@@ -306,7 +306,7 @@ describe('muffin memory search — --surface and --around actually reach a resul
   it('--surface reaches recall through the real binary, not just through cmdMemorySearch directly', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-surface']).code).toBe(0);
+    expect(muffin(env, ['init'], 'sk-ant-api03-fake-main-cli-surface').code).toBe(0);
 
     const db = new DatabaseCtor(join(dir, 'muffin.db'));
     const store = new MemoryStore(db);
@@ -329,7 +329,7 @@ describe('muffin memory search — --surface and --around actually reach a resul
   it('--around reaches recall through the real binary, attaching the surrounding messages', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    expect(muffin(env, ['init', '--api-key', 'sk-ant-api03-fake-main-cli-around']).code).toBe(0);
+    expect(muffin(env, ['init'], 'sk-ant-api03-fake-main-cli-around').code).toBe(0);
 
     const db = new DatabaseCtor(join(dir, 'muffin.db'));
     const store = new MemoryStore(db);
@@ -348,5 +348,44 @@ describe('muffin memory search — --surface and --around actually reach a resul
     expect(r.out).toContain(`intorno a #${anchor}`);
     expect(r.out).toContain('un messaggio prima');
     expect(r.out).toContain('un messaggio dopo');
+  });
+});
+
+describe('una chiave non passa mai per argv (direttiva owner 2026-08-18)', () => {
+  /**
+   * Il difetto che questo test impedisce: `muffin init --api-key sk-…` metteva
+   * una chiave di classe 1 in `argv`, cioè nella shell history e nel `ps` di
+   * chiunque sulla macchina — e un segreto è un segreto anche **prima** di
+   * essere registrato nel backend. Non è deprecato con un avviso: un avviso
+   * arriva quando la history l'ha già scritta.
+   */
+  it('rifiuta --api-key con un valore, e dice come passarla', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-argv-'));
+    const xdg = mkdtempSync(join(tmpdir(), 'muffin-argv-xdg-'));
+    try {
+      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init', '--api-key', 'sk-ant-api03-mai-in-argv']);
+      expect(r.code).toBe(78);
+      expect(r.err).toMatch(/argv/i);
+      expect(r.err).toMatch(/stdin/);
+      // E non ha scritto niente: un rifiuto che installa metà home sarebbe
+      // peggio del difetto.
+      expect(existsSync(join(dir, 'config.json'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  it('accetta la stessa chiave da stdin', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-stdin-'));
+    const xdg = mkdtempSync(join(tmpdir(), 'muffin-stdin-xdg-'));
+    try {
+      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-api03-da-stdin-va-bene');
+      expect(r.code).toBe(0);
+      expect(existsSync(join(dir, 'config.json'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
   });
 });
