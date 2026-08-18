@@ -316,7 +316,14 @@ function stato() {
   for (const v of reg) {
     const f = transcriptOf(v.id);
     const kb = f ? (statSync(f).size / 1024).toFixed(0) : '—';
-    console.log(`${f ? '✓' : '✗'} ${v.slug.padEnd(24)} ${v.id}  ${kb.padStart(6)} KB  ${v.cosa ?? ''}`);
+    // Cerotto (2026-08-18): quattro deleghe hanno solo la riga di `chiudi` —
+    // agenti chiusi per id mentre la sessione veniva compattata — e `padEnd` su
+    // `undefined` faceva uscire 1 sia qui sia in `riprendi`, cioe' sul percorso
+    // che `loop.md` §1 rende canonico per una sessione fresca. Il fix vero (una
+    // costante in tutti i cicli di stampa, la riga «N chiuse senza
+    // registrazione», tre test) arriva da un'altra sessione: quando entra,
+    // questo sparisce.
+    console.log(`${f ? '✓' : '✗'} ${(v.slug ?? '(mai registrata)').padEnd(24)} ${v.id}  ${kb.padStart(6)} KB  ${v.cosa ?? ''}`);
   }
 }
 
@@ -738,7 +745,7 @@ function riprendi() {
     console.log(`  ${' '.repeat(22)} id ${r.id}${r.vivo ? '' : '  ⚠ transcript assente'}`);
   }
   console.log(`\n═══ CHIUSE (${chiuse.length}) ═══`);
-  for (const r of chiuse) console.log(`  ${r.slug.padEnd(22)} ${r.dove}`);
+  for (const r of chiuse) console.log(`  ${(r.slug ?? '(mai registrata)').padEnd(22)} ${r.dove}`);
 
   console.log(`\n═══ SCONOSCIUTE (${sconosciute.length}) — non riprendere senza verifica ═══`);
   for (const r of sconosciute) {
