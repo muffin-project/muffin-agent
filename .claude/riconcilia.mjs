@@ -156,7 +156,7 @@ function statoDaGh() {
  * `branchRemoti` è la lista dei branch che esistono su `origin`; `antenati` dice
  * se lo sha dichiarato è un antenato di HEAD (null = non verificabile).
  */
-export function riconcilia({ documenti, statoPr, branchRemoti, base, baseEsiste, baseAntenata }) {
+export function riconcilia({ documenti, statoPr, branchRemoti, branchLocali = [], base, baseEsiste, baseAntenata }) {
   const reperti = [];
   const vive = prDichiarateVive(documenti);
   for (const [numero, dove] of vive) {
@@ -171,8 +171,12 @@ export function riconcilia({ documenti, statoPr, branchRemoti, base, baseEsiste,
   const percorso = documenti.find((d) => d.soloSezione);
   if (percorso) {
     for (const branch of branchDichiarativi(percorso.testo)) {
-      if (!branchRemoti.includes(branch)) {
-        reperti.push(`\`${branch}\` è nominato fra il lavoro in volo ma non esiste su origin (mergiato e cancellato?)`);
+      // Su origin **o** in locale: una slice appena aperta vive in un worktree e
+      // non è ancora stata pushata, e segnalarla sarebbe rumore — il reperto che
+      // conta è il branch che **non esiste più da nessuna parte**, cioè quello
+      // mergiato e cancellato mentre il documento lo dice ancora vivo.
+      if (!branchRemoti.includes(branch) && !branchLocali.includes(branch)) {
+        reperti.push(`\`${branch}\` è nominato fra il lavoro in volo ma non esiste né su origin né in locale (mergiato e cancellato?)`);
       }
     }
     if (base !== null) {
@@ -224,8 +228,9 @@ function main() {
     .split('\n')
     .map((r) => r.split('refs/heads/')[1])
     .filter(Boolean);
+  const branchLocali = git(['branch', '--format=%(refname:short)']).split('\n').map((r) => r.trim()).filter(Boolean);
 
-  const reperti = riconcilia({ documenti, statoPr, branchRemoti, base, baseEsiste, baseAntenata });
+  const reperti = riconcilia({ documenti, statoPr, branchRemoti, branchLocali, base, baseEsiste, baseAntenata });
   if (reperti.length === 0) {
     process.stdout.write(`handoff riconciliato: ${numeri.length} PR dichiarate vive, tutte aperte; base e branch coerenti\n`);
     process.exit(0);
