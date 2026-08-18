@@ -275,11 +275,19 @@ async function main(rawArgv: string[]): Promise<number> {
  * description. Quindi si ritenta, con una scadenza, e un errore di lettura non
  * diventa mai «nessun valore».
  */
-function readAllStdin(deadlineMs = 30_000): string {
+function readAllStdin(primoByteMs = 3_000, poiMs = 60_000): string {
   const chunks: Buffer[] = [];
   const buf = Buffer.alloc(64 * 1024);
   const wait = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + deadlineMs;
+  let visto = 0;
+  // Due scadenze, e la differenza conta: **prima** del primo byte si aspetta
+  // poco, perche il caso comune di un'attesa infinita e uno stdin ereditato e
+  // muto (CI, un servizio) — e restare fermi trenta secondi in silenzio e la
+  // cosa che fa credere a chi guarda che il comando sia piantato. **Dopo** il
+  // primo byte si aspetta a lungo, perche un produttore vero (`pass show`,
+  // `gpg -d`, un blob grosso) puo metterci. La scadenza si rinnova a ogni
+  // chunk: un flusso lungo non e un flusso fermo.
+  let deadline = Date.now() + primoByteMs;
   for (;;) {
     let read: number;
     try {
@@ -289,13 +297,19 @@ function readAllStdin(deadlineMs = 30_000): string {
       if (code === 'EOF') break;
       if (code !== 'EAGAIN') throw error;
       if (Date.now() > deadline) {
-        throw new Error(`stdin non ha prodotto niente entro ${Math.round(deadlineMs / 1000)}s`);
+        throw new Error(
+          visto === 0
+            ? `stdin non ha prodotto niente entro ${Math.round(primoByteMs / 1000)}s`
+            : `stdin si e fermato dopo ${visto} byte e non ha chiuso entro ${Math.round(poiMs / 1000)}s`,
+        );
       }
       Atomics.wait(wait, 0, 0, 20); // 20ms, senza bruciare la CPU
       continue;
     }
     if (read === 0) break;
     chunks.push(Buffer.from(buf.subarray(0, read)));
+    visto += read;
+    deadline = Date.now() + poiMs;
   }
   return Buffer.concat(chunks).toString('utf8');
 }
@@ -397,7 +411,15 @@ async function cmdInit(argv: string[]): Promise<number> {
   }
   // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
   // `secret set` usa da sempre.
-  let apiKey = readKeyFromStdin();
+  let apiKey: string | undefined;
+  try {
+    apiKey = readKeyFromStdin();
+  } catch (error) {
+    // Come `cmdSecret`: uno stack trace di Node non e un messaggio, e questa e
+    // la prima cosa che una macchina nuova vede.
+    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 78;
+  }
   const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
