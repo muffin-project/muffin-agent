@@ -179,16 +179,14 @@ mutazione verificata.
 
 ## Cosa NON copre
 
-- **`muffin init --api-key CHIAVE`.** Argomento CLI documentato, quindi
-  visibile in `ps aux` a un altro utente dello stesso host e nella cronologia
-  della shell. Preesistente a questa slice, non class-1 (la chiave non è
-  ancora "conosciuta dal backend" nel momento in cui arriva) ma la stessa
-  famiglia di rischio di "segreto in argv" che la direttiva nomina. Non
-  corretto qui: cambiare la UX di `init` è una decisione propria, con un
-  proprio raggio (script di CI che già passano `--api-key`, documentazione,
-  test esistenti) — dichiarato come rischio residuo, non silenziato.
-  Follow-up proposto: deprecare il flag a favore di stdin, come già `secret
-  set`.
+- ~~**`muffin init --api-key CHIAVE`**~~ — **chiuso, non più un rischio
+  residuo.** Correzione dell'owner, 2026-08-18: *«un secret è un secret anche
+  prima di essere registrato nel backend… nessun secret value in argv; la
+  compatibilità di script non prevale sulla garanzia»*. Questa ADR lo aveva
+  classificato come non-class-1 perché la chiave non è ancora conosciuta dal
+  backend nel momento in cui arriva — ragionamento sbagliato: la finestra fra
+  «arriva» e «è nel backend» è precisamente quella in cui la shell history e
+  `ps` la vedono, e il valore è lo stesso. Vedi §Revisione in fondo.
 - **Righe già scritte in `~/.muffin` reale.** Non toccate, non cancellate —
   "le righe non si cancellano" resta valido. Una bonifica una-tantum
   (`muffin secret scrub`) è **proposta**, non implementata: cercherebbe prima
@@ -212,3 +210,135 @@ aggiunta a un modulo esistente, il punto di applicazione in `agent/loop.ts`
 reversibile con un revert del commit; nessuna riga del database cambia
 forma. I pattern di `SECRET_VALUE_SHAPES` sono dati, non contratto: se una
 forma produce un falso positivo misurato, si toglie in un commit che lo dice.
+
+
+## Revisione — 2026-08-18: nessun secret value in argv, e non è una deprecazione
+
+**Correzione dell'owner**, dopo il MERGE di questa ADR: *«`muffin init
+--api-key CHIAVE` NON può restare come follow-up se la claim è "i secret non
+sono mai mostrati o mostrabili". Un secret è un secret anche prima di essere
+registrato nel backend. Il judge non deve dare MERGE alla claim globale finché
+esiste un entry point supportato che rende un secret visibile in process list o
+shell history.»*
+
+**Cosa cambia.** `--api-key <valore>` non è deprecato con un avviso: è
+**rifiutato** (`cli/main.ts`, exit 78, e niente viene scritto — un rifiuto che
+installa mezza home sarebbe peggio del difetto). Un avviso arriverebbe quando la
+history ha già scritto la chiave, e la finestra è esattamente quella.
+
+**Da dove arriva la chiave adesso**, nell'ordine in cui `init` la cerca:
+
+1. **stdin**, quando `init` non è su un terminale — `echo -n "$KEY" | muffin
+   init`. È il percorso di script e CI, ed è lo stesso che `muffin secret set`
+   usa da sempre (`readFileSync(0)`, mai `argv`).
+2. **il prompt nascosto**, quando c'è un TTY (`promptSecret`, nessun eco).
+3. **`secret://provider_api_key` già registrato** — la catena dei backend, che è
+   ciò che rende `muffin uninstall --yes && muffin init` un ciclo senza
+   reincollare niente (ADR-0030 §`--local`).
+4. ~~`MUFFIN_API_KEY` nell'ambiente~~ — **chiusa anche questa** (decisione owner,
+   2026-08-18): *«la regola "mai mostrabile" vale anche per l'environment del
+   processo principale. Il fatto che `/proc/.../environ` abbia permessi più
+   stretti di `cmdline` riduce il rischio, ma non cambia la forma: env resta un
+   generic carrier del secret.»* Se la variabile è presente, `init` **fallisce
+   chiuso** e il messaggio nomina **solo la variabile** e i rimedi: mai il
+   valore, mai un prefisso, mai la lunghezza — «mostrabile» include
+   «deducibile». Nessun `*_REF` nuovo: per il Gate 1 il backend che esiste
+   basta, e un consumatore che lo richieda non c'è.
+
+**La forma della garanzia, nelle parole dell'owner.** Il valore *deve* esistere
+in RAM: un provider HTTP e Telegram devono materializzare la credenziale per
+autenticarsi. La proprietà non è «il segreto non esiste», è **da dove passa**:
+
+```
+secret backend  →  consumatore privilegiato  →  sink di autenticazione
+```
+
+senza mai passare da: model · env generico · argv · risultato di tool · DB ·
+log · superficie · approvazione. È forte e mantenibile perché nomina un
+percorso, non un'assenza.
+
+**Anche i server MCP.** `muffin mcp add --env K=VALORE` era l'unico modo
+documentato di dare una chiave a un server MCP, e la metteva in `argv`
+(reperto del judge di questa PR). Ora `--env` accetta **solo** riferimenti
+`secret://nome`: il registro su disco tiene il nome, e il valore si risolve
+al momento della connessione dentro `core/mcp/connect.ts` — il sink
+privilegiato che avvia il figlio — e finisce nell'**environment del figlio**,
+mai in `argv`. `core/config/secret-boundary.test.ts` dichiara questo quarto
+chiamante di `readSecret` con la sua ragione. Nota che l'env **del figlio** è
+il sink autorizzato di quel consumatore, mentre l'env **del processo
+principale** non lo è: la differenza è chi lo riceve, non il meccanismo.
+
+**Il percorso stdin funziona anche con un produttore lento.** `process.stdin.isTTY`
+mette fd 0 in non-blocking: con `pass show`/`op read`/`gpg -d` a monte,
+`readFileSync(0)` lanciava **EAGAIN**, il `catch` lo inghiottiva e `init`
+proseguiva **senza chiave, in silenzio** (misurato dal judge:
+`(sleep 3; printf 'sk-…') | muffin init` non salvava niente). Ora si usa
+`isatty(0)` da `node:tty`, che non tocca lo stream.
+
+**Cosa è stato migrato**: harness di accettazione, `evals/memory/acceptance.ts`
+e i test della CLI passano la chiave da stdin. Nessun chiamante di produzione o
+di test la mette più in `argv` — e il test che lo pinna è in `cli/main.test.ts`
+(«una chiave non passa mai per argv»), rosso quando la guardia viene tolta
+(mutazione eseguita: `if (false && …)` → 1 fallimento, gli altri 21 verdi).
+
+
+## Revisione — il produttore lento, e dove vive la regola dell'`env` MCP
+
+Due reperti del secondo giro di judge, entrambi chiusi.
+
+**1. `readFileSync(0)` perdeva la chiave in silenzio, e `isatty` non bastava.**
+La prima correzione aveva spostato la guardia (`process.stdin.isTTY` →
+`isatty(0)`) credendo che fosse `cmdInit` a mettere fd 0 in non-blocking. Non
+lo è: lo mette un tocco di `process.stdin` **a import time** nel grafo dei
+moduli — il bisect del judge arriva a `import('./repl.js')`. Quindi il fd resta
+non-bloccante comunque, `readFileSync(0)` lancia **EAGAIN** appena i dati non
+sono ancora arrivati, e il `catch` lo leggeva come «nessun valore»: `pass show`,
+`op read`, `gpg -d` fallivano in silenzio — **su entrambe le porte**, `init` e
+`secret set`. Il fail-closed di `MUFFIN_API_KEY` prescriveva due vie e nessuna
+delle due si apriva.
+
+Ora una sola primitiva, `readAllStdin`, con retry su EAGAIN e una scadenza, usata
+da tutti e due i comandi; un errore di lettura non diventa mai «nessun valore».
+Scartato `openSync('/dev/stdin')`: eredita la stessa open file description e
+lancia lo stesso EAGAIN (misurato). Il test che mancava — e la ragione per cui il
+difetto è sopravvissuto a un giro — è che una pipe immediata riempie il buffer
+prima della lettura e maschera il caso: ora c'è un test con un produttore che
+ritarda, rosso quando si toglie il retry.
+
+**2. La regola sull'`env` di un server MCP vive nello schema, non nel parser.**
+Un `mcp.json` scritto a mano con un token letterale veniva consegnato al figlio
+senza obiezioni: la garanzia dipendeva dal fatto che si passasse da `muffin mcp
+add`. Ora `core/mcp/registry.ts` rifiuta un valore che **ha la forma** di una
+credenziale, riusando il predicato di `core/tracing/redact.ts`
+(`looksLikeSecretValue`) invece di ricopiarne la lista.
+
+È **classe 3, e va letto come tale**: riconosce le forme note (`ghp_…`,
+`sk-ant-…`, `Bearer …`, `token=…`), non qualunque stringa. La classe 1 resta
+strutturale altrove — il valore noto al backend non passa mai di qui, perché
+`--env` accetta solo `secret://nome` e la risoluzione avviene nel sink. E
+`LANG=C` o `MCP_MODE=strict` continuano a passare: vietare ogni valore letterale
+avrebbe rotto la configurazione legittima senza chiudere niente che la classe 1
+non chiudesse già.
+
+
+## Eccezione dichiarata — `evals/character/run.ts` (2026-08-18)
+
+Reperto del judge del terzo giro, registrato invece che lasciato implicito: lo
+strumento del **character eval** prende la chiave da una variabile d'ambiente
+(`--api-key-env <VAR>`, `requireEnv`). È la forma che l'owner ha rifiutato per
+`MUFFIN_API_KEY`, e finché resta così la frase «non esiste un entry point
+supportato che trasporti un segreto in argv o in env generico» sarebbe più larga
+di ciò che è provato.
+
+Perché resta, e perché non invalida la claim: `evals/character/run.ts` non è un
+percorso del prodotto — non parte da `muffin`, non tocca `readSecret`, non
+partecipa alla catena *secret backend → consumatore privilegiato → sink*, e non
+gira mai in una installazione dell'owner. È uno strumento di misura che si lancia
+a mano quando l'owner autorizza una corsa a pagamento. La claim riguarda il
+prodotto; qui la nota serve a impedire che qualcuno la citi come prova di
+qualcosa che questo file non rispetta.
+
+Chiuderla è la stessa mossa già fatta due volte (`readAllStdin` da stdin, oppure
+leggere `secret://` dal backend con `--api-key-ref`): vale quando l'eval smette
+di essere uno strumento e diventa qualcosa che gira da solo — a quel punto è
+prodotto, e la regola si applica per intero.

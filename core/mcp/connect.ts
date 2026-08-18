@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/client';
 // is runtime-agnostic) — probed on the installed package, the alpha-era docs
 // still show it on the root export.
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { readSecret } from '../config/config.js';
 import type { McpServerEntry, McpToolDef } from './registry.js';
 
 /**
@@ -26,7 +27,11 @@ export async function connectServer(server: string, entry: McpServerEntry): Prom
   const transport = new StdioClientTransport({
     command: entry.command,
     args: [...entry.args],
-    env: { ...entry.env },
+    // I valori `secret://nome` si risolvono **qui**, nel sink privilegiato che
+    // avvia il server, e non prima: il registro su disco tiene il riferimento,
+    // il figlio riceve il valore nel proprio env (non in argv), e nessuna
+    // struttura intermedia lo porta in giro (ADR-0048 §Revisione 18/08).
+    env: resolveEnv(entry.env),
     // The server's stderr is diagnostics, not conversation: keep it out of the
     // parent's inherited stderr so a chatty server cannot scribble on the REPL.
     stderr: 'pipe',
@@ -64,3 +69,22 @@ export async function connectServer(server: string, entry: McpServerEntry): Prom
     },
   };
 }
+
+
+/**
+ * `secret://nome` → il valore, tutto il resto invariato.
+ *
+ * Un riferimento che non si risolve è un errore rumoroso e non una connessione
+ * a metà: un server MCP avviato senza la sua chiave fallisce più tardi, in un
+ * punto in cui nessuno collega la causa.
+ */
+function resolveEnv(env: Record<string, string>, home?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    out[key] = value.startsWith('secret://') ? (home === undefined ? readSecret(value) : readSecret(value, home)) : value;
+  }
+  return out;
+}
+
+/** Solo per il test: la stessa funzione, con una home esplicita. */
+export const resolveEnvForTest = resolveEnv;

@@ -137,7 +137,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     if (found) {
       step('api key', `già presente (${found.backend}): ${found.path}`);
     } else {
-      step('api key', 'missing — set MUFFIN_API_KEY or pass --api-key', false);
+      step('api key', 'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt', false);
     }
   }
 
