@@ -291,3 +291,133 @@ test che porta un fire deferred fino al settlement passando per
 `core/turns/lane.ts`, oppure un tetto d'età sul deferred che emetta un evento
 diagnostico. Nessuno dei due prima di avere un caso reale: costruire il tetto
 adesso sarebbe infrastruttura per una possibilità ipotetica.
+
+## Emendamento №6 — `telegram_updates` chiude ciò che №5 aveva aperto (2026-08-18, `slice/inbound-unit`)
+
+**Il punto lasciato aperto.** L'emendamento №5, §"Comporre con Telegram", nominava
+la stessa domanda con una chiave diversa e proponeva — non implementava — una
+tabella gemella. Il difetto dal lato dell'owner, triage 17/08: *"`drain()` itera
+`inbox.pending()`, chiama `handle()`, e solo se non lancia chiama
+`markProcessed`. `handle()` chiama `runTurn` **direttamente**, che crea un turno
+con id fresco a ogni chiamata: nessuna chiave lega `update_id` a un turno."* Un
+crash in qualunque punto fra l'inizio di `handle()` e `markProcessed` faceva
+rileggere lo stesso update al riavvio e creare un secondo turno indipendente —
+secondo giro di modello, e se il primo era arrivato fino all'invio, secondo
+messaggio recapitato all'owner. Decisione owner, verbatim: *"Ogni `update_id`
+mappa a UNA sola identità durevole di turno. Dopo un crash Muffin continua o
+conclude quella stessa identità: non crea un secondo turno, non abbandona il
+primo, e non richiama modello o tool solo per riconsegnare un risultato già
+computato."*
+
+**La forma scelta, e perché non la tabella gemella che №5 aveva sketchato.**
+`ensureColumn` (`core/lock/durable.ts`, lo stesso helper che `core/turns/store.ts`
+usa per `claim_token`) su `telegram_updates`, non una tabella nuova. La
+differenza con `job_fires` è la stessa che il mandato di questa slice chiedeva
+di verificare prima di scegliere: **l'occorrenza deve poter esistere prima del
+turno**, ed è esattamente la proprietà per cui `job_fires` *doveva* essere una
+tabella a sé — `jobs` tiene solo la regola di ricorrenza, non una riga per
+occorrenza, quindi `job_fires.claim()` doveva crearla lei. `telegram_updates` non
+ha questo problema: `UpdateInbox.accept()` scrive già una riga per update, prima
+di qualunque `handle()`, da quando questo file esiste (§"L'inbox" in testa a
+`updates.ts`). L'occorrenza esiste già. Aggiungere due colonne nullable a una
+riga che è già lì è più piccolo di una tabella nuova con la sua stessa
+`PRIMARY KEY`, non un'approssimazione della stessa idea — ed è la forma il
+mandato di questa slice chiedeva esplicitamente di preferire quando disponibile.
+
+**La forma, letterale.** `connectors/telegram/updates.ts`:
+
+```sql
+ALTER TABLE telegram_updates ADD COLUMN turn_id TEXT;
+ALTER TABLE telegram_updates ADD COLUMN settled_at TEXT;
+```
+
+(`ensureColumn(db, 'telegram_updates', 'turn_id', 'turn_id TEXT')` e l'analoga per
+`settled_at`, righe 98-99 — `ALTER TABLE ... ADD COLUMN` solo se la colonna manca,
+`CREATE TABLE IF NOT EXISTS` per una installazione nuova.) Tre metodi, stesso
+nome e stessa semantica di `JobFireStore`: `bind(updateId, turnId): string`
+(riga 123, `UPDATE ... WHERE turn_id IS NULL`, first-writer-wins, il perdente
+riceve indietro l'id del vincitore mai il proprio); `settle(updateId, at): void`
+(riga 138, `UPDATE ... WHERE settled_at IS NULL`, idempotente); `get(updateId)`
+(riga 143, per il recovery e per i test). `claim` non esiste come metodo
+separato perché `accept()` già lo è.
+
+**Il percorso.** `connectors/telegram/connector.ts`, tre funzioni che rispecchiano
+`agent/scheduler-run.ts`'s `makeJobRunner`/`resolveBound`/`runFresh` per nome e
+per struttura: `resolve` (riga 508) legge `stored.turnId` — già portato da
+`pending()`, mai una query in più — e si dirama *prima* di toccare pairing o
+modello; `resolveBound` (riga 531) risolve un update già legato senza mai
+richiamare il modello; `runFresh` (riga 587) è l'unico percorso che chiama
+`runTurn`, con `id: turnId` già impegnato da `bind`. `finish` (riga 753) è
+`settle` seguito da `markProcessed`, sempre in quest'ordine, mai l'inverso —
+l'analogo di `settleFire` chiamato immediatamente prima di ogni `markRan` in
+`core/scheduler/scheduler.ts`.
+
+**La matrice dei sette punti dell'owner, e dove ciascuno è provato.**
+
+| # | Punto | Dove è provato |
+|---|---|---|
+| 1 | crash dopo `accept` prima di `handle` → lavorato una volta sola | invariato, meccanismo pre-esistente (`connectors/telegram/updates.ts`'s inbox); `pending()` filtra su `processed_at IS NULL`, immutato da questa slice |
+| 2 | crash dopo il binding prima del turno → completa con lo **stesso** id | store: `connectors/telegram/updates.test.ts` (`bind` first-writer-wins, un restart sulla stessa connessione trova lo stesso binding); connettore: `connectors/telegram/inbound-unit.test.ts` ("bound but the turn row is missing completes with the SAME id"); **contro il percorso reale**: stesso file, "a crash between bind and turn-creation (2)…", `TelegramApi` finto ma `drain`/`resolve`/`resolveBound`/`runFresh`/`TurnStore`/`UpdateInbox` veri, crash iniettato con `MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_BIND_MS` sotto fake timer — la chiamata "uccisa" è provata ancora parcheggiata (`stalled.settled() === false`) prima di trattare lo stato del database come la finestra di crash, non assunta |
+| 3 | crash dopo la creazione del turno → riprende lo stesso `turn_id`, mai uno nuovo | stesso test del punto 2: il "riavvio" (una chiamata `resolve` indipendente sullo stesso database) completa il binding e il conteggio di `turns` resta 1 |
+| 4 | crash a metà turno → recovery normale (turno/effect WAL), nessuna duplicazione di tool non ri-eseguibili | invariato, meccanismo pre-esistente (B5, `agent/loop.ts`'s `reconcile`); `inbound-unit.test.ts` prova che `resolveBound` **non tocca** un turno `running`/`interrupted`/`waiting` (zero chiamate al modello, zero invii, l'update resta pending) |
+| 5 | turno `done` e `sendMessage` riuscito ma crash prima di `recordDelivery`/`markProcessed` → niente secondo messaggio | store+connettore: `inbound-unit.test.ts` (delivery `pending` mai attivata → un solo invio; il residuo sotto — `settledAt` già scritto ma `turns.delivery` ancora `pending` — non rimanda); **contro il percorso reale**: "a crash between turn-done and delivery (5)…", stesso schema del punto 2/3 con `MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_DONE_MS`, provato con il conteggio delle chiamate sull'API finta (`h.sendMessage`), non un evento — esattamente ciò che il mandato chiedeva |
+| 6 | `sendMessage` fallito → il ritentativo **non** ricomputa | `inbound-unit.test.ts` ("a live retry after a failed send redelivers the durable result instead of recomputing it"): il modello resta chiamato una volta sola, l'API viene richiamata una seconda volta con lo stesso testo — a differenza di `job_fires`, qui il ritentativo **continua** (l'update resta pending, non si ferma su `failed:`), proprietà preesistente di questo connettore che la slice preserva invece di cambiare |
+| 7 | solo dopo che consegna e ack sono registrati l'update è `processed` | `updates.test.ts` (`settle`, idempotente, mai due volte); `connector.ts`'s `finish` chiama `settle` poi `markProcessed`, mai `markProcessed` da solo su un percorso che ha appena consegnato |
+
+**Il residuo che il punto 5 non chiude del tutto, dichiarato invece di
+nascosto.** Fra `sendMessage` che ritorna con successo e la riga successiva
+(`inbox.settle`, sincrona, subito dopo) resta una finestra — un crash letterale a
+metà fra due istruzioni JS consecutive, non fra due `await`. Non è chiudibile
+senza un commit atomico fra Telegram e SQLite, che non esiste. È la stessa
+classe di residuo che questo repo già nomina altrove invece di fingerla chiusa:
+`core/scheduler/scheduler.ts` la chiama, in inglese, *"sub-millisecond, and it
+is the whole remaining exposure for a duplicate delivery"* per la propria
+finestra fra `stillOwner` e `deliver`; questo stesso ADR, §Emendamento №3, la
+chiama altrove *"un residuo bounded, non un buco"*. `settle` viene scritto
+**prima** di `recordDelivery` proprio per tenerla stretta: nella finestra
+rimasta, l'update resta `pending` con `settled_at` NULL, e un secondo passaggio
+la richiude ri-tentando l'invio — lo stesso comportamento del punto 5
+principale, solo con un invio in più nel sub-millisecondo che nessun test in
+questo repo può isolare in modo affidabile.
+
+**Cosa NON chiude.**
+
+- **Multi-part: solo il messaggio intero viene ritentato, non la singola
+  parte.** Una risposta che `renderForTelegram` divide in più messaggi Telegram
+  e che fallisce a metà (parte 1 inviata, parte 2 no) viene ri-consegnata da
+  `resolveBound` come un unico nuovo `deliverTo`, che rimanda **tutte** le parti
+  — la parte 1 arriva due volte. Nominato, non chiuso: tracciare la consegna
+  per-parte è un cambio di schema più grande di questa slice, e la risposta
+  multi-messaggio resta rara nell'uso quotidiano.
+- **Un turno che sospende (`wait`) settla l'occorrenza subito**, prima che il
+  turno finisca di rispondere — stessa lettura di "settled" che l'emendamento
+  №5 usa per `job_fires`: l'occorrenza è gestita (turno creato, legato, ceduto
+  alla corsia), il turno no. La consegna eventuale resta un fatto sulla riga del
+  turno, mai su `telegram_updates`.
+- **B2 resta fuori apposta.** `runFresh` resta una chiamata sincrona a
+  `runTurn`, non `enqueueTurn` — il mandato di questa slice lo dichiara
+  esplicitamente («il turno lungo Telegram è al test di prod», decisione owner)
+  e questa slice non lo riapre.
+- **Tassonomia degli errori Telegram**, oltre al crash/duplicazione: resta B10,
+  non questa riga.
+
+**Alternative scartate.** *La tabella gemella che №5 aveva sketchato*
+(`telegram_updates` come nome nuovo, con `update_id`/`turn_id`/`settled_at`/
+`created_at`) — collideva col nome della tabella che esiste già, e comunque
+avrebbe duplicato `payload`/`received_at`/`processed_at`/`failure` in una
+seconda riga per lo stesso update: due righe per un fatto che ne ha bisogno di
+una sola, esattamente il tipo di divergenza silenziosa che `docs/JUDGE.md`
+chiede di cercare. *Un helper condiviso sopra `claim`/`bind`/`settle`* (sul
+modello di `core/lock/durable.ts`'s `DurableLock`) — due istanze
+(`job_fires`, `telegram_updates`) non giustificano l'astrazione, la stessa
+regola che l'emendamento №5 si era già dato; resta un passo successivo per
+quando (e se) arriva un terzo consumatore.
+
+**Segnale che questa forma era sbagliata**, contato e non percepito: un terzo
+consumatore di `bind`/`settle` rende la duplicazione fra `job_fires` e
+`telegram_updates` costosa da tenere in sincrono — nel qual caso l'estrazione
+dell'algoritmo condiviso è il passo successivo, non prima. Oppure: il residuo
+sub-millisecondo del punto 5 si osserva per davvero (un secondo messaggio
+recapitato, non solo temuto) — nel qual caso la cura è nominare esplicitamente
+un intento di invio prima della chiamata a Telegram, non solo dopo, e quella è
+una decisione di schema a sé.
