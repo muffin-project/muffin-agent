@@ -2326,7 +2326,7 @@
   },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
-    "line": 307,
+    "line": 308,
     "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
   },
   "executor.ts:112": {
