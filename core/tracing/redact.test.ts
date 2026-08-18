@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redactAttributes, redactValue } from './redact.js';
+import { redactAttributes, redactText, redactValue } from './redact.js';
 
 /**
  * The threat model's §8 commitment — *"Secrets: mai nel repo, **mai in chiaro
@@ -124,6 +124,98 @@ describe('trace redaction — the value-shape net', () => {
   it('passes non-strings through untouched, so numbers stay queryable', () => {
     expect(redactValue(3)).toBe(3);
     expect(redactValue(true)).toBe(true);
+  });
+
+  it('redacts a Telegram bot token even as a whole value', () => {
+    const value = '123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567';
+    expect(redactAttributes({ note: value })['note']).toBe(`«redacted:${value.length}»`);
+  });
+
+  it('redacts a raw Bearer value even as a whole value', () => {
+    const value = 'Bearer sk-ant-abc123DEF456ghi789';
+    expect(redactAttributes({ note: value })['note']).toBe(`«redacted:${value.length}»`);
+  });
+});
+
+/**
+ * The write boundary this slice adds (`agent/loop.ts`) hands a whole tool
+ * result — prose, not a single attribute — to `redactText`, so the shapes
+ * that matter most here are the ones with no fixed prefix to anchor on: a
+ * label (`Authorization`, `api_key`, `token`, `password`) directly against a
+ * token-shaped value. Owner, 2026-08-17: *"non inventare un detector di
+ * entropia generico… misura su un corpus finto e dichiara la soglia"* — this
+ * is that corpus, both directions, in one file so a change to either list is
+ * visible next to the other.
+ */
+describe('trace redaction — labeled credentials inside free text (redactText)', () => {
+  const mustRedact: [string, string][] = [
+    ['a Bearer header', 'curl -H "Authorization: Bearer sk-ant-abc123DEF456ghi789xyz" https://api.example.com'],
+    ['api_key in a query string', 'GET /search?api_key=AKIA1234567890ABCD&q=ciao HTTP/1.1'],
+    ['token in a query string', 'redirect_uri=https://x?token=abcdEFGH1234&state=1'],
+    ['password in a JSON body', '{"user":"bob","password":"hunter2Strong!"}'],
+    ['api_key in a JSON body, snake_case', '{"api_key":"sk-liveTESTKEY1234567890"}'],
+    ['password in an unquoted form body', 'username=bob&password=Sup3rSecret!&remember=1'],
+    ['a Telegram bot URL', 'fetch fallito su https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz1234567/getMe'],
+  ];
+
+  for (const [label, text] of mustRedact) {
+    it(`redacts ${label}, leaving the surrounding text`, () => {
+      const out = redactText(text);
+      expect(out, `${label} survived redactText verbatim`).not.toBe(text);
+      expect(out).toContain('«redacted:');
+    });
+  }
+
+  /**
+   * The other half: a detector that also fires on phone numbers, UUIDs, type
+   * annotations and ordinary prose is a defect wearing a security feature's
+   * clothes (owner, 2026-08-17). Every one of these must come back
+   * byte-identical.
+   */
+  const mustSurvive: [string, string][] = [
+    ['a phone number', 'chiamami al +1 (555) 123-4567'],
+    ['a UUID', 'order id: 8f14e45f-ceea-467e-bb9c-24e0e2c9d4a5'],
+    ['a TypeScript interface', 'interface Config { apiKey: string; token: string }'],
+    ['a token_type field, not a token value', '{"token_type": "Bearer", "expires_in": 3600}'],
+    ['password_confirmation, a compound word', 'password_confirmation does not match password'],
+    ['prose mentioning the word token', 'il token del bot va altrove: muffin secret set telegram_token'],
+    ['prose mentioning the word password (Italian)', 'la password deve avere almeno 8 caratteri'],
+    ['a session id under an unrelated key', 'session: {"id": "abc123", "active": true}'],
+    ['the English word bearer, unrelated', 'the bearer of good news arrived early'],
+    ['a short numeric value under the threshold', 'token=42 // contatore del loop'],
+    ['a compound identifier with a short value', 'api_key_id: 8834'],
+    ['a secret reference, which is a name, not a value', 'ho usato secret://provider_api_key per la chiamata'],
+    ['a yaml-ish colon with no secret label', 'key: value pairs in yaml, like host: localhost'],
+  ];
+
+  for (const [label, text] of mustSurvive) {
+    it(`leaves ${label} untouched`, () => {
+      expect(redactText(text), `false positive: ${label}`).toBe(text);
+    });
+  }
+});
+
+describe('trace redaction — secret:// is a reference, not a value', () => {
+  /**
+   * ADR-0048: a reference is safe to show — redacting it would hide *which*
+   * secret a call used without hiding anything that was ever at risk. This
+   * has to survive even under a field name the name-denylist would otherwise
+   * mark secret, or `provider.apiKeyRef` in a trace loses its own value.
+   */
+  it('passes a bare reference through redactValue unchanged', () => {
+    expect(redactValue('secret://provider_api_key')).toBe('secret://provider_api_key');
+  });
+
+  it('passes a reference through redactAttributes even under a secret-flavoured field name', () => {
+    const out = redactAttributes({ apiKeyRef: 'secret://provider_api_key', 'muffin.telegram.tokenRef': 'secret://telegram_token' });
+    expect(out['apiKeyRef']).toBe('secret://provider_api_key');
+    expect(out['muffin.telegram.tokenRef']).toBe('secret://telegram_token');
+  });
+
+  it('still redacts a resolved value under the same field name — the reference is the only exemption', () => {
+    const out = redactAttributes({ apiKeyRef: 'sk-ant-abc123DEF456ghi789' });
+    expect(out['apiKeyRef']).not.toBe('sk-ant-abc123DEF456ghi789');
+    expect(out['apiKeyRef']).toContain('«redacted:');
   });
 });
 
