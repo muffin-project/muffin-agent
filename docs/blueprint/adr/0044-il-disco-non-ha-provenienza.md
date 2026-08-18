@@ -424,6 +424,7 @@ già stampa quando taglia ("`cercalo in memoria invece di indovinare`").
 | sessione vecchia, riga `assistant` con `traceId` di un turno a taint 2, nessun `tier` | taint 0 | taint 2 |
 | sessione vecchia, riga `assistant` senza `tier` né `traceId` | taint 0 | taint 3 (fail-closed) |
 | messaggio tier 3 tagliato fuori da `MAX_HISTORY_TURNS` | taint 0 | taint 0 (invariato — §Decisione 6) |
+| sessione già a taint 3, turno successivo pulito | taint 0 | taint 3 — **e il cricchetto**: vedi sotto |
 
 Riga due e tre sono la stessa catena read-then-egress di questa ADR, questa
 volta attraverso un confine di processo: `evals/acceptance/scenarios/
@@ -461,6 +462,14 @@ Ripristinata la riga, cinque su cinque verdi di nuovo.
 
 ### Cosa NON copre questa revisione
 
+- **La taint fa cricchetto, e la finestra si pulisce più tardi di quanto sembri**
+  (trovato dal judge di questa slice, 2026-08-17). Ogni risposta scritta mentre
+  la sessione è a 3 viene registrata essa stessa `tier: 3` (`agent/loop.ts`, il
+  `tier` dell'`assistant` è `currentTaint()`): quindi la finestra torna pulita
+  `MAX_HISTORY_TURNS` messaggi dopo **l'ultima risposta sporca**, non dopo la
+  lettura che aveva alzato la taint. È corretto — quella risposta *è* derivata
+  dal contenuto tier 3 — ma è più lungo di quanto un lettore assuma, e va detto
+  qui invece di essere scoperto durante i quattordici giorni.
 - **Il rimedio è una sessione nuova, e non tutte le superfici sanno aprirne
   una.** La CLI ha `--session <id>`: una sessione nuova è un id nuovo, sempre
   stata così. Telegram non ha equivalente: `connectors/telegram/connector.ts`
