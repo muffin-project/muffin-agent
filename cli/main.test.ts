@@ -2,7 +2,8 @@ import DatabaseCtor from 'better-sqlite3';
 import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
 
@@ -396,6 +397,27 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
       rmSync(xdg, { recursive: true, force: true });
     }
   });
+
+  it('accetta la chiave da un produttore LENTO — pass/op/gpg, non solo echo', () => {
+    // Il test che mancava, e la ragione per cui il difetto è vissuto due giri:
+    // una pipe immediata riempie il buffer prima della lettura e maschera
+    // EAGAIN. Qui il produttore ritarda, come `pass show`/`op read`/`gpg -d`.
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-slow-'));
+    const xdg = mkdtempSync(join(tmpdir(), 'muffin-slow-xdg-'));
+    try {
+      const cli = join(dirname(fileURLToPath(import.meta.url)), 'main.ts');
+      const r = spawnSync(
+        'bash',
+        ['-c', `(sleep 1; printf 'sk-ant-api03-produttore-lento') | npx tsx ${cli} init`],
+        { env: { ...process.env, MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, encoding: 'utf8' },
+      );
+      expect(r.status).toBe(0);
+      expect(existsSync(join(dir, 'secrets', 'provider_api_key'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it('accetta la stessa chiave da stdin', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-stdin-'));

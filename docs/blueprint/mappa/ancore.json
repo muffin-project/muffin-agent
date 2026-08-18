@@ -986,37 +986,37 @@
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 279,
+    "line": 312,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 298,
+    "line": 331,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 391,
+    "line": 424,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 402,
+    "line": 435,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 412,
+    "line": 445,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 443,
+    "line": 476,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 608,
+    "line": 641,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1416,12 +1416,12 @@
   },
   "core/mcp/registry.ts:58": {
     "path": "core/mcp/registry.ts",
-    "line": 58,
+    "line": 77,
     "testo": "export function loadMcpRegistry(home: string): McpRegistry {"
   },
   "core/mcp/registry.ts:97": {
     "path": "core/mcp/registry.ts",
-    "line": 97,
+    "line": 116,
     "testo": "export function toolHash(tool: McpToolDef): string {"
   },
   "core/memory/absence.ts:214": {
