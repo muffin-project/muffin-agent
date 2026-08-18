@@ -351,7 +351,28 @@ describe('muffin memory search — --surface and --around actually reach a resul
   });
 });
 
-describe('una chiave non passa mai per argv (direttiva owner 2026-08-18)', () => {
+describe('una chiave non passa mai per argv né per l\'environment (owner 2026-08-18)', () => {
+  it('rifiuta MUFFIN_API_KEY nominando solo la variabile, mai il valore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-env-'));
+    const xdg = mkdtempSync(join(tmpdir(), 'muffin-env-xdg-'));
+    const KEY = 'sk-ant-api03-mai-nell-environment';
+    try {
+      const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, MUFFIN_API_KEY: KEY }, ['init']);
+      expect(r.code).toBe(78);
+      expect(r.err).toContain('MUFFIN_API_KEY');
+      expect(r.err).toMatch(/secret set|muffin init/);
+      // Il messaggio non deve descrivere il valore: né il valore, né un
+      // prefisso, né la lunghezza — «mostrabile» include «deducibile».
+      expect(r.err).not.toContain(KEY);
+      expect(r.err).not.toContain(KEY.slice(0, 8));
+      expect(r.err).not.toMatch(new RegExp(`\\b${KEY.length}\\b`));
+      expect(existsSync(join(dir, 'config.json'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
   /**
    * Il difetto che questo test impedisce: `muffin init --api-key sk-…` metteva
    * una chiave di classe 1 in `argv`, cioè nella shell history e nel `ps` di
