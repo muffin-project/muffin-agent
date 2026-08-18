@@ -129,6 +129,41 @@ describe('the turn record', () => {
   });
 });
 
+describe('taintForIds — the batch read agent/context/history-taint.ts needs', () => {
+  it('answers with one query for the whole set, keyed by id', () => {
+    const s = store();
+    s.create(spec({ id: 'turn-1', taint: 2 }));
+    s.create(spec({ id: 'turn-2', taint: 0 }));
+    s.create(spec({ id: 'turn-3', taint: 3 }));
+    expect(s.taintForIds(['turn-1', 'turn-3', 'turn-2'])).toEqual(
+      new Map([
+        ['turn-1', 2],
+        ['turn-3', 3],
+        ['turn-2', 0],
+      ]),
+    );
+  });
+
+  it('an id with no row is simply absent from the map, not zero', () => {
+    const s = store();
+    s.create(spec({ id: 'turn-1', taint: 2 }));
+    const result = s.taintForIds(['turn-1', 'never-written']);
+    expect(result.get('turn-1')).toBe(2);
+    expect(result.has('never-written')).toBe(false);
+  });
+
+  it('an empty set of ids is an empty map — no query, no crash on a zero-length IN()', () => {
+    const s = store();
+    expect(s.taintForIds([])).toEqual(new Map());
+  });
+
+  it('duplicate ids do not change the answer', () => {
+    const s = store();
+    s.create(spec({ id: 'turn-1', taint: 1 }));
+    expect(s.taintForIds(['turn-1', 'turn-1', 'turn-1'])).toEqual(new Map([['turn-1', 1]]));
+  });
+});
+
 describe('reclaiming what a dead process was holding', () => {
   it('marks the row interrupted and names the calls that may have landed', () => {
     const s = store(() => false);

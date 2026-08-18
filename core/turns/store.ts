@@ -848,6 +848,31 @@ export class TurnStore {
   }
 
   /**
+   * The taint each of these rows is at, keyed by id — which is also `traceId`
+   * (`NewTurn.id`'s own docstring: "one identity, so 'why' is a join").
+   *
+   * One query for the whole set, never one per row: `agent/context/
+   * history-taint.ts` calls this with every `traceId` a turn is about to
+   * reinject from `SessionStore` (ADR-0044 §Revisione), which on a long
+   * session is dozens of rows for one context build. Not a prepared statement
+   * in the constructor like the rest of this class — the placeholder count
+   * varies with the caller's set, and `better-sqlite3` has no bind-an-array
+   * primitive — but this runs once per turn's context assembly, not once per
+   * row, so preparing it fresh here costs nothing a hot loop would notice.
+   */
+  taintForIds(ids: readonly string[]): Map<string, TrustTier> {
+    const out = new Map<string, TrustTier>();
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT id, taint FROM turns WHERE id IN (${placeholders})`)
+      .all(...unique) as { id: string; taint: number }[];
+    for (const row of rows) out.set(row.id, row.taint as TrustTier);
+    return out;
+  }
+
+  /**
    * The state at a suspension point: transcript, taint and counters together.
    *
    * Fenced on `claimToken` (P19's second finding) and now returns whether it
