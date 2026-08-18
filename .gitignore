@@ -32,3 +32,6 @@ zz-*
 # Il registro NO: e' l'intento con cui una delega e' partita, e se si perde
 # restano transcript anonimi — che e' esattamente il buco che il registro chiude.
 .claude/deleghe/*.md
+
+# Character-eval transcripts: evidence of a run, not of the repo.
+evals/character/out/
