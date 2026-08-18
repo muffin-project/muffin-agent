@@ -31,6 +31,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
@@ -79,6 +80,15 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
+  /**
+   * The `(job.id, scheduled_for) → turn_id` bridge (B7). Exposed the same way
+   * `jobs` is — `cli/gateway.ts`/`cli/repl.ts` wire it into both `Scheduler`
+   * (settling a fire before `markRan`) and `makeJobRunner` (resolving one
+   * before ever touching the model) — rather than each opening its own
+   * `JobFireStore` on this same `db` and risking two objects disagreeing about
+   * one row.
+   */
+  jobFires: JobFireStore;
   /**
    * That same connection, for the coordination a runtime cannot express through
    * one of its stores — today the gateway lock (ADR-0035), which the REPL reads
@@ -191,6 +201,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);
+  // The identity/idempotency bridge from a due occurrence to a durable turn
+  // (B7, ADR-0035 emendamento №5). Same connection as `jobs`/`turns`, same
+  // `CREATE TABLE IF NOT EXISTS` additivity as every other store here.
+  const jobFires = new JobFireStore(db);
   // The plan, on the same connection as everything else (ADR-0022). Built here
   // rather than inside the loop because two things read it — the tool that
   // writes rows and `buildContext`, which shows them back on every turn — and a
@@ -586,6 +600,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     config,
     budget,
     jobs,
+    jobFires,
     db,
     consolidation,
     safeMode,
