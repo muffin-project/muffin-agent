@@ -490,3 +490,112 @@ Ripristinata la riga, cinque su cinque verdi di nuovo.
   reiniettata non è delimitato da `fence()` — questa ADR fa il taint, non la
   difesa del modello dall'istruzione iniettata nel testo stesso. Stessa nota
   già scritta sopra, stessa slice futura.
+
+## Emendamento — 2026-08-18 (`slice/ingress-forward`, B16 minimo, audit P14)
+
+**La terza faccia dello stesso invariante.** Questa ADR aveva già chiuso "che
+tier ha un file letto dal disco" (§Contesto) e "che tier ha la history
+reiniettata" (§Revisione 17/08 sopra). Restava aperta la stessa domanda su un
+terzo canale: l'ingresso di un connector. `connectors/telegram/connector.ts`
+`parseUpdate` faceva `const text = message.text ?? message.caption` e non
+leggeva affatto `forward_origin`: un messaggio che l'owner **inoltra** da uno
+sconosciuto entrava a tier 0, byte-identico alle parole scritte dall'owner in
+quella chat — da lì poteva alzare fiducia ed entrare in memoria come evidenza
+sua. Stessa famiglia: `caption` fusa in `text` come se il mittente l'avesse
+scritta come riga separata, e il `filename` dell'allegato — scelto da chi
+manda, mai dal destinatario — concatenato come testo libero in almeno un
+percorso (`ingest`, ramo "vault non configurato").
+
+**L'ingresso ha campi, non un testo: chi non ha scritto non è l'owner.** Nel
+minimo di B16 (`M5-BIS.md`, PC 1.4, non l'envelope universale):
+
+1. `forward_origin` presente (Bot API 9.x: sostituisce `forward_from`/
+   `forward_sender_name`, assenti dal tipo `Update` corrente — verificato su
+   `@grammyjs/types`) ⇒ il contenuto (testo o caption) entra a `FORWARD_TIER =
+   2` (`connectors/telegram/connector.ts`) — lo stesso numero concettuale di
+   `DISK_TIER` sopra: la scala è su *chi ha parlato*, e un forward consegna le
+   parole di qualcun altro attraverso un account senza che quell'account le
+   abbia dette. Non 3: resta un messaggio che il mittente ha scelto di
+   portare *in questa chat*, la stessa distinzione che questa ADR traccia già
+   fra un file sul disco di casa e una fetch aperta sul web.
+2. `caption` e `filename` restano campi distinti da `text`, sempre tipizzati e
+   sempre recintati con `fence()` (`core/memory/spotlight.ts`, riuso —non un
+   secondo meccanismo: la stessa funzione che #61 usa già per descrizioni MCP
+   e risultati web) — anche quando il messaggio **non** è inoltrato: sono
+   metadata scelti attraverso un'interfaccia diversa dalla riga di
+   conversazione (un file picker, non la tastiera del messaggio), quindi non
+   sono mai equivalenti a prosa digitata lì.
+3. Un messaggio normale dell'owner (niente forward, niente allegato) resta
+   tier 0 e **non** recintato — provato in negativo: recintare ogni messaggio
+   sarebbe la regressione contro cui ADR-0046 §2 mette già in guardia.
+4. Il tier del turno parte dal **massimo** fra il tier del principal e il
+   content-taint misurato dal connector: `TurnInput.contentTaint?: TrustTier`
+   (`agent/loop.ts`), campo nuovo e opzionale che ogni chiamante diverso da
+   Telegram lascia assente. `initialTaint(input)` è la sola formula, e
+   sostituisce quattro copie separate del vecchio `principal.kind ===
+   'member' ? 2 : 0` (`enqueueTurn`, `runTurn`, la scrittura dell'episodio,
+   l'append di sessione) — la terza copia che il docstring di `tierOf`
+   (`core/surface/types.ts`) nominava già come rischio.
+
+**Trovato cablando, non prima.** Le due scritture dentro `drive` (l'episodio
+di memoria, la riga di sessione) leggono un `input: TurnInput` **ricostruito
+da `record`** qualche decina di righe più in alto, non l'`input` originale del
+chiamante — e `record` non ha `contentTaint` da nessuna parte. Una prima
+versione di questa correzione richiamava `initialTaint(input)` anche lì e
+restava silenziosamente a tier 0 per quelle due scritture: il test rosso-prima
+di questa slice l'ha preso (`expected +0 to be 2`) prima di arrivare a un
+judge. La correzione è `record.taint` — il valore che `enqueueTurn`/`runTurn`
+avevano già calcolato con `initialTaint` alla creazione della riga — non una
+seconda chiamata a `initialTaint` su un `input` che non porta l'informazione.
+
+**Cosa costa, misurato:**
+
+| scenario | prima | dopo |
+|---|---|---|
+| owner inoltra un messaggio ostile, poi il turno chiama `skill_read` (`maxTaint: 1`) | taint 0 → **allow** | taint 2 → **deny/taint_exceeded** |
+| lo stesso messaggio, come episodio di memoria e riga di sessione | `trustTier`/`tier`: 0 (evidenza dell'owner) | 2 |
+| messaggio normale dell'owner, nessun allegato | taint 0, testo invariato | taint 0, testo invariato (**invariato**) |
+| foto con caption e filename ostile | caption fusa in `text`; filename libero nel ramo "vault non configurato" | entrambi tipizzati, recintati con `fence()`, mai testo libero |
+
+**Test rosso-prima e mutazione.** `connectors/telegram/forward-taint.test.ts`,
+nove casi, dal punto d'ingresso di produzione — `Update` reale → `drain()` →
+`handle()` → `runTurn()` → kernel vero, `buildRuntime` reale, solo Bot API e
+modello sostituiti (stesso schema di `document-arrival.test.ts`/
+`group-context.test.ts`, incluso un caso con vault e download reali). (a)
+inoltro ostile: fence visibile con la provenienza dichiarata, `skill_read`
+negato con `taint_exceeded`, riga di sessione a tier 2 — **questo è il caso
+rosso-prima**. (b) messaggio normale: nessun fence, testo byte-identico, tier
+0 — anti-regressione. (c) caption+filename ostile, con e senza vault
+configurato: entrambi recintati; il filename ostile compare **esattamente una
+volta** nell'intero transcript, dentro la fence, mai nella forma libera che il
+vecchio `ingest` produceva. Più cinque casi a livello di parser puro su
+`parseUpdate`/`composeTurnText`/`contentTaintOf`, incluso il principal — un
+forward dall'owner resta principal owner, mai alterato dal contenuto.
+
+Mutazione eseguita a mano: `describeForwardOrigin(message.forward_origin)`
+sostituita con `undefined`, sospeso, rilanciato. Cadono quattro test su nove —
+(a) esattamente sul fence mancante (mai raggiunge l'assert su
+`taint_exceeded`, che sarebbe caduto comunque) e i tre test di parser che
+leggono `.forwarded`; (b) e (c), che non dipendono dal forward, restano verdi
+— la mutazione è mirata, non un test che si accorge di tutto e non prova
+niente. Ripristinata la riga, nove su nove verdi di nuovo.
+
+**Cosa NON copre questo emendamento** (dichiarato in `M5-BIS.md` B16, non
+nascosto):
+
+- **L'envelope universale resta fuori.** Nomi, bio, entità, poll, contatti,
+  posizione, titolo della chat, MIME/EXIF — la lista che ADR-0046 §2 nomina
+  per intero — restano non tipizzati. Nessuna capability dei quattordici
+  giorni personali li tocca; post-Gate 1.
+- **`quote`/reply non è `forward`.** Un messaggio che *cita* un altro
+  messaggio (`ExternalReplyInfo.origin`, distinto da `forward_origin` sul
+  tipo `Message`) non passa da questa correzione — stessa famiglia di
+  rischio, fuori dal minimo che questa slice aveva in mandato.
+- **Il copia-incolla manuale resta indistinguibile.** Chi copia il testo di
+  uno sconosciuto e lo incolla come messaggio proprio non porta
+  `forward_origin` — Telegram non lo marca lato client, e nessun parser lato
+  server può saperlo. Limite della piattaforma, non di questo codice; già
+  nominato nell'audit P14 come byte-identico per costruzione.
+- **Discord non è toccato.** Stessa forma di difetto, altra superficie —
+  `connectors/discord/connector.ts` non legge un equivalente di
+  `forward_origin`. Follow-up dichiarato, non silenzioso.
