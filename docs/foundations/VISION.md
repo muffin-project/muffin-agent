@@ -3,8 +3,9 @@
 > **Stato: VIVO · aggiornato 2026-08-18 · decisioni tecniche in ADR-0045/0046.**
 > Questa è la nord-stella di prodotto. `docs/THESIS.md` espone la scommessa;
 > `docs/OPEN-SOURCE-STRATEGY.md` descrive come distribuirla senza cambiarne la
-> forma; `docs/blueprint/04-roadmap.md` decide l'ordine; `docs/blueprint/STATE.md`
-> dice cosa esiste davvero oggi.
+> forma; `docs/EXTENSIONS.md` descrive come far crescere le capability senza
+> gonfiare il core; `docs/blueprint/04-roadmap.md` decide l'ordine;
+> `docs/blueprint/STATE.md` dice cosa esiste davvero oggi.
 
 ## Cosa diventa
 
@@ -49,6 +50,18 @@ ciò che ha il diritto di osservare, riprende dopo una morte del processo e sa
 quando aspettare, tacere, interrompere, chiedere, rivedere o abbandonare.
 Presenza non significa attività continua: il default può essere il silenzio.
 
+La presenza ha anche una proprietà comportamentale che il vecchio Muffin aveva
+espresso bene e che il rebuild non deve perdere: **il tempo passato da solo non
+è un motivo per disturbare**. Una apertura proattiva vale quando esiste qualcosa
+di specifico — un thread lasciato aperto, una intenzione ferma, un cambiamento
+osservato, una contraddizione o un lavoro che richiede davvero l'owner. Un
+check-in generico non è un fallback: è assenza di una ragione travestita da
+presenza.
+
+Allo stesso modo, una conversazione dichiarata importante non deve evaporare solo
+perché è finita una sessione. Work state, todo e continuation servono anche a
+**chiudere loop**, non soltanto a far sopravvivere processi.
+
 ## Quattro stati, non un blob
 
 - **Evidenza**: cosa è successo e da dove arriva.
@@ -81,6 +94,15 @@ L'importazione accelera la conoscenza, non la falsifica: conserva fonte e tempo
 originali e non trasforma un archivio storico in qualcosa che Muffin pretende di
 aver osservato oggi.
 
+**Possedere una fonte non rende l'owner autore di tutto ciò che contiene.** Una
+mail ricevuta, un messaggio inoltrato, una newsletter o un allegato di terzi
+restano evidenza di terzi anche se arrivano da un account dell'owner. Ownership
+dell'archivio, authorship e trust sono assi distinti.
+
+Importare anni di storia riduce il cold start; non elimina il warm-up. Alcune
+proprietà — come il modo in cui Muffin e l'owner si correggono, lavorano e
+chiudono loop insieme — emergono solo vivendo davvero col nuovo agente.
+
 ## Autonomia guadagnata
 
 Conoscere meglio l'owner non dà a Muffin più permessi. La familiarità migliora
@@ -91,6 +113,27 @@ stessa classe di risorsa e contesto, esiti ripetutamente corretti, effetto
 reversibile o recuperabile. Ogni concessione è locale, visibile, revocabile,
 scade e regredisce quando fallisce. Non esiste un punteggio globale di fiducia e
 il modello non è mai arbitro della propria sicurezza.
+
+## Core stretto, capability opt-in
+
+Muffin non deve diventare il repository di ogni integrazione possibile.
+
+Il core possiede le primitive e le garanzie che devono comporre: identity,
+evidence, work, effects, authority, provenance, continuity, provider/surface
+boundaries e introspection. Gmail, Spotify, Home Assistant, un importer Takeout,
+un privacy transform o un futuro servizio specifico possono vivere come
+extension installabili.
+
+**Quello che l'owner non installa non esiste nel suo Muffin.** Nessuna capability
+entra per obbligo perché è popolare o perché fa parte del catalogo pubblico.
+
+Un package comunitario non riceve authority implicita: il package è l'unità di
+distribuzione, la capability è l'unità di permission. Installare una extension
+può aggiungere più capability, ognuna governata separatamente dal kernel.
+
+La community può far crescere la breadth senza far crescere nella stessa misura
+la trusted computing base del core. La forma di catalogo, manifest e review vive
+in `docs/EXTENSIONS.md`.
 
 ## Una sola entità, molte porte
 
@@ -128,6 +171,12 @@ Durante il dogfood la domanda di roadmap più utile è quindi:
 
 Ogni fallback a un'altra app o agente è evidenza di una capability, qualità o
 surface che manca; vale più di una feature inventata a tavolino.
+
+Il test di Presence aggiunge altre due domande:
+
+> **Quale lavoro Muffin mi aveva detto che avrebbe seguito e poi ha dimenticato?**
+>
+> **Quante volte mi ha interrotto senza avere qualcosa di specifico da dire?**
 
 Il primo test vicino resta più semplice e più duro: quattordici giorni di uso
 reale, senza tornare indietro per un blocker del Gate 1.
