@@ -27,21 +27,18 @@ non sovrapposte in volo.
 **nello stesso passaggio del merge**, non dopo — `BRANCHING.md` checkpoint 4. Il
 controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 
-- **`slice/egress-params`** (PC 1.6, **CRITICAL**) — implementazione, wiring e
-  scenari già scritti prima del session limit; `origin/dev` mergiato e mappa
-  rigenerata. Resta: rifinire, riverificare per mutazione il gate sui parametri,
-  judge fresco, verdetto terminale.
 - **`slice/session-taint`** (PC 1.2, **CRITICAL**) — WIP committato e pushato:
   tier per messaggio di sessione, la history reiniettata alza la taint prima del
   kernel. Da riprendere allo stesso modo.
-- **`slice/identita-eval`** (A2/A3 parte 2, STANDARD) — WIP committato e
-  pushato: character eval a proprietà, cross-model, confronto qualitativo col
-  vecchio Muffin. La corsa reale sui modelli costa e va proposta all'owner prima
-  di lanciarla.
+- **PR #65** `slice/identita-eval` (A2/A3 parte 2, STANDARD) — character eval a
+  proprietà, cross-model, confronto col vecchio Muffin; verificata, in attesa
+  della CI. La **corsa reale** costa ~$0.33 (Sonnet 5) / ~$0.11 (Haiku) di solo
+  input e la autorizza l'owner: A2/A3 restano BLOCKER finché non è stata fatta
+  e letta.
 
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
-`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica) · #61 cluster di MEDIUM dell'audit (P34-1, P35, P36, P25, P33, E2).
+`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica) · #61 cluster di MEDIUM dell'audit (P34-1, P35, P36, P25, P33, E2) · #62 egress-params (inv. 7, CRITICAL: judge MERGE, soglia owner = 2).
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
@@ -52,7 +49,7 @@ controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 | 1.3 | `slice/recall-speaker` | Mandato inv. 3: un episodio `role='agent'` richiamato non è mai «tu» (probe eseguito: `source: "tu via cli"` per una frase mai detta dall'owner — **CONFLATED**). `describeTier` riceve il ruolo; `searchEpisodes` seleziona `role`; rendering `[muffin, …]`. Stesso file: audit P23 (ricerca a parola chiave e vicinato non marcano RITIRATO i fatti superseduti). | `core/memory/recall.ts` `describeTier(tier→'tu')`; `core/memory/store.ts` `searchEpisodes` senza `role`; `schema.ts` trigger FTS senza filtro | M |
 | 1.4 | `slice/ingress-forward` (B16 minimo, non l'envelope universale) | Mandato inv. 3 lato ingresso: un messaggio **inoltrato** dall'owner da un estraneo entra oggi a tier 0, byte-identico alle parole dell'owner (audit P14); caption/filename entrano fusi nel testo. Minimo: `forward_origin` → contenuto a tier 2 recintato; caption e filename come campi tipizzati con provenienza. L'envelope completo (nomi, bio, entities, poll, contact) resta post-Gate 1 con ragione scritta in M5-BIS. | `connectors/telegram/connector.ts` `parseUpdate` (`text ?? caption`, nessun `forward_origin`) | M |
 | 1.5 | `slice/job-fires` + `slice/inbound-unit` — **decisione owner presa (17/08): A, `job_fires` come ponte di identità** | Mandato inv. 4 e 5 (proprietà 3 e 4). Proprietà voluta dall'owner: «ogni occorrenza stabile `(job_id, scheduled_for)` mappa a UNA sola identità durevole di lavoro/turno; dopo un crash Muffin continua o conclude quella stessa identità, non crea un secondo turno e non abbandona il primo». `job_fires` è un **ponte di identità/idempotenza verso `turns`** (`(job_id, scheduled_for) → turn_id`), non un secondo TurnStore; `scheduled_for` è l'occorrenza dovuta, mai l'ora in cui il processo l'ha presa. Matrice di fault minima: crash prima del fire → si crea; dopo il fire prima del turno → completa il binding, non perde il fire; dopo la creazione del turno → riprende lo stesso `turn_id`; a metà turno → recovery normale del turno/effect WAL; turno `done` prima di `markRan` → non richiama il modello, completa il settlement; delivery incerta → non rifà la computazione; **solo dopo il settlement** avanza la schedule. Niente trigger framework; deve **comporre** con la stessa proprietà Telegram `update_id → exactly one durable turn` (oggi `drain()` → `handle()` → `runTurn` con id fresco: crash fra `handle()` e `markProcessed` = secondo turno, secondo giro modello, seconda consegna). Una forma più piccola che garantisca esattamente queste proprietà è ammessa. Prova: fault-chain con Bot API finto e SIGKILL reale in quattro punti (dopo accept / dopo runTurn / dopo sendMessage / dopo recordDelivery) e per i job nei sette punti della matrice. Chiude B7, B1 (metà Telegram), la parte Telegram di B8, e apre B2 alla prova di prod. | `core/scheduler/scheduler.ts` `markRan`; `connectors/telegram/connector.ts` `drain()`/`handle()`; `core/turns/store.ts` (nessuna chiave d'origine) | L (una slice per il ponte job, una per Telegram, una per la journey) |
-| 1.6 | `slice/egress-params` **(in volo, WIP)** | Mandato inv. 7 (proprietà 6): il kernel guarda solo l'host; byte a tier ≥ 2 nel path/query di `http_get` verso host allowlisted passano (P04-1); `sys.search` dichiara `resourceKind:'none'` e non entra mai nel ramo egress (P04-2, D7). Chiude D7 e la journey egress (D6/D7/D10 nello stesso file di scenario). | `core/policy/decide.ts` ramo `resourceKind==='url'`; `agent/tools/http.ts`; `agent/tools/search.ts:57` | M |
+| 1.6 | ~~`slice/egress-params`~~ **fatto (#62)** | Mandato inv. 7 (proprietà 6): il kernel guarda solo l'host; byte a tier ≥ 2 nel path/query di `http_get` verso host allowlisted passano (P04-1); `sys.search` dichiara `resourceKind:'none'` e non entra mai nel ramo egress (P04-2, D7). Chiude D7 e la journey egress (D6/D7/D10 nello stesso file di scenario). | `core/policy/decide.ts` ramo `resourceKind==='url'`; `agent/tools/http.ts`; `agent/tools/search.ts:57` | M |
 
 ## 2 · Forma durevole prima dei dati reali (priorità 2)
 
