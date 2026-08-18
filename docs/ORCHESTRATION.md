@@ -170,7 +170,11 @@ e la capacità di dire *questa modifica ha peggiorato X*.
 Le domande che meritano un eval, in ordine di quanto sono nostre: cosa va
 ricordato di un dialogo · cosa va ripescato dato un contesto · dove va
 un'informazione (memoria, workspace, contesto, tool) · quale tool serve · dato
-un evento, agire/ricordare/ignorare · l'obiettivo è stato davvero completato.
+un evento, agire/ricordare/ignorare · l'obiettivo è stato davvero completato ·
+**e il carattere arriva alla risposta** (`evals/character/`, che risponde a
+«sui modelli Gate 1, Muffin è riconoscibilmente Muffin?» — proprietà, non
+wording, con un giudice automatico come primo filtro e una colonna di revisione
+umana che resta all'owner).
 
 ## 9. Il modello si sceglie per la task, e la scelta si misura
 
