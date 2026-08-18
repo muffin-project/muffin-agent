@@ -176,7 +176,20 @@ describe('acceptance · B7 · job_fires — identità durevole di un\'occorrenza
         try {
           await gw3.waitFor(/⏰ ecco il brief di questa occorrenza/, 15_000);
 
-          const final = inst.db((db) => ({
+          // `waitForDb` e non una lettura immediata: la riga su stdout compare
+          // quando la **consegna** è registrata, e `markRan` viene dopo il
+          // settlement — che è precisamente l'ordine che questa slice
+          // garantisce. Leggere subito significa cadere fra i due su una
+          // macchina carica: misurato 4 volte su 4 mentre giravano altre suite,
+          // sempre con `settled_at` valorizzato e `last_run_at` ancora nullo.
+          // Il difetto era nell'attesa del test, non nel prodotto.
+          const final = await waitForDb(inst, (db) => {
+            const job = db.prepare(`SELECT last_run_at, next_fire_at FROM jobs WHERE id = ?`).get(jobId) as {
+              last_run_at: string | null;
+              next_fire_at: string;
+            };
+            return job.last_run_at === null ? null : job;
+          }).then((job) => inst.db((db) => ({
             turnRows: (db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n,
             turn: db.prepare(`SELECT status, delivery FROM turns WHERE id = ?`).get(boundTurnId) as {
               status: string;
@@ -186,11 +199,8 @@ describe('acceptance · B7 · job_fires — identità durevole di un\'occorrenza
               turn_id: string;
               settled_at: string | null;
             },
-            job: db.prepare(`SELECT last_run_at, next_fire_at FROM jobs WHERE id = ?`).get(jobId) as {
-              last_run_at: string | null;
-              next_fire_at: string;
-            },
-          }));
+            job,
+          })));
 
           // Exactly one identity, start to finish — never a second turn for
           // this occurrence across three process lifetimes and two real kills.
