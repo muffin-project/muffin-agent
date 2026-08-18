@@ -319,3 +319,26 @@ strutturale altrove — il valore noto al backend non passa mai di qui, perché
 `LANG=C` o `MCP_MODE=strict` continuano a passare: vietare ogni valore letterale
 avrebbe rotto la configurazione legittima senza chiudere niente che la classe 1
 non chiudesse già.
+
+
+## Eccezione dichiarata — `evals/character/run.ts` (2026-08-18)
+
+Reperto del judge del terzo giro, registrato invece che lasciato implicito: lo
+strumento del **character eval** prende la chiave da una variabile d'ambiente
+(`--api-key-env <VAR>`, `requireEnv`). È la forma che l'owner ha rifiutato per
+`MUFFIN_API_KEY`, e finché resta così la frase «non esiste un entry point
+supportato che trasporti un segreto in argv o in env generico» sarebbe più larga
+di ciò che è provato.
+
+Perché resta, e perché non invalida la claim: `evals/character/run.ts` non è un
+percorso del prodotto — non parte da `muffin`, non tocca `readSecret`, non
+partecipa alla catena *secret backend → consumatore privilegiato → sink*, e non
+gira mai in una installazione dell'owner. È uno strumento di misura che si lancia
+a mano quando l'owner autorizza una corsa a pagamento. La claim riguarda il
+prodotto; qui la nota serve a impedire che qualcuno la citi come prova di
+qualcosa che questo file non rispetta.
+
+Chiuderla è la stessa mossa già fatta due volte (`readAllStdin` da stdin, oppure
+leggere `secret://` dal backend con `--api-key-ref`): vale quando l'eval smette
+di essere uno strumento e diventa qualcosa che gira da solo — a quel punto è
+prodotto, e la regola si applica per intero.
