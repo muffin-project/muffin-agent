@@ -76,16 +76,30 @@ describe('riconcilia', () => {
     expect(reperti[0]).toMatch(/#60 è mergiata/);
   });
 
+  it('non segnala una slice appena aperta che vive solo in locale', () => {
+    const reperti = riconcilia({
+      documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
+      statoPr: { 60: { state: 'OPEN', headRefName: 'slice/map-resourcefor' } },
+      branchRemoti: ['slice/map-resourcefor'],
+      branchLocali: ['slice/session-taint'],
+      base: null,
+      baseEsiste: null,
+      baseAntenata: null,
+    });
+    expect(reperti).toEqual([]);
+  });
+
   it('nomina un branch sparito e una base che non è più antenata', () => {
     const reperti = riconcilia({
       documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
       statoPr: { 60: { state: 'OPEN', headRefName: 'slice/map-resourcefor' } },
       branchRemoti: ['slice/map-resourcefor'],
+      branchLocali: [],
       base: '3068ece',
       baseEsiste: true,
       baseAntenata: false,
     });
-    expect(reperti.join('\n')).toMatch(/slice\/session-taint.*non esiste su origin/s);
+    expect(reperti.join('\n')).toMatch(/slice\/session-taint.*non esiste né su origin né in locale/s);
     expect(reperti.join('\n')).toMatch(/3068ece.*non è un antenato/s);
   });
 });
