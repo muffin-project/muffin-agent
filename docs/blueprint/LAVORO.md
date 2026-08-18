@@ -7,17 +7,19 @@
 > l'obiettivo successivo.
 
 <!-- INIZIO BLOCCO -->
-**Aggiornato**: 2026-08-17
+**Aggiornato**: 2026-08-17 (pomeriggio)
 
-**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md`; sequenza in `gate1/PERCORSO-CRITICO.md`.
+**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md`, sequenza in `gate1/PERCORSO-CRITICO.md` §0 (riconciliato a ogni merge).
 
-**Triage 17/08 fatto**: `M5-BIS.md` riscritto riga per riga — 9 READY · 37 BLOCKER · 7 OUT · 0 INVALIDATED (54 righe). `?` ritirato salvo B8/D10 (li tocca #54, in giudizio sulla stessa riga).
+**Workflow (owner 17/08)**: verifica proporzionale alla claim — FAST/STANDARD/CRITICAL scelti *prima* di implementare (`ORCHESTRATION.md` §17). Judge fresco solo per CRITICAL; FAST/STANDARD li integra l'orchestratore. L'evidenza non si rifà per rituale; fuori scope → follow-up (§18); documenti solo dove diventano stale (§19).
 
-**In volo**: PR #53 `slice/lease-fencing` e PR #54 `slice/acceptance-truth` (giudizio g2, non in scrittura) · `slice/a1-continuita` (A1 lettura forte, l'unica slice attiva — tetto due non sovrapposte).
+**Inventario**: 13 READY · 35 BLOCKER · 7 OUT (55 righe).
 
-**Prossime tre slice (PC §1)**: `wal-intent` (1.1, intent WAL per tool call) · `session-taint` (1.2, taint attraverso la history) · `recall-speaker` (1.3, episodio agente ≠ "tu").
+**Integrate il 17/08**: #53 lease/fencing · #54 acceptance truth · #56 A1 · #57 WAL intento · #58 identità p1 · #59 init --local · #60 mappa · #63 workflow · #61 audit-mediums.
 
-**Decisioni owner aperte**: P34-2 segreti a riposo · audio nei 14gg sì/no · scope lettura sandbox · `mcp.*` per-tool · `ricorda` scrive/propone · lingua doc pubblici.
+**In volo**: `egress-params` (1.6) e `session-taint` (1.2) CRITICAL da rifinire + judge fresco · `identita-eval` (A2/A3 p2) WIP.
+
+**Owner aperte**: P34-2 segreti a riposo · audio nei 14gg · scope sandbox · `mcp.*` per-tool · `ricorda` · lingua doc.
 <!-- FINE BLOCCO -->
 
 ---

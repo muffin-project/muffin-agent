@@ -23,7 +23,7 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 
 const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
-/spend   quanto hai speso questo mese
+/spend   quanto hai speso questo mese e oggi
 /exit    esci (o Ctrl+D)`;
 
 /**
@@ -333,8 +333,15 @@ export async function runRepl(
         }
         if (line === '/spend') {
           const s = runtime.budget.status();
+          // `status()` only ever answers the month — E2's own claim is "so
+          // quanto costa una giornata", and tenantTodayUsd('host') existed
+          // (core/budget/budget.ts) with nothing calling it: BudgetEngine's
+          // per-tenant-daily gate excludes the owner outright
+          // (`tenantExhausted`), so the number was computed and never read.
+          const today = runtime.budget.tenantTodayUsd('host');
           process.stderr.write(
-            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n`,
+            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n` +
+              `oggi: $${today.toFixed(4)}\n`,
           );
           continue;
         }

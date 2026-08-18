@@ -9,6 +9,13 @@
 >
 > `PRACTICES.md` dice **come si scrive**. Questo file dice **come si decide e chi
 > verifica**. `AGENTS.md` dice cosa non si tocca.
+>
+> **La regola più usata di tutte è §17: la verifica è proporzionale alla claim e
+> al blast radius.** Prima di implementare si sceglie il profilo — FAST,
+> STANDARD, CRITICAL — e quel profilo dice quale evidenza serve. Tutto ciò che
+> segue va letto con quella lente: le regole forti di questo documento nascono
+> da difetti veri, ma sono state applicate uniformemente, e l'uniformità è
+> diventata il collo di bottiglia (direttiva owner, 2026-08-17).
 
 ## 1. Il loop è un control loop, non un task loop
 
@@ -52,7 +59,16 @@ senza averla analizzata è lavoro non fatto, non collaborazione.
 
 Questa è la regola che questo repo paga più spesso. I subagenti sono **worker**:
 l'orchestratore definisce il compito, loro producono, **l'orchestratore
-verifica**. Non a campione — sulle affermazioni che reggono la conclusione.
+verifica** — le affermazioni che reggono la conclusione, non tutte.
+
+**Ma delegare non è il default.** Un subagente si giustifica quando compra
+almeno una di queste cose: esplorazione che costerebbe troppo contesto qui ·
+parallelismo davvero indipendente · competenza specializzata · isolamento di
+un'indagine · verifica fresca e indipendente per una claim CRITICAL (§17). Un
+compito locale e chiaro l'orchestratore lo legge, lo implementa e lo verifica da
+sé: la catena `orchestratore → worker → judge → worker2` per una modifica di
+venti righe costa più contesto e più tempo di quanto ne compri, e ogni passaggio
+di mano è un punto in cui l'informazione si degrada.
 
 Evidenza è: il codice che c'è · un test che passa **e che è stato visto fallire
 prima del fix** · il comportamento eseguito · il diff letto · `tsc` e la suite
@@ -177,25 +193,33 @@ invece di ripartire. Il formato e le due zone stanno in `PRACTICES.md` §13; qui
 si aggiunge solo l'obbligo della citazione puntuale e del *perché*.
 ## 11. Cosa significa «chiuso»
 
-Direttiva owner, 2026-08-15, e sostituisce ogni uso più permissivo della parola
-in questo repo. **Un test verde non è «chiuso».**
+**Un test verde non è «chiuso»** — questo resta. Ma la vecchia tabella
+universale (implementazione · unit · integration · cablaggio · failure path ·
+accettazione reale · documenti, *tutte* per ogni voce) è stata sostituita il
+2026-08-17, perché applicata a ogni riga trasformava un typo in una
+mini-certificazione di kernel.
 
-Chiuso è, per ogni voce di lavoro:
+> **Chiuso = la claim è soddisfatta, l'evidence budget del suo profilo (§17) è
+> soddisfatto, e non c'è un blocker noto che invalidi quella claim.**
 
-| | |
+Gli strumenti della vecchia tabella restano gli strumenti — non le caselle:
+
+| strumento | quando è **obbligatorio** |
 |---|---|
-| implementazione | il codice esiste |
-| unit test | la logica è provata in isolamento |
-| **integration test** | provata attraverso i confini, non nei mock |
-| **cablaggio in produzione** | il percorso reale ci arriva — non solo i test |
-| **percorso di fallimento** | cosa succede quando non funziona, e chi lo dice |
-| **scenario di accettazione reale** | eseguito come lo eseguirebbe l'owner |
-| documentazione · `STATE.md` | ciò che è cambiato è scritto dove si cerca |
+| unit | la claim è su una logica locale |
+| integration | la claim attraversa un confine fra moduli |
+| **cablaggio provato** | la claim dice «la produzione ci arriva» |
+| **failure path** | il cambiamento introduce o modifica un fallimento materiale |
+| **accettazione col binario vero** | la claim è sul comportamento del binario, non su una funzione pura |
+| **mutazione** | la claim è che un guard o una cucitura *impedisce* qualcosa |
+| documenti | il cambiamento rende stale una *authoritative home* (§19) |
 
-Le due righe in mezzo sono quelle che questo repo salta, e sono la ragione per
-cui esiste una famiglia di difetti chiamata *dichiarato e non collegato*: un
-`decideProactive` con zero chiamanti aveva unit test verdi, e una allowlist
-egress con i suoi test verdi non è mai entrata in funzione in produzione.
+La famiglia di difetti che ha prodotto la vecchia regola resta la ragione delle
+righe in grassetto: *dichiarato e non collegato* — un `decideProactive` con zero
+chiamanti aveva unit test verdi, e una allowlist egress con i suoi test verdi
+non è mai entrata in funzione in produzione. Quando la claim è «esiste ed è
+raggiunto», il cablaggio e la mutazione non sono ceremony: sono l'unica cosa che
+può falsificarla.
 
 È la stessa disciplina che il giudice applica al codice: non che sembri
 corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
@@ -308,6 +332,14 @@ ripararla e si chiede *quale primitiva la renderebbe impossibile*. Se la rispost
 è cara, si porta all'owner con pro e contro — ma si **chiede**, prima di riparare
 la terza.
 
+**Senza inflazione di framework** (owner, 2026-08-17). «Radice» non significa
+`istanza → framework → primitiva nuova → ADR nuovo`. Si sceglie **il livello più
+piccolo che rende il fallimento non rappresentabile** senza generalizzare oltre
+l'evidenza: spesso è un tipo o una firma, non un modulo. Due occorrenze sono un
+motivo per **indagare** una radice comune, non la prova che serva subito
+un'astrazione; e non si costruisce infrastruttura per una possibilità ipotetica
+post-Gate 1.
+
 E il corollario che questo repo paga più spesso: preferire la forma che
 **fallisce da sola** — un `switch` esaustivo, un tipo che obbliga il chiamante a
 gestire l'esito, un sink obbligatorio nella firma — a quella che dipende dal
@@ -346,3 +378,143 @@ Il judge attacca anche questa proprietà: muta il valore oggi dominante, prova
 un secondo tenant/surface/provider quando pertinente e cerca consumer non
 toccati dal diff. Se il test passa solo perché ogni fixture usa lo stesso caso,
 non è una prova di generalità.
+
+## 17. La verifica è proporzionale alla claim e al blast radius
+
+Direttiva owner, 2026-08-17: *«il rigore che abbiamo costruito funziona, ma
+viene applicato quasi uniformemente e sta diventando il collo di bottiglia. Non
+voglio ridurre il livello di sicurezza sulle garanzie critiche. Voglio eliminare
+ceremony che non produce evidenza aggiuntiva.»*
+
+La domanda da farsi **non** è «abbiamo eseguito tutti i tipi di test?». È:
+
+> **qual è la quantità minima di evidenza che potrebbe falsificare questa
+> claim?**
+
+Il profilo si sceglie **prima** di implementare, si scrive nella PR, e non
+dipende dalla dimensione del diff: dipende dal rischio della garanzia. Una riga
+può essere CRITICAL, cinquecento righe di scenari possono essere FAST.
+
+### FAST
+
+Documenti · stato e handoff · viste generate e mappa · soli test · formattazione
+· correzioni meccaniche che non cambiano comportamento a runtime né contratti.
+
+*Richiede*: il check direttamente pertinente (es. `ancore.mjs --check` se tocchi
+la mappa, il test del file che tocchi), il **diff letto**, la CI normale se apre
+una PR.
+
+*Non richiede per default*: red-first · mutazione · integration · accettazione
+col binario vero · suite completa in locale · judge fresco · l'aggiornamento di
+ogni documento del repo.
+
+Più FAST indipendenti possono stare in **una** maintenance PR, se restano
+leggibili e verificabili separatamente. Non serve una PR per riga meccanica.
+
+### STANDARD
+
+Il default per il normale lavoro di prodotto/runtime **reversibile** che non
+tocca una garanzia CRITICAL: retry ordinario di un provider, output della CLI,
+`sys.inspect` read-only, media Telegram, `prompt show` quando non cambia il
+meccanismo del RoT, un bug locale.
+
+*Richiede solo ciò che la claim rende necessario*: un bug vuole la riproduzione
+o un test rosso-prima · logica locale vuole unit · un confine fra moduli vuole
+integration · una cosa user-facing o una riga Gate 1 vuole l'accettazione giusta
+· toccare tipi/API vuole la build.
+
+**Mutazione solo** se ciò che affermiamo è che un guard o un cablaggio impedisce
+qualcosa e potrebbe essere scollegato restando verde. **Failure path solo** se il
+cambiamento ne introduce o modifica uno materiale.
+
+La suite completa gira **una volta**, in CI, sulla testa integrata: non si
+rilancia in locale dopo ogni commit per rito. **Judge fresco non richiesto**:
+l'orchestratore verifica e integra.
+
+### CRITICAL
+
+Scatta da sé — non è una scelta di comodità — se la claim tocca almeno uno di:
+effect WAL o effect journal · side effect non ri-eseguibile o irreversibile ·
+authority, capability, policy kernel · taint e provenienza · egress · Root of
+Trust · segreti · schema durevole e migrazioni · backup/restore con rischio dati
+· concorrenza, lease, lock · exactly-once e idempotenza · crash recovery che può
+duplicare o perdere lavoro · sandbox e containment · operazioni distruttive · un
+confine la cui rottura causerebbe perdita dati, violazione di autorità, effetti
+duplicati o comportamento unsafe silenzioso.
+
+Qui la disciplina forte resta **identica a prima**: ricostruzione del percorso di
+produzione · red-first · wiring/integration · mutazione sulla cucitura portante ·
+matrice dei fallimenti · fault injection quando pertinente · accettazione col
+binario vero quando la claim dipende dal percorso reale · suite completa ·
+documenti autorevoli aggiornati · **judge fresco e indipendente** · verdetto
+terminale prima dell'integrazione.
+
+E un limite anche qui: CRITICAL non vuol dire «prova tutto il sistema». Prova
+ciò che può falsificare **quella** garanzia.
+
+### Gli esempi, perché la classificazione non si interpreti a piacere
+
+| lavoro | profilo |
+|---|---|
+| typo nel README · ancora della mappa stale | FAST |
+| `/spend` mostra anche «oggi» | STANDARD — accettazione mirata; niente judge né mutazione teatrale |
+| retry del provider su 429/5xx | STANDARD — test dei fallimenti e integration appropriata |
+| `sys.inspect` read-only | STANDARD, finché non tocca una primitiva di authority/RoT/durevole |
+| session taint · egress · `job_fires`/Telegram exactly-once · migrazione di schema · undo/effect journal · WAL dell'intento | CRITICAL |
+
+### Il riuso dell'evidenza
+
+**Un'evidenza già osservata non si rifà per rituale.** Se la PR registra sha,
+comando, la mutazione o lo stato pre-fix, il fallimento osservato e il successo
+osservato, quella prova **resta valida** finché il codice o il test che regge la
+claim non cambia. Worker, orchestratore e judge non devono ripetere in catena la
+stessa mutazione.
+
+Il judge la riesegue quando: l'evidenza è incompleta · il branch è cambiato in
+modo pertinente · sospetta che il test non provi la claim · la nuova mutazione è
+essa stessa parte della review.
+
+Un merge di `dev` invalida **solo** le prove materialmente toccate, non tutta la
+storia epistemica della PR.
+
+### L'anti-metrica
+
+> **Il workflow non si giudica da quante prove produce, ma da quanti errori
+> materiali intercetta per unità di tempo e di contesto.**
+
+Se una verifica non può plausibilmente cambiare il verdetto, è probabilmente
+ceremony — e la ceremony non è neutra: consuma il contesto e l'attenzione che
+servivano alla verifica che *avrebbe* potuto cambiarlo.
+
+## 18. Scope firewall
+
+Durante una slice emerge quasi sempre un altro problema. Entra nella slice
+**solo** se: (1) invalida la claim corrente; (2) impedisce di verificarla; (3)
+crea un rischio concreto per il giorno 1 — perdita dati, effetti duplicati,
+violazione di autorità o privacy, comportamento unsafe silenzioso; (4) è
+tecnicamente inseparabile dal fix.
+
+Altrimenti: si registra come follow-up (una riga in `M5-BIS`/`PERCORSO-CRITICO`,
+un task, o una nota nella PR), **non** si costruisce l'astrazione adesso, e si
+chiude la claim corrente.
+
+> «Ho trovato qualcosa di migliorabile» non significa «questa PR deve
+> migliorarlo».
+
+## 19. Il budget dei documenti
+
+Non si aggiornano `STATE`, `LAVORO`, mappa, ADR e `lessons` tutti insieme per
+riflesso. Si aggiorna **solo la casa autorevole** che il cambiamento rende
+stale:
+
+| documento | si tocca quando |
+|---|---|
+| `M5-BIS.md` | cambia una riga o l'evidenza di una riga Gate 1 |
+| `gate1/PERCORSO-CRITICO.md` | cambia l'ordine o lo **stato** delle slice |
+| `STATE.md` · `LAVORO.md` | cambia davvero obiettivo, blocker, decisione owner, PR attiva o milestone |
+| ADR | c'è una decisione architetturale durevole |
+| `lessons.md` | c'è una lezione **generalizzabile**, non per ogni bug |
+| mappa | cambia una cosa rappresentata o ancorata dalla mappa |
+
+Le viste generate restano verificate meccanicamente (§14), e il handoff resta
+verificato da `.claude/riconcilia.mjs` — vedi `BRANCHING.md` checkpoint 4.

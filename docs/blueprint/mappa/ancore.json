@@ -801,7 +801,7 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 255,
+    "line": 260,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -1469,10 +1469,10 @@
     "line": 87,
     "testo": "export const CONSOLIDATION_IDLE_MS = 20_000;"
   },
-  "core/memory/extract.ts:132": {
+  "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 132,
-    "testo": "export async function extractFacts("
+    "line": 150,
+    "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
     "path": "core/memory/ingest-lock.ts",
@@ -1486,62 +1486,62 @@
   },
   "core/memory/ingest.ts:117": {
     "path": "core/memory/ingest.ts",
-    "line": 117,
+    "line": 126,
     "testo": "* `judgeUnavailable` below instead, kept apart rather than folded in here."
   },
   "core/memory/ingest.ts:176": {
     "path": "core/memory/ingest.ts",
-    "line": 176,
+    "line": 185,
     "testo": "`giudice non disponibile su ${g.subject}/${g.predicate}` +"
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 235,
+    "line": 245,
     "testo": "// would read as \"stuck\" on exactly the page that was working."
   },
   "core/memory/ingest.ts:237": {
     "path": "core/memory/ingest.ts",
-    "line": 237,
+    "line": 247,
     "testo": "deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 272,
+    "line": 282,
     "testo": "if (episode.kind === 'document') {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 304,
+    "line": 316,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 321,
+    "line": 333,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 323,
+    "line": 335,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 324,
+    "line": 336,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 448,
+    "line": 460,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 449,
+    "line": 461,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 463,
+    "line": 475,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1959,20 +1959,20 @@
     "line": 261,
     "testo": "export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READERS): RotReadersResult {"
   },
+  "core/rot/verify.ts:120": {
+    "path": "core/rot/verify.ts",
+    "line": 120,
+    "testo": "export function hardeningHolds("
+  },
   "core/rot/verify.ts:156": {
     "path": "core/rot/verify.ts",
-    "line": 156,
+    "line": 207,
     "testo": "export function verify(homeDir: string, mode: RotMode): VerifyOutcome {"
   },
   "core/rot/verify.ts:16": {
     "path": "core/rot/verify.ts",
     "line": 16,
     "testo": "*   hardened     — the RoT is owned by another OS user; the runtime cannot write"
-  },
-  "core/rot/verify.ts:99": {
-    "path": "core/rot/verify.ts",
-    "line": 99,
-    "testo": "export function hardeningHolds(homeDir: string): HardeningCheck {"
   },
   "core/sandbox/executor.test.ts:173": {
     "path": "core/sandbox/executor.test.ts",
@@ -2026,32 +2026,32 @@
   },
   "core/skills/skills.ts:124": {
     "path": "core/skills/skills.ts",
-    "line": 124,
+    "line": 134,
     "testo": "export function skillsPromptSection(skills: SkillInfo[]): string {"
   },
   "core/skills/skills.ts:18": {
     "path": "core/skills/skills.ts",
-    "line": 18,
+    "line": 19,
     "testo": "* --debug. Here it is SKIPPED and the reason is reported at boot and in"
   },
   "core/skills/skills.ts:53": {
     "path": "core/skills/skills.ts",
-    "line": 53,
+    "line": 54,
     "testo": "export function skillsRoot(home: string): string {"
   },
   "core/skills/skills.ts:59": {
     "path": "core/skills/skills.ts",
-    "line": 59,
+    "line": 60,
     "testo": "export function discoverSkills(home: string): SkillScan {"
   },
   "core/skills/skills.ts:69": {
     "path": "core/skills/skills.ts",
-    "line": 69,
+    "line": 70,
     "testo": "if (!existsSync(file)) {"
   },
   "core/skills/skills.ts:81": {
     "path": "core/skills/skills.ts",
-    "line": 81,
+    "line": 82,
     "testo": "export function parseSkill(content: string, dirName: string, dir: string): SkillInfo | { problem: string } {"
   },
   "core/tracing/redact.ts:1": {
@@ -2334,15 +2334,15 @@
     "line": 168,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
-  "extract.ts:176": {
+  "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 176,
-    "testo": ".filter((f) => f.confidence >= 0.4),"
+    "line": 187,
+    "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
-  "extract.ts:186": {
+  "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 186,
-    "testo": "export function canonicalPredicate(raw: string): string {"
+    "line": 192,
+    "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
     "path": "core/memory/extract.ts",
@@ -2391,7 +2391,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 362,
+    "line": 356,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
@@ -2934,9 +2934,9 @@
     "line": 67,
     "testo": "private migrateUnpartitioned(): void {"
   },
-  "verify.ts:99": {
+  "verify.ts:120": {
     "path": "core/rot/verify.ts",
-    "line": 99,
-    "testo": "export function hardeningHolds(homeDir: string): HardeningCheck {"
+    "line": 120,
+    "testo": "export function hardeningHolds("
   }
 }
