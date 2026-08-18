@@ -15,11 +15,11 @@
 
 **Inventario**: 13 READY · 35 BLOCKER · 7 OUT (55 righe).
 
-**Integrate il 17/08**: #53 lease/fencing · #54 acceptance truth · #56 A1 · #57 WAL intento · #58 identità p1 · #59 init --local · #60 mappa · #63 workflow · #61 audit-mediums · #62 egress (soglia owner = 2) · #65 character eval.
+**Integrate il 17/08**: #53 lease/fencing · #54 acceptance truth · #56 A1 · #57 WAL intento · #58 identità p1 · #59 init --local · #60 mappa · #63 workflow · #61 audit-mediums · #62 egress (soglia owner = 2) · #65 character eval · #67 session-taint.
 
-**In volo**: `session-taint` (1.2), ultima CRITICAL del blocco 1 — verificata, verso judge fresco.
+**In volo**: `segreti-mai-mostrabili` (CRITICAL, direttiva owner: il valore non entra nel data plane, chiude P34-2).
 
-**Serve l'owner**: corsa reale del character eval (~$0.33 Sonnet + ~$0.11 Haiku, solo input) · P34-2 segreti a riposo · audio nei 14gg · scope sandbox · `mcp.*` per-tool · `ricorda` · lingua doc.
+**Serve l'owner**: corsa reale del character eval (~$0.33 Sonnet + ~$0.11 Haiku, solo input) · audio nei 14gg · scope sandbox · `mcp.*` per-tool · `ricorda` · lingua doc.
 
 <!-- FINE BLOCCO -->
 
