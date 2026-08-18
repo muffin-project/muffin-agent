@@ -65,7 +65,9 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
 comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NOME] [--light-model NOME] [--api-key CHIAVE]
+              [--base-url URL] [--model NOME] [--light-model NOME]
+                                la chiave arriva da stdin o dal prompt nascosto,
+                                mai da argv: echo -n "$KEY" | muffin init
               [--local [DIR]]  home di prova separata (default ~/.muffin-local),
                                 riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
@@ -248,6 +250,23 @@ async function main(rawArgv: string[]): Promise<number> {
   }
 }
 
+/**
+ * La chiave da stdin quando `muffin init` gira in una pipe; `undefined` quando
+ * stdin e un terminale (allora si usa il prompt nascosto) o e vuoto.
+ *
+ * `readFileSync(0)` e non un readline: e la stessa lettura di
+ * `muffin secret set`, e un `init` in CI non ha un TTY su cui aprire un prompt.
+ */
+function readKeyFromStdin(): string | undefined {
+  if (process.stdin.isTTY) return undefined;
+  try {
+    const value = readFileSync(0, 'utf8').trim();
+    return value === '' ? undefined : value;
+  } catch {
+    return undefined;
+  }
+}
+
 async function cmdInit(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -306,7 +325,24 @@ async function cmdInit(argv: string[]): Promise<number> {
   // answers and nothing is prompted or copied. `--local` reads that very same
   // chain against its own `home` below — never a copy (ADR-0030's `--local`
   // amendment).
-  let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
+  // **Mai da argv** (direttiva owner 2026-08-18, ADR-0048 §revisione). Un valore
+  // in `argv` sta nella shell history e nel `ps` di chiunque sulla macchina, ed
+  // è un segreto anche prima di essere registrato nel backend: `--api-key
+  // CHIAVE` non è deprecato con un avviso — è **rifiutato**, perché un avviso
+  // arriva quando la chiave è già finita nella history. Stessa forma che
+  // `muffin secret set` ha sempre avuto (vedi `cmdSecret`).
+  if (values['api-key'] !== undefined) {
+    process.stderr.write(
+      `--api-key non accetta piu un valore: una chiave in argv finisce nella shell history e nel ps di chiunque.\n` +
+        `  Passala da stdin:  echo -n "$KEY" | muffin init\n` +
+        `  Oppure lancia muffin init in un terminale e incollala al prompt nascosto.\n` +
+        `  Se e gia stata usata cosi, ruotala.\n`,
+    );
+    return 78;
+  }
+  // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
+  // `secret set` usa da sempre.
+  let apiKey = readKeyFromStdin() ?? process.env['MUFFIN_API_KEY'];
   const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);

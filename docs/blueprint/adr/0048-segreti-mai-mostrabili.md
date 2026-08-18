@@ -179,16 +179,14 @@ mutazione verificata.
 
 ## Cosa NON copre
 
-- **`muffin init --api-key CHIAVE`.** Argomento CLI documentato, quindi
-  visibile in `ps aux` a un altro utente dello stesso host e nella cronologia
-  della shell. Preesistente a questa slice, non class-1 (la chiave non è
-  ancora "conosciuta dal backend" nel momento in cui arriva) ma la stessa
-  famiglia di rischio di "segreto in argv" che la direttiva nomina. Non
-  corretto qui: cambiare la UX di `init` è una decisione propria, con un
-  proprio raggio (script di CI che già passano `--api-key`, documentazione,
-  test esistenti) — dichiarato come rischio residuo, non silenziato.
-  Follow-up proposto: deprecare il flag a favore di stdin, come già `secret
-  set`.
+- ~~**`muffin init --api-key CHIAVE`**~~ — **chiuso, non più un rischio
+  residuo.** Correzione dell'owner, 2026-08-18: *«un secret è un secret anche
+  prima di essere registrato nel backend… nessun secret value in argv; la
+  compatibilità di script non prevale sulla garanzia»*. Questa ADR lo aveva
+  classificato come non-class-1 perché la chiave non è ancora conosciuta dal
+  backend nel momento in cui arriva — ragionamento sbagliato: la finestra fra
+  «arriva» e «è nel backend» è precisamente quella in cui la shell history e
+  `ps` la vedono, e il valore è lo stesso. Vedi §Revisione in fondo.
 - **Righe già scritte in `~/.muffin` reale.** Non toccate, non cancellate —
   "le righe non si cancellano" resta valido. Una bonifica una-tantum
   (`muffin secret scrub`) è **proposta**, non implementata: cercherebbe prima
@@ -212,3 +210,40 @@ aggiunta a un modulo esistente, il punto di applicazione in `agent/loop.ts`
 reversibile con un revert del commit; nessuna riga del database cambia
 forma. I pattern di `SECRET_VALUE_SHAPES` sono dati, non contratto: se una
 forma produce un falso positivo misurato, si toglie in un commit che lo dice.
+
+
+## Revisione — 2026-08-18: nessun secret value in argv, e non è una deprecazione
+
+**Correzione dell'owner**, dopo il MERGE di questa ADR: *«`muffin init
+--api-key CHIAVE` NON può restare come follow-up se la claim è "i secret non
+sono mai mostrati o mostrabili". Un secret è un secret anche prima di essere
+registrato nel backend. Il judge non deve dare MERGE alla claim globale finché
+esiste un entry point supportato che rende un secret visibile in process list o
+shell history.»*
+
+**Cosa cambia.** `--api-key <valore>` non è deprecato con un avviso: è
+**rifiutato** (`cli/main.ts`, exit 78, e niente viene scritto — un rifiuto che
+installa mezza home sarebbe peggio del difetto). Un avviso arriverebbe quando la
+history ha già scritto la chiave, e la finestra è esattamente quella.
+
+**Da dove arriva la chiave adesso**, nell'ordine in cui `init` la cerca:
+
+1. **stdin**, quando `init` non è su un terminale — `echo -n "$KEY" | muffin
+   init`. È il percorso di script e CI, ed è lo stesso che `muffin secret set`
+   usa da sempre (`readFileSync(0)`, mai `argv`).
+2. **il prompt nascosto**, quando c'è un TTY (`promptSecret`, nessun eco).
+3. **`secret://provider_api_key` già registrato** — la catena dei backend, che è
+   ciò che rende `muffin uninstall --yes && muffin init` un ciclo senza
+   reincollare niente (ADR-0030 §`--local`).
+4. `MUFFIN_API_KEY` nell'ambiente **del processo che lancia `init`**. Resta, ed è
+   una scelta dichiarata, non una svista: su Linux `/proc/<pid>/environ` è
+   leggibile solo dal proprietario, mentre `/proc/<pid>/cmdline` è leggibile da
+   chiunque sulla macchina — non sono lo stesso rischio. Se l'owner vuole
+   chiudere anche quella porta è una riga, ma è una sua decisione: qui è scritta,
+   non assunta.
+
+**Cosa è stato migrato**: harness di accettazione, `evals/memory/acceptance.ts`
+e i test della CLI passano la chiave da stdin. Nessun chiamante di produzione o
+di test la mette più in `argv` — e il test che lo pinna è in `cli/main.test.ts`
+(«una chiave non passa mai per argv»), rosso quando la guardia viene tolta
+(mutazione eseguita: `if (false && …)` → 1 fallimento, gli altri 21 verdi).
