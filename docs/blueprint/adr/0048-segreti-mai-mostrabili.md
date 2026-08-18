@@ -1,0 +1,214 @@
+# ADR-0048 — I segreti non sono mostrabili: redazione al confine di scrittura
+
+**Stato:** accettato · 2026-08-17 · chiude P34-2, chiude la decisione owner
+pendente su "segreti a riposo" (`M5-BIS.md` §E3, `PERCORSO-CRITICO.md` 2.5)
+
+## Contesto
+
+Direttiva owner, 2026-08-17, verbatim: *«i secret non devono mai essere
+mostrati o mostrabili, né in logs, né in chat, da nessuna parte»*.
+
+Il mandato iniziale di questa slice leggeva quella frase come un problema di
+**redazione**: un valore che assomiglia a un segreto va oscurato ovunque
+possa essere scritto — trace, record durevole, sessione, CLI. Una
+precisazione successiva dell'owner ha spostato il baricentro prima che il
+codice fosse scritto: la redazione testuale è **difesa in profondità**, non
+la garanzia. L'invariante vero, verbatim:
+
+> «Un secret value conosciuto non entra mai nel data plane generale di
+> Muffin. Viene materializzato solo nel sink privilegiato autorizzato che ne
+> ha bisogno, il più tardi possibile, e da lì non torna nel runtime
+> osservabile.»
+
+La differenza non è cosmetica. Un detector testuale può sempre mancare una
+forma non ancora vista; una garanzia strutturale — "questa funzione ha un
+insieme fisso e piccolo di chiamanti, nessuno dei quali è un tool" — si prova
+per enumerazione ed è falsificabile da un test che conta i chiamanti.
+
+## Decisione
+
+### 1. Tre classi, e non si trattano allo stesso modo
+
+1. **Segreti conosciuti dal backend** (`muffin secret set`,
+   `readSecret`/`locateSecret` — `core/config/config.ts`). **Garanzia
+   strutturale.** Il valore risolto esiste solo dentro il sink privilegiato
+   che lo ha richiesto — l'header `Authorization` costruito dall'SDK del
+   provider, la query firmata verso Tavily, l'URL/header verso Telegram o
+   Discord — e non torna mai nel piano generale (tool args/result, messages,
+   turns, sessioni, trace, CLI, approval resource, argv, env di un
+   sottoprocesso). Questo è **uso**, non esposizione.
+2. **`muffin secret set`.** Il valore entra solo da stdin: la sintassi del
+   comando (`secret set NOME [--persist]`) non ha uno slot in argv per il
+   valore, quindi non è redazione, è assenza del canale.
+3. **Stringhe secret-like incollate a mano** (in una chat, dentro un file che
+   `fs_read` può leggere). **Detector best-effort**, dichiarato come tale: un
+   pattern testuale, non una garanzia di sicurezza. Non copre ogni forma
+   possibile e non deve: un falso positivo che cancella contenuto vero è un
+   difetto, non prudenza (owner, stessa direttiva).
+
+Il prune periodico e la cifratura a riposo — entrambe valutate — restano
+**utili per la privacy generale** (dati vecchi, GDPR) ma non sono la garanzia
+dei segreti: un prune lascia il segreto visibile per tutto il tempo in cui
+gira, e "mostrabile" è già la violazione che la direttiva chiude.
+
+### 2. La garanzia strutturale (classe 1), e come si prova
+
+`readSecret` ha un insieme fisso di chiamanti in produzione, e la prova è
+un'enumerazione eseguibile (`core/config/secret-boundary.test.ts`), non un
+argomento:
+
+| chiamante | sink | perché è privilegiato |
+|---|---|---|
+| `agent/runtime.ts` | l'SDK Anthropic/OpenAI-compat, il backend Tavily | il valore risolto entra **inline** nel costruttore/closure e da lì costruisce solo l'header/la query in uscita; nessuna variabile intermedia lo tiene |
+| `cli/surface.ts` | `TelegramApi`/`DiscordApi` | stesso schema: risolto al momento di costruire il client di pairing, mai copiato altrove; una chiamata (`hasSecret`) lo scarta subito |
+| `cli/doctor.ts` | nessuno — solo diagnostica | stampa backend, percorso e **lunghezza in caratteri** (mai un carattere del valore — coerente con `«redacted:N»`, che tiene la lunghezza per lo stesso motivo) |
+
+Nessun handler di tool (`agent/tools/*.ts`), nessun connector, nessun punto
+di `core/turns/`, `core/session/` o `core/tracing/` chiama `readSecret` — il
+test lo verifica per enumerazione dell'intero albero sorgente, non per
+lettura di un singolo file, cosicché un nuovo chiamante fuori
+dall'allowlist rende il test rosso finché non è una decisione rivista, non
+una svista.
+
+**Perché non serve spostare la risoluzione dentro l'adapter del provider.**
+La domanda era legittima — se `buildRuntime` avesse tenuto il valore
+risolto in una variabile riusata altrove, quello sarebbe stato il difetto da
+correggere. Non lo fa: `new AnthropicProvider(readSecret(...), baseUrl)` e
+l'equivalente per Tavily/OpenAI-compat risolvono **inline**, come argomento
+di chiamata — non esiste un `const key = readSecret(...)` che sopravviva
+oltre quella riga. Spostare la chiamata dentro il costruttore dell'adapter
+avrebbe spostato *dove* avviene la lettura del file senza cambiare *cosa*
+succede al valore dopo: finisce comunque dentro l'SDK, che lo tiene per la
+vita della richiesta. Verificato leggendo ogni chiamante (tabella sopra) e
+non assunto.
+
+**Conseguenze verificate con test, non solo enunciate:**
+
+- `fs_read`/`fs_list`/il tool shell sandboxato non possono leggere nessuno
+  dei due backend di `secretDir` (`home`, `persistent` — catena ADR-0039):
+  `core/rot/guards.ts` li mette entrambi in `denyRead`, condiviso fra
+  `agent/tools/fs.ts` e `core/sandbox/executor.ts`. Provato: hard link e
+  symlink terminali chiusi da PR #52 (`agent/tools/fs.test.ts`); i due
+  backend letti dentro lo scope, dove solo `denyRead` — non il confine dello
+  scope — può negare (`core/rot/guards.test.ts`, mutazione verificata su
+  entrambe le voci).
+- Un processo sandboxato non eredita segreti via environment:
+  `SandboxExecutor.childEnv` ricostruisce l'ambiente del figlio da un
+  allowlist fisso, mai da `process.env` per intero — provato con un test che
+  ispeziona l'ambiente *effettivo* del figlio (`printenv`), non il codice
+  (`core/sandbox/executor.test.ts`, preesistente, riverificato qui).
+- `sys.process.list` non espone mai `argv` di un altro processo, solo
+  `pid,user,comm` — deciso e commentato in `agent/tools/process.ts` prima di
+  questa slice, riletto e confermato qui.
+- Un tool result o un tool args non possono mai portare un valore risolto:
+  nessun tool chiama `readSecret`, quindi un `resource` d'approvazione
+  (`ApprovalRequest`) può mostrare solo ciò che il modello ha scritto negli
+  argomenti — mai un segreto vero, al più uno che *assomiglia* a un segreto
+  (classe 3, se l'owner o un file letto lo hanno scritto lì).
+
+### 3. La redazione al confine di scrittura (classe 3, difesa in profondità)
+
+`core/tracing/redact.ts` resta la casa — non più solo per le trace, il
+commento in testa lo dice ora esplicitamente — e guadagna: il passaggio di
+`secret://<nome>` come valore sempre mostrabile (è un riferimento, non il
+segreto), e tre forme etichettate (`Authorization: Bearer <token>`,
+`chiave=valore`/`"chiave": "valore"` per query string/form/JSON, il token bot
+Telegram `id:hash`). Niente detector di entropia generico: ogni nuova forma
+richiede un'etichetta o un prefisso noto accanto al valore, misurata contro
+un corpus di 15 falsi-positivi plausibili (numeri di telefono, UUID,
+annotazioni di tipo TypeScript, parole isolate) — zero colpi, dichiarato in
+`redact.test.ts`.
+
+**Un solo punto di applicazione**: `agent/loop.ts`, dentro `runTool()`, sia
+sul ramo di successo sia sul catch, prima che `outcome.content`/`detail`
+tocchino una qualunque delle tre strutture che sopravvivono al turno:
+`recordOutcome` (→ `turn_tool_calls.content`), `deps.sessions.append` (→ la
+sessione JSONL) e il `tool_result` restituito (→ `turns.messages`, scritto da
+`closeRecord`/checkpoint). Dimostrato per lettura di ciascun consumatore:
+`TurnStore.endToolCall`/`.finish` e `SessionStore.append` scrivono
+`content`/`messages` verbatim, senza una seconda trasformazione — quindi
+redigere una volta a monte è sufficiente, non solo conveniente
+(`agent/secret-redaction.test.ts`, mutazione verificata: rimuovere la
+`redactText()` fa cadere sia il test unitario sia lo scenario di
+accettazione `E3`).
+
+`span.error` era già coperto (P34-1, chiuso da `053934f` prima di questa
+slice) — la redazione qui è idempotente su un valore già redatto, quindi le
+due cuciture non divergono.
+
+### 4. Il token Telegram nell'URL — trovato mentre si verificava il sink
+
+`connectors/telegram/api.ts` costruisce ogni richiesta come
+`.../bot<token>/<metodo>`: il token vive nel **path**, non in un header (a
+differenza di Discord, che usa `Authorization: Bot <token>` — commento
+preesistente in `discord/api.ts`, corretto). `media.ts`, nello stesso
+connector, già evitava `error.message` per questo — *"la URL carica il bot
+token... non deve mai raggiungere un log, una trace o un errore"* — ma
+`api.ts`'s `call()`/`upload()` no: un fetch fallito finiva con
+`error.message` dentro `TelegramError`, che `connector.ts` logga a ogni
+catch. Probato (non assunto) contro il `fetch` di questo Node — DNS,
+connessione rifiutata, timeout, URL malformato — `.message` non porta mai
+l'URL oggi; ma il token siede nell'unica stringa che un futuro runtime più
+verboso includerebbe per prima, e il costo del fix è nullo. Allineato a
+`.name`, come `media.ts` già faceva. Test rosso-prima con un fetch avversariale
+che *include già* il token nel proprio `.message` (`connectors/telegram/api.test.ts`),
+mutazione verificata.
+
+## Alternative scartate
+
+- **Prune periodico delle righe vecchie**, l'opzione che P34-2 lasciava
+  aperta. Scartata: lascia il segreto in chiaro per tutto l'intervallo fra
+  una scrittura e il prune successivo, e "mostrabile" durante quell'intervallo
+  è già la violazione che la direttiva del 17/08 chiude. Resta valida come
+  meccanismo di **retention** generale (già `JsonlExporter.pruneOlderThan`
+  per le trace), ma non come risposta a questa direttiva.
+- **Cifratura a riposo del database/delle sessioni.** Risolve un problema
+  diverso — un attaccante con accesso al disco spento — non quello posto qui:
+  un processo vivo che scrive un segreto in chiaro in una riga lo ha già
+  esposto a chiunque legga quella riga mentre il processo gira, cifrata o no.
+  Ortogonale, non alternativa: se un giorno serve, si aggiunge sopra questa
+  garanzia, non al suo posto.
+- **Un detector di entropia generico** (qualunque stringa ad alta entropia è
+  sospetta). Scartato per direttiva esplicita: un numero di telefono, un
+  UUID, un hash git hanno entropia comparabile a un token e nessuno di loro è
+  un segreto — il costo sarebbe contenuto reale cancellato, non prudenza.
+- **Spostare `readSecret` dentro l'adapter del provider.** Considerata e
+  respinta con motivazione (§2 sopra): la chiamata è già inline, il valore
+  risolto non sopravvive oltre l'argomento di costruzione, e spostare il
+  punto di lettura non avrebbe cambiato dove il valore vive dopo.
+
+## Cosa NON copre
+
+- **`muffin init --api-key CHIAVE`.** Argomento CLI documentato, quindi
+  visibile in `ps aux` a un altro utente dello stesso host e nella cronologia
+  della shell. Preesistente a questa slice, non class-1 (la chiave non è
+  ancora "conosciuta dal backend" nel momento in cui arriva) ma la stessa
+  famiglia di rischio di "segreto in argv" che la direttiva nomina. Non
+  corretto qui: cambiare la UX di `init` è una decisione propria, con un
+  proprio raggio (script di CI che già passano `--api-key`, documentazione,
+  test esistenti) — dichiarato come rischio residuo, non silenziato.
+  Follow-up proposto: deprecare il flag a favore di stdin, come già `secret
+  set`.
+- **Righe già scritte in `~/.muffin` reale.** Non toccate, non cancellate —
+  "le righe non si cancellano" resta valido. Una bonifica una-tantum
+  (`muffin secret scrub`) è **proposta**, non implementata: cercherebbe prima
+  i valori esatti che il backend conosce oggi (`locateSecretAll` su ogni
+  nome noto in `config.json`), poi in seconda passata le forme regex di
+  `redact.ts`, su `turns.messages`, `turn_tool_calls.content` e le sessioni
+  JSONL — una UPDATE per tabella più una riscrittura di file, plausibilmente
+  sopra le ~80 righe che questa slice si è data come tetto per codice non
+  discusso con l'owner. La decisione di eseguirlo sui propri dati resta
+  dell'owner; nessun test di questa slice tocca `~/.muffin` reale.
+- **Segreti incollati a mano dall'owner in chat.** Classe 3: il detector li
+  intercetta se assomigliano a una forma nota, non li garantisce. Un token in
+  un formato non elencato passa.
+
+## Reversibilità
+
+**Alta.** Nessuna migrazione di schema: `redact.ts` è una funzione pura
+aggiunta a un modulo esistente, il punto di applicazione in `agent/loop.ts`
+è una chiamata in più su un valore già di passaggio, il fix di
+`connectors/telegram/api.ts` cambia una riga per ramo di errore. Tutto
+reversibile con un revert del commit; nessuna riga del database cambia
+forma. I pattern di `SECRET_VALUE_SHAPES` sono dati, non contratto: se una
+forma produce un falso positivo misurato, si toglie in un commit che lo dice.

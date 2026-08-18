@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
@@ -228,5 +229,56 @@ describe('acceptance · E · economia e osservabilità', () => {
       }
     },
     30_000,
+  );
+
+  /**
+   * E3, the P34-2 half: ADR-0048's write-boundary redaction, through the real
+   * binary and the real home database — not `runTurn()` with a fake
+   * `TurnStore`, which is what `agent/secret-redaction.test.ts` already
+   * covers at the unit level. The owner's own file, planted on disk exactly
+   * as `fs_read` would find one it did not write, is the realistic case this
+   * slice exists for: a key pasted into a note, read back later.
+   */
+  scenario(
+    'E3',
+    async () => {
+      const SECRET = 'sk-ant-FINTA-CHIAVE-ACCETTAZIONE-1234567890';
+      const inst = await install({
+        main: [{ tool: { name: 'fs_read', args: { path: 'appunti.txt' } } }, { text: 'letto' }],
+      });
+      try {
+        writeFileSync(join(inst.workspace, 'appunti.txt'), `password: "${SECRET}"\naltro testo innocuo\n`);
+
+        const r = await inst.muffin(['run', '--timeout', '20', 'leggi appunti.txt']);
+        if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
+        if (r.out.includes(SECRET)) {
+          throw new Error(`la chiave finta è arrivata nella risposta finale: ${JSON.stringify(r.out)}`);
+        }
+
+        const call = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT content FROM turn_tool_calls WHERE tool = 'fs_read' ORDER BY started_at DESC LIMIT 1`)
+              .get() as { content: string | null } | undefined,
+        );
+        if (!call) throw new Error('nessuna fs_read registrata');
+        if ((call.content ?? '').includes(SECRET)) {
+          throw new Error(`turn_tool_calls.content porta la chiave in chiaro: ${JSON.stringify(call.content)}`);
+        }
+        if (!(call.content ?? '').includes('«redacted:')) {
+          throw new Error(`nessun marcatore di redazione nel content registrato: ${JSON.stringify(call.content)}`);
+        }
+
+        const turnRow = inst.db(
+          (db) => db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as { messages: string },
+        );
+        if (turnRow.messages.includes(SECRET)) {
+          throw new Error('turns.messages porta la chiave in chiaro');
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    20_000,
   );
 });
