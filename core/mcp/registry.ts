@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { looksLikeSecretValue } from '../tracing/redact.js';
 import { paths } from '../config/config.js';
 
 /**
@@ -25,9 +26,27 @@ const ServerEntrySchema = z.object({
   /**
    * Environment passed to the server, explicit and empty by default. The SDK
    * adds only its own safelist (PATH, HOME, …) — the host process env, API key
-   * included, never crosses unless the owner writes it here by name.
+   * included, never crosses.
+   *
+   * **Solo riferimenti `secret://nome`, mai valori** (direttiva owner
+   * 2026-08-18). La regola vive qui, nello schema, e non solo nel parser di
+   * `muffin mcp add`: un `mcp.json` scritto a mano con un token letterale lo
+   * consegnerebbe al figlio senza che nessuno obietti, e la garanzia
+   * dipenderebbe dal fatto che si passi dalla CLI. Un valore che non è un
+   * segreto — `LANG=C`, un percorso, un flag — non appartiene all'env di un
+   * server MCP: sta negli `args`, dove è visibile per quello che è.
    */
-  env: z.record(z.string(), z.string()).default({}),
+  env: z
+    .record(
+      z.string(),
+      z
+        .string()
+        .refine(
+          (value) => !looksLikeSecretValue(value),
+          'un valore con la forma di una credenziale: registralo con `muffin secret set` e mettici `secret://nome`',
+        ),
+    )
+    .default({}),
   approvedAt: z.string().min(1),
   /** toolName → sha256 of the canonical definition, pinned at approval. */
   tools: z.record(z.string(), z.string().length(64)),

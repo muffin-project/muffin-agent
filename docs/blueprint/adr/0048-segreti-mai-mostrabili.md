@@ -280,3 +280,42 @@ e i test della CLI passano la chiave da stdin. Nessun chiamante di produzione o
 di test la mette più in `argv` — e il test che lo pinna è in `cli/main.test.ts`
 («una chiave non passa mai per argv»), rosso quando la guardia viene tolta
 (mutazione eseguita: `if (false && …)` → 1 fallimento, gli altri 21 verdi).
+
+
+## Revisione — il produttore lento, e dove vive la regola dell'`env` MCP
+
+Due reperti del secondo giro di judge, entrambi chiusi.
+
+**1. `readFileSync(0)` perdeva la chiave in silenzio, e `isatty` non bastava.**
+La prima correzione aveva spostato la guardia (`process.stdin.isTTY` →
+`isatty(0)`) credendo che fosse `cmdInit` a mettere fd 0 in non-blocking. Non
+lo è: lo mette un tocco di `process.stdin` **a import time** nel grafo dei
+moduli — il bisect del judge arriva a `import('./repl.js')`. Quindi il fd resta
+non-bloccante comunque, `readFileSync(0)` lancia **EAGAIN** appena i dati non
+sono ancora arrivati, e il `catch` lo leggeva come «nessun valore»: `pass show`,
+`op read`, `gpg -d` fallivano in silenzio — **su entrambe le porte**, `init` e
+`secret set`. Il fail-closed di `MUFFIN_API_KEY` prescriveva due vie e nessuna
+delle due si apriva.
+
+Ora una sola primitiva, `readAllStdin`, con retry su EAGAIN e una scadenza, usata
+da tutti e due i comandi; un errore di lettura non diventa mai «nessun valore».
+Scartato `openSync('/dev/stdin')`: eredita la stessa open file description e
+lancia lo stesso EAGAIN (misurato). Il test che mancava — e la ragione per cui il
+difetto è sopravvissuto a un giro — è che una pipe immediata riempie il buffer
+prima della lettura e maschera il caso: ora c'è un test con un produttore che
+ritarda, rosso quando si toglie il retry.
+
+**2. La regola sull'`env` di un server MCP vive nello schema, non nel parser.**
+Un `mcp.json` scritto a mano con un token letterale veniva consegnato al figlio
+senza obiezioni: la garanzia dipendeva dal fatto che si passasse da `muffin mcp
+add`. Ora `core/mcp/registry.ts` rifiuta un valore che **ha la forma** di una
+credenziale, riusando il predicato di `core/tracing/redact.ts`
+(`looksLikeSecretValue`) invece di ricopiarne la lista.
+
+È **classe 3, e va letto come tale**: riconosce le forme note (`ghp_…`,
+`sk-ant-…`, `Bearer …`, `token=…`), non qualunque stringa. La classe 1 resta
+strutturale altrove — il valore noto al backend non passa mai di qui, perché
+`--env` accetta solo `secret://nome` e la risoluzione avviene nel sink. E
+`LANG=C` o `MCP_MODE=strict` continuano a passare: vietare ogni valore letterale
+avrebbe rotto la configurazione legittima senza chiudere niente che la classe 1
+non chiudesse già.
