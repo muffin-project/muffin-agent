@@ -31,9 +31,17 @@ scopo e va tolto. Un ramo si tiene finché risponde a una domanda.
 
 1. **Il lavoro non nasce su `main` né su `dev`.** Nasce su `slice/<cosa>`.
 2. **Una slice è coerente**, non "tutto quello che ho fatto oggi". Il metro:
-   riesci a scrivere il titolo della PR senza usare "e"?
-3. **Una slice entra in `dev` verde**: `npm run build` e `npx vitest run` puliti,
-   e i test nuovi verificati *rossi* prima del fix (`PRACTICES.md` §5).
+   riesci a scrivere il titolo della PR senza usare "e"? L'eccezione dichiarata
+   sono i FAST indipendenti — typo, ancore stale, viste rigenerate — che possono
+   stare insieme in **una** maintenance slice, purché restino leggibili e
+   verificabili separatamente: una PR per riga meccanica è essa stessa ceremony.
+   STANDARD e CRITICAL restano centrati su una claim sola.
+3. **Una slice entra in `dev` verde**, e «verde» dipende dal suo profilo di
+   verifica (`ORCHESTRATION.md` §17, scelto **prima** di implementare e scritto
+   nella PR): FAST vuole il check pertinente e il diff letto; STANDARD vuole
+   l'evidenza che la claim richiede più la suite completa **una volta**, in CI;
+   CRITICAL vuole la disciplina piena, red-first e mutazione sulla cucitura
+   portante inclusi. La CI resta il gate meccanico per tutte e tre.
 4. **Da `dev` a `main` si passa solo per un verdetto terminale** — `MERGE`,
    oppure `BLOCKED`/`REJECT` che rimandano indietro (`docs/JUDGE.md`).
 5. **Niente stack profondi.** Le PR impilate di 5 livelli hanno prodotto rebase
@@ -58,18 +66,25 @@ sono decisi **prima** del lavoro e hanno una prova osservabile:
 3. **Slice verificata** — `npm run build`, `npx vitest run`, scenario di
    fallimento, accettazione richiesta, documenti/stato e viste derivate sono
    aggiornati. La PR esce da draft e chiede il verdetto di `JUDGE.md`.
-4. **Integrazione** — due classi, decise dall'orchestratore e scritte nella PR
-   (decisione owner 2026-08-17): una slice **sicura** — documenti e stato,
-   aggiunte di soli test, correzioni meccaniche di una riga, merge di `dev`,
-   rigenerazione della mappa, tutto ciò che l'orchestratore può verificare da
-   solo con comandi (build, suite, accettazione, mutazione, ancore) senza
-   bisogno di un contesto fresco anti-adulazione — la integra l'orchestratore
-   dopo quelle verifiche, riportandole nella PR. Una slice **ambigua** —
-   kernel/taint/policy, Root of Trust, schema durevole, concorrenza/lock,
-   sandbox, segreti, una primitiva nuova, una garanzia che si legge male da
-   dentro — richiede un verdetto terminale `MERGE` di un judge nuovo
-   (`JUDGE.md`). Il passaggio `dev`→`main` resta un checkpoint separato: suite
-   sull'insieme integrato e nuovo verdetto terminale.
+4. **Integrazione** — per profilo (`ORCHESTRATION.md` §17; decisione owner
+   2026-08-17): **FAST e STANDARD** li integra l'orchestratore quando l'evidence
+   budget del profilo è soddisfatto e la CI è verde, scrivendo nella PR i comandi
+   eseguiti e il loro esito. **CRITICAL** richiede il verdetto terminale `MERGE`
+   di un judge nuovo, a contesto fresco (`JUDGE.md`) — è lì che un contesto
+   indipendente compra qualcosa che chi ha scritto il codice non può comprarsi da
+   solo. Il passaggio `dev`→`main` resta un checkpoint separato: suite
+   sull'insieme integrato e review dell'insieme.
+
+   **L'integrazione include la riconciliazione del handoff**, non la rimanda: se
+   il merge cambia lo stato di una slice o l'evidenza di una riga Gate 1, nello
+   stesso passaggio si aggiornano `gate1/PERCORSO-CRITICO.md` §0 e la riga di
+   `M5-BIS.md`, e `STATE.md` **solo se** cambia davvero obiettivo, blocker,
+   decisione owner o PR attiva (`ORCHESTRATION.md` §19). Il controllo meccanico è
+   `node .claude/riconcilia.mjs`: esce ≠ 0 se il percorso critico descrive come
+   «in volo» una PR già mergiata o un branch già cancellato. Incrementare un
+   contatore non è riconciliare: il difetto trovato dall'owner il 2026-08-17 era
+   esattamente questo — il percorso critico mandava una sessione fresca a
+   lavorare su slice già integrate.
 
 “Commit continuo” non significa un commit per ogni file: significa che nessuna
 unità verificabile o passaggio rischioso vive soltanto nel worktree. Un commit

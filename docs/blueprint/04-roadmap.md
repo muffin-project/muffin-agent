@@ -326,7 +326,7 @@ prima il lettore, poi lo scrittore); **l'audit dei predicati** a metà (l'invari
 sinonimia, cioè una chiamata al modello — contro la regola di costo — o un
 vocabolario chiuso, contro ADR-0032). **Il decadimento della confidenza è
 rifiutato**, non rimandato: non c'è un tasso difendibile, ⬤ l'unica soglia sulla
-confidenza in tutto il repo è `extract.ts:176` *prima* della scrittura (quindi
+confidenza in tutto il repo è `extract.ts:192` *prima* della scrittura (quindi
 sarebbe una mutazione senza lettore), e il giorno che un lettore ci fosse una
 credenza scivolata sotto soglia diventerebbe irrecuperabile **senza `expired_at`
 né `superseded_by`**: una cancellazione senza traccia. Una **passata di scadenza**

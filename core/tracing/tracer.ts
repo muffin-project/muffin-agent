@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { redactAttributes } from './redact.js';
+import { redactAttributes, redactValue } from './redact.js';
 import {
   SEMCONV_VERSION,
   type AttributeValue,
@@ -95,7 +95,11 @@ export class SimpleTracer implements Tracer {
           semconvVersion: SEMCONV_VERSION,
         };
         if (outcome?.error !== undefined) {
-          span.error = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+          const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+          // redactValue always returns a string for a string input (unchanged, or the
+          // «redacted:<len>» marker) — same net attributes go through at line 94, so an
+          // error message carrying a key does not become the one path that skips it (P34-1).
+          span.error = redactValue(message) as string;
         }
         exporter.export(span);
       },
