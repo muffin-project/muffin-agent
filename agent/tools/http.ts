@@ -26,6 +26,14 @@ import type { RegisteredTool } from '../loop.js';
  * GET only. The taint-2/3 row of the matrix reads "solo read-only su allowlist
  * pubblica": a body-carrying verb is an exfiltration channel and arrives, if
  * ever, with its own capability — not as a parameter here.
+ *
+ * The allowlist only ever checked the HOST. On an allowlisted host the kernel
+ * additionally asks whether the URL carries bytes the model chose — a
+ * non-empty query string or fragment — and above `paramsMaxTaint` the owner is
+ * asked and shown the whole URL, everyone else refused (`core/policy/
+ * decide.ts`, `gateParams` — mandato inv. 7, audit P04-1). Nothing here has to
+ * change for that: the gate reads the same `url` resource this capability
+ * already declares.
  */
 export const httpCapability: CapabilityDecl = {
   id: 'sys.http',

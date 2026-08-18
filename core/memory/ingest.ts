@@ -86,6 +86,15 @@ export type IngestReport = {
   marked: number;
   episodes: number;
   factsAdded: number;
+  /**
+   * Candidates `extractFacts` parsed but discarded before they ever reached
+   * `reconcile` — confidence below the floor, or shaped like an obeyed
+   * instruction rather than a description of one (P25, `looksInjected` in
+   * `extract.ts`). Summed across the round's `ExtractionResult`s rather than
+   * split by reason, the same one-count shape `ExtractionResult.rejected`
+   * itself uses.
+   */
+  rejected: number;
   superseded: number;
   /** Stored and searchable, deliberately not mined. */
   skippedAgentOutput: number;
@@ -191,6 +200,7 @@ export async function ingestPending(
     marked: 0,
     episodes: 0,
     factsAdded: 0,
+    rejected: 0,
     superseded: 0,
     skippedAgentOutput: 0,
     skippedDocuments: 0,
@@ -296,6 +306,8 @@ export async function ingestPending(
         // rather than silently losing the evidence.
         continue;
       }
+
+      report.rejected += extraction.rejected;
 
       for (const fact of extraction.facts) {
         const subjectId = deps.store.upsertEntity(
