@@ -262,3 +262,32 @@ con lo stesso `claim`/`bind`/`settle` di `JobFireStore`, alla lettera: `drain()`
 **Alternative scartate.** *Colonna `origin_key` su `turns`* — vedi sopra: non può rappresentare un'occorrenza prima che il turno esista, che è la proprietà che rende il fault point 2 chiudibile. *Riverificare l'identità dentro ogni tool call della corsa* (come l'emendamento №3 aveva scartato per `stillOwner`) — stesso ragionamento, costo molto più alto per una finestra già chiusa dal binding-prima-del-modello. *Un contatore/generazione monotona invece del binding first-writer-wins* — stessa proprietà di `bind`'s `UPDATE … WHERE turn_id IS NULL`, nessun vantaggio misurabile, una scrittura in più da tenere sincrona nella stessa transazione.
 
 **Segnale che questa forma era sbagliata**, contato e non percepito: un secondo consumatore di `claim`/`bind`/`settle` (Telegram, o altro) rende la duplicazione fra le due tabelle costosa da tenere in sincrono — nel qual caso l'estrazione dell'algoritmo condiviso, non della tabella, è il passo successivo, già indicato sopra.
+
+
+### Limite noto: un fire legato a un turno sospeso resta deferred
+
+Reperto del judge di questa slice, registrato invece che chiuso a caso.
+
+Quando un crash lascia il turno di un job in `waiting` con un `wake_at` lontano,
+il fire resta **deferred** (`core/scheduler/scheduler.ts`, ramo
+`bound_turn_pending`) e `next_fire_at` non avanza finché la corsia dei turni non
+lo chiude. Il ramo *sospeso vivo* invece fa settle e `markRan` subito: due
+percorsi che divergono per la stessa parola, «sospeso».
+
+**Perché non è un difetto della garanzia**: niente viene perso né duplicato —
+l'occorrenza esiste, è legata a quel `turn_id`, e chi la conclude è la corsia,
+che è il proprietario giusto di un turno sospeso. Il costo è che la *schedule*
+di quel job non avanza nel frattempo: un brief delle 8 con un turno sospeso
+appeso non spara alle 9.
+
+**Perché non è silenzioso**: `cli/doctor.ts` ha già il controllo che serve —
+`N in attesa e nessun gateway attivo: non li sveglia nessuno`, con il rimedio.
+La configurazione in cui il deferred può durare è precisamente quella (REPL
+senza gateway: `agent/runtime.ts` «reclaims, does not resume»), ed è quella che
+`doctor` nomina.
+
+**Cosa lo chiuderebbe**, se durante i quattordici giorni si vede davvero: un
+test che porta un fire deferred fino al settlement passando per
+`core/turns/lane.ts`, oppure un tetto d'età sul deferred che emetta un evento
+diagnostico. Nessuno dei due prima di avere un caso reale: costruire il tetto
+adesso sarebbe infrastruttura per una possibilità ipotetica.
