@@ -4,6 +4,7 @@ import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
+import { tierOf } from '../core/surface/types.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
@@ -384,6 +385,21 @@ export type TurnInput = {
   surface: string;
   session: SessionRef;
   text: string;
+  /**
+   * What `text` carries **beyond** the principal's own tier — content a
+   * surface had to type out separately from the sender's own prose to keep it
+   * honest (ADR-0046 §2: a forwarded message's original content, chiefly).
+   * Absent/`0` is indistinguishable from "this surface has no such concept
+   * yet", which is every caller but Telegram's connector today.
+   *
+   * The turn's starting taint is `max(tierOf(principal), contentTaint)`
+   * (`initialTaint` below), computed once and reused at `enqueueTurn`,
+   * `runTurn` and the episode/session writes inside `drive` — one number, so
+   * a forwarded message cannot enter memory at the sender's tier from one of
+   * those call sites while the turn itself starts higher from another
+   * (M5-BIS B16).
+   */
+  contentTaint?: TrustTier;
   signal?: AbortSignal;
   /**
    * Mint the row under this identity instead of a fresh random one.
@@ -502,6 +518,22 @@ export type TurnResult = {
 export const MAX_RESUMES = 3;
 
 /**
+ * `max(the principal's own tier, whatever content-taint the caller measured)`
+ * — the one formula `enqueueTurn`, `runTurn` and the episode/session writes
+ * inside `drive` all have to agree on. Before `TurnInput.contentTaint`
+ * existed the four of them each wrote `principal.kind === 'member' ? 2 : 0`
+ * separately (`core/surface/types.ts`'s own `tierOf` docstring already named
+ * the risk of a fourth copy); a fifth copy here would have been exactly the
+ * kind of seam a forwarded message could land on the wrong side of, at
+ * whichever one of the four someone forgot to update.
+ */
+function initialTaint(input: TurnInput): TrustTier {
+  const base = tierOf(input.principal);
+  const content = input.contentTaint ?? 0;
+  return content > base ? content : base;
+}
+
+/**
  * Write the row, and let something else run it.
  *
  * This is the whole of B2 — *"un turno lungo restituisce entro ~500 ms e
@@ -531,7 +563,7 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     sessionId: input.session.id,
     model: deps.model,
     messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
-    taint: input.principal.kind === 'member' ? 2 : 0,
+    taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
@@ -604,7 +636,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // fails silently rather than loudly.
     model: deps.model,
     messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
-    taint: input.principal.kind === 'member' ? 2 : 0,
+    taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
@@ -904,7 +936,16 @@ async function drive(
         role: 'user',
         kind: 'message',
         content: input.text,
-        trustTier: input.principal.kind === 'member' ? 2 : 0,
+        // `record.taint`, not `initialTaint(input)`: the `input` in scope
+        // here is `drive`'s own reconstruction from `record` a few dozen
+        // lines up, which has no `contentTaint` to read (resume has none to
+        // reconstruct, so it is not carried). `record.taint` is the value
+        // `enqueueTurn`/`runTurn` already computed with `initialTaint` at
+        // creation — a forwarded message's episode is the exact "enters
+        // memory at the owner's tier" step the audit named (M5-BIS B16), and
+        // this is the row this slice exists to stop writing at tier 0 for
+        // content nobody at tier 0 actually said.
+        trustTier: record.taint,
         createdAt: now().toISOString(),
       });
     }
@@ -971,17 +1012,22 @@ async function drive(
     messages.length = 0;
     messages.push(...buildContext(input, recalled, open, spoken));
 
-    // `tier` matches the init rule (`enqueueTurn`/`runTurn`, a few hundred
-    // lines up): the owner's own words are 0, a member's are 2 — never a
-    // literal 0 that would make a group turn's own user line read as clean
-    // once a later turn in the same conversation reinjects it.
+    // `record.taint`, the same substitution and for the same reason as the
+    // episode write above: `initialTaint(input)` here would read `drive`'s
+    // own reconstructed `input`, which never carries `contentTaint`.
+    // `record.taint` is what `enqueueTurn`/`runTurn` already computed with
+    // `initialTaint` at creation — never a literal 0 that would make a group
+    // turn's own user line, or a forwarded message's (M5-BIS B16), read as
+    // clean once a later turn in the same conversation reinjects it
+    // (`agent/context/history-taint.ts`, ADR-0044 §"la history non lava la
+    // provenienza").
     deps.sessions.append(input.session, {
       role: 'user',
       content: input.text,
       surface: input.surface,
       createdAt: now().toISOString(),
       traceId: turn.traceId,
-      tier: input.principal.kind === 'member' ? 2 : 0,
+      tier: record.taint,
     });
     // Marked before the first model call, so a crash inside recall replays the
     // preamble (one duplicated episode, absorbed by consolidation) while a
