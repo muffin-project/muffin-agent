@@ -104,12 +104,13 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > `gate1/PERCORSO-CRITICO.md`, non questo file: qui c'è la risposta, lì la
 > sequenza e il perché.
 >
-> **Conteggio: 13 READY · 35 BLOCKER · 7 OUT · 0 INVALIDATED** (55 righe, E7
-> aggiunta dall'owner il 17/08). Aggiornato dopo l'integrazione di #53 (lease e
-> fencing), #54 (verità dell'accettazione), #56 (A1 continuità), #57 (WAL
-> dell'intento), #58 (identità parte 1) e #59 (`init --local`). `?` non esiste
-> più come stato: ogni riga ha una delle quattro risposte con evidenza — e
-> l'evidenza si riconcilia al merge, non dopo (`BRANCHING.md` checkpoint 4).
+> **Conteggio: 15 READY · 33 BLOCKER · 7 OUT · 0 INVALIDATED** (55
+> righe). Aggiornato dopo l'integrazione del **blocco 1 quasi intero**: #57 WAL
+> dell'intento · #67 la history non lava la provenienza · #62 egress che
+> ispeziona i byte · #70 i segreti non entrano nel data plane · #72 un inoltro
+> non è parola dell'owner. Resta 1.5 (`job_fires`). `?` non esiste più come
+> stato: ogni riga ha una delle quattro risposte con evidenza — e l'evidenza si
+> riconcilia al merge, non dopo (`BRANCHING.md` checkpoint 4).
 
 Stato: `READY` · `OUT` (fuori dal Gate 1, con ragione) · `BLOCKER` (con cosa
 manca e la slice del percorso critico che la chiude) · `INVALIDATED`
