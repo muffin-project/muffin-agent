@@ -877,7 +877,7 @@ describe('muffin init offers the gateway', () => {
     // forbids — and every test in this file runs off a pipe.
     const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-init-'));
     homes.push(dir);
-    const r = muffin(dir, ['init', '--api-key', 'sk-never-called']);
+    const r = muffin(dir, ['init'], 'sk-never-called');
 
     expect(r.err).toContain('muffin gateway install');
     const unit =

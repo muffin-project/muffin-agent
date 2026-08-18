@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,5 +52,63 @@ describe('muffin mcp verbs', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-mcpcli-'));
     expect(await cmdMcpAdd(home, 'Bad Name!', '/bin/true', [], {})).toBe(78);
     expect(loadMcpRegistry(home).servers).toEqual({});
+  });
+});
+
+
+import { spawnSync } from 'node:child_process';
+
+/** Il binario vero, con la sua home: il parsing di `--env` vive in `cli/main.ts`, non in `cli/mcp.ts`. */
+function muffin(dir: string, args: string[]): { code: number; out: string; err: string } {
+  const cli = join(dirname(fileURLToPath(import.meta.url)), 'main.ts');
+  const r = spawnSync('npx', ['tsx', cli, ...args], {
+    env: { ...process.env, MUFFIN_HOME: dir },
+    encoding: 'utf8',
+  });
+  return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
+}
+
+describe('una chiave di un server MCP non passa per argv (correzione owner 18/08)', () => {
+  it('rifiuta --env K=valore e insegna il riferimento', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-mcpenv-'));
+    try {
+      const r = muffin(dir, ['mcp', 'add', 'gh', '--env', 'GITHUB_TOKEN=ghp_mai_in_argv', '--', 'npx', 'server']);
+      expect(r.code).toBe(78);
+      expect(r.err).toMatch(/ps di chiunque|shell history/);
+      expect(r.err).toMatch(/secret:\/\/mcp_github_token/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('un riferimento secret:// passa la guardia — fallisce semmai alla connessione, non al flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-mcpref-'));
+    try {
+      const r = muffin(dir, ['mcp', 'add', 'gh', '--env', 'GITHUB_TOKEN=secret://mcp_gh', '--', 'npx', 'server']);
+      // Non 78: la guardia sull'argv non scatta. Qui il comando prova davvero a
+      // connettersi (è così che `mcp add` pinna i tool) e il segreto non è
+      // registrato in questa home, quindi fallisce **rumorosamente** — che è la
+      // direzione giusta: un server MCP avviato senza la sua chiave fallirebbe
+      // più tardi, dove nessuno collega la causa.
+      expect(r.code).not.toBe(78);
+      expect(r.err).toMatch(/missing secret "mcp_gh"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveEnv risolve solo i riferimenti e lascia stare il resto', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-resolveenv-'));
+    try {
+      writeFileSync(join(dir, 'config.json'), '{}');
+      mkdirSync(join(dir, 'secrets'), { recursive: true, mode: 0o700 });
+      writeFileSync(join(dir, 'secrets', 'mcp_gh'), 'ghp_valore_che_non_deve_girare', { mode: 0o600 });
+      const { resolveEnvForTest } = await import('../core/mcp/connect.js');
+      const out = resolveEnvForTest({ GITHUB_TOKEN: 'secret://mcp_gh', LANG: 'C' }, dir);
+      expect(out['GITHUB_TOKEN']).toBe('ghp_valore_che_non_deve_girare');
+      expect(out['LANG']).toBe('C');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
