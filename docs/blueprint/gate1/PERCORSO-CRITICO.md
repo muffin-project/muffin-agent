@@ -30,15 +30,9 @@ controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 - **`slice/session-taint`** (PC 1.2, **CRITICAL**) — WIP committato e pushato:
   tier per messaggio di sessione, la history reiniettata alza la taint prima del
   kernel. Da riprendere allo stesso modo.
-- **PR #65** `slice/identita-eval` (A2/A3 parte 2, STANDARD) — character eval a
-  proprietà, cross-model, confronto col vecchio Muffin; verificata, in attesa
-  della CI. La **corsa reale** costa ~$0.33 (Sonnet 5) / ~$0.11 (Haiku) di solo
-  input e la autorizza l'owner: A2/A3 restano BLOCKER finché non è stata fatta
-  e letta.
-
 **Integrate oggi** (non più in volo): #53 lease/fencing · #54 acceptance truth ·
 #56 A1 continuità · #57 WAL dell'intento · #58 identità parte 1 · #59
-`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica) · #61 cluster di MEDIUM dell'audit (P34-1, P35, P36, P25, P33, E2) · #62 egress-params (inv. 7, CRITICAL: judge MERGE, soglia owner = 2).
+`init --local` · #60 citazioni della mappa · #63 workflow (profili di verifica) · #61 cluster di MEDIUM dell'audit (P34-1, P35, P36, P25, P33, E2) · #62 egress-params (inv. 7, CRITICAL: judge MERGE, soglia owner = 2) · #65 character eval (A2/A3 parte 2).
 
 ## 1 · Invarianti trasversali (priorità 1) — possono invalidare READY già dati
 
@@ -72,7 +66,7 @@ controllo non vede una voce *duplicata*: quella la vede solo chi legge.)*
 | 3.5 | `slice/pairing-sigilla` (B15) | Il pairing sigilla da solo il binding; manomissione di `config.json` non sigillato rilevata. | S/M |
 | 3.6 | `slice/telegram-media` (B10) | Foto → modello con visione se la capability c'è, altrimenti rifiuto esplicito; errori Telegram visibili. | S/M |
 | 3.7 | `slice/budget-per-job` (E1) | Cap per singola esecuzione di job, controllato prima del goal, dinamico da CLI. | M |
-| 3.8 | `slice/audio` (C8) — **ultima**, e solo se l'owner conferma che le note vocali servono nei 14 giorni | Capability nativa del modello se c'è, altrimenti whisper/faster-whisper locale, fornitore da CLI. Nessuna chiamata reale nella suite. | L |
+| 3.8 | `slice/audio` (C8) — **e la corsa reale del character eval** (~$0.33 Sonnet 5 / ~$0.11 Haiku di solo input): entrambe aspettano l'ok dell'owner — **ultima**, e solo se l'owner conferma che le note vocali servono nei 14 giorni | Capability nativa del modello se c'è, altrimenti whisper/faster-whisper locale, fornitore da CLI. Nessuna chiamata reale nella suite. | L |
 | 3.9 | B2 turno lungo Telegram | Provato al test di prod (decisione owner); resta BLOCKER nell'inventario finché non è provato lì. | battery |
 | 3.10 | `slice/sys-inspect` (E7, lacuna aggiunta dall'owner il 17/08) — dopo `slice/identita` parte 1 (`prompt show`) | Propriocezione tecnica: Muffin «non deve ricordare come funziona quando può interrogarsi». Una primitiva **read-only first-class `sys.inspect`** che legge dalle **stesse fonti autorevoli** già usate da runtime/`doctor`/`prompt show`/`gateway status` (una sola source of truth: runtime facts → doctor / prompt show / gateway status / sys.inspect; nessuna implementazione divergente; niente altra documentazione nel system prompt). Scope minimo Gate 1: overview runtime; provider + modello main/light correnti; surface/tenant corrente; RoT/safe mode; sandbox/search/MCP disponibili; capability effettivamente esposte; blocchi del prompt e provenienza; modalità reale della memoria (indice vettoriale disponibile o degradato); work state essenziale (turni aperti/waiting/interrupted); scheduler/job essenziali. Distinguere sempre **architettura/progetto** da **stato live dell'istanza**. Acceptance: «spiegami tecnicamente come funzioni e cosa stai usando adesso» → cambia una condizione reale (search off, modello diverso, MCP assente) → ripeti: se recita lo stato vecchio è BROKEN; se distingue design e live state è verde. Piccolo: non deve documentare la codebase, deve spiegare il proprio funzionamento operativo reale, nella propria voce. | M |
 
