@@ -1902,7 +1902,17 @@ async function runTool(
       const request: ApprovalRequest = {
         capability,
         prompt: decision.ask.prompt,
-        ...(resource.kind === 'path' ? { resource: resource.value } : {}),
+        // `path` carried this alone; `url` and `query` join it (mandato inv.
+        // 7, egress-params) so approving a params-gated fetch or search shows
+        // the exact bytes, not just the kernel's prose — the gap ADR-0044
+        // §revisione named and left open ("l'URL che sys.http sta per
+        // raggiungere ... non compaiono nel testo che l'owner vede"). Does
+        // not by itself close D12 (M5-BIS): a `resourceKind: 'none'`
+        // capability — `sys.shell`'s command+cwd, a pid+name — still has
+        // nothing here to show.
+        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
+          ? { resource: resource.value }
+          : {}),
       };
       if (!deps.approve) {
         // No channel on this surface: the turn stops and says what it wanted,
@@ -2103,15 +2113,21 @@ function recordOutcome(
  * highest-risk capability in the matrix was going to arrive with a gate that
  * silently did not fire.
  *
- * Only `url` and `path` are lifted. A `tenant` resource is not in the args —
- * it is the turn's tenant — and inventing one here would change what the kernel
+ * `url`, `path` and `query` are lifted. `query` joined the other two so that
+ * `sys.search` could stop declaring `resourceKind: 'none'` — the mechanism
+ * this function already provides needed no new case, only a wider guard
+ * (mandato inv. 7, P04-2). A `tenant` resource is not in the args — it is the
+ * turn's tenant — and inventing one here would change what the kernel
  * decides for every memory read.
  */
 function resourceFor(
   decl: CapabilityDecl | undefined,
   args: Record<string, unknown>,
 ): DecisionRequest['resource'] {
-  if (!decl || (decl.resourceKind !== 'url' && decl.resourceKind !== 'path')) {
+  if (
+    !decl ||
+    (decl.resourceKind !== 'url' && decl.resourceKind !== 'path' && decl.resourceKind !== 'query')
+  ) {
     return { kind: 'none' };
   }
   for (const name of decl.policyArgs) {
