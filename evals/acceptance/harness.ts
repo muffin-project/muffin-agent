@@ -206,9 +206,7 @@ export async function install(options: InstallOptions): Promise<Install> {
     'openai-compat',
     '--base-url',
     provider.baseUrl,
-    '--api-key',
-    'sk-acceptance-fake-key',
-  ]);
+  ], 'sk-acceptance-fake-key');
   if (init.code !== 0) {
     await provider.close();
     throw new Error(`muffin init è uscito con ${init.code}:\n${init.err}`);

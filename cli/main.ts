@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
@@ -65,7 +66,9 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
 comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NOME] [--light-model NOME] [--api-key CHIAVE]
+              [--base-url URL] [--model NOME] [--light-model NOME]
+                                la chiave arriva da stdin o dal prompt nascosto,
+                                mai da argv: echo -n "$KEY" | muffin init
               [--local [DIR]]  home di prova separata (default ~/.muffin-local),
                                 riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
@@ -248,6 +251,75 @@ async function main(rawArgv: string[]): Promise<number> {
   }
 }
 
+/**
+ * La chiave da stdin quando `muffin init` gira in una pipe; `undefined` quando
+ * stdin e un terminale (allora si usa il prompt nascosto) o e vuoto.
+ *
+ * `readFileSync(0)` e non un readline: e la stessa lettura di
+ * `muffin secret set`, e un `init` in CI non ha un TTY su cui aprire un prompt.
+ */
+/**
+ * Tutto stdin, anche quando fd 0 e non-bloccante e il produttore e lento.
+ *
+ * Il difetto che questa funzione esiste per chiudere, misurato due volte dal
+ * judge di questa slice: `readFileSync(0)` su fd 0 non-bloccante lancia
+ * **EAGAIN** appena i dati non sono ancora arrivati, e il `catch` intorno lo
+ * leggeva come «nessuna chiave» — quindi `pass show`, `op read`, `gpg -d`
+ * fallivano **in silenzio**, e il fail-closed di `MUFFIN_API_KEY` rimandava a
+ * una porta che non si apre.
+ *
+ * Il fd resta non-bloccante e non c'e niente da fare qui: lo mette
+ * `process.stdin`, toccato a import time nel grafo dei moduli (bisect del
+ * judge: `import('./repl.js')` basta). `isatty(0)` sposta la guardia, non il
+ * problema; `openSync('/dev/stdin')` nemmeno — eredita la stessa open file
+ * description. Quindi si ritenta, con una scadenza, e un errore di lettura non
+ * diventa mai «nessun valore».
+ */
+function readAllStdin(primoByteMs = 3_000, poiMs = 60_000): string {
+  const chunks: Buffer[] = [];
+  const buf = Buffer.alloc(64 * 1024);
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  let visto = 0;
+  // Due scadenze, e la differenza conta: **prima** del primo byte si aspetta
+  // poco, perche il caso comune di un'attesa infinita e uno stdin ereditato e
+  // muto (CI, un servizio) — e restare fermi trenta secondi in silenzio e la
+  // cosa che fa credere a chi guarda che il comando sia piantato. **Dopo** il
+  // primo byte si aspetta a lungo, perche un produttore vero (`pass show`,
+  // `gpg -d`, un blob grosso) puo metterci. La scadenza si rinnova a ogni
+  // chunk: un flusso lungo non e un flusso fermo.
+  let deadline = Date.now() + primoByteMs;
+  for (;;) {
+    let read: number;
+    try {
+      read = readSync(0, buf, 0, buf.length, null);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EOF') break;
+      if (code !== 'EAGAIN') throw error;
+      if (Date.now() > deadline) {
+        throw new Error(
+          visto === 0
+            ? `stdin non ha prodotto niente entro ${Math.round(primoByteMs / 1000)}s`
+            : `stdin si e fermato dopo ${visto} byte e non ha chiuso entro ${Math.round(poiMs / 1000)}s`,
+        );
+      }
+      Atomics.wait(wait, 0, 0, 20); // 20ms, senza bruciare la CPU
+      continue;
+    }
+    if (read === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, read)));
+    visto += read;
+    deadline = Date.now() + poiMs;
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function readKeyFromStdin(): string | undefined {
+  if (isatty(0)) return undefined;
+  const value = readAllStdin().trim();
+  return value === '' ? undefined : value;
+}
+
 async function cmdInit(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -306,7 +378,48 @@ async function cmdInit(argv: string[]): Promise<number> {
   // answers and nothing is prompted or copied. `--local` reads that very same
   // chain against its own `home` below — never a copy (ADR-0030's `--local`
   // amendment).
-  let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
+  // **Mai da argv** (direttiva owner 2026-08-18, ADR-0048 §revisione). Un valore
+  // in `argv` sta nella shell history e nel `ps` di chiunque sulla macchina, ed
+  // è un segreto anche prima di essere registrato nel backend: `--api-key
+  // CHIAVE` non è deprecato con un avviso — è **rifiutato**, perché un avviso
+  // arriva quando la chiave è già finita nella history. Stessa forma che
+  // `muffin secret set` ha sempre avuto (vedi `cmdSecret`).
+  if (values['api-key'] !== undefined) {
+    process.stderr.write(
+      `--api-key non accetta piu un valore: una chiave in argv finisce nella shell history e nel ps di chiunque.\n` +
+        `  Passala da stdin:  echo -n "$KEY" | muffin init\n` +
+        `  Oppure lancia muffin init in un terminale e incollala al prompt nascosto.\n` +
+        `  Se e gia stata usata cosi, ruotala.\n`,
+    );
+    return 78;
+  }
+  // **Nemmeno dall'environment** (decisione owner 2026-08-18). `environ` ha
+  // permessi piu stretti di `cmdline`, ma la forma non cambia: un env generico
+  // e un vettore generico, e la garanzia dice che il valore va dal backend dei
+  // segreti al consumatore privilegiato al sink di autenticazione, senza
+  // passare da model, env generico, argv, risultati di tool, DB, log, superfici
+  // o approvazioni. Fail closed, e il messaggio nomina **solo la variabile**:
+  // mai il valore, mai la lunghezza, mai un prefisso.
+  if (process.env['MUFFIN_API_KEY'] !== undefined) {
+    process.stderr.write(
+      `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+        `  Oppure passala a init:  echo -n "$KEY" | muffin init\n` +
+        `  Poi togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
+    );
+    return 78;
+  }
+  // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
+  // `secret set` usa da sempre.
+  let apiKey: string | undefined;
+  try {
+    apiKey = readKeyFromStdin();
+  } catch (error) {
+    // Come `cmdSecret`: uno stack trace di Node non e un messaggio, e questa e
+    // la prima cosa che una macchina nuova vede.
+    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 78;
+  }
   const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
@@ -709,7 +822,24 @@ async function cmdMcp(argv: string[]): Promise<number> {
         return 78;
       }
       const eq = flags[i + 1]!.indexOf('=');
-      env[flags[i + 1]!.slice(0, eq)] = flags[i + 1]!.slice(eq + 1);
+      const key = flags[i + 1]!.slice(0, eq);
+      const value = flags[i + 1]!.slice(eq + 1);
+      // Solo riferimenti, mai valori (direttiva owner 2026-08-18): `--env
+      // GITHUB_TOKEN=ghp_…` metteva il token nel `ps` di chiunque e nella shell
+      // history, ed era l'unico modo documentato di dare una chiave a un server
+      // MCP. Ora si registra con `muffin secret set` (stdin) e qui viaggia il
+      // nome: `--env GITHUB_TOKEN=secret://mcp_gh_token`, risolto al momento
+      // della connessione dentro il sink privilegiato (`core/mcp/connect.ts`).
+      if (!value.startsWith('secret://')) {
+        process.stderr.write(
+          `--env ${key}=… non accetta un valore: finirebbe nel ps di chiunque e nella shell history.\n` +
+            `  Registra il segreto:  echo -n "$TOKEN" | muffin secret set mcp_${key.toLowerCase()}\n` +
+            `  Poi passa il riferimento:  --env ${key}=secret://mcp_${key.toLowerCase()}\n` +
+            `  Un valore che non è un segreto (un flag, un percorso) mettilo negli argomenti del comando, dopo --.\n`,
+        );
+        return 78;
+      }
+      env[key] = value;
       i++;
     }
     return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env);
@@ -743,9 +873,12 @@ function cmdSecret(argv: string[]): number {
   // shell history and in every `ps` on the machine.
   let value = '';
   try {
-    value = readFileSync(0, 'utf8').trim();
-  } catch {
-    /* empty stdin falls through to the check below */
+    value = readAllStdin().trim();
+  } catch (error) {
+    // Un errore di lettura non e «nessun valore»: dirlo com'e, invece di
+    // suggerire una pipe che l'utente ha appena usato.
+    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 78;
   }
   if (!value) {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);
