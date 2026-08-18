@@ -75,6 +75,19 @@ sono decisi **prima** del lavoro e hanno una prova osservabile:
    solo. Il passaggio `dev`→`main` resta un checkpoint separato: suite
    sull'insieme integrato e review dell'insieme.
 
+   **Deroga temporanea, 2026-08-18 — la CI non gira.** I 2.000 minuti/mese del
+   piano Free sono esauriti e nessun workflow parte (repo privato; `ci.yml`
+   documenta il vincolo). Decisione dell'owner: *«per adesso mergiamo così, non
+   siamo ancora pronti per la repo pubblica»*. Finché dura, **il gate meccanico
+   è la verifica locale**, e va scritta nella PR con i comandi: `npm run build`,
+   `npx vitest run`, `npm run test:acceptance`, `npx tsx
+   evals/acceptance/report.ts`, `node docs/blueprint/mappa/ancore.mjs --check`.
+   Vale per FAST e STANDARD come per CRITICAL, che continua a volere anche il
+   judge fresco. Non è un allentamento del profilo: è lo stesso insieme di
+   prove, eseguito dove può girare. Quando i minuti tornano — nuovo ciclo, minuti
+   a pagamento, o repo pubblica — questa deroga si cancella e la CI torna il
+   gate.
+
    **L'integrazione include la riconciliazione del handoff**, non la rimanda: se
    il merge cambia lo stato di una slice o l'evidenza di una riga Gate 1, nello
    stesso passaggio si aggiornano `gate1/PERCORSO-CRITICO.md` §0 e la riga di
