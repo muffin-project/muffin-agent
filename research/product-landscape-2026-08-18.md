@@ -94,6 +94,39 @@ ricca delle risposte AI). La conclusione durevole non è "Muffin dipende da
 Telegram" ma "Telegram è una surface primaria iniziale che vale la pena
 sfruttare in profondità finché resta il miglior client".
 
+## 2-bis. Fonti personali: API quando conviene, export quando riduce l'attrito
+
+Fonti Google:
+
+- Gmail messages list: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list
+- Gmail history list: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.history/list
+- Gmail watch: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users/watch
+- Gmail OAuth scopes: https://developers.google.com/workspace/gmail/api/auth/scopes
+- Google Takeout: https://support.google.com/accounts/answer/3024190
+
+Gmail offre sia lettura incrementale (`messages.list`/`history.list`) sia watch
+per notificare cambiamenti. Quindi una source continua è tecnicamente naturale.
+Il costo prodotto non è il polling: è l'autorizzazione pubblica.
+
+Al 2026-08-18 `gmail.readonly`, `gmail.modify`, `gmail.metadata` e altri scope
+ampi sono **restricted**. Una public app che li usa deve affrontare OAuth app
+verification; se dati ottenuti da restricted scopes vengono memorizzati o
+trasmessi su server dello sviluppatore, Google richiede anche security assessment
+nelle condizioni indicate dalla propria policy.
+
+Per Muffin questo rafforza la forma owner-run:
+
+- token OAuth e dati acquisiti vivono sull'installazione dell'owner;
+- eventuale servizio centrale serve al massimo come bootstrap OAuth dove la
+  piattaforma lo richiede, non come data plane;
+- scope minimi per capability (read personalization ≠ send mail);
+- BYO OAuth client può restare escape hatch per utenti avanzati/test;
+- per alpha o fonti con OAuth pesante, import da export ufficiale (es. Google
+  Takeout) è una strada di cold-start valida e spesso più facile da distribuire.
+
+Quindi "API first" non significa "API a qualunque costo": scegliamo il percorso
+che dà all'owner più continuità con meno authority e meno infrastruttura centrale.
+
 ## 3. Privacy prima di un provider cloud
 
 ### Rizzo PII
