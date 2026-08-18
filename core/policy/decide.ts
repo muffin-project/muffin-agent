@@ -6,6 +6,7 @@ import type {
   Decision,
   DecisionRequest,
   Principal,
+  TrustTier,
 } from './types.js';
 
 /**
@@ -190,6 +191,39 @@ export function createDecide(ctx: PolicyContext): Decide {
           detail: `${host} is not in the egress allowlist (taint ${taint})`,
         };
       }
+      // The allowlist only ever looked at `host`, so a turn that had read
+      // tier-2+ content could still put those bytes in the query string or
+      // fragment of an allowlisted URL and nothing here noticed (audit
+      // 2026-08-16, P04-1). A clean host is not the same claim as a clean
+      // request: the model chose everything after it.
+      if (hasParams(resource.value)) {
+        const gated = gateParams(
+          principal,
+          taint,
+          ctx.matrix.paramsMaxTaint,
+          `egress con parametri verso host allowlisted: ${resource.value}`,
+        );
+        if (gated) return gated;
+      }
+    }
+
+    // `sys.search`'s destination is a constant checked once at registration —
+    // there is no host here for the allowlist above to hold against — but the
+    // query text is exactly as model-controlled as a URL's query string, and
+    // until now it never reached this file at all: `resourceKind: 'none'`
+    // meant the egress branch above never even ran (audit 2026-08-16, P04-2).
+    // Same threshold as the url branch's params check, because it is the same
+    // question: did this turn's taint just choose these bytes?
+    if (decl.resourceKind === 'query') {
+      if (resource.kind !== 'query') {
+        return {
+          effect: 'deny',
+          code: 'resource_denied',
+          detail: `${capability} declares a query resource but received ${resource.kind} — refusing rather than skipping the check`,
+        };
+      }
+      const gated = gateParams(principal, taint, ctx.matrix.paramsMaxTaint, `ricerca: "${resource.value}"`);
+      if (gated) return gated;
     }
 
     // Autonomous principals never auto-approve what a human would be asked for:
@@ -227,5 +261,47 @@ function hostOf(value: string): string | null {
     return url.hostname;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Model-chosen bytes above a taint ceiling answer to one rule, whichever
+ * capability carries them: the owner is ASKED and shown the exact bytes
+ * (`prompt` carries them verbatim, so `ApprovalRequest.resource` — built from
+ * this decision's `resource` in `agent/loop.ts` — can show them too); every
+ * other principal is refused outright, same as `sys.shell` above its own
+ * ceiling (ADR-0044 §revisione). Both callers below are the params gate found
+ * missing by the 2026-08-16 audit: P04-1 (`http_get`'s query string was never
+ * inspected once the host cleared the allowlist) and P04-2 (`sys.search`
+ * never reached this file at all) — mandato inv. 7.
+ *
+ * Returns `null` for "no restriction from this gate", not "allow": the caller
+ * still falls through to the risk-class switch below, exactly as the url
+ * branch already did once the allowlist cleared.
+ */
+function gateParams(principal: Principal, taint: TrustTier, ceiling: TrustTier, prompt: string): Decision | null {
+  if (taint <= ceiling) return null;
+  if (isOwnerPrincipal(principal)) return ask(prompt);
+  return {
+    effect: 'deny',
+    code: 'resource_denied',
+    detail: `params blocked at taint ${taint} (ceiling ${ceiling})`,
+  };
+}
+
+/**
+ * True when a URL carries bytes beyond its host: a non-empty query or
+ * fragment. Not the path: today's allowlist (`rot/egress.json`) is
+ * hostname-only, with no notion of "the path the owner allowlisted", so there
+ * is no "beyond the allowlisted path" to compare against yet — declared here
+ * rather than silently assumed, and the smaller of the two forms named in the
+ * mandate.
+ */
+function hasParams(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.search !== '' || parsed.hash !== '';
+  } catch {
+    return false; // unreachable here: hostOf() above already refused an unparseable url
   }
 }

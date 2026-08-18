@@ -8,6 +8,7 @@ const decls: CapabilityDecl[] = [
   { id: 'fs.write', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
   { id: 'sys.shell', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
   { id: 'sys.http', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
+  { id: 'sys.search', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'query', policyArgs: ['query'], hostOnly: true },
   { id: 'outward.send', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
   { id: 'rot.write', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'path', policyArgs: [], hostOnly: true },
 ];
@@ -302,5 +303,116 @@ describe('egress branch — the allowlist in the root of trust speaks for URLs',
       effect: 'deny',
       code: 'resource_denied',
     });
+  });
+});
+
+describe('params gate — model-chosen bytes above a ceiling, whichever tool carries them (mandato inv. 7)', () => {
+  const paramsUrlReq = (p: Principal, tenant: string, url: string, taint: 0 | 1 | 2 | 3) => ({
+    principal: p,
+    tenant,
+    capability: 'sys.http' as CapabilityId,
+    resource: { kind: 'url', value: url } as const,
+    args: { url },
+    taint,
+  });
+  const queryReq = (p: Principal, tenant: string, query: string, taint: 0 | 1 | 2 | 3) => ({
+    principal: p,
+    tenant,
+    capability: 'sys.search' as CapabilityId,
+    resource: { kind: 'query', value: query } as const,
+    args: { query },
+    taint,
+  });
+  const withList = () => kernel({ egressAllowed: (host) => host === 'allowed.example.com' });
+
+  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (ships 2)', () => {
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 1))).toMatchObject({
+      effect: 'allow',
+    });
+    // Tier 2 is the owner's own disk: a search after reading a local file must
+    // not become an ASK (decisione owner 2026-08-17).
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2))).toMatchObject({
+      effect: 'allow',
+    });
+  });
+
+  it('http_get: the same URL past the ceiling asks the owner and shows the whole URL', () => {
+    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3));
+    expect(d.effect).toBe('ask');
+    if (d.effect === 'ask') expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
+  });
+
+  it('http_get: the same URL past the ceiling refuses anyone but the owner outright', () => {
+    expect(
+      withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3)),
+    ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+  });
+
+  it('http_get: an allowlisted host with NO params is unaffected by the ceiling, at any taint', () => {
+    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/', 3))).toMatchObject({
+      effect: 'allow',
+    });
+    expect(withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/', 2))).toMatchObject({
+      effect: 'allow',
+    });
+  });
+
+  it('http_get: a fragment alone counts as params too', () => {
+    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/#MUFFIN-SECRET', 3));
+    expect(d.effect).toBe('ask');
+  });
+
+  it('sys.search: the query text is fine at taint <= paramsMaxTaint', () => {
+    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 0))).toMatchObject({ effect: 'allow' });
+    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 1))).toMatchObject({ effect: 'allow' });
+    expect(kernel()(queryReq(owner, 'host', 'previsioni domani', 2))).toMatchObject({ effect: 'allow' });
+  });
+
+  it('sys.search: past the ceiling asks the owner and shows the query', () => {
+    const d = kernel()(queryReq(owner, 'host', 'MUFFIN-SECRET-sk-live-9f3a7c21', 3));
+    expect(d.effect).toBe('ask');
+    if (d.effect === 'ask') expect(d.ask.prompt).toContain('MUFFIN-SECRET-sk-live-9f3a7c21');
+  });
+
+  it('sys.search: a group member never reaches the params gate at all — host-only refuses first', () => {
+    expect(kernel()(queryReq(member, 'group:telegram:42', 'qualsiasi cosa', 3))).toMatchObject({
+      effect: 'deny',
+      code: 'principal_forbidden',
+    });
+  });
+
+  it('a query capability handed the wrong resource kind is refused, not skipped', () => {
+    const d = kernel()({
+      principal: owner,
+      tenant: 'host',
+      capability: 'sys.search',
+      resource: { kind: 'none' },
+      args: {},
+      taint: 0,
+    });
+    expect(d).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+    expect(d.effect === 'deny' && d.detail).toMatch(/declares a query resource but received/);
+  });
+
+  it('the owner can raise the ceiling from the sealed policy file, and it only moves the ask threshold', () => {
+    // Owner decision open per the mandate (1 vs 2): whichever way it lands,
+    // the raised ceiling must never turn into a silent allow above it — only
+    // ask moves.
+    const raised = kernel({
+      matrix: { ...POLICY_FLOOR, paramsMaxTaint: 2 },
+      egressAllowed: (host) => host === 'allowed.example.com',
+    });
+    expect(raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 2))).toMatchObject({
+      effect: 'allow',
+    });
+    expect(raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 3)).effect).toBe('ask');
+  });
+
+  it('the owner can lower the ceiling from the sealed policy file too', () => {
+    const lowered = kernel({
+      matrix: { ...POLICY_FLOOR, paramsMaxTaint: 0 },
+      egressAllowed: (host) => host === 'allowed.example.com',
+    });
+    expect(lowered(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 1)).effect).toBe('ask');
   });
 });

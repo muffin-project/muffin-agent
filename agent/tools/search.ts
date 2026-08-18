@@ -30,20 +30,24 @@ import type { RegisteredTool } from '../loop.js';
  *    costs nothing; a search spends the owner's credits, and a group member has
  *    no business spending them. The kernel already excludes members from
  *    host-only capabilities, so this needs no new rule.
- *  - `resourceKind: 'none'`, and the endpoint checked **once at registration**
- *    instead. The kernel's egress branch reads a `url` resource, which the loop
- *    lifts out of an argument called `url` — and this tool's only argument is a
- *    query. Declaring `'url'` here would have looked like a gate and been a
- *    no-op, which is the exact defect just found in `http_get`. Since the
- *    destination is a constant, the truthful place to check it is boot: not on
- *    the allowlist, not registered, and the reason printed. `rot/egress.json`
- *    keeps answering "everywhere muffin can reach" truthfully either way.
+ *  - `resourceKind: 'query'`, not `'none'`. It used to be `'none'`, with the
+ *    endpoint checked **once at registration** instead and a paragraph here
+ *    calling the query text itself an accepted, unsolved limit — but "accepted"
+ *    was never a decision anyone made, it was P04-2 (audit 2026-08-16):
+ *    `decide.ts`'s egress branch only ever read `resourceKind === 'url'`, so
+ *    `'none'` meant the query left with **zero** kernel inspection at any
+ *    taint, and the endpoint check at boot answers a different question ("is
+ *    this destination trusted at all") from the one that matters turn to turn
+ *    ("did THIS turn's taint just choose these bytes"). `'query'` gives the
+ *    loop (`resourceFor`, `agent/loop.ts`) an argument to lift and the kernel
+ *    (`decide.ts`, `gateParams`) a branch to read: above `paramsMaxTaint` the
+ *    owner is asked and shown the query text, everyone else is refused — the
+ *    same rule `http_get` now applies to a query string on an allowlisted
+ *    host, because the two are the same question asked of two different tools
+ *    (mandato inv. 7).
  *
- * The known limit, stated rather than discovered later: the query itself is an
- * outbound channel. A poisoned context can put data in a search string, and no
- * allowlist prevents it, because the endpoint is the one we approved. This is
- * the same surface `sys.http` already accepts (its path and query are equally
- * model-controlled); it is not made worse here, and it is not solved here.
+ * `rot/egress.json` keeps answering "everywhere muffin can reach" truthfully
+ * either way — the endpoint check at boot is unchanged by this.
  */
 export const searchCapability: CapabilityDecl = {
   id: 'sys.search',
@@ -54,7 +58,7 @@ export const searchCapability: CapabilityDecl = {
   // correctness question — the cost of a resume is the budget's problem.
   rerunnable: true,
   maxTaint: 3,
-  resourceKind: 'none',
+  resourceKind: 'query',
   policyArgs: ['query'],
   hostOnly: true,
   timeoutMs: 20_000,

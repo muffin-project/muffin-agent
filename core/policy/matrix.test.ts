@@ -86,6 +86,7 @@ describe('a policy file that cannot be trusted never widens anything', () => {
     expect(matrix.source).toBe('fallback');
     expect(matrix.note).toMatch(why);
     expect(matrix.defaultMaxTaint).toEqual({ low: 3, medium: 1, high: 1 });
+    expect(matrix.paramsMaxTaint).toBe(2);
     // The namespace entries joined the bare ids when the lookup learned to
     // read them (`denyListCovers`): 03 §3 says `outward.*`, and the Root of
     // Trust row says the RoT, not one verb of it. Both are tightenings — the
@@ -151,6 +152,54 @@ describe('the deny lists are a floor, not a setting', () => {
     const matrix = loadPolicyMatrix(dir);
     expect(matrix.neverAtRuntime.has('sys.shell')).toBe(true);
     expect(matrix.neverAtRuntime.has('rot.write')).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('paramsMaxTaint — the one ceiling the file may also raise (mandato inv. 7)', () => {
+  /**
+   * Deliberately not `it('lets the file tighten a ceiling and refuses to let
+   * it raise one', ...)`'s shape: that test (above) pins `defaultMaxTaint`'s
+   * tighten-only clamp, and `paramsMaxTaint` is NOT under that clamp — see the
+   * field's own doc comment on `PolicyMatrix` (matrix.ts) for why. These three
+   * tests exist so that clamping it later — making it match `defaultMaxTaint`
+   * by accident — goes red instead of silently taking away the owner's dial.
+   */
+  it('defaults to 2 when the file is genuinely silent — tier 2 is the owner\'s own disk (owner, 17/08)', () => {
+    const dir = home();
+    // `home()` installa `defaults/rot/policy.json`, che la chiave la CONTIENE:
+    // asserire sul file installato non prova il default, prova il default del
+    // file. Qui si riscrive il file **senza** la chiave — la forma che ha
+    // davvero la `~/.muffin` dell'owner, sigillata prima di questa slice —
+    // così togliere il `?? POLICY_FLOOR.paramsMaxTaint` in `merge()` va rosso.
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, neverAtRuntime: ['rot.write'] }));
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('sealed');
+    expect(matrix.paramsMaxTaint).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an owner edit can lower it', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, paramsMaxTaint: 0 }));
+    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an owner edit can also RAISE it, unlike defaultMaxTaint', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, paramsMaxTaint: 3 }));
+    expect(loadPolicyMatrix(dir).paramsMaxTaint).toBe(3);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an out-of-range value invalidates the whole file, same as defaultMaxTaint', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, paramsMaxTaint: 9 }));
+    const matrix = loadPolicyMatrix(dir);
+    expect(matrix.source).toBe('fallback');
+    expect(matrix.note).toMatch(/paramsMaxTaint/);
+    expect(matrix.paramsMaxTaint).toBe(2);
     rmSync(dir, { recursive: true, force: true });
   });
 });
