@@ -89,7 +89,17 @@ export class TelegramApi implements TelegramApiLike {
         await sleep(1000);
         return this.call<T>(method, payload, 1);
       }
-      throw new TelegramError(0, error instanceof Error ? error.message : String(error));
+      // `.name`, never `.message` — the same choice `media.ts` already makes
+      // and for the same reason: the URL this `fetch` just failed on carries
+      // the bot token (Telegram, unlike Discord, puts it in the path — see
+      // this file's own header comment), and `.name` ("TypeError",
+      // "AbortError") says what kind of failure this was without risking
+      // whatever a future runtime decides to put in `.message`. Probed
+      // 2026-08-17 against this Node's `fetch` (DNS failure, connection
+      // refused, timeout, malformed URL): `.message` never carried the URL
+      // today, but a promise about a dependency's *next* version is not one
+      // this file can keep, and the fix costs nothing.
+      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
     }
 
     const body = (await response.json()) as
@@ -121,11 +131,17 @@ export class TelegramApi implements TelegramApiLike {
    * layer gets to make.
    */
   async upload<T>(method: string, body: FormData): Promise<T> {
-    const response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
-      method: 'POST',
-      body,
-      signal: AbortSignal.timeout(120_000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
+        method: 'POST',
+        body,
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      // Same reasoning as `call`'s catch: this URL carries the token too.
+      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
+    }
     const payload = (await response.json()) as { ok: true; result: T } | { ok: false; description: string };
     if (!payload.ok) throw new TelegramError(response.status, payload.description);
     return payload.result;
