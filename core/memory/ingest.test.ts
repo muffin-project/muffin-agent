@@ -930,6 +930,7 @@ describe('formatConsolidationLines — what a human reads at the end of a round'
     marked: 0,
     episodes: 0,
     factsAdded: 0,
+    rejected: 0,
     superseded: 0,
     skippedAgentOutput: 0,
     skippedDocuments: 0,

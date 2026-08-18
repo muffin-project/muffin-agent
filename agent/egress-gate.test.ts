@@ -14,6 +14,7 @@ import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import { httpCapability } from './tools/http.js';
+import { searchCapability } from './tools/search.js';
 
 /**
  * The egress allowlist has to be reached by a real tool call.
@@ -181,5 +182,26 @@ describe('the exploit that the first fix left open', () => {
     });
 
     expect(h.fetched).toEqual([]);
+  });
+});
+
+describe('every capability that reaches the network declares an inspectable resource', () => {
+  // The mutation this guards against: `resourceKind: 'none'` skips every
+  // branch in `decide.ts` that inspects a resource at all and falls straight
+  // to the risk-class switch — a silent allow for a medium/reversible
+  // capability, at ANY taint. `sys.search` shipped exactly this way (audit
+  // 2026-08-16, P04-2): the query left with zero kernel inspection because
+  // nothing here caught a network-reaching tool declaring the one
+  // resourceKind the kernel cannot gate. `mcp.*` is deliberately not on this
+  // list: its destination is a pinned, approved server chosen at attach time,
+  // not a per-call model argument — a different shape, already narrowed by
+  // `hostOnly` plus its inherited taint ceiling (`agent/tools/mcp.ts`), and
+  // out of this slice's scope (mandato inv. 7).
+  it('sys.http declares a resourceKind the kernel can inspect', () => {
+    expect(httpCapability.resourceKind).not.toBe('none');
+  });
+
+  it('sys.search declares a resourceKind the kernel can inspect', () => {
+    expect(searchCapability.resourceKind).not.toBe('none');
   });
 });

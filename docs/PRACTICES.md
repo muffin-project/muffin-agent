@@ -19,7 +19,13 @@ AGENTS.md present); only checks reduce bugs.
 before, or to add a dependency.**
 
 Read the real documentation first — Context7 MCP (`resolve-library-id` →
-`query-docs`) or the official docs — not the type signatures. Types are
+`query-docs`) or the official docs — not the type signatures.
+
+**Budget (owner, 2026-08-17).** The trigger is *new to this repo*, not *new to
+this file*: if the same call already has a clear local precedent, reuse the
+precedent instead of re-reading the vendor docs — unless the specific behaviour
+you depend on is load-bearing or known to be unstable. Research when it can
+change a decision, not as a tax. Types are
 generated from a schema; they do not say what the server does under an edge
 case, which arguments are mutually exclusive, or what silently changed in the
 last release.
@@ -71,7 +77,10 @@ timer è stata una riga; provare quella presunzione, zero righe e nessuna prova.
 verb, a file format, an exit code, a config key.**
 
 Look at three comparable tools first, and at the field's reference (for CLIs:
-clig.dev, GNU standards) — then decide, and record what you rejected. The shape
+clig.dev, GNU standards) — then decide, and record what you rejected. **Scope
+(owner, 2026-08-17): outward-facing, public or durable shapes, and choices that
+are expensive to change.** A private, reversible choice that already matches a
+pattern in this repo reuses the pattern — no mini literature review. The shape
 of `muffin telegram send` was invented instead of checked, and it was wrong the
 day it shipped.
 
@@ -436,3 +445,23 @@ Un doc-feature, quando serve, **indicizza e collega**: racconta la feature e
 punta all'ADR che l'ha decisa e alle ricerche che l'hanno informata, ognuna con
 la sua data. Non ricopia il contenuto — quella sarebbe la doppia scrittura che
 questo repo rifiuta ovunque.
+
+## 14. Il budget di verifica e di documentazione
+
+**Trigger: stai per aggiungere una prova o aggiornare un documento.**
+
+La verifica è proporzionale alla claim e al blast radius: i tre profili — FAST,
+STANDARD, CRITICAL — e cosa ciascuno richiede stanno in `ORCHESTRATION.md` §17,
+e si sceglie **prima** di implementare. La domanda che li governa è «qual è la
+quantità minima di evidenza che potrebbe falsificare questa claim?», non
+«abbiamo eseguito tutti i tipi di test?».
+
+I documenti hanno lo stesso vincolo (`ORCHESTRATION.md` §19): si aggiorna la
+**casa autorevole** che il cambiamento rende stale, non tutte insieme per
+riflesso. `lessons.md` vuole una lezione *generalizzabile*, non un diario dei
+bug; la mappa vuole un cambiamento che la mappa rappresenta.
+
+L'anti-metrica, perché non si scivoli di nuovo: **il workflow non si giudica da
+quante prove produce, ma da quanti errori materiali intercetta per unità di
+tempo e di contesto.** Una verifica che non può cambiare il verdetto costa il
+contesto che serviva a quella che poteva.

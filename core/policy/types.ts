@@ -40,6 +40,15 @@ export type CapabilityId = string;
 export type Resource =
   | { kind: 'path'; value: string } // absolute, normalized, symlinks resolved
   | { kind: 'url'; value: string }
+  /**
+   * The literal text a model-controlled search argument sends outbound, when
+   * the destination is a constant the capability already pins (`sys.search`'s
+   * endpoint, checked once at registration) rather than something the model
+   * names per call. Not `url`: there is no host for the kernel to hold
+   * against the allowlist, only bytes whose turn taint decides whether they
+   * may leave at all (`decide.ts`, `gateParams` — mandato inv. 7, P04-2).
+   */
+  | { kind: 'query'; value: string }
   | { kind: 'tenant'; value: TenantId }
   | { kind: 'none' };
 

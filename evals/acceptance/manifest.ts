@@ -89,8 +89,20 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'A1',
     'continuity: a gateway SIGKILLed mid-life is replaced by a supervisor-started one that resumes a suspended turn and fires a due job, each exactly once',
   ),
+  verde(
+    'A2',
+    "identity: the installed rot/identity.md — this home's own, not defaults/ — reaches the real system prompt sent to the provider, and `muffin prompt show` matches it",
+  ),
+  verde(
+    'A3',
+    'persona: the installed persona.md/voice.md reach the real system prompt in canonical order (persona, identity, voice), and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
+  ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
   verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
+  verde(
+    'A9',
+    'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
+  ),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
@@ -131,6 +143,33 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
   ),
   verde('D2', 'file write: asking to write a file gets an honest refusal, not a silent no-op'),
+  // New (slice/egress-params, mandato inv. 7 / audit P04-1): the row's own
+  // BLOCKER text said "solo scenario mancante" — the mechanism (allowlist,
+  // redirect recheck, SSRF floor) was already `impl solida`. This scenario is
+  // that missing proof, extended to cover the gap the audit found: the
+  // allowlist checked the HOST only, so a tainted turn could still put chosen
+  // bytes in an allowlisted URL's query string. Does not promote the row —
+  // see the note on D7 below and the PR body: a live "allow, fetch succeeds"
+  // leg stays unproven at this layer (would need a real reachable host),
+  // unrelated to what this scenario closes.
+  verde(
+    'D6',
+    'http: a query string on an allowlisted host answers to the same params ceiling as an unlisted host — after tainted content, ask for the owner and never fetched without one',
+  ),
+  // New (slice/egress-params, mandato inv. 7 / audit P04-2): `sys.search`
+  // declared `resourceKind: 'none'` and never reached the kernel's egress
+  // branch at all — the query left with zero policy inspection at any taint.
+  // Proves the fix reaches the real binary: after tainted content, `ask` is
+  // the decision on record and the search backend is never called. Per the
+  // mandate, this does NOT promote D7 to READY — the happy path (a real
+  // search actually returning results) is still unproven at this layer,
+  // because `tavilyBackend`'s endpoint is a compiled constant with no seam to
+  // point at a fake server from a subprocess, and hitting the real Tavily API
+  // from this suite is out of scope (no real providers).
+  verde(
+    'D7',
+    'web search: the query now answers to the kernel — after tainted content, a search asks the owner and the backend is never called unapproved',
+  ),
   rosso(
     'D3',
     'undo: a file modification the model made can be reverted by the owner',

@@ -229,6 +229,106 @@ debole di quanto sembri — e con questa revisione `sys.shell` torna a passare p
 quel canale più spesso, non meno. Non chiuso qui: è nominato come lavoro
 immediatamente successivo, non lasciato per essere ritrovato una terza volta.
 
+## Emendamento — 2026-08-17 (`slice/egress-params`, mandato inv. 7)
+
+**Il difetto che questa revisione chiude: il kernel guardava solo l'host, non i
+byte.** L'audit del 16/08 (P04-1/P04-2) e il triage del 17/08 (proprietà
+trasversale 6) hanno trovato la stessa forma di buco che questa ADR aveva già
+chiuso una volta per la lettura, riaperta sul lato dell'uscita: il ramo
+`resourceKind === 'url'` di `decide.ts` verificava l'**hostname** di un `sys.http`
+contro l'allowlist e poi lasciava passare tutto il resto dell'URL — query
+string, fragment — senza guardarlo. Un turno che aveva letto byte a tier ≥ 2
+poteva quindi costruire `http_get` verso un host allowlisted con quei byte
+incollati nel path o nella query, e il kernel approvava: l'argomento di
+sicurezza di `fs.ts` («il read da solo non è la fuga: la gamba di egress è
+gattata a parte») dipendeva da una proprietà che il ramo url non forniva.
+`sys.search` era peggio: dichiarava `resourceKind: 'none'`, quindi non entrava
+**mai** nel ramo egress, a nessun taint — l'unica difesa era l'endpoint
+verificato una volta alla registrazione, che risponde a una domanda diversa
+("questa destinazione è fidata") da quella che conta turno per turno ("questi
+byte li ha appena scelti un contesto avvelenato?").
+
+**La correzione, nella stessa primitiva.** `core/policy/decide.ts` guadagna
+`gateParams(principal, taint, ceiling, prompt)`, chiamata da due punti:
+
+1. Nel ramo `url`, **dopo** che l'host ha già superato l'allowlist: se l'URL
+   porta una query string o un fragment non vuoti (`hasParams`), i byte
+   rispondono a `gateParams` esattamente come l'host aveva già risposto
+   all'allowlist. Il path non è incluso — l'allowlist odierna (`rot/egress.json`)
+   non ha granularità di path, quindi non esiste ancora un «oltre il path
+   consentito» da confrontare; dichiarato qui, non taciuto.
+2. `sys.search` guadagna un nuovo `ResourceKind`, `'query'` (`core/policy/
+   types.ts`): non un riuso di `'url'`, perché il testo di una query non è un
+   URL e non ha un host su cui il kernel possa far leva — l'unica cosa su cui
+   il kernel *può* decidere è il taint del turno. `search.ts` dichiara ora
+   `resourceKind: 'query'` al posto di `'none'` (il `policyArgs: ['query']`
+   c'era già, ma era inerte); `resourceFor` (`agent/loop.ts`) lo solleva dagli
+   argomenti come già faceva per `url`/`path`, stessa funzione, guardia più
+   larga.
+
+**La soglia è la stessa forma di `sys.shell`, e il perché è lo stesso.** Sopra
+`paramsMaxTaint` (**default 2**, decisione owner 2026-08-17), l'owner viene **chiesto** e vede i byte per
+intero (`prompt` li contiene già; `ApprovalRequest.resource` ora li porta anche
+strutturati — vedi sotto); ogni altro principal è **rifiutato**, sempre, mai un
+`ask`. È la stessa mossa di questa ADR §revisione 2026-08-16 per `sys.shell
+dopo un fs_read`: un turno che ha letto qualcosa non deve smettere di
+funzionare, ma non deve nemmeno poter *scegliere ed approvare da solo* la
+propria via d'uscita — quindi ask per l'owner (che può dire no tanto quanto sì),
+mai auto-allow, mai per chiunque altro. La tabella si legge come quella di
+allora:
+
+| | sotto la soglia | sopra la soglia |
+|---|---|---|
+| `http_get`, host allowlisted, **senza** parametri | allow (invariato) | allow (invariato) |
+| `http_get`, host allowlisted, **con** parametri, owner | allow | **ask**, mostra l'URL intero |
+| `http_get`, host allowlisted, **con** parametri, chiunque altro | allow | **deny/resource_denied** |
+| `sys.search`, owner | allow | **ask**, mostra la query |
+| `sys.search`, chiunque altro (già escluso da `hostOnly`) | deny/principal_forbidden | deny/principal_forbidden |
+
+**`paramsMaxTaint` vive dove vivono le altre soglie — con una differenza
+dichiarata.** Come `defaultMaxTaint`, è un campo di `rot/policy.json` letto da
+`core/policy/matrix.ts`; a differenza di `defaultMaxTaint`, il file sigillato
+può **alzarlo**, non solo abbassarlo (`merge()` lo legge diretto, senza il
+clamp `tighter()`). Non è una svista sulla regola di confinamento monotono
+(ADR-0013): `defaultMaxTaint` è ereditato da ogni capability che non fissa un
+proprio `maxTaint`, quindi un numero allargato in un file risigillato allenta
+capability mai riviste per quello (la misura su `mcp.*` nel docstring di
+`matrix.ts`); `paramsMaxTaint` ha esattamente le due chiamate sopra, e alzarlo
+non concede niente a nessuno tranne l'owner — sposta solo il taint a cui
+l'owner comincia a essere chiesto, mai verso un auto-allow. Il floor spedito è
+**2**, e la ragione è una distinzione di sostanza, non un compromesso
+(decisione owner 2026-08-17): **tier 2 è il disco e i dati locali dell'owner**,
+e chiedere per ogni ricerca che segue una lettura di file trasformerebbe l'ASK
+in un riflesso da liquidare — il modo esatto in cui un cancello di sicurezza
+smette di essere letto (mandato §D12). **Tier 3 è il mondo esterno** (web,
+risultati di ricerca, MCP, contenuto inoltrato): è lì che i byte scelti dal
+modello smettono di essere parole dell'owner. Il knob resta nel Root of Trust e
+resta modificabile in `rot/policy.json` + `muffin rot reseal`, senza toccare il
+codice; e a qualunque valore, **un principal non-owner è rifiutato, mai
+chiesto**.
+
+**Chiude in parte il gap che la revisione del 16/08 aveva lasciato scritto qui
+sopra.** `ApprovalRequest.resource` (`agent/loop.ts`) portava il valore della
+risorsa solo per `resource.kind === 'path'`; ora lo porta anche per `'url'` e
+`'query'`, quindi un `ask` per `http_get` o `sys.search` mostra il byte esatto
+che l'owner sta per approvare, non solo la frase del kernel. **Non chiude
+D12**: `sys.shell` (comando+cwd) e `process_kill` (pid+nome) dichiarano ancora
+`resourceKind: 'none'` e restano senza niente da mostrare in quel campo — resta
+lavoro di `slice/ask-dice-cosa`, non toccato qui.
+
+**Cablaggio, mutato prima di scriverlo qui.** Rosso-prima verificato: `core/
+policy/decide.test.ts` (branch `params gate`, 11 casi) e `core/policy/
+matrix.test.ts` (`paramsMaxTaint`, 4 casi) contro il kernel puro;
+`agent/read-then-egress.test.ts` estende la stessa catena vera (`runTurn` +
+`resourceFor` + `decide` + i tool di produzione) con `http_get` con parametri
+su host allowlisted e `web_search` dietro `makeSearchTool`; `evals/acceptance/
+scenarios/d-capability.accept.ts` aggiunge `D6`/`D7` contro il binario reale
+(`muffin run --json`), verificando che l'`ask` non wired si fermi *prima* di
+`tool.handler` — nessun fetch, nessuna chiamata verso Tavily. Mutazione
+verificata a mano su tutti e tre i livelli: rimettere `resourceKind: 'none'` in
+`search.ts` fa cadere `decide.test.ts`, `read-then-egress.test.ts` **e** lo
+scenario `D7` (`stopped: 'answered'` al posto di `ask`).
+
 ## Revisione — 2026-08-17: la history non lava la provenienza
 
 **La domanda negativa di questa ADR era "che tier ha un file", e restava aperta

@@ -191,7 +191,12 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
   } else {
     const hardening = hardeningHolds(home);
     if (hardening.holds) {
-      ok('root of trust mode', 'hardened: this process cannot write the RoT — prevention, verified now');
+      ok(
+        'root of trust mode',
+        hardening.caveat
+          ? `hardened: prevention verified now, but narrower than usual — ${hardening.caveat}`
+          : 'hardened: this process cannot write the RoT — prevention, verified now',
+      );
     } else {
       fail(
         'root of trust mode',
