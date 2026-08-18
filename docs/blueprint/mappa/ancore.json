@@ -1,9 +1,4 @@
 {
-  "03-threat-model.md:121": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 122,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
-  },
   "03-threat-model.md:53": {
     "path": "docs/blueprint/03-threat-model.md",
     "line": 54,
@@ -36,267 +31,277 @@
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 103,
+    "line": 104,
     "testo": "* An omitted `replyChannel` has no default to be silent about — the one"
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1059,
+    "line": 1060,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1120,
+    "line": 1121,
     "testo": "// model at all."
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 1680,
+    "line": 1681,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 173,
+    "line": 174,
     "testo": "export type ApprovalRequest = {"
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1876,
+    "line": 1877,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 1894,
+    "line": 1895,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 1913,
+    "line": 1914,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 1914,
+    "line": 1915,
     "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
+  },
+  "agent/loop.ts:2004": {
+    "path": "agent/loop.ts",
+    "line": 2031,
+    "testo": "const safeContent = redactText(outcome.content);"
+  },
+  "agent/loop.ts:2044": {
+    "path": "agent/loop.ts",
+    "line": 2075,
+    "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2110": {
     "path": "agent/loop.ts",
-    "line": 2154,
+    "line": 2171,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 272,
+    "line": 273,
     "testo": "};"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 274,
+    "line": 275,
     "testo": "export type LoopDeps = {"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 290,
+    "line": 291,
     "testo": "* seen, resumed, or told apart from one that died mid-effect. So the type"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 300,
+    "line": 301,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 317,
+    "line": 318,
     "testo": "* `stopped: 'ask'` rather than pretending the tool failed."
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 321,
+    "line": 322,
     "testo": "* Bills a model call and returns what it cost. Absent in tests; absent in"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 339,
+    "line": 340,
     "testo": "memory?: { store: MemoryStore; recall: RecallDeps } | undefined;"
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 352,
+    "line": 353,
     "testo": "capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 353,
+    "line": 354,
     "testo": "/**"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 356,
+    "line": 357,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 364,
+    "line": 365,
     "testo": "* Deliberately **not** the closure-handed-back shape of"
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 375,
+    "line": 376,
     "testo": "*/"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 380,
+    "line": 381,
     "testo": "export type TurnInput = {"
   },
   "agent/loop.ts:425": {
     "path": "agent/loop.ts",
-    "line": 426,
+    "line": 427,
     "testo": "* un-showing text it already showed, which is a worse promise than showing"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 429,
+    "line": 430,
     "testo": "onDelta?: ((delta: TurnDelta) => void) | undefined;"
   },
   "agent/loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 450,
+    "line": 451,
     "testo": "* before it happened. `suspended` is the arm this slice adds, and adding it in"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 454,
+    "line": 455,
     "testo": "/**"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 467,
+    "line": 468,
     "testo": "* is a fact the caller needs in the same breath as `text`."
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 483,
+    "line": 484,
     "testo": "* that can count. Three is enough to survive a laptop closing, a `systemctl"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 489,
+    "line": 490,
     "testo": "/**"
   },
   "agent/loop.ts:503": {
     "path": "agent/loop.ts",
-    "line": 504,
+    "line": 505,
     "testo": "* rest, and it is why nothing here calls recall — recall is an embedder plus a"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 522,
+    "line": 523,
     "testo": "});"
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 529,
+    "line": 530,
     "testo": "iterations: 0,"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 530,
+    "line": 531,
     "testo": "recoveriesUsed: 0,"
   },
   "agent/loop.ts:538": {
     "path": "agent/loop.ts",
-    "line": 539,
+    "line": 540,
     "testo": "}"
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 541,
+    "line": 542,
     "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 544,
+    "line": 545,
     "testo": "[ATTR.tenant]: input.tenant,"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 57,
+    "line": 58,
     "testo": "* turn that created it. A handler that wants durable state attached to the"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 575,
+    "line": 576,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 596,
+    "line": 597,
     "testo": "why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished';"
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 63,
+    "line": 64,
     "testo": "* a plan that died with the turn that wrote it would not be a plan."
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 697,
+    "line": 698,
     "testo": "const detail ="
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 721,
+    "line": 722,
     "testo": "options: {"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 770,
+    "line": 771,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 778,
+    "line": 779,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 793,
+    "line": 794,
     "testo": "/**"
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 799,
+    "line": 800,
     "testo": "let transportRetriesLeft = record.counters.transportRetriesLeft;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 806,
+    "line": 807,
     "testo": "iterations,"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 818,
+    "line": 819,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 820,
+    "line": 821,
     "testo": "* `null` until a handler asks. See `ToolContext.suspend` for why it is armed"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 890,
+    "line": 891,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 926,
+    "line": 927,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 963,
+    "line": 964,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -1916,7 +1921,7 @@
   },
   "core/rot/guards.test.ts:38": {
     "path": "core/rot/guards.test.ts",
-    "line": 38,
+    "line": 46,
     "testo": "describe('the five mandatory deny paths of threat model §3-bis', () => {"
   },
   "core/rot/guards.ts:47": {
@@ -2058,6 +2063,11 @@
     "path": "core/tracing/redact.ts",
     "line": 1,
     "testo": "import type { AttributeValue } from './types.js';"
+  },
+  "core/tracing/redact.ts:90": {
+    "path": "core/tracing/redact.ts",
+    "line": 90,
+    "testo": "const SECRET_REF = /^secret:\\/\\/[A-Za-z0-9_]+$/;"
   },
   "core/tracing/tracer.ts:24": {
     "path": "core/tracing/tracer.ts",
@@ -2221,8 +2231,8 @@
   },
   "docs/blueprint/03-threat-model.md:121": {
     "path": "docs/blueprint/03-threat-model.md",
-    "line": 122,
-    "testo": "Telemetria esterna: **nessuna, mai, di default** — niente crash report, niente analytics, niente \"phone home\"; l'unico traffico uscente è quello delle capability configurate dall'utente. Aggiornamenti: pull esplicito. Secrets: mai nel repo, mai in chiaro nei trace (redaction nel layer di logging); storage in keychain OS o file cifrato, referenziati per nome."
+    "line": 121,
+    "testo": ""
   },
   "docs/blueprint/03-threat-model.md:21": {
     "path": "docs/blueprint/03-threat-model.md",
@@ -2401,122 +2411,122 @@
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 113,
+    "line": 114,
     "testo": "* the same shape — the `SurfaceRegistry` address — so a tool can ask the"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1751,
+    "line": 1752,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 300,
+    "line": 301,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 310,
+    "line": 311,
     "testo": "* `() => boolean`, so the per-tenant daily cap could not be consulted through"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 353,
+    "line": 354,
     "testo": "/**"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 356,
+    "line": 357,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 430,
+    "line": 431,
     "testo": "};"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 432,
+    "line": 433,
     "testo": "/** One increment of the final answer's text, already past the tool-call filter above. */"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 443,
+    "line": 444,
     "testo": "* never the same one as `stopped`."
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 485,
+    "line": 486,
     "testo": "* not about the infrastructure."
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 486,
+    "line": 487,
     "testo": "*/"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 509,
+    "line": 510,
     "testo": "export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 522,
+    "line": 523,
     "testo": "});"
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 575,
+    "line": 576,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 578,
+    "line": 579,
     "testo": "model: deps.model,"
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 595,
+    "line": 596,
     "testo": "turnId: string;"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 603,
+    "line": 604,
     "testo": "*"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 745,
+    "line": 746,
     "testo": "* holding whatever REPL or Telegram chat asked the *previous* attempt to"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 748,
+    "line": 749,
     "testo": "* to suspend."
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 770,
+    "line": 771,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 778,
+    "line": 779,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 793,
+    "line": 794,
     "testo": "/**"
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 807,
+    "line": 808,
     "testo": "recoveriesUsed,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 843,
+    "line": 844,
     "testo": "},"
   },
   "maintenance.ts:21": {
@@ -2718,6 +2728,16 @@
     "path": "core/tracing/redact.ts",
     "line": 11,
     "testo": "* That first sentence was false for as long as this file has existed, and said"
+  },
+  "redact.ts:110": {
+    "path": "core/tracing/redact.ts",
+    "line": 110,
+    "testo": "const SECRET_VALUE_SHAPES: readonly RegExp[] = ["
+  },
+  "redact.ts:90": {
+    "path": "core/tracing/redact.ts",
+    "line": 90,
+    "testo": "const SECRET_REF = /^secret:\\/\\/[A-Za-z0-9_]+$/;"
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
