@@ -1,9 +1,17 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { PathDenied, fsWrite, type FsScope } from '../../agent/tools/fs.js';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { PathDenied, fsRead, fsWrite, type FsScope } from '../../agent/tools/fs.js';
+import { secretDir } from '../config/config.js';
 import { mandatoryGuards } from './guards.js';
+
+// `secretDir('persistent', …)` reads `XDG_CONFIG_HOME` (ADR-0030/0039's
+// chain) — stubbed once, for the whole file, so the persistent-backend
+// assertions below resolve inside a scratch directory and never touch a
+// real `~/.config` on the machine running the suite.
+vi.stubEnv('XDG_CONFIG_HOME', mkdtempSync(join(tmpdir(), 'muffin-guards-xdg-')));
+afterAll(() => vi.unstubAllEnvs());
 
 /**
  * The threat model names five mandatory deny paths. This counts them.
@@ -82,6 +90,51 @@ describe('the deny paths beat an allow-write that contains them', () => {
 
   it('still lets an ordinary file through, so the scope is a scope and not a wall', () => {
     expect(() => fsWrite(scope, 'notes.md', 'ciao')).not.toThrow();
+  });
+});
+
+/**
+ * ADR-0048's class-1 consequence: `fs_read` denies the secret backend, not
+ * only `fs_write`. `writeSecret` (`core/config/config.ts`) has two backends —
+ * `home` and `persistent`, ADR-0039's chain — and both have to be in
+ * `denyRead`, not just the one the categories test above happens to
+ * exercise through `denyWrite`. Missing either one is exactly the shape of
+ * the pre-existing bug `secret-read.test.ts` documents: a chain that
+ * "answers" for `readSecret` while `fs_read` still reaches one of its links.
+ *
+ * Both secret directories are placed *inside* `root` here, deliberately —
+ * `secret-read.test.ts`'s own docstring names the reason: `fs_read` already
+ * refuses any absolute path outside the scope root, on a *different*
+ * mechanism than `denyRead` (probed 2026-08-17: an empty `denyRead` still
+ * refuses an out-of-root read). A secret store outside `root` would make
+ * these tests pass without `denyRead` doing anything, which is exactly the
+ * shape of test JUDGE.md calls theatre. Inside `root`, the scope guard is
+ * satisfied and only `denyRead` stands in the way — so reverting either
+ * backend's entry in `guards.ts` turns the matching test red.
+ */
+describe('both secret backends are denied to fs_read, not only to fs_write', () => {
+  const s = scratch();
+  const guards = mandatoryGuards(s.home, s.cwd, s.userHome);
+
+  it('denyRead names both secretDir backends', () => {
+    expect(guards.denyRead).toContain(secretDir('home', s.home));
+    expect(guards.denyRead).toContain(secretDir('persistent', s.home));
+  });
+
+  it('fs_read refuses a key written to the default (home) backend, reachable inside root', () => {
+    const home = join(s.cwd, '.muffin-home-inside');
+    const scope: FsScope = { root: s.cwd, ...mandatoryGuards(home, s.cwd, s.userHome) };
+    mkdirSync(secretDir('home', home), { recursive: true });
+    writeFileSync(join(secretDir('home', home), 'provider_api_key'), 'sk-home-BACKEND\n');
+    expect(() => fsRead(scope, join(secretDir('home', home), 'provider_api_key'))).toThrow(PathDenied);
+  });
+
+  it('fs_read refuses a key written to the persistent (XDG) backend, reachable inside root', () => {
+    vi.stubEnv('XDG_CONFIG_HOME', join(s.cwd, '.xdg-inside'));
+    const scope: FsScope = { root: s.cwd, ...mandatoryGuards(s.home, s.cwd, s.userHome) };
+    mkdirSync(secretDir('persistent', s.home), { recursive: true });
+    writeFileSync(join(secretDir('persistent', s.home), 'provider_api_key'), 'sk-persistent-BACKEND\n');
+    expect(() => fsRead(scope, join(secretDir('persistent', s.home), 'provider_api_key'))).toThrow(PathDenied);
   });
 });
 
