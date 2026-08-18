@@ -70,6 +70,17 @@ sé: la catena `orchestratore → worker → judge → worker2` per una modifica
 venti righe costa più contesto e più tempo di quanto ne compri, e ogni passaggio
 di mano è un punto in cui l'informazione si degrada.
 
+E il costo di un ventaglio si legge **prima**, non a metà: `node
+.claude/deleghe.mjs preventivo <n>` lo stima sulle deleghe già misurate. Non
+esiste un tetto di agenti come invariante — il predittore vero non è il numero
+di worker ma le tool call per worker, perché è la lettura di cache a crescere —
+e un ventaglio materialmente costoso resta una decisione dell'owner (§2), da
+portargli istruita invece che da scoprire con quaranta sonde già in volo. La
+stessa famiglia di comandi tiene il resto della resilienza: una delega si
+registra **prima** che parta, e una uccisa da quota o 529 si *parcheggia* —
+resta riprendibile dal brief su disco invece di sparire o, peggio, di restare
+indistinguibile da una che sta lavorando.
+
 Evidenza è: il codice che c'è · un test che passa **e che è stato visto fallire
 prima del fix** · il comportamento eseguito · il diff letto · `tsc` e la suite
 lanciati da chi riferisce · il numero prodotto nello stesso respiro in cui si

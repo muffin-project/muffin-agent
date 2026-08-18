@@ -13,9 +13,13 @@ tutto il repo a ogni giro (`ORCHESTRATION.md` §6).
 All'inizio normale di una sessione bastano:
 
 1. `CLAUDE.md` (la mappa) e il blocco START HERE, che arriva già iniettato.
-2. Lo **stato osservato**: `git status`, branch locali e remoti, PR aperte e
-   loro check, worktree, `node .claude/deleghe.mjs stato`, diff non committati.
-   Una PR in review o un `ADJUST` aperto viene prima di nuovo lavoro.
+2. Lo **stato osservato**: `node .claude/deleghe.mjs riprendi` — deleghe aperte,
+   chiuse, **parcheggiate** (uccise da quota o 529: da rilanciare dal brief su
+   disco, non da ricostruire a memoria) e la diagnosi dello stato danneggiato
+   che una sessione morta lascia dietro (merge o rebase a metà, marcatori di
+   conflitto, toolchain inutilizzabile, commit non pushati). Poi branch, PR e
+   loro check. Una PR in review o un `ADJUST` aperto viene prima di nuovo
+   lavoro; uno stato danneggiato viene prima di tutto.
 3. `docs/blueprint/gate1/PERCORSO-CRITICO.md` — §0 «In volo adesso» e la voce
    che stai per prendere.
 4. La riga o le righe di `docs/blueprint/M5-BIS.md` che quella voce tocca.
@@ -23,6 +27,13 @@ All'inizio normale di una sessione bastano:
 Se documenti e stato osservato divergono, **correggi prima il handoff**: una
 sessione fresca deve poter capire da sola dove siamo. `node
 .claude/riconcilia.mjs` lo dice meccanicamente.
+
+Delegare non è il default: una task piccola e locale la fa l'orchestratore, e un
+subagente costa un contesto intero per ricostruire ciò che qui è già noto. Prima
+di un ventaglio, `node .claude/deleghe.mjs preventivo <n>` dà il costo misurato
+sulle deleghe già fatte — e se è materialmente costoso la decisione è dell'owner
+(`ORCHESTRATION.md` §2), non una cosa da scoprire a metà. Ogni delega si registra
+**prima** che parta; una che muore per quota si parcheggia invece di sparire.
 
 ## 2. Cosa caricare quando
 
