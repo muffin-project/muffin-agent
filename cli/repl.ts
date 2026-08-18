@@ -272,7 +272,7 @@ export async function runRepl(
   );
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps),
+    makeJobRunner(runtime.deps, runtime.jobFires),
     deliver,
     foreground,
     (e) => {
@@ -295,6 +295,12 @@ export async function runRepl(
     // serialises this scheduler against itself, which is the whole property
     // this session needs.
     new ModelLane(),
+    // `stillOwner` — the REPL's scheduler holds no gateway claim to
+    // re-verify, same default as every other REPL/test construction.
+    undefined,
+    // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
+    // installed yet, or its claim gone stale) gets the same identity bridge.
+    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive

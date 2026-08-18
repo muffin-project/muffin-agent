@@ -107,6 +107,17 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
   verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),
+  // New (slice/job-fires, owner decision 2026-08-17): the fire-claim/identity
+  // gap A1's own comment named as "owned elsewhere" — a real SIGKILL landed
+  // between job_fires binding a fire and its turn actually being written,
+  // and a second one landed between that turn reaching `done` and Scheduler
+  // ever calling deliver/markRan. Both recover to exactly one turn and
+  // exactly one delivery, and the fake provider's own request log — not just
+  // the database — is the evidence the model was never called twice.
+  verde(
+    'B7',
+    'job-fires: a real SIGKILL between binding a fire and creating its turn, and another between the turn finishing and settlement, both recover to exactly one delivered turn — the model called exactly once',
+  ),
   verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
   // Promoted (this slice): `Deliver` returns a typed `DeliveryOutcome` and
   // `Scheduler.settle` is markRan's only caller (ADR-0035 §1, PR #42). The
