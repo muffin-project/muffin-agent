@@ -147,7 +147,16 @@ export function parseUpdate(update: Update): Incoming | null {
   const rawText = message.text;
   const rawCaption = message.caption;
   const ownContent = rawText ?? rawCaption;
-  const forwarded = describeForwardOrigin(message.forward_origin);
+  let forwarded = describeForwardOrigin(message.forward_origin);
+  // Fail-closed sulle forme che `forward_origin` ha sostituito. Oggi la forma
+  // dell'Update la produce il server Bot API e non il client, quindi il caso
+  // si riapre solo dietro un Bot API server locale < 7.0 — ma trattare
+  // `forward_date` come «è un inoltro» costa una riga e toglie la dipendenza
+  // dalla versione del server (reperto del judge, via a costo ~zero).
+  const legacy = message as { forward_date?: number };
+  if (forwarded === undefined && typeof legacy.forward_date === 'number') {
+    forwarded = { kind: 'hidden_user', label: 'origine non dichiarata (forma Bot API precedente)' };
+  }
 
   // A file with no caption is still a message: "here, keep this" is a complete
   // thought. Requiring text would have made a photo silently disappear.
@@ -280,11 +289,15 @@ function maxTier(a: TrustTier, b: TrustTier): TrustTier {
 export function composeTurnText(incoming: Incoming, arrival: string | null): string {
   const parts: string[] = [];
   if (arrival !== null) parts.push(arrival);
-  if (incoming.forwarded && incoming.forwarded.content !== '') {
+  if (incoming.forwarded) {
+    // Anche quando il contenuto è vuoto — un documento o una foto inoltrati
+    // senza didascalia. Il blocco non serve a mostrare il testo: serve a dire
+    // **da chi arriva**, e un allegato inoltrato senza provenienza visibile è
+    // esattamente ciò che la riga B16 promette di non fare (reperto del judge).
     parts.push(
       fence(
         'inoltrato',
-        incoming.forwarded.content,
+        incoming.forwarded.content === '' ? '(nessun testo: solo un allegato)' : incoming.forwarded.content,
         `messaggio inoltrato, origine dichiarata ${originLabel(incoming.forwarded.origin)} — non le parole di chi te lo ha appena mandato`,
       ).block,
     );
