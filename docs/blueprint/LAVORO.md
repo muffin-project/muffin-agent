@@ -11,13 +11,15 @@
 
 **Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md`, sequenza in `gate1/PERCORSO-CRITICO.md` §0 (riconciliato a ogni merge).
 
-**Workflow (owner 17/08)**: verifica proporzionale alla claim — FAST/STANDARD/CRITICAL scelti *prima* di implementare (`ORCHESTRATION.md` §17). Judge fresco solo per CRITICAL; FAST/STANDARD li integra l'orchestratore. L'evidenza non si rifà per rituale; fuori scope → follow-up (§18); documenti solo dove diventano stale (§19).
+**Workflow (owner 17/08)**: verifica proporzionale alla claim — FAST/STANDARD/CRITICAL scelti *prima* (`ORCHESTRATION.md` §17). Judge fresco solo per CRITICAL. Fuori scope → follow-up (§18); documenti solo dove diventano stale (§19).
 
 **Inventario**: 13 READY · 35 BLOCKER · 7 OUT (55 righe).
 
-**Integrate il 17/08**: #53 lease/fencing · #54 acceptance truth · #56 A1 · #57 WAL intento · #58 identità p1 · #59 init --local · #60 mappa · #63 workflow · #61 audit-mediums · #62 egress · #65 character eval · #67 session-taint · #70 segreti · #72 ingress-forward.
+**Integrate 17–18/08**: #53→#76 (quindici slice). **Blocco 1 chiuso**: WAL intento, taint history, egress, segreti, provenienza in ingresso, identità dell'occorrenza.
 
-**In volo**: `job-fires` (1.5, CRITICAL): ultima del blocco 1 — un'occorrenza dovuta = una sola identità di turno · #73 direzione prodotto (FAST, altra sessione).
+**Prossimo**: `inbound-unit` (update_id → un turno, sulla forma di job_fires), poi blocco 2 (schema-evolution, update/backup, undo-journal). In volo: #73 (altra sessione).
+
+**CI ferma**: minuti Free esauriti dal 18/08 — si integra sulla verifica locale (build+suite+accettazione+report+ancore), deroga dell'owner scritta in BRANCHING checkpoint 4.
 
 **Serve l'owner**: corsa reale del character eval (~$0.33 Sonnet + ~$0.11 Haiku, solo input) · audio nei 14gg · scope sandbox · `mcp.*` per-tool · `ricorda` · lingua doc.
 

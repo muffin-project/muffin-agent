@@ -100,7 +100,7 @@ export function prDichiarateVive(documenti) {
       // di lavoro vivo. Senza questa esclusione il controllo segnalava come
       // stale la riga che lo teneva aggiornato, che è il modo più rapido per
       // farlo disattivare da qualcuno.
-      if (/integrat|mergiat|già dentro|chius[ae]|\bfatto\b/i.test(riga)) continue;
+      if (/integrat|mergiat|già dentro|chius[aeio]|\bfatto\b/i.test(riga)) continue;
       const vivo = soloSezione || /in giudizio|in volo|in corso/i.test(riga);
       if (!vivo) continue;
       // Fino a quattro cifre: i riferimenti lunghi in questo repo sono
