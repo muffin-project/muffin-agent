@@ -9,6 +9,7 @@ import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js'
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
+import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import { tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
@@ -2017,6 +2018,17 @@ async function runTool(
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
     // that honestly reports 0 costs the turn nothing.
     snapshot.raiseTaint(outcome.tier);
+    // The write boundary (owner, 2026-08-17; ADR-0048): every sink a tool
+    // result reaches from here — the durable record, the session JSONL, and
+    // the `tool_result` that later gets persisted into `turns.messages` by
+    // `closeRecord`/checkpoint — reads this one value. Redacting once, here,
+    // before any of the three, is provably sufficient (P34-2): none of
+    // `endToolCall`, `SessionStore.append` or `TurnStore.finish` transforms
+    // `content` again, they store exactly what they are given. This is a
+    // best-effort text scan (class 3, `redact.ts`), not the structural
+    // guarantee — a backend-known secret never reaches this variable in the
+    // first place, because no tool handler ever calls `readSecret`.
+    const safeContent = redactText(outcome.content);
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -2029,13 +2041,13 @@ async function runTool(
     // written with the tier absent, which is the version of that same argument
     // one level down: a resumed turn cannot inherit a provenance nobody stated.
     recordOutcome(deps, ctx.turnId, span, call.id, {
-      content: outcome.content,
+      content: safeContent,
       isError: outcome.isError === true,
       tier: outcome.tier,
     });
     deps.sessions.append(input.session, {
       role: 'tool',
-      content: outcome.content,
+      content: safeContent,
       toolCallId: call.id,
       toolName: call.name,
       surface: input.surface,
@@ -2050,12 +2062,17 @@ async function runTool(
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: outcome.content,
+      content: safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
-    const detail = error instanceof Error ? error.message : String(error);
+    // Redacted for the same reason and at the same boundary as the success
+    // path above: an error can carry a header or a query string right back
+    // out (`http_get` against a URL the model built), and this is the one
+    // point that covers the durable record, the session and `turns.messages`
+    // for the failure exit too.
+    const detail = redactText(error instanceof Error ? error.message : String(error));
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
