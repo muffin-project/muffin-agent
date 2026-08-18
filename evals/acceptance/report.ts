@@ -79,6 +79,15 @@ function parseInventory(): InventoryRow[] {
  */
 const NOT_PROVABLE_HERE: Record<string, string> = {
   C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
+  // `TelegramApi.baseUrl` (`connectors/telegram/api.ts`) ha un default ma
+  // nessun override in produzione — `cli/surface.ts` chiama sempre `new
+  // TelegramApi(token)`, mai un secondo argomento — quindi il binario reale
+  // non può essere puntato a un Bot API finto senza toccare quel cablaggio,
+  // fuori mandato per `slice/ingress-forward`. Il minimo di B16 è provato dal
+  // punto d'ingresso di produzione con un `TelegramApiLike` finto invece
+  // (`connectors/telegram/forward-taint.test.ts`, stesso livello di
+  // `document-arrival.test.ts`/`group-context.test.ts`), non dal binario.
+  B16: 'nessun binario spawnabile contro un Bot API finto: TelegramApi non ha override di baseUrl in produzione (cli/surface.ts)',
 };
 
 export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
