@@ -386,6 +386,20 @@ export type TurnInput = {
   text: string;
   signal?: AbortSignal;
   /**
+   * Mint the row under this identity instead of a fresh random one.
+   *
+   * Absent on every caller that predates it (a REPL turn, a Telegram message):
+   * `runTurn` keeps generating its own id, unchanged. It exists for a caller
+   * that must know the turn's identity *before* the model is ever called —
+   * B7's `job_fires` bridge binds `(job.id, job.nextFireAt)` to a turn id and
+   * only then calls `runTurn`, so that a crash between the bind and this call
+   * has somewhere durable to point at rather than a turn that never got made.
+   * `deps.turns.create` already takes any caller-supplied id (`enqueueTurn`
+   * does the same, for the same store); this only threads one in from the one
+   * caller that has to pick it first.
+   */
+  id?: string | undefined;
+  /**
    * Where the answer has to go, for a surface that delivers **out of band**.
    *
    * Opaque here on purpose: the loop must not learn what a chat id is — that is
@@ -540,12 +554,24 @@ function freshCounters(): TurnCounters {
 }
 
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
-  const turn = deps.tracer.start('muffin.turn', {
-    [ATTR.principalKind]: input.principal.kind,
-    [ATTR.tenant]: input.tenant,
-    [ATTR.surface]: input.surface,
-    [ATTR.requestModel]: deps.model,
-  });
+  const turn = deps.tracer.start(
+    'muffin.turn',
+    {
+      [ATTR.principalKind]: input.principal.kind,
+      [ATTR.tenant]: input.tenant,
+      [ATTR.surface]: input.surface,
+      [ATTR.requestModel]: deps.model,
+    },
+    // `SimpleTracer.start` takes `traceId = parent?.traceId ?? id(16)` — handing
+    // it `remoteParent(input.id)` is the one existing lever that makes the
+    // trace id (and so `record.id` below) exactly `input.id` instead of a
+    // freshly minted one. Reused rather than duplicated: this is not a resume,
+    // but the tracer does not need to know that, and `resumeTurn` already
+    // established that a handle carrying only a `traceId` is enough. The one
+    // cosmetic cost is `parentSpanId` reading as the marker id instead of
+    // `null` on this turn's very first span, in the trace JSONL only.
+    input.id === undefined ? undefined : remoteParent(input.id),
+  );
 
   /**
    * The record, before anything happens — and **not** inside a try.
