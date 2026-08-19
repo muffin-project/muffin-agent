@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/readme/banner-light.svg">
+  <img alt="Muffin continuity — one human at the center, connected across the changing parts of a digital life" src="assets/readme/banner-light.svg">
+</picture>
+
 <div align="center">
 
 <!--
@@ -5,7 +11,6 @@ Public README language contract (not rendered):
 - README.md is the canonical authored English surface.
 - README.it.md will be a derived/localized view after copy freeze, with freshness
   tracking so translations cannot silently become a second source of truth.
-- Hero art is intentionally not referenced until the final banner asset is approved.
 -->
 
 # Muffin
