@@ -8,26 +8,30 @@ osservato vince quando diverge da questo file.
 
 **Work live osservato (19/08/2026):**
 
-- **#81 `slice/docs-authority` — FAST, draft.** Refactor della gerarchia
-  documentale/workflow: authority map, current architecture/security, router
-  progressivi, Gate truth maintenance. Non chiude blocker runtime.
-- **#78 `slice/inbound-unit` — CRITICAL, open.** `update_id → one durable turn`.
-  All'ultima osservazione il branch è divergente da `dev` (4 commit avanti / 4
-  indietro): deve incorporare il `dev` corrente e rifare evidence/judge CRITICAL
-  prima del merge.
-- **#73 `slice/product-open-source-direction` — FAST, draft.** Direzione prodotto,
-  extensions/open-source/public narrative. Va riconciliata manualmente con la
-  gerarchia di #81; non mergiare wholesale la sua `THESIS.md`.
+- **#81 `slice/docs-authority` — STANDARD, draft, mergeable.** Refactor della
+  knowledge/workflow architecture. Il branch è **19 commit avanti / 0 indietro**
+  da `dev`. Oltre ai documenti modifica due consumer eseguibili del repository
+  harness: SessionStart ora inietta solo questo handoff; `riconcilia.mjs` verifica
+  solo `LAVORO ↔ Git/GitHub`. Per questo non è più FAST puro.
+- **#78 `slice/inbound-unit` — CRITICAL, open.** Telegram
+  `update_id → one durable turn`; il branch è ancora **4 avanti / 4 indietro** da
+  `dev`. Prima dell'integrazione deve incorporare il `dev` corrente e rifare
+  evidence pertinente + judge CRITICAL.
 
-**Blocker di truth maintenance già verificato:** il vecchio handoff/percorso
-scriveva «blocco 1 chiuso», ma `recall-speaker` resta un difetto reale. M5 deve
-essere riconciliato contro HEAD/evidence prima che i suoi conteggi globali siano
-riutilizzati come misura.
+**Chiuso come superseded:** #73 `slice/product-open-source-direction`. Le
+decisioni valide sono state assorbite nelle authority di #81; le draft originali
+e la research sono preservate in `docs/history/product-direction-2026-08-18/` e
+`docs/blueprint/research/`.
 
-**Next action di #81:** restringere il Gate a quattro case distinte
-(mandato/status/ordine/WIP), poi spostare storia/evidence solo dopo reverse-link
-scan e salvataggio delle semantiche uniche.
+**Truth-maintenance blocker separato:** M5 contiene ancora claim/sintesi stale
+(esempio già verificato: vecchio «blocco 1 chiuso» vs `recall-speaker` ancora
+aperto). Non correggere M5 per far sembrare completa #81: la riconciliazione
+riga-per-riga è un task evidence-driven distinto.
 
-**Owner decision richiesta da #81:** nessuna. Le decisioni personali del Gate
-restano nelle righe M5 pertinenti e vanno portate all'owner solo quando bloccano
-il prossimo lavoro reale.
+**Next action di #81:** eseguire sul checkout locale i test mirati dei consumer
+workflow (`inject-state.test.ts`, `riconcilia.test.ts`), leggere il diff finale,
+verificare `node .claude/riconcilia.mjs` sul GitHub live e aggiornare il body PR
+alla scope/profile reale. Se passa, #81 può uscire da draft e integrarsi come
+STANDARD; nessun fresh judge CRITICAL è richiesto.
+
+**Owner decision richiesta da #81:** nessuna.
