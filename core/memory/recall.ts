@@ -279,7 +279,7 @@ export type RecallResult = {
 const K = 60;
 
 /** The durable episode role. Trust and speaker are deliberately separate axes. */
-type EpisodeRole = 'user' | 'agent' | 'tool' | 'system';
+type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
 
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
@@ -422,7 +422,7 @@ export async function recall(
   const episodeRoles = new Map<number, EpisodeRole | null>();
   const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string => {
     if (!episodeRoles.has(id)) {
-      episodeRoles.set(id, (deps.store.episodeById(tenantId, id)?.role as EpisodeRole | undefined) ?? null);
+      episodeRoles.set(id, deps.store.episodeById(tenantId, id)?.role ?? null);
     }
     return describeEpisodeSource(episodeRoles.get(id) ?? null, tier, at, surface);
   };
@@ -793,8 +793,11 @@ function describeSource(who: string, when: string, surface?: string): string {
 /**
  * Episode role answers "who produced these bytes"; tier answers "how much
  * authority do these bytes carry". Conflating the two is how an agent message
- * at tier 0 used to become `[tu ...]` on recall. Unknown role fails closed:
- * absence of attribution can never be promoted to owner speech.
+ * at tier 0 used to become `[tu ...]` on recall. For non-user episodes the
+ * speaker remains explicit while a non-zero tier is also shown as context, so
+ * fixing attribution never launders the trust provenance that reply taint was
+ * built to preserve. Unknown role fails closed: absence of attribution can
+ * never be promoted to owner speech.
  */
 function describeEpisodeSource(role: EpisodeRole | null, tier: TrustTier, when: string, surface?: string): string {
   const who =
@@ -807,7 +810,8 @@ function describeEpisodeSource(role: EpisodeRole | null, tier: TrustTier, when: 
           : role === 'user'
             ? tierSpeaker(tier)
             : 'origine non attribuita';
-  return describeSource(who, when, surface);
+  const trustContext = role === 'user' || tier === 0 ? '' : ` · contesto: ${tierSpeaker(tier)}`;
+  return describeSource(`${who}${trustContext}`, when, surface);
 }
 
 function describeTier(tier: TrustTier, when: string, surface?: string): string {
