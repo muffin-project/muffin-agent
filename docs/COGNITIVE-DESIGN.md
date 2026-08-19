@@ -52,7 +52,7 @@ definition.
 
 ## 2. Two evidence axes, never one maturity badge
 
-Every cognitive idea carries two independent statuses.
+Every falsifiable cognitive idea carries two independent statuses.
 
 ### External grounding
 
@@ -80,14 +80,20 @@ How much evidence says the **software/product application** is useful here?
   silently resurrect it under a new name.
 
 `SHIPPED` is deliberately absent. Shipping says code exists, not that the idea
-works.
+works. `SUPPORTED` is deliberately expensive: a mechanism does not earn it from
+one unit test or because the external science is strong.
 
 External grounding never upgrades Muffin evidence automatically. A robust
 neuroscience phenomenon can still inspire a terrible product feature.
 
+Some human-first properties are **not cognitive experiments at all**. If a
+boundary is required independently for security, provenance or continuity, it
+belongs under architectural commitments rather than being assigned a fake
+cognitive-evidence badge.
+
 ---
 
-## 3. Current hypothesis registry
+## 3. Falsifiable product hypotheses
 
 ### H1 — Learn from prediction error, not from confidence alone
 
@@ -98,7 +104,9 @@ The underlying learning idea is simple: compare an expectation with what
 actually happened and use the discrepancy to update the model. Prediction-error
 learning is a major construct in associative/computational neuroscience.
 
-The Muffin hypothesis is more specific and therefore unproven:
+This is the deeper idea behind what the legacy project sometimes described as
+learning from the **prediction diff**. The Muffin version is more specific and
+therefore unproven:
 
 ```text
 explicit prediction about this owner / situation
@@ -166,7 +174,7 @@ Candidate measurements:
 ### H3 — Importance is not frequency
 
 **External grounding: SUGGESTIVE**  
-**Muffin evidence: EXPERIMENT / PARTIAL**
+**Muffin evidence: EXPERIMENT**
 
 A repeated item is not necessarily the most important item, and a one-off event
 can remain highly significant. Muffin therefore should not turn mention count
@@ -174,7 +182,8 @@ into a universal importance score.
 
 The current memory design already separates dimensions such as explicit
 importance, confidence, provenance and temporal state instead of putting a
-single frequency term in charge of memory.
+single frequency term in charge of memory. That makes the idea testable; it does
+not prove the stronger product claim.
 
 The stronger claim — that Muffin can infer durable personal significance better
 than a well-contextualised model without special machinery — remains unproven.
@@ -189,7 +198,7 @@ Candidate measurements:
 ### H4 — Forgetting can improve usefulness; Muffin should complement human forgetting
 
 **External grounding: STRONG for adaptive forgetting in humans; ANALOGY for Muffin**  
-**Muffin evidence: UNTESTED as a product policy**
+**Muffin evidence: UNTESTED**
 
 Human memory does not preserve every representation equally, and forgetting can
 reduce interference. That does not imply Muffin should copy a biological
@@ -212,7 +221,7 @@ question, not a licence to delete data.
 ### H5 — Timing is part of intelligence; silence is a valid action
 
 **External grounding: STRONG that proactive timing is a hard problem**  
-**Muffin evidence: legacy mechanism REJECTED; new posture EXPERIMENTAL**
+**Muffin evidence: EXPERIMENT (current direction); legacy heartbeat form REJECTED**
 
 A correct suggestion at the wrong moment is a bad intervention. Muffin treats
 `do nothing` / `stay silent` as a first-class outcome.
@@ -224,7 +233,8 @@ context or treats elapsed time as a reason to speak.
 The current direction is intentionally stricter: cheap deterministic signals may
 identify candidate moments; semantic judgement decides whether there is
 actually something specific worth saying; silence remains the default when the
-case is weak.
+case is weak. That direction is still experimental: the failure of heartbeat
+does not prove the replacement works.
 
 Candidate measurements:
 
@@ -237,7 +247,7 @@ Candidate measurements:
 ### H6 — A person model must learn change, not fossilise biography
 
 **External grounding: SUGGESTIVE / strong engineering evidence for preference drift**  
-**Muffin evidence: PARTIAL / UNTESTED longitudinally**
+**Muffin evidence: UNTESTED longitudinally**
 
 A useful personal model distinguishes relatively stable biography from mutable
 preferences, priorities, projects and habits. More importantly, it needs a
@@ -246,7 +256,8 @@ model that produced the action.
 
 Legacy Muffin had a useful mutability intuition but an incomplete loop: its
 belief-gap questions were asked, yet answer/ignore states were not wired well
-enough for the supposed adaptive back-off to learn from them.
+enough for the supposed adaptive back-off to learn from them. That is negative
+evidence for the old mechanism, not positive evidence for the replacement.
 
 Future person-model work should therefore optimise for **correction latency and
 adaptation**, not number of stored attributes.
@@ -259,38 +270,38 @@ Candidate measurements:
 - whether post-action feedback actually modifies future behaviour;
 - questions repeated despite sufficient prior evidence.
 
-### H7 — Episodic evidence and semantic belief are different things
+---
 
-**External grounding: STRONG as a cognitive distinction; software mapping is ANALOGY**  
-**Muffin evidence: SUPPORTED as an architectural separation, mechanism still evolvable**
+## 4. Cognitive-adjacent architectural commitments
+
+These properties are related to the human-first programme but are **not** kept or
+removed by a cognitive engagement A/B test. Their current authority lives in the
+architecture/security documents and executable system.
+
+### Evidence and belief are different things
 
 A time-stamped observation and a de-contextualised belief should not be the same
-record merely because both are "memory". The current architecture's Evidence vs
-Beliefs split expresses the useful software property without requiring Muffin to
-simulate hippocampal/cortical biology.
+record merely because both are "memory". Episodic/semantic cognition is useful
+prior art, but the software property earns its place independently through
+provenance, speaker attribution, contradiction and temporal correction.
 
-This is now more than a cognitive experiment because provenance, contradiction,
-speaker attribution and temporal correction depend on the separation. The exact
-extraction/consolidation algorithm remains harness and may be replaced.
+The exact extraction/consolidation algorithm remains harness and may be replaced.
+The Evidence vs Beliefs boundary does not require Muffin to simulate
+hippocampal/cortical biology.
 
-### H8 — Understanding never grants authority
+### Understanding never grants authority
 
-**External grounding: not a neuroscience claim**  
-**Muffin evidence: architectural commitment**
+Human-first personalisation easily drifts into the assumption "the agent knows
+me, therefore it may decide for me". Muffin rejects that inference.
 
-This belongs here because human-first personalisation easily drifts into the
-opposite assumption: "the agent knows me, therefore it may decide for me".
-
-Muffin rejects that inference. Better understanding can improve interpretation.
-Authority is granted separately, by capability/resource/context, and remains
-observable and revocable.
-
+Better understanding can improve interpretation. Authority is granted
+separately, by capability/resource/context, and remains observable and revocable.
 This is a constitutional/product boundary, not something an engagement metric is
-allowed to A/B away.
+allowed to optimise away.
 
 ---
 
-## 4. Ideas we explicitly do not canonise
+## 5. Ideas we explicitly do not canonise
 
 ### "The brain does X, therefore Muffin should do X"
 
@@ -328,7 +339,7 @@ different.
 
 ---
 
-## 5. Product-level augmentation metrics
+## 6. Product-level augmentation metrics
 
 The sentence "make the owner more capable, not more dependent" is only useful if
 we are willing to observe its failure.
@@ -355,7 +366,7 @@ before a compelling cognitive story hardens into doctrine.
 
 ---
 
-## 6. Kill criteria for cognitive machinery
+## 7. Kill criteria for cognitive machinery
 
 A cognitive mechanism should be simplified, parked or removed when one or more
 of these persist after a fair experiment:
@@ -377,7 +388,7 @@ project failed.
 
 ---
 
-## 7. Legacy corpus and evidence discipline
+## 8. Legacy corpus and evidence discipline
 
 The curated rebuild corpus under `docs/blueprint/knowledge/` remains valuable
 because it preserves both useful principles and failed implementations from the
