@@ -208,7 +208,8 @@ capability  each authority-bearing thing it can do
 grant       what you currently permit it to do
 ```
 
-**What you do not install should not exist in your Muffin.**
+The intended direction is a narrow trusted core with optional capabilities around
+it. What you do not install should not exist in your Muffin.
 
 [Extension direction →](docs/EXTENSIONS.md)
 
@@ -224,10 +225,18 @@ owner DAY-1
 small trusted alpha
     ↓
 public alpha
+    ↓
+community breadth + earned maintainership
 ```
 
-The first 14 days are meant to expose fallback, forgotten/duplicated work,
-bad interruptions and clever mechanisms that do not actually help.
+The 14-day run is meant to expose what actually forces the owner back to another
+agent or direct interface, what Muffin forgets, where it interrupts badly, and
+which supposedly clever mechanisms do not help.
+
+> **Which part of my digital life am I still forced to manage directly?**
+>
+> **Which mechanism actually made me more capable, and which one merely made
+> Muffin feel more clever?**
 
 [Open-source strategy →](docs/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/PUBLIC-NARRATIVE.md)
 
