@@ -1,98 +1,74 @@
 # Working on this repository
 
-For agents — including this project's own agent, once it can work on itself.
+This file is a **router**, not the repository manual. Start with
+`docs/README.md`: it maps each kind of question to its authoritative home.
 
-Read `docs/THESIS.md` for what this is betting on and `docs/DESIGN-PRINCIPLES.md`
-for how decisions get made. `docs/BRANCHING.md` says where work lives and what
-`main` means — including the rule that remains a convention rather than a
-mechanism because the repo has no branch protection. CI exists and verifies
-PRs plus pushes to `dev`/`main`; it cannot by itself forbid an unchecked merge.
-Read `docs/lessons.md` before you add a guard: it is
-a list of guards this repository already wrote and failed to connect.
+## Reconstruct reality before changing it
 
-## The one rule that has cost the most to learn
+- Observe Git, worktrees/branches, open PRs/checks and durable delegation state;
+  do not infer current work from a nearby Markdown file.
+- For an autonomous continuation, follow `.claude/loop.md` (Claude) or the same
+  control loop in `docs/ORCHESTRATION.md`.
+- `docs/blueprint/LAVORO.md` is a disposable handoff. Observed repository state
+  wins when they disagree.
+- A detailed historical document is not evidence that HEAD still implements its
+  claim. Verify load-bearing current-state claims against code/config/runtime.
 
-**A mechanism working is not the same claim as the outcome being right, and only
-the second one is worth asserting.**
+## Know which source owns the question
 
-Four separate defences here had a schema, passing tests, and a caller waiting on
-them — and were reached by nothing. The budget engine never recorded, so its caps
-were decorative. Safe mode was computed and never handed to the kernel, while the
-CLI told the user capabilities were denied. The invariant written for an incident
-where every vector table sat empty skipped in silence in exactly that
-configuration. A sandbox probe ran an allow-all profile and reported "a real
-containment ran and held".
+- **Literal mechanics** → code, schemas and shipped config.
+- **Why Muffin exists** → `docs/THESIS.md`.
+- **Current architecture** → `docs/ARCHITECTURE.md`.
+- **Current security model** → `docs/SECURITY.md`.
+- **How design choices are made** → `docs/DESIGN-PRINCIPLES.md`.
+- **Why a decision was taken** → the relevant ADR under
+  `docs/blueprint/adr/`.
+- **DAY-1 status** → `docs/blueprint/M5-BIS.md`; ordering →
+  `docs/blueprint/gate1/PERCORSO-CRITICO.md`.
+- **Research/audits/lessons** → evidence and history, never current state by
+  themselves.
+- **`docs/mappa/`** → derived navigation views, never independent authority.
 
-So: **when you add a guard, write the test that fails without its wiring**, not
-the test that proves its logic. In this codebase the logic has never been the
-thing that was wrong.
+Load deeper/domain material only when the task makes it relevant. Context is a
+resource; history is not startup context.
 
-**The process document is `docs/PRACTICES.md`** — nine practices, each with the
-trigger that fires it. This file is why; that file is when. **`docs/JUDGE.md`**
-is what a review asks: the standing questions, the verdict labels, and the rule
-that a reviewer reaches the guarantee from production rather than reading the
-diff — because the defect above was in neither diff.
+## How work is governed
 
-## Before you change anything
+Classify the claim **before** implementation using FAST / STANDARD / CRITICAL in
+`docs/ORCHESTRATION.md`. The verification budget follows the claim and blast
+radius, not diff size.
 
-- `npm run build` (`tsc --noEmit`) and `npm test` both clean. Tests passing while
-  the build fails has happened here; run both.
-- Reconstruct the whole repository state: current worktree, every local and
-  remote branch, open PR/check state, and the non-integrated work named in
-  `STATE.md`. A nearby file is not the whole project, and another worktree may
-  already contain the primitive you are about to duplicate.
-- Research before an architectural choice, not after. A chunker was written from
-  intuition and thrown away when three hours of reading said the intuitive answer
-  loses on this corpus — see `docs/blueprint/adr/0024`. Chunking looked like an
-  implementation detail. It decides what recall *can* find.
-- Probe, don't assume, when a library's behaviour is load-bearing. `vec0` renames
-  a virtual table without renaming its shadow tables; `sqlite-vec` supports
-  partition keys; Ollama does not expose pre-pooling token embeddings. All three
-  changed a design, and all three took one script to establish.
+- `docs/ORCHESTRATION.md` — control loop, evidence budget, delegation, scope and
+  escalation.
+- `docs/PRACTICES.md` — engineering practices and their triggers.
+- `docs/JUDGE.md` — independent review semantics.
+- `docs/BRANCHING.md` — Git/PR/promotion mechanics.
 
-The first deployment is single-user; the architecture is not host-only. Tenant,
-principal, surface, provider, capability, provenance and budget remain variable
-across boundaries even when today's default has one value. Group activation can
-wait until after the fourteen-day personal-use window. Retrofitting isolation
-after data accumulates cannot.
+A subagent saying something is not evidence. A module existing is not proof that
+production reaches it. Prefer the smallest evidence that could falsify the claim
+and prove wiring when wiring is the guarantee.
 
-## Shape of the thing
+## Repository-wide conventions
 
-```
-core/      policy kernel · root of trust · tracing · budget · config
-           memory (episodes, bi-temporal graph, recall) · vault
-agent/     the loop · providers · per-model profiles · tools · context
-cli/       the surfaces: repl, run, memory, vault, doctor, trace
-evals/     capability floor · memory acceptance · voice drift
-```
+Follow ADR-0020 for language instead of inventing a new policy: code,
+identifiers, commits and outward technical interfaces are English; internal
+design/persona material may be Italian; do not maintain duplicate bilingual
+copies merely for translation.
 
-`core/policy/decide.ts` is the kernel: pure, synchronous, total. Every capability
-request goes through it. It has been reviewed line by line and the problems have
-always been in its callers — start there before suspecting it.
+Never put personal data or owner state in the repository. Installation data
+belongs under the Muffin home, not in Git.
 
-Data lives only in `~/.muffin/`. A `git pull` must never be able to touch
-anyone's identity or memory.
+Do not reopen a recorded architectural decision merely because another design is
+possible. Bring new evidence; if the decision materially reverses, record a new
+ADR rather than rewriting history until the old decision disappears.
 
-## Conventions that are not preferences
+## The failure pattern to remember
 
-- **English** in code, commits and anything facing outward. **Italian** for the
-  persona, the prompts and the design records. Never the same content in both —
-  see `docs/blueprint/adr/0020`.
-- Comments explain *why*, and especially why-not. A comment restating the code is
-  noise; a comment recording the failure that produced the line is the reason the
-  line survives a refactor.
-- Never delete rows. `expired_at` and `superseded_at` retire things without
-  destroying them, which is what makes "what did I think in May" answerable.
-- Trust never rises. A fact cannot be more trusted than the sentence it came
-  from, a reindex cannot launder a downloaded file, and a vector match is not
-  evidence of provenance.
-- Secrets are read from stdin, never from argv, and never printed. If one reaches
-  a log or a transcript, it is rotated, not redacted after the fact.
+Muffin has repeatedly had mechanisms that existed, had unit tests and were still
+not on the production path. Therefore:
 
-## What not to reopen
+> **A mechanism working is not the same claim as the outcome being right.**
 
-Decisions with a record behind them, in `docs/blueprint/adr/`: rigid S→P→O
-triples (an in-house constraint silently corrupted 89 beliefs), an explicit
-planning layer in the loop, semantic chunking, late chunking, a dynamic model
-router, headless browsers. Each has an ADR with the evidence. Bring new evidence
-or leave them alone.
+When the claim is load-bearing, trace producer → consumer → failure path and make
+the evidence fail when the wiring is removed. The repository should make that
+path easier to inspect, not compensate with more prose.
