@@ -98,7 +98,7 @@ describe('recall preserves episode speaker independently from trust', () => {
     expect(agent?.source).not.toContain('tu via cli');
   });
 
-  it('a tier-2 Muffin neighbour stays Muffin while its tier still raises turn taint', async () => {
+  it('a tier-2 Muffin neighbour keeps both speaker and trust context, and still raises turn taint', async () => {
     const { store } = memory();
     const agentId = addEpisode(store, {
       content: 'questa era una risposta precedente di Muffin',
@@ -121,7 +121,8 @@ describe('recall preserves episode speaker independently from trust', () => {
 
     expect(anchor?.source).toContain('tu via cli');
     expect(neighbour?.neighbourOf).toBe(anchorId);
-    expect(neighbour?.source).toContain('Muffin via cli');
+    expect(neighbour?.source).toContain('Muffin');
+    expect(neighbour?.source).toContain('contesto: gruppo/sconosciuto');
     expect(neighbour?.source).not.toContain('tu via cli');
     expect(neighbour?.trustTier).toBe(2);
     expect(recallTaint(result)).toBe(2);
