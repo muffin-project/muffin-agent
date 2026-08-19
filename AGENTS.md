@@ -18,6 +18,7 @@ This file is a **router**, not the repository manual. Start with
 
 - **Literal mechanics** → code, schemas and shipped config.
 - **Why Muffin exists** → `docs/THESIS.md`.
+- **Where the product is trying to go** → `docs/VISION.md`.
 - **Current architecture** → `docs/ARCHITECTURE.md`.
 - **Current security model** → `docs/SECURITY.md`.
 - **How design choices are made** → `docs/DESIGN-PRINCIPLES.md`.
@@ -27,7 +28,8 @@ This file is a **router**, not the repository manual. Start with
   `docs/blueprint/gate1/PERCORSO-CRITICO.md`.
 - **Research/audits/lessons** → evidence and history, never current state by
   themselves.
-- **`docs/mappa/`** → derived navigation views, never independent authority.
+- **Architecture map** → `docs/blueprint/mappa/`; a derived editorial view,
+  never independent authority.
 
 Load deeper/domain material only when the task makes it relevant. Context is a
 resource; history is not startup context.
@@ -41,7 +43,7 @@ radius, not diff size.
 - `docs/ORCHESTRATION.md` — control loop, evidence budget, delegation, scope and
   escalation.
 - `docs/PRACTICES.md` — engineering practices and their triggers.
-- `docs/JUDGE.md` — independent review semantics.
+- `docs/JUDGE.md` — independent CRITICAL review semantics.
 - `docs/BRANCHING.md` — Git/PR/promotion mechanics.
 
 A subagent saying something is not evidence. A module existing is not proof that
