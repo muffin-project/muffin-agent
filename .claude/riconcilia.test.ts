@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error — repository checker is an executable .mjs script without declarations.
 import { branchDichiaratiVivi, prDichiarateVive, riconcilia, righeLogiche } from './riconcilia.mjs';
 
 const lavoro = `# Lavoro corrente
