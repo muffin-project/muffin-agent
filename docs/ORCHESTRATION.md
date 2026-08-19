@@ -1,535 +1,315 @@
-# Come si orchestra questo lavoro
+# Orchestration
 
-> Direttiva owner, 2026-08-15. Nasce da due conversazioni esterne che l'owner ha
-> portato come fonte (un'analisi del prompt d'orchestrazione, e una lettura della
-> documentazione di Hermes Agent) più il modo in cui questo repo ha effettivamente
-> lavorato negli ultimi giorni. Non è una lista di buone intenzioni: ogni regola
-> qui sotto esiste perché la sua assenza è già costata qualcosa, e dove è costata
-> è scritto.
->
-> `PRACTICES.md` dice **come si scrive**. Questo file dice **come si decide e chi
-> verifica**. `AGENTS.md` dice cosa non si tocca.
->
-> **La regola più usata di tutte è §17: la verifica è proporzionale alla claim e
-> al blast radius.** Prima di implementare si sceglie il profilo — FAST,
-> STANDARD, CRITICAL — e quel profilo dice quale evidenza serve. Tutto ciò che
-> segue va letto con quella lente: le regole forti di questo documento nascono
-> da difetti veri, ma sono state applicate uniformemente, e l'uniformità è
-> diventata il collo di bottiglia (direttiva owner, 2026-08-17).
+This document owns **how repository work is selected, bounded, delegated,
+verified and integrated**. It does not own Git mechanics (`BRANCHING.md`), review
+rubrics (`JUDGE.md`), coding practices (`PRACTICES.md`) or current project state.
 
-## 1. Il loop è un control loop, non un task loop
+The central rule is:
 
-La forma sbagliata, e quella in cui si scivola da soli:
+> **Verification is proportional to the claim and its blast radius.**
 
-> leggo → credo di aver capito → faccio → i test passano → prossimo task
+The question is not "which checks exist?" but:
 
-La forma giusta ha uno stadio che quella non ha: **ricostruire lo stato prima di
-scegliere l'obiettivo**, e **aggiornarlo dopo**.
+> **What is the minimum evidence that could falsify this claim?**
 
+## 1. The control loop
+
+Work is a control loop, not a TODO loop:
+
+```text
+OBSERVE
+  ↓
+RECONSTRUCT REAL STATE
+  ↓
+CHOOSE ONE DELIVERABLE / CLAIM
+  ↓
+FIND DECISION FORKS
+  ↓
+RESEARCH ONLY WHAT CAN CHANGE THE DECISION
+  ↓
+CLASSIFY VERIFICATION PROFILE
+  ↓
+IMPLEMENT / DELEGATE
+  ↓
+VERIFY THE CLAIM
+  ↓
+INTEGRATE
+  ↓
+UPDATE ONLY THE AUTHORITATIVE HOMES MADE STALE
+  ↓
+OBSERVE AGAIN
 ```
-OSSERVA → RICOSTRUISCI LO STATO → SCEGLI L'OBIETTIVO → CERCA I BIVI
-   → RICERCA → PIANIFICA → DELEGA → IMPLEMENTA → VERIFICA
-   → INTEGRA → AGGIORNA LO STATO → OSSERVA
-```
 
-«Cerca i bivi» sta **prima** della ricerca di proposito: una decisione trovata a
-implementazione fatta è una decisione già presa da sé.
+Observed Git/worktree/PR/check/delegation state is part of observation. A handoff
+file is not allowed to override reality.
 
-## 2. Le classi di decisione, e dove ci si ferma
+For DAY-1, the deliverable is selected from
+`docs/blueprint/gate1/PERCORSO-CRITICO.md` and the relevant rows of
+`docs/blueprint/M5-BIS.md`. A PR is an execution/checkpoint vehicle, not the
+product's state machine.
 
-L'errore da evitare è duplice, e i due estremi sono ugualmente inutili: l'agente
-paralizzato che chiede conferma per rinominare una variabile, e l'agente cowboy
-che sceglie da solo la forma dei dati.
+## 2. Decision boundaries
 
-| Classe | Cosa fa l'orchestratore |
+The orchestrator should not ask the owner to make routine implementation choices,
+and should not silently make decisions whose cost belongs to the owner.
+
+| Decision | Default behaviour |
 |---|---|
-| Banale · implementazione locale | decide e procede |
-| Architetturale **reversibile** | propone, e procede se il rischio è basso — dicendo che l'ha fatto |
-| Architetturale **irreversibile** | **si ferma** |
-| Prodotto (cosa deve fare, per chi) | **si ferma** |
-| Sicurezza · privacy | **si ferma** |
-| Modello dati (schema, formati, migrazioni) | **si ferma** |
-
-**Fermarsi non è chiedere «cosa vuoi fare?».** È portare il bivio già istruito:
-le opzioni, i pro e i contro di ciascuna, la raccomandazione con la sua ragione,
-e la domanda esatta a cui serve risposta. Scaricare la scelta addosso all'owner
-senza averla analizzata è lavoro non fatto, non collaborazione.
-
-## 3. Un subagente che dice di aver fatto non è evidenza
-
-Questa è la regola che questo repo paga più spesso. I subagenti sono **worker**:
-l'orchestratore definisce il compito, loro producono, **l'orchestratore
-verifica** — le affermazioni che reggono la conclusione, non tutte.
-
-**Ma delegare non è il default.** Un subagente si giustifica quando compra
-almeno una di queste cose: esplorazione che costerebbe troppo contesto qui ·
-parallelismo davvero indipendente · competenza specializzata · isolamento di
-un'indagine · verifica fresca e indipendente per una claim CRITICAL (§17). Un
-compito locale e chiaro l'orchestratore lo legge, lo implementa e lo verifica da
-sé: la catena `orchestratore → worker → judge → worker2` per una modifica di
-venti righe costa più contesto e più tempo di quanto ne compri, e ogni passaggio
-di mano è un punto in cui l'informazione si degrada.
-
-E il costo di un ventaglio si legge **prima**, non a metà: `node
-.claude/deleghe.mjs preventivo <n>` lo stima sulle deleghe già misurate. Non
-esiste un tetto di agenti come invariante — il predittore vero non è il numero
-di worker ma le tool call per worker, perché è la lettura di cache a crescere —
-e un ventaglio materialmente costoso resta una decisione dell'owner (§2), da
-portargli istruita invece che da scoprire con quaranta sonde già in volo. La
-stessa famiglia di comandi tiene il resto della resilienza: una delega si
-registra **prima** che parta, e una uccisa da quota o 529 si *parcheggia* —
-resta riprendibile dal brief su disco invece di sparire o, peggio, di restare
-indistinguibile da una che sta lavorando.
-
-Evidenza è: il codice che c'è · un test che passa **e che è stato visto fallire
-prima del fix** · il comportamento eseguito · il diff letto · `tsc` e la suite
-lanciati da chi riferisce · il numero prodotto nello stesso respiro in cui si
-scrive.
-
-Non è evidenza: un riassunto, una spunta, «tutti i test passano» senza il
-comando, un `file:riga` ricordato invece che aperto.
-
-E vale anche al contrario: quando un subagente riferisce un difetto, si verifica
-prima di crederci. In questa slice un agente ha riportato due vincitori su un
-lock — sembrava un bug di concorrenza gravissimo, era il suo harness di test.
-
-## 4. Le PR sono checkpoint epistemici
-
-Non «faccio tutto e poi te lo mostro», ma:
-
-```
-obiettivo → PR → verifica → merge → aggiorna lo stato → obiettivo successivo
-```
-
-Una PR per cosa, con una definizione di completamento **verificabile**. Non si
-scrive «abbiamo implementato memoria, eventi e workspace»: si scrive quali PR,
-e ognuna sopravvive da sola alla domanda «è vero?».
-
-Il checkpoint comincia prima del merge. Appena scope e decisione sono stabili si
-apre una **draft PR**; dopo ogni unità raggiungibile e verificata si fa un commit
-coerente e si aggiorna lo stato, così un compact o un esperimento successivo non
-è l'unico posto in cui il lavoro esiste. La PR diventa reviewable soltanto con
-build, suite, failure path, accettazione dovuta e viste derivate aggiornate.
-
-I quattro checkpoint normativi — decisione, meccanismo raggiunto, slice
-verificata, integrazione — sono in `BRANCHING.md`. Il merge in `dev` richiede il
-verdetto terminale di un judge **quando la slice è ambigua** (kernel, RoT,
-schema, concorrenza, sandbox, segreti, primitive nuove); una slice sicura
-(documenti, stato, soli test, correzioni meccaniche) la verifica e la integra
-l'orchestratore da solo, con i comandi eseguiti scritti nella PR — un judge
-serve dove serve un contesto fresco contro l'adulazione, non per un check che
-chi integra può fare da sé (decisione owner 2026-08-17). `dev`→`main` richiede
-una nuova verifica dell'insieme. Frequenza non sostituisce evidenza: commit e PR sono continui,
-merge solo ai checkpoint dichiarati.
-
-## 5. Lo stato dell'orchestratore, non solo quello del progetto
-
-`STATE.md` dice dov'è il *progetto*. Dopo trenta iterazioni serve anche dov'è
-*chi lo sta guidando*: comprensione attuale · obiettivo attuale · decisioni
-aperte · domande all'owner · PR attive · deleghe in volo · stato della verifica
-· rischi noti · prossima azione consigliata.
-
-Senza, il loop diventa un narratore con la memoria confusa: sa di aver fatto
-molto e non sa più cosa regge.
-
-## 6. Repo navigabile da umani **e** da agenti
-
-Non sono lo stesso problema. Un umano naviga per concetti, gerarchie, nomi
-familiari, intuizione. Un agente naviga per segnali strutturali: riferimenti
-espliciti, indici, entry point, percorsi deterministici, metadati.
-
-> **La repo non va progettata perché l'agente la legga tutta. Va progettata
-> perché sappia cosa leggere, in che ordine, e perché.**
-
-Due vincoli che si tengono a vicenda: *human-readable* non implica
-*agent-navigable*, e *agent-navigable* non deve diventare *human-hostile*. Niente
-cartella `AI_DOCS/` parallela — il livello di navigazione per agenti si ottiene
-con manifest, indici, riferimenti bidirezionali e entry point **dentro** la
-struttura vera (`CLAUDE.md`, `AGENTS.md`, `STATE.md`, gli ADR), non accanto.
-
-Il criterio di qualità è misurabile: quanto ci mette un umano — e quanto ci mette
-un agente — a ricostruire il contesto che serve per fare correttamente una data
-operazione.
-
-## 7. Sapere quando non fare niente
-
-Vale per l'agente che stiamo costruendo e per l'orchestratore che lo costruisce.
-
-> **Un agente continuo non è quello che fa sempre qualcosa. È quello che sa
-> quando non fare nulla.**
-
-Ogni evento passa da: serve un'azione? serve ricordare? serve toccare il
-workspace? serve coinvolgere l'owner? **oppure si ignora** — e ignorare è un
-esito legittimo, non un fallimento. In codice questa proprietà esiste già ed è
-`decideProactive` (`core/scheduler/proactivity.ts`), col suo insieme **chiuso** di
-trigger. Qualunque spina degli eventi nasca dopo, quel cancello resta.
-
-ADR-0045 rende esplicito che questa è la terza dimensione del prodotto:
-**presenza**, accanto a fare e capire. Non introduce un altro loop cognitivo.
-Richiede che il control loop sappia produrre anche `wait`, `defer`, `ignore`,
-`ask`, `refuse`, `revise`, `abandon` e `cancel`, con stato durevole quando resta
-qualcosa dovuto. E richiede di non confondere ciò che è successo (evidenza), ciò
-che Muffin crede, ciò che vale adesso nel mondo e ciò che il lavoro sta ancora
-aspettando: quattro domande diverse, non un blob chiamato “contesto”.
-
-## 8. Gli eval rispondono a una domanda sola
-
-Non «quanti benchmark mettiamo nel README», ma **«sta migliorando?»**. Quindi
-pochi, concreti, e soprattutto **di regressione**: la stessa suite prima e dopo,
-e la capacità di dire *questa modifica ha peggiorato X*.
-
-Le domande che meritano un eval, in ordine di quanto sono nostre: cosa va
-ricordato di un dialogo · cosa va ripescato dato un contesto · dove va
-un'informazione (memoria, workspace, contesto, tool) · quale tool serve · dato
-un evento, agire/ricordare/ignorare · l'obiettivo è stato davvero completato ·
-**e il carattere arriva alla risposta** (`evals/character/`, che risponde a
-«sui modelli Gate 1, Muffin è riconoscibilmente Muffin?» — proprietà, non
-wording, con un giudice automatico come primo filtro e una colonna di revisione
-umana che resta all'owner).
-
-## 9. Il modello si sceglie per la task, e la scelta si misura
-
-Non si fissa oggi una matrice modello→task. La regola è: il modello di un
-sotto-compito si sceglie per **natura, complessità, rischio e costo**, e quando
-il dubbio sulla qualità relativa è reale si fa un **eval comparativo piccolo**
-prima di standardizzare.
-
-La separazione che resta ferma è un'altra, e non è sui nomi dei modelli:
-**orchestratore ≠ worker ≠ verificatore**. L'orchestratore non è il modello che
-sa fare tutto meglio; è quello che ha la responsabilità di decidere cosa va
-fatto, come si verifica, e quando fermarsi a chiedere.
-
-## 10. La ricerca cita, e la citazione impedisce di rifarla
-
-Ogni affermazione che viene da fuori porta la fonte primaria e **perché ci
-interessa**, non solo il titolo. Serve a una cosa concreta: che la ricerca
-successiva possa dire *«quel paper lo stiamo già considerando, ecco dove»*
-invece di ripartire. Il formato e le due zone stanno in `PRACTICES.md` §13; qui
-si aggiunge solo l'obbligo della citazione puntuale e del *perché*.
-## 11. Cosa significa «chiuso»
-
-**Un test verde non è «chiuso»** — questo resta. Ma la vecchia tabella
-universale (implementazione · unit · integration · cablaggio · failure path ·
-accettazione reale · documenti, *tutte* per ogni voce) è stata sostituita il
-2026-08-17, perché applicata a ogni riga trasformava un typo in una
-mini-certificazione di kernel.
-
-> **Chiuso = la claim è soddisfatta, l'evidence budget del suo profilo (§17) è
-> soddisfatto, e non c'è un blocker noto che invalidi quella claim.**
-
-Gli strumenti della vecchia tabella restano gli strumenti — non le caselle:
-
-| strumento | quando è **obbligatorio** |
-|---|---|
-| unit | la claim è su una logica locale |
-| integration | la claim attraversa un confine fra moduli |
-| **cablaggio provato** | la claim dice «la produzione ci arriva» |
-| **failure path** | il cambiamento introduce o modifica un fallimento materiale |
-| **accettazione col binario vero** | la claim è sul comportamento del binario, non su una funzione pura |
-| **mutazione** | la claim è che un guard o una cucitura *impedisce* qualcosa |
-| documenti | il cambiamento rende stale una *authoritative home* (§19) |
-
-La famiglia di difetti che ha prodotto la vecchia regola resta la ragione delle
-righe in grassetto: *dichiarato e non collegato* — un `decideProactive` con zero
-chiamanti aveva unit test verdi, e una allowlist egress con i suoi test verdi
-non è mai entrata in funzione in produzione. Quando la claim è «esiste ed è
-raggiunto», il cablaggio e la mutazione non sono ceremony: sono l'unica cosa che
-può falsificarla.
-
-È la stessa disciplina che il giudice applica al codice: non che sembri
-corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
-
-## 12. Un inventario, non una lista di feature
-
-Quando l'obiettivo è «siamo pronti?», la forma giusta non è l'elenco di ciò che
-si vuole costruire — quello parte da come è fatto il codice. È un **inventario
-di domande**, che parte da cosa serve a chi lo usa, e in cui **ogni voce ha una
-di tre risposte**: `READY`, `FUORI DALLO SCOPO` con la ragione scritta, o
-`BLOCKER`.
-
-> **La quarta categoria — «non ci avevamo pensato» — è quella che produce le
-> fasi di recupero.** Un inventario esiste per renderla impossibile: se emerge
-> una lacuna nuova non si nasconde, si aggiunge.
-
-L'inventario vivo è `docs/blueprint/M5-BIS.md`.
-## 13. Un documento fondazionale è un insieme di affermazioni, e le affermazioni si controllano
-
-Direttiva owner, 2026-08-15: *«dovremo controllare ogni singola cosetta messa in
-questi file fondamentali e validarla… non possiamo continuare a trovare cose
-nuove solo perché le noto io, che agentic codebase sarebbe altrimenti?»*
-
-`09-contratti-m0-m1.md` è **normativo**. `03-threat-model.md` dichiara
-**garanzie**. `STATE.md` dice cosa è **costruito**. Ognuna di quelle righe è o
-vera o falsa del codice — e oggi la deriva si trova per caso.
-
-**Non è un'idea nuova: qui esiste già in tre punti, e non è mai stata
-generalizzata.** `core/rot/readers.ts` dimostra che ogni file sigillato ha un
-lettore, e `doctor` lo esegue. `.claude/hooks/inject-state.test.ts` verifica che
-il handoff **vero** entri nel budget vero. `core/memory/invariants.ts` controlla
-proprietà del grafo. Tre invarianti che *girano*. Tutto il resto è sulla fiducia.
-
-La regola, quindi:
-
-1. **Ogni affermazione portante ha uno stato**: *verificata* (con la prova),
-   *derivata* (drift trovato, lavoro aperto), *non verificabile* (e allora dice
-   perché).
-2. **Se un'affermazione può eseguire, deve eseguire.** Un test, un controllo di
-   `doctor`, un invariante. Una regola che vive solo in prosa perde contro un
-   merge — misurato: il budget del blocco iniettato era scritto in `PRACTICES`
-   §7 ed è stato sforato il giorno dopo da un merge a tre vie.
-3. **Ciò che non può eseguire ha una cadenza di ri-validazione**, non una data di
-   scrittura.
-
-E il limite da nominare, perché è quello che ha prodotto la direttiva: gli audit
-interni confrontano il codice **con i nostri stessi documenti**. Trovano ciò che
-abbiamo scritto e non fatto. Sono **strutturalmente ciechi** a ciò che non
-abbiamo mai scritto — lo streaming non era «dichiarato e non collegato», era mai
-pensato. Quella categoria si trova solo guardando fuori, e vuole una passata sua.
-
-## 14. La mappa è una vista derivata, e le viste derivate marciscono
-
-Direttiva owner, 2026-08-15: *«ricordiamoci di aggiornare anche questo artefatto
-quando serve che modifichiamo qualcosa»*.
-
-Un diagramma dell'architettura è la forma di documentazione che **invecchia
-peggio**: descrive la parte del sistema che cambia di più, non ha compilatore, e
-sbaglia con autorevolezza — sembra vero proprio mentre smette di esserlo. Un
-promemoria («ricordati di aggiornarlo») è una regola che vive solo in prosa, e
-§13.2 dice già come finisce.
-
-Quindi la mappa **non si disegna a mano**:
-
-1. **I dati stanno nel repo**, non nell'artefatto: `docs/blueprint/mappa/*.json`.
-   Ogni voce porta un'ancora `file:riga` verso il codice che la giustifica.
-2. **L'artefatto è un renderer** su quei dati. Ridisegnarlo non è un lavoro di
-   memoria: si rigenera.
-3. **Le ancore sono testate.** `docs/blueprint/mappa/mappa.test.ts` verifica che
-   ogni ancora esista ancora e punti allo stesso testo. Quando il codice si
-   sposta, **fallisce la suite**, non l'artefatto in silenzio.
-
-Il costo di questa forma è che la mappa può coprire solo ciò che è ancorabile a
-codice vero, ed è precisamente il vincolo che si vuole: una casella senza ancora
-è una casella che non abbiamo il diritto di disegnare.
-
-## 15. Si ripara alla radice, e la radice è quasi sempre una forma
-
-Direttiva owner, 2026-08-15: *«quando ci sono cose da fixxare, proviamo sempre a
-fixxare alla radice, magari sono scelte sbagliate, o cose del genere, cerchiamo
-di andare più alla radice possibile e sempre primitivo, architetturale»*.
-
-Un difetto trovato **due volte** non è due difetti: è una forma che li produce.
-Ripararne le istanze una per una è lavoro che si ripete, e che finisce quando
-qualcuno smette di guardare — non quando la causa smette di esistere.
-
-**Il livello a cui fermarsi.** Salendo dall'istanza: la riga · la funzione · il
-contratto fra due moduli · **il tipo che permette lo stato sbagliato** · la
-decisione architetturale. Ci si ferma al primo livello in cui il difetto diventa
-**non rappresentabile**, non al primo in cui sparisce.
-
-L'esempio da cui viene la regola, e vale come metro perché è tutto misurato in
-un giorno solo. Tre istanze della stessa famiglia — «riporta successo mentre
-fallisce» — in `cli/repl.ts`, `cli/gateway.ts`, `cli/doctor.ts`. Tre riparazioni
-puntuali sarebbero state tre riparazioni corrette e la quarta istanza sarebbe
-arrivata comunque, perché:
-
-- `Deliver` ritorna `Promise<void>`. **Una firma che ritorna `void` non può dire
-  «non ho consegnato»**: ogni implementazione deve *ricordarsi* di lanciare, e
-  delle tre una sola se n'è ricordata. Il tipo permette il difetto.
-- `doctor` distingue i casi di un'unione chiusa con una catena di `if`, e il
-  ramo non gestito **cade su quello verde**. Questo repo ha già la prova che la
-  forma alternativa funziona: `switch (decl.risk)` in `core/policy/decide.ts` non
-  ha `default` e **rompe la build** se manca un caso, mentre la catena di `if` in
-  `runTool` *esegue il tool* su un effetto sconosciuto. Stessa domanda, due forme,
-  due esiti opposti — e uno dei due si accorge da solo.
-
-**La regola operativa**: quando la stessa forma compare due volte, si smette di
-ripararla e si chiede *quale primitiva la renderebbe impossibile*. Se la risposta
-è cara, si porta all'owner con pro e contro — ma si **chiede**, prima di riparare
-la terza.
-
-**Senza inflazione di framework** (owner, 2026-08-17). «Radice» non significa
-`istanza → framework → primitiva nuova → ADR nuovo`. Si sceglie **il livello più
-piccolo che rende il fallimento non rappresentabile** senza generalizzare oltre
-l'evidenza: spesso è un tipo o una firma, non un modulo. Due occorrenze sono un
-motivo per **indagare** una radice comune, non la prova che serva subito
-un'astrazione; e non si costruisce infrastruttura per una possibilità ipotetica
-post-Gate 1.
-
-E il corollario che questo repo paga più spesso: preferire la forma che
-**fallisce da sola** — un `switch` esaustivo, un tipo che obbliga il chiamante a
-gestire l'esito, un sink obbligatorio nella firma — a quella che dipende dal
-fatto che qualcuno si ricordi.
-
-## 16. Una slice locale deve restare vera per il progetto intero
-
-Direttiva owner, 2026-08-16: ogni pezzo costruito deve considerare il progetto
-intero. Il difetto da impedire non è soltanto l'hardcode letterale. È una
-garanzia progettata sul caso che si ha davanti — `host`, chat privata, Telegram,
-un provider, una macchina — e poi presentata come primitiva generale.
-
-Prima del piano, l'orchestratore fa una **passata d'impatto**:
-
-1. nomina tutti i produttori e consumer del contratto che cambia;
-2. cerca la stessa primitiva nel repo, nei branch e nei worktree non integrati;
-3. segue almeno un percorso di produzione e il suo failure path da capo a capo;
-4. verifica quali contratti, ADR, inventario, mappa e handoff devono cambiare;
-5. distingue il default operativo da un invariante architetturale.
-6. nomina **il piano** a cui il cambiamento appartiene — Evidence, Beliefs,
-   Work, Effects, Authority (ADR-0045 §revisione 2026-08-17). Se la risposta è
-   due piani, c'è una cucitura da capire prima di scrivere: uno store che è
-   insieme evidenza e contesto perde la provenienza; una tabella che è insieme
-   bookkeeping ed effect ledger mente su ciò che è successo al mondo.
-
-Il criterio non è «nessuna costante»: magic number e default legittimi
-esistono. È **nessuna decisione locale travestita da forma universale**. Tenant,
-principal, surface, provider, capability, budget e provenienza viaggiano come
-tipi o configurazione quando possono variare. Il single-user è la prima
-configurazione della forma multi-surface, non un percorso host-only da
-generalizzare dopo. I gruppi possono essere attivati dopo i quattordici giorni;
-la possibilità di isolarli non può essere aggiunta dopo senza riscrivere ciò
-che nel frattempo ha accumulato dati.
-
-Il judge attacca anche questa proprietà: muta il valore oggi dominante, prova
-un secondo tenant/surface/provider quando pertinente e cerca consumer non
-toccati dal diff. Se il test passa solo perché ogni fixture usa lo stesso caso,
-non è una prova di generalità.
-
-## 17. La verifica è proporzionale alla claim e al blast radius
-
-Direttiva owner, 2026-08-17: *«il rigore che abbiamo costruito funziona, ma
-viene applicato quasi uniformemente e sta diventando il collo di bottiglia. Non
-voglio ridurre il livello di sicurezza sulle garanzie critiche. Voglio eliminare
-ceremony che non produce evidenza aggiuntiva.»*
-
-La domanda da farsi **non** è «abbiamo eseguito tutti i tipi di test?». È:
-
-> **qual è la quantità minima di evidenza che potrebbe falsificare questa
-> claim?**
-
-Il profilo si sceglie **prima** di implementare, si scrive nella PR, e non
-dipende dalla dimensione del diff: dipende dal rischio della garanzia. Una riga
-può essere CRITICAL, cinquecento righe di scenari possono essere FAST.
+| Local/reversible implementation detail | decide and proceed |
+| Reversible architecture with low blast radius | analyse, state the choice, proceed |
+| Irreversible architecture | stop with options + recommendation |
+| Product scope/behaviour | stop with options + recommendation |
+| Security/privacy boundary | stop with options + recommendation |
+| Durable data/schema/migration shape | stop with options + recommendation |
+| Materially expensive fanout/research | show cost/alternative, ask owner |
+
+Stopping does not mean asking "what do you want?". It means doing the analysis
+first: options, trade-offs, recommendation, and the exact decision required.
+
+## 3. Work is claim-oriented
+
+A slice should make one coherent falsifiable claim. FAST maintenance items may be
+clustered when they remain independently readable; STANDARD/CRITICAL work should
+normally have one primary claim.
+
+Do not use PR/session boundaries to define the product architecture. A claim can
+survive a compact, rate limit or new worker because its evidence and Git state
+survive them.
+
+A draft PR is useful once scope and the primary decision are stable. Commit
+coherent checkpoints before a long experiment can become the only place the work
+exists.
+
+## 4. Delegation is a context tool, not the default
+
+The orchestrator works directly when the task is local and clear.
+
+Delegate when it buys at least one of:
+
+- context isolation for a large investigation;
+- genuinely independent parallel work;
+- specialised expertise;
+- fresh adversarial review;
+- protection of the orchestrator's context from noisy exploration.
+
+Do not delegate a single obvious tool call or a small mechanical edit merely to
+create a worker hierarchy.
+
+Before material fanout, use the repository's delegation budget tooling
+(`.claude/deleghe.mjs preventivo <n>` where applicable). There is no universal
+magic worker count: cost depends on context/tool use and the work's independence.
+If a sequential plan buys the same information materially cheaper, prefer it.
+
+A delegation is recorded before dispatch. A child killed by quota/session/529 is
+PARKED/resumable rather than silently lost. The durable delegation record should
+contain enough scope/evidence/next-action information for another worker to
+continue without owner re-paste.
+
+A worker summary is **not evidence**. Verify the load-bearing claims before acting
+on them. Empty/placeholder output is failure, not completion.
+
+## 5. Research budget
+
+Research is commissioned to change a decision, not to make the process look
+thorough.
+
+Use current primary documentation when:
+
+- a dependency/API behaviour is unfamiliar or plausibly unstable;
+- a library behaviour is load-bearing;
+- a new dependency is proposed;
+- a public/durable/outward-facing shape is being designed;
+- current ecosystem prior art can materially change the architecture.
+
+Reuse a clear local precedent for private/reversible work instead of repeatedly
+researching the same shape.
+
+For agent/repository architecture, compare relevant current systems (for example
+OpenAI/Anthropic guidance, OpenClaw, Hermes) as prior art, then choose the
+smallest shape that fixes a measured Muffin failure. Peer architecture is input,
+not authority.
+
+Research belongs in dated evidence documents when it has durable value. Current
+architecture/product/security decisions belong in their authoritative homes,
+not in the research report.
+
+## 6. Verification profiles
+
+Choose the profile **before implementation** and record it in the PR. Diff size
+does not choose the profile; the guarantee does.
 
 ### FAST
 
-Documenti · stato e handoff · viste generate e mappa · soli test · formattazione
-· correzioni meccaniche che non cambiano comportamento a runtime né contratti.
+Use for documentation, handoff/state, generated views, test-only work,
+formatting and mechanical changes that do not alter runtime behaviour or a
+contract.
 
-*Richiede*: il check direttamente pertinente (es. `ancore.mjs --check` se tocchi
-la mappa, il test del file che tocchi), il **diff letto**, la CI normale se apre
-una PR.
+Required by default:
 
-*Non richiede per default*: red-first · mutazione · integration · accettazione
-col binario vero · suite completa in locale · judge fresco · l'aggiornamento di
-ogni documento del repo.
+- directly relevant check;
+- diff read;
+- generator/anchor check when the changed artifact has one;
+- normal PR CI when available.
 
-Più FAST indipendenti possono stare in **una** maintenance PR, se restano
-leggibili e verificabili separatamente. Non serve una PR per riga meccanica.
+Not required by default:
+
+- red-first;
+- mutation;
+- integration/E2E;
+- real-binary acceptance;
+- full local suite;
+- fresh judge;
+- updating every document.
+
+Several coherent independent FAST fixes may share one maintenance PR.
 
 ### STANDARD
 
-Il default per il normale lavoro di prodotto/runtime **reversibile** che non
-tocca una garanzia CRITICAL: retry ordinario di un provider, output della CLI,
-`sys.inspect` read-only, media Telegram, `prompt show` quando non cambia il
-meccanismo del RoT, un bug locale.
+Default for ordinary reversible runtime/product work that does not touch a
+CRITICAL guarantee.
 
-*Richiede solo ciò che la claim rende necessario*: un bug vuole la riproduzione
-o un test rosso-prima · logica locale vuole unit · un confine fra moduli vuole
-integration · una cosa user-facing o una riga Gate 1 vuole l'accettazione giusta
-· toccare tipi/API vuole la build.
+Evidence follows the claim:
 
-**Mutazione solo** se ciò che affermiamo è che un guard o un cablaggio impedisce
-qualcosa e potrebbe essere scollegato restando verde. **Failure path solo** se il
-cambiamento ne introduce o modifica uno materiale.
+- bug/fix → reproduce or red-before;
+- local logic → unit;
+- cross-module boundary → integration;
+- user-facing/Gate behaviour → appropriate acceptance;
+- type/API/build surface → build/typecheck;
+- failure path → only when the change introduces/modifies a material failure;
+- mutation → only when the claim is specifically that a guard/wiring prevents
+  something and could otherwise disconnect while tests stay green.
 
-La suite completa gira **una volta**, in CI, sulla testa integrata: non si
-rilancia in locale dopo ogni commit per rito. **Judge fresco non richiesto**:
-l'orchestratore verifica e integra.
+The full suite runs once at the integrated PR/head gate (normally CI), not after
+every local commit. A fresh judge is not required; the orchestrator may integrate
+an unambiguous STANDARD claim when its evidence budget is satisfied.
 
 ### CRITICAL
 
-Scatta da sé — non è una scelta di comodità — se la claim tocca almeno uno di:
-effect WAL o effect journal · side effect non ri-eseguibile o irreversibile ·
-authority, capability, policy kernel · taint e provenienza · egress · Root of
-Trust · segreti · schema durevole e migrazioni · backup/restore con rischio dati
-· concorrenza, lease, lock · exactly-once e idempotenza · crash recovery che può
-duplicare o perdere lavoro · sandbox e containment · operazioni distruttive · un
-confine la cui rottura causerebbe perdita dati, violazione di autorità, effetti
-duplicati o comportamento unsafe silenzioso.
+Automatic when the claim touches a boundary whose failure can silently lose or
+duplicate work/data, violate authority/privacy, leak secrets, or execute unsafe
+effects. This includes at least:
 
-Qui la disciplina forte resta **identica a prima**: ricostruzione del percorso di
-produzione · red-first · wiring/integration · mutazione sulla cucitura portante ·
-matrice dei fallimenti · fault injection quando pertinente · accettazione col
-binario vero quando la claim dipende dal percorso reale · suite completa ·
-documenti autorevoli aggiornati · **judge fresco e indipendente** · verdetto
-terminale prima dell'integrazione.
+- effect WAL/journal and non-rerunnable/irreversible effects;
+- authority/capability/policy kernel;
+- taint/provenance and egress;
+- Root of Trust and known-secret boundary;
+- durable schema/migrations;
+- backup/restore with data risk;
+- concurrency/lease/lock/fencing;
+- exactly-once/idempotency;
+- crash recovery with loss/duplication risk;
+- sandbox/containment;
+- destructive operations.
 
-E un limite anche qui: CRITICAL non vuol dire «prova tutto il sistema». Prova
-ciò che può falsificare **quella** garanzia.
+Required evidence is strong **for that guarantee**, not for the entire product:
 
-### Gli esempi, perché la classificazione non si interpreti a piacere
+- reconstruct the production path;
+- red-first/reproduction;
+- wiring/integration proof;
+- load-bearing mutation where a seam/guard is the claim;
+- relevant failure/fault matrix;
+- fault injection where the guarantee depends on crash/failure timing;
+- real-binary acceptance when the claim depends on the binary/runtime path;
+- full suite at the integrated head gate;
+- authoritative docs updated when their meaning changed;
+- fresh independent judge with terminal verdict before integration.
 
-| lavoro | profilo |
+CRITICAL is not permission to run every test type ritualistically.
+
+## 7. Profile escalation and evidence reuse
+
+Profiles may escalate when a hidden risk boundary appears:
+
+```text
+FAST → STANDARD → CRITICAL
+```
+
+Do not opportunistically downgrade after implementation because the fix became
+small.
+
+Evidence can be reused when it is pinned to the relevant branch/head and records
+what was observed: command/scenario, pre-fix or mutation state, failure, success.
+Worker → orchestrator → judge do not need to repeat the same proof merely because
+ownership changed.
+
+Repeat evidence when:
+
+- relevant code/test changed;
+- the previous evidence is incomplete;
+- a reviewer has a specific reason to doubt what it proves;
+- the new mutation/fault is itself the review question.
+
+Merging `dev` invalidates only evidence materially affected by that change, not
+the entire epistemic history of the PR.
+
+## 8. Scope firewall
+
+A finding enters the current slice only if it:
+
+1. invalidates the current claim;
+2. prevents the claim from being verified;
+3. creates a concrete current-use risk (data loss, duplicate effects, authority/
+   privacy violation, unsafe silent behaviour) that makes the claim misleading;
+4. is technically inseparable from the fix.
+
+Otherwise record it as FOLLOW-UP/debt/evidence and finish the current claim.
+
+> **"I found something improvable" does not mean "this PR must improve it."**
+
+Repeated instances of the same failure form justify investigating a shared
+primitive. One instance does not automatically justify a new framework.
+
+## 9. Repository state and knowledge budget
+
+Repository knowledge follows `docs/README.md`.
+
+Update only the authoritative home whose meaning changed:
+
+| Change | Home |
 |---|---|
-| typo nel README · ancora della mappa stale | FAST |
-| `/spend` mostra anche «oggi» | STANDARD — accettazione mirata; niente judge né mutazione teatrale |
-| retry del provider su 429/5xx | STANDARD — test dei fallimenti e integration appropriata |
-| `sys.inspect` read-only | STANDARD, finché non tocca una primitiva di authority/RoT/durevole |
-| session taint · egress · `job_fires`/Telegram exactly-once · migrazione di schema · undo/effect journal · WAL dell'intento | CRITICAL |
+| literal mechanics/config/schema | executable source |
+| current architecture semantics | `docs/ARCHITECTURE.md` |
+| current security promise | `docs/SECURITY.md` |
+| durable architectural decision/rationale | ADR |
+| DAY-1 row/status/evidence | `docs/blueprint/M5-BIS.md` |
+| DAY-1 ordering/dependency | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
+| current WIP/next action | `docs/blueprint/LAVORO.md` |
+| product destination | `docs/VISION.md` |
+| general engineering lesson | `docs/lessons.md` |
+| external/research evidence | dated `docs/blueprint/research/` |
+| generated/visual view | regenerate/update the derived artifact if relevant |
 
-### Il riuso dell'evidenza
+Do not update history merely so it reads like HEAD. Do not put Gate counts in the
+handoff or critical path. Do not put PR chronology in architecture/ADR. A current
+finding that has no authoritative home is a signal to choose one, not to copy it
+into several files.
 
-**Un'evidenza già osservata non si rifà per rituale.** Se la PR registra sha,
-comando, la mutazione o lo stato pre-fix, il fallimento osservato e il successo
-osservato, quella prova **resta valida** finché il codice o il test che regge la
-claim non cambia. Worker, orchestratore e judge non devono ripetere in catena la
-stessa mutazione.
+## 10. Integration and stopping
 
-Il judge la riesegue quando: l'evidenza è incompleta · il branch è cambiato in
-modo pertinente · sospetta che il test non provi la claim · la nuova mutazione è
-essa stessa parte della review.
+A claim is closed when:
 
-Un merge di `dev` invalida **solo** le prove materialmente toccate, non tutta la
-storia epistemica della PR.
+> **the claim is satisfied, its profile's evidence budget is satisfied, and no
+> known blocker invalidates it.**
 
-### L'anti-metrica
+Integration mechanics live in `BRANCHING.md`.
 
-> **Il workflow non si giudica da quante prove produce, ma da quanti errori
-> materiali intercetta per unità di tempo e di contesto.**
+After integration:
 
-Se una verifica non può plausibilmente cambiare il verdetto, è probabilmente
-ceremony — e la ceremony non è neutra: consuma il contesto e l'attenzione che
-servivano alla verifica che *avrebbe* potuto cambiarlo.
+1. observe the resulting Git/runtime state;
+2. update M5 only if Gate status/evidence changed;
+3. update critical path only if order/dependency changed;
+4. keep LAVORO as the smallest useful next-session handoff;
+5. regenerate relevant derived views;
+6. do not refresh historical audits into current state.
 
-## 18. Scope firewall
+For a multi-slice goal (notably DAY-1), individual green PRs do not replace an
+integrated final check. The final reviewer asks whether the **assembled system**
+still satisfies the goal.
 
-Durante una slice emerge quasi sempre un altro problema. Entra nella slice
-**solo** se: (1) invalida la claim corrente; (2) impedisce di verificarla; (3)
-crea un rischio concreto per il giorno 1 — perdita dati, effetti duplicati,
-violazione di autorità o privacy, comportamento unsafe silenzioso; (4) è
-tecnicamente inseparabile dal fix.
+## 11. Anti-metric
 
-Altrimenti: si registra come follow-up (una riga in `M5-BIS`/`PERCORSO-CRITICO`,
-un task, o una nota nella PR), **non** si costruisce l'astrazione adesso, e si
-chiude la claim corrente.
+> **Judge the workflow by material errors caught per unit of time/context, not by
+> the number of proofs, agents, documents or review rounds produced.**
 
-> «Ho trovato qualcosa di migliorabile» non significa «questa PR deve
-> migliorarlo».
-
-## 19. Il budget dei documenti
-
-Non si aggiornano `STATE`, `LAVORO`, mappa, ADR e `lessons` tutti insieme per
-riflesso. Si aggiorna **solo la casa autorevole** che il cambiamento rende
-stale:
-
-| documento | si tocca quando |
-|---|---|
-| `M5-BIS.md` | cambia una riga o l'evidenza di una riga Gate 1 |
-| `gate1/PERCORSO-CRITICO.md` | cambia l'ordine o lo **stato** delle slice |
-| `STATE.md` · `LAVORO.md` | cambia davvero obiettivo, blocker, decisione owner, PR attiva o milestone |
-| ADR | c'è una decisione architetturale durevole |
-| `lessons.md` | c'è una lezione **generalizzabile**, non per ogni bug |
-| mappa | cambia una cosa rappresentata o ancorata dalla mappa |
-
-Le viste generate restano verificate meccanicamente (§14), e il handoff resta
-verificato da `.claude/riconcilia.mjs` — vedi `BRANCHING.md` checkpoint 4.
+A verification step that cannot plausibly change the verdict is ceremony. It
+consumes the same context and attention needed by a check that can.

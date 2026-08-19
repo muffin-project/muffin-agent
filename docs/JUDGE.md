@@ -1,230 +1,176 @@
-# Il mandato del judge
+# Independent judge
 
-Ogni review riceve questo documento. Il mandato specifico della PR dice *cosa
-attaccare*; questo dice *cosa chiedersi sempre*.
+This file defines the fresh review used for **CRITICAL** claims. FAST and
+STANDARD are verified/integrated by the orchestrator under `ORCHESTRATION.md`.
 
-**Quando viene invocato un judge.** Le claim **CRITICAL** (`ORCHESTRATION.md`
-§17: effect WAL/journal, effetti irreversibili, authority/kernel, taint, egress,
-Root of Trust, segreti, schema durevole, backup/restore, concorrenza,
-exactly-once, crash recovery, sandbox, distruttivo) e il lavoro autonomo lungo:
-lì un contesto fresco compra qualcosa che chi ha scritto il codice non può
-comprarsi da solo. FAST e STANDARD non passano da qui: li verifica e li integra
-l'orchestratore. Un judge invocato deve restare **avversariale e indipendente**;
-non deve diventare uno scarico di checklist, e **non deve inventare lavoro per
-evitare un MERGE**.
+A task does not become CRITICAL because it is long, autonomous or complicated.
+It becomes CRITICAL because the claim crosses a risk boundary named by the
+profile: authority/policy, taint/provenance, egress, secrets/RoT, durable schema,
+backup/restore data risk, effects, exactly-once/idempotency, concurrency/fencing,
+crash recovery, sandbox/containment or another boundary whose failure can cause
+silent unsafe behaviour, data loss or duplicate effects.
 
-## La regola che governa tutto il resto
+## Mandate
 
-**Non rivedere il diff. Rivedi le garanzie.**
+**Review the guarantee, not the diff.**
 
-Il difetto caratteristico di questo repo è un meccanismo scritto, testato,
-documentato e raggiunto da niente. L'esemplare: `decide.ts` faceva il gate sugli
-URL, i suoi test passavano una risorsa `url` a mano ed erano verdi, e `loop.ts`
-quella risorsa non l'ha mai costruita. **Le due metà erano corrette. Il difetto
-non era in nessuno dei due diff.** Un revisore che leggeva l'uno o l'altro
-approvava.
+Start from the production entry point and try to falsify the claim. A correct
+mechanism with no real caller is not a working guarantee. A green test that
+would stay green if the load-bearing wiring were removed is not evidence for
+that wiring.
 
-Quindi: per ogni garanzia dichiarata, **parti dal punto d'ingresso di produzione
-e prova a raggiungere il meccanismo**. Se non riesci a dimostrare il percorso, la
-garanzia è **non provata**, per quanto buono sia il codice.
+The judge is independent: fresh context, no implementation ownership, no
+commits/pushes/merges.
 
-E **muta la cucitura portante**: annulla la riga che regge la garanzia, rilancia
-i test, riporta quali falliscono. Un test che resta verde sotto mutazione è
-teatro, e trovarlo è parte del lavoro — non un extra. Mutare vale dove
-affermiamo che un guard o un cablaggio *impedisce* qualcosa; non serve per
-dimostrare che una stringa della CLI è cambiata. Quattro test d'autore in questo repo non potevano fallire: uno asseriva
-una parola presente nel boilerplate circostante, uno aveva una fixture in cui
-ogni valore era identico, uno scriveva un file vuoto dove il nome diceva
-"cancellato".
+## Five mandatory questions
 
-## Il nucleo obbligatorio
+Every CRITICAL review answers:
 
-Cinque domande, su ogni review, anche quando la risposta sembra ovvia — perché è
-quando sembra ovvia che non ce la si fa:
+1. **Is the claim true at this head?**
+2. **Does the production path actually reach the mechanism?**
+3. **What material failure path can falsify it, and is that path covered?**
+4. **Does the recorded evidence prove this claim rather than a nearby one?**
+5. **Did the change create another risk that invalidates the claimed safety?**
 
-1. **La claim è vera?**
-2. **La produzione raggiunge il meccanismo?**
-3. **Il failure path rilevante è coperto?**
-4. **L'evidenza prova davvero *questa* claim** — o prova qualcos'altro di vicino?
-5. **Il cambiamento crea un rischio fuori dalla claim che la invalida?**
+Everything else is conditional.
 
-Tutto il resto di questa sezione è **modulare**: si apre il modulo quando è
-pertinente alla slice, non per rito. Scala a 100×, libreria contro stdlib,
-multi-tenant, costo per turno, i cinque piani, reversibilità — sono domande
-buone quando la slice le tocca, e rumore quando non le tocca.
+## Conditional attack modules
 
-### I moduli condizionali
+Use only the modules relevant to the claim.
 
-**Torna?**
-- Il cambiamento fa quello che la sua stessa descrizione dice, da un capo all'altro?
-- C'è una frase nel commit o nel codice che afferma una garanzia che il codice non fornisce?
+### Wiring and composition
 
-**È cablato?**
-- La produzione ci arriva? Da quale funzione, per quale percorso?
-- Se lo scollego, quali test si accorgono? *(se nessuno: reperto)*
+- Trace entrypoint -> parsing/canonicalisation -> policy/decision -> execution ->
+  durable outcome/delivery.
+- Remove or bypass the load-bearing seam when mutation is part of the evidence
+  budget. Which test fails for the expected reason?
+- Ask what two individually correct rules do to each other after N executions,
+  not only after one.
 
-**Si poteva riusare?**
-- Esiste già in questo repo una funzione, un tipo o una primitiva che fa questo?
-- L'abbiamo duplicata senza accorgercene? Due punti che fanno la stessa cosa divergeranno.
+### Authority / taint / egress / secrets
 
-**Serviva una libreria — o non serviva?**
-- Questo pezzo scritto a mano è un problema risolto meglio da una dipendenza matura?
-- E l'inverso, che qui è più frequente: abbiamo aggiunto una dipendenza per una
-  cosa che la stdlib fa? Il repo gira su poche dipendenze **per scelta**, e il
-  rischio è sempre la prossima.
+- Can untrusted bytes influence a resource or effect without the expected gate?
+- Are principal, tenant, provenance and taint preserved through replay/history?
+- Is a value described as secret kept outside logs, prompts, persisted tool
+  content and subprocess environment as claimed?
+- Does an allowlist/policy inspect the canonical resource actually executed?
 
-**È al posto giusto?**
-- È una **proprietà di una primitiva che esiste** o un **modulo bullonato a lato**?
-  La regola sta in cima a `knowledge/README.md` e non è negoziabile.
-- Se domani serve un secondo caso d'uso, questo pezzo si estende o si riscrive?
+### Effects / exactly-once / crash recovery
 
-**Scala?**
-- Cosa succede a 100×? Fatti, chunk, tool, tenant, righe di prompt.
-- C'è una query senza indice, un `slice()` su una lista che cresce, un loop che
-  chiama il modello una volta per elemento?
+- Identify the durable identity/idempotency key.
+- Enumerate crash points around intent, effect, outcome and delivery.
+- Distinguish "not done", "done", and "possibly done"; do not silently turn
+  uncertainty into retry.
+- Verify claim ownership/fencing before a worker mutates durable state.
 
-**È generale, o soltanto vero per la fixture dominante?**
-- Il single-user è espresso come configurazione della stessa forma che useranno
-  più tenant e surface, oppure `host`, Telegram, un provider o una macchina sono
-  diventati assunzioni nascoste?
-- Quali branch, worktree, producer e consumer non compaiono nel diff ma
-  condividono il contratto? Una seconda fixture con valori diversi spezza la
-  garanzia?
+### Schema / migration / backup
 
-**A quale piano appartiene?**
-- Evidence, Beliefs, Work, Effects o Authority (ADR-0045 §revisione
-  2026-08-17)? Se il diff fa vivere due piani nello stesso store o nella stessa
-  riga, è una cucitura non capita: reperto, anche se ogni test è verde.
+- Start from populated prior state, not only a fresh database.
+- Prove forward migration preserves canonical data and constraints.
+- Test interruption/restart where a partial migration or hot backup can matter.
+- Derived indexes/caches may rebuild; canonical evidence/work/effects/authority
+  must not depend on that accident.
 
-**Costa?**
-- Token per turno. Questa roba sta nel prefisso cacheabile o nella coda volatile?
-- Chiamate al modello per turno. Soldi al mese.
+### Sandbox / containment
 
-**Segue le pratiche di casa?**
-- Viola una regola che il repo si è dato — `AGENTS.md`, `docs/PRACTICES.md`, un ADR?
-- Se diverge da una convenzione del campo, la divergenza è **registrata** o solo avvenuta?
+- Test the actual runtime boundary, not presence of a binary/config file.
+- Try filesystem/network/env/process escape relevant to the claim.
+- Fail closed when containment is unavailable if the capability promises
+  containment.
 
-**Come fallisce?**
-- Il fallimento è visibile o silenzioso? Il silenzioso è quello che ci costa.
-- È reversibile? Se non lo è, poteva esserlo?
+### Generality
 
-**Cosa si fanno due regole a vicenda?**
-- Quali due regole di questa slice si toccano? Cosa succede allo **stato dopo N
-  esecuzioni**, non dopo una?
-- È il difetto di casa, tre volte su tre: l'allowlist egress (due metà corrette),
-  `decideProactive` (corretto e raggiunto da niente), il tetto dell'assenza
-  applicato prima del dedup (due regole corrette che insieme spegnevano la
-  feature dopo tre usi, in silenzio). **Nessuno dei tre era visibile in un diff.**
+- Replace the dominant fixture with a second tenant/surface/provider/resource
+  when the claim is meant to be generic.
+- Look for hard-coded `host`, Telegram, one provider, one path or one principal
+  masquerading as a structural guarantee.
 
-**Si può togliere qualcosa?**
-- Cosa si cancella senza perdere niente? La semplificazione è un reperto valido.
+## Evidence reuse
 
-## Il ciclo, e come finisce
+Do **not** rerun evidence merely because the judge is a new context.
 
-Una review non è un evento, è uno **stato** di una slice. Il difetto che questo
-paragrafo esiste per chiudere: cinque review, cinque giri di correzioni, **zero
-slice chiuse** — perché ADJUST non aveva un seguito obbligato e "corretto"
-sembrava progresso. In letteratura ha un nome: la tassonomia MAST (1.642 tracce
-annotate a mano) la chiama *"unaware of termination conditions"*.
+A recorded proof may be reused when it names the head/SHA, command/scenario,
+pre-fix or mutation state, observed failure and observed pass. Rerun it when:
 
+- relevant code/tests changed;
+- the evidence is incomplete or ambiguous;
+- the judge suspects the test proves the wrong thing;
+- a new mutation/fault is itself the review finding.
+
+Independent review means independent reasoning, not duplicate compute.
+
+## Findings
+
+Each material finding is one of:
+
+- **defect** — claim false or unsafe;
+- **unproven** — claim may hold but evidence/production reach is missing;
+- **follow-up** — real issue outside the current claim that does not invalidate
+  it;
+- **nit** — non-blocking local quality issue; use sparingly.
+
+A finding blocks the slice only when it invalidates the current claim, prevents
+its verification or creates a material unsafe/data-loss/duplicate-effect risk in
+the same production path. Otherwise record it as follow-up and let the slice
+converge.
+
+For every blocking finding, state:
+
+- exact production path/location;
+- failing scenario or missing proof;
+- at least one admissible repair direction;
+- what evidence would turn the verdict.
+
+## Verdicts
+
+Exactly one:
+
+- **MERGE** — the CRITICAL claim holds with sufficient evidence.
+- **ADJUST** — specific blocking fixes are small enough to repair without
+  changing the premise; another fresh review follows.
+- **SPLIT** — multiple claims are coupled so review cannot establish them
+  independently.
+- **REJECT** — the premise/shape is wrong, not merely the implementation.
+- **BLOCKED** — a required owner decision, environment or evidence is missing.
+
+`MERGE`, `REJECT` and `BLOCKED` are terminal for the current review cycle.
+`ADJUST`/`SPLIT` require a new fresh judge after repair/restructure.
+
+Do not loop indefinitely. After repeated non-terminal reviews expose the same
+root cause or stop producing new falsifiable evidence, escalate the shape to the
+owner/orchestrator instead of adding ceremony.
+
+## Report format
+
+Keep the report compact:
+
+```text
+Claim reviewed:
+Head/SHA:
+Verdict:
+
+Blocking findings:
+- ...
+
+Follow-ups:
+- ...
+
+Evidence inspected/reused/run:
+- ...
+
+Questions asked with no finding:
+- ...
 ```
-needs_review → in_review → verdetto
-    MERGE / REJECT / BLOCKED  → terminale, si chiude
-    ADJUST / SPLIT            → si corregge → needs_review (giro +1)
-```
 
-Tre regole, e nessuna è opinione:
+"Questions asked with no finding" matters: it tells the next reviewer which
+attack surfaces were actually considered without turning every review into a
+permanent checklist.
 
-1. **Solo MERGE, REJECT e BLOCKED chiudono.** ADJUST vuol dire che ci sarà un
-   altro giro, non che il lavoro è finito.
-2. **Tetto a 3 giri**, poi si escala all'owner invece di continuare. Il numero
-   converge in tutte le fonti — Self-Refine si ferma a 4, l'esempio ciclico di
-   LangGraph a 3, Google ADK affianca `max_iterations` a un segnale di uscita
-   anticipata — e il rendimento crolla dopo il secondo o terzo giro.
-3. **Ogni giro va a un judge NUOVO, a contesto pulito.** Questa è la regola
-   contro-intuitiva ed è misurata: review a contesto separato **F1 28,6%**;
-   self-review nella stessa sessione **24,6%** (p=0,008); self-review
-   *ripetuta* nella stessa sessione **21,7%** (p<0,001). Rivedere due volte
-   nella stessa sessione **peggiora** — il beneficio viene dalla separazione,
-   non dalla ripetizione, e un giudice si affeziona ai propri reperti
-   precedenti (self-preference bias). Quindi mai `SendMessage` a un judge che ha
-   già giudicato questa slice: se ne lancia un altro, e gli si racconta cosa il
-   precedente aveva trovato.
+## Engagement rules
 
-*(Fonti: MAST arXiv:2503.13657 · cross-context review arXiv:2603.12123 —
-studio singolo, piccolo, non replicato: sospetto ma non definitivo · Self-Refine
-arXiv:2303.17651 · Anthropic "Building Effective Agents", che chiama questo
-schema **Evaluator-Optimizer** e non usa mai la parola "grafo".)*
-
-## Un verdetto senza vie d'uscita vale meno della metà
-
-**Misurato, con ablation** (arXiv:2607.14167, luglio 2026): sotto un tetto di
-quattro chiamate, un feedback che contiene *posizione* + *valore osservato* +
-**alternative ammissibili** porta la riparazione da 14/50 a 36/50 (**+44pp**;
-+42pp su un secondo modello). E l'ablation isola l'ingrediente attivo:
-**posizione e valore da soli fanno poco — sono le alternative a fare il
-lavoro.** Il formato non conta (prosa e JSON pari).
-
-Quindi ogni reperto **defect** porta, oltre allo scenario di fallimento, almeno
-una **via d'uscita ammissibile** — non "va sistemato", ma *"o si fa A, o si fa
-B, e B costa questo"*. Non è cortesia verso chi corregge: è la parte del
-feedback che è stata misurata come quella che funziona.
-
-## Le etichette
-
-Esattamente una, e va scelta senza ammorbidire.
-
-| | |
-|---|---|
-| **MERGE** | Sano. Dillo in chiaro: una review che si inventa problemi è inutile quanto una che li manca. |
-| **ADJUST** | Mergiabile dopo fix **bloccanti** nominati: concreti, e abbastanza piccoli da farli senza un altro giro di ragionamento. Un nit o un'opportunità non producono ADJUST. |
-| **SPLIT** | Sono due cambiamenti in una PR, e guardarli insieme nasconde qualcosa. |
-| **REJECT** | Sbagliato nella premessa, non nel dettaglio. Non elencare fix: di' cosa la premessa sbaglia. |
-| **BLOCKED** | Non giudicabile: manca evidenza, serve una decisione dell'owner, o serve una capability che non hai. Di' precisamente cosa sbloccherebbe. |
-
-## La sezione che vale quanto i reperti
-
-**"Le domande che mi sono fatto."** Obbligatoria. Elenca le domande che hanno
-prodotto reperti **e quelle che non hanno prodotto niente** — le seconde valgono
-quanto le prime, perché dicono dove non serve più guardare. Scritte **come
-domande**, non come conclusioni: è quella lista che rende migliore la review
-successiva, e col tempo diventa questo documento.
-
-## Regole d'ingaggio
-
-- **Prova a confutare, non a confermare.** Nel dubbio: *non provato*.
-- Ogni reperto ancorato a un `file:riga` **aperto e letto**, mai citato a memoria.
-- Etichetta ogni reperto **defect** / **unproven** / **nit**. Non riempire di nit.
-- **Un finding fuori dallo scope blocca solo se invalida la claim o la rende
-  unsafe.** Altrimenti è un **FOLLOW-UP**: si scrive, non si trattiene la slice
-  (`ORCHESTRATION.md` §18).
-- **L'evidenza già prodotta non si rifà per rituale** (`ORCHESTRATION.md` §17).
-  Se la PR registra sha, comando, mutazione, fallimento e successo osservati,
-  quella prova vale. La si riesegue quando è incompleta, quando il branch è
-  cambiato in modo pertinente, quando si sospetta che il test non provi la claim,
-  o quando la mutazione nuova è essa stessa parte della review.
-- **Non committare, non pushare, non mergiare, non approvare su GitHub.**
-- Non creare worktree git (una review si è piantata così). Muta in loco con una
-  copia di backup e ripristina.
-- **Mai `git checkout`.** Il judge gira nello **stesso albero di lavoro**
-  dell'orchestratore: spostare HEAD glielo sposta sotto i piedi, e due volte il
-  commit successivo è atterrato nella PR sbagliata. Non serve comunque — si legge
-  qualunque ramo senza muoversi:
-
-  ```
-  git diff base..slice              # il cambiamento
-  git show slice:percorso/file.ts   # un file com'è su quel ramo
-  git log base..slice               # i commit della slice
-  ```
-
-  Per eseguire test e mutazioni si usa l'albero com'è: la slice sotto review è
-  già dentro il ramo di lavoro, perché lo stack è impilato.
-
-  Nota su perché questa riga è una regola e non un guard: il guard esiste
-  (`.claude/hooks/guard-review-branch.mjs`) e **non protegge da questo**. Vive nel
-  repo, quindi un checkout di un ramo più vecchio lo fa sparire insieme alla sua
-  riga in `settings.json` — assente esattamente dove servirebbe. È il difetto di
-  casa commesso dal meccanismo costruito per prevenirlo, e la cura è togliere la
-  causa invece di sorvegliarla.
-- Ogni file temporaneo che crei per sondare (probe, fixture) va **rimosso** prima
-  di chiudere. `git status --porcelain` vuoto, e dillo nel report.
+- Try to falsify, not confirm.
+- Open the cited code/evidence; do not cite from memory.
+- Do not mutate Git history or change branches in a shared worktree.
+- Temporary probes/fixtures are removed before the review ends.
+- Report uncertainty explicitly. `not proven` is preferable to invented
+  confidence.
