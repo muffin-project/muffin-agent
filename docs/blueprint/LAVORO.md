@@ -1,46 +1,39 @@
-# Stato del lavoro
+# Lavoro corrente
 
-> ⚙️ **Blocco iniettato a ogni sessione, budget ~1.200 caratteri.** Il limite è
-> il meccanismo, non un fastidio: quando è pieno si consolida o si chiude
-> qualcosa. Qui sta solo ciò che è **aperto**; il chiuso è cronaca e va in
-> `STATE.md`. Aggiornare a **ogni** iterazione del loop, prima di scegliere
-> l'obiettivo successivo.
+Questo è un **handoff operativo**, non una source of truth sul prodotto. Deve
+restare piccolo e cancellabile senza perdere conoscenza di Muffin. Lo stato Git
+osservato vince quando diverge da questo file.
 
-<!-- INIZIO BLOCCO -->
-**Aggiornato**: 2026-08-17 (pomeriggio)
+**Goal:** portare Muffin a DAY-1 READY secondo `gate1/MANDATO-DAY-1.md`.
 
-**Goal**: DAY-1 READY come uso reale — mandato in `gate1/MANDATO-DAY-1.md`, sequenza in `gate1/PERCORSO-CRITICO.md` §0 (riconciliato a ogni merge).
+**Work live osservato (19/08/2026):**
 
-**Workflow (owner 17/08)**: verifica proporzionale alla claim — FAST/STANDARD/CRITICAL scelti *prima* (`ORCHESTRATION.md` §17). Judge fresco solo per CRITICAL. Fuori scope → follow-up (§18); documenti solo dove diventano stale (§19).
+- **#81 `slice/docs-authority` — STANDARD, draft, mergeable.** Refactor della
+  knowledge/workflow architecture. All'ultima osservazione il branch è avanti e
+  non indietro rispetto a `dev`; ricontrollare il compare prima dell'integrazione
+  invece di mantenere qui un contatore di commit. Oltre ai documenti modifica due
+  consumer eseguibili del repository harness: SessionStart ora inietta solo
+  questo handoff; `riconcilia.mjs` verifica solo `LAVORO ↔ Git/GitHub`. Per
+  questo non è più FAST puro.
+- **#78 `slice/inbound-unit` — CRITICAL, open.** Telegram
+  `update_id → one durable turn`; il branch è **diverged** da `dev`. Prima
+  dell'integrazione deve incorporare il `dev` corrente e rifare evidence
+  pertinente + judge CRITICAL.
 
-**Inventario**: 13 READY · 35 BLOCKER · 7 OUT (55 righe).
+**Chiuso come superseded:** #73 `slice/product-open-source-direction`. Le
+decisioni valide sono state assorbite nelle authority di #81; le draft originali
+e la research sono preservate in `docs/history/product-direction-2026-08-18/` e
+`docs/blueprint/research/`.
 
-**Integrate 17–18/08**: #53→#76 (quindici slice). **Blocco 1 chiuso**: WAL intento, taint history, egress, segreti, provenienza in ingresso, identità dell'occorrenza.
+**Truth-maintenance blocker separato:** M5 contiene ancora claim/sintesi stale
+(esempio già verificato: vecchio «blocco 1 chiuso» vs `recall-speaker` ancora
+aperto). Non correggere M5 per far sembrare completa #81: la riconciliazione
+riga-per-riga è un task evidence-driven distinto.
 
-**Prossimo**: `inbound-unit` (update_id → un turno, sulla forma di job_fires), poi blocco 2 (schema-evolution, update/backup, undo-journal). In volo: #73 (altra sessione).
+**Next action di #81:** lasciare stabilizzare l'head, usare CI/test mirati per i
+consumer workflow (`inject-state.test.ts`, `riconcilia.test.ts`), leggere il diff
+finale e verificare `node .claude/riconcilia.mjs` sul GitHub live. Se passa, #81
+può uscire da draft e integrarsi come STANDARD; nessun fresh judge CRITICAL è
+richiesto.
 
-**CI ferma**: minuti Free esauriti dal 18/08 — si integra sulla verifica locale (build+suite+accettazione+report+ancore), deroga dell'owner scritta in BRANCHING checkpoint 4.
-
-**Serve l'owner**: corsa reale del character eval (~$0.33 Sonnet + ~$0.11 Haiku, solo input) · audio nei 14gg · scope sandbox · `mcp.*` per-tool · `ricorda` · lingua doc.
-
-<!-- FINE BLOCCO -->
-
----
-
-## Perché questo file esiste
-
-`ORCHESTRATION.md` §5 lo chiedeva e non esisteva — il difetto di famiglia di
-questo repo, *dichiarato e non collegato*, prodotto mentre lo si cercava altrove.
-
-Il modo in cui falliva è preciso: lo stato del lavoro viveva solo nella
-conversazione. Una conversazione lunga non lo perde gradualmente, lo riduce a
-«l'ultima cosa di cui si è parlato». Da lì ogni messaggio dell'owner arriva come
-un imperativo isolato e viene eseguito da solo — che è il task loop che §1
-vieta. Il sintomo osservato dall'owner: *"ogni cosa non sembra considerare tutto
-il resto"*.
-
-Il budget stretto è deliberato e viene da una misura fatta su Hermes: il loro
-`USER.md` sta in ~1.375 caratteri **senza schema**, e la struttura emerge perché
-il limite costringe a consolidare. Stessa idea qui: un elenco che cresce senza
-tetto smette di essere letto entro una settimana — è già successo al blocco di
-`STATE.md`, due volte in una settimana, e la cura è stata la stessa.
+**Owner decision richiesta da #81:** nessuna.
