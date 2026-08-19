@@ -1,105 +1,72 @@
 import { describe, expect, it } from 'vitest';
-import { baseDichiarata, branchDichiarativi, prDichiarateVive, riconcilia, sezioneInVolo } from './riconcilia.mjs';
+import { branchDichiaratiVivi, prDichiarateVive, riconcilia, righeLogiche } from './riconcilia.mjs';
 
-/**
- * Il controllo che il handoff non racconti lavoro già fatto.
- *
- * Il difetto che questi test pinnano è successo davvero: `PERCORSO-CRITICO.md`
- * ha continuato a dire «in volo: #53, #54, slice/a1-continuita» per ore dopo che
- * quelle tre erano dentro `dev`, e una sessione fresca che avesse aperto quel
- * file sarebbe andata a rifare lavoro fatto. Le funzioni sotto sono pure apposta
- * per poterle provare senza rete e senza `gh`.
- */
+const lavoro = `# Lavoro corrente
 
-const percorso = `# Percorso critico
+- **#81 \`slice/docs-authority\` — FAST, draft.** Refactor docs.
+- **#78 \`slice/inbound-unit\` — CRITICAL, open.** Exactly once.
+- **#73 \`slice/product-open-source-direction\` — merged.** Assorbita altrove.
 
-**Aggiornato**: 2026-08-17 · base \`dev\` @ \`98e4787\`.
-
-## 0 · In volo adesso
-
-- **PR #60** \`slice/map-resourcefor\` — citazioni della mappa.
-- **\`slice/session-taint\`** — WIP committato.
-
-## 1 · Invarianti
-
-| 1.1 | ~~\`slice/wal-intent\`~~ **fatto (#57)** | … |
+Cronaca: ieri sono entrate #60 e #61.
 `;
 
-describe('riconcilia', () => {
-  it('legge solo la sezione «in volo», non la cronaca sotto', () => {
-    const sezione = sezioneInVolo(percorso);
-    expect(sezione).toContain('#60');
-    // #57 sta in tabella come lavoro *fatto*: fuori sezione, non è una
-    // dichiarazione di lavoro vivo e non deve diventare un reperto.
-    expect(sezione).not.toContain('#57');
+describe('riconcilia operational handoff', () => {
+  it('keeps wrapped markdown bullets as logical lines', () => {
+    const righe = righeLogiche('- **#81 `slice/docs-authority` — draft.** Riga\n  continuata qui.\n');
+    expect(righe.join('\n')).toContain('Riga continuata qui.');
   });
 
-  it('prende le PR dichiarate vive dal percorso, e altrove solo se la riga lo dice', () => {
-    const vive = prDichiarateVive([
-      { nome: 'PERCORSO', testo: percorso, soloSezione: true },
-      // Righe logiche separate da una riga vuota: l'unità di analisi è il
-      // paragrafo, quindi una cronaca non va infilata nello stesso capoverso
-      // di una dichiarazione di lavoro vivo.
-      { nome: 'STATE', testo: '#12 è in giudizio\n\nil 16/08 sono entrate #28/#29\n', soloSezione: false },
+  it('extracts only PRs and branches explicitly described as live', () => {
+    expect(prDichiarateVive(lavoro)).toEqual([78, 81]);
+    expect(branchDichiaratiVivi(lavoro)).toEqual([
+      'slice/docs-authority',
+      'slice/inbound-unit',
     ]);
-    expect([...vive.keys()].sort((a, b) => a - b)).toEqual([12, 60]);
-    expect(vive.get(60)).toEqual(['PERCORSO']);
   });
 
-  it('trova branch e base dichiarati', () => {
-    expect(branchDichiarativi(percorso)).toEqual(['slice/map-resourcefor', 'slice/session-taint']);
-    expect(baseDichiarata(percorso)).toBe('98e4787');
+  it('is quiet when live declarations match Git/GitHub', () => {
+    expect(
+      riconcilia({
+        testo: lavoro,
+        statoPr: {
+          78: { state: 'OPEN', headRefName: 'slice/inbound-unit' },
+          81: { state: 'OPEN', headRefName: 'slice/docs-authority' },
+        },
+        branchRemoti: ['slice/docs-authority'],
+        branchLocali: ['slice/inbound-unit'],
+      }),
+    ).toEqual([]);
   });
 
-  it('tace quando tutto è coerente', () => {
+  it('reports a PR that is already merged but still called live', () => {
     const reperti = riconcilia({
-      documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
-      statoPr: { 60: { state: 'OPEN', headRefName: 'slice/map-resourcefor' } },
-      branchRemoti: ['slice/map-resourcefor', 'slice/session-taint', 'dev'],
-      base: '98e4787',
-      baseEsiste: true,
-      baseAntenata: true,
-    });
-    expect(reperti).toEqual([]);
-  });
-
-  it('nomina una PR mergiata ancora descritta come in volo — il difetto del 17/08', () => {
-    const reperti = riconcilia({
-      documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
-      statoPr: { 60: { state: 'MERGED', headRefName: 'slice/map-resourcefor' } },
-      branchRemoti: ['slice/map-resourcefor', 'slice/session-taint'],
-      base: null,
-      baseEsiste: null,
-      baseAntenata: null,
-    });
-    expect(reperti).toHaveLength(1);
-    expect(reperti[0]).toMatch(/#60 è mergiata/);
-  });
-
-  it('non segnala una slice appena aperta che vive solo in locale', () => {
-    const reperti = riconcilia({
-      documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
-      statoPr: { 60: { state: 'OPEN', headRefName: 'slice/map-resourcefor' } },
-      branchRemoti: ['slice/map-resourcefor'],
-      branchLocali: ['slice/session-taint'],
-      base: null,
-      baseEsiste: null,
-      baseAntenata: null,
-    });
-    expect(reperti).toEqual([]);
-  });
-
-  it('nomina un branch sparito e una base che non è più antenata', () => {
-    const reperti = riconcilia({
-      documenti: [{ nome: 'PERCORSO', testo: percorso, soloSezione: true }],
-      statoPr: { 60: { state: 'OPEN', headRefName: 'slice/map-resourcefor' } },
-      branchRemoti: ['slice/map-resourcefor'],
+      testo: lavoro,
+      statoPr: {
+        78: { state: 'MERGED', headRefName: 'slice/inbound-unit' },
+        81: { state: 'OPEN', headRefName: 'slice/docs-authority' },
+      },
+      branchRemoti: ['slice/docs-authority', 'slice/inbound-unit'],
       branchLocali: [],
-      base: '3068ece',
-      baseEsiste: true,
-      baseAntenata: false,
     });
-    expect(reperti.join('\n')).toMatch(/slice\/session-taint.*non esiste né su origin né in locale/s);
-    expect(reperti.join('\n')).toMatch(/3068ece.*non è un antenato/s);
+    expect(reperti.join('\n')).toMatch(/#78 è mergiata/);
+  });
+
+  it('reports a live branch that disappeared everywhere', () => {
+    const reperti = riconcilia({
+      testo: lavoro,
+      statoPr: {
+        78: { state: 'OPEN', headRefName: 'slice/inbound-unit' },
+        81: { state: 'OPEN', headRefName: 'slice/docs-authority' },
+      },
+      branchRemoti: ['slice/docs-authority'],
+      branchLocali: [],
+    });
+    expect(reperti.join('\n')).toMatch(/slice\/inbound-unit.*non esiste/);
+  });
+
+  it('does not treat historical PR references as live work', () => {
+    const testo = '# Lavoro\n\nCronaca: merged #12. In passato #13 era open.\n';
+    expect(prDichiarateVive(testo)).toEqual([]);
+    expect(branchDichiaratiVivi(testo)).toEqual([]);
   });
 });
