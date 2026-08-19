@@ -1,239 +1,161 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/readme/banner-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/banner-light.svg">
-  <img alt="Muffin continuity — one human at the center, connected across the changing parts of a digital life" src="assets/readme/banner-light.svg">
+  <img alt="A person at the center of one continuous thread across messages, work, memory and tools, with Muffin present on the ring" src="assets/readme/banner-light.svg">
 </picture>
 
 <div align="center">
 
 <!--
-Public README language contract (not rendered):
-- README.md is the canonical authored English surface.
-- README.it.md will be a derived/localized view after copy freeze, with freshness
-  tracking so translations cannot silently become a second source of truth.
+README.md is the canonical authored English surface.
+A localized README.it.md can be derived after copy freeze with freshness tracking.
 -->
 
 # Muffin
 
 ### A human-first personal agent built to make you more capable, not more dependent.
 
-One owner-run agent that keeps the thread across time, models, tools and surfaces —
-while authority stays explicit and under your control.
+One agent that keeps the thread across time, models, tools and surfaces — while its memory, work and authority remain under the owner's control.
 
 **One agent · your continuity · your rules**
 
 [Why Muffin](docs/THESIS.md) · [Vision](docs/VISION.md) · [Cognitive design](docs/COGNITIVE-DESIGN.md) · [Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY.md)
 
-<sub><strong>DEVELOPER PREVIEW · PRE-DAY-1</strong> — the runtime works; the product is still being hardened for real daily use.</sub>
+<sub><strong>DEVELOPER PREVIEW · PRE-DAY-1</strong> — real runtime, still being hardened for daily life.</sub>
 
 </div>
 
 ---
 
-> **Models change. Devices change. Apps change. Muffin should not have to become
-> someone else every time they do.**
+> **Models change. Devices change. Apps change. Muffin should not have to become someone else every time they do.**
 
 ## What is Muffin?
 
-Most AI products begin with a conversation.
+Most AI products begin with a conversation. **Muffin begins with the person across time.**
 
-Muffin begins with the **person across time**.
+The goal is one continuous personal agent whose history, unfinished work, point of view and authority survive new chats, model changes, process restarts and new interfaces. CLI, Telegram, future desktop, voice or a wearable are ports onto the same Muffin — not separate assistants.
 
-It is meant to be one continuous personal agent whose history, unfinished work,
-point of view and authority survive conversations, model changes, process
-restarts and new surfaces. CLI, Telegram, future desktop, voice or a wearable
-are ports onto the same Muffin — not separate assistants.
+Memory, tools and self-hosting are increasingly baseline agent features. Muffin's harder bet is **sovereign, portable continuity**: preserving not only facts, but who said what, what changed, what is still owed, what may already have happened, and what the agent is actually allowed to do.
 
-Memory, tools, self-hosting and messaging are increasingly baseline agent
-features. Muffin's harder bet is **quality, ownership and portability of personal
-continuity**: preserving not only facts, but who said what, what changed, what is
-still owed, what may already have happened, and what the agent is allowed to do.
-
-> **This is already a real system:** Muffin has a resident runtime, CLI, durable
-> memory/work, tools, policy boundaries, Telegram and scheduling. The current job
-> is making those pieces trustworthy enough to live inside for 14 consecutive
-> days.
+**It already exists as a working system:** resident runtime, CLI, durable memory/work, tools, policy boundaries, Telegram and scheduling. The current job is making that system trustworthy enough for the owner to live inside it for 14 consecutive days.
 
 ## Do · Understand · Be present
 
-Muffin has three equal jobs.
-
 | **DO** | **UNDERSTAND** | **BE PRESENT** |
 |---|---|---|
-| Carry real work through, including multi-step and long-running work. | Accumulate evidence and beliefs without flattening every source into “you said this.” | Keep the thread across sessions, waits, restarts and time — and know when silence is better. |
+| Carry real work through instead of stopping at an answer. | Build context without turning every source into “you said this.” | Keep commitments and context alive across sessions, waits, restarts and time. |
 
-An executor with no continuity is a tool. A memory that cannot act is a notebook.
-An assistant whose obligations disappear when the session ends is not continuous.
+An executor with no continuity is a tool. A memory that cannot act is a notebook. An assistant whose obligations disappear with the session is not continuous.
 
 ## Built around the human
 
-Muffin is not trying to simulate a human brain, and it is not designed around
-maximising how much thinking a person can stop doing.
+Muffin is not trying to simulate a human brain or optimise away human judgement.
 
-The working hypothesis is **complementarity**:
+| **You** | **Muffin** |
+|---|---|
+| goals, values, judgement, changing your mind, taking over | continuity, remembering commitments, tracking change, comparison, follow-through, delegated action |
 
-```text
-YOU
-│
-├── decide what matters
-├── judge
-├── change your mind
-└── stay able to intervene
-        │
-        │ works with
-        ▼
-MUFFIN
-│
-├── keeps the thread
-├── remembers commitments
-├── tracks change and provenance
-├── compares expectation with outcome
-├── follows work through
-└── acts when it has authority
-        │
-        ▼
-more capability — without giving up agency
-```
+The working hypothesis is **complementarity**: use the machine to carry what machines can carry well, while the person remains able to understand, correct, interrupt and decide.
 
-Human + AI is not automatically better. Muffin has to earn this claim in real
-use. A mechanism that feels clever but does not make the owner more capable
-loses its right to stay.
+Human + AI is not automatically better. Muffin has to earn that claim in real use. A mechanism that feels clever but does not make the owner more capable loses its right to stay.
 
 ## Some unusual ideas we're testing
 
-These are not scientific superpowers. Some are experiments, one is a product
-commitment, and all experimental machinery is disposable.
+These are **ideas, not scientific superpowers**. External cognitive/neuroscience grounding and evidence that a Muffin implementation is actually useful are tracked separately.
 
 | | |
 |---|---|
-| **Prediction → outcome → Δ** · `UNTESTED`<br><br>Can Muffin learn from the difference between what it expected and what actually happened — without turning a metaphor into another magic score? | **Absence can be data** · `EXPERIMENT`<br><br>If something normally appears with a personal rhythm, its absence may be informative. Absence alone is never a reason to interrupt. |
-| **Importance ≠ frequency** · `EXPERIMENT`<br><br>Something repeated every day is not automatically more important than one rare event that genuinely matters. | **Forgetting can help** · `UNTESTED`<br><br>Can Muffin discard processing cruft and stale representations while preserving the continuity humans are actually bad at carrying perfectly? |
-| **Silence is an action** · `EXPERIMENT`<br><br>Presence is not heartbeat spam. Timing is part of usefulness, and sometimes the right intervention is none. | **Understanding ≠ power** · `COMMITMENT`<br><br>Knowing you better can improve interpretation. It grants Muffin no additional authority by itself. |
+| **Prediction → outcome → Δ** `UNTESTED`<br>Can an explicit prediction become useful learning when reality disagrees? | **Silence can carry signal** `EXPERIMENT`<br>A change in what the owner stops mentioning may matter. It still does not tell Muffin *why*. |
+| **Importance ≠ frequency** `EXPERIMENT`<br>Repeated is not automatically important; rare is not automatically noise. | **Forgetting can help** `UNTESTED`<br>Discard processing cruft without casually discarding the continuity humans need help preserving. |
+| **Timing is part of intelligence** `EXPERIMENT`<br>A relevant observation at the wrong moment is still a bad intervention. | **Understanding ≠ power** `COMMITMENT`<br>Knowing the owner better grants Muffin no additional authority by itself. |
 
-The old Muffin already supplied negative evidence: noticing that a topic had
-“disappeared” did not mean it understood why, and heartbeat prompts could become
-context-blind noise. A signal is not understanding; understanding is not a right
-to interrupt.
+Legacy Muffin already provided negative evidence: noticing that a topic had disappeared did not mean it understood the context, and heartbeat-style prompts could become noise. **A signal is not understanding. Understanding is not permission.**
 
-Muffin treats cognitive science and neuroscience as **lenses for finding useful
-computational problems, not blueprints to copy**. External evidence and Muffin's
-own product evidence are tracked separately.
+[Cognitive hypotheses, evidence levels and kill criteria →](docs/COGNITIVE-DESIGN.md)
 
-[Hypotheses, evidence levels and kill criteria →](docs/COGNITIVE-DESIGN.md)
+## One agent across change
 
-## One agent, continuous across change
-
-```mermaid
-flowchart LR
-    H((Human)) --> M["Muffin\none continuous agent"]
-    M --- C["continuity\nevidence · beliefs · work · effects · authority"]
-    M --> P["models\nreplaceable"]
-    M --> S["surfaces\nreplaceable"]
-    M --> X["capabilities\nopt-in"]
+```text
+          models change       surfaces change       machines change
+                \                   |                    /
+                 \                  |                   /
+                  └─────────────  MUFFIN  ─────────────┘
+                                one identity
+                                     |
+                    ┌────────────────┼────────────────┐
+                 evidence         unfinished        authority
+                 + beliefs            work           + effects
 ```
 
-A process can die without creating a new Muffin. A model can change without
-resetting the relationship. A new surface should not fork memory, work or policy.
-
-The durable thing is the continuity-bearing meaning between them.
+The process is replaceable. The provider is replaceable. The interface is replaceable. **The continuity-bearing meaning is not supposed to reset with them.**
 
 ## What it should feel like
 
-The experience matters more than the mechanism. These examples carry explicit
-maturity labels until the corresponding journey is reproducible on the real
-product.
+Until dogfood gives us better real examples, these are labelled by maturity instead of pretending every behaviour already ships perfectly.
 
-> **CURRENT INVARIANT — provenance**  
-> “That came from someone else. You didn't say it.”
+| | Muffin moment |
+|---|---|
+| `CURRENT` **Provenance** | “That came from someone else. You didn't say it.” |
+| `TARGET` **Follow-through** | “I said I'd keep following this. I'm still waiting on the dependency.” |
+| `CURRENT` **Authority** | “I understand what you probably want. That still doesn't give me permission to send it.” |
+| `EXPERIMENT` **Presence** | Sometimes nothing happens, because Muffin did not have enough reason to interrupt. |
 
-> **TARGET EXPERIENCE — follow-through**  
-> “I said I'd keep following this. I'm still waiting on the dependency.”
-
-> **CURRENT INVARIANT — authority**  
-> “I can understand what you probably want. That does not give me permission to
-> send it.”
-
-> **EXPERIMENTAL — calibrated presence**  
-> Sometimes the right experience is simply **nothing happening**, because elapsed
-> time alone was not a good enough reason to bother you.
-
-During dogfood, conceptual examples should be replaced by real, reproducible
-Muffin moments wherever possible.
+Real dogfood moments should progressively replace conceptual examples here.
 
 ## What exists today
 
-Muffin is a working runtime under **DAY-1 hardening**, not a general-release
-personal agent yet. The current binary question is whether its owner could live
-for 14 consecutive days using Muffin as the only general personal agent.
+Muffin is a working runtime under **DAY-1 hardening**, not a general-release personal agent yet.
 
-| Area | Current state |
+| Area | State |
 |---|---|
-| Agent runtime + CLI | **Working** |
+| Runtime + CLI | **Working** |
 | Durable memory + provenance | **Working / hardening** |
-| Durable turns, waits and recovery | **Working / hardening** |
-| Policy, sandbox and secret boundary | **Working / hardening** |
-| Telegram | **Working / hardening** |
-| Scheduling + proactive signals | **Working / experimental behaviour** |
+| Durable work, waits + recovery | **Working / hardening** |
+| Policy, sandbox + secret boundary | **Working / hardening** |
+| Telegram + scheduling | **Working / hardening** |
+| Cognitive/proactive behaviour | **Experimental** |
 | Consumer-grade onboarding | **Not yet** |
 | Community extension catalog | **Post-DAY-1 direction** |
 
-The detailed Gate changes too quickly to duplicate here.
-
-[Current DAY-1 inventory →](docs/blueprint/M5-BIS.md)
+The detailed Gate moves too quickly to duplicate here. [Current DAY-1 inventory →](docs/blueprint/M5-BIS.md)
 
 ## Try Muffin — developer preview
 
-The current path is still developer-grade. Public onboarding is meant to become
-substantially simpler; self-hosted should describe ownership, not an installation
-punishment.
+The install path is still developer-grade. Public onboarding is meant to become much simpler; **self-hosted should describe ownership, not an installation punishment.**
 
-**Requirements:** Node.js 22+ and a supported model provider.
+Requires Node.js 22+ and a supported model provider.
 
 ```bash
 git clone https://github.com/GiustoPiedimonte/muffin-agent.git
 cd muffin-agent
 ./install.sh
+
+muffin init
+muffin
+muffin doctor
 ```
-
-Then:
-
-```bash
-muffin init        # configure the owner installation
-muffin             # open Muffin
-muffin doctor      # inspect installation/runtime health
-```
-
-The installer does not use `sudo`. If another program already owns the `muffin`
-command — notably Linux Mint's Cinnamon window manager — it installs the CLI as
-`muffin-agent` instead of shadowing it.
 
 <details>
 <summary><strong>Why is the repository called <code>muffin-agent</code>?</strong></summary>
 
-The product, identity and normal command are **Muffin**. The repository/package
-slug carries `-agent` because the bare npm name is unavailable and because the
-rebuild had to coexist with the predecessor locally. The slug is packaging, not
-product identity.
+The product, identity and normal command are **Muffin**. The repository/package slug carries `-agent` because the bare npm name is unavailable and because the rebuild had to coexist with its predecessor locally. Packaging is not product identity.
 
 </details>
 
 ## Go deeper
 
-The root README is the surface, not the encyclopedia.
-
 <details>
 <summary><strong>Architecture — evidence, beliefs, work, effects and authority</strong></summary>
 
-Muffin separates persistent meaning into five semantic planes:
+Muffin separates persistent meaning into five planes:
 
 - **Evidence** — what actually entered or happened;
 - **Beliefs** — what Muffin currently thinks is true;
 - **Work** — what is still owed, waiting, due or resumable;
 - **Effects** — what Muffin intended to do and what may have happened in the world;
-- **Authority** — which transitions Muffin is actually allowed to perform.
+- **Authority** — which transitions Muffin is allowed to perform.
 
-The separation keeps inference from becoming evidence, completed reasoning from
-becoming a claimed real-world effect, and familiarity from becoming permission.
+That separation keeps inference from becoming evidence, reasoning from becoming a claimed real-world effect, and familiarity from becoming permission.
 
 [Architecture →](docs/ARCHITECTURE.md)
 
@@ -244,34 +166,27 @@ becoming a claimed real-world effect, and familiarity from becoming permission.
 
 The model can interpret and propose. It does not grant itself authority.
 
-Known secret values are designed to stay out of general model/transcript/tool
-traffic. A configured remote model provider is explicitly treated as an egress
-boundary rather than hidden behind the word “self-hosted”. Understanding the
-owner better does not silently increase permissions.
+Known secret values are designed to stay outside general model/transcript/tool traffic. A configured remote model provider is treated as an explicit egress boundary. Better understanding of the owner does not silently increase permissions.
 
 [Security →](docs/SECURITY.md)
 
 </details>
 
 <details>
-<summary><strong>Cognitive design — hypotheses, evidence and kill criteria</strong></summary>
+<summary><strong>Cognitive design — hypotheses that are allowed to die</strong></summary>
 
-Muffin uses cognitive science and neuroscience as prior art where they expose a
-real computational problem. The software mechanism still has to prove useful on
-its own terms. Some ideas are experiments; some legacy mechanisms have already
-been rejected.
+Cognitive science and neuroscience are prior art when they expose a useful problem or trade-off. The software interpretation must still beat a sensible simpler baseline in real use.
 
-External scientific grounding and Muffin-specific evidence are tracked
-separately. `SHIPPED` is deliberately not an evidence status.
+`SHIPPED` is deliberately not an evidence status. Some legacy mechanisms have already been rejected.
 
 [Cognitive design →](docs/COGNITIVE-DESIGN.md)
 
 </details>
 
 <details>
-<summary><strong>Extensions — capabilities without growing the trusted core forever</strong></summary>
+<summary><strong>Extensions — install capabilities, not permanent core bloat</strong></summary>
 
-The intended extension model separates:
+The intended model separates:
 
 ```text
 package     what you install
@@ -279,8 +194,7 @@ capability  each authority-bearing thing it can do
 grant       what you currently permit it to do
 ```
 
-Gmail, browser control, Home Assistant, privacy transforms and future surfaces
-should be opt-in capabilities around a narrow continuity/authority core.
+Gmail, browser control, Home Assistant, privacy transforms and future surfaces should live around a narrow continuity/authority core.
 
 > **What you do not install should not exist in your Muffin.**
 
@@ -290,30 +204,13 @@ should be opt-in capabilities around a narrow continuity/authority core.
 
 ## Road to open source
 
-Muffin is still private while its foundations are cheap to change.
-
 ```text
-owner DAY-1
-    ↓
-14 days of real daily use
-    ↓
-small trusted alpha
-    ↓
-public alpha
-    ↓
-community breadth + earned maintainership
+owner DAY-1  →  14 days real use  →  trusted alpha  →  public alpha  →  community breadth
 ```
 
-The 14-day run is meant to expose what actually forces the owner back to another
-agent or direct interface, what Muffin forgets, where it interrupts badly, and
-which supposedly clever mechanisms do not help.
+The dogfood period is meant to expose what actually forces the owner back to another agent or direct interface, what Muffin forgets, where it interrupts badly, and which supposedly clever mechanisms do not help.
 
-Two questions dominate:
-
-> **Which part of my digital life am I still forced to manage directly?**
->
-> **Which mechanism actually made me more capable, and which one merely made
-> Muffin feel more clever?**
+> **Which mechanism made the owner more capable — and which one merely made Muffin feel more clever?**
 
 [Open-source strategy →](docs/OPEN-SOURCE-STRATEGY.md) · [Public narrative →](docs/PUBLIC-NARRATIVE.md)
 
