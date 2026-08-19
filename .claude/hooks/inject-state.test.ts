@@ -5,123 +5,63 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-/**
- * The handoff hook, exercised as Claude Code runs it.
- *
- * This file exists because of what its absence cost. The hook shipped with a
- * 10,000-character cap and no test, in the same change that added the practice
- * saying a cap arrives with the test that fails without it. The cap was applied
- * to the block instead of to the emitted string, so between 9,876 and 10,000
- * characters the output silently exceeded the limit — and past the limit Claude
- * Code replaces the whole thing with a preview and a file path, which is
- * precisely the "handoff became a pointer" failure the hook was written to stop.
- *
- * Running the real script through `execFileSync` rather than importing it: the
- * thing under test is a program Claude Code invokes, and an import would not
- * catch a broken shebang, a stray stdout write, or a non-zero exit.
- */
-
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'inject-state.mjs');
-const MAX = 10_000;
+const MAX = 4_000;
 
-/** A home where the hook can find a STATE.md with a block of exactly `n` chars. */
-function homeWithBlock(n: number): string {
-  const home = mkdtempSync(join(tmpdir(), 'muffin-hook-'));
+function homeWithWork(content: string): string {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-handoff-'));
   mkdirSync(join(home, 'docs', 'blueprint'), { recursive: true });
   mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
   cpSync(HOOK, join(home, '.claude', 'hooks', 'inject-state.mjs'));
-
-  const head = '⭐ **START HERE**\n\n';
-  const block = head + 'x'.repeat(Math.max(0, n - head.length));
-  writeFileSync(join(home, 'docs', 'blueprint', 'STATE.md'), `# S\n\n${block}\n\n---\n\ncoda\n`);
+  writeFileSync(join(home, 'docs', 'blueprint', 'LAVORO.md'), content);
   return home;
 }
 
-function run(home: string): { stdout: string; status: number } {
-  const stdout = execFileSync('node', [join(home, '.claude', 'hooks', 'inject-state.mjs')], {
+function run(home: string): string {
+  return execFileSync('node', [join(home, '.claude', 'hooks', 'inject-state.mjs')], {
     input: '{}',
     encoding: 'utf8',
   });
-  return { stdout, status: 0 };
 }
 
 const contextOf = (stdout: string): string =>
   JSON.parse(stdout).hookSpecificOutput.additionalContext as string;
 
-describe('inject-state hook', () => {
-  it('emits valid JSON with the right event name', () => {
-    const { stdout } = run(homeWithBlock(200));
+describe('SessionStart operational handoff', () => {
+  it('injects LAVORO directly and labels it non-authoritative', () => {
+    const stdout = run(homeWithWork('# Lavoro corrente\n\n**Goal:** DAY-1 READY\n'));
     const parsed = JSON.parse(stdout);
     expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
-    expect(contextOf(stdout)).toContain('START HERE');
+    expect(contextOf(stdout)).toContain('**Goal:** DAY-1 READY');
+    expect(contextOf(stdout)).toContain('observed Git/PR state wins');
   });
 
-  it.each([9_800, 9_875, 9_880, 9_950, 10_000, 10_400])(
-    'never emits more than the cap, at a block of %i chars',
-    (n) => {
-      // The window that was broken was 9,876-10,000: wide enough to be reached
-      // by a growing STATE.md, narrow enough that a single spot check missed it.
-      const context = contextOf(run(homeWithBlock(n)).stdout);
-      expect(context.length).toBeLessThanOrEqual(MAX);
-    },
-  );
+  it('does not depend on STATE.md existing or carrying a marker', () => {
+    const home = homeWithWork('# Lavoro corrente\n\nwork survives without STATE\n');
+    expect(contextOf(run(home))).toContain('work survives without STATE');
+  });
 
-  it('says so when it truncates, instead of looking complete', () => {
-    const context = contextOf(run(homeWithBlock(10_400)).stdout);
-    expect(context).toMatch(/blocco troncato/);
+  it('bounds bootstrap context and says when the handoff was truncated', () => {
+    const context = contextOf(run(homeWithWork(`# Lavoro\n\n${'x'.repeat(6_000)}\n`)));
+    expect(context.length).toBeLessThanOrEqual(MAX);
+    expect(context).toMatch(/handoff truncated/);
+  });
+
+  it('injects the real LAVORO whole while it stays inside the local budget', () => {
+    const context = contextOf(
+      execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }),
+    );
+    expect(context).toContain('# Lavoro corrente');
+    expect(context).not.toMatch(/handoff truncated/);
     expect(context.length).toBeLessThanOrEqual(MAX);
   });
 
-  it('leaves a block that fits completely alone', () => {
-    const context = contextOf(run(homeWithBlock(500)).stdout);
-    expect(context).not.toMatch(/blocco troncato/);
-  });
+  it('stays silent when there is no handoff to inject', () => {
+    const bare = mkdtempSync(join(tmpdir(), 'muffin-handoff-bare-'));
+    mkdirSync(join(bare, '.claude', 'hooks'), { recursive: true });
+    cpSync(HOOK, join(bare, '.claude', 'hooks', 'inject-state.mjs'));
+    expect(run(bare)).toBe('');
 
-  it('fits the real STATE.md and the real LAVORO.md, both whole', () => {
-    // Every test above proves the mechanism handles a block of size N. None of
-    // them ever looked at OUR blocks, and that is the gap the mechanism cannot
-    // see: it truncated the real handoff twice — at 16,716 characters and again
-    // at 18,700 after a merge — announcing it correctly both times while the
-    // tail, which is where the load-bearing file list lives, stopped arriving.
-    //
-    // Both blocks are asserted in one test on purpose: they compete for a
-    // single cap, so checking them separately would let one quietly starve the
-    // other, which is exactly how the handoff was lost.
-    const context = contextOf(execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }));
-    expect(context).not.toMatch(/blocco troncato/);
-    expect(context).toMatch(/File load-bearing/); // the handoff's last line
-    // Structural, not literal: the preamble is emitted only when the work block
-    // is non-empty, and every work block carries its own date. Keying on a
-    // phrase from the content — the first version used "Deleghe in volo" —
-    // makes the test fail when the work state legitimately changes, which is
-    // the one thing it is supposed to allow.
-    expect(context).toMatch(/LAVORO\.md/);
-    expect(context).toMatch(/\*\*Aggiornato\*\*/);
-    expect(context.length).toBeLessThanOrEqual(MAX - 250);
-  });
-
-  it('loses the work state rather than the handoff when LAVORO.md is malformed', () => {
-    // Fail-soft in the direction that matters. A LAVORO.md that is absent, or
-    // present without its markers, must cost the work state and never the
-    // handoff — the reverse arrangement would let a stray edit to a small file
-    // take out the block this hook exists for.
-    const home = homeWithBlock(300);
-    writeFileSync(join(home, 'docs', 'blueprint', 'LAVORO.md'), 'niente marcatori qui\n');
-    const context = contextOf(run(home).stdout);
-    expect(context).toMatch(/START HERE/);
-    expect(context).not.toMatch(/LAVORO\.md/);
-  });
-
-  it('stays silent rather than failing when there is nothing to inject', () => {
-    // A session without its handoff is a bad day; a session that will not start
-    // because a doc was mid-edit is worse. Every one of these exits 0, empty.
-    const noState = mkdtempSync(join(tmpdir(), 'muffin-hook-bare-'));
-    mkdirSync(join(noState, '.claude', 'hooks'), { recursive: true });
-    cpSync(HOOK, join(noState, '.claude', 'hooks', 'inject-state.mjs'));
-    expect(run(noState).stdout).toBe('');
-
-    const noMarker = homeWithBlock(100);
-    writeFileSync(join(noMarker, 'docs', 'blueprint', 'STATE.md'), '# S\n\nsenza stella\n\n---\n');
-    expect(run(noMarker).stdout).toBe('');
+    expect(run(homeWithWork('   \n'))).toBe('');
   });
 });
