@@ -13,7 +13,7 @@ Current decisions:
 - **No monocle** in the canonical mark.
 - Do not redraw the mark into a generic blob, orb, robot or “AI” symbol.
 - Preserve the mark's proportions and recognizable silhouette when deriving future assets.
-- `muffin-mark-32.png` is the current small-surface convenience asset.
+- `muffin-mark-64.png` and `muffin-mark-32.png` are convenience assets for small UI surfaces.
 
 ## Current palette
 
