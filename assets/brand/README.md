@@ -13,8 +13,8 @@ Current decisions:
 - **No monocle** in the canonical mark.
 - Do not redraw the mark into a generic blob, orb, robot or “AI” symbol.
 - Preserve the mark's proportions and recognizable silhouette when deriving sizes.
-- `muffin-avatar.png` is the current ready-to-use square avatar.
-- `muffin-mark-64.png` and `muffin-mark-32.png` are convenience sizes for small UI surfaces.
+- `muffin-mark-64.png` and `muffin-mark-32.png` are convenience sizes for small UI/icon surfaces.
+- Until a dedicated avatar treatment earns a reason to exist, the canonical transparent mark is also the avatar source.
 
 ## Current palette
 
