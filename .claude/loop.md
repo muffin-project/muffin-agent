@@ -48,7 +48,7 @@ riprendibile invece di sparire.
 | una review | `docs/JUDGE.md` |
 | pratica ingegneristica | `docs/PRACTICES.md` |
 | Git/merge/promotion | `docs/BRANCHING.md` |
-| perché/cosa stiamo costruendo | `docs/THESIS.md` + `docs/DESIGN-PRINCIPLES.md` |
+| perché/cosa stiamo costruendo | `docs/THESIS.md` + `docs/VISION.md` + `docs/DESIGN-PRINCIPLES.md` |
 | evidence storica | il research/audit datato pertinente, mai l'intera cartella |
 
 Non usare `STATE.md`, il vecchio threat model o i contratti rebuild-era come
