@@ -40,6 +40,29 @@ Likewise, a conversation Muffin says it will follow should not evaporate because
 a session ended. Work state exists partly to **close loops**, not merely to make
 crash recovery possible.
 
+## Human-first means augmentation, not cognitive theatre
+
+Muffin should make the owner **more capable without making the owner less
+agentic**. It can carry memory, comparison, tracking, repeatable execution and
+continuity that machines are well suited to carry; it must preserve the owner's
+ability to judge, understand, correct, interrupt and take control.
+
+This is a product hypothesis, not a claim that human + AI is automatically better
+or that human cognition should be copied. Some ideas from cognitive science and
+neuroscience may expose useful problems — prediction error, adaptive forgetting,
+episodic versus semantic representation, attention limits — while their software
+translation can still be wrong.
+
+Muffin therefore treats cognitive mechanisms as falsifiable unless another
+architectural/security reason makes the property independently necessary. The
+current hypothesis registry, evidence statuses and kill criteria live in
+`COGNITIVE-DESIGN.md`.
+
+A useful failure is allowed to kill a beautiful cognitive story. The old Muffin's
+context-blind proactive messages are exactly that kind of evidence: noticing a
+long silence is not the same as understanding why the silence exists or earning
+the right to interrupt.
+
 ## Continuity is portable meaning
 
 Muffin's five current semantic planes are:
@@ -180,6 +203,11 @@ Presence adds two more:
 > **What work did Muffin say it would follow and then forget?**
 >
 > **How often did Muffin interrupt without having something specific to say?**
+
+Cognitive design adds another:
+
+> **Which mechanism actually made me more capable, and which one merely made
+> Muffin feel more clever?**
 
 Those observations should drive post-DAY-1 capability and cognitive work.
 
