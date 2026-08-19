@@ -5,8 +5,8 @@
 ### A personal agent built to make you more capable, not more dependent.
 
 Muffin is an **owner-run personal agent designed around continuity**.
-It remembers what happened, keeps track of what is still owed, learns carefully
-from change, and acts inside authority you explicitly give it.
+It keeps the thread across time, preserves what happened and what is still owed,
+and acts inside authority you explicitly give it.
 
 **One agent · your continuity · your rules**
 
@@ -45,6 +45,10 @@ Continuity means more than remembering a preference. It means being able to tell
 - what is still unfinished;
 - what may already have happened in the world;
 - and what Muffin is currently allowed to do.
+
+> **Already real:** a resident agent runtime, CLI, durable memory/work, tools,
+> policy boundaries, Telegram and scheduling exist today. The current work is
+> making those pieces trustworthy enough to live inside for 14 consecutive days.
 
 [Read the thesis →](docs/THESIS.md)
 
