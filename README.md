@@ -1,5 +1,13 @@
 <div align="center">
 
+<!--
+Public README language contract (not rendered):
+- README.md is the canonical authored English surface.
+- README.it.md will be a derived/localized view after copy freeze, with freshness
+  tracking so translations cannot silently become a second source of truth.
+- Hero art is intentionally not referenced until the final banner asset is approved.
+-->
+
 # Muffin
 
 ### A human-first personal agent built to make you more capable, not more dependent.
