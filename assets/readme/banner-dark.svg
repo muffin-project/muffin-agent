@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
+  <title id="title">Muffin continuity banner</title>
+  <desc id="desc">A human at the center connected by continuous threads to messages, work, places, people, decisions and memory.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090b12"/>
+      <stop offset="0.52" stop-color="#111326"/>
+      <stop offset="1" stop-color="#0a0b12"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="54%" r="45%">
+      <stop offset="0" stop-color="#ffae71" stop-opacity="0.52"/>
+      <stop offset="0.28" stop-color="#b779ff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#111326" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="thread" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6f7cff"/>
+      <stop offset="0.45" stop-color="#b878ff"/>
+      <stop offset="0.62" stop-color="#ff9d6c"/>
+      <stop offset="1" stop-color="#8d7dff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+  <rect width="1400" height="360" rx="28" fill="url(#bg)"/>
+  <ellipse cx="700" cy="190" rx="360" ry="165" fill="url(#halo)" filter="url(#soft)"/>
+
+  <g opacity="0.9" stroke="url(#thread)" fill="none" stroke-linecap="round">
+    <path d="M106 82 C240 42 320 122 430 121 C518 120 560 86 623 122" stroke-width="3.4" filter="url(#glow)"/>
+    <path d="M105 162 C245 125 320 195 441 186 C525 180 562 157 623 164" stroke-width="3.1" filter="url(#glow)"/>
+    <path d="M120 255 C240 294 337 236 454 243 C532 248 570 228 625 210" stroke-width="2.8" filter="url(#glow)"/>
+    <path d="M1294 78 C1160 48 1084 121 970 119 C887 118 839 87 778 122" stroke-width="3.4" filter="url(#glow)"/>
+    <path d="M1294 166 C1168 128 1071 199 955 188 C871 180 833 156 778 165" stroke-width="3.1" filter="url(#glow)"/>
+    <path d="M1276 255 C1156 296 1058 238 944 244 C864 248 826 229 775 211" stroke-width="2.8" filter="url(#glow)"/>
+  </g>
+
+  <g fill="#101322" stroke="#7e74ff" stroke-width="2">
+    <circle cx="106" cy="82" r="26"/><circle cx="105" cy="162" r="26"/><circle cx="120" cy="255" r="26"/>
+    <circle cx="1294" cy="78" r="26"/><circle cx="1294" cy="166" r="26"/><circle cx="1276" cy="255" r="26"/>
+  </g>
+
+  <g stroke="#c9c4ff" stroke-width="2.3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M95 74 h22 v14 h-11 l-6 6 v-6 h-5z"/>
+    <path d="M96 153 h18 v18 H96z M100 159 h10 M100 164 h7"/>
+    <path d="M111 246 l9-6 9 6 v15 l-9 6-9-6z M116 252 h8"/>
+    <path d="M1286 69 h16 v18 h-16z M1290 66 v7 M1298 66 v7 M1289 77 h10"/>
+    <path d="M1294 151 c-7 0-12 5-12 12 0 9 12 18 12 18s12-9 12-18c0-7-5-12-12-12z M1294 160a4 4 0 1 0 0 .1"/>
+    <path d="M1267 249 h18 M1276 240 v18 M1268 265 c6-8 12-8 18 0"/>
+  </g>
+
+  <g>
+    <circle cx="700" cy="176" r="78" fill="#121527" stroke="#b379ff" stroke-width="2.5"/>
+    <circle cx="700" cy="176" r="93" fill="none" stroke="#8b75ff" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="5 10"/>
+    <circle cx="700" cy="151" r="25" fill="#0b0d17" stroke="#f0c4ff" stroke-width="2"/>
+    <path d="M650 231 c8-38 28-57 50-57s42 19 50 57" fill="#0b0d17" stroke="#f0c4ff" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="700" cy="176" r="111" fill="none" stroke="#ffae71" stroke-opacity="0.18"/>
+  </g>
+
+  <g fill="#d9d4ff" opacity="0.82">
+    <circle cx="380" cy="70" r="2"/><circle cx="346" cy="260" r="1.8"/><circle cx="1034" cy="74" r="2"/><circle cx="1091" cy="260" r="1.8"/>
+    <circle cx="520" cy="51" r="1.6"/><circle cx="882" cy="48" r="1.7"/><circle cx="520" cy="292" r="1.5"/><circle cx="881" cy="295" r="1.6"/>
+  </g>
+</svg>
