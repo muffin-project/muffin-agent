@@ -1,9 +1,3 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/banner-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/readme/banner-light.png">
-  <img alt="Muffin continuity — one human at the center, connected across the changing parts of a digital life" src="assets/readme/banner-light.png">
-</picture>
-
 <div align="center">
 
 <!--
