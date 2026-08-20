@@ -1,12 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 240" role="img" aria-labelledby="title desc">
-  <title id="title">Muffin visual identity v0.1 palette</title>
-  <desc id="desc">Ink, Muffin orange, cream, paper and muted line colors.</desc>
-  <rect width="1000" height="240" rx="24" fill="#FCF9F5"/>
-  <g font-family="system-ui, sans-serif" font-size="20" fill="#111315">
-    <rect x="40" y="48" width="150" height="100" rx="16" fill="#111315"/><text x="40" y="184">Ink · #111315</text>
-    <rect x="230" y="48" width="150" height="100" rx="16" fill="#F06B2A"/><text x="230" y="184">Orange · #F06B2A</text>
-    <rect x="420" y="48" width="150" height="100" rx="16" fill="#FEF7E8" stroke="#111315"/><text x="420" y="184">Cream · #FEF7E8</text>
-    <rect x="610" y="48" width="150" height="100" rx="16" fill="#FCF9F5" stroke="#111315"/><text x="610" y="184">Paper · #FCF9F5</text>
-    <rect x="800" y="48" width="150" height="100" rx="16" fill="#D9D3C9"/><text x="800" y="184">Muted · #D9D3C9</text>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 250" role="img" aria-labelledby="title desc">
+<title id="title">Muffin visual identity v0.1 palette</title><desc id="desc">Ink, Muffin orange, cream, paper, system blue and inverse line.</desc>
+<rect width="1200" height="250" rx="24" fill="#FAF6EE"/>
+<g font-family="system-ui, sans-serif" font-size="18" fill="#07162C">
+<rect x="30" y="45" width="150" height="105" rx="14" fill="#07162C"/><text x="30" y="188">Ink · #07162C</text>
+<rect x="225" y="45" width="150" height="105" rx="14" fill="#FF7A1A"/><text x="225" y="188">Orange · #FF7A1A</text>
+<rect x="420" y="45" width="150" height="105" rx="14" fill="#FFF9EE" stroke="#07162C"/><text x="420" y="188">Cream · #FFF9EE</text>
+<rect x="615" y="45" width="150" height="105" rx="14" fill="#FAF6EE" stroke="#07162C"/><text x="615" y="188">Paper · #FAF6EE</text>
+<rect x="810" y="45" width="150" height="105" rx="14" fill="#1878F2"/><text x="810" y="188">System blue · #1878F2</text>
+<rect x="1005" y="45" width="150" height="105" rx="14" fill="#F8EEDC" stroke="#07162C"/><text x="1005" y="188">Inverse · #F8EEDC</text>
+</g></svg>
