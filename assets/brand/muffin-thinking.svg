@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+<title id="title">Muffin thinking</title><desc id="desc">Thinking expression variant of the canonical Muffin mascot.</desc>
+<defs><linearGradient id="wrapper" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FF8A2A"/><stop offset="1" stop-color="#FF6B0A"/></linearGradient></defs>
+<g stroke="#07162C" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+<path fill="url(#wrapper)" d="M57 139 C73 151 84 156 97 149 C107 157 118 161 128 161 C138 161 149 157 159 149 C172 156 183 151 199 139 L190 216 Q188 226 178 229 Q128 237 78 229 Q68 226 66 216 Z"/>
+<path fill="#FF5C0A" stroke="none" d="M62 151 L72 213 Q73 219 82 222 L88 223 L78 153 Z"/><path fill="#FF983C" stroke="none" d="M72 151 L80 215 L91 219 L86 154 Z" opacity=".72"/><path fill="#FF5C0A" stroke="none" d="M194 151 L184 213 Q183 219 174 222 L168 223 L178 153 Z"/><path fill="#FF983C" stroke="none" d="M184 151 L176 215 L165 219 L170 154 Z" opacity=".72"/>
+<path d="M88 163 L94 220 M108 166 L112 225 M128 167 L128 227 M148 166 L144 225 M168 163 L162 220" fill="none"/>
+</g>
+<path fill="#FFF9EE" stroke="#07162C" stroke-width="10" stroke-linejoin="round" d="M54 146 C34 144 24 132 26 113 C27 97 37 84 53 78 C51 62 59 49 76 45 C85 28 103 20 128 20 C153 20 171 28 180 45 C197 49 205 62 203 78 C219 84 229 97 230 113 C232 132 222 144 202 146 C194 158 176 162 160 153 C151 164 138 168 128 168 C118 168 105 164 96 153 C80 162 62 158 54 146 Z"/>
+<circle cx="101" cy="111" r="10" fill="#07162C"/><circle cx="155" cy="111" r="10" fill="#07162C"/><circle cx="98" cy="108" r="3" fill="#FFF9EE"/><circle cx="152" cy="108" r="3" fill="#FFF9EE"/>
+<g fill="#1878F2"><rect x="190" y="27" width="9" height="24" rx="4.5" transform="rotate(14 194.5 39)"/><rect x="207" y="43" width="9" height="24" rx="4.5" transform="rotate(45 211.5 55)"/><rect x="214" y="68" width="25" height="9" rx="4.5"/></g>
+</svg>
