@@ -14,27 +14,29 @@ operative, è preservata in
 claim e sintesi stale; non usare conteggi globali o la vecchia frase «blocco 1
 chiuso» come evidence.
 
-Contraddizione già verificata:
-
-- il vecchio percorso dichiarava chiuso il blocco trasversale;
-- `recall-speaker` resta un difetto reale: un episodio scritto dall'agente può
-  ancora essere reso come «tu» se il recall usa solo il trust tier e perde il
-  ruolo/speaker.
-
-Finché M5 non è riconciliato riga per riga, questo percorso ordina **i blocker
-noti e verificati**, senza fingere che l'elenco globale sia già fresco.
+La contraddizione che ha aperto questa sezione — il vecchio percorso dichiarava
+chiuso il blocco trasversale mentre `recall-speaker` era ancora un difetto
+reale — è stata verificata e chiusa (§1.1). Resta la regola: finché M5 non è
+riconciliato riga per riga, questo percorso ordina **i blocker noti e
+verificati**, senza fingere che l'elenco globale sia già fresco.
 
 ## 1 · Chiudi le invarianti trasversali residue
 
-### 1.1 `recall-speaker`
+### 1.1 `recall-speaker` — chiuso
 
 **Perché prima:** provenance/speaker errati contaminano il livello epistemico su
-cui si appoggiano memoria e personalizzazione. Il nuovo schema conserva `role` e
-speaker; il rendering di recall deve conservarli fino al prompt invece di
-collassare `tier 0` in «owner said».
+cui si appoggiano memoria e personalizzazione. Lo schema conserva `role`; il
+rendering di recall ora lo conserva fino al prompt invece di collassare
+`tier 0` in «owner said».
 
-Claim: una frase precedente di Muffin non può essere renderizzata o interpretata
-come parola dell'owner soltanto perché è trust tier 0.
+Claim chiusa: una frase precedente di Muffin non viene renderizzata né
+interpretata come parola dell'owner soltanto perché è trust tier 0. Le tre
+porte del recall episodico (FTS, vettoriale, vicinato) rendono chi ha prodotto
+il testo da `episodes.role` e tengono `trustTier` come asse separato, che
+continua a guidare la taint. Evidence: `core/memory/recall-speaker.test.ts`,
+rosso se l'attribuzione torna a derivare dal solo tier. Residuo registrato come
+follow-up, non blocker: la provenienza dei *fatti* è ancora solo da tier, e
+oggi nessun produttore scrive episodi `tool`/`system`.
 
 ### 1.2 `inbound-unit` / Telegram `update_id → one durable turn`
 
@@ -42,9 +44,11 @@ come parola dell'owner soltanto perché è trust tier 0.
 effetti o delivery. La forma deve comporre con l'identità già usata per le
 occorrenze scheduler.
 
-PR #78 implementa questa famiglia ma, all'osservazione del 19/08, il branch è
-divergente rispetto a `dev`. Prima dell'integrazione CRITICAL deve incorporare il
-`dev` corrente e rifare l'evidence pertinente + judge indipendente; il testo di
+È ora il primo claim aperto del percorso. PR #78 implementa questa famiglia;
+all'osservazione del 23/08 il branch è indietro rispetto a `dev` ma senza
+conflitti testuali e senza commit di `dev` sui suoi file runtime. Prima
+dell'integrazione CRITICAL deve incorporare il `dev` corrente, rifare solo
+l'evidence davvero invalidata e avere un judge indipendente fresco; il testo di
 questa riga non è un verdetto sulla PR.
 
 ## 2 · Chiudi la forma durevole prima del dogfood

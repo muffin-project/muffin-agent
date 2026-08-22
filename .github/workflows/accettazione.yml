@@ -60,12 +60,20 @@ jobs:
 
       # Primo gate: uno scenario reale che si rompe fa fallire questo step, e
       # quindi il job. Senza pipe, per la stessa ragione di `ci.yml`.
+      # `--reporter=json --outputFile.json=…` alongside `dot`: the same run
+      # feeds the report below, so the suite spawns its real binaries once.
+      # Until 2026-08-23 the report re-ran the whole suite as a subprocess and
+      # the job crossed `timeout-minutes` with every step green — GitHub marks
+      # that `cancelled`, on `dev` too, and a green report in the log was the
+      # only way to tell a timeout from a failure.
       - name: suite di accettazione
-        run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot
+        run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/accettazione.json
 
       # Secondo gate — vedi il commento in testa al file. Senza `|| true`: una
       # riga READY scoperta, o READY con uno scenario ancora atteso-rosso, ora
       # fa fallire questo step e quindi il job, non solo il log.
       - name: rapporto per riga
         if: always()
+        env:
+          MUFFIN_ACCEPT_RESULTS: ${{ runner.temp }}/accettazione.json
         run: npx tsx evals/acceptance/report.ts
