@@ -27,6 +27,10 @@ it by tradition.
 4. Do not build deep PR stacks. If slice B materially depends on A, integrate A
    into `dev`, then rebase/branch B from the new integration state.
 5. Delete the work branch after merge.
+6. Integrate with a merge commit, not a squash. Once the branch is gone, the
+   subject `Merge pull request #NN from <owner>/<branch>` is the local witness
+   `node .claude/deleghe.mjs riprendi` uses to derive that a delegation's work
+   is integrated; a squash erases it and finished work shows up as live again.
 
 A good slice title can state the claim without an unrelated "and".
 

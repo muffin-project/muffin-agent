@@ -104,6 +104,18 @@ function registro() {
   return [...per.values()];
 }
 
+/**
+ * Il nome di una delega che una `registra` non ha mai nominato.
+ *
+ * Succede davvero, e non è un caso di scuola: quattro righe del registro hanno
+ * solo una `chiudi` per id — judge lanciati e conclusi mentre la sessione veniva
+ * compattata, con la `registra` che non è mai arrivata a toccare il file. È
+ * precisamente lo stato parziale che questo strumento esiste per sopravvivere, e
+ * fino a qui lo faceva saltare: `v.slug.padEnd()` su `undefined` uccideva
+ * `stato` e `riprendi` — cioè i due comandi con cui una sessione fresca comincia.
+ */
+const MAI_REGISTRATA = '(mai registrata)';
+
 function registra(id, slug, cosa) {
   mkdirSync(DIR, { recursive: true });
   const voce = { id, slug, cosa, quando: new Date().toISOString() };
@@ -316,14 +328,7 @@ function stato() {
   for (const v of reg) {
     const f = transcriptOf(v.id);
     const kb = f ? (statSync(f).size / 1024).toFixed(0) : '—';
-    // Cerotto (2026-08-18): quattro deleghe hanno solo la riga di `chiudi` —
-    // agenti chiusi per id mentre la sessione veniva compattata — e `padEnd` su
-    // `undefined` faceva uscire 1 sia qui sia in `riprendi`, cioe' sul percorso
-    // che `loop.md` §1 rende canonico per una sessione fresca. Il fix vero (una
-    // costante in tutti i cicli di stampa, la riga «N chiuse senza
-    // registrazione», tre test) arriva da un'altra sessione: quando entra,
-    // questo sparisce.
-    console.log(`${f ? '✓' : '✗'} ${(v.slug ?? '(mai registrata)').padEnd(24)} ${v.id}  ${kb.padStart(6)} KB  ${v.cosa ?? ''}`);
+    console.log(`${f ? '✓' : '✗'} ${(v.slug ?? MAI_REGISTRATA).padEnd(24)} ${v.id}  ${kb.padStart(6)} KB  ${v.cosa ?? ''}`);
   }
 }
 
@@ -706,7 +711,8 @@ function riprendi() {
     else dove = 'nessun branch';
     const ultimo = t ? statSync(t).mtime.toISOString().slice(5, 16).replace('T', ' ') : '—';
     righe.push({
-      slug: v.slug,
+      slug: v.slug ?? MAI_REGISTRATA,
+      mai: !v.slug,
       id: v.id,
       dove,
       ultimo,
@@ -745,7 +751,17 @@ function riprendi() {
     console.log(`  ${' '.repeat(22)} id ${r.id}${r.vivo ? '' : '  ⚠ transcript assente'}`);
   }
   console.log(`\n═══ CHIUSE (${chiuse.length}) ═══`);
-  for (const r of chiuse) console.log(`  ${(r.slug ?? '(mai registrata)').padEnd(22)} ${r.dove}`);
+  for (const r of chiuse) console.log(`  ${r.slug.padEnd(22)} ${r.dove}`);
+
+  // Una chiusura senza registrazione non è un difetto di formato: è la prova che
+  // la `registra` non è mai atterrata, quindi per quelle deleghe non esistono né
+  // il mandato né il brief. Vale la pena dirlo una volta, non nasconderlo dentro
+  // una riga che sembra normale.
+  const mai = righe.filter((r) => r.mai);
+  if (mai.length) {
+    console.log(`\n⚠ ${mai.length} chiuse senza registrazione: la riga \`registra\` non è mai arrivata,`);
+    console.log('  quindi mandato e brief non sono recuperabili. Registra prima di lanciare, non dopo.');
+  }
 
   console.log(`\n═══ SCONOSCIUTE (${sconosciute.length}) — non riprendere senza verifica ═══`);
   for (const r of sconosciute) {
