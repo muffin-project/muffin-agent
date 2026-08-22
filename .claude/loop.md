@@ -1,122 +1,124 @@
 # Il control loop di Muffin
 
-Porta Muffin al **DAY-1 READY** definito in `docs/blueprint/M5-BIS.md`, poi
-accompagna i quattordici giorni d'uso reale senza perdere il lavoro parallelo
-su gruppi, M6 e M7. Non eseguire una manutenzione generica: scegli il prossimo
-obiettivo dal percorso critico e chiudilo secondo `docs/ORCHESTRATION.md`.
+Porta Muffin al **DAY-1 READY** definito dal mandato Gate, usando
+`docs/blueprint/M5-BIS.md` come inventario di stato e
+`docs/blueprint/gate1/PERCORSO-CRITICO.md` come ordine. Non fare manutenzione
+generica: scegli una claim reale e chiudila secondo `docs/ORCHESTRATION.md`.
 
-## 1. Prima di scegliere — il minimo, non tutto
+## 1. Startup: osserva prima, leggi il minimo
 
-Il contesto è una risorsa: si carica ciò che la task rende load-bearing, non
-tutto il repo a ogni giro (`ORCHESTRATION.md` §6).
+Il contesto è una risorsa. `AGENTS.md`, `CLAUDE.md` e `docs/README.md` sono mappe;
+non autorizzano a caricare tutto il repo a ogni ciclo.
 
-All'inizio normale di una sessione bastano:
+All'inizio normale:
 
-1. `CLAUDE.md` (la mappa) e il blocco START HERE, che arriva già iniettato.
-2. Lo **stato osservato**: `node .claude/deleghe.mjs riprendi` — deleghe aperte,
-   chiuse, **parcheggiate** (uccise da quota o 529: da rilanciare dal brief su
-   disco, non da ricostruire a memoria) e la diagnosi dello stato danneggiato
-   che una sessione morta lascia dietro (merge o rebase a metà, marcatori di
-   conflitto, toolchain inutilizzabile, commit non pushati). Poi branch, PR e
-   loro check. Una PR in review o un `ADJUST` aperto viene prima di nuovo
-   lavoro; uno stato danneggiato viene prima di tutto.
-3. `docs/blueprint/gate1/PERCORSO-CRITICO.md` — §0 «In volo adesso» e la voce
-   che stai per prendere.
-4. La riga o le righe di `docs/blueprint/M5-BIS.md` che quella voce tocca.
+1. Ricostruisci lo **stato osservato**. Esegui
+   `node .claude/deleghe.mjs riprendi`: deleghe aperte, chiuse o parcheggiate e
+   diagnosi dello stato interrotto. Poi osserva worktree/branch, PR, check,
+   commit non pushati e conflitti. Una review aperta o uno stato danneggiato
+   precedono nuovo lavoro.
+2. Confronta l'osservato con `docs/blueprint/LAVORO.md`. Git/realtà vincono sul
+   handoff se divergono; correggi il handoff prima che una nuova sessione erediti
+   una bugia.
+3. Leggi soltanto la voce corrente di
+   `docs/blueprint/gate1/PERCORSO-CRITICO.md` e le righe toccate di
+   `docs/blueprint/M5-BIS.md`.
+4. Carica altra documentazione solo quando la claim la rende load-bearing.
 
-Se documenti e stato osservato divergono, **correggi prima il handoff**: una
-sessione fresca deve poter capire da sola dove siamo. `node
-.claude/riconcilia.mjs` lo dice meccanicamente.
+`node .claude/riconcilia.mjs` resta un controllo stretto sul drift che sa vedere.
+Non estenderlo in un framework universale soltanto perché esiste un altro tipo di
+disaccordo.
 
-Delegare non è il default: una task piccola e locale la fa l'orchestratore, e un
-subagente costa un contesto intero per ricostruire ciò che qui è già noto. Prima
-di un ventaglio, `node .claude/deleghe.mjs preventivo <n>` dà il costo misurato
-sulle deleghe già fatte — e se è materialmente costoso la decisione è dell'owner
-(`ORCHESTRATION.md` §2), non una cosa da scoprire a metà. Ogni delega si registra
-**prima** che parta; una che muore per quota si parcheggia invece di sparire.
+Delegare non è il default. Una task piccola e locale la fa l'orchestratore.
+Prima di un fanout usa `node .claude/deleghe.mjs preventivo <n>`; una delega si
+registra prima di partire e, se muore per quota/sessione, si parcheggia con stato
+riprendibile invece di sparire.
 
-## 2. Cosa caricare quando
+## 2. Progressive disclosure: cosa caricare quando
 
-| se la task tocca… | leggi anche |
+`docs/README.md` decide **dove cercare**, non la verità della singola claim.
+
+| Se la task tocca… | Carica anche… |
 |---|---|
-| taint, provenienza, egress, capability | `03-threat-model.md`, `core/policy/*`, ADR-0044 |
-| memoria, recall, estrazione | `knowledge/`, ADR-0038/0040/0045, `core/memory/*` |
-| schema, migrazioni, durabilità | `09-contratti-m0-m1.md`, gli ADR dello store toccato |
-| turno, lane, gateway, scheduler | ADR-0022/0035/0042/0047 |
-| identità, prompt, RoT | `defaults/`, ADR-0011, `core/rot/*` |
-| una review da fare | `docs/JUDGE.md` |
-| come si scrive qui | `docs/PRACTICES.md` |
-| come si integra | `docs/BRANCHING.md` |
+| taint, provenance, egress, secrets, sandbox | `docs/SECURITY.md`, config/codice pertinenti, ADR che spiegano la decisione |
+| memoria, recall, estrazione, person model | `docs/blueprint/knowledge/` pertinente + ADR/store coinvolti |
+| schema, migrazioni, durabilità | schema/migration code + `docs/ARCHITECTURE.md` + ADR dello store |
+| turni, work, gateway, scheduler, delivery | `docs/ARCHITECTURE.md` + ADR 0022/0035/0042/0047 o successivi pertinenti |
+| identità, prompt, Root of Trust | `defaults/` rilevanti + SECURITY/ADR pertinenti |
+| una review | `docs/JUDGE.md` |
+| pratica ingegneristica | `docs/PRACTICES.md` |
+| Git/merge/promotion | `docs/BRANCHING.md` |
+| perché/cosa stiamo costruendo | `docs/THESIS.md` + `docs/VISION.md` + `docs/DESIGN-PRINCIPLES.md` |
+| evidence storica | il research/audit datato pertinente, mai l'intera cartella |
 
-`THESIS.md` e `DESIGN-PRINCIPLES.md` si leggono quando è in gioco **cosa** stiamo
-costruendo o **perché**, non per correggere un typo. La repo deve insegnare dove
-andare, non obbligare ogni sessione a leggere tutto.
+Non usare `STATE.md`, il vecchio threat model o i contratti rebuild-era come
+shortcut per lo stato corrente. Possono essere evidence/history quando la task
+richiede la loro lineage.
 
-## 3. Classifica prima di implementare
+## 3. Classifica la claim prima di implementare
 
-Scegli il profilo di verifica (`ORCHESTRATION.md` §17) e **scrivilo nella PR**.
-Non lo decide la dimensione del diff: lo decide il rischio della garanzia.
+Scegli **FAST / STANDARD / CRITICAL** usando la procedura e i trigger canonici in
+`docs/ORCHESTRATION.md`. Scrivi profile e motivo nella PR.
 
-- La claim tocca effect WAL/journal · effetti irreversibili o non ri-eseguibili ·
-  authority/capability/policy kernel · taint/provenienza · egress · Root of Trust
-  · segreti · schema durevole/migrazioni · backup-restore · concorrenza/lock ·
-  exactly-once/idempotenza · crash recovery che può duplicare o perdere lavoro ·
-  sandbox/containment · operazioni distruttive?
-  → **CRITICAL**: disciplina piena, judge fresco, verdetto terminale.
-- È documenti, stato, viste generate, soli test, formattazione, una correzione
-  meccanica che non cambia comportamento né contratti?
-  → **FAST**: check pertinente, diff letto, CI. Più FAST indipendenti possono
-  stare in una sola maintenance PR.
-- Tutto il resto (prodotto/runtime reversibile) → **STANDARD**: solo l'evidenza
-  che la claim richiede; suite completa una volta in CI; integra l'orchestratore.
+Non copiare qui la matrice dei profili: una modifica a ORCHESTRATION deve cambiare
+la policy di verifica in un solo posto.
 
-Nel dubbio fra STANDARD e CRITICAL, guarda cosa succede **se la garanzia si
-rompe in silenzio**: se la risposta contiene perdita dati, effetti duplicati,
-autorità violata o unsafe silenzioso, è CRITICAL.
+La dimensione del diff non decide il profilo. Se durante il lavoro emerge un
+boundary più rischioso, escalare è normale; un downgrade opportunistico no.
 
-## 4. Come scegli l'obiettivo
+## 4. Scegli il prossimo obiettivo dal Gate reale
 
-- Prima rendi possibile il giorno 1: continuità del turno e del lavoro;
-  autorità/taint; superficie privata e delivery; memoria; acceptance reale.
-- Chiudi prima le decisioni di schema: dal giorno 1 i dati non si resettano più.
-- Durante i quattordici giorni continua a correggere ciò che emerge e prepara i
-  gruppi in parallelo; non attivare i gruppi prima del checkpoint previsto.
-- Una decisione prodotto, sicurezza, privacy, schema o irreversibile richiede
-  opzioni, costi e una domanda precisa all'owner. Non scegliere in silenzio.
+- Prima chiudi ciò che impedirebbe concretamente l'inizio dei quattordici giorni.
+- Le decisioni che possono rendere costosa la forma durevole vengono prima che
+  l'installazione inizi ad accumulare dati reali.
+- Questa generazione parte con memoria nativa nuova (ADR-0049); dopo il suo
+  confine di nascita, reset del canonical state non è un recovery path normale.
+- Una decisione prodotto, sicurezza, privacy, schema o irreversibile che non è
+  già stata presa richiede opzioni, costi e una domanda precisa all'owner. Non
+  scegliere in silenzio.
+- Non aggiungere architettura futura soltanto perché il mondo 2026 la rende
+  interessante. Registra il finding; entra nel Gate solo se il criterio Day1 lo
+  rende necessario.
 
-## 5. Ogni pezzo considera l'intero sistema
+## 5. Verifica il percorso, non il modulo
 
-Prima di implementare, traccia produttori, consumer, failure path e viste
-derivate della garanzia. Controlla anche branch e worktree non integrati per non
-duplicare una primitiva o sovrascrivere lavoro migliore.
+Prima di implementare, traccia produttore → consumer → failure path → vista
+derivata della garanzia. Controlla branch/worktree non integrati per non duplicare
+una primitiva o sovrascrivere lavoro migliore.
 
-Un valore valido oggi per `host`, Telegram, una chat privata, un modello o una
-macchina non diventa una costante per comodità. Autorità, tenant, surface,
-provider, budget, percorso e capability attraversano i confini come dati
-tipizzati o configurazione. Il default single-user è una configurazione della
-forma generale, non un secondo percorso cognitivo. Nessuna surface può eleggere
-l'owner da nomi, bio, username, stanze, foto o contenuto; ogni campo letto resta
-input potenzialmente iniettato anche dopo parsing.
+Un valore valido oggi per host, Telegram, un modello o una macchina non diventa
+una costante per comodità. Principal, tenant, surface, provider, budget,
+provenance e capability attraversano i confini come dati/config espliciti.
 
-## 6. Resta dentro la claim
+Quando la claim riguarda un meccanismo di sicurezza/durabilità, l'evidenza deve
+fallire quando si rimuove **la cucitura che rende vera la claim**, non soltanto
+quando si rompe la funzione locale.
 
-Se emerge un altro problema, entra in questa slice solo se invalida la claim, ne
-impedisce la verifica, crea un rischio Day-1 concreto, o è tecnicamente
-inseparabile (`ORCHESTRATION.md` §18). Altrimenti registralo come follow-up e
-chiudi ciò che stai facendo.
+## 6. Scope firewall
 
-## 7. Come chiudi un'iterazione
+Un nuovo finding entra nella slice solo se invalida la claim, impedisce la sua
+verifica, crea un rischio Day1 concreto o è tecnicamente inseparabile. Altrimenti
+va registrato come follow-up/debt e la slice corrente si chiude.
 
-Chiuso = **claim soddisfatta + evidence budget del profilo soddisfatto + nessun
-blocker noto che la invalidi**. Commit recuperabili, PR con profilo ed evidenza
-scritti, CI verde; FAST e STANDARD li integra l'orchestratore, CRITICAL richiede
-il verdetto terminale di un judge fresco.
+Segui `docs/ORCHESTRATION.md` per la regola canonica; non trasformare `/loop` in
+un secondo manuale di scope.
 
-Dopo l'integrazione riconcilia il handoff — `PERCORSO-CRITICO.md`, l'evidenza
-delle righe M5-BIS toccate, START HERE se cambia davvero — e ricostruisci lo
-stato prima di scegliere altro. Non aggiornare per riflesso i documenti che il
-cambiamento non ha reso stale (`ORCHESTRATION.md` §19).
+## 7. Chiusura e handoff
 
-Non dichiarare DAY-1 READY perché il codice compila: richiede zero BLOCKER
-nell'inventario personale, un percorso reale provato come lo userà l'owner e
-nessun lavoro integrato soltanto per affermazione.
+Una claim è chiusa quando il suo evidence budget è soddisfatto e nessun blocker
+noto la invalida. FAST/STANDARD seguono l'integrazione prevista da
+ORCHESTRATION; CRITICAL richiede il verdetto terminale indipendente previsto lì.
+
+Dopo un merge:
+
+1. ricostruisci lo stato osservato;
+2. aggiorna `M5-BIS.md` **solo** se cambia status/evidence Gate;
+3. aggiorna `PERCORSO-CRITICO.md` **solo** se cambia ordine/dipendenza;
+4. aggiorna `LAVORO.md` con il minimo handoff operativo;
+5. rigenera viste derivate se la loro fonte è cambiata;
+6. non "rinfrescare" audit/history per farli sembrare correnti.
+
+Non dichiarare DAY-1 READY perché compila o perché un documento dice READY. Il
+criterio finale resta il mandato: zero blocker personali reali, percorso integrato
+provato come lo userà l'owner, owner-machine acceptance e nessun motivo già
+conoscibile che lo costringa a tornare a un altro agente nei quattordici giorni.

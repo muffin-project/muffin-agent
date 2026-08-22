@@ -117,7 +117,7 @@ manca e la slice del percorso critico che la chiude) · `INVALIDATED`
 (premessa non più valida, con ragione). `?` è ritirato dal 17/08 — le due
 eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 
-### A · Installazione e ciclo di vita → `gate1/a-installazione.md`
+### A · Installazione e ciclo di vita
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
@@ -131,7 +131,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | A8 | Backup | La memoria si salva e si ripristina? | BLOCKER — lo scenario (`evals/acceptance/scenarios/a-lifecycle.accept.ts:96-129`, verde) prova solo la copia a freddo (processo fermo); il gateway è un processo residente quindi il backup reale è a caldo, sotto scrittura WAL (`cli/init.ts:109-111`); nessun verbo `muffin backup`/`restore` → PC 2.2 `slice/update-backup` |
 | A9 | Setup locale | `muffin init --local` riusa i segreti persistiti per un'installazione pulita di prova? | READY — `muffin init --local [<dir>]` (default `~/.muffin-local`) risolve `home` su quella directory e lascia il passo «api key» leggerlo dalla stessa catena `locateSecret` contro quella home — mai una copia (`cli/main.ts:276-303`); guardia realpath rifiuta un `<dir>` che coincide con la home reale o le sta annidato sotto, anche attraverso un symlink, prima di scrivere qualunque cosa (`cli/init.ts:47-93`, unit test con symlink `cli/init.test.ts`); scenario di accettazione sul binario vero — segreto scritto sul backend persistent isolato dall'harness (mai quello reale), `init --local` lo trova senza copiarlo, `muffin doctor` sano sulla home locale, la home originale invariata (hash prima/dopo), `--local` sulla home reale rifiutato con exit 78 (`evals/acceptance/scenarios/a-lifecycle.accept.ts:293-364`, verde, manifest `evals/acceptance/manifest.ts`) |
 
-### B · Continuità del runtime → `gate1/b-continuita.md`
+### B · Continuità del runtime
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
@@ -278,7 +278,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > processo reale), e per Telegram nello specifico dalla journey inbound-unit
 > (`docs/blueprint/gate1/PERCORSO-CRITICO.md` §1.5, in arrivo su `dev`).
 
-### C · Memoria e acquisizione → `gate1/c-memoria.md`
+### C · Memoria e acquisizione
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
@@ -386,7 +386,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > già passante nell'harness di accettazione, non scrivere nuova logica
 > (`gate1/PERCORSO-CRITICO.md` §4, journey J2, con C5).
 
-### D · Capability e sicurezza → `gate1/d-capability.md`
+### D · Capability e sicurezza
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|
@@ -403,7 +403,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — **il WAL dell'intento è chiuso** da PR [#57](https://github.com/GiustoPiedimonte/muffin-agent/pull/57): `startToolCall` che fallisce impedisce l'esecuzione dell'handler (mutazione verificata, `agent/turn-record.test.ts`), e `endToolCall` richiede `tier` (P05). Resta il registro: nessuno snapshot pre-effect esiste, `draft` è ancora ineseguibile da ogni percorso (vedi D2), `muffin undo` non esiste (D3) → PC 2.3 `slice/undo-journal` (CRITICAL) |
 | D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando (`describe()` ritorna `'(no resource)'`, `core/policy/decide.ts:218-220`, audit P03); "ASK-in-coda" non è una coda durevole, `turn_outcome='ask'` persistito ma nessun consumer lo rilegge (`agent/scheduler-run.ts:54-61`) → PC 3.1 `slice/ask-dice-cosa` |
 
-### E · Economia e osservabilità → `gate1/e-osservabilita.md`
+### E · Economia e osservabilità
 
 | # | Area | Domanda Gate 1 | Stato |
 |---|---|---|---|

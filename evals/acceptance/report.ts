@@ -95,11 +95,33 @@ export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
 /** One assertion's outcome, plus whatever it threw — the input `verdictFor` needs to tell "promote" apart from "wrong reason". */
 export type TestOutcome = { status: VitestStatus; failureMessages: string[] };
 
-type VitestJsonResult = {
+export type VitestJsonResult = {
   testResults: Array<{
     assertionResults: Array<{ fullName: string; status: VitestStatus; failureMessages?: string[] }>;
   }>;
 };
+
+/**
+ * Where the outcomes come from. In CI the suite has already run one step
+ * earlier with `--reporter=json --outputFile.json=<file>`; re-spawning it here
+ * doubled the job's wall clock past its `timeout-minutes`, and GitHub marks a
+ * timed-out job `cancelled` even when every step — this report included — was
+ * green. When `MUFFIN_ACCEPT_RESULTS` names that file, read it; a named file
+ * that cannot be read is an error, never a silent second run. Unset, run the
+ * suite here: `npm run acceptance:report` on a laptop stays one command.
+ */
+function acceptanceResults(): Map<string, TestOutcome> {
+  const given = process.env.MUFFIN_ACCEPT_RESULTS;
+  if (given === undefined || given === '') return runAcceptanceSuite();
+  try {
+    return outcomesOf(JSON.parse(readFileSync(given, 'utf8')) as VitestJsonResult);
+  } catch (error) {
+    throw new Error(
+      `MUFFIN_ACCEPT_RESULTS=${given} non è un JSON di vitest leggibile: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 function runAcceptanceSuite(): Map<string, TestOutcome> {
   const outFile = join(mkdtempSync(join(tmpdir(), 'muffin-accept-report-')), 'results.json');
@@ -122,6 +144,11 @@ function runAcceptanceSuite(): Map<string, TestOutcome> {
   } finally {
     rmSync(join(outFile, '..'), { recursive: true, force: true });
   }
+  return outcomesOf(json);
+}
+
+/** Every assertion of vitest's JSON reporter, keyed by its `fullName` the way `verdictFor`'s suffix match expects. */
+export function outcomesOf(json: VitestJsonResult): Map<string, TestOutcome> {
   const byTitle = new Map<string, TestOutcome>();
   for (const file of json.testResults) {
     for (const a of file.assertionResults) {
@@ -329,7 +356,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
 
 function main(): void {
   const inventory = parseInventory();
-  const results = runAcceptanceSuite();
+  const results = acceptanceResults();
   const { lines, counts, failed } = summarize(inventory, MANIFEST, results);
 
   // `MANIFEST.length` alone would count E4 too, but a `provata-dal-meccanismo`

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { promoteMarker } from './manifest.js';
-import { summarize, type InventoryRow, type TestOutcome } from './report.js';
+import { outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
 import type { ScenarioEntry } from './manifest.js';
 
 /**
@@ -174,5 +174,23 @@ describe('summarize — provata dal meccanismo (E4: la suite non può testare s�
 
     expect(summary.failed).toBe(false);
     expect(summary.counts.provataDalMeccanismo).toBe(1);
+  });
+});
+
+describe('outcomesOf — the one reading of vitest JSON, whether this script ran the suite or CI did', () => {
+  it('keys every assertion by its trimmed fullName and never leaves failureMessages undefined', () => {
+    const out = outcomesOf({
+      testResults: [
+        {
+          assertionResults: [
+            { fullName: ' X1 scenario finto ', status: 'passed' },
+            { fullName: 'X2 scenario finto', status: 'failed', failureMessages: ['boom'] },
+          ],
+        },
+      ],
+    });
+    expect(out.get('X1 scenario finto')).toEqual({ status: 'passed', failureMessages: [] });
+    expect(out.get('X2 scenario finto')).toEqual({ status: 'failed', failureMessages: ['boom'] });
+    expect(out.size).toBe(2);
   });
 });
