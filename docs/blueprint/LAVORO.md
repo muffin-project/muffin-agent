@@ -17,10 +17,10 @@ osservato vince quando diverge da questo file.
   `dev`.** L'allineamento locale a `dev` del 18/08 è stato spinto il 22/08; prima
   di qualunque integrazione deve incorporare `dev` corrente, risolvere i
   conflitti semanticamente e rifare l'evidence invalidata + judge fresco.
-- **#86 `slice/riconcilia-2026-08-22` — FAST, open.** Registro deleghe
-  riconciliato (4 `collega`, 1 `chiudi`), fix vero di `deleghe.mjs` al posto
-  del cerotto del 18/08, regola 6 in BRANCHING, intestazioni di M5-BIS senza
-  puntatori a file inesistenti.
+
+**Integrato:** #86 `slice/riconcilia-2026-08-22` (22/08): registro deleghe
+riconciliato (riprendi: APERTE 4→0), fix vero di `deleghe.mjs` al posto del
+cerotto, regola 6 in BRANCHING, intestazioni M5-BIS senza puntatori morti.
 
 **Follow-up noti (non slice, non Gate):**
 
