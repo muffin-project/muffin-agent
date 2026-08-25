@@ -50,10 +50,14 @@ status Gate. La milestone aggiunge una classificazione, non un secondo backlog:
 
 **Percorso RETURN** (ordine operativo in `gate1/PERCORSO-CRITICO.md` §0): S1 la
 foundation ingress atterra · S2 schema lifecycle (A6+A7+A8-min) · S3 hardening
-minimo (D12-min+E6, parallela a S2) · S4 bring-up del modello locale + install
-reale. In S4 il character eval sul modello locale è smoke/evidence, **non gate
-di qualità**: se il locale non basta ancora, RETURN usa temporaneamente un
-provider già funzionante — la scelta provider non tiene Muffin spento.
+minimo (D12-min+E6, parallela a S2) · S4 bring-up del modello + install reale.
+Decisione owner 25/08: **API-first** — modello personale `qwen/qwen3.8-27b`
+via OpenRouter (openai-compat); Muffin resta multi-famiglia (qwen / anthropic
+/ gpt / gemma) attraverso i due provider esistenti, senza adapter nuovi;
+embeddings locali (`qwen3-embedding:0.6b` su Ollama, default già in
+`core/memory/embed.ts`) e reranker già cablato in recall. Il character eval è
+smoke/evidence, **non gate di qualità** — la scelta provider non tiene Muffin
+spento.
 
 **Regola di stop**: soddisfatti S1–S4, **stop pre-dogfood development** →
 install reale → Muffin torna in uso. Voice, immagini, undo, busy semantics e il
