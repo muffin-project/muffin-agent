@@ -1,6 +1,7 @@
 import type { Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
-import { recoveredText, runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
+import { runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
+import { recoveredText } from '../../agent/recovered-text.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
@@ -567,7 +568,7 @@ export class TelegramConnector {
       this.finish(stored.updateId, this.now());
       return;
     }
-    const text = recoveredText(this.deps.loop, existing);
+    const text = recoveredText(this.deps.loop.sessions, existing);
     try {
       await this.deliverTo(existing.replyTo, text);
     } catch (error) {
