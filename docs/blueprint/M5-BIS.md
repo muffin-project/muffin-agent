@@ -10,6 +10,59 @@
 > di vivere 14 giorni usando esclusivamente Muffin?»* Finché la risposta è sì,
 > quella cosa entra qui.
 
+## Milestone RETURN TO OWNER — 2026-08-25, decisione owner
+
+Il Gate dei quattordici giorni resta il fondo dell'inventario, ma non è più la
+prima soglia. Prima viene **RETURN TO OWNER**: rimettere Muffin nelle mani
+dell'owner per l'uso quotidiano, con limitazioni note, appena è *sicuro*
+accumulare dati e lavoro reali — non appena è *completo*.
+
+RETURN è una **safety threshold, non una completeness threshold**: l'evidence
+resta proporzionata alla claim (ORCHESTRATION), senza ricreare Gate 1 in
+miniatura. La domanda che classifica ogni blocker è:
+
+> *Se l'owner iniziasse a usare Muffin stasera, questo difetto rende pericoloso
+> accumulare dati/lavoro, oppure produce soltanto una limitation/fallback
+> osservabile?*
+
+Le righe dell'inventario restano una e una sola volta qui sotto, con il loro
+status Gate. La milestone aggiunge una classificazione, non un secondo backlog:
+
+- **RETURN** (impedisce la riaccensione sicura): A6, A7, A8 *(minimo: online
+  backup + un restore provato; la matrice hot-backup resta dogfood)*, D12
+  *(minimo: l'ASK mostra comando+cwd/URL/pid e il motivo del taint su REPL e
+  Telegram; un ask non consegnabile fallisce visibilmente, mai in silenzio)*,
+  E6, più la **metà foundation** di B2/B16 — l'atterraggio di PR #90: event
+  identity exactly-once e fence della delivery; assembler e COLLECT/STEER
+  restano dogfood.
+- **DOGFOOD** (si chiude durante l'uso reale, non prima): tutte le altre righe
+  BLOCKER — quelle di sola evidence (A4, B14, C2, C3, C6, C7, D4, D5, D6, D7,
+  D9, E3), il character eval A2/A3, le capability fail-closed o oneste (B1,
+  B6, B10, B15, C5, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
+  (B2/B16, metà restante). Nota di sicurezza verificata sul codice: foto e
+  vocali sono archiviati come Evidence integra e dichiarati al turno —
+  trascrizione/caption sono derivabili retroattivamente, quindi iniziare prima
+  non perde nulla.
+- **PUBLIC-ALPHA**: nessuna riga corrente è solo-public; la classe eredita da
+  OUT/ROADMAP (gruppi, multi-tenant, extension surface) più la promozione di
+  B15-sealing prima di imporre il sistema ad altri utenti.
+- **OUT**: invariato.
+
+**Percorso RETURN** (ordine operativo in `gate1/PERCORSO-CRITICO.md` §0): S1 la
+foundation ingress atterra · S2 schema lifecycle (A6+A7+A8-min) · S3 hardening
+minimo (D12-min+E6, parallela a S2) · S4 bring-up del modello locale + install
+reale. In S4 il character eval sul modello locale è smoke/evidence, **non gate
+di qualità**: se il locale non basta ancora, RETURN usa temporaneamente un
+provider già funzionante — la scelta provider non tiene Muffin spento.
+
+**Regola di stop**: soddisfatti S1–S4, **stop pre-dogfood development** →
+install reale → Muffin torna in uso. Voice, immagini, undo, busy semantics e il
+resto vengono ordinati dal dogfood (ROADMAP §14-day), salvo nuove evidenze di
+rischio RETURN. Dopo RETURN nessuna nuova astrazione importante senza almeno
+uno di: failure osservato nel dogfood · requirement owner già decisa ·
+migrazione che diventa costosa rimandandola · rischio concreto di
+authority/data/effect correctness.
+
 ## La finestra si chiude, ed è questo che ordina il lavoro
 
 Direttiva owner, 2026-08-15: *«le "cose che non devono cambiare" possono ancora
