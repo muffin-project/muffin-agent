@@ -31,6 +31,7 @@ import {
   GATEWAY_USAGE,
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
+import { cmdBackup, cmdRestore } from './backup.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -73,6 +74,10 @@ comandi operatore:
                                 riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
+  muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
+  muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
+                                mette da parte il db corrente, riapplica le
+                                migrazioni
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
@@ -204,6 +209,10 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdConfig(paths().home, rest);
     case 'doctor':
       return cmdDoctor(rest);
+    case 'backup':
+      return cmdBackup(rest);
+    case 'restore':
+      return cmdRestore(rest);
     case 'rot':
       return cmdRot(rest);
     case 'uninstall':
