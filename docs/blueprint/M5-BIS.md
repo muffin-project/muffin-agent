@@ -10,6 +10,63 @@
 > di vivere 14 giorni usando esclusivamente Muffin?»* Finché la risposta è sì,
 > quella cosa entra qui.
 
+## Milestone RETURN TO OWNER — 2026-08-25, decisione owner
+
+Il Gate dei quattordici giorni resta il fondo dell'inventario, ma non è più la
+prima soglia. Prima viene **RETURN TO OWNER**: rimettere Muffin nelle mani
+dell'owner per l'uso quotidiano, con limitazioni note, appena è *sicuro*
+accumulare dati e lavoro reali — non appena è *completo*.
+
+RETURN è una **safety threshold, non una completeness threshold**: l'evidence
+resta proporzionata alla claim (ORCHESTRATION), senza ricreare Gate 1 in
+miniatura. La domanda che classifica ogni blocker è:
+
+> *Se l'owner iniziasse a usare Muffin stasera, questo difetto rende pericoloso
+> accumulare dati/lavoro, oppure produce soltanto una limitation/fallback
+> osservabile?*
+
+Le righe dell'inventario restano una e una sola volta qui sotto, con il loro
+status Gate. La milestone aggiunge una classificazione, non un secondo backlog:
+
+- **RETURN** (impedisce la riaccensione sicura): A6, A7, A8 *(minimo: online
+  backup + un restore provato; la matrice hot-backup resta dogfood)*, D12
+  *(minimo: l'ASK mostra comando+cwd/URL/pid e il motivo del taint su REPL e
+  Telegram; un ask non consegnabile fallisce visibilmente, mai in silenzio)*,
+  E6, più la **metà foundation** di B2/B16 — l'atterraggio di PR #90: event
+  identity exactly-once e fence della delivery; assembler e COLLECT/STEER
+  restano dogfood.
+- **DOGFOOD** (si chiude durante l'uso reale, non prima): tutte le altre righe
+  BLOCKER — quelle di sola evidence (A4, B14, C2, C3, C6, C7, D4, D5, D6, D7,
+  D9, E3), il character eval A2/A3, le capability fail-closed o oneste (B1,
+  B6, B10, B15, C5, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
+  (B2/B16, metà restante). Nota di sicurezza verificata sul codice: foto e
+  vocali sono archiviati come Evidence integra e dichiarati al turno —
+  trascrizione/caption sono derivabili retroattivamente, quindi iniziare prima
+  non perde nulla.
+- **PUBLIC-ALPHA**: nessuna riga corrente è solo-public; la classe eredita da
+  OUT/ROADMAP (gruppi, multi-tenant, extension surface) più la promozione di
+  B15-sealing prima di imporre il sistema ad altri utenti.
+- **OUT**: invariato.
+
+**Percorso RETURN** (ordine operativo in `gate1/PERCORSO-CRITICO.md` §0): S1 la
+foundation ingress atterra · S2 schema lifecycle (A6+A7+A8-min) · S3 hardening
+minimo (D12-min+E6, parallela a S2) · S4 bring-up del modello + install reale.
+Decisione owner 25/08: **API-first** — modello personale `qwen/qwen3.8-27b`
+via OpenRouter (openai-compat); Muffin resta multi-famiglia (qwen / anthropic
+/ gpt / gemma) attraverso i due provider esistenti, senza adapter nuovi;
+embeddings locali (`qwen3-embedding:0.6b` su Ollama, default già in
+`core/memory/embed.ts`) e reranker già cablato in recall. Il character eval è
+smoke/evidence, **non gate di qualità** — la scelta provider non tiene Muffin
+spento.
+
+**Regola di stop**: soddisfatti S1–S4, **stop pre-dogfood development** →
+install reale → Muffin torna in uso. Voice, immagini, undo, busy semantics e il
+resto vengono ordinati dal dogfood (ROADMAP §14-day), salvo nuove evidenze di
+rischio RETURN. Dopo RETURN nessuna nuova astrazione importante senza almeno
+uno di: failure osservato nel dogfood · requirement owner già decisa ·
+migrazione che diventa costosa rimandandola · rischio concreto di
+authority/data/effect correctness.
+
 ## La finestra si chiude, ed è questo che ordina il lavoro
 
 Direttiva owner, 2026-08-15: *«le "cose che non devono cambiare" possono ancora
@@ -127,9 +184,9 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | A3 | Persona | Il comportamento è definito? | BLOCKER 👤 `persona.md`/`voice.md` sono testo reale dell'owner da c090dce e raggiungono il system prompt reale nell'ordine canonico (persona → identity → voice) — provato: scenario A3 verde, `muffin prompt show` byte-identico a quanto ricevuto davvero dal provider (`evals/acceptance/scenarios/a-lifecycle.accept.ts`). Resta BLOCKER: mancano character eval, cross-model e confronto col vecchio `Muffin.ai` (punti 6-8 mandato owner) → parte 2 di `slice/identita` |
 | A4 | Config | Si configura senza toccare il codice? | BLOCKER — solo scenario mancante: `muffin config` è read-only per disegno (ADR-0036, `cli/config.ts:7,22-37`), validazione zod rumorosa al caricamento (`core/config/config.ts:35-63`), ma nessuno scenario prova l'hand-edit di `config.json` + `muffin rot reseal` end-to-end → PC §4 |
 | A5 | Doctor | Individua **davvero** i problemi? | READY — manomissione reale di `rot/policy.json`, `doctor` la rileva e nomina il file con un rimedio azionabile (`evals/acceptance/scenarios/a-lifecycle.accept.ts:56-94`, verde); ogni check esegue, non assume (`cli/doctor.ts:45-568`) |
-| A6 | Upgrade | Aggiornare il codice non distrugge dati? | BLOCKER — nessun verbo `update`/`upgrade` in `cli/main.ts`; `ensureColumn` esiste solo per 3 colonne di `core/memory/store.ts` (audit P27), `turns`/`jobs` non hanno l'equivalente; nessuno scenario da schema popolato preesistente → PC 2.1 `slice/schema-evolution` |
-| A7 | Migration | Lo schema evolve senza perdere memoria? | BLOCKER ⚠️ `episodes.kind` ha un CHECK a 5 valori che SQLite non altera (`core/turns/store.ts:34-35` lo cita come trappola); stessa causa radice di A6 (nessun migration runner condiviso); nessun test da schema popolato → PC 2.1 `slice/schema-evolution` |
-| A8 | Backup | La memoria si salva e si ripristina? | BLOCKER — lo scenario (`evals/acceptance/scenarios/a-lifecycle.accept.ts:96-129`, verde) prova solo la copia a freddo (processo fermo); il gateway è un processo residente quindi il backup reale è a caldo, sotto scrittura WAL (`cli/init.ts:109-111`); nessun verbo `muffin backup`/`restore` → PC 2.2 `slice/update-backup` |
+| A6 | Upgrade | Aggiornare il codice non distrugge dati? | BLOCKER — il meccanismo c'è (RETURN S2, judge CRITICAL MERGE giro 2): runner versionato `core/db/migrate.ts` con `schema_version`, guardia `SchemaAheadError` (codice vecchio su dati nuovi rifiuta), backup `VACUUM INTO` validato prima del primo reshaping, `stampFresh` per install fresche; restano il verbo `muffin update` e lo scenario di accettazione della journey install/update/backup → DOGFOOD (PC §4) |
+| A7 | Migration | Lo schema evolve senza perdere memoria? | BLOCKER — la trappola CHECK è chiusa nel meccanismo (RETURN S2): `rebuildTable` prova su DB popolato che il CHECK si allarga con righe intatte e constraint nuova attiva, e abortisce se perde righe; regole per il primo autore di migrazione nel docstring di `MIGRATIONS` (tabelle surface lazy, storia non-additiva di `vectors.ts`); resta lo scenario di accettazione → DOGFOOD (PC §4) |
+| A8 | Backup | La memoria si salva e si ripristina? | BLOCKER — A8-min chiuso (RETURN S2): `muffin backup` online WAL-safe con `quick_check`, `muffin restore` che rifiuta gateway vivo e backup più nuovi del codice, aside `VACUUM INTO` (una riga rimasta solo nel `-wal` di un writer ucciso sopravvive — regression test SIGKILL); provato sul binario reale; restano matrice hot-backup sotto carico, retention/cron e lo scenario → DOGFOOD (PC §4) |
 | A9 | Setup locale | `muffin init --local` riusa i segreti persistiti per un'installazione pulita di prova? | READY — `muffin init --local [<dir>]` (default `~/.muffin-local`) risolve `home` su quella directory e lascia il passo «api key» leggerlo dalla stessa catena `locateSecret` contro quella home — mai una copia (`cli/main.ts:276-303`); guardia realpath rifiuta un `<dir>` che coincide con la home reale o le sta annidato sotto, anche attraverso un symlink, prima di scrivere qualunque cosa (`cli/init.ts:47-93`, unit test con symlink `cli/init.test.ts`); scenario di accettazione sul binario vero — segreto scritto sul backend persistent isolato dall'harness (mai quello reale), `init --local` lo trova senza copiarlo, `muffin doctor` sano sulla home locale, la home originale invariata (hash prima/dopo), `--local` sulla home reale rifiutato con exit 78 (`evals/acceptance/scenarios/a-lifecycle.accept.ts:293-364`, verde, manifest `evals/acceptance/manifest.ts`) |
 
 ### B · Continuità del runtime
@@ -401,7 +458,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | D9 | Skills | Scopre e usa le skill senza promuovere descrizioni non fidate a istruzioni? | BLOCKER — **EVIDENCE-RECONCILE, non nuovo mechanism**: la causa storica è stale. HEAD usa `fence()` in `skillsPromptSection` (`core/skills/skills.ts`) e `buildRuntime` inietta realmente quella sezione nel prompt (`agent/runtime.ts`). Prima di READY serve la prova stretta al profilo richiesto (injection/fake-close + production wiring); se quella evidence non regge si corregge il finding reale, non si costruisce un secondo sistema skill → PC §4 |
 | D10 | Security | Nessuna capability escape? | READY — taint in ingresso chiuso (`slice/taint-in-ingresso`, ADR-0044, giro 2 PR #28: STATE.md "Taint in ingresso — chiuso"); un turno a taint 3 che tenta `http_get` fuori allowlist riceve `deny/resource_denied` dal kernel, mai `ask` — provato end-to-end (`evals/acceptance/scenarios/d-capability.accept.ts`, scenario D10) |
 | D11 | Checkpoint | Esiste uno snapshot prima di ogni mutazione, e un ripristino che disfa anche il turno? | BLOCKER 🔭 — **il WAL dell'intento è chiuso** da PR [#57](https://github.com/GiustoPiedimonte/muffin-agent/pull/57): `startToolCall` che fallisce impedisce l'esecuzione dell'handler (mutazione verificata, `agent/turn-record.test.ts`), e `endToolCall` richiede `tier` (P05). Resta il registro: nessuno snapshot pre-effect esiste, `draft` è ancora ineseguibile da ogni percorso (vedi D2), `muffin undo` non esiste (D3) → PC 2.3 `slice/undo-journal` (CRITICAL) |
-| D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — direttiva owner 16/08; oggi `ApprovalRequest` porta solo capability+prompt (+path), il REPL chiede «approvi "sys.shell"?» senza il comando (`describe()` ritorna `'(no resource)'`, `core/policy/decide.ts:218-220`, audit P03); "ASK-in-coda" non è una coda durevole, `turn_outcome='ask'` persistito ma nessun consumer lo rilegge (`agent/scheduler-run.ts:54-61`) → PC 3.1 `slice/ask-dice-cosa` |
+| D12 | Ask | L'ASK mostra **cosa** sta per fare (comando+cwd, URL, pid+nome) e perché il turno è a quel taint? | BLOCKER — il meccanismo c'è (RETURN S3): per le capability `resourceKind: 'none'` la richiesta deriva la risorsa dagli argomenti della call (`summarizeCallArgs`, `agent/loop.ts`), `ApprovalRequest` porta il taint del turno, il REPL e il rendering in coda dello scheduler mostrano azione e taint; resta la coda durevole degli ask (`turn_outcome='ask'` persistito, nessun consumer lo rilegge) → DOGFOOD |
 
 ### E · Economia e osservabilità
 
@@ -412,7 +469,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | E3 | Tracing | Posso ricostruire cosa è successo? | BLOCKER — cablato (`cli/trace.ts`, `muffin trace tail/grep`). Stato 17/08: **P34-1 chiuso** (`span.error` redatto, `core/tracing/tracer.ts:94-102`, PR #61, prima di questa slice — questa riga era stale). **P34-2 chiuso**: decisione owner presa (redazione al confine di scrittura, non prune — un prune lascia il segreto mostrabile finché non gira), meccanismo e le tre classi (segreto noto al backend/`secret set`/incollato a mano) in ADR-0048; applicato in `agent/loop.ts` (`runTool`, una sola volta, copre `turn_tool_calls.content`+`turns.messages`+sessione) e `core/tracing/redact.ts`; provato da `agent/secret-redaction.test.ts` (mutazione verificata) e dallo scenario di accettazione `E3` (`evals/acceptance/scenarios/e-cost.accept.ts`, binario reale, DB reale). Resta BLOCKER: lo scenario prova la claim dei segreti, non l'intera domanda della riga — manca ancora un caso di accettazione per "ricostruisci un turno qualunque via `trace tail/grep`" → PC §4 |
 | E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) — è il meccanismo: harness contro il binario vero, provider finto deterministico, ogni verde visto rosso prima. La PR #54 aggiunge nel manifest la specie provata dal meccanismo stesso, chiudendo l'unico "READY senza scenario" rimasto dopo il triage 17/08 |
 | E5 | Failure | Ogni fallimento importante è esplicito e recuperabile? | BLOCKER — **COMPOSITE**: lo scenario `E5` prova una classe (giudice di contraddizione), non l'intera domanda. Non creare un “E5 subsystem”: chiudere B6/ASK/delivery/scheduled-work e poi fare una synthesis integrata delle classi residue → PC §4 |
-| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | BLOCKER — confermato con lettura diretta: `while (iterations < cap)` (`agent/loop.ts:959`) limita solo le iterazioni, mai il numero di tool call per iterazione (`toolCallsMade`, riga 1281, incrementato ma mai confrontato con un tetto); un modello può emettere 200 `tool_use` paralleli in una risposta e sforare `maxToolCallsPerTurn` di un ordine di grandezza → PC 3 |
+| E6 | Act caps | Un singolo turno può fare 200 ricerche web o 200 deleghe? | BLOCKER — il meccanismo c'è (RETURN S3): il tetto `maxToolCallsPerTurn` vale per singola tool call anche dentro un batch in una sola risposta del modello; le call oltre il tetto ricevono un `tool_result` di rifiuto esplicito invece di eseguire; restano i budget per-capability (200 ricerche in 15 turni restano possibili) → DOGFOOD |
 | E7 | Self-inspection | Sa spiegare **tecnicamente** come funziona e cosa sta usando **adesso**, distinguendo architettura/progetto da stato live dell'istanza? | BLOCKER — lacuna aggiunta dall'owner il 17/08 (propriocezione tecnica): oggi il modello può solo recitare ciò che il prompt dice o indovinare; nessuna primitiva read-only lo lascia interrogare runtime, provider/modelli correnti, surface/tenant, RoT/safe mode, sandbox/search/MCP disponibili, capability esposte, blocchi del prompt e provenienza, modalità reale della memoria (indice vettoriale disponibile o degradato), turni aperti/waiting/interrupted, job essenziali. Forma decisa: **`sys.inspect`** first-class e read-only che legge dalle **stesse fonti autorevoli** di `doctor` / `prompt show` / `gateway status` (una sola source of truth, nessuna implementazione divergente, niente documentazione infilata nel system prompt); acceptance: «spiegami tecnicamente come funzioni e cosa stai usando adesso» → cambia una condizione reale (search off, modello diverso, MCP assente) → ripeti: se recita lo stato vecchio è BROKEN, se distingue design e live state è verde → PC 3 |
 
 > **E4, cosa vuol dire `READY` qui — e cosa esplicitamente non vuol dire.**

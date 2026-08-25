@@ -176,7 +176,20 @@ export type ApprovalRequest = {
   capability: string;
   /** The kernel's own wording, not a paraphrase. */
   prompt: string;
+  /**
+   * The concrete subject of the call: the kernel's resource when it has one
+   * (path, URL, query bytes), otherwise a render of the call's own arguments —
+   * a shell command with its cwd, a pid with its name. An approval whose
+   * subject is invisible is theater (D12): "approvi sys.shell?" is not a
+   * question anyone can answer.
+   */
   resource?: string | undefined;
+  /**
+   * The turn's taint when the ask fired — "why am I being asked" is half of
+   * the answer. 0 = owner speaking directly; higher tiers mean untrusted
+   * content has already entered the turn, so the surface should say so.
+   */
+  taint: TrustTier;
 };
 
 export type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
@@ -1404,13 +1417,31 @@ async function drive(
       if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
 
       const results: ContentBlock[] = [];
-      toolCallsMade += result.toolCalls.length;
       for (const call_ of result.toolCalls) {
         // Checked between tools, not only before the next model call: a Ctrl+C
         // during a run of tool calls used to do nothing visible until the batch
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
         if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        // The ceiling counts CALLS, not iterations. `cap` above bounds trips
+        // through this loop, but nothing upstream bounds how many `tool_use`
+        // blocks one completion carries — a single response with 40 calls
+        // used to execute all 40 under a profile that promised 15 (E6,
+        // RETURN S3). Refused calls still get a tool_result: a hole in the
+        // batch is a protocol error every provider rejects, and the model
+        // should read why it was stopped instead of retrying blind.
+        if (toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+          results.push({
+            type: 'tool_result',
+            toolCallId: call_.id,
+            content:
+              `Tetto di ${deps.profile.maxToolCallsPerTurn} tool call per turno raggiunto: chiamata non eseguita. ` +
+              `Chiudi il turno con quello che hai, o dì all'owner cosa resta da fare.`,
+            isError: true,
+          });
+          continue;
+        }
+        toolCallsMade += 1;
         try {
           results.push(await runTool(deps, snapshot, turn, call_, input, exposed, toolContext));
         } catch (error) {
@@ -1900,6 +1931,23 @@ function assertNever(x: never): never {
   throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
 }
 
+/**
+ * Render a tool call's arguments as the one-line subject of an approval —
+ * `command: rm -rf /tmp/x · cwd: /tmp` — for capabilities whose kernel
+ * resource is `none`. Flat key: value pairs, no prose: the owner is deciding,
+ * not reading. Capped because an argument can be a whole file body, and a
+ * question that scrolls is a question nobody reads to the end of.
+ */
+function summarizeCallArgs(args: unknown): string | undefined {
+  if (args === null || typeof args !== 'object') return undefined;
+  const parts = Object.entries(args as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+  if (parts.length === 0) return undefined;
+  const joined = parts.join(' · ');
+  return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
+}
+
 async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -2002,17 +2050,19 @@ async function runTool(
       const request: ApprovalRequest = {
         capability,
         prompt: decision.ask.prompt,
-        // `path` carried this alone; `url` and `query` join it (mandato inv.
+        // `path` carried this alone; `url` and `query` joined it (mandato inv.
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
         // §revisione named and left open ("l'URL che sys.http sta per
-        // raggiungere ... non compaiono nel testo che l'owner vede"). Does
-        // not by itself close D12 (M5-BIS): a `resourceKind: 'none'`
-        // capability — `sys.shell`'s command+cwd, a pid+name — still has
-        // nothing here to show.
+        // raggiungere ... non compaiono nel testo che l'owner vede"). For a
+        // `resourceKind: 'none'` capability the kernel has nothing to offer,
+        // so the call's own arguments are the action — `sys.shell`'s
+        // command+cwd, a pid+name — and hiding them made the ask
+        // unanswerable (D12-min, RETURN S3).
         ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
           ? { resource: resource.value }
-          : {}),
+          : { resource: summarizeCallArgs(call.args) }),
+        taint: snapshot.currentTaint(),
       };
       if (!deps.approve) {
         // No channel on this surface: the turn stops and says what it wanted,
