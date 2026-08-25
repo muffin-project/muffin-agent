@@ -157,6 +157,41 @@ describe('a delegation killed by quota', () => {
   });
 });
 
+describe('a delegation closed without ever having been registered', () => {
+  // Quattro righe del registro vero sono così: solo una `chiudi` per id, perché
+  // la `registra` non è atterrata mentre la sessione veniva compattata. È lo
+  // stato parziale che questo strumento esiste per sopravvivere, e faceva
+  // saltare i due comandi con cui una sessione fresca comincia.
+  function conOrfana(): ReturnType<typeof fixture> {
+    const f = fixture();
+    execFileSync(process.execPath, [join(f.repo, '.claude', 'deleghe.mjs'), 'chiudi', 'orfana1', 'judge #47: MERGE'], {
+      cwd: f.repo,
+      env: f.env,
+      encoding: 'utf8',
+    });
+    return f;
+  }
+
+  it('does not crash `stato`', () => {
+    const r = run(conOrfana(), 'stato');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('(mai registrata)');
+    expect(r.out).toContain('orfana1');
+  });
+
+  it('does not crash `riprendi`, the command a fresh session runs first', () => {
+    const r = run(conOrfana(), 'riprendi');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('(mai registrata)');
+  });
+
+  it('says why it matters: no mandate and no brief survive for those', () => {
+    const r = run(conOrfana(), 'riprendi');
+    expect(r.out).toContain('1 chiuse senza registrazione');
+    expect(r.out).toContain('non sono recuperabili');
+  });
+});
+
 describe('damaged state, found before new work', () => {
   it('finds real conflict markers and exits non-zero', () => {
     const f = fixture();

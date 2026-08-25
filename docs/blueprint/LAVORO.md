@@ -4,36 +4,50 @@ Questo è un **handoff operativo**, non una source of truth sul prodotto. Deve
 restare piccolo e cancellabile senza perdere conoscenza di Muffin. Lo stato Git
 osservato vince quando diverge da questo file.
 
-**Goal:** portare Muffin a DAY-1 READY secondo `gate1/MANDATO-DAY-1.md`.
+**Muffin è installato e in uso (25/08/2026).** La milestone RETURN TO OWNER è
+chiusa: S1–S4 in `M5-BIS.md` §RETURN, che possiede il dettaglio: qui resta solo
+ciò che serve per scegliere il prossimo lavoro.
 
-**Work live osservato (19/08/2026):**
+**Stato dell'installazione reale**, provato sulla macchina dell'owner:
+`~/.muffin` (database di agosto, 29 tabelle, schema v1), provider OpenRouter
+con `qwen/qwen3.8-27b` e `qwen/qwen3.7-flash`, gateway vivo sotto launchd, un
+job schedulato eseguito da solo. Backup validato prima della migrazione.
 
-- **`recall-speaker` — prossimo claim Gate.** Il difetto è ancora reale: un
-  episodio scritto dall'agente può essere proiettato nel recall come parola
-  dell'owner se speaker/role vengono persi e resta soltanto il trust tier. È il
-  primo punto del `PERCORSO-CRITICO.md`; la slice deve partire dal codice/row M5
-  corrente, non dalla vecchia sintesi «blocco 1 chiuso». Essendo una garanzia di
-  provenance, applicare il profilo CRITICAL se la claim tocca quel boundary.
-- **#78 `slice/inbound-unit` — CRITICAL, open.** Telegram
-  `update_id → one durable turn`. Dopo l'integrazione di #81 il branch è ancora
-  **diverged** dal `dev` corrente; prima di qualunque merge deve incorporare
-  `dev`, risolvere semanticamente i conflitti e rifare l'evidence materialmente
-  invalidata + fresh judge CRITICAL.
+**Regola di stop attiva.** Niente sviluppo pre-dogfood: il prossimo lavoro
+nasce da un failure osservato usando Muffin, da una requirement owner già
+decisa, da una migrazione che rimandare renderebbe costosa, o da un rischio
+concreto su authority/data/effect. Non da questa lista.
 
-**Integrato:** #81 `slice/docs-authority` → `dev` con merge commit
-`c8385b6306b27d363f48685ef7a68d855554e62b`. La nuova gerarchia di authority,
-progressive disclosure e i consumer SessionStart/`riconcilia` sono ora parte del
-`dev` integrato. #73 resta chiusa come superseded; draft e research sono
-preservate nelle relative history/research home.
+**Aperto per l'owner:** Telegram non è ancora abilitato (serve il token del
+bot); `doctor` segnala due chiavi API, in `~/.muffin/secrets/` (quella usata) e
+in `~/.config/muffin/secrets/` — cancellare quella che non si vuole ruotare; il
+job di prova `922ac8b7` riparte ogni giorno alle 18:24 finché non lo si toglie
+(`muffin jobs remove 922ac8b7`).
 
-**Truth maintenance:** `M5-BIS.md` non è ancora riconciliato riga per riga. Non
-usare i vecchi conteggi globali come misura finché quella verifica non è stata
-fatta; aggiornare soltanto le righe per cui nuova evidence cambia davvero
-status/causa.
+**Follow-up registrati (non slice).** Dal primo uso reale: il REPL muore su
+input non-TTY (`readline was closed`), quindi nessuno script può parlare a
+Muffin — branch `wip/repl-linereader-pipe-eof`. Muffin ricorre a `sys.shell`
+per rispondere a domande su se stesso (tre volte in sei turni), perché non ha
+`sys.inspect`: è E7 vista in funzione, e su `muffin run`, che non può chiedere
+approvazione, quei turni finiscono in un vicolo cieco. Dall'install: `doctor`
+su una home che non ha ancora avviato il codice nuovo mostra un `✗ database`
+con rimedio sbagliato («run `muffin init` to create it») su un database che
+esiste — le tabelle nuove nascono al primo boot del runtime. Dal judge #90: il meccanismo
+N eventi → 1 composizione non ha ancora un assembler che lo chiami (in
+produzione resta 1 evento = 1 Work, dichiarato nel codice); `possibly_sent` non
+distingue «crashato» da «vivo e in volo» e genera un falso allarme
+all'operatore. Dal judge S2: la mutazione interna a `snapshotTo` sopravvive ai
+test (difesa in profondità dichiarata); il catch di `cmdRestore` mostra stack
+per errori non-`RestoreRefused`; il ramo doctor «behind» è irraggiungibile
+finché `MIGRATIONS` è vuota; TOCTOU gateway e assenza di repl-lock restano
+dichiarati. Da #78: finestra di pairing, Discord `handle()` non bound.
+`riconcilia.mjs` regex DONE.
 
-**Next action:** ricostruire il percorso reale di `recall-speaker` su `dev`,
-localizzare la perdita di role/speaker fino al prompt di recall e chiudere la
-claim con evidence che fallisce se quella cucitura viene rimossa. Solo dopo si
-porta #78 sul `dev` corrente.
+**Branch aperti:** solo `slice/readme-open-source-v1` (#84), ferma di proposito
+— il README pubblico non contiene falsità ma la milestone non è il lancio.
 
-**Owner decision pendente:** nessuna per il prossimo claim noto.
+**Truth maintenance:** M5-BIS possiede status Gate e classificazione RETURN;
+PERCORSO §0 possiede l'ordine, ed è chiuso. Le righe A6/A7/A8 e D12/E6 hanno il
+meccanismo in HEAD e restano BLOCKER di Gate solo per i residui DOGFOOD.
+
+**Owner decision pendente:** nessuna.

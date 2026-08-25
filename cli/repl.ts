@@ -199,6 +199,13 @@ export async function runRepl(
   runtime.deps.approve = async (request) => {
     process.stderr.write(`\n⚠ ${request.prompt}\n`);
     if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
+    // Taint 0 is the quiet default; anything above it means untrusted content
+    // already steered this turn, and that changes the answer more often than
+    // the capability name does.
+    if (request.taint > 0) {
+      const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][request.taint];
+      process.stderr.write(`   contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}\n`);
+    }
     const answer = (await rl.question(`   approvi "${request.capability}"? [s/N] `)).trim().toLowerCase();
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
     process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
@@ -272,7 +279,7 @@ export async function runRepl(
   );
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
     deliver,
     foreground,
     (e) => {

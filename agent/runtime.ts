@@ -1,6 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
+import { openDb } from '../core/db/open.js';
 import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
+import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -63,6 +65,18 @@ import { lightLane } from './providers/light-lane.js';
 export type Runtime = {
   deps: LoopDeps;
   config: Config;
+  /**
+   * La sandbox, o `null` se il contenimento non è disponibile qui.
+   *
+   * Esposta perché un job `script` gira **fuori** da un turno del modello —
+   * niente tool, quindi niente `makeShellTool` a portarsela dietro — e deve
+   * girare contenuto esattamente come ci gira `sys.shell`. `null` è la stessa
+   * informazione che qui sotto decide se esporre `sys.shell`, e il runner dei
+   * job la usa per rifiutare invece di eseguire senza contenimento.
+   */
+  executor: { run: SandboxExecutor['run'] } | null;
+  /** Dove girano gli script dei job: la stessa radice di progetto dei tool. */
+  workspace: string;
   /**
    * The light lane. Extraction, the contradiction judge and consolidation all
    * run here: they are classification and rewriting, not frontier work, and
@@ -195,9 +209,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budgets = loadSealedBudgets(home);
   const budgetNotes = budgets.notes.map((n) => `! ${n}`);
 
-  const db = new DatabaseCtor(p.db);
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
+  const db = openDb(p.db);
+  // Versioned schema lifecycle before any store constructs (RETURN S2): the
+  // additive store DDL below stays the fresh-install path; ordered reshapings,
+  // the old-code-on-newer-data guard and the pre-migration VACUUM INTO backup
+  // live in one place. A boot with nothing pending costs zero here.
+  migrate(db, { backupDir: join(p.home, 'backups') });
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);
@@ -403,7 +420,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
   const executor = new SandboxExecutor(guards);
-  if (executor.status().available) {
+  const contained = executor.status().available;
+  if (contained) {
     tools.push(makeShellTool(executor, { root: cwd }));
   }
 
@@ -597,6 +615,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   );
 
   return {
+    executor: contained ? executor : null,
+    workspace: cwd,
     config,
     budget,
     jobs,

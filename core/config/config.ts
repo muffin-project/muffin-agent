@@ -88,6 +88,25 @@ export const ConfigSchema = z.object({
             attempts: z.number().int().nonnegative(),
           })
           .optional(),
+        /**
+         * Where the Bot API lives, when it is not Telegram's own servers.
+         *
+         * A documented deployment mode, not a test hook: Telegram publishes
+         * the Bot API server as software you can run yourself — *"You can run
+         * it locally and send the requests to your own server instead of
+         * `https://api.telegram.org`"* (core.telegram.org/bots/api) — and it
+         * is what removes the download size limit and allows plain-HTTP
+         * webhooks. The request shape is identical either way,
+         * `<base>/bot<token>/METHOD`, which is why one field is enough.
+         *
+         * It also happens to be the seam the acceptance suite was missing.
+         * `evals/acceptance/provider.ts` can point the real binary at a fake
+         * model because `init --base-url` exists; Telegram had no equivalent,
+         * so pairing and delivery were provable only in-process — the exact
+         * "green tests no real path reaches" gap `harness.ts` was built
+         * against. Left absent, the default is Telegram's own host.
+         */
+        apiBase: z.string().url().optional(),
       })
       .optional(),
     /**

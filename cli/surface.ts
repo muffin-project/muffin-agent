@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import { SurfaceRegistry } from '../core/surface/registry.js';
 import type { Surface } from '../core/surface/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
+import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
 import { telegramSurface } from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { DiscordApi } from '../connectors/discord/api.js';
@@ -97,18 +99,23 @@ export function cmdSurfaceList(home: string): number {
  * missing step; run it again after and it finishes. No environment variable:
  * the owner id is configuration, and configuration lives in the config.
  */
-export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {
+export async function cmdSurfaceEnable(
+  home: string,
+  id: string,
+  ownerFlag?: string,
+  apiBaseFlag?: string,
+): Promise<number> {
   if (id === 'cli') {
     process.stderr.write(`la CLI è sempre abilitata\n`);
     return 0;
   }
-  if (id === 'telegram') return enableTelegram(home, ownerFlag);
+  if (id === 'telegram') return enableTelegram(home, ownerFlag, apiBaseFlag);
   if (id === 'discord') return enableDiscord(home, ownerFlag);
   process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
   return 78;
 }
 
-async function enableTelegram(home: string, ownerFlag?: string): Promise<number> {
+async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: string): Promise<number> {
   let token: string;
   try {
     token = readSecret('secret://telegram_token', home);
@@ -118,12 +125,18 @@ async function enableTelegram(home: string, ownerFlag?: string): Promise<number>
     return 78;
   }
 
+  const config = loadConfig(home);
+  // `--api-base` wins over what is stored, and what is stored wins over
+  // Telegram's own host — the ordinary precedence for a flag that overrides
+  // configuration. A self-hosted Bot API server is a documented deployment
+  // (core.telegram.org/bots/api), so this is a real knob, not a test hook.
+  const apiBase = apiBaseFlag ?? config.surfaces.telegram?.apiBase;
+
   // Against the real server, now: a bad token should fail here, in the command
   // whose job is configuration, not tonight when the surface tries to connect.
-  const api = new TelegramApi(token);
+  const api = apiBase === undefined ? new TelegramApi(token) : new TelegramApi(token, apiBase);
   const me = await api.getMe();
 
-  const config = loadConfig(home);
   let ownerChatId = config.surfaces.telegram?.ownerChatId;
   let ownerUserId = config.surfaces.telegram?.ownerUserId;
 
@@ -173,6 +186,7 @@ async function enableTelegram(home: string, ownerFlag?: string): Promise<number>
         ...(ownerUserId === undefined ? {} : { ownerUserId }),
         ...(ownerChatId === undefined ? {} : { ownerChatId }),
         ...(pairing === undefined ? {} : { pairing }),
+        ...(apiBase === undefined ? {} : { apiBase }),
       },
     },
   };
@@ -320,7 +334,10 @@ export function connectSurfaces(
    * turn addressed to a surface that failed to connect is reported as
    * undeliverable rather than sent nowhere.
    */
-  const doors = new Map<string, (replyTo: Record<string, unknown>, text: string) => Promise<void>>();
+  const doors = new Map<
+    string,
+    (turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>
+  >();
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -334,8 +351,11 @@ export function connectSurfaces(
       if (ownerUserId === undefined && tg?.pairing === undefined) {
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
-        const api = new TelegramApi(token);
-        const inbox = new UpdateInbox(new DatabaseCtor(paths(home).db));
+        const base = tg?.apiBase;
+        const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
+        const telegramDb = openDb(paths(home).db);
+        const inbox = new UpdateInbox(telegramDb);
+        const delivery = new TelegramDeliveryStore(telegramDb);
         const vaultRoot = paths(home).vault;
         mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
         // The runtime's own vault, not a second one: `document_read` reads
@@ -345,6 +365,7 @@ export function connectSurfaces(
           loop: runtime.deps,
           sessions: runtime.deps.sessions,
           inbox,
+          delivery,
           api,
           vault: telegramVault(runtime, vaultRoot),
           config: {
@@ -386,7 +407,10 @@ export function connectSurfaces(
         // The door for the lane. Registered next to the connector that owns it,
         // so a surface that did not come up simply has none — the honest state,
         // rather than a door onto a dead poller.
-        doors.set('telegram', (replyTo, text) => connector.deliverTo(replyTo, text));
+        doors.set('telegram', async (turnId, replyTo, text) => {
+          const outcome = await connector.deliverTo(turnId, replyTo, text);
+          return outcome === 'possibly_sent' ? outcome : undefined;
+        });
         // Delivery for `SurfaceRegistry`, from the same token the listener
         // uses. `ownerChatId` is what makes `handles('telegram')` true, so an
         // unpaired surface listens but does not claim to be a destination —
@@ -412,7 +436,7 @@ export function connectSurfaces(
         lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
       } else {
         const api = new DiscordApi(token);
-        const inbox = new DiscordInbox(new DatabaseCtor(paths(home).db));
+        const inbox = new DiscordInbox(openDb(paths(home).db));
         const vaultRoot = paths(home).vault;
         mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
         const connector = new DiscordConnector({
@@ -492,7 +516,7 @@ export function connectSurfaces(
       const door = doors.get(turn.surface);
       if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
       if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
-      await door(turn.replyTo, text);
+      return door(turn.id, turn.replyTo, text);
     },
   };
 }

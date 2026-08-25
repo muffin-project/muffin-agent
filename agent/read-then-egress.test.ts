@@ -270,7 +270,7 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell on (no resource)']);
+    expect(h.approvals).toEqual(['sys.shell']);
     expect(ran).toEqual(['shell_run']);
   });
 

@@ -111,10 +111,12 @@ export type TurnStopped = TurnOutcome | 'suspended';
  * case; the gap was that the event reached only the process's own stderr and
  * nothing wrote it onto the row, so a restart — or `doctor`, which opens its
  * own handle and never sees an in-memory event — had no way to learn it had
- * happened. Additive: existing rows keep reading `pending` / `sent` /
- * `failed:…` exactly as before.
+ * happened. `possibly_sent` is the deliberately terminal answer for a remote
+ * effect whose response was lost: it is never silently converted back to a
+ * retry. Additive: existing rows keep reading `pending` / `sent` / `failed:…`
+ * exactly as before.
  */
-export type DeliveryState = 'pending' | 'sent' | 'undeliverable' | `failed:${string}`;
+export type DeliveryState = 'pending' | 'sent' | 'possibly_sent' | 'undeliverable' | `failed:${string}`;
 
 export type TurnCounters = {
   iterations: number;
@@ -258,7 +260,8 @@ export type UncertainCall = {
  *
  * A different question from `TurnHealth.undeliverable` below, and the two are
  * not merged: this is a turn that **had** an address and the delivery either
- * never settled (`pending`) or was attempted and refused (`failed:<why>`) —
+ * never settled (`pending`), was attempted and refused (`failed:<why>`), or
+ * crossed the remote boundary without a readable response (`possibly_sent`) —
  * `TurnHealth.undeliverable` is a turn that had **no** address at all, so
  * there was never a delivery to attempt or fail. Same family of fact
  * (`DeliveryState`), two different rows it can be true of.
@@ -268,7 +271,7 @@ export type UndeliveredTurn = {
   surface: string;
   tenant: string;
   startedAt: string;
-  /** `pending` (nothing ever settled it) or `failed:<why>` (the surface said no). */
+  /** `pending`, `failed:<why>`, or terminal uncertainty after a remote effect. */
   delivery: DeliveryState;
 };
 
@@ -306,6 +309,19 @@ export type InterruptedTurn = {
   delivery: DeliveryState | null;
   uncertain: UncertainCall[];
 };
+
+/**
+ * Il valore di `model` per un turno che non ha un modello.
+ *
+ * Un job `script` scrive una riga in `turns` come qualsiasi altro lavoro —
+ * è ciò che gli dà identità durevole ed esattamente-una-volta — ma non c'è
+ * nessuna inferenza da riprendere. Serve un discriminante *nominato*, e non
+ * un confronto di stringhe sparso: `agent/loop.ts` lo legge per rifiutarsi di
+ * riprendere attraverso il modello un turno che il modello non ha mai visto,
+ * e senza questa costante quel rifiuto sarebbe una stringa scritta due volte
+ * in due file che possono divergere.
+ */
+export const SCRIPT_MODEL = '(script: nessun modello)';
 
 export type NewTurn = {
   /** The trace id of the turn's root span: one identity, so "why" is a join. */
@@ -557,7 +573,9 @@ export class TurnStore {
      *
      * Both halves matter and they are different failures. `failed:%` is a
      * delivery that was attempted and reported back — the surface said no.
-     * `pending` on a turn that is already `done` is worse: the work finished and
+     * `possibly_sent` is the safe terminal state for an effect whose response
+     * was lost: it needs operator attention but must not become an automatic
+     * retry. `pending` on a turn that is already `done` is worse: the work finished and
      * *nothing ever settled the delivery*, which is what a process dying between
      * the answer and the send looks like from the outside.
      *
@@ -567,7 +585,7 @@ export class TurnStore {
     this.undeliveredStmt = db.prepare(
       `SELECT id, surface, tenant, created_at AS startedAt, delivery
        FROM turns
-       WHERE status = 'done' AND (delivery = 'pending' OR delivery LIKE 'failed:%')
+       WHERE status = 'done' AND (delivery IN ('pending','possibly_sent') OR delivery LIKE 'failed:%')
          AND updated_at >= @since
        ORDER BY updated_at DESC`,
     );

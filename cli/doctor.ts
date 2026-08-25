@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
@@ -268,6 +269,20 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     };
     ok('database', `${p.db}, ${tables.n} tables`);
 
+    const schema = schemaVersionOf(db);
+    if (schema === null) {
+      warn('schema', 'nessuna schema_version: database mai avviato da questo codice', 'parte al primo avvio del runtime');
+    } else if (schema > currentSchemaVersion()) {
+      fail('schema', `database v${schema}, codice v${currentSchemaVersion()}`, 'aggiorna il codice');
+    } else if (schema < currentSchemaVersion()) {
+      // Unreachable while MIGRATIONS is empty (baseline is the ceiling), but
+      // this is the tool the restore path points at — behind must never read
+      // as healthy (judge #93 follow-up).
+      warn('schema', `database v${schema}, codice v${currentSchemaVersion()} — migrazione pendente`, 'avvia il runtime (repl o gateway)');
+    } else {
+      ok('schema', `v${schema} (codice v${currentSchemaVersion()})`);
+    }
+
     // The semantic half of recall, checked rather than assumed. Three separate
     // defences against the vector index being silently empty were written into
     // this repository and none of them was ever *consulted* — which is the same
@@ -509,7 +524,8 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
     // B8's own guarantee, checked here rather than only claimed: a turn that
     // finished and whose delivery never settled — `pending` on a `done` row —
-    // or was reported failed by the surface. D3 (judge, PR #42): `undelivered()`
+    // was reported failed by the surface, or crossed the remote boundary with
+    // no readable response (`possibly_sent`). D3 (judge, PR #42): `undelivered()`
     // had no caller and no test before this; a job could say "inviato" to
     // nobody, forever, with nothing anywhere reading the query built to catch
     // it. Reported only when `turns` exists — an absent table already said so
@@ -523,9 +539,9 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
         warn(
           'consegne',
-          `${undelivered.length} turni con delivery mai arrivata nelle ultime 24h — la più vecchia: ` +
+          `${undelivered.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
             `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
-          'il lavoro è stato fatto ma non ha raggiunto il canale: controlla che la superficie sia connessa e raggiungibile',
+          'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
         );
       } else if (undelivered !== null) {
         ok('consegne', 'nessuna delivery mancante nelle ultime 24h');

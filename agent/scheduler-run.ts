@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
-import type { TurnRecord } from '../core/turns/store.js';
+import type { ExecResult } from '../core/sandbox/executor.js';
+import { SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { recoveredText } from './recovered-text.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -82,9 +84,13 @@ export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
   }
   if (result.stopped === 'ask' && result.pending) {
     const on = result.pending.resource ? ` su ${result.pending.resource}` : '';
+    // Same two facts the REPL approver shows (D12-min): the concrete action,
+    // and — when untrusted content already steered the turn — why the ask
+    // deserves suspicion. Taint 0 stays silent; it is the unremarkable case.
+    const why = result.pending.taint > 0 ? ` (turno a taint ${result.pending.taint})` : '';
     return {
       stopped: 'ask',
-      text: `In coda per te: "${result.pending.capability}"${on} — ${result.pending.prompt}`,
+      text: `In coda per te: "${result.pending.capability}"${on}${why} — ${result.pending.prompt}`,
       turnId: result.turnId,
     };
   }
@@ -105,39 +111,6 @@ async function testStall(envVar: string): Promise<void> {
 }
 
 /**
- * The text a live turn would have delivered, reconstructed for one a later
- * tick found already `done`.
- *
- * `TurnRecord.messages` does not hold it: `drive` (`agent/loop.ts`) only
- * appends the model's final text-only round to the **session file**
- * (`deps.sessions.append`, the `'answered'` branch) — the in-turn transcript
- * stops at the last tool round, because nothing needs to feed a finished
- * turn's own answer back into its own next model call. The session file is
- * exactly what that branch wrote, verbatim, so reading it back is not a
- * reconstruction for the common case — it is the same string.
- *
- * For any other outcome (`ask`, `error`, `cap`, `budget`) the original wording
- * genuinely is not recoverable this way — `ask`'s "In coda per te…" text, for
- * one, is built from `ApprovalRequest`, which is never persisted — and
- * inventing a plausible-looking one would be exactly the kind of claim
- * `docs/JUDGE.md` asks not to make. Named honestly instead.
- */
-function recoveredText(deps: LoopDeps, record: TurnRecord): string {
-  if (record.outcome === 'answered') {
-    const ref = deps.sessions.open(record.sessionId);
-    const messages = deps.sessions.read(ref);
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.role === 'assistant' && m.content.trim() !== '') return m.content;
-    }
-  }
-  return (
-    `Il job ha concluso con esito "${record.outcome ?? 'sconosciuto'}" prima che la consegna fosse ` +
-    `registrata; il testo originale non è stato recuperato dopo un riavvio.`
-  );
-}
-
-/**
  * Create (or finish creating) the turn for an occurrence whose fire is
  * already bound to `turnId`, and run it. The only path in this file that ever
  * calls the model.
@@ -147,7 +120,14 @@ async function runFresh(
   job: Job,
   turnId: string,
   signal: AbortSignal | undefined,
+  exec: JobExec | null,
+  scope: ScriptScope,
 ): Promise<JobOutcome> {
+  // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
+  // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
+  // è ciò che tiene l'esattamente-una-volta, la visibilità in `doctor` e la
+  // consegna — ma il modello non lo vede mai.
+  if (job.kind === 'script') return runScript(deps, job, turnId, exec, scope);
   // Fault point 2, made observable: a real `SIGKILL` here lands after the
   // fire is bound and before the turn row exists at all.
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
@@ -208,12 +188,14 @@ async function resolveBound(
   job: Job,
   turnId: string,
   signal: AbortSignal | undefined,
+  exec: JobExec | null,
+  scope: ScriptScope,
 ): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   const existing = deps.turns.get(turnId);
   // The bind landed, but the row it points at does not exist — a crash
   // between the two (fault point 2). Nothing has run yet, so this is not a
   // duplicate: finish exactly what was interrupted, with the same identity.
-  if (existing === null) return runFresh(deps, job, turnId, signal);
+  if (existing === null) return runFresh(deps, job, turnId, signal, exec, scope);
   if (existing.status !== 'done') return { deferred: true };
   // `done`, and delivery already resolved by someone else (a live run's own
   // `Scheduler.settle`, or a completed one this same check is re-observing) —
@@ -232,24 +214,191 @@ async function resolveBound(
   // between a turn finishing and `Scheduler.settle` running at all). Recover
   // the text and hand back a normal outcome: `Scheduler` delivers and settles
   // exactly as it would for a live run, never calling `runJob` a second time.
-  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps, existing), turnId: existing.id };
+  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps.sessions, existing), turnId: existing.id };
 }
 
-export function makeJobRunner(deps: LoopDeps, fires: JobFireStore): RunJob {
+/**
+ * Cosa serve per eseguire uno script: solo `run`. Un finto con quel metodo è
+ * un esecutore valido, come per `makeShellTool`.
+ */
+export type JobExec = {
+  run(req: { command: string; cwd: string; writeScope: readonly string[]; timeoutMs?: number }): Promise<ExecResult>;
+};
+
+/** Dove gira uno script di job, e per quanto al massimo. */
+export type ScriptScope = { cwd: string; timeoutMs?: number };
+
+export function makeJobRunner(
+  deps: LoopDeps,
+  fires: JobFireStore,
+  /**
+   * L'esecutore sandboxato, e `null` quando il contenimento non è
+   * disponibile su questa macchina.
+   *
+   * `null` non è "esegui senza sandbox": un job `script` gira **senza nessuno
+   * che guardi**, a orario, con l'autorità del processo. È esattamente la
+   * situazione in cui un contenimento assente non va aggirato ma dichiarato —
+   * lo script non parte e il turno registra perché. La stessa scelta che
+   * `agent/runtime.ts` fa per `sys.shell`, che non viene nemmeno esposto se
+   * il probe della sandbox fallisce.
+   */
+  exec: JobExec | null = null,
+  scope: ScriptScope = { cwd: process.cwd() },
+): RunJob {
   return async (job: Job, signal): Promise<JobOutcome | FireDeferred | FireSettleOnly> => {
     // The occurrence that is due, not the moment this process noticed it —
     // `job.nextFireAt` as `due()` returned it, read once here and never
     // recomputed later in this call.
     const scheduledFor = job.nextFireAt.toISOString();
     const fire = fires.claim(job.id, scheduledFor);
-    if (fire.turnId !== null) return resolveBound(deps, job, fire.turnId, signal);
+    if (fire.turnId !== null) return resolveBound(deps, job, fire.turnId, signal, exec, scope);
 
     const minted = randomBytes(16).toString('hex');
     const winner = fires.bind(job.id, scheduledFor, minted);
     // Lost the race: some other bind landed first. There is no turn to run —
     // `minted` was never written anywhere — so this resolves the winner's id
     // exactly as if it had found it already bound at the top of this call.
-    if (winner !== minted) return resolveBound(deps, job, winner, signal);
-    return runFresh(deps, job, winner, signal);
+    if (winner !== minted) return resolveBound(deps, job, winner, signal, exec, scope);
+    return runFresh(deps, job, winner, signal, exec, scope);
   };
+}
+
+
+/**
+ * Un'occorrenza che esegue invece di ragionare.
+ *
+ * Il modello non viene chiamato: non c'è sessione, non c'è prompt, non c'è
+ * contesto assemblato, non ci sono tool. È il punto della cosa — un controllo
+ * ogni cinque minuti costa zero token nei giorni in cui non trova niente, e
+ * questo è ciò che rende tenibile un controllo che altrimenti si finisce per
+ * spegnere.
+ *
+ * Il **turno durevole si scrive lo stesso**, e non è una formalità: è la riga
+ * su cui poggiano l'esattamente-una-volta di `job_fires`, la visibilità in
+ * `muffin doctor`, la consegna e il suo esito. Toglierla renderebbe i job
+ * script l'unico lavoro di Muffin senza identità durevole — cioè l'unico che
+ * dopo un crash nessuno sa se è girato.
+ */
+async function runScript(
+  deps: LoopDeps,
+  job: Job,
+  turnId: string,
+  exec: JobExec | null,
+  scope: ScriptScope,
+): Promise<JobOutcome> {
+  await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
+  const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
+  // Tutti a zero, e sono la prova: nessuna iterazione, nessuna tool call,
+  // nessun token — né in ingresso né in uscita — e nessuna spesa. La riga del
+  // turno *dichiara* che il modello non è stato chiamato, invece di lasciarlo
+  // dedurre a chi legge.
+  const counters: TurnCounters = {
+    iterations: 0,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 0,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: true,
+  };
+
+  const comando = job.script ?? '';
+
+  /**
+   * La riga **prima** dell'effetto, e non dopo.
+   *
+   * Era il contrario, e il judge di questa slice l'ha rotto con un probe: un
+   * crash a metà script non lasciava nessuna riga, `resolveBound` legge
+   * l'assenza di riga come *"nothing has run yet, so this is not a
+   * duplicate"*, e al riavvio lo script ripartiva. `exec.run()` chiamato due
+   * volte, osservato. Uno script che manda una mail o addebita qualcosa lo
+   * farebbe due volte, e la riga finale mostrerebbe un'esecuzione sola,
+   * ordinaria: la duplicazione non lascia traccia.
+   *
+   * È la stessa disciplina che `agent/loop.ts` si dà per il percorso a
+   * obiettivo — *"The record, before anything happens — and not inside a
+   * try"* — e `sys.shell` dichiara già `rerunnable: false` proprio perché un
+   * comando "may have sent something, moved something, or charged something".
+   * Con la riga scritta prima, un crash lascia uno stato `running` che
+   * `resolveBound` rinvia invece di rieseguire.
+   */
+  const aperta = deps.turns.create({
+    id: turnId,
+    principal: { kind: 'system', source: 'scheduler' },
+    tenant: 'host',
+    surface: job.channel,
+    sessionId: session.id,
+    // `SCRIPT_MODEL`, non una stringa scritta a mano: `agent/loop.ts` la legge
+    // per rifiutarsi di riprendere attraverso il modello un turno che il
+    // modello non ha mai visto.
+    model: SCRIPT_MODEL,
+    messages: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
+    taint: 0,
+    counters,
+    replyTo: { channel: job.channel },
+  });
+
+  const chiudi = (outcome: TurnOutcome, text: string): JobOutcome => {
+    // Il token di claim che `create` ha appena scritto: `finish` chiude solo
+    // la riga di cui si è titolari, ed è la stessa fence che impedisce a un
+    // secondo processo di chiudere il lavoro di un altro.
+    deps.turns.finish(
+      turnId,
+      {
+        outcome,
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] },
+          { role: 'assistant', content: [{ type: 'text', text }] },
+        ],
+        taint: 0,
+        counters,
+      },
+      aperta.claimToken,
+    );
+    return { stopped: outcome, text, turnId };
+  };
+
+  if (exec === null) {
+    // Fail closed. Uno script gira senza nessuno che guardi: se il
+    // contenimento non c'è, non è il momento di fare a meno del contenimento.
+    return chiudi(
+      'error',
+      `Job "${job.id.slice(0, 8)}" non eseguito: la sandbox non è disponibile su questa macchina, ` +
+        `e uno script schedulato non gira senza contenimento. \`muffin doctor\` dice cosa manca.`,
+    );
+  }
+
+  let result: ExecResult;
+  try {
+    result = await exec.run({
+      command: comando,
+      cwd: scope.cwd,
+      // La stessa radice che `makeShellTool` concede a `sys.shell`: uno script
+      // schedulato non ottiene più autorità sul filesystem di quanta ne
+      // otterrebbe lo stesso comando chiesto a Muffin da una persona.
+      writeScope: [scope.cwd],
+      ...(scope.timeoutMs === undefined ? {} : { timeoutMs: scope.timeoutMs }),
+    });
+  } catch (error) {
+    return chiudi('error', `Job "${job.id.slice(0, 8)}" non è partito: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  // Cosa dice, e quando. Lo stdout è la voce dello script — vuoto significa
+  // silenzio, e il silenzio non si consegna (`core/scheduler/scheduler.ts`).
+  // Un'uscita diversa da zero invece parla sempre: un controllo che fallisce
+  // in silenzio è peggio di un controllo che non esiste, perché sembra verde.
+  const out = result.stdout.trim();
+  if (result.timedOut) {
+    return chiudi('error', `Job "${job.id.slice(0, 8)}": lo script ha superato il tempo massimo.${out ? `\n${out}` : ''}`);
+  }
+  if (result.code !== 0) {
+    const err = result.stderr.trim();
+    return chiudi(
+      'error',
+      `Job "${job.id.slice(0, 8)}": uscita ${result.code}.${out ? `\n${out}` : ''}${err ? `\n${err}` : ''}`,
+    );
+  }
+  return chiudi('answered', out);
 }

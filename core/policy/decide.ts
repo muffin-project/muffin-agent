@@ -244,13 +244,29 @@ export function createDecide(ctx: PolicyContext): Decide {
         // is never a silent allow — see docs/adr/0003 (revision).
         return ctx.hardened && isOwnerPrincipal(principal) && taint === 0
           ? { effect: 'allow' }
-          : ask(`${capability} on ${describe(resource)}`);
+          : ask(describe(capability, resource));
     }
   };
 }
 
-function describe(resource: DecisionRequest['resource']): string {
-  return resource.kind === 'none' ? '(no resource)' : `${resource.kind}:${resource.value}`;
+/**
+ * The sentence the owner reads before deciding.
+ *
+ * A capability with `resourceKind: 'none'` used to render as `sys.shell on
+ * (no resource)` — a placeholder that is true here (the kernel genuinely has
+ * no resource for it) and useless there (a person is being asked to approve
+ * something). Worse, once `agent/loop.ts` learned to derive the concrete
+ * action from the call's own arguments (D12-min), the two lines contradicted
+ * each other on screen:
+ *
+ *     ⚠ sys.shell on (no resource)
+ *        su: command: ls -1 *.md
+ *
+ * So the kernel now says only what it knows. It names the capability, and it
+ * names the resource when it has one; the surface supplies the action.
+ */
+function describe(capability: string, resource: DecisionRequest['resource']): string {
+  return resource.kind === 'none' ? capability : `${capability} on ${resource.kind}:${resource.value}`;
 }
 
 /** Pure: URL parsing only, no I/O. `null` for anything that is not http(s). */

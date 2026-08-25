@@ -6,12 +6,13 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
-import { JobStore, type Job } from '../core/scheduler/jobs.js';
+import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { TurnStore } from '../core/turns/store.js';
+import { SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
 import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
+import { resumeTurn } from './loop.js';
 import type { LoopDeps, TurnResult } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
@@ -45,7 +46,7 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco' },
+      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco', taint: 0 },
     });
     expect(out.stopped).toBe('ask');
     expect(out.text).toContain('In coda per te');
@@ -59,10 +60,27 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?' },
+      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?', taint: 0 },
     });
     expect(out.text).toContain('sys.shell');
     expect(out.text).not.toContain('undefined');
+  });
+
+  it('a tainted ASK says why it deserves suspicion; taint 0 stays silent', () => {
+    const tainted = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 2 },
+    });
+    expect(tainted.text).toContain('turno a taint 2');
+    const clean = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 0 },
+    });
+    expect(clean.text).not.toContain('taint');
   });
 
   it('other terminal states pass through unchanged', () => {
@@ -201,7 +219,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: 'sess-done-delivered',
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -234,7 +252,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: 'sess-undeliverable',
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -264,6 +282,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
       content: 'la risposta che il crash non ha mai consegnato',
       surface: 'cli',
       createdAt: new Date().toISOString(),
+      traceId: turnId,
     });
     const rec = deps.turns.create(
       {
@@ -273,7 +292,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: session.id,
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -308,7 +327,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
           surface: 'cli',
           sessionId: `sess-${status}`,
           model: 'test-model',
-          messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+          messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
           taint: 0,
           counters: counters(),
           replyTo: { channel: 'cli' },
@@ -350,5 +369,121 @@ describe('makeJobRunner — B7 identity resolution', () => {
     expect(provider.calls).toBe(1); // completing the interrupted bind runs once
     const rows = db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
     expect(rows.n).toBe(1); // never a second, competing turn
+  });
+});
+
+/**
+ * Il probe del judge di questa slice, reso permanente.
+ *
+ * La prima stesura scriveva la riga del turno **dopo** `exec.run()`. Un crash
+ * a metà script non lasciava quindi nessuna riga, `resolveBound` legge
+ * l'assenza di riga come «non è ancora partito niente, quindi non è un
+ * duplicato», e al riavvio lo script ripartiva: `exec.run()` chiamato due
+ * volte, osservato dal judge con un probe. Uno script che manda una mail o
+ * addebita qualcosa lo farebbe due volte, e la riga finale mostrerebbe
+ * un'esecuzione sola — la duplicazione non lascia traccia.
+ */
+describe('makeJobRunner — uno script non gira due volte', () => {
+  const SCRIPT_SPEC = {
+    cron: '0 8 * * *',
+    timezone: 'Europe/Rome',
+    channel: 'cli',
+    kind: 'script' as const,
+    script: 'echo ciao',
+  };
+
+  it('un crash a metà script non fa ripartire lo script al riavvio', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    // Uno script che non ritorna mai: è il processo che muore mentre gira.
+    let partenze = 0;
+    const appeso = {
+      run: async (): Promise<never> => {
+        partenze += 1;
+        return new Promise<never>(() => {});
+      },
+    };
+
+    // Prima esecuzione: parte e resta appesa (il processo muore qui).
+    void makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(partenze).toBe(1);
+
+    // Riavvio: la stessa occorrenza viene risolta di nuovo. In gara con un
+    // timeout, perché il difetto che questo test esiste per catturare fa
+    // ripartire lo script — e lo script appeso non torna mai: senza la gara
+    // il fallimento sarebbe un timeout del test invece dell'asserzione, cioè
+    // un rosso che non dice cosa è andato storto.
+    const seconda = await Promise.race([
+      makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined),
+      new Promise((r) => setTimeout(() => r('BLOCCATO'), 1500)),
+    ]);
+
+    // Lo script NON è ripartito, e il secondo giro dice che il lavoro è di
+    // qualcun altro invece di rifarlo.
+    expect(partenze).toBe(1);
+    expect(seconda).toEqual({ deferred: true });
+    expect(provider.calls).toBe(0);
+  });
+
+  it('senza sandbox non esegue, e lo dice', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    const outcome = await makeJobRunner(deps, fires, null, { cwd: '/tmp' })(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('error');
+    expect(outcome.text).toContain('sandbox');
+    expect(provider.calls).toBe(0);
+  });
+
+  it('un turno script interrotto non si riprende col modello, e lo script non viene rifatto', async () => {
+    // L'altra metà del crash a metà script, sul percorso che NON passa dallo
+    // scheduler: la riga `running` di un processo morto viene reclamata come
+    // `interrupted` al boot, e la turn-lane la riprende con `resumeTurn`.
+    // Prima della guardia su SCRIPT_MODEL la lane chiamava il modello con
+    // «script: echo …» come fosse una richiesta dell'owner — un costo, una
+    // risposta inventata, e consegnata. Il judge del giro 2 ha provato la
+    // guardia sana con un probe usa-e-getta; questo è quel probe reso
+    // permanente, perché era a un refactor di distanza dal rompersi in
+    // silenzio.
+    const { deps, provider } = fixture([answer('mai chiamato')]);
+
+    // La riga esattamente come la scrive `runScript`: stesso principal,
+    // stesso modello sentinella, stesso primo messaggio.
+    const morto = 999_999_983; // un pid che non esiste: la reclaim lo vede morto
+    const riga = deps.turns.create(
+      {
+        id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: deps.sessions.open('job-test').id,
+        model: SCRIPT_MODEL,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'script: echo ciao' }] }],
+        taint: 0,
+        counters: { ...counters(), contextBuilt: true },
+        replyTo: { channel: 'cli' },
+      },
+      morto,
+    );
+    expect(riga.status).toBe('running');
+
+    // Il boot successivo: il pid è morto, la riga diventa `interrupted`.
+    const reclaimed = deps.turns.reclaim(new Date());
+    expect(reclaimed.map((r) => r.id)).toContain(riga.id);
+
+    const esito = await resumeTurn(deps, riga.id);
+    if (!('stopped' in esito)) throw new Error(`atteso un esito terminale, ricevuto ${JSON.stringify(esito)}`);
+
+    // Il modello non è mai stato toccato, lo script non è stato rieseguito, e
+    // il testo dice la sola cosa vera: forse fatto, non rifatto.
+    expect(provider.calls).toBe(0);
+    expect(esito.stopped).toBe('error');
+    expect(esito.text).toContain("Non l'ho rifatto");
+    expect(esito.text).toContain('echo ciao');
+    expect(deps.turns.get(riga.id)?.status).toBe('done');
   });
 });
