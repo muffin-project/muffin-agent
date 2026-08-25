@@ -24,6 +24,23 @@ integrated evidence + real owner battery
 
 Una riga di sola evidence non riceve un subsystem nuovo. Più righe con la stessa causa radice condividono una slice quando il claim resta reviewable.
 
+## 0 · RETURN TO OWNER viene prima del resto dell'ordine
+
+Milestone owner del 2026-08-25; definizione e classificazione vivono in
+`../M5-BIS.md` §Milestone RETURN TO OWNER (una sola casa, qui solo l'ordine).
+Fino al suo stop-point l'ordine operativo è:
+
+```text
+S1  ingress foundation atterra   (PR #90 + fence della delivery + judge sulla claim nuova)
+S2  schema lifecycle             (A6 + A7 + A8-min: migration runner versionato, backup/restore)
+S3  hardening minimo             (D12-min + E6; parallela a S2)
+S4  bring-up modello locale + install reale + smoke journey
+```
+
+Path critico S1 → S2 → S4. Al termine: stop pre-dogfood development, install,
+uso reale. Le sezioni da §2.3 in giù restano l'ordine *di Gate*, ma la loro
+esecuzione riparte **dopo** RETURN, riprioritizzata dall'evidence del dogfood.
+
 ## 1 · Chiudi l'ingress foundation prima di costruirci sopra
 
 ### 1.1 `recall-speaker` — chiuso
