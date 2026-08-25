@@ -208,6 +208,16 @@ RestartSec=${RESTART_SEC}
 # Il rate limit di systemd NON è disabilitato, di proposito (ADR-0035): è
 # l'ultima rete sotto questa riga.
 RestartPreventExitStatus=${EXIT_PERMANENT} ${EXIT_STOPPED}
+# ${EXIT_STOPPED} qui e NON ${EXIT_PERMANENT}, ed è la riga che decide cosa vede chi guarda.
+# \`RestartPreventExitStatus\` dice a systemd di non riavviare; non dice che
+# l'uscita andava bene. Senza questa riga un normale \`muffin gateway stop\`
+# lascia la unit in stato \`failed\`: \`systemctl --user --failed\` la elenca e
+# \`doctor\` — che da questa slice chiede davvero \`is-failed\` — allarmerebbe a
+# ogni arresto voluto, che è il modo più rapido per insegnare a ignorarlo.
+# ${EXIT_PERMANENT} resta fuori di proposito: config assente, secret mancante o root of
+# trust che rifiuta *sono* un guasto, e devono restare rossi in systemd finché
+# qualcuno li guarda.
+SuccessExitStatus=${EXIT_STOPPED}
 # I figli — server MCP, sandbox — li chiude il cgroup, non il parent.
 KillMode=mixed
 # Più lungo del nostro budget di drenaggio (${Math.round(DRAIN_BUDGET_MS / 1000)}s), o systemd

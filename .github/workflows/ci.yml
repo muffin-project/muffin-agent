@@ -25,6 +25,17 @@
 #  2b. `paths-ignore`: una PR di soli documenti (blueprint, handoff, mappa) non
 #     esercita nulla che la suite copra. `defaults/**` NON è qui dentro:
 #     persona/voice/RoT sono prodotto, non documentazione.
+#     **`.claude/**` è un'eccezione a metà: va letta con `strumenti.yml`
+#     accanto, o si conclude il contrario di quello che è vero.**
+#     `vitest.config.ts` non esclude `.claude/` (solo `worktrees/`), quindi i
+#     53 test di hook, `deleghe.mjs` e `riconcilia.mjs` stanno nella suite che
+#     gira qui sotto — ma questo `paths-ignore` li spegneva proprio sulle PR
+#     che cambiavano quei file (la #107 è passata con zero check). Il rimedio
+#     non è togliere `.claude/**` di qui, che rimetterebbe sotto CI comandi e
+#     impostazioni che non hanno test: è `.github/workflows/strumenti.yml`,
+#     che gira solo sui file di `.claude/` che un test copre e costa 42s
+#     invece dei ~205s di questo job. Il perché per esteso è in testa a quel
+#     file.
 #  3. Solo `ubuntu-latest`. macOS conta 10× i minuti e Windows 2×, e non
 #     abbiamo ancora una ragione misurata per pagarli — la macchina di sviluppo
 #     è macOS e la produzione è una VPS Linux, quindi Linux è il lato che
@@ -145,9 +156,16 @@ jobs:
       # resta un salto (è il caso del portatile macOS su piattaforme che il
       # sandbox non copre); con la variabile diventa rosso, ed è l'unica forma
       # in cui «9 saltati» smette di leggersi come «9 passati».
+      # `MUFFIN_REQUIRE_SYSTEMD=1` è la stessa disciplina per l'altro pezzo di
+      # produzione: la unit systemd. Il plist ha `plutil -lint` sul portatile;
+      # la unit — il file della VPS — aveva solo asserzioni su stringhe, e
+      # questo è l'unico runner con `systemd-analyze`. Se il parser sparisse
+      # dall'immagine, senza la variabile il test tornerebbe a saltare in
+      # silenzio e l'unica verifica reale della unit sparirebbe con lui.
       - name: suite
         env:
           MUFFIN_REQUIRE_SANDBOX: '1'
+          MUFFIN_REQUIRE_SYSTEMD: '1'
         run: npx vitest run --reporter=dot
 
 # ---------------------------------------------------------------------------
