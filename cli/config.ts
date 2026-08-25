@@ -17,8 +17,6 @@ import { listConfigKnobs, type ConfigKnob } from '../core/config/inventory.js';
  * column none of the three needed and this command exists to answer.
  */
 
-export const CONFIG_USAGE = `usage: muffin config [--json]\n`;
-
 export function cmdConfig(home: string, argv: string[]): number {
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' } }, allowPositionals: false });
 

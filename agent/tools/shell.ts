@@ -53,7 +53,7 @@ export const shellCapability: CapabilityDecl = {
   maxTaint: 2,
 };
 
-export const shellSpec: ToolSpec = {
+const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
     'Run a non-interactive shell command inside the sandbox. Writes are confined to the ' +
@@ -168,7 +168,7 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
  * cost, not just a non-regression, in `agent/tools/shell.test.ts` §"the cost,
  * stated as a test".
  */
-export function formatExecOutcome(
+function formatExecOutcome(
   command: string,
   result: ExecResult,
 ): { content: string; isError?: true; tier: TrustTier } {

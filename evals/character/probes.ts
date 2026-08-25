@@ -76,7 +76,7 @@ export const RUBRIC: Record<PropertyId, string> = {
 };
 
 /** A prior message seeded verbatim into the session before the graded turn(s) — real `SessionStore` rows, never system-prompt text. */
-export type SeedTurn = { role: 'user' | 'assistant'; text: string };
+type SeedTurn = { role: 'user' | 'assistant'; text: string };
 
 /** A tool registered via the runtime's real `register()` door before the turn — the harness's own sanctioned primitive for "context that needs a tool". */
 export type FakeTool = { name: string; description: string; fails: boolean };

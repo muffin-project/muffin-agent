@@ -32,7 +32,7 @@ import { connectSurfaces } from './surface.js';
 
 const TENANT = 'host';
 
-export const OBSERVE_USAGE = `usage:
+const OBSERVE_USAGE = `usage:
   muffin observe           cosa è diventato silenzioso, e cosa ne farebbe il gate
   muffin observe --send    compone e consegna quello che il gate consente
 `;

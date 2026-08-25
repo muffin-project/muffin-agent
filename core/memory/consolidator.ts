@@ -123,7 +123,7 @@ export const CONSOLIDATION_CEILING = 12;
  * the next message" property does not hold. That is what the drain below
  * exists to end.
  */
-export const CONSOLIDATION_BATCH = 20;
+const CONSOLIDATION_BATCH = 20;
 
 /**
  * The drain: what happens when one page was not enough.
@@ -258,7 +258,7 @@ export type ConsolidationTrigger = 'idle' | 'ceiling' | 'manual' | 'drain';
  */
 export type ConsolidationOutcome = 'ran' | 'budget' | 'busy' | 'error';
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS consolidation_runs (
   id         INTEGER PRIMARY KEY,
   ran_at     TEXT NOT NULL,

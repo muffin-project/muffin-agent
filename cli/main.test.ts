@@ -120,6 +120,26 @@ describe('muffin init infers the provider from the key — headless, no TTY requ
     const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
     expect(config.provider.kind).toBe('openai-compat');
   });
+
+  it('non-TTY stays exactly as before: no machine interrogation, no new questions — only the new "what was decided" line', () => {
+    // slice/init-interroga, owner's brief verbatim: "--yes/non-TTY: nessuna
+    // domanda nuova — inferenza attuale + default attuali, MA la stampa dice
+    // sempre cosa è stato deciso". spawnSync's piped stdin is never a TTY (no pty in this
+    // repo), which is exactly the headless path every other test in this
+    // describe already exercises — this one asserts the negative space
+    // directly instead of only not-tripping-over it.
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-or-v1-realistic-openrouter-key');
+    expect(r.code).toBe(0);
+    expect(r.err).not.toContain('Supervisore:');
+    expect(r.err).not.toContain('Trovato un runtime locale');
+    expect(r.err).not.toContain('Che famiglia di modello?');
+    // The one new line that IS unconditional: what model got decided, and why.
+    expect(r.err).toContain('modelli');
+    expect(r.err).toContain('default compilato');
+    const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    expect(config.models.main).toBe('anthropic/claude-sonnet-5'); // unchanged compiled default
+  });
 });
 
 describe('selective Italian command aliases (ADR-0036)', () => {

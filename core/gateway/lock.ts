@@ -39,7 +39,7 @@ export const HEARTBEAT_MS = 30_000;
  */
 export const STALE_AFTER_MS = 10 * HEARTBEAT_MS;
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS gateway_lock (
   id        INTEGER PRIMARY KEY CHECK (id = 1),
   pid       INTEGER,

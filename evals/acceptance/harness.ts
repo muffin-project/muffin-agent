@@ -162,7 +162,7 @@ export type Install = {
   cleanup(): Promise<void>;
 };
 
-export type Gateway = {
+type Gateway = {
   /** Resolves when stderr has matched, or rejects after the timeout. */
   waitFor(pattern: RegExp, timeoutMs?: number): Promise<string>;
   stderr(): string;
