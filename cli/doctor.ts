@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
-import { probeSandbox } from '../core/sandbox/probe.js';
+import { probeSandbox, type SandboxProbe } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
@@ -587,7 +587,7 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
   const sandbox = probeSandbox();
   if (sandbox.available) {
-    ok('sandbox', `${sandbox.mechanism}: a real containment ran and held`);
+    ok('sandbox', sandboxOkDetail(sandbox));
   } else {
     // Not a hard failure: the runtime still starts, execution capabilities just
     // degrade to ask. Silently unsandboxed is the one outcome we refuse.
@@ -626,6 +626,23 @@ export function formatReport(report: DoctorReport): string {
     return c.remedy ? `${head}\n  → ${c.remedy}` : head;
   });
   return lines.join('\n');
+}
+
+/**
+ * The `ok('sandbox', …)` line, honest about which mechanism actually held.
+ *
+ * A green "sandbox: contained" reads as parity between platforms, and it is
+ * not: `SandboxManager.baseConfig` (core/sandbox/executor.ts) sets
+ * `allowAllUnixSockets: true` on Linux only — two open upstream bugs (#428,
+ * #429) block the seccomp layer that would otherwise deny them — so bubblewrap
+ * holding today says less than seatbelt holding does. One line, not the essay
+ * this comment is: doctor.ts owns being read at a glance.
+ */
+export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true }>): string {
+  const base = `${sandbox.mechanism}: a real containment ran and held`;
+  return sandbox.mechanism === 'bubblewrap'
+    ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
+    : base;
 }
 
 /** `null` means the table is not there, which is a different fact from "zero rows". */
