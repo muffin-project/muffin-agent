@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { parseArgs } from 'node:util';
 import { loadConfig, paths } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
-import { JobError, JobStore, type Job } from '../core/scheduler/jobs.js';
+import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 
 /**
  * `muffin jobs` — the operator surface over scheduled work.
@@ -46,7 +46,15 @@ function ownerTimezone(home: string): string {
 
 function fmt(job: Job): string {
   const next = job.nextFireAt.toLocaleString('it-IT', { timeZone: job.timezone, dateStyle: 'short', timeStyle: 'short' });
-  return `${job.id.slice(0, 8)}  ${job.cron.padEnd(14)} ${job.timezone.padEnd(16)} →${job.channel.padEnd(9)} prossima ${next}\n            ${job.goal}`;
+  // `jobPayload`, non `job.goal`: per un job `script` quel campo è undefined
+  // per costruzione, e la lista stampava «undefined» — trovato lanciando il
+  // binario vero, non dai test, che creavano job senza mai elencarli.
+  //
+  // E il tipo è mostrato: uno script gira senza modello e senza che nessuno
+  // guardi, quindi «cosa farà domattina alle 8» deve essere leggibile da
+  // questa riga, non deducibile.
+  const che = job.kind === 'script' ? '$ ' : '';
+  return `${job.id.slice(0, 8)}  ${job.cron.padEnd(14)} ${job.timezone.padEnd(16)} →${job.channel.padEnd(9)} prossima ${next}\n            ${che}${jobPayload(job)}`;
 }
 
 export function cmdJobsList(home: string): number {
