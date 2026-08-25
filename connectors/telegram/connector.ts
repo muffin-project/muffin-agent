@@ -8,6 +8,12 @@ import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
+import {
+  deliverTelegram,
+  type TelegramDeliveryOutcome,
+  type TelegramDeliveryPlanPart,
+  TelegramDeliveryStore,
+} from './delivery.js';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForTelegram } from './render.js';
@@ -75,6 +81,8 @@ export type ConnectorDeps = {
   }) => void) | undefined;
   sessions: SessionStore;
   inbox: UpdateInbox;
+  /** Same SQLite home as `inbox`: the exact outbound wire plan survives restart. */
+  delivery: TelegramDeliveryStore;
   api: TelegramApiLike;
   /**
    * Where attachments land. Absent means the connector still answers, and says
@@ -441,11 +449,10 @@ export class TelegramConnector {
    * Telegram-shaped footers. A row whose address is unreadable throws, and the
    * caller records `failed:` on it instead of silently dropping the answer.
    *
-   * Deliberately additive and separate from `handle`'s own send: the in-band
-   * path is being rewritten by another slice, and two slices editing one send
-   * is a merge war rather than a suture.
+   * Both the fresh inbound path and the lane/recovery path converge here: one
+   * frozen wire plan, one first-writer-wins attempt per part.
    */
-  async deliverTo(replyTo: Record<string, unknown>, text: string): Promise<void> {
+  async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
     if (typeof chatId !== 'number') {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
@@ -453,18 +460,18 @@ export class TelegramConnector {
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
     const editMessageId = typeof replyTo['editMessageId'] === 'number' ? replyTo['editMessageId'] : undefined;
 
-    for (const [i, part] of renderForTelegram(text).entries()) {
-      // The placeholder from the original turn is reused when it is still
-      // there: a suspended turn that left "sto guardando…" in the chat should
-      // replace it, not answer underneath it hours later.
-      if (i === 0 && editMessageId !== undefined) {
-        await this.deps.api.editMessageText(chatId, editMessageId, part);
-      } else {
-        await this.deps.api.sendMessage(chatId, part, {
-          ...(i === 0 && replyToMessage !== undefined ? { replyTo: replyToMessage } : {}),
-        });
-      }
-    }
+    const plan: TelegramDeliveryPlanPart[] = renderForTelegram(text).map((html, i) =>
+      i === 0 && editMessageId !== undefined
+        ? { operation: 'edit', chatId, replyTo: null, editMessageId, html }
+        : {
+            operation: 'send',
+            chatId,
+            replyTo: i === 0 && replyToMessage !== undefined ? replyToMessage : null,
+            editMessageId: null,
+            html,
+          },
+    );
+    return deliverTelegram(this.deps.delivery, this.deps.api, turnId, plan, () => this.now());
   }
 
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
@@ -551,13 +558,25 @@ export class TelegramConnector {
       return;
     }
     // `done`: the model already ran. Resolve delivery without ever recomputing.
-    if (stored.settledAt !== null || existing.delivery === 'sent' || existing.delivery === 'undeliverable') {
+    if (
+      stored.settledAt !== null ||
+      existing.delivery === 'sent' ||
+      existing.delivery === 'possibly_sent' ||
+      existing.delivery === 'undeliverable'
+    ) {
       // Fault points 5/7: already delivered — by this same connector's
       // earlier pass, or by an independent turn-lane delivery. `settledAt`
       // proves it even when the turn's own bookkeeping column did not land
       // (the residual `runFresh` names: `sendMessage` returned before
       // `recordDelivery` ran).
-      if (existing.delivery !== 'sent' && existing.delivery !== 'undeliverable') this.recordDelivery(turnId, 'sent');
+      if (
+        existing.delivery !== 'sent' &&
+        existing.delivery !== 'possibly_sent' &&
+        existing.delivery !== 'undeliverable'
+      ) {
+        const wireWasUncertain = this.deps.delivery.parts(turnId).some((part) => part.status === 'possibly_sent');
+        this.recordDelivery(turnId, wireWasUncertain ? 'possibly_sent' : 'sent');
+      }
       this.finish(stored.updateId, this.now());
       return;
     }
@@ -570,7 +589,13 @@ export class TelegramConnector {
     }
     const text = recoveredText(this.deps.loop.sessions, existing);
     try {
-      await this.deliverTo(existing.replyTo, text);
+      const outcome = await this.deliverTo(turnId, existing.replyTo, text);
+      if (outcome === 'deferred') return;
+      if (outcome === 'possibly_sent') {
+        this.finish(stored.updateId, this.now());
+        this.recordDelivery(turnId, 'possibly_sent');
+        return;
+      }
     } catch (error) {
       this.recordDelivery(turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
       throw error; // stays pending; the next drain retries the send, not the model
@@ -646,10 +671,8 @@ export class TelegramConnector {
         // second, competing one (`slice/inbound-unit`, ADR-0035 emendamento №6).
         id: turnId,
         // Where the answer goes, on the record rather than only on this stack.
-        // Nothing reads it yet — the turn is still delivered from right here,
-        // below — and that is the point of writing it now: the day the lane
-        // delivers instead of this function, the address is already durable and
-        // this call site does not have to be reopened to put it there.
+        // Both this fresh path and the lane/recovery path read the same durable
+        // address and converge on `deliverTo`.
         // `channel` is that address in `SurfaceRegistry` terms — added for
         // #41's lane (turno sospeso), the same field `makeJobRunner`
         // (`agent/scheduler-run.ts`) already writes for a scheduled job.
@@ -657,7 +680,6 @@ export class TelegramConnector {
           chatId: incoming.chatId,
           messageId: incoming.messageId,
           channel: `telegram:${incoming.chatId}`,
-          ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
         },
         // The registry address for *this* conversation — always the fully
         // qualified `telegram:<chatId>`, even for the owner's own private
@@ -679,9 +701,9 @@ export class TelegramConnector {
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
       // `sent` on a turn that has not answered — the owner would read it as the
-      // answer. The placeholder stays as the truth of the moment, and the lane's
-      // `deliverTo` replaces it when the turn resumes: the mirror of the guard
-      // `agent/turn-lane.ts` already has on the resume path. Found by the
+      // answer. Presence is ephemeral (draft in private chats, chat action in
+      // groups); the lane's `deliverTo` sends the answer when the turn resumes:
+      // the mirror of the guard `agent/turn-lane.ts` already has. Found by the
       // integrated judge of the dev→main promotion (#44), between #41 and #42.
       //
       // The *update* is nonetheless fully handled: a turn exists, is bound,
@@ -701,25 +723,16 @@ export class TelegramConnector {
       await testStall('MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_DONE_MS');
 
       try {
-        const parts = renderForTelegram(result.text);
-        for (const [i, part] of parts.entries()) {
-          // The placeholder becomes the first part rather than sitting above it.
-          if (i === 0 && presence.editMessageId !== undefined) {
-            // B11: if live streaming already left this message showing
-            // exactly the finished answer, skip the edit rather than send a
-            // knowably-redundant one. Whether Telegram treats an edit with
-            // unchanged content as a harmless no-op or an error is not
-            // something this environment can verify (no token to probe
-            // with — PRACTICES §2) — dropping the call removes the
-            // dependency on the answer instead of assuming either one.
-            if (presence.lastStreamedRaw() !== result.text) {
-              await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
-            }
-          } else {
-            await this.deps.api.sendMessage(incoming.chatId, part, {
-              ...(i === 0 ? { replyTo: incoming.messageId } : {}),
-            });
-          }
+        const outcome = await this.deliverTo(
+          result.turnId,
+          { chatId: incoming.chatId, messageId: incoming.messageId, channel: `telegram:${incoming.chatId}` },
+          result.text,
+        );
+        if (outcome === 'deferred') return;
+        if (outcome === 'possibly_sent') {
+          this.finish(stored.updateId, this.now());
+          this.recordDelivery(result.turnId, 'possibly_sent');
+          return;
         }
         // The send landed — settle this update's fire *before* the
         // bookkeeping write below, so a crash between the two still proves
@@ -812,7 +825,10 @@ export class TelegramConnector {
    * successful send would mark the update failed and send the whole answer a
    * second time on the next drain.
    */
-  private recordDelivery(turnId: string, delivery: 'sent' | 'undeliverable' | `failed:${string}`): void {
+  private recordDelivery(
+    turnId: string,
+    delivery: 'sent' | 'possibly_sent' | 'undeliverable' | `failed:${string}`,
+  ): void {
     try {
       this.deps.loop.turns.delivered(turnId, delivery);
     } catch (error) {

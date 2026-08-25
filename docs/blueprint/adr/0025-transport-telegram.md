@@ -82,3 +82,21 @@ Direttiva owner sulla slice `slice/streaming`: *"quando prendi dal vecchio Muffi
 **Cosa non cambia**: la decisione di questo ADR (raw fetch, nessuna libreria) e le altre due trappole. Il pattern per i gruppi resta quello già descritto (placeholder che diventa risposta, `editMessageText` sullo stesso messaggio) — è quello che l'implementazione di streaming (`connectors/telegram/presence.ts`, `connectors/telegram/connector.ts`) usa quando `sendMessageDraft` non è applicabile.
 
 **La lezione, more in generale**: un ADR che eredita un fatto dalla storia di un sistema diverso senza ri-verificarlo lo trasporta come se fosse verificato qui. Non è la prima volta in questo repo (`docs/lessons.md`); è la prima volta che il fatto ereditato nascondeva un parametro mancante nel codice di produzione, non solo un'assunzione di design.
+
+## §revisione 2026-08-25 — nessun placeholder materiale nei gruppi, delivery con incertezza esplicita (#90)
+
+La frase «nessun orfano se il turno muore» attribuita al pattern
+placeholder→edit era falsa nel fault point più importante: Telegram può
+accettare il `sendMessage` del placeholder e perdere la risposta HTTP. La Bot
+API non espone una chiave di idempotenza né un lookup per payload; senza il
+`message_id` della risposta non si può sapere quale messaggio editare, e
+ritentare il send può crearne un secondo.
+
+Perciò nei gruppi la presenza torna a essere soltanto `sendChatAction`, che si
+auto-estingue e non crea un effetto visibile da riconciliare. La risposta finale
+passa invece da `telegram_delivery_parts`: payload HTML congelato prima del
+send, claim first-writer-wins per parte, prefisso `sent` mai ripetuto,
+`rejected` ritentabile e `possibly_sent` terminale quando il confine remoto è
+stato attraversato senza una risposta leggibile. Le chat private conservano la
+bozza effimera `sendMessageDraft`. La decisione raw-fetch e le altre trappole
+restano invariate; cambia soltanto la precedente scelta operativa per i gruppi.

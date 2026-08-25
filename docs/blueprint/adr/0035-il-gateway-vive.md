@@ -263,6 +263,16 @@ con lo stesso `claim`/`bind`/`settle` di `JobFireStore`, alla lettera: `drain()`
 
 **Segnale che questa forma era sbagliata**, contato e non percepito: un secondo consumatore di `claim`/`bind`/`settle` (Telegram, o altro) rende la duplicazione fra le due tabelle costosa da tenere in sincrono — nel qual caso l'estrazione dell'algoritmo condiviso, non della tabella, è il passo successivo, già indicato sopra.
 
+## Emendamento №6 — il gateway non ritenta alla cieca una consegna Telegram ambigua (2026-08-25, #90)
+
+La §revisione del 2026-08-14 indicava placeholder→`editMessageText` come forma
+senza orfani nei gruppi. Il fault point «send accettato, risposta HTTP persa» la
+smentisce: senza `message_id` non esiste un edit recuperabile e un secondo send
+può duplicare l’effetto. Da #90 la presenza di gruppo è soltanto
+`sendChatAction`; la risposta finale ha un intent per-parte durevole e lo stato
+terminale `possibly_sent`. Il gateway segnala l’incertezza a `TurnStore` e a
+`doctor`, ma non la converte in un retry. Vedi ADR-0025 §revisione 2026-08-25.
+
 
 ### Limite noto: un fire legato a un turno sospeso resta deferred
 

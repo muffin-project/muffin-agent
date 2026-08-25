@@ -11,6 +11,7 @@ import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types
 import { TelegramConnector, type TelegramConfig } from './connector.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
+import { TelegramDeliveryStore } from './delivery.js';
 
 /**
  * A real group turn, through the real connector, gets the group context.
@@ -101,7 +102,8 @@ function harness(config: TelegramConfig, script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
-    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    inbox: new UpdateInbox(runtime.db),
+    delivery: new TelegramDeliveryStore(runtime.db),
     api,
     config,
   });

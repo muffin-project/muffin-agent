@@ -10,7 +10,8 @@ import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatResult, Provider } from '../../agent/providers/types.js';
 import type { TurnRecord } from '../../core/turns/store.js';
 import { TelegramConnector, type TelegramConfig } from './connector.js';
-import type { TelegramApi } from './api.js';
+import { TelegramError, type TelegramApi } from './api.js';
+import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
 /**
@@ -84,11 +85,12 @@ function harness(over: { send?: () => Promise<never>; breakDeliveryRecord?: bool
     sendMessageDraft: async () => true,
   } as unknown as TelegramApi;
 
-  const inbox = new UpdateInbox(new DatabaseCtor(':memory:'));
+  const inbox = new UpdateInbox(runtime.db);
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
     inbox,
+    delivery: new TelegramDeliveryStore(runtime.db),
     api,
     config,
     log: (line) => logged.push(line),
@@ -133,14 +135,14 @@ describe('a telegram turn records where the answer goes and whether it got there
   it('a failed send leaves the turn answered and the delivery failed — never both', async () => {
     const h = harness({
       send: async () => {
-        throw new Error('429 Too Many Requests');
+        throw new TelegramError(429, 'Too Many Requests', 1);
       },
     });
     await deliver(h, [privateMsg(1)]);
     const row = h.row();
     expect(row?.status).toBe('done');
     expect(row?.outcome).toBe('answered');
-    expect(row?.delivery).toBe('failed:429 Too Many Requests');
+    expect(row?.delivery).toBe('failed:Telegram 429: Too Many Requests');
     // Unchanged behaviour on the update: it stays pending and is retried, which
     // is what the inbox is for. The record does not take that over in this
     // slice — it only stops the two outcomes from being one.
