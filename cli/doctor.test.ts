@@ -14,7 +14,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
-import { runDoctor, type Check } from './doctor.js';
+import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
 
 /**
  * Doctor exists to say which of two indistinguishable states you are in.
@@ -660,5 +660,20 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     const supervisor = report.checks.find((x) => x.name === 'supervisore');
     expect(supervisor?.level).toBe('ok');
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('sandboxOkDetail — the sandbox "ok" line is honest about which platform actually contained it', () => {
+  it('is a plain summary for seatbelt', () => {
+    const line = sandboxOkDetail({ available: true, mechanism: 'seatbelt' });
+    expect(line).toContain('seatbelt');
+    expect(line).not.toContain('weaker');
+  });
+
+  it('names the Linux gap on bubblewrap — Unix-socket hardening is off there (executor.ts, #428/#429)', () => {
+    const line = sandboxOkDetail({ available: true, mechanism: 'bubblewrap' });
+    expect(line).toContain('bubblewrap');
+    expect(line.toLowerCase()).toContain('weaker');
+    expect(line).toMatch(/unix.socket/i);
   });
 });

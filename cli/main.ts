@@ -3,7 +3,8 @@ import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
-import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
+import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
+import { probeSandbox } from '../core/sandbox/probe.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
@@ -45,7 +46,21 @@ import {
 } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
 import { cmdPromptShow, PROMPT_USAGE } from './prompt-show.js';
-import { chooseProvider, describeProviderChoice, keyHint, looksLikeTelegramToken } from './onboarding.js';
+import {
+  askLocalOrApi,
+  askModelChoice,
+  chooseProvider,
+  describeModelChoice,
+  describeProviderChoice,
+  describeSandboxProbe,
+  describeSupervisor,
+  keyHint,
+  localModelChoices,
+  looksLikeTelegramToken,
+  OPENROUTER_MODEL_FAMILIES,
+  probeLocalRuntime,
+  type ModelChoiceReason,
+} from './onboarding.js';
 
 /**
  * Entry point.
@@ -375,6 +390,16 @@ async function cmdInit(argv: string[]): Promise<number> {
     home = local;
   }
 
+  // "Durante l'installazione deve capire la macchina" (owner, verbatim) —
+  // before any question, not instead of doctor: `probeSandbox` already runs a
+  // real containment, but until now only `muffin doctor` ever read the result,
+  // so a first run learned about a broken sandbox by running a *second*
+  // command. Headless is untouched: nothing here prints or blocks off a TTY.
+  if (process.stdin.isTTY) {
+    process.stderr.write(describeSandboxProbe(probeSandbox()));
+    process.stderr.write(describeSupervisor(process.platform));
+  }
+
   // Acquire the key: flag > env > an already-stored secret > an interactive
   // prompt on a terminal. A missing key is not fatal — runInit records the step
   // as incomplete and the user can re-run — but on a TTY we ask rather than
@@ -433,9 +458,34 @@ async function cmdInit(argv: string[]): Promise<number> {
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
   }
-  if (!apiKey && !stored && process.stdin.isTTY) {
+
+  // Locale-o-API (owner, verbatim: "chiedere se si vuole andare in locale o in
+  // API") — asked only when nothing already answers it: an explicit
+  // --provider/--base-url, or a key already on file (fresh or stored), both
+  // already decide the provider under ADR-0036, and asking again would be
+  // exactly the "decide silently, then ask anyway" shape that ADR forbids in
+  // the other direction. `askLocalOrApi` itself only runs when a probe found
+  // something to offer, so there is never a question with one real answer.
+  let localRuntime: { baseUrl: string; models: readonly string[] } | undefined;
+  if (process.stdin.isTTY && !providerFlag && values['base-url'] === undefined && !apiKey && !stored) {
+    const probe = await probeLocalRuntime();
+    if (probe.available) localRuntime = await askLocalOrApi(probe);
+  }
+
+  if (!localRuntime && !apiKey && !stored && process.stdin.isTTY) {
     process.stderr.write(keyHint(providerFlag, values['base-url']));
     apiKey = await promptSecret('Chiave API (nascosta — incollala, o invio per saltare): ');
+  }
+
+  // A local runtime needs no key from the owner, but `readSecret` at boot
+  // (agent/runtime.ts) still requires *something* to be on file for
+  // `provider.apiKeyRef` — an empty secret is a hard failure there, not a
+  // degrade. Writing this placeholder through the same `apiKey` option a real
+  // key travels through is not new secret-handling, just a harmless value
+  // flowing through the existing one; skipped whenever a real key already
+  // answers (fresh, stored, or the owner pasted one instead of going local).
+  if (localRuntime && !apiKey && !stored) {
+    apiKey = 'local-runtime-no-key-needed';
   }
 
   // Caught regardless of --provider: a pasted Telegram token is not a key for
@@ -459,16 +509,51 @@ async function cmdInit(argv: string[]): Promise<number> {
   // (`describeProviderChoice`) — ADR-0036: ask only what cannot be inferred,
   // and never decide silently.
   const keyForInference = apiKey ?? (stored ? readFileSync(stored.path, 'utf8').trim() : undefined);
-  const choice = chooseProvider(providerFlag, keyForInference, values['base-url']);
+  // `localRuntime` already decided the provider (a probe, not a key prefix) —
+  // `chooseProvider` never sees it, same as an explicit --provider always
+  // wins over inference. `describeProviderChoice` still says it out loud
+  // through the same call, via the 'local' reason.
+  const choice = localRuntime
+    ? { provider: 'openai-compat' as const, baseUrl: localRuntime.baseUrl, reason: 'local' as const }
+    : chooseProvider(providerFlag, keyForInference, values['base-url']);
   process.stderr.write(describeProviderChoice(choice, keyForInference));
+
+  // Modello (owner, verbatim: "chiedere che modello si vuole usare") — asked
+  // only when nothing already names one, and only on a TTY; headless keeps
+  // today's compiled default from `defaultModels`. Anthropic diretto gets no
+  // question at all: one family, nothing to choose among.
+  let mainModel = values.model;
+  let lightModel = values['light-model'];
+  let modelReason: ModelChoiceReason = mainModel || lightModel ? 'explicit' : 'default';
+  if (!mainModel && process.stdin.isTTY) {
+    const pick = localRuntime
+      ? await askModelChoice(
+          localModelChoices(localRuntime.models),
+          `\nModello (tra quelli offerti da ${localRuntime.baseUrl}):`,
+        )
+      : choice.provider === 'openai-compat'
+        ? await askModelChoice(OPENROUTER_MODEL_FAMILIES, '\nChe famiglia di modello?')
+        : undefined;
+    if (pick) {
+      mainModel = pick.main;
+      lightModel ??= pick.light;
+      modelReason = 'chosen';
+    }
+  }
+  const resolvedModels = defaultModels({
+    provider: choice.provider,
+    ...(mainModel ? { mainModel } : {}),
+    ...(lightModel ? { lightModel } : {}),
+  });
+  process.stderr.write(describeModelChoice(resolvedModels.main, resolvedModels.light, modelReason));
 
   const steps = runInit({
     ...(values.hardened ? { hardened: true } : {}),
     ...(values.force ? { force: true } : {}),
     provider: choice.provider,
     ...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),
-    ...(values.model ? { mainModel: values.model } : {}),
-    ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
+    ...(mainModel ? { mainModel } : {}),
+    ...(lightModel ? { lightModel } : {}),
     ...(apiKey ? { apiKey } : {}),
     home,
   });
