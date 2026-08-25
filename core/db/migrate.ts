@@ -46,7 +46,34 @@ export type Migration = {
  * (`migrateUnpartitioned`), so "store DDL is purely additive" is a premise to
  * re-check, not an axiom.
  */
-export const MIGRATIONS: Migration[] = [];
+export const MIGRATIONS: Migration[] = [
+  {
+    version: 2,
+    description: "jobs.kind — un job può essere uno script, e uno script non chiama il modello",
+    up: (db) => {
+      // La guardia che le regole qui sopra chiedono, e serve davvero: `jobs`
+      // è creata da `JobStore`, che gira **dopo** questo runner. Su
+      // un'installazione fresca la tabella non esiste ancora quando questa
+      // migrazione viene considerata, e la creerà `SCHEMA` con la colonna già
+      // dentro; su un'installazione esistente la tabella c'è e le manca la
+      // colonna. Entrambi i casi finiscono nello stesso stato, per strade
+      // diverse.
+      const esiste = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'`)
+        .get() as unknown;
+      if (esiste === undefined) return;
+
+      const colonne = db.prepare(`PRAGMA table_info(jobs)`).all() as Array<{ name: string }>;
+      if (colonne.some((c) => c.name === 'kind')) return;
+
+      // Additiva, con default: le righe che esistevano prima di oggi sono
+      // tutte obiettivi, e nessuna diventa eseguibile per effetto di questa
+      // migrazione. È la direzione che conta — il contrario avrebbe reso
+      // eseguibile del testo scritto quando "eseguibile" non era un concetto.
+      db.exec(`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'goal'`);
+    },
+  },
+];
 
 const BASELINE_VERSION = 1;
 
