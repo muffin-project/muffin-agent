@@ -44,6 +44,27 @@ Use only the modules relevant to the claim.
   durable outcome/delivery.
 - Remove or bypass the load-bearing seam when mutation is part of the evidence
   budget. Which test fails for the expected reason?
+- **Restore from a copy, never from git.** Take the copy *before* mutating and
+  put it back with `cp`:
+
+  ```
+  cp <file> /tmp/base      # before mutating
+  ...mutate, run the tests...
+  cp /tmp/base <file>      # restore
+  ```
+
+  `git checkout -- <file>` and `git restore <file>` return the file to the
+  **index or HEAD**, not to what it held a minute ago. During a mutation test
+  the repairs under examination are usually uncommitted, so that command
+  deletes exactly them and leaves the defective version in place — which then
+  passes the wrong tests. This has happened twice here, the second time after
+  it had been written down, which is why it is written *here*, next to the step
+  that reaches for it. A guard hook refuses the dangerous form
+  (`.claude/hooks/guard-restore-discard.mjs`), but hooks load at session start
+  and a judge cannot rely on one being armed.
+
+  To recover when it has already happened: `git checkout stash@{0} -- <file>`,
+  or the reflog.
 - Ask what two individually correct rules do to each other after N executions,
   not only after one.
 
