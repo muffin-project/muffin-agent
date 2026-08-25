@@ -4,9 +4,24 @@
 # `ci.yml` a un job solo. Lì il vincolo era il tempo di install (`npm ci` pagato
 # due volte). Qui è la frequenza: questa suite spawna un processo `node --import
 # tsx cli/main.ts` reale per ogni asserzione — misurato in locale, 17 scenari in
-# ~60s — e non ha bisogno del sandbox Linux che `ci.yml` prepara (nessuno
-# scenario qui chiama `shell_run`), quindi un job condiviso pagherebbe
-# quell'apt-get per niente ogni volta.
+# ~60s — quindi un job condiviso la pagherebbe a ogni push.
+#
+# ## Il sandbox Linux serve, e la ragione è cambiata (2026-08-25)
+#
+# Fino a `slice/job-script-only` questo file diceva che la suite «non ha bisogno
+# del sandbox Linux che `ci.yml` prepara (nessuno scenario qui chiama
+# `shell_run`)». Era vero e ha smesso di esserlo nello stesso commit in cui è
+# nato il job script: uno script schedulato **è** esecuzione contenuta, e senza
+# sandbox il runtime fa la cosa giusta — rifiuta di eseguirlo — che però lascia
+# lo scenario ad aspettare un effetto che non arriverà mai.
+#
+# La lezione non è «aggiungi un apt-get». È che lo scenario passava su macOS,
+# dove `sandbox-exec` c'è sempre, e falliva su Linux, dove Muffin andrà davvero
+# a vivere: la piattaforma di destinazione è **Linux, poi** macOS, e una prova
+# verde solo sulla macchina di sviluppo prova la piattaforma che non conta.
+# Questi step sono gli stessi quattro di `ci.yml` — tre pacchetti e il profilo
+# AppArmor — per la stessa ragione documentata lì, e la loro assenza qui era la
+# differenza fra le due configurazioni.
 #
 # `pull_request` (verso `dev`/`main`) è nel trigger; il `push` copre solo
 # `main` — per il push su `dev` e i `paths-ignore` vale il ragionamento al
@@ -70,7 +85,48 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # I quattro prerequisiti del sandbox su Linux. Il perché di ciascuno è in
+      # `ci.yml`, dove sono stati misurati la prima volta; qui non si ripete, si
+      # tiene identico — due copie divergenti di una configurazione di
+      # contenimento sono peggio di nessuna.
+      - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+
+      - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+        run: |
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       - run: npm ci
+
+      # Il sandbox è un **prerequisito di questo job**, non uno sfondo: senza,
+      # gli scenari che eseguono aspettano un effetto che il runtime rifiuta
+      # correttamente di produrre, e falliscono per timeout con un messaggio che
+      # parla d'altro (successo del primo giro di `slice/job-script-only`:
+      # «il gateway non ha mai scritto /il sito non risponde/», causa vera
+      # «la sandbox non è disponibile su questa macchina»).
+      #
+      # Quindi il verdetto del probe si legge **prima** della suite e con exit
+      # non-zero: un contenimento assente diventa una riga sola, non una diagnosi.
+      # È anche l'unico punto in cui questo job vedrebbe il regresso che ha
+      # tenuto no-op per due mesi il sandbox del vecchio Muffin (ADR-0018).
+      - name: il sandbox contiene davvero, qui?
+        run: |
+          npx tsx -e "
+            import('./core/sandbox/probe.js').then((m) => {
+              const p = m.probeSandbox();
+              console.log(JSON.stringify(p, null, 2));
+              if (!p.available) process.exit(1);
+            })
+          "
 
       # Primo gate: uno scenario reale che si rompe fa fallire questo step, e
       # quindi il job. Senza pipe, per la stessa ragione di `ci.yml`.

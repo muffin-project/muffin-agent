@@ -310,6 +310,19 @@ export type InterruptedTurn = {
   uncertain: UncertainCall[];
 };
 
+/**
+ * Il valore di `model` per un turno che non ha un modello.
+ *
+ * Un job `script` scrive una riga in `turns` come qualsiasi altro lavoro —
+ * è ciò che gli dà identità durevole ed esattamente-una-volta — ma non c'è
+ * nessuna inferenza da riprendere. Serve un discriminante *nominato*, e non
+ * un confronto di stringhe sparso: `agent/loop.ts` lo legge per rifiutarsi di
+ * riprendere attraverso il modello un turno che il modello non ha mai visto,
+ * e senza questa costante quel rifiuto sarebbe una stringa scritta due volte
+ * in due file che possono divergere.
+ */
+export const SCRIPT_MODEL = '(script: nessun modello)';
+
 export type NewTurn = {
   /** The trace id of the turn's root span: one identity, so "why" is a join. */
   id: string;

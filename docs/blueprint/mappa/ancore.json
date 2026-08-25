@@ -31,277 +31,277 @@
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 105,
+    "line": 106,
     "testo": "* An omitted `replyChannel` has no default to be silent about — the one"
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1145,
+    "line": 1196,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1206,
+    "line": 1257,
     "testo": "// model at all."
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 1784,
+    "line": 1835,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 175,
+    "line": 176,
     "testo": "export type ApprovalRequest = {"
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 1997,
+    "line": 2048,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2015,
+    "line": 2066,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 2034,
+    "line": 2085,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 2035,
+    "line": 2086,
     "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 2153,
+    "line": 2204,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 2197,
+    "line": 2248,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2110": {
     "path": "agent/loop.ts",
-    "line": 2293,
+    "line": 2344,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 287,
+    "line": 288,
     "testo": "};"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 289,
+    "line": 290,
     "testo": "export type LoopDeps = {"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 305,
+    "line": 306,
     "testo": "* seen, resumed, or told apart from one that died mid-effect. So the type"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 315,
+    "line": 316,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 332,
+    "line": 333,
     "testo": "* `stopped: 'ask'` rather than pretending the tool failed."
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 336,
+    "line": 337,
     "testo": "* Bills a model call and returns what it cost. Absent in tests; absent in"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 354,
+    "line": 355,
     "testo": "memory?: { store: MemoryStore; recall: RecallDeps } | undefined;"
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 367,
+    "line": 368,
     "testo": "capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 355,
+    "line": 356,
     "testo": "/**"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 371,
+    "line": 372,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 379,
+    "line": 380,
     "testo": "* Deliberately **not** the closure-handed-back shape of"
   },
   "agent/loop.ts:374": {
     "path": "agent/loop.ts",
-    "line": 366,
+    "line": 367,
     "testo": "*/"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 395,
+    "line": 396,
     "testo": "export type TurnInput = {"
   },
   "agent/loop.ts:425": {
     "path": "agent/loop.ts",
-    "line": 470,
+    "line": 471,
     "testo": "* un-showing text it already showed, which is a worse promise than showing"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 473,
+    "line": 474,
     "testo": "onDelta?: ((delta: TurnDelta) => void) | undefined;"
   },
   "agent/loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 494,
+    "line": 495,
     "testo": "* before it happened. `suspended` is the arm this slice adds, and adding it in"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 483,
+    "line": 453,
     "testo": "/**"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 511,
+    "line": 512,
     "testo": "* is a fact the caller needs in the same breath as `text`."
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 527,
+    "line": 528,
     "testo": "* that can count. Three is enough to survive a laptop closing, a `systemctl"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 483,
+    "line": 484,
     "testo": "/**"
   },
   "agent/loop.ts:503": {
     "path": "agent/loop.ts",
-    "line": 564,
+    "line": 565,
     "testo": "* rest, and it is why nothing here calls recall — recall is an embedder plus a"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 582,
+    "line": 583,
     "testo": "});"
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 589,
+    "line": 590,
     "testo": "iterations: 0,"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 590,
+    "line": 591,
     "testo": "recoveriesUsed: 0,"
   },
   "agent/loop.ts:538": {
     "path": "agent/loop.ts",
-    "line": 584,
+    "line": 585,
     "testo": "}"
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 601,
+    "line": 602,
     "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 606,
+    "line": 607,
     "testo": "[ATTR.tenant]: input.tenant,"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 59,
+    "line": 60,
     "testo": "* turn that created it. A handler that wants durable state attached to the"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 647,
+    "line": 648,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 668,
+    "line": 680,
     "testo": "why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished';"
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 65,
+    "line": 66,
     "testo": "* a plan that died with the turn that wrote it would not be a plan."
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 758,
+    "line": 809,
     "testo": "const detail ="
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 793,
+    "line": 844,
     "testo": "options: {"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 842,
+    "line": 893,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 850,
+    "line": 901,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 781,
+    "line": 746,
     "testo": "/**"
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 871,
+    "line": 922,
     "testo": "let transportRetriesLeft = record.counters.transportRetriesLeft;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 878,
+    "line": 929,
     "testo": "iterations,"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 890,
+    "line": 941,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 892,
+    "line": 943,
     "testo": "* `null` until a handler asks. See `ToolContext.suspend` for why it is armed"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 944,
+    "line": 995,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1007,
+    "line": 1058,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1049,
+    "line": 1100,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -401,127 +401,127 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 124,
+    "line": 136,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 147,
+    "line": 159,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 236,
+    "line": 248,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 285,
+    "line": 297,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 287,
+    "line": 299,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 306,
+    "line": 318,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 326,
+    "line": 338,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 328,
+    "line": 340,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 337,
+    "line": 349,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 342,
+    "line": 354,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 354,
+    "line": 366,
     "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 360,
+    "line": 372,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:345": {
     "path": "agent/runtime.ts",
-    "line": 372,
+    "line": 384,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 373,
+    "line": 385,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 515,
+    "line": 528,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 521,
+    "line": 534,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 524,
+    "line": 537,
     "testo": "// Declared only when the tool exists. A capability the kernel knows about"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 552,
+    "line": 565,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 560,
+    "line": 573,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:534": {
     "path": "agent/runtime.ts",
-    "line": 561,
+    "line": 574,
     "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 639,
+    "line": 654,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 660,
+    "line": 675,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
     "path": "agent/scheduler-run.ts",
-    "line": 60,
+    "line": 62,
     "testo": "export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {"
   },
   "agent/scheduler-run.ts:42": {
     "path": "agent/scheduler-run.ts",
-    "line": 71,
+    "line": 73,
     "testo": "return {"
   },
   "agent/scheduler-run.ts:44": {
     "path": "agent/scheduler-run.ts",
-    "line": 73,
+    "line": 75,
     "testo": "text:"
   },
   "agent/tools/fs.ts:105": {
@@ -886,7 +886,7 @@
   },
   "cli/jobs.ts:63": {
     "path": "cli/jobs.ts",
-    "line": 63,
+    "line": 75,
     "testo": "export function cmdJobsAdd(home: string, argv: string[]): number {"
   },
   "cli/main.ts:101": {
@@ -2016,7 +2016,7 @@
   },
   "core/scheduler/scheduler.ts:458": {
     "path": "core/scheduler/scheduler.ts",
-    "line": 458,
+    "line": 488,
     "testo": "private settle(job: Job, outcome: JobOutcome, delivery: DeliveryOutcome): void {"
   },
   "core/session/store.ts:35": {
@@ -2411,122 +2411,122 @@
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 115,
+    "line": 116,
     "testo": "* the same shape — the `SurfaceRegistry` address — so a tool can ask the"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1855,
+    "line": 1906,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 315,
+    "line": 316,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 325,
+    "line": 326,
     "testo": "* `() => boolean`, so the per-tenant daily cap could not be consulted through"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 355,
+    "line": 356,
     "testo": "/**"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 371,
+    "line": 372,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "loop.ts:429": {
     "path": "agent/loop.ts",
-    "line": 474,
+    "line": 475,
     "testo": "};"
   },
   "loop.ts:431": {
     "path": "agent/loop.ts",
-    "line": 476,
+    "line": 477,
     "testo": "/** One increment of the final answer's text, already past the tool-call filter above. */"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 487,
+    "line": 488,
     "testo": "* never the same one as `stopped`."
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 529,
+    "line": 530,
     "testo": "* not about the infrastructure."
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 488,
+    "line": 489,
     "testo": "*/"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 569,
+    "line": 570,
     "testo": "export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 582,
+    "line": 583,
     "testo": "});"
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 647,
+    "line": 648,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 577,
+    "line": 578,
     "testo": "model: deps.model,"
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 667,
+    "line": 679,
     "testo": "turnId: string;"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 623,
+    "line": 624,
     "testo": "*"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 817,
+    "line": 868,
     "testo": "* holding whatever REPL or Telegram chat asked the *previous* attempt to"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 820,
+    "line": 871,
     "testo": "* to suspend."
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 842,
+    "line": 893,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 850,
+    "line": 901,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 781,
+    "line": 746,
     "testo": "/**"
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 879,
+    "line": 930,
     "testo": "recoveriesUsed,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 915,
+    "line": 966,
     "testo": "},"
   },
   "maintenance.ts:21": {
@@ -2746,42 +2746,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 311,
+    "line": 323,
     "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 376,
+    "line": 388,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 411,
-    "testo": "if (executor.status().available) {"
+    "line": 384,
+    "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 491,
+    "line": 504,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 515,
+    "line": 528,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 552,
+    "line": 565,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 558,
+    "line": 571,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 110,
+    "line": 122,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {

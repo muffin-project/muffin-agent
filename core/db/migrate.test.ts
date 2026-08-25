@@ -70,8 +70,12 @@ const widenKindCheck: Migration = {
 describe('migrate — baseline and idempotence', () => {
   it('stamps the baseline on a fresh database and is a no-op to run twice', () => {
     const { db, backups } = fileDb();
-    const first = migrate(db, { backupDir: backups });
-    const second = migrate(db, { backupDir: backups });
+    // `migrations: []` esplicito, e non più implicito: questa prova riguarda
+    // il *runner* con niente in sospeso, non la lista reale. Quando la lista
+    // reale ha smesso di essere vuota (migrazione 2, jobs.kind) questa riga è
+    // diventata l'unica che dice ancora cosa il test intendeva.
+    const first = migrate(db, { backupDir: backups, migrations: [] });
+    const second = migrate(db, { backupDir: backups, migrations: [] });
     expect(first).toEqual({ applied: [], backup: null, version: 1 });
     expect(second).toEqual({ applied: [], backup: null, version: 1 });
     expect(schemaVersionOf(db)).toBe(1);
@@ -91,7 +95,7 @@ describe('migrate — a populated old-shape database reaches HEAD', () => {
   it('applies pending migrations in order, stamps each, and keeps the rows', () => {
     const { db, backups } = fileDb();
     seedOldShape(db);
-    migrate(db, { backupDir: backups }); // baseline, as an old install would have
+    migrate(db, { backupDir: backups, migrations: [] }); // baseline, as an old install would have
 
     const res = migrate(db, { backupDir: backups, migrations: [widenKindCheck] });
 
@@ -122,7 +126,7 @@ describe('migrate — the backup precedes the reshaping, and failure is atomic',
   it('writes a validated pre-migrate backup before running the first pending migration', () => {
     const { db, backups } = fileDb();
     seedOldShape(db);
-    migrate(db, { backupDir: backups });
+    migrate(db, { backupDir: backups, migrations: [] });
 
     const res = migrate(db, { backupDir: backups, migrations: [widenKindCheck] });
 
@@ -138,7 +142,7 @@ describe('migrate — the backup precedes the reshaping, and failure is atomic',
   it('a migration that throws leaves no stamp, no reshaping, and the backup on disk', () => {
     const { db, backups } = fileDb();
     seedOldShape(db);
-    migrate(db, { backupDir: backups });
+    migrate(db, { backupDir: backups, migrations: [] });
     const boom: Migration = {
       version: 2,
       description: 'esplode a metà',
@@ -215,8 +219,51 @@ describe('snapshotTo/assertSnapshotOk — a snapshot is validated or it is not a
   it('the automatic pre-migrate backup passes the shared validation (judge #93, blocking finding 2)', () => {
     const { db, backups } = fileDb();
     seedOldShape(db);
-    migrate(db, { backupDir: backups });
+    migrate(db, { backupDir: backups, migrations: [] });
     const res = migrate(db, { backupDir: backups, migrations: [widenKindCheck] });
     expect(() => assertSnapshotOk(res.backup!)).not.toThrow();
+  });
+});
+
+/**
+ * La prima migrazione vera, contro i due stati in cui il mondo si trova
+ * davvero: un'installazione che ha già dei job, e una che non ha ancora
+ * nessuna tabella `jobs` perché `JobStore` gira dopo questo runner.
+ */
+describe('migrazione 2 — jobs.kind', () => {
+  it('aggiunge la colonna a un database che ha già dei job, e nessuno diventa uno script', () => {
+    const { db, backups } = fileDb();
+    // La forma di ieri: `jobs` senza `kind`, con dentro un obiettivo vero.
+    db.exec(`CREATE TABLE jobs (
+      id TEXT PRIMARY KEY, cron TEXT NOT NULL, timezone TEXT NOT NULL, goal TEXT NOT NULL,
+      channel TEXT NOT NULL, created_at TEXT NOT NULL, next_fire_at TEXT NOT NULL,
+      last_run_at TEXT, active INTEGER NOT NULL DEFAULT 1)`);
+    db.prepare(
+      `INSERT INTO jobs (id, cron, timezone, goal, channel, created_at, next_fire_at)
+       VALUES ('j1', '0 8 * * *', 'Europe/Rome', 'riassumimi la giornata', 'cli', '2026-08-01', '2026-08-02')`,
+    ).run();
+    migrate(db, { backupDir: backups, migrations: [] }); // baseline v1, come un'installazione vecchia
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([2]);
+    const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
+      goal: string;
+      kind: string;
+    };
+    // La riga sopravvive intatta, e resta un obiettivo. Il contrario — un
+    // testo scritto quando "eseguibile" non era un concetto che diventa
+    // eseguibile per effetto di un aggiornamento — è il difetto che il
+    // default di questa colonna esiste per impedire.
+    expect(riga.goal).toBe('riassumimi la giornata');
+    expect(riga.kind).toBe('goal');
+  });
+
+  it('non fallisce su un database dove `jobs` non esiste ancora', () => {
+    const { db, backups } = fileDb();
+    // È il caso di ogni installazione fresca: `migrate()` gira in
+    // `agent/runtime.ts` PRIMA che `JobStore` crei la propria tabella.
+    expect(() => migrate(db, { backupDir: backups })).not.toThrow();
+    expect(schemaVersionOf(db)).toBe(2);
   });
 });
