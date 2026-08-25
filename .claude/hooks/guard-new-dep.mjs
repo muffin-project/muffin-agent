@@ -66,3 +66,5 @@ process.stderr.write(
     `Poi, deliberatamente: MUFFIN_DEP_OK=1 npm install ${args.join(' ')}\n`,
 );
 process.exit(2);
+
+// prova del filtro paths di strumenti.yml — commit usa e getta
