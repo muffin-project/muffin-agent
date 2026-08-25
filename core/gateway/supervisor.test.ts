@@ -110,6 +110,65 @@ describe('checkSupervisor — never fail, always ok or a named remedy', () => {
         expect(status.detail).toContain('logout');
       }
     });
+
+    it('a failed unit is named even when enabled — enabled parla del futuro, failed del presente', () => {
+      // Lo stato che `doctor` esisteva per vedere e riportava verde: enabled
+      // (partirà al boot) ma failed adesso — e su questa unit failed significa
+      // «non torna da solo», perché RestartPreventExitStatus tiene giù le
+      // uscite permanenti di proposito. Il rimedio deve portare al journal,
+      // che è dove sta scritto il perché.
+      const status = checkSupervisor(
+        'linux',
+        HOME,
+        false,
+        probes({
+          unitFileExists: () => true,
+          systemdEnabled: () => true,
+          systemdFailed: () => true,
+          lingerEnabled: () => true,
+        }),
+        HOME_DIR,
+      );
+      expect(status.engaged).toBe(false);
+      if (!status.engaged) {
+        expect(status.detail).toContain('failed');
+        expect(status.remedy).toContain('journalctl');
+      }
+    });
+
+    it('failed vince sul linger: «è giù adesso» prima di «morirà al logout»', () => {
+      // Entrambi i difetti presenti: il messaggio deve nominare quello che è
+      // già successo, non quello previsto. Un owner che riceve solo la remedy
+      // del linger la applica e crede di aver finito.
+      const status = checkSupervisor(
+        'linux',
+        HOME,
+        false,
+        probes({
+          unitFileExists: () => true,
+          systemdEnabled: () => true,
+          systemdFailed: () => true,
+          lingerEnabled: () => false,
+        }),
+        HOME_DIR,
+      );
+      expect(status.engaged).toBe(false);
+      if (!status.engaged) expect(status.detail).toContain('failed');
+    });
+
+    it('una sonda is-failed assente non inventa un guasto', () => {
+      // La sonda è opzionale come le altre: un test Linux-shaped che non la
+      // fornisce, o una macchina dove `systemctl` non parte, degradano a «non
+      // confermato» — cioè al percorso linger/ok, mai a un falso rosso.
+      const status = checkSupervisor(
+        'linux',
+        HOME,
+        false,
+        probes({ unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true }),
+        HOME_DIR,
+      );
+      expect(status).toMatchObject({ engaged: true });
+    });
   });
 
   it('reads the same path planUnit would write, XDG_CONFIG_HOME included', () => {
