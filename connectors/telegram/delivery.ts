@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { TelegramError, type TelegramApiLike } from './api.js';
 
-export type TelegramDeliveryStatus = 'pending' | 'attempting' | 'sent' | 'rejected' | 'possibly_sent';
+type TelegramDeliveryStatus = 'pending' | 'attempting' | 'sent' | 'rejected' | 'possibly_sent';
 export type TelegramDeliveryOutcome = 'sent' | 'possibly_sent' | 'deferred';
 
 export type TelegramDeliveryPart = {
@@ -24,7 +24,7 @@ export type TelegramDeliveryPlanPart = Pick<
   'operation' | 'chatId' | 'replyTo' | 'editMessageId' | 'html'
 >;
 
-export const TELEGRAM_DELIVERY_SCHEMA = `
+const TELEGRAM_DELIVERY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
   turn_id              TEXT NOT NULL,
   part_index           INTEGER NOT NULL CHECK (part_index >= 0),

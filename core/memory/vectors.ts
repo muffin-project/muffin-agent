@@ -15,7 +15,7 @@ import { toVectorBlob, type Embedder } from './embed.js';
 
 export type ChunkSource = 'episode' | 'fact';
 
-export const CHUNKS_SCHEMA = `
+const CHUNKS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS chunks (
   id            INTEGER PRIMARY KEY,
   tenant_id     TEXT    NOT NULL,

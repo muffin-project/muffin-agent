@@ -86,7 +86,7 @@ const searchArgs = z.object({ query: z.string().min(1).max(400) });
  * file and a config value rather than an edit to the tool, the capability and
  * the fencing all at once.
  */
-export type SearchHit = { title: string; url: string; snippet: string };
+type SearchHit = { title: string; url: string; snippet: string };
 export type SearchBackend = {
   readonly id: string;
   /** The fixed destination, so the kernel can gate it like any other egress. */

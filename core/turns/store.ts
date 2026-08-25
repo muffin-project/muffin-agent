@@ -337,7 +337,7 @@ export type NewTurn = {
   replyTo?: Record<string, unknown> | undefined;
 };
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS turns (
   id            TEXT PRIMARY KEY,
   principal     TEXT NOT NULL,
@@ -450,7 +450,7 @@ function toRecord(row: Row): TurnRecord {
  * has to call the handler again; that is the same content the session JSONL
  * already holds verbatim, in the same home, so it is not a new exposure.
  */
-export function argsDigest(args: unknown): string {
+function argsDigest(args: unknown): string {
   return createHash('sha256').update(JSON.stringify(args ?? null)).digest('hex').slice(0, 16);
 }
 
@@ -1217,4 +1217,4 @@ export function readUndelivered(
  * not know what" is still a live question for the owner. Older crashes stay in
  * the table — nothing is deleted — they simply stop being today's news.
  */
-export const DOCTOR_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DOCTOR_WINDOW_MS = 24 * 60 * 60 * 1000;

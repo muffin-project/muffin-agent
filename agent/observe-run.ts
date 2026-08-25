@@ -41,7 +41,7 @@ export function absenceGoal(a: Absence): string {
   ].join('\n');
 }
 
-export class ComposeError extends Error {
+class ComposeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ComposeError';

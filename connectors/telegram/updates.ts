@@ -33,7 +33,7 @@ import { ensureColumn } from '../../core/lock/durable.js';
  * above; there is no `update_id -> turn_id` column in the current schema.
  */
 
-export const TELEGRAM_SCHEMA = `
+const TELEGRAM_SCHEMA = `
 CREATE TABLE IF NOT EXISTS telegram_updates (
   update_id     INTEGER PRIMARY KEY,
   payload       TEXT    NOT NULL,

@@ -58,7 +58,7 @@ export const sendFileCapability: CapabilityDecl = {
   hostOnly: true,
 };
 
-export const sendFileToolSpec: ToolSpec = {
+const sendFileToolSpec: ToolSpec = {
   name: 'send_file',
   description:
     "Send a file from the vault as a real attachment on the current conversation's surface (Telegram, Discord, or the terminal), instead of citing its path in text. Use this for anything the owner should be able to open directly — a report, an exported chart, a generated document.",

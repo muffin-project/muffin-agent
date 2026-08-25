@@ -19,7 +19,7 @@ import { ensureColumn } from '../lock/durable.js';
  * "what did I have scheduled in May" stays answerable.
  */
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
   id           TEXT PRIMARY KEY,
   cron         TEXT NOT NULL,
@@ -103,7 +103,7 @@ export class JobError extends Error {
  * fire times against the wrong clock forever. `Intl.DateTimeFormat` throws on
  * an invalid IANA zone, so it is the boundary check.
  */
-export function assertTimezone(tz: string): void {
+function assertTimezone(tz: string): void {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
   } catch {

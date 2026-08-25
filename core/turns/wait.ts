@@ -78,10 +78,10 @@ export const MAX_SUSPENDED_PER_TENANT = 8;
  * adding its evaluator in the same change; `satisfied` below is a `switch` with
  * an exhaustive `default`, so the build says so.
  */
-export type WaitKind = 'process_exit';
+type WaitKind = 'process_exit';
 
 /** `process_exit:<pid>` — the persisted form, one string, so the column stays a column. */
-export type WaitFor = { kind: 'process_exit'; pid: number };
+export type WaitFor = { kind: WaitKind; pid: number };
 
 export type WaitSpec = {
   /** ISO 8601. The deadline, always present. */

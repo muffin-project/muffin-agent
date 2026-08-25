@@ -13,7 +13,8 @@
     "evals/voice/drift.ts",
     "evals/character/run.ts",
     "evals/system/sandbox-overhead.ts",
-    "evals/acceptance/report.ts"
+    "evals/acceptance/report.ts",
+    "evals/memory/corpus.ts"
   ],
   "project": [
     "**/*.ts",
@@ -30,5 +31,12 @@
     "loginctl",
     "plutil",
     "bwrap"
-  ]
+  ],
+  "ignoreUnresolved": [
+    "gateway"
+  ],
+  "ignoreIssues": {
+    "core/memory/consolidator.ts": ["duplicates"],
+    "core/memory/embed.ts": ["exports"]
+  }
 }
