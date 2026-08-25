@@ -866,12 +866,12 @@
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 189,
+    "line": 190,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 190,
+    "line": 191,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:46": {

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
-import { migrate } from '../core/db/migrate.js';
+import { stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -160,9 +160,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.exec(BUDGET_SCHEMA);
-  // Stamp the schema baseline at install, so the very first boot after a
-  // future upgrade already has a version to compare against (RETURN S2).
-  migrate(db, { backupDir: join(home, 'backups') });
+  // A fresh install is born at HEAD: stamp every version without running
+  // migrations written for yesterday's populated data (RETURN S2). Later
+  // boots go through `migrate()` in buildRuntime and find nothing pending.
+  stampFresh(db);
   db.close();
   step('database', `${p.db} (WAL)`);
 
