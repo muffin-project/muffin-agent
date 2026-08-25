@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -339,7 +340,7 @@ export function connectSurfaces(
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
         const api = new TelegramApi(token);
-        const telegramDb = new DatabaseCtor(paths(home).db);
+        const telegramDb = openDb(paths(home).db);
         const inbox = new UpdateInbox(telegramDb);
         const delivery = new TelegramDeliveryStore(telegramDb);
         const vaultRoot = paths(home).vault;
@@ -422,7 +423,7 @@ export function connectSurfaces(
         lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
       } else {
         const api = new DiscordApi(token);
-        const inbox = new DiscordInbox(new DatabaseCtor(paths(home).db));
+        const inbox = new DiscordInbox(openDb(paths(home).db));
         const vaultRoot = paths(home).vault;
         mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
         const connector = new DiscordConnector({
