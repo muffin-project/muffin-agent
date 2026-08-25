@@ -82,9 +82,13 @@ export function jobOutcomeFromTurn(result: TurnResult): JobOutcome {
   }
   if (result.stopped === 'ask' && result.pending) {
     const on = result.pending.resource ? ` su ${result.pending.resource}` : '';
+    // Same two facts the REPL approver shows (D12-min): the concrete action,
+    // and — when untrusted content already steered the turn — why the ask
+    // deserves suspicion. Taint 0 stays silent; it is the unremarkable case.
+    const why = result.pending.taint > 0 ? ` (turno a taint ${result.pending.taint})` : '';
     return {
       stopped: 'ask',
-      text: `In coda per te: "${result.pending.capability}"${on} — ${result.pending.prompt}`,
+      text: `In coda per te: "${result.pending.capability}"${on}${why} — ${result.pending.prompt}`,
       turnId: result.turnId,
     };
   }
