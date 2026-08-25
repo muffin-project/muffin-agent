@@ -14,7 +14,8 @@ import type { LoopDeps } from '../../agent/loop.js';
 import { CONSERVATIVE } from '../../agent/profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { parseUpdate, TelegramConnector, type Incoming, type TelegramConfig } from './connector.js';
-import type { TelegramApiLike } from './api.js';
+import { TelegramError, type TelegramApiLike } from './api.js';
+import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -126,10 +127,19 @@ function fixture(script: ChatResult[] = []) {
   const sendMessageDraft = vi.fn(async () => true);
   const api = { sendMessage, editMessageText, sendChatAction, sendMessageDraft } as unknown as TelegramApiLike;
 
-  const inbox = new UpdateInbox(new DatabaseCtor(':memory:'));
+  const inbox = new UpdateInbox(db);
+  const delivery = new TelegramDeliveryStore(db);
   const config: TelegramConfig = { token: 't', ownerUserId: OWNER, ownerChatId: OWNER };
   const logged: string[] = [];
-  const connector = new TelegramConnector({ loop, sessions: loop.sessions, inbox, api, config, log: (l) => logged.push(l) });
+  const connector = new TelegramConnector({
+    loop,
+    sessions: loop.sessions,
+    inbox,
+    delivery,
+    api,
+    config,
+    log: (l) => logged.push(l),
+  });
 
   return { connector, db, inbox, provider, turns, sent, sendMessage, editMessageText, sendMessageDraft, logged };
 }
@@ -214,7 +224,7 @@ describe('resolveBound — fault point 2: bound but the turn row is missing comp
 describe('resolveBound — fault point 6: the same update resolved twice never re-runs the model', () => {
   it('a live retry after a failed send redelivers the durable result instead of recomputing it', async () => {
     const h = fixture([answer('primo e unico giro')]);
-    h.sendMessage.mockRejectedValueOnce(new Error('429 Too Many Requests'));
+    h.sendMessage.mockRejectedValueOnce(new TelegramError(429, 'Too Many Requests', 1));
     const { stored, incoming } = acceptOne(h, privateMsg(1));
 
     await expect(resolveOnce(h, stored, incoming)).rejects.toThrow('429');
@@ -228,6 +238,28 @@ describe('resolveBound — fault point 6: the same update resolved twice never r
     expect(h.provider.calls).toBe(1); // never called twice
     expect(h.sendMessage).toHaveBeenCalledTimes(2); // the retry, not the model
     expect(h.sent.filter((s) => s === 'send:primo e unico giro')).toHaveLength(1);
+    expect(h.inbox.pending()).toHaveLength(0);
+  });
+
+  it('a response lost after Telegram accepted the send settles as possibly sent and is never retried', async () => {
+    const h = fixture([answer('risposta accettata ma conferma persa')]);
+    h.sendMessage.mockImplementationOnce(async (_chatId: number, text: string) => {
+      // The remote side accepted the visible effect; only its HTTP response is
+      // lost. Recording the acceptance before throwing is the load-bearing
+      // distinction from the existing "failed before success" fixture.
+      h.sent.push(`accepted:${text}`);
+      throw new TypeError('response stream closed');
+    });
+    const { stored, incoming } = acceptOne(h, privateMsg(1));
+
+    await resolveOnce(h, stored, incoming);
+    await resolveOnce(h, h.inbox.get(1)!, incoming);
+
+    expect(h.provider.calls).toBe(1);
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.sent).toEqual(['accepted:risposta accettata ma conferma persa']);
+    expect(h.turns.get(h.inbox.get(1)!.turnId!)?.delivery).toBe('possibly_sent');
+    expect(h.inbox.get(1)?.settledAt).toBeTruthy();
     expect(h.inbox.pending()).toHaveLength(0);
   });
 });

@@ -13,6 +13,7 @@ import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types
 import { composeTurnText, contentTaintOf, parseUpdate, principalFor, TelegramConnector, type TelegramConfig } from './connector.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
+import { TelegramDeliveryStore } from './delivery.js';
 
 /**
  * M5-BIS B16 minimum (PC 1.4, audit P14): a message the owner *forwards* is
@@ -129,7 +130,8 @@ function harness(script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
-    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    inbox: new UpdateInbox(runtime.db),
+    delivery: new TelegramDeliveryStore(runtime.db),
     api,
     // No `vault`: (c) below exercises exactly the fallback path that used to
     // leak the raw filename, and the filename-fencing machinery in
@@ -398,7 +400,8 @@ describe('(c, with a real vault) filename fencing does not depend on the arrival
     const connector = new TelegramConnector({
       loop: { ...runtime.deps, provider } satisfies LoopDeps,
       sessions: runtime.deps.sessions,
-      inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+      inbox: new UpdateInbox(runtime.db),
+      delivery: new TelegramDeliveryStore(runtime.db),
       api,
       vault: telegramVault(runtime, vaultRoot),
       config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },

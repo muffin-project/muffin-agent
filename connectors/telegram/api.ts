@@ -74,6 +74,25 @@ export class TelegramApi implements TelegramApiLike {
    * becomes a hard one.
    */
   async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0): Promise<T> {
+    return this.request<T>(method, payload, true, true, attempt);
+  }
+
+  /**
+   * One HTTP attempt for a user-visible effect. The Bot API exposes no client
+   * idempotency token, so a transport failure after acceptance is ambiguous and
+   * retrying it here can create a second visible message.
+   */
+  private effect<T>(method: string, payload: Record<string, unknown>): Promise<T> {
+    return this.request<T>(method, payload, false, true, 0);
+  }
+
+  private async request<T>(
+    method: string,
+    payload: Record<string, unknown>,
+    retryTransport: boolean,
+    retryRejected: boolean,
+    attempt: number,
+  ): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
@@ -83,11 +102,12 @@ export class TelegramApi implements TelegramApiLike {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      // A network failure is retryable once; a second one is the network's
-      // answer and pretending otherwise just delays it.
-      if (attempt === 0) {
+      // Reads retry one network failure. User-visible effects deliberately do
+      // not: after an unreadable response the remote side may have accepted
+      // the request, and a second send can become a second visible message.
+      if (retryTransport && attempt === 0) {
         await sleep(1000);
-        return this.call<T>(method, payload, 1);
+        return this.request<T>(method, payload, retryTransport, retryRejected, 1);
       }
       // `.name`, never `.message` — the same choice `media.ts` already makes
       // and for the same reason: the URL this `fetch` just failed on carries
@@ -102,18 +122,25 @@ export class TelegramApi implements TelegramApiLike {
       throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
     }
 
-    const body = (await response.json()) as
+    let body:
       | { ok: true; result: T }
       | { ok: false; description: string; parameters?: { retry_after?: number } };
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      // Headers without a readable Bot API result do not prove whether a
+      // mutating request landed. Status 0 is the connector's "unknown" class.
+      throw new TelegramError(0, 'risposta Telegram non leggibile');
+    }
 
     if (body.ok) return body.result;
 
     const retryAfter = body.parameters?.retry_after;
-    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+    if (retryRejected && attempt === 0 && (response.status === 429 || response.status >= 500)) {
       // Plus a second: `retry_after` is when the window opens, not when it is
       // safe to be inside it.
       await sleep((retryAfter ?? 1) * 1000 + 1000);
-      return this.call<T>(method, payload, 1);
+      return this.request<T>(method, payload, retryTransport, retryRejected, 1);
     }
     throw new TelegramError(response.status, body.description, retryAfter);
   }
@@ -168,7 +195,7 @@ export class TelegramApi implements TelegramApiLike {
   }
 
   sendMessage(chatId: number, html: string, options: SendOptions = {}): Promise<Message> {
-    return this.call<Message>('sendMessage', {
+    return this.effect<Message>('sendMessage', {
       chat_id: chatId,
       text: html,
       parse_mode: 'HTML',
@@ -178,7 +205,7 @@ export class TelegramApi implements TelegramApiLike {
   }
 
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean> {
-    return this.call<Message | boolean>('editMessageText', {
+    return this.effect<Message | boolean>('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text: html,

@@ -16,6 +16,7 @@ import { SurfaceRegistry } from '../core/surface/registry.js';
 import type { Surface } from '../core/surface/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { TelegramConnector, type ConnectorDeps } from '../connectors/telegram/connector.js';
+import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
 import { telegramSurface } from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { DiscordApi } from '../connectors/discord/api.js';
@@ -320,7 +321,10 @@ export function connectSurfaces(
    * turn addressed to a surface that failed to connect is reported as
    * undeliverable rather than sent nowhere.
    */
-  const doors = new Map<string, (replyTo: Record<string, unknown>, text: string) => Promise<void>>();
+  const doors = new Map<
+    string,
+    (turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>
+  >();
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -335,7 +339,9 @@ export function connectSurfaces(
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
         const api = new TelegramApi(token);
-        const inbox = new UpdateInbox(new DatabaseCtor(paths(home).db));
+        const telegramDb = new DatabaseCtor(paths(home).db);
+        const inbox = new UpdateInbox(telegramDb);
+        const delivery = new TelegramDeliveryStore(telegramDb);
         const vaultRoot = paths(home).vault;
         mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
         // The runtime's own vault, not a second one: `document_read` reads
@@ -345,6 +351,7 @@ export function connectSurfaces(
           loop: runtime.deps,
           sessions: runtime.deps.sessions,
           inbox,
+          delivery,
           api,
           vault: telegramVault(runtime, vaultRoot),
           config: {
@@ -386,7 +393,10 @@ export function connectSurfaces(
         // The door for the lane. Registered next to the connector that owns it,
         // so a surface that did not come up simply has none — the honest state,
         // rather than a door onto a dead poller.
-        doors.set('telegram', (replyTo, text) => connector.deliverTo(replyTo, text));
+        doors.set('telegram', async (turnId, replyTo, text) => {
+          const outcome = await connector.deliverTo(turnId, replyTo, text);
+          return outcome === 'possibly_sent' ? outcome : undefined;
+        });
         // Delivery for `SurfaceRegistry`, from the same token the listener
         // uses. `ownerChatId` is what makes `handles('telegram')` true, so an
         // unpaired surface listens but does not claim to be a destination —
@@ -492,7 +502,7 @@ export function connectSurfaces(
       const door = doors.get(turn.surface);
       if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
       if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
-      await door(turn.replyTo, text);
+      return door(turn.id, turn.replyTo, text);
     },
   };
 }
