@@ -360,3 +360,41 @@ describe('resolveLauncher — what ExecStart is allowed to point at', () => {
     expect(found.warning).toMatch(/checkout/);
   });
 });
+
+/**
+ * Trovato sulla macchina dell'owner durante l'install reale (RETURN S4):
+ * `launchctl bootstrap` riusciva, il gateway non partiva, e `gateway.err`
+ * diceva `env: node: No such file or directory` — exit 127. Il launcher è uno
+ * script con shebang `#!/usr/bin/env node`, e né launchd né systemd mettono
+ * nel PATH la directory di un Node installato da Homebrew o nvm. La unit
+ * prometteva continuità dopo il riavvio e non ne dava nessuna.
+ */
+describe('la unit deve dire dove sta node', () => {
+  const base = {
+    home: '/home/x/.muffin',
+    exec: ['/home/x/.local/bin/muffin', 'gateway', 'run'],
+    homeDir: '/home/x',
+    interpreterDir: '/opt/homebrew/bin',
+  };
+
+  it('launchd: PATH nelle EnvironmentVariables contiene la directory dell interprete', () => {
+    const plan = planUnit({ ...base, platform: 'darwin' });
+    expect(plan.text).toContain('<key>PATH</key>');
+    expect(plan.text).toContain('/opt/homebrew/bin');
+    // I percorsi di sistema restano, altrimenti si romperebbe tutto ciò che
+    // il gateway lancia a sua volta.
+    expect(plan.text).toContain('/usr/bin');
+  });
+
+  it('systemd: Environment=PATH contiene la directory dell interprete', () => {
+    const plan = planUnit({ ...base, platform: 'linux' });
+    expect(plan.text).toMatch(/Environment=PATH=[^\n]*\/opt\/homebrew\/bin/);
+    expect(plan.text).toMatch(/Environment=PATH=[^\n]*\/usr\/bin/);
+  });
+
+  it('senza interpreterDir la unit resta valida e non inventa un PATH vuoto', () => {
+    const plan = planUnit({ ...base, interpreterDir: undefined, platform: 'darwin' });
+    expect(plan.text).not.toContain('<key>PATH</key>');
+    expect(plan.text).toContain('<key>MUFFIN_HOME</key>');
+  });
+});
