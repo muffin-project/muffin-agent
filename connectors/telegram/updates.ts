@@ -192,12 +192,13 @@ export class UpdateInbox {
   }
 
   /**
-   * Marks the semantic consumption/delivery of this composition settled.
+   * Marks semantic consumption/delivery settled.
    *
-   * Today every composition is singleton, so this is observationally identical
-   * to #78's per-update settle. Updating all members now is what prevents the
-   * future N-event assembler from delivering one Work and leaving sibling
-   * native events pending forever. `COALESCE` keeps the first settlement time.
+   * Once a composition has a Work, settlement belongs to that semantic unit:
+   * every native event that fed the Work is settled together. Before Work seal,
+   * however, composition membership is only an assembler fact; settling one
+   * member must not consume its siblings accidentally. `COALESCE` preserves the
+   * first settlement timestamp across retries.
    */
   settle(updateId: number, at: string): void {
     this.db
@@ -205,9 +206,11 @@ export class UpdateInbox {
         `UPDATE telegram_updates
          SET settled_at = COALESCE(settled_at, ?)
          WHERE update_id = ?
-            OR (
-              composition_id IS NOT NULL
-              AND composition_id = (SELECT composition_id FROM telegram_updates WHERE update_id = ?)
+            OR composition_id = (
+              SELECT u.composition_id
+              FROM telegram_updates u
+              JOIN telegram_compositions c ON c.composition_id = u.composition_id
+              WHERE u.update_id = ? AND c.work_id IS NOT NULL
             )`,
       )
       .run(at, updateId, updateId);
@@ -278,9 +281,10 @@ export class UpdateInbox {
   }
 
   /**
-   * Processing belongs to the semantic composition once one exists. Pairing
-   * updates are deliberately still uncomposed and therefore mark only their own
-   * row, preserving the pre-work pairing path.
+   * A sealed composition is one semantic consumption unit, so completion of its
+   * Work clears all member events. An unsealed composition is only membership:
+   * marking one native event processed cannot silently erase its siblings.
+   * Pairing updates are uncomposed and therefore affect only their own row.
    */
   markProcessed(updateId: number, at: string): void {
     this.db
@@ -288,9 +292,11 @@ export class UpdateInbox {
         `UPDATE telegram_updates
          SET processed_at = ?, failure = NULL
          WHERE update_id = ?
-            OR (
-              composition_id IS NOT NULL
-              AND composition_id = (SELECT composition_id FROM telegram_updates WHERE update_id = ?)
+            OR composition_id = (
+              SELECT u.composition_id
+              FROM telegram_updates u
+              JOIN telegram_compositions c ON c.composition_id = u.composition_id
+              WHERE u.update_id = ? AND c.work_id IS NOT NULL
             )`,
       )
       .run(at, updateId, updateId);
