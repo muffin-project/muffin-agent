@@ -24,8 +24,14 @@ stop pre-dogfood e uso reale.
   `maxToolCallsPerTurn` ora vale per singola call anche dentro un batch,
   con rifiuti espliciti leggibili dal modello. Residui → DOGFOOD: coda
   durevole degli ask, budget per-capability.
-- **S4 — bring-up modello locale + install reale + smoke journey, ultima.**
-  Eval sul locale = smoke, provider funzionante ammesso come ponte.
+- **S4 — bring-up fatto, install reale in attesa di S1.** Decisione owner:
+  API-first, `qwen/qwen3.8-27b` su OpenRouter (chiave nel secret store
+  persistente, `init` la ritrova da solo); multi-famiglia via i due provider
+  esistenti; embeddings locali `qwen3-embedding:0.6b` (Ollama) e reranker già
+  presenti. Smoke su home temporanea, 3/3: chat in-character senza fatti
+  runtime inventati, tool calling reale (memoria, 4 passaggi), percorso ask
+  con azione concreta visibile (D12-min dal binario). Resta: install reale su
+  `~/.muffin` + gateway + pairing Telegram + journey — parte a S1 chiusa.
 
 **Follow-up noti (registrati, non slice):** dal judge S2: la mutazione interna
 a `snapshotTo` (quick_check rimosso) sopravvive ai test — difesa in profondità
@@ -39,7 +45,7 @@ Discord `handle()` non bound. REPL non-TTY su `wip/repl-linereader-pipe-eof`.
 PERCORSO §0 possiede l'ordine; le righe A6/A7/A8 riflettono il meccanismo S2 e
 restano BLOCKER di Gate solo per scenario/verbo residui (DOGFOOD).
 
-**Next action:** S4 (bring-up Qwen3 27B + install reale + smoke journey);
-a S1 chiusa (Codex, #90) → stop pre-dogfood.
+**Next action:** attendere S1 (Codex, #90); alla chiusura → install reale
+S4 e stop pre-dogfood.
 
 **Owner decision pendente:** nessuna.
