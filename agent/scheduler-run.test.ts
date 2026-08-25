@@ -10,8 +10,9 @@ import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { TurnStore } from '../core/turns/store.js';
+import { SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
 import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
+import { resumeTurn } from './loop.js';
 import type { LoopDeps, TurnResult } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
@@ -436,5 +437,53 @@ describe('makeJobRunner — uno script non gira due volte', () => {
     expect(outcome.stopped).toBe('error');
     expect(outcome.text).toContain('sandbox');
     expect(provider.calls).toBe(0);
+  });
+
+  it('un turno script interrotto non si riprende col modello, e lo script non viene rifatto', async () => {
+    // L'altra metà del crash a metà script, sul percorso che NON passa dallo
+    // scheduler: la riga `running` di un processo morto viene reclamata come
+    // `interrupted` al boot, e la turn-lane la riprende con `resumeTurn`.
+    // Prima della guardia su SCRIPT_MODEL la lane chiamava il modello con
+    // «script: echo …» come fosse una richiesta dell'owner — un costo, una
+    // risposta inventata, e consegnata. Il judge del giro 2 ha provato la
+    // guardia sana con un probe usa-e-getta; questo è quel probe reso
+    // permanente, perché era a un refactor di distanza dal rompersi in
+    // silenzio.
+    const { deps, provider } = fixture([answer('mai chiamato')]);
+
+    // La riga esattamente come la scrive `runScript`: stesso principal,
+    // stesso modello sentinella, stesso primo messaggio.
+    const morto = 999_999_983; // un pid che non esiste: la reclaim lo vede morto
+    const riga = deps.turns.create(
+      {
+        id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: deps.sessions.open('job-test').id,
+        model: SCRIPT_MODEL,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'script: echo ciao' }] }],
+        taint: 0,
+        counters: { ...counters(), contextBuilt: true },
+        replyTo: { channel: 'cli' },
+      },
+      morto,
+    );
+    expect(riga.status).toBe('running');
+
+    // Il boot successivo: il pid è morto, la riga diventa `interrupted`.
+    const reclaimed = deps.turns.reclaim(new Date());
+    expect(reclaimed.map((r) => r.id)).toContain(riga.id);
+
+    const esito = await resumeTurn(deps, riga.id);
+    if (!('stopped' in esito)) throw new Error(`atteso un esito terminale, ricevuto ${JSON.stringify(esito)}`);
+
+    // Il modello non è mai stato toccato, lo script non è stato rieseguito, e
+    // il testo dice la sola cosa vera: forse fatto, non rifatto.
+    expect(provider.calls).toBe(0);
+    expect(esito.stopped).toBe('error');
+    expect(esito.text).toContain("Non l'ho rifatto");
+    expect(esito.text).toContain('echo ciao');
+    expect(deps.turns.get(riga.id)?.status).toBe('done');
   });
 });

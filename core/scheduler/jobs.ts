@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { CronExpressionParser } from 'cron-parser';
+import { ensureColumn } from '../lock/durable.js';
 
 /**
  * The durable core of M5: jobs that survive a restart, and a next-fire that is
@@ -167,6 +168,16 @@ export class JobStore {
     private readonly clock: () => Date = () => new Date(),
   ) {
     db.exec(SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` è un no-op su una tabella che esiste già,
+    // quindi su un database scritto prima di `kind` il prepare qui sotto
+    // esplodeva con «table jobs has no column named kind» — non solo per i job
+    // script nuovi: per QUALUNQUE `muffin jobs list` dopo l'aggiornamento
+    // (judge #106 giro 2, riprodotto). La migrazione 2 fa la stessa cosa per
+    // chi passa da `migrate()`, ma `cli/jobs.ts` apre il database direttamente
+    // e di proposito; questa è la stessa rete difensiva che `TurnStore` tiene
+    // per `claim_token`, e il suo costo è un PRAGMA. È anche il gap che
+    // l'audit P27 aveva già nominato per `turns`/`jobs`/le tabelle di lock.
+    ensureColumn(db, 'jobs', 'kind', `kind TEXT NOT NULL DEFAULT 'goal'`);
     this.insertStmt = db.prepare(
       `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, last_run_at, active)
        VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @createdAt, @nextFireAt, NULL, 1)`,
