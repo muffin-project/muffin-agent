@@ -401,112 +401,112 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 122,
+    "line": 123,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 145,
+    "line": 146,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 231,
+    "line": 237,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 280,
+    "line": 286,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 282,
+    "line": 288,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 301,
+    "line": 307,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 321,
+    "line": 327,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 323,
+    "line": 329,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 332,
+    "line": 338,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 337,
+    "line": 343,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 349,
+    "line": 355,
     "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 355,
+    "line": 361,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:345": {
     "path": "agent/runtime.ts",
-    "line": 367,
+    "line": 373,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 368,
+    "line": 374,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 510,
+    "line": 516,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 516,
+    "line": 522,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 519,
+    "line": 525,
     "testo": "// Declared only when the tool exists. A capability the kernel knows about"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 547,
+    "line": 553,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 555,
+    "line": 561,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:534": {
     "path": "agent/runtime.ts",
-    "line": 556,
+    "line": 562,
     "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 634,
+    "line": 640,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 655,
+    "line": 661,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -806,12 +806,12 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 260,
+    "line": 261,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 52,
+    "line": 53,
     "testo": "export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {"
   },
   "cli/gateway.ts:27": {
@@ -856,32 +856,32 @@
   },
   "cli/init.ts:101": {
     "path": "cli/init.ts",
-    "line": 150,
+    "line": 151,
     "testo": "apiKeyRef: 'secret://provider_api_key',"
   },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
-    "line": 153,
+    "line": 154,
     "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 185,
+    "line": 190,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 186,
+    "line": 191,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:46": {
     "path": "cli/init.ts",
-    "line": 95,
+    "line": 96,
     "testo": "export function runInit(options: InitOptions = {}): InitStep[] {"
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
-    "line": 148,
+    "line": 149,
     "testo": "kind: options.provider ?? 'anthropic',"
   },
   "cli/jobs.ts:63": {
@@ -891,132 +891,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 111,
+    "line": 116,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 169,
+    "line": 174,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 171,
+    "line": 176,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 173,
+    "line": 178,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 175,
+    "line": 180,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 177,
+    "line": 182,
     "testo": "*/"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 179,
+    "line": 184,
     "testo": "if (argv.includes('--no-stream')) return false;"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 181,
+    "line": 186,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 185,
+    "line": 190,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 187,
+    "line": 192,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 189,
+    "line": 194,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 191,
+    "line": 196,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 193,
+    "line": 198,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 195,
+    "line": 200,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 197,
+    "line": 202,
     "testo": "case 'run':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 199,
+    "line": 204,
     "testo": "case 'repl':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 201,
+    "line": 206,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 208,
+    "line": 217,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 212,
+    "line": 221,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 326,
+    "line": 335,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 345,
+    "line": 354,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 446,
+    "line": 455,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 457,
+    "line": 466,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 467,
+    "line": 476,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 498,
+    "line": 507,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 663,
+    "line": 672,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -2746,42 +2746,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 306,
+    "line": 312,
     "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 371,
+    "line": 377,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 406,
+    "line": 412,
     "testo": "if (executor.status().available) {"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 486,
+    "line": 492,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 510,
+    "line": 516,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 547,
+    "line": 553,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 553,
+    "line": 559,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 108,
+    "line": 109,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {
