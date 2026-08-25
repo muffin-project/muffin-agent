@@ -535,7 +535,7 @@ export function recoveredText(deps: LoopDeps, record: TurnRecord): string {
     const messages = deps.sessions.read(ref);
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]!;
-      if (m.role === 'assistant' && m.content.trim() !== '') return m.content;
+      if (m.role === 'assistant' && m.traceId === record.id && m.content.trim() !== '') return m.content;
     }
   }
   return (
@@ -1396,7 +1396,6 @@ async function drive(
 
       // Model's turn goes into the transcript before the results, so a crash
       // between the two leaves a record that explains itself.
-      //
       // Reasoning first, unmodified, ahead of the `tool_use` blocks it came
       // with. This is the half the API calls **Required** — "within a tool-use
       // turn, pass thinking blocks back" — and the half that was missing: this
