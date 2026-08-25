@@ -50,8 +50,9 @@ runtime duplicato `cli/gateway.ts`↔`cli/repl.ts` (già costato il bug del
 giro 1 di #106: la copia REPL era rimasta senza esecutore) e coppie
 discord↔telegram nei connettori — dedup con trigger, non estrazioni premature.
 
-**Branch aperti:** solo `slice/readme-open-source-v1` (#84), ferma di proposito
-— il README pubblico non contiene falsità ma la milestone non è il lancio.
+**Branch aperti:** nessuno. #84 (README pubblico) è stata aggiornata a HEAD
+(fact-check senza claim falsi) e mergiata il 26/08 — in `dev`, che resta
+privato: il lancio è un'altra decisione.
 
 **Truth maintenance:** M5-BIS possiede status Gate e classificazione RETURN;
 PERCORSO §0 possiede l'ordine, ed è chiuso. Le righe A6/A7/A8 e D12/E6 hanno il
