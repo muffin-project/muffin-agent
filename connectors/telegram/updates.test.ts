@@ -90,3 +90,116 @@ describe('telegram inbox', () => {
     expect(box.nextOffset()).toBe(8);
   });
 });
+
+/**
+ * `bind`/`settle` — the `update_id → turn_id` identity bridge
+ * (`slice/inbound-unit`, ADR-0035 emendamento №6). Same `claim`/`bind`/`settle`
+ * shape as `core/scheduler/job-fires.ts`'s `JobFireStore`, with `accept` above
+ * standing in for `claim`: the row already exists before any handling starts,
+ * so there is nothing separate to claim.
+ */
+describe('UpdateInbox.bind — fault points 2/3: the identity survives a crash between the two writes', () => {
+  it('a fresh update starts unbound and unsettled', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    expect(box.get(10)).toEqual({ updateId: 10, payload: JSON.stringify({ update_id: 10 }), receivedAt: NOW, turnId: null, settledAt: null });
+    expect(box.pending()[0]).toMatchObject({ turnId: null, settledAt: null });
+  });
+
+  it('binds a fresh update to the given turn id', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    const winner = box.bind(10, 'turn-a');
+    expect(winner).toBe('turn-a');
+    expect(box.get(10)?.turnId).toBe('turn-a');
+  });
+
+  it('first writer wins: a second bind for the same update returns the first id, never overwrites it', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    const first = box.bind(10, 'turn-a');
+    // A second pass racing on the same update, minting its own id.
+    const second = box.bind(10, 'turn-b');
+    expect(first).toBe('turn-a');
+    // The loser gets told the winner's id back — never its own.
+    expect(second).toBe('turn-a');
+    expect(box.get(10)?.turnId).toBe('turn-a');
+  });
+
+  it('binding the SAME id twice (a retried call) is idempotent', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    expect(box.bind(10, 'turn-a')).toBe('turn-a');
+  });
+
+  it('a restart on the same database finds the same binding — a crash after bind, before the turn, loses nothing', () => {
+    // A new UpdateInbox on the same connection is exactly what a restart looks
+    // like (mirrors the "survives a crash between accepting and processing"
+    // test above, one column over).
+    const db = new DatabaseCtor(':memory:');
+    new UpdateInbox(db).accept([{ update_id: 10 }], NOW);
+    const first = new UpdateInbox(db);
+    first.bind(10, 'turn-a');
+
+    const afterRestart = new UpdateInbox(db);
+    expect(afterRestart.get(10)?.turnId).toBe('turn-a');
+    // And re-binding after the restart resolves to the SAME id, never a new one.
+    expect(afterRestart.bind(10, 'turn-b')).toBe('turn-a');
+  });
+});
+
+describe('UpdateInbox.settle — fault point 7: settlement, then (and only then) the update is processed', () => {
+  it('marks settled_at, once', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    expect(box.get(10)?.settledAt).toBeNull();
+    box.settle(10, NOW);
+    expect(box.get(10)?.settledAt).toBe(NOW);
+  });
+
+  it('a second settle (a delivery retry, a duplicate drain) never moves settled_at', () => {
+    const box = inbox();
+    box.accept([{ update_id: 10 }], NOW);
+    box.bind(10, 'turn-a');
+    box.settle(10, NOW);
+    const LATER = '2026-08-06T11:00:00Z';
+    box.settle(10, LATER);
+    expect(box.get(10)?.settledAt).toBe(NOW);
+  });
+
+  it('settle on an update that was never accepted touches nothing (no row to settle)', () => {
+    const box = inbox();
+    expect(() => box.settle(999, NOW)).not.toThrow();
+    expect(box.get(999)).toBeNull();
+  });
+});
+
+describe('UpdateInbox — additive on a database written before this slice', () => {
+  it('CREATE TABLE IF NOT EXISTS plus ensureColumn on a table that already has real rows loses nothing and adds no missing column', () => {
+    // A stand-in for the owner's already-installed muffin.db: telegram_updates
+    // exists and has a real row in it, written by the pre-slice schema.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`
+      CREATE TABLE telegram_updates (
+        update_id INTEGER PRIMARY KEY, payload TEXT NOT NULL, received_at TEXT NOT NULL,
+        processed_at TEXT, failure TEXT
+      );
+    `);
+    db.prepare(`INSERT INTO telegram_updates (update_id, payload, received_at) VALUES (?, ?, ?)`).run(
+      5,
+      JSON.stringify({ update_id: 5 }),
+      NOW,
+    );
+
+    const box = new UpdateInbox(db);
+    const columns = (db.prepare(`PRAGMA table_info(telegram_updates)`).all() as { name: string }[]).map((c) => c.name);
+    expect(columns.sort()).toEqual(['failure', 'payload', 'processed_at', 'received_at', 'turn_id', 'settled_at', 'update_id'].sort());
+
+    // The pre-existing row is untouched and reads its new columns as NULL.
+    expect(box.get(5)).toEqual({ updateId: 5, payload: JSON.stringify({ update_id: 5 }), receivedAt: NOW, turnId: null, settledAt: null });
+    // And the new methods work immediately on this same, previously-unbound row.
+    expect(box.bind(5, 'turn-a')).toBe('turn-a');
+  });
+});
