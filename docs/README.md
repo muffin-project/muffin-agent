@@ -21,6 +21,8 @@ unused manifest would be another source of drift.
 | What does the system literally do or accept? | Executable code, schemas and shipped config; tests/evals are evidence that the path is exercised. |
 | Why does Muffin exist? | `docs/THESIS.md` |
 | Where is the product trying to go? | `docs/VISION.md` |
+| Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/COGNITIVE-DESIGN.md` |
+| In which phase should a deliberately deferred capability be reconsidered? | `docs/ROADMAP.md` |
 | How is Muffin shaped now? | `docs/ARCHITECTURE.md` |
 | What security boundary does Muffin claim now? | `docs/SECURITY.md` |
 | How should design choices be made? | `docs/DESIGN-PRINCIPLES.md` |
@@ -45,12 +47,24 @@ is **typed by question**.
 Global current documents own different questions:
 
 ```text
-THESIS          why
-VISION          product destination
-ARCHITECTURE    current semantic shape
-SECURITY        current trust/security boundaries
-DESIGN          decision compass
+THESIS             why
+VISION             product destination
+COGNITIVE DESIGN   falsifiable human/cognitive hypotheses
+ROADMAP            phase placement of deliberate deferrals
+ARCHITECTURE       current semantic shape
+SECURITY           current trust/security boundaries
+DESIGN             decision compass
 ```
+
+`COGNITIVE-DESIGN.md` is intentionally **not** runtime truth. It owns the status
+of hypotheses and their falsification criteria. A mechanism may be shipped while
+still marked experimental; robust external science may still map to a rejected
+Muffin product idea.
+
+`ROADMAP.md` owns **phase placement only**. It does not own whether a DAY-1 row is
+READY/BLOCKER, the next implementation slice, or whether an item is already
+shipped. Those questions stay with M5, the critical path, Git and executable
+authority respectively.
 
 Scoped current design documents such as `EXTENSIONS.md` are loaded only when
 that domain matters. Product/distribution/public-narrative strategy does not
@@ -93,6 +107,11 @@ become current architecture by proximity or detail.
 Do not "refresh" an old audit into current state. Record new evidence or change
 the current authoritative document.
 
+The same rule applies to cognitive research. A paper can support the existence of
+a human phenomenon without proving a Muffin implementation is useful; legacy
+Muffin can provide negative product evidence even when the underlying science is
+sound.
+
 ## Operational state
 
 Operational state is deliberately small and disposable. `LAVORO.md` may name the
@@ -120,6 +139,10 @@ Agents and humans should start with a map, not a manual.
 - Root `AGENTS.md` and `CLAUDE.md` are routers, not encyclopedias.
 - Global semantics live in the small authority set above.
 - Domain-specific detail is loaded when the task makes it relevant.
+- `COGNITIVE-DESIGN.md` is loaded when a task proposes or evaluates a cognitive
+  mechanism, person-model behaviour, memory salience/decay or proactivity claim.
+- `ROADMAP.md` is loaded when the question is when a deliberate deferral should
+  be reconsidered, not as a substitute for current Gate or Git state.
 - Product strategy is not required to fix a runtime bug unless it changes the
   product claim being implemented.
 - Research and history are opt-in context, not startup context.
