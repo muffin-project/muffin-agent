@@ -821,32 +821,32 @@
   },
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 314,
+    "line": 317,
     "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 315,
+    "line": 318,
     "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 400,
+    "line": 403,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 423,
+    "line": 426,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 429,
+    "line": 432,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 444,
+    "line": 447,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
@@ -1406,7 +1406,7 @@
   },
   "core/gateway/unit.ts:232": {
     "path": "core/gateway/unit.ts",
-    "line": 232,
+    "line": 272,
     "testo": "<!-- KeepAlive incondizionato, e la scelta è fra due difetti. Con"
   },
   "core/lock/durable.ts:93": {
