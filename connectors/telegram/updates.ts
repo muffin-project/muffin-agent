@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
 CREATE INDEX IF NOT EXISTS idx_telegram_pending ON telegram_updates(processed_at, update_id);
 
 -- Surface-local composition state. This is not a generic event bus and not an
--- `intents` table: it exists only to preserve the parentage ADR-0052 requires
+-- intents table: it exists only to preserve the parentage ADR-0052 requires
 -- between native Telegram evidence and the concrete Work eventually created.
 CREATE TABLE IF NOT EXISTS telegram_compositions (
   composition_id TEXT PRIMARY KEY,
