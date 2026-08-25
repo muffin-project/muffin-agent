@@ -1171,27 +1171,27 @@
   },
   "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 201,
+    "line": 213,
     "testo": "* controls via an OAuth2 URL with the `bot` scope and no permissions, then"
   },
   "cli/surface.ts:233": {
     "path": "cli/surface.ts",
-    "line": 235,
+    "line": 247,
     "testo": "`  https://discord.com/oauth2/authorize?client_id=${me.id}&scope=bot&permissions=0\\n` +"
   },
   "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 293,
+    "line": 305,
     "testo": "* never arrived even on a home where Telegram was connected and answering"
   },
   "cli/surface.ts:295": {
     "path": "cli/surface.ts",
-    "line": 297,
+    "line": 309,
     "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 351,
+    "line": 364,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
@@ -1301,22 +1301,22 @@
   },
   "core/config/config.ts:100": {
     "path": "core/config/config.ts",
-    "line": 100,
+    "line": 108,
     "testo": "*/"
   },
   "core/config/config.ts:101": {
     "path": "core/config/config.ts",
-    "line": 101,
+    "line": 120,
     "testo": "discord: z"
   },
   "core/config/config.ts:102": {
     "path": "core/config/config.ts",
-    "line": 102,
+    "line": 85,
     "testo": ".object({"
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
-    "line": 169,
+    "line": 188,
     "testo": "`dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +"
   },
   "core/config/config.ts:39": {
@@ -1331,7 +1331,7 @@
   },
   "core/config/config.ts:96": {
     "path": "core/config/config.ts",
-    "line": 96,
+    "line": 115,
     "testo": "* ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one"
   },
   "core/config/inventory.ts:52": {

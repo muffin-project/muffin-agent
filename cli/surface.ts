@@ -99,18 +99,23 @@ export function cmdSurfaceList(home: string): number {
  * missing step; run it again after and it finishes. No environment variable:
  * the owner id is configuration, and configuration lives in the config.
  */
-export async function cmdSurfaceEnable(home: string, id: string, ownerFlag?: string): Promise<number> {
+export async function cmdSurfaceEnable(
+  home: string,
+  id: string,
+  ownerFlag?: string,
+  apiBaseFlag?: string,
+): Promise<number> {
   if (id === 'cli') {
     process.stderr.write(`la CLI è sempre abilitata\n`);
     return 0;
   }
-  if (id === 'telegram') return enableTelegram(home, ownerFlag);
+  if (id === 'telegram') return enableTelegram(home, ownerFlag, apiBaseFlag);
   if (id === 'discord') return enableDiscord(home, ownerFlag);
   process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
   return 78;
 }
 
-async function enableTelegram(home: string, ownerFlag?: string): Promise<number> {
+async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: string): Promise<number> {
   let token: string;
   try {
     token = readSecret('secret://telegram_token', home);
@@ -120,12 +125,18 @@ async function enableTelegram(home: string, ownerFlag?: string): Promise<number>
     return 78;
   }
 
+  const config = loadConfig(home);
+  // `--api-base` wins over what is stored, and what is stored wins over
+  // Telegram's own host — the ordinary precedence for a flag that overrides
+  // configuration. A self-hosted Bot API server is a documented deployment
+  // (core.telegram.org/bots/api), so this is a real knob, not a test hook.
+  const apiBase = apiBaseFlag ?? config.surfaces.telegram?.apiBase;
+
   // Against the real server, now: a bad token should fail here, in the command
   // whose job is configuration, not tonight when the surface tries to connect.
-  const api = new TelegramApi(token);
+  const api = apiBase === undefined ? new TelegramApi(token) : new TelegramApi(token, apiBase);
   const me = await api.getMe();
 
-  const config = loadConfig(home);
   let ownerChatId = config.surfaces.telegram?.ownerChatId;
   let ownerUserId = config.surfaces.telegram?.ownerUserId;
 
@@ -175,6 +186,7 @@ async function enableTelegram(home: string, ownerFlag?: string): Promise<number>
         ...(ownerUserId === undefined ? {} : { ownerUserId }),
         ...(ownerChatId === undefined ? {} : { ownerChatId }),
         ...(pairing === undefined ? {} : { pairing }),
+        ...(apiBase === undefined ? {} : { apiBase }),
       },
     },
   };
@@ -339,7 +351,8 @@ export function connectSurfaces(
       if (ownerUserId === undefined && tg?.pairing === undefined) {
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
-        const api = new TelegramApi(token);
+        const base = tg?.apiBase;
+        const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
         const telegramDb = openDb(paths(home).db);
         const inbox = new UpdateInbox(telegramDb);
         const delivery = new TelegramDeliveryStore(telegramDb);
