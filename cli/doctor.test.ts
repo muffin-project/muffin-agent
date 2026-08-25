@@ -663,6 +663,64 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
   });
 });
 
+/**
+ * ADR-0026 has claimed since it was written that "`doctor` controlla la
+ * lunghezza di `TMPDIR` su Linux (#213)". Until this slice that sentence was
+ * false — nothing in `doctor.ts` read TMPDIR at all — which is exactly the
+ * shape of invisible fact this file exists to catch everywhere else. The
+ * `platform` override (test-only, like `supervisorProbes` above) exercises
+ * the Linux branch on whichever OS runs the suite, the same reasoning
+ * `core/sandbox/probe.test.ts` uses to mock `node:os` for the same reason.
+ */
+describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213, ADR-0026)', () => {
+  it('warns, naming the length, the limit and #213, when TMPDIR is past the socket-path limit on Linux', () => {
+    const dir = home(); // must exist before TMPDIR is stubbed: home() mkdtemps under the real one
+    vi.stubEnv('TMPDIR', '/x'.repeat(60)); // 120 chars, past the 108-byte sun_path limit
+    const report = runDoctor(dir, { platform: 'linux' });
+    const c = report.checks.find((x) => x.name === 'tmpdir');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('120');
+    expect(c?.detail).toContain('108');
+    expect(c?.detail).toContain('#213');
+    expect(c?.remedy).toBeTruthy();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns anche nella fascia 74–108: il budget è del path del socket, non della directory', () => {
+    // Il difetto del giro 1 del judge: 108 speso tutto su TMPDIR nudo, mentre
+    // il bridge del sandbox appende il suo socket più lungo (35 caratteri
+    // misurati, claude-socks-<16hex>.sock) direttamente sotto quella
+    // directory. Un TMPDIR di 80 caratteri lasciava doctor verde e il sandbox
+    // rotto a runtime.
+    const dir = home();
+    vi.stubEnv('TMPDIR', '/x'.repeat(40)); // 80 chars: sotto 108 da solo, oltre col percorso reale
+    const report = runDoctor(dir, { platform: 'linux' });
+    const c = report.checks.find((x) => x.name === 'tmpdir');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('80');
+    expect(c?.detail).toContain('35');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is ok, naming the limit, when TMPDIR is short on Linux', () => {
+    const dir = home();
+    vi.stubEnv('TMPDIR', '/tmp');
+    const report = runDoctor(dir, { platform: 'linux' });
+    const c = report.checks.find((x) => x.name === 'tmpdir');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('/tmp');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says nothing on a platform where the sandbox does not proxy through a Unix socket', () => {
+    const dir = home();
+    vi.stubEnv('TMPDIR', '/x'.repeat(60));
+    const report = runDoctor(dir, { platform: 'darwin' });
+    expect(report.checks.find((x) => x.name === 'tmpdir')).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('sandboxOkDetail — the sandbox "ok" line is honest about which platform actually contained it', () => {
   it('is a plain summary for seatbelt', () => {
     const line = sandboxOkDetail({ available: true, mechanism: 'seatbelt' });
