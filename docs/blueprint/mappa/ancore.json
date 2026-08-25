@@ -1411,7 +1411,7 @@
   },
   "core/lock/durable.ts:93": {
     "path": "core/lock/durable.ts",
-    "line": 209,
+    "line": 207,
     "testo": "export class DurableLock {"
   },
   "core/mcp/registry.ts:58": {
@@ -1706,72 +1706,72 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 147,
+    "line": 148,
     "testo": "*"
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 162,
+    "line": 163,
     "testo": "private readonly ingestLock: IngestLock;"
   },
   "core/memory/store.ts:218": {
     "path": "core/memory/store.ts",
-    "line": 218,
+    "line": 214,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "core/memory/store.ts:237": {
     "path": "core/memory/store.ts",
-    "line": 237,
+    "line": 233,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 256,
+    "line": 252,
     "testo": "releaseIngestLock(pid: number = process.pid): void {"
   },
   "core/memory/store.ts:295": {
     "path": "core/memory/store.ts",
-    "line": 295,
+    "line": 291,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
     "path": "core/memory/store.ts",
-    "line": 38,
+    "line": 39,
     "testo": "export type FactInput = {"
   },
   "core/memory/store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 503,
+    "line": 499,
     "testo": "/**"
   },
   "core/memory/store.ts:572": {
     "path": "core/memory/store.ts",
-    "line": 572,
+    "line": 568,
     "testo": "/**"
   },
   "core/memory/store.ts:610": {
     "path": "core/memory/store.ts",
-    "line": 610,
+    "line": 606,
     "testo": "FROM facts f"
   },
   "core/memory/store.ts:637": {
     "path": "core/memory/store.ts",
-    "line": 637,
+    "line": 633,
     "testo": "searchEpisodes("
   },
   "core/memory/store.ts:700": {
     "path": "core/memory/store.ts",
-    "line": 700,
+    "line": 696,
     "testo": "episodeNeighbourhood("
   },
   "core/memory/store.ts:829": {
     "path": "core/memory/store.ts",
-    "line": 829,
+    "line": 825,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
   "core/memory/store.ts:958": {
     "path": "core/memory/store.ts",
-    "line": 958,
+    "line": 954,
     "testo": "f.superseded_by AS supersededBy"
   },
   "core/memory/vectors.ts:106": {
@@ -2846,17 +2846,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 116,
+    "line": 117,
     "testo": "since?: string | undefined;"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 147,
+    "line": 148,
     "testo": "*"
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 179,
+    "line": 181,
     "testo": "`origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,"
   },
   "store.ts:21": {
@@ -2866,27 +2866,27 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 228,
+    "line": 224,
     "testo": ".all(tenantId, extractionV, limit) as Episode[];"
   },
   "store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 503,
+    "line": 499,
     "testo": "/**"
   },
   "store.ts:740": {
     "path": "core/memory/store.ts",
-    "line": 740,
+    "line": 736,
     "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
   },
   "store.ts:903": {
     "path": "core/memory/store.ts",
-    "line": 903,
+    "line": 899,
     "testo": "* Where a recalled chunk came from and how much it is worth."
   },
   "store.ts:935": {
     "path": "core/memory/store.ts",
-    "line": 935,
+    "line": 931,
     "testo": "// recall has nothing else to read it from. Without it an inferred"
   },
   "tracer.ts:94": {
