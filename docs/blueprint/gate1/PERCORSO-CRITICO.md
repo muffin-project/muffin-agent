@@ -31,14 +31,16 @@ Milestone owner del 2026-08-25; definizione e classificazione vivono in
 Fino al suo stop-point l'ordine operativo è:
 
 ```text
-S1  ingress foundation atterra   (PR #90 + fence della delivery + judge sulla claim nuova)
-S2  schema lifecycle             (A6 + A7 + A8-min: migration runner versionato, backup/restore)
-S3  hardening minimo             (D12-min + E6; parallela a S2)
-S4  bring-up modello locale + install reale + smoke journey
+S1  ingress foundation atterra   CHIUSA — #90, judge CRITICAL MERGE giro 1
+S2  schema lifecycle             CHIUSA — #93, judge CRITICAL MERGE giro 2
+S3  hardening minimo             CHIUSA — #95 (D12-min + E6)
+S4  bring-up modello             CHIUSA per lo smoke (3/3 su home temporanea)
+    install reale                ← unica cosa rimasta
 ```
 
-Path critico S1 → S2 → S4. Al termine: stop pre-dogfood development, install,
-uso reale. Le sezioni da §2.3 in giù restano l'ordine *di Gate*, ma la loro
+Le quattro slice sono chiuse: **lo stop-point è raggiunto**. Da qui non si
+sviluppa altro prima del dogfood — resta l'installazione reale, e poi l'ordine
+lo detta l'uso. Le sezioni da §2.3 in giù restano l'ordine *di Gate*, ma la loro
 esecuzione riparte **dopo** RETURN, riprioritizzata dall'evidence del dogfood.
 
 ## 1 · Chiudi l'ingress foundation prima di costruirci sopra

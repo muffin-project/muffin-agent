@@ -48,9 +48,12 @@ status Gate. La milestone aggiunge una classificazione, non un secondo backlog:
   B15-sealing prima di imporre il sistema ad altri utenti.
 - **OUT**: invariato.
 
-**Percorso RETURN** (ordine operativo in `gate1/PERCORSO-CRITICO.md` §0): S1 la
-foundation ingress atterra · S2 schema lifecycle (A6+A7+A8-min) · S3 hardening
-minimo (D12-min+E6, parallela a S2) · S4 bring-up del modello + install reale.
+**Percorso RETURN — le quattro slice sono chiuse (25/08/2026).** S1 la
+foundation ingress è atterrata (#90, judge CRITICAL MERGE al giro 1: mutation
+testing rosso per la ragione giusta su entrambe le cuciture, doppio invio
+riprodotto e fermato con due connessioni reali) · S2 schema lifecycle
+(A6+A7+A8-min, #93) · S3 hardening minimo (D12-min+E6, #95) · S4 bring-up del
+modello, smoke 3/3 su home temporanea. Resta **solo l'install reale**.
 Decisione owner 25/08: **API-first** — modello personale `qwen/qwen3.8-27b`
 via OpenRouter (openai-compat); Muffin resta multi-famiglia (qwen / anthropic
 / gpt / gemma) attraverso i due provider esistenti, senza adapter nuovi;
