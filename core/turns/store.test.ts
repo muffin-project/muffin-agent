@@ -121,6 +121,16 @@ describe('the turn record', () => {
     expect(row?.delivery).toBe('failed:429 Too Many Requests');
   });
 
+  it('keeps an ambiguous remote effect terminal and visible to undelivered readers', () => {
+    const s = store();
+    const created = s.create(spec({ replyTo: { chatId: 7, messageId: 9 } }));
+    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
+    s.delivered('turn-1', 'possibly_sent');
+
+    expect(s.get('turn-1')?.delivery).toBe('possibly_sent');
+    expect(s.undelivered()).toMatchObject([{ id: 'turn-1', delivery: 'possibly_sent' }]);
+  });
+
   it('a turn nobody has to deliver to has no delivery that can fail', () => {
     const s = store();
     s.create(spec());
