@@ -123,7 +123,13 @@ function gatewayOver(deps: LoopDeps, home: string, delivered: { turn: TurnRecord
 
 /** Lets the background run the lane started finish, without a fixed sleep. */
 async function settle(lane: TurnLane): Promise<void> {
-  for (let i = 0; i < 200 && lane.isRunning(); i++) await new Promise((r) => setTimeout(r, 5));
+  // The full suite runs CPU-heavy document, sandbox and subprocess tests in
+  // parallel. One second was enough in isolation but could expire while this
+  // lane was still legitimately holding the shared model token, after which
+  // the test asserted on a turn it had not waited for. Keep polling the actual
+  // ownership signal and fail explicitly if it never clears.
+  for (let i = 0; i < 800 && lane.isRunning(); i++) await new Promise((r) => setTimeout(r, 5));
+  expect(lane.isRunning()).toBe(false);
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
@@ -224,6 +230,37 @@ describe('B2 · il turno torna subito, e la risposta arriva dopo', () => {
     expect(row.delivery).toBe('failed:telegram giù');
     // The model was paid once. Retrying the *turn* to fix a *delivery* is the
     // duplication `Scheduler.run` already learned not to do for jobs.
+    expect(provider.calls).toBe(1);
+  });
+
+  it('una consegna ambigua resta possibly_sent e non rifà il lavoro', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Scripted([answer('risposta forse già arrivata')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+
+    const turnId = enqueueTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: deps.sessions.open('telegram:ambiguous'),
+      text: 'ciao',
+      replyTo: { chatId: 18 },
+    });
+
+    const lane = new TurnLane({
+      turns: deps.turns,
+      run: makeLaneRunner(deps, async () => 'possibly_sent'),
+      modelLane: new ModelLane(),
+    });
+    lane.tick();
+    await settle(lane);
+    const row = deps.turns.get(turnId)!;
+    runtime.close();
+
+    expect(row.status).toBe('done');
+    expect(row.outcome).toBe('answered');
+    expect(row.delivery).toBe('possibly_sent');
     expect(provider.calls).toBe(1);
   });
 });

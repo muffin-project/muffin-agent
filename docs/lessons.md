@@ -1091,3 +1091,40 @@ non-rerunnable and rerunnable cases red (the spy handler is called even
 though `startToolCall` threw) while every other test in the file, including
 the happy path, stays green — the failure is specific to the removed gate,
 not a side effect of a broader breakage.
+
+## A crash after the interesting output looks exactly like a successful run **(this build)**
+
+`node .claude/deleghe.mjs riprendi` was declared healthy by two agents, in two
+sessions, within an hour of each other — and it exited 1. It prints its
+sections in order, and the `TypeError` that killed it (`v.slug.padEnd` on four
+delegations closed without ever being registered) fires inside the *last* loop.
+Everything a reader cares about — the delegation counts, the diagnosis, the
+parked set — is already on stdout when the process dies. The output does not
+look truncated. It looks finished.
+
+Both readers then filtered it: one grepped the section headers to report the
+counts, the other filtered for lines starting with `✗`. Neither filter can
+carry an exit status, and `cmd | grep` reports grep's. So the check that
+existed to verify the command consumed exactly the part of its output that was
+still true, and discarded the one signal that was not.
+
+The generalizable shape is not "we forgot to check `$?`". It is that **a
+filter chosen to make output readable is chosen from the output you expect**,
+so it is structurally blind to the failure you did not — and the more useful
+the filter, the more complete the surviving output looks. This is the house
+defect (`ORCHESTRATION.md` §11: *dichiarato e non collegato*) turned on the
+people applying it: a mechanism that ran is not the claim; the claim is that
+it ran *and finished*, and only one of those is visible in the text.
+
+The form that cannot lie is the one the repo already writes down for mutating
+commands — redirect to a file, read the status, then look at the content:
+
+```bash
+node .claude/deleghe.mjs riprendi > /tmp/r.out 2>&1; echo "exit=$?"
+```
+
+And the defect underneath had the same shape as its own discovery: the crash
+came from a delegation in a *partial* state — a `chiudi` row with no `registra`
+row, left by a session compacted mid-flight — which is precisely the state the
+tool exists to survive. A recovery tool that dies on incomplete input is a
+recovery tool that works only when nothing went wrong.

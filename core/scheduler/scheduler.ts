@@ -419,6 +419,36 @@ export class Scheduler {
       return;
     }
 
+    /**
+     * Niente da dire, quindi non dice niente.
+     *
+     * Un job che produce testo vuoto ha **girato**: la sua occorrenza va
+     * settled e la schedulazione avanza. Ma consegnarlo produrrebbe un
+     * messaggio vuoto, che `agent/scheduler-run.ts` descrive già come *"un job
+     * che non ha prodotto niente"* — cioè rumore indistinguibile da un
+     * guasto. È il caso ordinario di un job `script`: «controlla se il sito è
+     * giù» non deve dire niente nei giorni in cui il sito è su, e la
+     * differenza fra silenzio e messaggio vuoto è tutta la differenza fra un
+     * controllo che si può tenere acceso e uno che si finisce per spegnere.
+     *
+     * `error` è escluso, e non per simmetria. Un turno può finire in errore
+     * con testo vuoto — il ramo del claim perso in `agent/loop.ts` lo fa —
+     * e quella riga assorbita qui diventerebbe indistinguibile da «girato,
+     * niente da dire»: nessuno stamperebbe più niente, e un esito perso in
+     * una race di fencing avrebbe lo stesso aspetto di una giornata in cui il
+     * sito era su. Il silenzio è una risposta; un guasto silenzioso no.
+     */
+    if (outcome.text.trim() === '' && outcome.stopped !== 'error') {
+      try {
+        this.settleFire(job);
+        this.store.markRan(job.id);
+        this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
+      } catch (error) {
+        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     // Deliver the answer, or — for a scheduler-principal ASK queued by the
     // kernel — the question the owner has to decide.
     //

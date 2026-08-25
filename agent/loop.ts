@@ -5,6 +5,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
+import { SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
@@ -176,7 +177,20 @@ export type ApprovalRequest = {
   capability: string;
   /** The kernel's own wording, not a paraphrase. */
   prompt: string;
+  /**
+   * The concrete subject of the call: the kernel's resource when it has one
+   * (path, URL, query bytes), otherwise a render of the call's own arguments —
+   * a shell command with its cwd, a pid with its name. An approval whose
+   * subject is invisible is theater (D12): "approvi sys.shell?" is not a
+   * question anyone can answer.
+   */
   resource?: string | undefined;
+  /**
+   * The turn's taint when the ask fired — "why am I being asked" is half of
+   * the answer. 0 = owner speaking directly; higher tiers mean untrusted
+   * content has already entered the turn, so the surface should say so.
+   */
+  taint: TrustTier;
 };
 
 export type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
@@ -649,6 +663,17 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   });
 }
 
+/** Il testo del primo messaggio utente, per dire *quale* script era partito. */
+function textOfFirstUserMessage(messages: Message[]): string | null {
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    for (const b of m.content) {
+      if (b.type === 'text' && b.text) return b.text;
+    }
+  }
+  return null;
+}
+
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
 export type ResumeRefusal = {
   turnId: string;
@@ -716,6 +741,45 @@ export async function resumeTurn(
     // Not an error: two lanes over one database is the normal case for the
     // seconds a REPL and a gateway overlap, and the loser has nothing to do.
     return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+  }
+
+  /**
+   * Un turno che il modello non ha mai visto non si riprende col modello.
+   *
+   * Un job `script` scrive una riga in `turns` come qualsiasi altro lavoro —
+   * è ciò che gli dà identità durevole — ma non c'è nessuna inferenza da
+   * riprendere: la riga porta un comando, non una conversazione. Senza questa
+   * guardia un crash a metà script finiva alla lane, che lo riprendeva
+   * chiamando il modello con `script: echo …` come se fosse una richiesta
+   * dell'owner: un costo, una risposta inventata, e consegnata.
+   *
+   * E non si riesegue nemmeno lo script. `sys.shell` dichiara
+   * `rerunnable: false` perché un comando *"may have sent something, moved
+   * something, or charged something"*: dopo un crash lo stato non è "non
+   * fatto" né "fatto" ma **forse fatto**, ed è ciò che va detto invece di
+   * scegliere una delle due e sbagliare a caso.
+   */
+  if (record.model === SCRIPT_MODEL) {
+    const comando = textOfFirstUserMessage(record.messages);
+    const testo =
+      `Un job script era partito quando il processo è morto, e non è ri-eseguibile: ` +
+      `**non posso sapere se ha avuto effetto**. Non l'ho rifatto.` +
+      (comando ? `\n\n${comando}` : '') +
+      `\n\nControlla lo stato prima di rilanciarlo.`;
+    deps.turns.finish(
+      record.id,
+      { outcome: 'error', messages: record.messages, taint: record.taint, counters: record.counters },
+      record.claimToken,
+    );
+    return {
+      turnId: record.id,
+      traceId: record.id,
+      stopped: 'error',
+      text: testo,
+      taint: record.taint,
+      iterations: 0,
+      usage: record.counters.usage,
+    };
   }
 
   const span = deps.tracer.start(
@@ -1404,13 +1468,31 @@ async function drive(
       if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
 
       const results: ContentBlock[] = [];
-      toolCallsMade += result.toolCalls.length;
       for (const call_ of result.toolCalls) {
         // Checked between tools, not only before the next model call: a Ctrl+C
         // during a run of tool calls used to do nothing visible until the batch
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
         if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        // The ceiling counts CALLS, not iterations. `cap` above bounds trips
+        // through this loop, but nothing upstream bounds how many `tool_use`
+        // blocks one completion carries — a single response with 40 calls
+        // used to execute all 40 under a profile that promised 15 (E6,
+        // RETURN S3). Refused calls still get a tool_result: a hole in the
+        // batch is a protocol error every provider rejects, and the model
+        // should read why it was stopped instead of retrying blind.
+        if (toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+          results.push({
+            type: 'tool_result',
+            toolCallId: call_.id,
+            content:
+              `Tetto di ${deps.profile.maxToolCallsPerTurn} tool call per turno raggiunto: chiamata non eseguita. ` +
+              `Chiudi il turno con quello che hai, o dì all'owner cosa resta da fare.`,
+            isError: true,
+          });
+          continue;
+        }
+        toolCallsMade += 1;
         try {
           results.push(await runTool(deps, snapshot, turn, call_, input, exposed, toolContext));
         } catch (error) {
@@ -1900,6 +1982,23 @@ function assertNever(x: never): never {
   throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
 }
 
+/**
+ * Render a tool call's arguments as the one-line subject of an approval —
+ * `command: rm -rf /tmp/x · cwd: /tmp` — for capabilities whose kernel
+ * resource is `none`. Flat key: value pairs, no prose: the owner is deciding,
+ * not reading. Capped because an argument can be a whole file body, and a
+ * question that scrolls is a question nobody reads to the end of.
+ */
+function summarizeCallArgs(args: unknown): string | undefined {
+  if (args === null || typeof args !== 'object') return undefined;
+  const parts = Object.entries(args as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+  if (parts.length === 0) return undefined;
+  const joined = parts.join(' · ');
+  return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
+}
+
 async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -2002,17 +2101,19 @@ async function runTool(
       const request: ApprovalRequest = {
         capability,
         prompt: decision.ask.prompt,
-        // `path` carried this alone; `url` and `query` join it (mandato inv.
+        // `path` carried this alone; `url` and `query` joined it (mandato inv.
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
         // §revisione named and left open ("l'URL che sys.http sta per
-        // raggiungere ... non compaiono nel testo che l'owner vede"). Does
-        // not by itself close D12 (M5-BIS): a `resourceKind: 'none'`
-        // capability — `sys.shell`'s command+cwd, a pid+name — still has
-        // nothing here to show.
+        // raggiungere ... non compaiono nel testo che l'owner vede"). For a
+        // `resourceKind: 'none'` capability the kernel has nothing to offer,
+        // so the call's own arguments are the action — `sys.shell`'s
+        // command+cwd, a pid+name — and hiding them made the ask
+        // unanswerable (D12-min, RETURN S3).
         ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
           ? { resource: resource.value }
-          : {}),
+          : { resource: summarizeCallArgs(call.args) }),
+        taint: snapshot.currentTaint(),
       };
       if (!deps.approve) {
         // No channel on this surface: the turn stops and says what it wanted,

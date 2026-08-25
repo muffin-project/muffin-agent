@@ -87,3 +87,16 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
     expect(me).toMatchObject({ id: 1, username: 'muffin_bot' });
   });
 });
+
+describe('TelegramApi — visible sends never retry an ambiguous transport failure', () => {
+  it('sendMessage makes one HTTP attempt when the response may have been lost after acceptance', async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError('response stream closed');
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const api = new TelegramApi(TOKEN);
+    await expect(api.sendMessage(42, 'una sola volta')).rejects.toBeInstanceOf(TelegramError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});

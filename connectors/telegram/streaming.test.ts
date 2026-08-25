@@ -10,6 +10,7 @@ import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider, StreamEvent } from '../../agent/providers/types.js';
 import { TelegramConnector, type TelegramConfig } from './connector.js';
 import type { TelegramApiLike } from './api.js';
+import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
 /**
@@ -160,10 +161,12 @@ function harness(config: TelegramConfig, provider: Provider, api: TelegramApiLik
   runInit({ home, apiKey: 'sk-tgstream-never-called' });
   const runtime = buildRuntime(home, workspace);
   const loop: LoopDeps = { ...runtime.deps, provider };
+  const inbox = new UpdateInbox(runtime.db);
   const connector = new TelegramConnector({
     loop,
     sessions: runtime.deps.sessions,
-    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    inbox,
+    delivery: new TelegramDeliveryStore(runtime.db),
     api,
     config,
   });
@@ -176,8 +179,8 @@ async function deliver(connector: TelegramConnector, updates: Update[]): Promise
   await (connector as unknown as { drain: () => Promise<void> }).drain();
 }
 
-describe('a group turn streams the placeholder as the answer forms (B11)', () => {
-  it('edits the placeholder live, and the live content is byte-identical to the finished answer — no separate re-send', async () => {
+describe('a group turn uses ephemeral presence and durably sends only the final answer', () => {
+  it('never creates or edits a crash-orphanable placeholder, and sends the finished answer once', async () => {
     const finalText = 'Cera una volta un muffin che parlava.';
     const provider = streamingProvider(['Cera ', 'una volta ', 'un muffin che parlava.'], finalText);
     const { api, calls } = recordingApi();
@@ -186,25 +189,14 @@ describe('a group turn streams the placeholder as the answer forms (B11)', () =>
     try {
       await deliver(connector, [groupMsg(1)]);
 
-      const edits = calls.filter((c) => c.method === 'editMessageText');
-      // At least one live edit happened — proof `onDelta` genuinely reached
-      // `presence.streamText`, not just that the final answer got delivered
-      // (which would happen even with the wiring deleted, via the ordinary
-      // non-streaming finalisation path).
-      expect(edits.length).toBeGreaterThanOrEqual(1);
-      // Whichever edit is last, it — and the finished answer — agree byte
-      // for byte, the same guarantee `cli/repl.test.ts` checks on the CLI
-      // side. And it was sent exactly once: streaming already left the
-      // placeholder correct, so finalisation recognised the match and did
-      // not re-send.
-      expect(edits[edits.length - 1]!.text).toBe(finalText);
-      expect(edits).toHaveLength(1);
+      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
     } finally {
       runtime.close();
     }
   });
 
-  it('never streams the tool round\'s "thinking aloud" text — only the final round reaches the placeholder', async () => {
+  it('never sends the tool round\'s "thinking aloud" text — only the final answer becomes durable output', async () => {
     const finalText = 'Ecco cosa ho trovato.';
     // A name the model invented — deliberately not registered. `runTool`
     // (`agent/loop.ts`) answers an unknown tool with a `tool_result` telling
@@ -218,10 +210,9 @@ describe('a group turn streams the placeholder as the answer forms (B11)', () =>
     try {
       await deliver(connector, [groupMsg(2)]);
 
-      const edits = calls.filter((c) => c.method === 'editMessageText');
-      const allEditText = edits.map((e) => e.text ?? '').join('\n');
-      expect(allEditText).not.toContain('lascia che controlli');
-      expect(edits[edits.length - 1]?.text).toBe(finalText);
+      const sent = calls.filter((c) => c.method === 'sendMessage');
+      expect(sent.map((e) => e.text ?? '').join('\n')).not.toContain('lascia che controlli');
+      expect(sent.map((e) => e.text)).toEqual([finalText]);
     } finally {
       runtime.close();
     }

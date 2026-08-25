@@ -6,6 +6,7 @@ import type { LoopDeps } from '../../agent/loop.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TelegramConnector, type TelegramConfig, parseUpdate, principalFor } from './connector.js';
 import { UpdateInbox } from './updates.js';
+import { TelegramDeliveryStore } from './delivery.js';
 import type { TelegramApi } from './api.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,10 +78,12 @@ function harness(config: TelegramConfig) {
     systemPrompts: { owner: 'x', group: 'x' },
   } as unknown as LoopDeps;
 
+  const db = new DatabaseCtor(':memory:');
   const connector = new TelegramConnector({
     loop,
     sessions: loop.sessions,
-    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    inbox: new UpdateInbox(db),
+    delivery: new TelegramDeliveryStore(db),
     api,
     config,
     savePairing: (next) => {
