@@ -304,6 +304,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > più, la rimozione di una costante (`expired_at IS NULL`/`superseded_at IS
 > NULL`) che nessun chiamante poteva muovere. `factsAsOf`/`nearestFactTo`
 > (`core/memory/store.ts`) rispondono a «chi era X a maggio» dentro le
+>
 > primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e
 > vicinato sono le due primitive di `02-ontologia.md` §9, cablate sia in
 > `muffin memory search` sia nel tool `memory_search` che il modello raggiunge
