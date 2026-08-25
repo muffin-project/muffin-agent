@@ -307,6 +307,7 @@ describe('resolveBound — fault points 5/7: a turn already delivered settles wi
       content: 'la risposta che il crash non ha mai consegnato',
       surface: 'telegram',
       createdAt: new Date().toISOString(),
+      traceId: turnId,
     });
     const rec = h.turns.create(
       {

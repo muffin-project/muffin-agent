@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
-import { recoveredText, runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { recoveredText } from './recovered-text.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -198,7 +199,7 @@ async function resolveBound(
   // between a turn finishing and `Scheduler.settle` running at all). Recover
   // the text and hand back a normal outcome: `Scheduler` delivers and settles
   // exactly as it would for a live run, never calling `runJob` a second time.
-  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps, existing), turnId: existing.id };
+  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps.sessions, existing), turnId: existing.id };
 }
 
 export function makeJobRunner(deps: LoopDeps, fires: JobFireStore): RunJob {

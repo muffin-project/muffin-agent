@@ -264,6 +264,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
       content: 'la risposta che il crash non ha mai consegnato',
       surface: 'cli',
       createdAt: new Date().toISOString(),
+      traceId: turnId,
     });
     const rec = deps.turns.create(
       {
