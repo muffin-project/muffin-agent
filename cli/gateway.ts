@@ -202,6 +202,9 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
     // instead of writing a real service into the owner's `~/Library` — which it
     // did, once, before this line existed.
     homeDir: homedir(),
+    // Where this install's Node lives. Without it launchd/systemd hand the
+    // launcher a PATH that has no `node` in it at all.
+    interpreterDir: dirname(process.execPath),
     ...(process.env['XDG_CONFIG_HOME'] ? { configHome: process.env['XDG_CONFIG_HOME'] } : {}),
   });
 
