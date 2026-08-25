@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   timezone     TEXT NOT NULL,
   goal         TEXT NOT NULL,
   channel      TEXT NOT NULL,
+  -- 'goal' (un obiettivo che il modello interpreta) oppure 'script' (un
+  -- comando che gira nella sandbox, senza modello). Default 'goal': le righe
+  -- che esistevano prima di questa colonna sono tutte obiettivi, e la
+  -- migrazione 2 la aggiunge con lo stesso default.
+  kind         TEXT NOT NULL DEFAULT 'goal',
   created_at   TEXT NOT NULL,
   next_fire_at TEXT NOT NULL,
   last_run_at  TEXT,
@@ -33,14 +38,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(active, next_fire_at);
 `;
 
-export type Job = {
+type JobCommon = {
   id: string;
   /** Standard 5-field cron expression. */
   cron: string;
   /** IANA timezone the cron is interpreted in. */
   timezone: string;
-  /** The natural-language goal to run when it fires. */
-  goal: string;
   /** Delivery surface id (e.g. 'cli', 'telegram'). */
   channel: string;
   createdAt: Date;
@@ -49,12 +52,41 @@ export type Job = {
   active: boolean;
 };
 
+/**
+ * What a fire actually does — and the two answers are not variations of one
+ * thing, which is why this is a union and not a nullable field.
+ *
+ * A **goal** is interpreted: it becomes a turn, the model reads it, tools may
+ * run, and the answer is delivered. That is the right shape for "riassumimi la
+ * giornata" and the wrong shape for "controlla se il sito risponde", where the
+ * work is deterministic and the model adds only cost and variance.
+ *
+ * A **script** is executed: a command runs in the sandbox and **the model is
+ * never called**. It speaks only when it has something to say — empty output
+ * means silence, not an empty message. A check every five minutes costs zero
+ * tokens until the day it finds something.
+ *
+ * Both share one storage column (`goal`), because "what to run when it fires"
+ * is genuinely one slot; the discriminant is what keeps a shell command from
+ * ever being handed to the model as a goal, or the reverse, by type error
+ * rather than by care.
+ */
+export type Job = JobCommon &
+  (
+    | { kind: 'goal'; goal: string; script?: undefined }
+    | { kind: 'script'; script: string; goal?: undefined }
+  );
+
 export type NewJob = {
   cron: string;
   timezone: string;
-  goal: string;
   channel: string;
-};
+} & ({ kind?: 'goal'; goal: string } | { kind: 'script'; script: string });
+
+/** What this job runs, whichever kind it is — for logs and list output. */
+export function jobPayload(job: Job | NewJob): string {
+  return job.kind === 'script' ? job.script : job.goal;
+}
 
 /** Thrown on a bad cron or timezone, so the CLI can name what was wrong. */
 export class JobError extends Error {
@@ -96,6 +128,7 @@ type Row = {
   timezone: string;
   goal: string;
   channel: string;
+  kind: string;
   created_at: string;
   next_fire_at: string;
   last_run_at: string | null;
@@ -103,17 +136,22 @@ type Row = {
 };
 
 function toJob(row: Row): Job {
-  return {
+  const common = {
     id: row.id,
     cron: row.cron,
     timezone: row.timezone,
-    goal: row.goal,
     channel: row.channel,
     createdAt: new Date(row.created_at),
     nextFireAt: new Date(row.next_fire_at),
     lastRunAt: row.last_run_at ? new Date(row.last_run_at) : null,
     active: row.active === 1,
   };
+  // Anything that is not exactly 'script' is a goal. A row with a `kind` this
+  // build does not know must not become an executable script by accident —
+  // the safe default is the one that goes through the model and its kernel.
+  return row.kind === 'script'
+    ? { ...common, kind: 'script', script: row.goal }
+    : { ...common, kind: 'goal', goal: row.goal };
 }
 
 export class JobStore {
@@ -130,8 +168,8 @@ export class JobStore {
   ) {
     db.exec(SCHEMA);
     this.insertStmt = db.prepare(
-      `INSERT INTO jobs (id, cron, timezone, goal, channel, created_at, next_fire_at, last_run_at, active)
-       VALUES (@id, @cron, @timezone, @goal, @channel, @createdAt, @nextFireAt, NULL, 1)`,
+      `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, last_run_at, active)
+       VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @createdAt, @nextFireAt, NULL, 1)`,
     );
     this.listStmt = db.prepare(`SELECT * FROM jobs WHERE active = 1 ORDER BY next_fire_at`);
     this.dueStmt = db.prepare(
@@ -146,23 +184,27 @@ export class JobStore {
   add(spec: NewJob): Job {
     const now = this.clock();
     const next = nextFire(spec.cron, spec.timezone, now); // throws before any write
-    const job: Job = {
+    const common = {
       id: randomUUID(),
       cron: spec.cron,
       timezone: spec.timezone,
-      goal: spec.goal,
       channel: spec.channel,
       createdAt: now,
       nextFireAt: next,
       lastRunAt: null,
       active: true,
     };
+    const job: Job =
+      spec.kind === 'script'
+        ? { ...common, kind: 'script', script: spec.script }
+        : { ...common, kind: 'goal', goal: spec.goal };
     this.insertStmt.run({
       id: job.id,
       cron: job.cron,
       timezone: job.timezone,
-      goal: job.goal,
+      goal: jobPayload(job),
       channel: job.channel,
+      kind: job.kind,
       createdAt: now.toISOString(),
       nextFireAt: next.toISOString(),
     });

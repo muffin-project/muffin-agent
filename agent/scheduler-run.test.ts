@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
-import { JobStore, type Job } from '../core/scheduler/jobs.js';
+import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TodoStore } from '../core/turns/todo.js';
@@ -218,7 +218,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: 'sess-done-delivered',
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -251,7 +251,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: 'sess-undeliverable',
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -291,7 +291,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
         surface: 'cli',
         sessionId: session.id,
         model: 'test-model',
-        messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
         taint: 0,
         counters: counters(),
         replyTo: { channel: 'cli' },
@@ -326,7 +326,7 @@ describe('makeJobRunner — B7 identity resolution', () => {
           surface: 'cli',
           sessionId: `sess-${status}`,
           model: 'test-model',
-          messages: [{ role: 'user', content: [{ type: 'text', text: job.goal }] }],
+          messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
           taint: 0,
           counters: counters(),
           replyTo: { channel: 'cli' },
