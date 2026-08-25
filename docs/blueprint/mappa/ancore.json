@@ -2621,22 +2621,22 @@
   },
   "probe.ts:129": {
     "path": "core/sandbox/probe.ts",
-    "line": 279,
+    "line": 285,
     "testo": "function probeBubblewrap(): SandboxProbe {"
   },
   "probe.ts:130": {
     "path": "core/sandbox/probe.ts",
-    "line": 280,
+    "line": 286,
     "testo": "if (userInfo().uid === 0) {"
   },
   "probe.ts:61": {
     "path": "core/sandbox/probe.ts",
-    "line": 122,
+    "line": 123,
     "testo": "function probeSeatbelt(): SandboxProbe {"
   },
   "probe.ts:99": {
     "path": "core/sandbox/probe.ts",
-    "line": 160,
+    "line": 161,
     "testo": "// A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a"
   },
   "process.ts:146": {

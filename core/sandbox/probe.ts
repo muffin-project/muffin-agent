@@ -77,7 +77,8 @@ export const TMPDIR_SUN_PATH_LIMIT = 108;
  *    exists, against the host `tmpdir()` — the two are siblings, not nested
  *    (the previous 49 = 19+30 modelled a nesting that does not exist, and was
  *    safe only by coincidence). `srt-mux-<pid>-<seq>.sock` stays ≤ 25 even at
- *    `pid_max = 4194304` (1+8+7+1+3+5); `srt-credmask-`/`srt-ca-` create
+ *    `pid_max = 4194304` (1+8+7+1+3+5) and `srt-tt-<pid>-<seq>.sock` ≤ 24 (one
+ *    char shorter prefix); `srt-credmask-`/`srt-ca-` create
  *    regular files, never sockets.
  *
  * So: 35, the longest reachable suffix, exact and unpadded. Pinned to the
@@ -255,13 +256,18 @@ function isUsernsDenied(detail: string): boolean {
   }
   // I due messaggi con cui bwrap stesso muore quando la creazione del
   // namespace è rifiutata — verbatim upstream (containers/bubblewrap,
-  // bubblewrap.c, letta 26/08/2026), incondizionati e non appesi a
-  // «operation not permitted», perché nessuno dei due lo contiene:
+  // bubblewrap.c, letta 26/08/2026), non appesi a «operation not
+  // permitted», perché nessuno dei due lo contiene. L'EINVAL è ancorato
+  // alla virgola di proposito (giro 3 del judge): upstream anche ENOSPC e
+  // il fallback generico iniziano con «Creating new namespace failed» ma
+  // proseguono coi due punti — sono limiti di risorse o errori qualunque,
+  // e il rimedio AppArmor per loro sarebbe una pista falsa; restano in
+  // probe_failed col detail verbatim:
   //
   //   EPERM  «No permissions to create a new namespace, likely because the
   //          kernel does not allow non-privileged user namespaces.»
   //   EINVAL «Creating new namespace failed, likely because the kernel does
-  //          not support user namespaces.»
+  //          not support user namespaces.» (virgola; ENOSPC/fallback: due punti)
   //
   // Il giro 1 del judge aveva trovato la provenienza falsa del secondo; il
   // giro 2 ha trovato di peggio: stava in un ramo in AND con «operation not
@@ -271,7 +277,7 @@ function isUsernsDenied(detail: string): boolean {
   // chi legge il rimedio: per EINVAL il profilo AppArmor non basta — lì è il
   // kernel a non avere i user namespaces — ma la classificazione resta
   // giusta, e il detail verbatim di bwrap lo dice da solo.
-  if (/creating new namespace failed/i.test(detail)) return true;
+  if (/creating new namespace failed,/i.test(detail)) return true;
   if (/no permissions to create a new namespace/i.test(detail)) return true;
   return false;
 }

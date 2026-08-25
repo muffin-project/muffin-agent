@@ -468,10 +468,10 @@ describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
 
   /**
    * The judge's finding on round 1: the 108-byte budget belongs to the whole
-   * socket path, and the runtime appends 49 measured characters under TMPDIR
-   * (executor scratch + the bridge's deepest socket) before any socket is
-   * born. The first version compared the bare directory against 108, so every
-   * TMPDIR in the 74–108 band read `ok` on a machine where the sandbox would
+   * socket path — the bridge binds its longest socket (35 measured
+   * characters, `claude-socks-<16hex>.sock`) directly under this directory.
+   * The first version compared the bare directory against 108, so every
+   * TMPDIR in the warn band read `ok` on a machine where the sandbox would
    * fail at runtime — a false green in exactly the range real XDG cache paths
    * live in.
    */
@@ -482,7 +482,7 @@ describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
 
   it('does not flag a short Linux TMPDIR — including the exact boundary', () => {
     expect(tmpdirBreaksSandboxSockets('linux', '/tmp')).toBe(false);
-    // The real boundary: dir + SANDBOX_TMPDIR_OVERHEAD (49) against 108.
+    // The real boundary: dir + SANDBOX_TMPDIR_OVERHEAD (35) against 108.
     expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD))).toBe(false);
     expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD + 1))).toBe(true);
   });
