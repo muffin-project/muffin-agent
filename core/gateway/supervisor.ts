@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { LAUNCHD_LABEL, planUnit, SERVICE_NAME } from './unit.js';
 
 /**
@@ -32,7 +32,20 @@ export type SupervisorProbes = {
   unitFileExists: (path: string) => boolean;
   /** Linux: `systemctl --user is-enabled <service>` exited 0. */
   systemdEnabled?: () => boolean;
-  /** Linux: `loginctl show-user "$USER" -p Linger` says `Linger=yes` — without it the user unit dies at logout. */
+  /**
+   * Linux: `systemctl --user is-failed <service>` exited 0 — note the polarity,
+   * that command answers *yes it is failed* with a zero exit.
+   *
+   * `is-enabled` answers a question about the **future** (will systemd start
+   * this at boot), and until this probe existed it was the only question asked.
+   * A unit can be enabled and dead at the same time, and on this unit that is
+   * not a transient: `RestartPreventExitStatus` (unit.ts) deliberately keeps
+   * systemd from restarting a permanent failure, so `failed` means *nothing is
+   * coming back on its own*. That is exactly the state `doctor` existed to
+   * catch, and it was reporting it green.
+   */
+  systemdFailed?: () => boolean;
+  /** Linux: `loginctl show-user <user> -p Linger` says `Linger=yes` — without it the user unit dies at logout. */
   lingerEnabled?: () => boolean;
   /** macOS: `launchctl print gui/$(id -u)/<label>` exited 0. */
   launchdLoaded?: () => boolean;
@@ -98,6 +111,18 @@ export function checkSupervisor(
       remedy: `systemctl --user enable --now ${SERVICE_NAME}.service`,
     };
   }
+  // Prima del linger, di proposito: «è giù adesso e non torna» batte «morirà
+  // al prossimo logout». Un servizio failed è già il guasto che l'altro
+  // controllo si limita a prevedere.
+  if (probes.systemdFailed?.() ?? false) {
+    return {
+      engaged: false,
+      detail:
+        `${plan.path} è enabled ma il servizio è in stato failed — ` +
+        `su questa unit non riparte da solo (RestartPreventExitStatus), quindi resta giù finché non lo si guarda`,
+      remedy: `systemctl --user status ${SERVICE_NAME}.service, e journalctl --user -u ${SERVICE_NAME}.service -n 50 per il perché`,
+    };
+  }
   if (!(probes.lingerEnabled?.() ?? false)) {
     return {
       engaged: false,
@@ -129,9 +154,20 @@ export function realSupervisorProbes(): SupervisorProbes {
   return {
     unitFileExists: (path) => existsSync(path),
     systemdEnabled: () => ok('systemctl', ['--user', 'is-enabled', '--quiet', `${SERVICE_NAME}.service`]),
+    // Polarità invertita rispetto a tutte le altre sonde: `is-failed` esce 0
+    // **quando è fallito**. Quindi qui `ok(...) === true` significa "rotto", e
+    // il collasso a `false` di una sonda che non parte resta la lettura
+    // prudente giusta — non confermato, non "sicuramente sano".
+    systemdFailed: () => ok('systemctl', ['--user', 'is-failed', '--quiet', `${SERVICE_NAME}.service`]),
     lingerEnabled: () => {
       try {
-        const result = spawnSync('loginctl', ['show-user', process.env['USER'] ?? '', '-p', 'Linger'], {
+        // `userInfo().username` e non `process.env['USER']`: sotto il gestore
+        // systemd `USER` può non esserci affatto — la unit esporta solo
+        // MUFFIN_HOME e PATH (unit.ts) — e `loginctl show-user ""` fallisce,
+        // che questa sonda leggeva come "linger assente". Cioè `doctor`
+        // lanciato da un job diceva all'owner di abilitare il linger su una
+        // macchina dove era già attivo.
+        const result = spawnSync('loginctl', ['show-user', process.env['USER'] || userInfo().username, '-p', 'Linger'], {
           timeout: 2000,
         });
         return result.error === undefined && result.status === 0 && /Linger=yes/.test(result.stdout?.toString() ?? '');
