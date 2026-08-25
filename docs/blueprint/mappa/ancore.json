@@ -401,112 +401,112 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 123,
+    "line": 124,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 146,
+    "line": 147,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 237,
+    "line": 236,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 286,
+    "line": 285,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 288,
+    "line": 287,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 307,
+    "line": 306,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 327,
+    "line": 326,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 329,
+    "line": 328,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 338,
+    "line": 337,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 343,
+    "line": 342,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 355,
+    "line": 354,
     "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 361,
+    "line": 360,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:345": {
     "path": "agent/runtime.ts",
-    "line": 373,
+    "line": 372,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 374,
+    "line": 373,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 516,
+    "line": 515,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 522,
+    "line": 521,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:497": {
     "path": "agent/runtime.ts",
-    "line": 525,
+    "line": 524,
     "testo": "// Declared only when the tool exists. A capability the kernel knows about"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 553,
+    "line": 552,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 561,
+    "line": 560,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:534": {
     "path": "agent/runtime.ts",
-    "line": 562,
+    "line": 561,
     "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 640,
+    "line": 639,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 661,
+    "line": 660,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -1171,37 +1171,37 @@
   },
   "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 200,
+    "line": 201,
     "testo": "* controls via an OAuth2 URL with the `bot` scope and no permissions, then"
   },
   "cli/surface.ts:233": {
     "path": "cli/surface.ts",
-    "line": 234,
+    "line": 235,
     "testo": "`  https://discord.com/oauth2/authorize?client_id=${me.id}&scope=bot&permissions=0\\n` +"
   },
   "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 292,
+    "line": 293,
     "testo": "* never arrived even on a home where Telegram was connected and answering"
   },
   "cli/surface.ts:295": {
     "path": "cli/surface.ts",
-    "line": 296,
+    "line": 297,
     "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 350,
+    "line": 351,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
     "path": "cli/surface.ts",
-    "line": 53,
+    "line": 54,
     "testo": "export function cmdSurfaceList(home: string): number {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 78,
+    "line": 79,
     "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
   "connector.ts:354": {
@@ -2746,42 +2746,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 312,
+    "line": 311,
     "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 377,
+    "line": 376,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 412,
+    "line": 411,
     "testo": "if (executor.status().available) {"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 492,
+    "line": 491,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 516,
+    "line": 515,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 553,
+    "line": 552,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 559,
+    "line": 558,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 109,
+    "line": 110,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {
