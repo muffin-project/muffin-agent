@@ -2,46 +2,35 @@ import type Database from 'better-sqlite3';
 import { ensureColumn } from '../../core/lock/durable.js';
 
 /**
- * The inbox: every update lands here before its offset is confirmed.
+ * The inbox: every native Telegram update lands here before its offset is
+ * confirmed. Evidence is recorded before anything is decided about it.
  *
- * This exists because of one sentence in the Bot API documentation — *"An update
- * is considered confirmed as soon as getUpdates is called with an offset higher
- * than its update_id"* — and one consequence nobody puts next to it: **Telegram
- * will never send it again.** So if the offset advances and the process dies
- * before the message is processed, that message is gone. Not delayed. Gone. And
- * it is not a failure any test produces, because tests do not crash halfway.
+ * The load-bearing order is:
  *
- * So the order is fixed and it is the whole point of this file:
+ *   1. `getUpdates` returns a batch;
+ *   2. the batch is written durably in one transaction;
+ *   3. only then does the Telegram offset advance;
+ *   4. semantic consumption may fail, retry or resume after a restart.
  *
- *   1. `getUpdates` returns a batch
- *   2. the batch is written here, durably, in one transaction
- *   3. **only then** the offset advances
- *   4. processing happens afterwards, and can fail, retry, or resume after a
- *      restart — because the evidence is already on disk
+ * `update_id` is therefore the native-event idempotency key. It is deliberately
+ * NOT the Work identity (ADR-0052). Between the event row and a Turn/Work lives
+ * a surface-owned composition:
  *
- * `update_id` is the primary key, so a duplicate delivery — which happens when
- * step 3 fails after step 2 — is an `INSERT OR IGNORE` and not a second answer
- * to the same message.
+ *   telegram_updates.update_id
+ *       -> telegram_updates.composition_id
+ *       -> telegram_compositions.composition_id
+ *       -> telegram_compositions.work_id
  *
- * The same ethic as the memory plane: evidence is recorded before anything is
- * decided about it.
+ * The first assembler policy is still singleton: when the connector asks to
+ * bind an uncomposed update, `bind()` gives it a deterministic fallback
+ * composition of its own. That is a policy, not a schema invariant. A future
+ * Telegram assembler can call `include()` first for N updates and then the same
+ * `bind()` seals that shared composition into one Work without changing the
+ * crash-recovery protocol.
  *
- * ## `turn_id`/`settled_at` — the identity bridge ADR-0035 emendamento №5 already named
- *
- * *"Ogni `update_id` mappa a UNA sola identità durevole di turno"* (owner,
- * `slice/inbound-unit`'s mandate) is the same shape `core/scheduler/job-fires.ts`
- * proves for a job occurrence — `claim` → `bind` → `settle` — with one
- * simplification the job case does not have: **`accept()` already creates this
- * row before any handling starts**, so there is no separate `claim()` to write.
- * A `job_fires` row has to be created *by* the scheduler, because `jobs` only
- * holds the recurrence rule, not a row per occurrence; a Telegram update is
- * already one row per occurrence from the moment it lands. Two columns, added
- * with `ensureColumn` on the table this repo already ships, host the rest of
- * the same three-method shape (`bind`, `settle`, plus this class's own
- * pre-existing `pending`/`markProcessed` standing in for `claim`/settle's
- * schedule-advance) — not a second table, and not a shared framework with
- * `job_fires`: ADR-0035 emendamento №5 refuses the generalisation until a third
- * consumer exists, and two instances are not a third.
+ * `StoredUpdate.turnId` is kept as the connector-facing recovery view because a
+ * Turn is the concrete Work identity today. It is derived through the join
+ * above; there is no `update_id -> turn_id` column in the current schema.
  */
 
 export const TELEGRAM_SCHEMA = `
@@ -49,19 +38,26 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
   update_id     INTEGER PRIMARY KEY,
   payload       TEXT    NOT NULL,
   received_at   TEXT    NOT NULL,
-  -- NULL until a turn has finished with it. The recovery query is exactly
-  -- "everything where this is NULL", which is why it is a timestamp and not a
-  -- boolean: knowing *when* it was handled is free here and answers a question
-  -- a boolean cannot.
+  -- NULL until semantic consumption has completed. Recovery is exactly
+  -- "everything where this is NULL".
   processed_at  TEXT,
   /** Set when processing failed for a reason worth seeing rather than retrying blindly. */
   failure       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_telegram_pending ON telegram_updates(processed_at, update_id);
 
+-- Surface-local composition state. This is not a generic event bus and not an
+-- `intents` table: it exists only to preserve the parentage ADR-0052 requires
+-- between native Telegram evidence and the concrete Work eventually created.
+CREATE TABLE IF NOT EXISTS telegram_compositions (
+  composition_id TEXT PRIMARY KEY,
+  created_at     TEXT NOT NULL,
+  work_id        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_composition_work ON telegram_compositions(work_id);
+
 -- The confirmed offset, so a restart does not re-ask for what it already has.
--- One row, and the connector name is the key: a second connector would have its
--- own, rather than silently sharing this one.
+-- One row, and the connector name is the key: a second connector gets its own.
 CREATE TABLE IF NOT EXISTS telegram_offset (
   connector     TEXT PRIMARY KEY,
   next_offset   INTEGER NOT NULL,
@@ -74,88 +70,161 @@ export type StoredUpdate = {
   /** The raw update, exactly as Telegram sent it. Parsed by the caller, not here. */
   payload: string;
   receivedAt: string;
-  /** `null` until this update is bound to a durable turn identity (`bind`). */
+  /** `null` until this update's composition has been sealed into a durable Work/Turn. */
   turnId: string | null;
-  /** `null` until this update's delivery has been settled (`settle`). */
+  /** `null` until this native event's delivery/semantic consumption has settled. */
   settledAt: string | null;
 };
 
+export type CompositionBinding = {
+  compositionId: string;
+  workId: string | null;
+};
+
 export class UpdateInbox {
-  private readonly bindStmt: Database.Statement;
-  private readonly settleStmt: Database.Statement;
+  private readonly includeStmt: Database.Statement;
+  private readonly bindWorkStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
+  private readonly membershipStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
     private readonly connector = 'telegram',
   ) {
     db.exec(TELEGRAM_SCHEMA);
-    // Additive, for a database written before this slice — see
-    // `ensureColumn`'s own docstring in `core/lock/durable.ts`. `NULL` on
-    // every pre-existing row reads exactly as "not yet bound" / "not yet
-    // settled", which is the truth for a row nobody has resolved this way
-    // before today.
-    ensureColumn(db, 'telegram_updates', 'turn_id', 'turn_id TEXT');
+
+    // Additive on databases written before this slice. NULL means exactly what
+    // it should: the event has been received, but no assembler has included it
+    // in a composition yet / no settlement has happened yet.
+    ensureColumn(db, 'telegram_updates', 'composition_id', 'composition_id TEXT');
     ensureColumn(db, 'telegram_updates', 'settled_at', 'settled_at TEXT');
-    // Guarded on `turn_id IS NULL`, exactly like `JobFireStore.bind`: whichever
-    // caller's write lands first wins, and a loser's `changes === 0` is how
-    // `bind` below knows to hand back the winner's id instead of its own —
-    // never two turns for one update, even if two passes both decided this
-    // update looked unbound at once.
-    this.bindStmt = db.prepare(`UPDATE telegram_updates SET turn_id = ? WHERE update_id = ? AND turn_id IS NULL`);
-    // Guarded on `settled_at IS NULL` for the same reason: idempotent under a
-    // retry, and the first settlement is the one that counts.
-    this.settleStmt = db.prepare(`UPDATE telegram_updates SET settled_at = ? WHERE update_id = ? AND settled_at IS NULL`);
-    this.getStmt = db.prepare(
-      `SELECT update_id AS updateId, payload, received_at AS receivedAt, turn_id AS turnId, settled_at AS settledAt
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_telegram_composition ON telegram_updates(composition_id, update_id);`);
+
+    this.includeStmt = db.prepare(
+      `UPDATE telegram_updates
+       SET composition_id = ?
+       WHERE update_id = ? AND composition_id IS NULL`,
+    );
+    this.bindWorkStmt = db.prepare(
+      `UPDATE telegram_compositions
+       SET work_id = ?
+       WHERE composition_id = ? AND work_id IS NULL`,
+    );
+    this.membershipStmt = db.prepare(
+      `SELECT composition_id AS compositionId, received_at AS receivedAt
        FROM telegram_updates WHERE update_id = ?`,
     );
+    this.getStmt = db.prepare(
+      `SELECT u.update_id AS updateId,
+              u.payload,
+              u.received_at AS receivedAt,
+              c.work_id AS turnId,
+              u.settled_at AS settledAt
+       FROM telegram_updates u
+       LEFT JOIN telegram_compositions c ON c.composition_id = u.composition_id
+       WHERE u.update_id = ?`,
+    );
+
+    this.migrateLegacyDirectTurnBindings();
   }
 
   /**
-   * First writer wins, and every caller — first or raced — gets back the id
-   * that actually landed rather than the one it proposed. A caller that lost
-   * never has a turn of its own to run: it asks what the winner's id is and
-   * defers to it, which is what makes a second, competing turn for the same
-   * update structurally unreachable rather than merely unlikely. Mirrors
-   * `core/scheduler/job-fires.ts`'s `JobFireStore.bind` exactly.
+   * Include one native event in a surface composition, first-writer-wins.
+   *
+   * This is intentionally separate from `bind`: a crash after inclusion and
+   * before Work materialisation is a valid durable state, not a half-write to
+   * hide. The next pass can see the same composition and finish sealing it.
+   *
+   * Multiple update ids may therefore return the same `compositionId`; one
+   * update id can never be silently moved to another composition by a retry.
+   */
+  include(updateId: number, compositionId: string): string {
+    if (compositionId.trim() === '') throw new Error('composition_id Telegram vuoto');
+
+    this.includeStmt.run(compositionId, updateId);
+    const row = this.membershipStmt.get(updateId) as
+      | { compositionId: string | null; receivedAt: string }
+      | undefined;
+    if (!row) throw new Error(`telegram_updates mancante durante include per ${updateId}`);
+    if (row.compositionId === null) throw new Error(`telegram_updates senza composition_id dopo include per ${updateId}`);
+
+    this.db
+      .prepare(`INSERT OR IGNORE INTO telegram_compositions (composition_id, created_at) VALUES (?, ?)`)
+      .run(row.compositionId, row.receivedAt);
+    return row.compositionId;
+  }
+
+  /**
+   * Seal this update's composition into one concrete Work/Turn identity.
+   *
+   * The connector still calls this `bind(updateId, turnId)` because Turn is the
+   * concrete Work implementation today, but the first-writer-wins guard lives
+   * on `telegram_compositions.work_id`, not on the native event row. If an
+   * assembler has already placed several updates in one composition, binding
+   * any member makes every member resolve to the same Work through `get()`.
+   *
+   * If no assembler has acted yet, the fallback composition is deterministic
+   * and surface-qualified. That keeps today's singleton behaviour while
+   * leaving N-events -> 1-Work representable without a schema migration.
    */
   bind(updateId: number, turnId: string): string {
-    this.bindStmt.run(turnId, updateId);
-    const row = this.getStmt.get(updateId) as { turnId: string | null } | undefined;
-    if (!row || row.turnId === null) throw new Error(`telegram_updates senza turn_id dopo bind per ${updateId}`);
-    return row.turnId;
+    const compositionId = this.include(updateId, this.defaultCompositionId(updateId));
+    this.bindWorkStmt.run(turnId, compositionId);
+    const binding = this.compositionOf(updateId);
+    if (!binding || binding.workId === null) {
+      throw new Error(`telegram composition senza work_id dopo bind per update ${updateId}`);
+    }
+    return binding.workId;
+  }
+
+  /** The durable parentage of one native event, for recovery/tests/future assembler wiring. */
+  compositionOf(updateId: number): CompositionBinding | null {
+    const row = this.db
+      .prepare(
+        `SELECT u.composition_id AS compositionId, c.work_id AS workId
+         FROM telegram_updates u
+         LEFT JOIN telegram_compositions c ON c.composition_id = u.composition_id
+         WHERE u.update_id = ?`,
+      )
+      .get(updateId) as { compositionId: string | null; workId: string | null } | undefined;
+    if (!row || row.compositionId === null) return null;
+    return { compositionId: row.compositionId, workId: row.workId };
   }
 
   /**
-   * Marks this update's delivery fully settled. Idempotent, so a duplicate
-   * drain or a retried delivery never moves `settled_at` a second time.
-   * `TelegramConnector` calls this immediately before marking the update
-   * processed and never after — the same ordering `core/scheduler/scheduler.ts`
-   * uses for `job_fires` ("solo dopo il settlement avanza la schedule"),
-   * applied to an update instead of a fire.
+   * Marks the semantic consumption/delivery of this composition settled.
+   *
+   * Today every composition is singleton, so this is observationally identical
+   * to #78's per-update settle. Updating all members now is what prevents the
+   * future N-event assembler from delivering one Work and leaving sibling
+   * native events pending forever. `COALESCE` keeps the first settlement time.
    */
   settle(updateId: number, at: string): void {
-    this.settleStmt.run(at, updateId);
+    this.db
+      .prepare(
+        `UPDATE telegram_updates
+         SET settled_at = COALESCE(settled_at, ?)
+         WHERE update_id = ?
+            OR (
+              composition_id IS NOT NULL
+              AND composition_id = (SELECT composition_id FROM telegram_updates WHERE update_id = ?)
+            )`,
+      )
+      .run(at, updateId, updateId);
   }
 
-  /** This update's own row, including its turn binding — for recovery and tests. */
+  /** This update's own row, with Work binding derived through its composition. */
   get(updateId: number): StoredUpdate | null {
     const row = this.getStmt.get(updateId) as StoredUpdate | undefined;
     return row ?? null;
   }
 
   /**
-   * Writes a batch and advances the offset, in one transaction.
+   * Writes a batch and advances the offset in one transaction.
    *
-   * One transaction because the two halves must not be separable: writing
-   * without advancing means re-processing (harmless, the primary key absorbs
-   * it), but advancing without writing means losing a message (silent, and
-   * permanent). If the process dies inside this call, SQLite rolls back and
-   * Telegram sends the batch again.
-   *
-   * Returns how many were new, which is how a duplicate delivery becomes
-   * visible rather than invisible.
+   * Writing without advancing can cause a redelivery (harmless: the PK absorbs
+   * it). Advancing without writing loses a message permanently, so those two
+   * writes are never separable.
    */
   accept(updates: { update_id: number }[], receivedAt: string): { stored: number; duplicates: number } {
     if (updates.length === 0) return { stored: 0, duplicates: 0 };
@@ -175,7 +244,6 @@ export class UpdateInbox {
         const info = insert.run(update.update_id, JSON.stringify(update), receivedAt);
         if (info.changes > 0) stored += 1;
       }
-      // Highest id in the batch plus one: the offset Telegram wants next.
       const highest = Math.max(...updates.map((u) => u.update_id));
       setOffset.run(this.connector, highest + 1, receivedAt);
     });
@@ -192,36 +260,43 @@ export class UpdateInbox {
     return row?.o ?? 0;
   }
 
-  /**
-   * Everything not yet finished with, oldest first.
-   *
-   * This is the recovery path and the normal path at once — there is no separate
-   * "catch up after a crash" mode, because a mode that only runs after a crash
-   * is a mode that is never exercised.
-   */
+  /** Everything not yet finished with, oldest native event first. */
   pending(limit = 50): StoredUpdate[] {
     return this.db
       .prepare(
-        `SELECT update_id AS updateId, payload, received_at AS receivedAt, turn_id AS turnId, settled_at AS settledAt
-         FROM telegram_updates WHERE processed_at IS NULL
-         ORDER BY update_id LIMIT ?`,
+        `SELECT u.update_id AS updateId,
+                u.payload,
+                u.received_at AS receivedAt,
+                c.work_id AS turnId,
+                u.settled_at AS settledAt
+         FROM telegram_updates u
+         LEFT JOIN telegram_compositions c ON c.composition_id = u.composition_id
+         WHERE u.processed_at IS NULL
+         ORDER BY u.update_id LIMIT ?`,
       )
       .all(limit) as StoredUpdate[];
   }
 
+  /**
+   * Processing belongs to the semantic composition once one exists. Pairing
+   * updates are deliberately still uncomposed and therefore mark only their own
+   * row, preserving the pre-work pairing path.
+   */
   markProcessed(updateId: number, at: string): void {
     this.db
-      .prepare(`UPDATE telegram_updates SET processed_at = ?, failure = NULL WHERE update_id = ?`)
-      .run(at, updateId);
+      .prepare(
+        `UPDATE telegram_updates
+         SET processed_at = ?, failure = NULL
+         WHERE update_id = ?
+            OR (
+              composition_id IS NOT NULL
+              AND composition_id = (SELECT composition_id FROM telegram_updates WHERE update_id = ?)
+            )`,
+      )
+      .run(at, updateId, updateId);
   }
 
-  /**
-   * Records a failure without marking the update done.
-   *
-   * It stays pending on purpose: an update that failed once may well succeed
-   * after a restart, and dropping it would be the data loss this whole file
-   * exists to prevent — arriving by a different road.
-   */
+  /** A failure is evidence about this native event; it stays pending for retry. */
   markFailed(updateId: number, reason: string): void {
     this.db.prepare(`UPDATE telegram_updates SET failure = ? WHERE update_id = ?`).run(reason, updateId);
   }
@@ -233,5 +308,48 @@ export class UpdateInbox {
       pending: one(`SELECT count(*) AS n FROM telegram_updates WHERE processed_at IS NULL`),
       failed: one(`SELECT count(*) AS n FROM telegram_updates WHERE failure IS NOT NULL`),
     };
+  }
+
+  private defaultCompositionId(updateId: number): string {
+    return `${this.connector}:update:${updateId}`;
+  }
+
+  /**
+   * The old #78 branch was dogfood-able before ADR-0052 existed and wrote a
+   * nullable `turn_id` directly on `telegram_updates`. It never reached `dev`,
+   * but migrating it costs little and avoids turning a branch switch into
+   * duplicate work on an owner's real database.
+   *
+   * We preserve the old work binding by interposing the deterministic fallback
+   * composition. The old column is left in place (SQLite additive migration);
+   * current code never reads it afterwards.
+   */
+  private migrateLegacyDirectTurnBindings(): void {
+    const columns = (this.db.prepare(`PRAGMA table_info(telegram_updates)`).all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('turn_id')) return;
+
+    const legacy = this.db
+      .prepare(
+        `SELECT update_id AS updateId, received_at AS receivedAt, turn_id AS turnId
+         FROM telegram_updates
+         WHERE turn_id IS NOT NULL AND composition_id IS NULL`,
+      )
+      .all() as { updateId: number; receivedAt: string; turnId: string }[];
+    if (legacy.length === 0) return;
+
+    const setComposition = this.db.prepare(
+      `UPDATE telegram_updates SET composition_id = ? WHERE update_id = ? AND composition_id IS NULL`,
+    );
+    const insertComposition = this.db.prepare(
+      `INSERT OR IGNORE INTO telegram_compositions (composition_id, created_at, work_id) VALUES (?, ?, ?)`,
+    );
+    const tx = this.db.transaction(() => {
+      for (const row of legacy) {
+        const compositionId = this.defaultCompositionId(row.updateId);
+        setComposition.run(compositionId, row.updateId);
+        insertComposition.run(compositionId, row.receivedAt, row.turnId);
+      }
+    });
+    tx();
   }
 }
