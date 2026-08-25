@@ -45,7 +45,7 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco' },
+      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco', taint: 0 },
     });
     expect(out.stopped).toBe('ask');
     expect(out.text).toContain('In coda per te');
@@ -59,10 +59,27 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?' },
+      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?', taint: 0 },
     });
     expect(out.text).toContain('sys.shell');
     expect(out.text).not.toContain('undefined');
+  });
+
+  it('a tainted ASK says why it deserves suspicion; taint 0 stays silent', () => {
+    const tainted = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 2 },
+    });
+    expect(tainted.text).toContain('turno a taint 2');
+    const clean = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 0 },
+    });
+    expect(clean.text).not.toContain('taint');
   });
 
   it('other terminal states pass through unchanged', () => {

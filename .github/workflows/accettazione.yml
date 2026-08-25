@@ -8,7 +8,9 @@
 # scenario qui chiama `shell_run`), quindi un job condiviso pagherebbe
 # quell'apt-get per niente ogni volta.
 #
-# `pull_request` (verso `dev`/`main`, come il `push` sotto) è nel trigger.
+# `pull_request` (verso `dev`/`main`) è nel trigger; il `push` copre solo
+# `main` — per il push su `dev` e i `paths-ignore` vale il ragionamento al
+# punto 2/2b di `ci.yml` (crediti agli sgoccioli, stesso giorno).
 # Decisione dell'orchestratore (PR #54, giro 2) — reversibile, non policy di
 # prodotto: prima era deliberatamente assente (vedi git blame), e senza di lei
 # uno scenario rotto o una riga `READY` senza prova restavano invisibili fino
@@ -33,8 +35,20 @@ name: accettazione
 on:
   pull_request:
     branches: [dev, main]
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
   push:
-    branches: [dev, main]
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
   workflow_dispatch:
 
 concurrency:

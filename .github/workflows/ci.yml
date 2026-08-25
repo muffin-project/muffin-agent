@@ -15,9 +15,16 @@
 #  1. `concurrency` con `cancel-in-progress`: tre push di fila su una PR fanno
 #     girare un run, non tre. È il risparmio più grosso e il più facile da
 #     dimenticare.
-#  2. Trigger su `pull_request` e sui push a `dev`/`main` soltanto. Senza il
-#     secondo vincolo ogni push a una slice pagherebbe **due** run (il push e
-#     la PR) per la stessa verifica.
+#  2. Trigger su `pull_request` e sul push a `main` soltanto. Senza il secondo
+#     vincolo ogni push a una slice pagherebbe **due** run (il push e la PR)
+#     per la stessa verifica. Il push su `dev` pagava lo stesso doppio conto a
+#     ogni merge: l'albero era già verde nella PR e il merge è condizionato a
+#     quel verde, quindi il run ripeteva ciò che era appena stato provato.
+#     Finestra accettata e nominata: se `dev` è avanzato tra il run della PR e
+#     il merge, il merge commit resta non provato fino alla PR successiva.
+#  2b. `paths-ignore`: una PR di soli documenti (blueprint, handoff, mappa) non
+#     esercita nulla che la suite copra. `defaults/**` NON è qui dentro:
+#     persona/voice/RoT sono prodotto, non documentazione.
 #  3. Solo `ubuntu-latest`. macOS conta 10× i minuti e Windows 2×, e non
 #     abbiamo ancora una ragione misurata per pagarli — la macchina di sviluppo
 #     è macOS e la produzione è una VPS Linux, quindi Linux è il lato che
@@ -33,8 +40,20 @@ name: verifica
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
   push:
-    branches: [dev, main]
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
