@@ -32,7 +32,7 @@ import type Database from 'better-sqlite3';
  * the first `claim()` for it creates the row.
  */
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS job_fires (
   job_id        TEXT NOT NULL,
   scheduled_for TEXT NOT NULL,

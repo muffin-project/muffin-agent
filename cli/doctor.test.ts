@@ -14,7 +14,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
-import { runDoctor, type Check } from './doctor.js';
+import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
 
 /**
  * Doctor exists to say which of two indistinguishable states you are in.
@@ -686,6 +686,21 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('warns anche nella fascia 74–108: il budget è del path del socket, non della directory', () => {
+    // Il difetto che il judge ha trovato nel primo giro: 108 speso tutto su
+    // TMPDIR nudo, mentre il runtime ci appende sotto 49 caratteri misurati
+    // (scratch dell'executor + socket più profondo del bridge). Un TMPDIR di
+    // 80 caratteri lasciava doctor verde e il sandbox rotto a runtime.
+    const dir = home();
+    vi.stubEnv('TMPDIR', '/x'.repeat(40)); // 80 chars: sotto 108 da solo, oltre col percorso reale
+    const report = runDoctor(dir, { platform: 'linux' });
+    const c = report.checks.find((x) => x.name === 'tmpdir');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('80');
+    expect(c?.detail).toContain('49');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('is ok, naming the limit, when TMPDIR is short on Linux', () => {
     const dir = home();
     vi.stubEnv('TMPDIR', '/tmp');
@@ -702,5 +717,20 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
     const report = runDoctor(dir, { platform: 'darwin' });
     expect(report.checks.find((x) => x.name === 'tmpdir')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('sandboxOkDetail — the sandbox "ok" line is honest about which platform actually contained it', () => {
+  it('is a plain summary for seatbelt', () => {
+    const line = sandboxOkDetail({ available: true, mechanism: 'seatbelt' });
+    expect(line).toContain('seatbelt');
+    expect(line).not.toContain('weaker');
+  });
+
+  it('names the Linux gap on bubblewrap — Unix-socket hardening is off there (executor.ts, #428/#429)', () => {
+    const line = sandboxOkDetail({ available: true, mechanism: 'bubblewrap' });
+    expect(line).toContain('bubblewrap');
+    expect(line.toLowerCase()).toContain('weaker');
+    expect(line).toMatch(/unix.socket/i);
   });
 });

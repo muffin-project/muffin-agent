@@ -26,7 +26,7 @@ import type { DiscordApi, DiscordAttachment } from './api.js';
  * free / up to 500MB with boosts) plus headroom, so an ordinary attachment
  * never trips it while a runaway one still cannot exhaust the vault.
  */
-export const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 export type Downloaded = {
   /** Relative to the vault root: what goes in the database. */
@@ -81,7 +81,7 @@ function hashToInt(snowflakeId: string): number {
   return Math.abs(h);
 }
 
-export class MediaTooLarge extends Error {
+class MediaTooLarge extends Error {
   constructor(readonly bytes: number) {
     super(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite operativo di ${MAX_DOWNLOAD_BYTES / 1e6}MB`);
     this.name = 'MediaTooLarge';

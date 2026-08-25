@@ -144,7 +144,7 @@ export type IngestReport = {
 };
 
 /** One judge call this round that could not be turned into a verdict. */
-export type JudgeUnavailable = {
+type JudgeUnavailable = {
   subject: string;
   predicate: string;
   /** `describeFailureReason` output: "vuota" · "non-json" · "schema: <campo> — <messaggio>". */

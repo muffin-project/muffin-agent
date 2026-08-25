@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { platform, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { probeSandbox, tmpdirBreaksSandboxSockets, TMPDIR_SUN_PATH_LIMIT } from './probe.js';
+import { probeSandbox, tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT } from './probe.js';
 
 /**
  * The probe had no test at all until 2026-08-15 — the module whose entire
@@ -302,6 +302,29 @@ describe('the Linux branch (bubblewrap)', () => {
     expect(probe.remedy).toMatch(/apparmor/i);
   });
 
+  /**
+   * Verbatim upstream (containers/bubblewrap, bubblewrap.c): the one denial
+   * message that says «permissions» instead of «operation not permitted», so
+   * the phrase-pair branch above never sees it. Found by reading the source,
+   * after a judge showed the previous provenance claim did not survive a grep:
+   * it is also bwrap's MOST self-explanatory message, and it was the one that
+   * fell through to probe_failed without the remedy.
+   */
+  it('the upstream wording without "operation not permitted" is still named userns_denied', () => {
+    mockedUserInfo.mockReturnValue(asUid(1000));
+    mockedExec.mockImplementation(() => {
+      throw exitedNonZero(
+        'bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces.',
+      );
+    });
+
+    const probe = probeSandbox();
+    expect(probe.available).toBe(false);
+    if (probe.available) return;
+    expect(probe.reason).toBe('userns_denied');
+    expect(probe.remedy).toMatch(/apparmor/i);
+  });
+
   it('nothing reports available unless bwrap actually exited zero', () => {
     mockedUserInfo.mockReturnValue(asUid(1000));
     for (const failure of [
@@ -435,9 +458,24 @@ describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
     expect(tmpdirBreaksSandboxSockets('linux', long)).toBe(true);
   });
 
+  /**
+   * The judge's finding on round 1: the 108-byte budget belongs to the whole
+   * socket path, and the runtime appends 49 measured characters under TMPDIR
+   * (executor scratch + the bridge's deepest socket) before any socket is
+   * born. The first version compared the bare directory against 108, so every
+   * TMPDIR in the 74–108 band read `ok` on a machine where the sandbox would
+   * fail at runtime — a false green in exactly the range real XDG cache paths
+   * live in.
+   */
+  it('flags the 74–108 band: the budget is the socket path, not the directory', () => {
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(80))).toBe(true);
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT))).toBe(true);
+  });
+
   it('does not flag a short Linux TMPDIR — including the exact boundary', () => {
     expect(tmpdirBreaksSandboxSockets('linux', '/tmp')).toBe(false);
-    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT))).toBe(false);
-    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT + 1))).toBe(true);
+    // The real boundary: dir + SANDBOX_TMPDIR_OVERHEAD (49) against 108.
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD))).toBe(false);
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD + 1))).toBe(true);
   });
 });

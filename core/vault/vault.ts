@@ -81,7 +81,7 @@ const NEVER_CONTENT = new Set([
  * symlink called `appunti` pointing at `~/.ssh` would otherwise walk straight
  * past a filter that only looks at what it is called here.
  */
-export function skipReason(relPath: string, realPath: string): string | null {
+function skipReason(relPath: string, realPath: string): string | null {
   const segments = [...relPath.split('/'), ...realPath.split(sep)];
   for (const segment of segments) {
     if (segment.startsWith('.') && segment !== '.' && segment !== '..') {
@@ -92,7 +92,7 @@ export function skipReason(relPath: string, realPath: string): string | null {
   return null;
 }
 
-export type VaultFile = {
+type VaultFile = {
   /** Relative to the vault root, with forward slashes: it goes in the database. */
   path: string;
   bytes: number;
@@ -108,7 +108,7 @@ export type VaultFile = {
  * model what just arrived, and a connector that re-opened the file to work it
  * out would be the second place that knows how to read a PDF.
  */
-export type IndexedDocument = {
+type IndexedDocument = {
   path: string;
   format: DocumentFormat;
   /** Pages for a PDF, blocks otherwise — the unit `document_read` takes. */
@@ -611,7 +611,7 @@ function identityOf(path: string): { format: DocumentFormat; hash: string } | nu
 }
 
 /** Content identity. Short because it is compared, never used as a secret. */
-export function hashOf(content: string | Buffer): string {
+function hashOf(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 

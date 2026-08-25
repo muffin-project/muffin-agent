@@ -50,7 +50,7 @@ export const httpCapability: CapabilityDecl = {
   timeoutMs: 20_000,
 };
 
-export const httpSpec: ToolSpec = {
+const httpSpec: ToolSpec = {
   name: 'http_get',
   description:
     'Fetch a URL with GET. Only hosts on the egress allowlist are reachable without asking; ' +

@@ -173,7 +173,7 @@ export type PromptBlock = { name: string; source: string; text: string };
 export type SystemPromptBlocks = Readonly<Record<TenantClass, readonly PromptBlock[]>>;
 
 /**
- * Both prompts' blocks, assembled once — the structure `buildSystemPrompts`
+ * Both prompts' blocks, assembled once — the structure `renderSystemPrompts`
  * joins into the two cacheable strings below, and the structure `prompt show
  * --blocks` renders with headers. One function computes the blocks so the two
  * consumers cannot describe a different assembly from each other.
@@ -264,11 +264,6 @@ export function renderSystemPrompts(blocks: SystemPromptBlocks): SystemPrompts {
     owner: concat(blocks.owner.map((b) => b.text)),
     group: concat(blocks.group.map((b) => b.text)),
   };
-}
-
-/** Both prompts, as the two cacheable strings the loop actually sends. See `buildSystemPromptBlocks`. */
-export function buildSystemPrompts(home: string, safeMode: boolean, skillsSection = ''): SystemPrompts {
-  return renderSystemPrompts(buildSystemPromptBlocks(home, safeMode, skillsSection));
 }
 
 /** Empty parts drop out; the rest are separated by a blank line. */

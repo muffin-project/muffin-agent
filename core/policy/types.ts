@@ -37,7 +37,7 @@ export type TrustTier = 0 | 1 | 2 | 3;
 /** Dotted, stable, versioned with the repo. e.g. 'fs.write', 'sys.shell'. */
 export type CapabilityId = string;
 
-export type Resource =
+type Resource =
   | { kind: 'path'; value: string } // absolute, normalized, symlinks resolved
   | { kind: 'url'; value: string }
   /**
@@ -52,7 +52,7 @@ export type Resource =
   | { kind: 'tenant'; value: TenantId }
   | { kind: 'none' };
 
-export type DenyCode =
+type DenyCode =
   | 'no_capability'
   | 'taint_exceeded'
   | 'tenant_mismatch'
@@ -80,7 +80,7 @@ export type DecisionRequest = {
 };
 
 export type RiskClass = 'low' | 'medium' | 'high';
-export type Reversibility = 'yes' | 'undoable' | 'no';
+type Reversibility = 'yes' | 'undoable' | 'no';
 
 /**
  * A tool without one of these does not exist for the runtime.

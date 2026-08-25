@@ -4,7 +4,7 @@ import { checkPairing, type PendingPairing } from '../../core/config/pairing.js'
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
-import { DiscordApi, DiscordError, DiscordMessageSchema } from './api.js';
+import { DiscordApi, DiscordMessageSchema } from './api.js';
 import { DiscordGateway } from './gateway.js';
 import { DiscordInbox } from './inbox.js';
 import { downloadToVault } from './media.js';
@@ -421,5 +421,3 @@ export class DiscordConnector {
     return (this.deps.now ?? (() => new Date()))().toISOString();
   }
 }
-
-export { DiscordError };

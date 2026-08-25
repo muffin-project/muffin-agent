@@ -183,8 +183,14 @@ export function runInit(options: InitOptions = {}): InitStep[] {
  * bill arrives at the end of the month. The ids differ by provider — through an
  * OpenAI-compatible gateway they carry a vendor prefix, against Anthropic
  * directly they do not.
+ *
+ * Exported so `cmdInit` can compute the same pair for `describeModelChoice`
+ * without duplicating the fallback logic — it needs to print what got decided
+ * even when nothing overrode it (slice/init-interroga: the print is
+ * unconditional, TTY or not), which means it has to be able to ask this
+ * function the same question `runInit` asks it internally.
  */
-function defaultModels(options: InitOptions): { main: string; light: string } {
+export function defaultModels(options: InitOptions): { main: string; light: string } {
   const compat = (options.provider ?? 'anthropic') === 'openai-compat';
   return {
     main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),

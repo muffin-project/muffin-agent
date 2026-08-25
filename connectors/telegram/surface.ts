@@ -26,7 +26,7 @@ import { renderForTelegram, TELEGRAM_MAX } from './render.js';
  */
 
 /** `telegram` or `telegram:<chatId>` → the chat, or null when it is neither. */
-export function chatIdFor(channel: string, ownerChatId: number | undefined): number | null {
+function chatIdFor(channel: string, ownerChatId: number | undefined): number | null {
   if (channel === 'telegram') return ownerChatId ?? null;
   if (!channel.startsWith('telegram:')) return null;
   const raw = channel.slice('telegram:'.length);

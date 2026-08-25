@@ -347,7 +347,7 @@
   "agent/profiles/profile.ts:118": {
     "path": "agent/profiles/profile.ts",
     "line": 118,
-    "testo": "export const MAX_ITERATIONS_HARD_CAP = 40;"
+    "testo": "const MAX_ITERATIONS_HARD_CAP = 40;"
   },
   "agent/profiles/profile.ts:183": {
     "path": "agent/profiles/profile.ts",
@@ -782,7 +782,7 @@
   "agent/tools/skill.ts:33": {
     "path": "agent/tools/skill.ts",
     "line": 33,
-    "testo": "export const skillSpec: ToolSpec = {"
+    "testo": "const skillSpec: ToolSpec = {"
   },
   "agent/tools/skill.ts:70": {
     "path": "agent/tools/skill.ts",
@@ -801,7 +801,7 @@
   },
   "cli/config.ts:22": {
     "path": "cli/config.ts",
-    "line": 22,
+    "line": 20,
     "testo": "export function cmdConfig(home: string, argv: string[]): number {"
   },
   "cli/doctor.ts:248": {
@@ -866,12 +866,12 @@
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 190,
+    "line": 196,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 191,
+    "line": 197,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:46": {
@@ -891,132 +891,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 116,
+    "line": 131,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 174,
+    "line": 189,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 176,
+    "line": 191,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 178,
+    "line": 193,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 180,
+    "line": 195,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 182,
+    "line": 174,
     "testo": "*/"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 184,
+    "line": 199,
     "testo": "if (argv.includes('--no-stream')) return false;"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 186,
+    "line": 201,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 190,
+    "line": 205,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 192,
+    "line": 207,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 194,
+    "line": 209,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 196,
+    "line": 211,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 198,
+    "line": 213,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 200,
+    "line": 215,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 202,
+    "line": 217,
     "testo": "case 'run':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 204,
+    "line": 219,
     "testo": "case 'repl':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 206,
+    "line": 221,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 217,
+    "line": 232,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 221,
+    "line": 236,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 335,
+    "line": 350,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 354,
+    "line": 369,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 455,
+    "line": 505,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 466,
+    "line": 551,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 476,
+    "line": 561,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 507,
+    "line": 592,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 672,
+    "line": 757,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1071,7 +1071,7 @@
   },
   "cli/onboarding.ts:43": {
     "path": "cli/onboarding.ts",
-    "line": 43,
+    "line": 50,
     "testo": "export function chooseProvider("
   },
   "cli/repl.ts:100": {
@@ -1437,7 +1437,7 @@
   "core/memory/consolidator.ts:261": {
     "path": "core/memory/consolidator.ts",
     "line": 261,
-    "testo": "export const SCHEMA = `"
+    "testo": "const SCHEMA = `"
   },
   "core/memory/consolidator.ts:333": {
     "path": "core/memory/consolidator.ts",
@@ -1482,7 +1482,7 @@
   "core/memory/ingest-lock.ts:58": {
     "path": "core/memory/ingest-lock.ts",
     "line": 58,
-    "testo": "export const SCHEMA = `"
+    "testo": "const SCHEMA = `"
   },
   "core/memory/ingest.test.ts:547": {
     "path": "core/memory/ingest.test.ts",
@@ -1616,52 +1616,52 @@
   },
   "core/memory/recall.ts:396": {
     "path": "core/memory/recall.ts",
-    "line": 399,
+    "line": 397,
     "testo": "tenantId: string,"
   },
   "core/memory/recall.ts:428": {
     "path": "core/memory/recall.ts",
-    "line": 444,
+    "line": 442,
     "testo": "if (textHits.length > 0) strategies.push('fts');"
   },
   "core/memory/recall.ts:432": {
     "path": "core/memory/recall.ts",
-    "line": 448,
+    "line": 446,
     "testo": "options.surface ? `superficie=${options.surface}` : '',"
   },
   "core/memory/recall.ts:435": {
     "path": "core/memory/recall.ts",
-    "line": 451,
+    "line": 449,
     "testo": "]"
   },
   "core/memory/recall.ts:441": {
     "path": "core/memory/recall.ts",
-    "line": 457,
+    "line": 455,
     "testo": "fuse(`episode:${hit.id}`, {"
   },
   "core/memory/recall.ts:527": {
     "path": "core/memory/recall.ts",
-    "line": 543,
+    "line": 541,
     "testo": "if (options.surface !== undefined && connector !== options.surface) return;"
   },
   "core/memory/recall.ts:586": {
     "path": "core/memory/recall.ts",
-    "line": 602,
+    "line": 600,
     "testo": "...(nearest"
   },
   "core/memory/recall.ts:593": {
     "path": "core/memory/recall.ts",
-    "line": 609,
+    "line": 607,
     "testo": ": {}),"
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 681,
+    "line": 679,
     "testo": "const key = `episode:${near.id}`;"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 724,
+    "line": 722,
     "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
@@ -1787,7 +1787,7 @@
   "core/memory/vectors.ts:18": {
     "path": "core/memory/vectors.ts",
     "line": 18,
-    "testo": "export const CHUNKS_SCHEMA = `"
+    "testo": "const CHUNKS_SCHEMA = `"
   },
   "core/memory/vectors.ts:212": {
     "path": "core/memory/vectors.ts",
@@ -1912,7 +1912,7 @@
   "core/policy/types.ts:40": {
     "path": "core/policy/types.ts",
     "line": 40,
-    "testo": "export type Resource ="
+    "testo": "type Resource ="
   },
   "core/rot/budgets.ts:104": {
     "path": "core/rot/budgets.ts",
@@ -2012,7 +2012,7 @@
   "core/scheduler/firelog.ts:27": {
     "path": "core/scheduler/firelog.ts",
     "line": 27,
-    "testo": "export const SCHEMA = `"
+    "testo": "const SCHEMA = `"
   },
   "core/scheduler/scheduler.ts:458": {
     "path": "core/scheduler/scheduler.ts",
@@ -2041,8 +2041,8 @@
   },
   "core/skills/skills.ts:53": {
     "path": "core/skills/skills.ts",
-    "line": 54,
-    "testo": "export function skillsRoot(home: string): string {"
+    "line": 53,
+    "testo": ""
   },
   "core/skills/skills.ts:59": {
     "path": "core/skills/skills.ts",
@@ -2107,7 +2107,7 @@
   "core/vault/vault.ts:95": {
     "path": "core/vault/vault.ts",
     "line": 95,
-    "testo": "export type VaultFile = {"
+    "testo": "type VaultFile = {"
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
@@ -2362,7 +2362,7 @@
   "extract.ts:67": {
     "path": "core/memory/extract.ts",
     "line": 67,
-    "testo": "export function deriveImportance(f: { matters: boolean; charged: boolean }): number {"
+    "testo": "function deriveImportance(f: { matters: boolean; charged: boolean }): number {"
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
@@ -2621,22 +2621,22 @@
   },
   "probe.ts:129": {
     "path": "core/sandbox/probe.ts",
-    "line": 217,
+    "line": 257,
     "testo": "function probeBubblewrap(): SandboxProbe {"
   },
   "probe.ts:130": {
     "path": "core/sandbox/probe.ts",
-    "line": 218,
+    "line": 258,
     "testo": "if (userInfo().uid === 0) {"
   },
   "probe.ts:61": {
     "path": "core/sandbox/probe.ts",
-    "line": 87,
+    "line": 113,
     "testo": "function probeSeatbelt(): SandboxProbe {"
   },
   "probe.ts:99": {
     "path": "core/sandbox/probe.ts",
-    "line": 125,
+    "line": 151,
     "testo": "// A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a"
   },
   "process.ts:146": {
@@ -2696,32 +2696,32 @@
   },
   "recall.ts:503": {
     "path": "core/memory/recall.ts",
-    "line": 519,
+    "line": 517,
     "testo": "validFrom: fact.validFrom,"
   },
   "recall.ts:588": {
     "path": "core/memory/recall.ts",
-    "line": 604,
+    "line": 602,
     "testo": "nearest: {"
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 671,
+    "line": 669,
     "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 691,
+    "line": 689,
     "testo": "score: 0,"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 747,
+    "line": 745,
     "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 766,
+    "line": 764,
     "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
@@ -2912,7 +2912,7 @@
   "types.ts:40": {
     "path": "core/policy/types.ts",
     "line": 40,
-    "testo": "export type Resource ="
+    "testo": "type Resource ="
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",

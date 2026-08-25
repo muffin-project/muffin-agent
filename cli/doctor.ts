@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
-import { probeSandbox, tmpdirBreaksSandboxSockets, TMPDIR_SUN_PATH_LIMIT } from '../core/sandbox/probe.js';
+import { probeSandbox, tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
@@ -595,7 +595,7 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
   const sandbox = probeSandbox();
   if (sandbox.available) {
-    ok('sandbox', `${sandbox.mechanism}: a real containment ran and held`);
+    ok('sandbox', sandboxOkDetail(sandbox));
   } else {
     // Not a hard failure: the runtime still starts, execution capabilities just
     // degrade to ask. Silently unsandboxed is the one outcome we refuse.
@@ -619,13 +619,24 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
   const tmpdirValue = tmpdir();
   const effectivePlatform = options.platform ?? process.platform;
   if (tmpdirBreaksSandboxSockets(effectivePlatform, tmpdirValue)) {
+    // Il conto è sul path INTERO del socket, non su TMPDIR nudo: il runtime
+    // aggiunge sotto questa directory lo scratch dell'executor più il socket
+    // del bridge (SANDBOX_TMPDIR_OVERHEAD, misurato componente per componente
+    // in probe.ts) — è la fascia in cui la prima versione diceva `ok` su una
+    // macchina che a runtime sarebbe esplosa.
     warn(
       'tmpdir',
-      `${tmpdirValue} è lungo ${tmpdirValue.length} caratteri, oltre il limite di ${TMPDIR_SUN_PATH_LIMIT} dei socket Unix su Linux (#213) — il sandbox può fallire a runtime con "Sandbox failed to initialize", un errore che non nomina TMPDIR`,
+      `${tmpdirValue} è lungo ${tmpdirValue.length} caratteri: col percorso che il sandbox costruisce ` +
+        `sotto (${SANDBOX_TMPDIR_OVERHEAD} caratteri misurati) supera il limite di ${TMPDIR_SUN_PATH_LIMIT} ` +
+        `dei socket Unix su Linux (#213) — il sandbox può fallire a runtime con "Sandbox failed to ` +
+        `initialize", un errore che non nomina TMPDIR`,
       `esporta un TMPDIR più corto (es. /tmp) prima di avviare muffin, o rimuovilo dall'ambiente per usare il default`,
     );
   } else if (effectivePlatform === 'linux') {
-    ok('tmpdir', `${tmpdirValue} (${tmpdirValue.length} caratteri, sotto il limite di ${TMPDIR_SUN_PATH_LIMIT})`);
+    ok(
+      'tmpdir',
+      `${tmpdirValue} (${tmpdirValue.length} caratteri: ${tmpdirValue.length}+${SANDBOX_TMPDIR_OVERHEAD} sotto il limite di ${TMPDIR_SUN_PATH_LIMIT})`,
+    );
   }
 
   // Was `statSync(p.home)` with the result assigned and voided — the remains of
@@ -656,6 +667,23 @@ export function formatReport(report: DoctorReport): string {
     return c.remedy ? `${head}\n  → ${c.remedy}` : head;
   });
   return lines.join('\n');
+}
+
+/**
+ * The `ok('sandbox', …)` line, honest about which mechanism actually held.
+ *
+ * A green "sandbox: contained" reads as parity between platforms, and it is
+ * not: `SandboxManager.baseConfig` (core/sandbox/executor.ts) sets
+ * `allowAllUnixSockets: true` on Linux only — two open upstream bugs (#428,
+ * #429) block the seccomp layer that would otherwise deny them — so bubblewrap
+ * holding today says less than seatbelt holding does. One line, not the essay
+ * this comment is: doctor.ts owns being read at a glance.
+ */
+export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true }>): string {
+  const base = `${sandbox.mechanism}: a real containment ran and held`;
+  return sandbox.mechanism === 'bubblewrap'
+    ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
+    : base;
 }
 
 /** `null` means the table is not there, which is a different fact from "zero rows". */

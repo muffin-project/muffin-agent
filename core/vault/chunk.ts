@@ -23,8 +23,8 @@
  */
 
 /** Target size. Comfortably under the ~2.5k-token cliff, above the point where a chunk stops being usable alone. */
-export const CHUNK_TARGET = 1200;
-export const CHUNK_MAX = 2000;
+const CHUNK_TARGET = 1200;
+const CHUNK_MAX = 2000;
 
 export type Chunk = {
   /** What gets embedded and indexed: the context line, then the text. */
