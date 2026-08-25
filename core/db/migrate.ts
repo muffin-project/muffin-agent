@@ -1,5 +1,6 @@
+import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -35,6 +36,15 @@ export type Migration = {
  * its evidence exist BEFORE the first real reshaping needs them — the first
  * entry added here after tenure begins finds the backup, the guard and the
  * rebuild recipe already proven instead of improvised during an upgrade.
+ *
+ * Rules for the first real entry here (judge #93 follow-ups): surface tables
+ * (`telegram_updates`, `telegram_offset`, `discord_messages`) are created
+ * lazily by `connectSurfaces`, strictly after this runner — an `up()` touching
+ * them must guard on table existence or an install that never enabled that
+ * surface fails with a raw "no such table" instead of an honest error. And
+ * `core/memory/vectors.ts` already rebuilt `chunks_vec` non-additively once
+ * (`migrateUnpartitioned`), so "store DDL is purely additive" is a premise to
+ * re-check, not an axiom.
  */
 export const MIGRATIONS: Migration[] = [];
 
@@ -99,6 +109,36 @@ export function stampFresh(
   }
 }
 
+
+/** A snapshot nobody has ever validated is a hope, not a backup (judge #93). */
+export function assertSnapshotOk(file: string): void {
+  const check = new DatabaseCtor(file, { readonly: true });
+  try {
+    const verdict = check.pragma('quick_check', { simple: true });
+    if (verdict !== 'ok') throw new Error(`quick_check su ${file}: ${String(verdict)}`);
+  } finally {
+    check.close();
+  }
+}
+
+/**
+ * The one way a snapshot is taken anywhere in this lifecycle: `VACUUM INTO`
+ * (synchronous, atomic, WAL-safe — committed rows still sitting in the WAL are
+ * included, which a raw file copy of the main db silently is not; judge #93,
+ * blocking finding 1) followed by `quick_check` on the produced file, which is
+ * discarded when the check fails so a bad snapshot cannot be mistaken for a
+ * safety net.
+ */
+export function snapshotTo(db: Database.Database, file: string): void {
+  db.prepare(`VACUUM INTO ?`).run(file);
+  try {
+    assertSnapshotOk(file);
+  } catch (e) {
+    rmSync(file, { force: true });
+    throw e;
+  }
+}
+
 export type MigrateResult = { applied: number[]; backup: string | null; version: number };
 
 export function migrate(
@@ -148,7 +188,7 @@ export function migrate(
     opts.backupDir,
     `pre-migrate-v${have}-${now().toISOString().replace(/[:.]/g, '-')}.db`,
   );
-  db.prepare(`VACUUM INTO ?`).run(backup);
+  snapshotTo(db, backup);
 
   const stamp = db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`);
   const applied: number[] = [];

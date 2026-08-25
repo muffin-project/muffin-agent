@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,5 +125,45 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     expect(() => restoreFrom(dbPath, join(d, 'niente.db'), { backupDir: join(d, 'backups') })).toThrow(
       RestoreRefused,
     );
+  });
+});
+
+describe('restoreFrom — the aside copy is WAL-safe (judge #93, blocking finding 1)', () => {
+  it('preserves a row that only ever lived in the WAL of a SIGKILLed writer', () => {
+    const d = dir();
+    const { dbPath, db } = liveDb(d);
+    db.close(); // clean close: baseline row checkpointed into the main file
+    const { file } = backupNow(dbPath, join(d, 'backups')); // snapshot of the baseline
+
+    // A writer that commits and dies without closing: autocheckpoint off, so
+    // the committed row exists ONLY in `-wal` — the normal state after any
+    // kill -9 / OOM / power loss. This is the row the old raw file copy lost
+    // while deleting the only other place it existed.
+    const child = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const D = require('better-sqlite3');
+         const db = new D(process.argv[1]);
+         db.pragma('journal_mode = WAL');
+         db.pragma('wal_autocheckpoint = 0');
+         db.prepare('INSERT INTO notes (body) VALUES (?)').run('solo-nel-wal');
+         process.kill(process.pid, 'SIGKILL');`,
+        dbPath,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(child.signal).toBe('SIGKILL');
+    expect(existsSync(`${dbPath}-wal`)).toBe(true);
+
+    const { asideCopy } = restoreFrom(dbPath, file, { backupDir: join(d, 'backups') });
+
+    const aside = new DatabaseCtor(asideCopy!, { readonly: true });
+    const bodies = (aside.prepare(`SELECT body FROM notes ORDER BY id`).all() as { body: string }[]).map((r) => r.body);
+    aside.close();
+    expect(bodies).toEqual(['prima', 'solo-nel-wal']); // nothing lost, ever
+    const restored = new DatabaseCtor(dbPath, { readonly: true });
+    expect(restored.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 1 }); // the backup's state
+    restored.close();
   });
 });

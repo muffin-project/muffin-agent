@@ -274,6 +274,11 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       warn('schema', 'nessuna schema_version: database mai avviato da questo codice', 'parte al primo avvio del runtime');
     } else if (schema > currentSchemaVersion()) {
       fail('schema', `database v${schema}, codice v${currentSchemaVersion()}`, 'aggiorna il codice');
+    } else if (schema < currentSchemaVersion()) {
+      // Unreachable while MIGRATIONS is empty (baseline is the ceiling), but
+      // this is the tool the restore path points at — behind must never read
+      // as healthy (judge #93 follow-up).
+      warn('schema', `database v${schema}, codice v${currentSchemaVersion()} — migrazione pendente`, 'avvia il runtime (repl o gateway)');
     } else {
       ok('schema', `v${schema} (codice v${currentSchemaVersion()})`);
     }
