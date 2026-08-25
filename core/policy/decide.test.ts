@@ -416,3 +416,81 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     expect(lowered(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 1)).effect).toBe('ask');
   });
 });
+
+/**
+ * Visto sulla macchina dell'owner durante il primo uso reale (RETURN):
+ *
+ *     ⚠ sys.shell on (no resource)
+ *        su: command: ls -1 *.md
+ *
+ * Le due righe si contraddicono. `(no resource)` è un segnaposto interno —
+ * vero al livello del kernel, che per una capability `resourceKind: 'none'`
+ * non ha davvero niente — finito dentro una frase che una persona deve
+ * leggere per decidere. La riga sotto, che il turno costruisce dagli
+ * argomenti della call (D12-min), dice invece esattamente cosa sta per
+ * succedere. Il kernel deve tacere su ciò che non sa, non affermarlo.
+ */
+describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () => {
+  it('una capability senza risorsa produce un prompt che nomina solo la capability', () => {
+    const decl: CapabilityDecl = {
+      id: 'sys.shell',
+      risk: 'high',
+      reversible: 'no',
+      rerunnable: false,
+      maxTaint: 3,
+      resourceKind: 'none',
+      policyArgs: [],
+      hostOnly: false,
+    };
+    const decide = createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map([[decl.id, decl]]),
+      budgetExhausted: () => false,
+      hardened: false,
+    });
+    const decision = decide({
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      capability: 'sys.shell',
+      resource: { kind: 'none' },
+      args: {},
+      taint: 0,
+    });
+
+    expect(decision.effect).toBe('ask');
+    if (decision.effect !== 'ask') return;
+    expect(decision.ask.prompt).toContain('sys.shell');
+    expect(decision.ask.prompt).not.toContain('no resource');
+    expect(decision.ask.prompt).not.toMatch(/\bon\s*$/);
+  });
+
+  it('una capability CON risorsa continua a mostrarla', () => {
+    const decl: CapabilityDecl = {
+      id: 'fs.write',
+      risk: 'high',
+      reversible: 'no',
+      rerunnable: false,
+      maxTaint: 3,
+      resourceKind: 'path',
+      policyArgs: [],
+      hostOnly: false,
+    };
+    const decide = createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map([[decl.id, decl]]),
+      budgetExhausted: () => false,
+      hardened: false,
+    });
+    const decision = decide({
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      capability: 'fs.write',
+      resource: { kind: 'path', value: '/tmp/x' },
+      args: {},
+      taint: 0,
+    });
+    expect(decision.effect).toBe('ask');
+    if (decision.effect !== 'ask') return;
+    expect(decision.ask.prompt).toContain('/tmp/x');
+  });
+});
