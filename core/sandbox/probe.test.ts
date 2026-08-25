@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { platform, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { probeSandbox } from './probe.js';
+import { probeSandbox, tmpdirBreaksSandboxSockets, TMPDIR_SUN_PATH_LIMIT } from './probe.js';
 
 /**
  * The probe had no test at all until 2026-08-15 — the module whose entire
@@ -108,19 +108,25 @@ describe('the probe agrees with a containment executed independently of it', () 
    * On Linux the expected answer is not fixed — a hardened Ubuntu 24.04 host is
    * *supposed* to say no. So the assertion is the equivalence: whatever bwrap
    * does here, the probe reports the same thing.
+   *
+   * Hand-rolled two-legged check, not a call into the module — reusing
+   * `probeSandbox`'s own constants would let a bug in *what* they check
+   * validate itself. `bwrapContains` applies the same rule the module applies:
+   * contained iff the tmpfs-shadowed read failed and the unrestricted read
+   * held.
    */
   it.runIf(platform() === 'linux')('linux: the probe matches what bwrap actually does', () => {
-    let bwrapContains = false;
-    try {
-      actual.cp.execFileSync(
-        'bwrap',
-        ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent', 'true'],
-        { timeout: 5_000, stdio: 'pipe' },
-      );
-      bwrapContains = true;
-    } catch {
-      bwrapContains = false;
-    }
+    const exitedZero = (argv: string[]): boolean => {
+      try {
+        actual.cp.execFileSync('bwrap', argv, { timeout: 5_000, stdio: 'pipe' });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const denyHeld = !exitedZero(['--ro-bind', '/', '/', '--tmpfs', '/etc', '--unshare-all', '--die-with-parent', 'cat', '/etc/hosts']);
+    const controlHeld = exitedZero(['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent', 'cat', '/etc/hosts']);
+    const bwrapContains = denyHeld && controlHeld;
 
     const probe = probeSandbox();
     if (actual.os.userInfo().uid === 0) {
@@ -172,17 +178,76 @@ describe('the Linux branch (bubblewrap)', () => {
     expect(mockedExec).not.toHaveBeenCalled();
   });
 
-  it('a contained bwrap is reported available — and the probe really asked for a namespace', () => {
+  /**
+   * The regression this slice fixes, mirrored from the seatbelt branch's own
+   * argv-pinning test: `bwrap --ro-bind / / --unshare-all --die-with-parent
+   * true` without any deny is the exact mistake the seatbelt branch shipped
+   * with — it proves the binary exists and a namespace was created, nothing
+   * about containment. The profile is asserted, not the intent: both legs
+   * must actually run, the deny leg must carry `--tmpfs /etc`, and the
+   * control must not.
+   */
+  it('deny fails, control holds: reported available — and the deny leg really shadowed /etc', () => {
     mockedUserInfo.mockReturnValue(asUid(1000));
-    mockedExec.mockReturnValue(Buffer.from(''));
+    mockedExec.mockImplementation(((bin: string, argv: string[]) => {
+      if (argv.includes('--tmpfs')) {
+        // The shadowed /etc really did hide the file: cat found nothing.
+        throw exitedNonZero('cat: /etc/hosts: No such file or directory');
+      }
+      return Buffer.from(''); // the control read the real file: bwrap itself works
+    }) as unknown as typeof execFileSync);
 
     expect(probeSandbox()).toEqual({ available: true, mechanism: 'bubblewrap' });
+    expect(mockedExec).toHaveBeenCalledTimes(2);
 
-    // `bwrap true` without unsharing proves the binary exists and nothing else
-    // — the exact mistake the seatbelt branch shipped with. Pin the argv.
-    const [bin, argv] = mockedExec.mock.calls[0] ?? [];
-    expect(bin).toBe('bwrap');
-    expect(argv).toContain('--unshare-all');
+    const [denyBin, denyArgv] = mockedExec.mock.calls[0] ?? [];
+    expect(denyBin).toBe('bwrap');
+    expect(denyArgv as string[]).toEqual(expect.arrayContaining(['--tmpfs', '/etc', '/etc/hosts']));
+    const [, allowArgv] = mockedExec.mock.calls[1] ?? [];
+    expect(allowArgv as string[]).not.toContain('--tmpfs');
+    expect(allowArgv as string[]).toEqual(expect.arrayContaining(['--unshare-all', '/etc/hosts']));
+  });
+
+  /**
+   * `contained = false`: the read that was supposed to be denied went
+   * through. Mirrors the seatbelt branch's "a deny-all profile that still
+   * lets the read through is a failure, not a pass" — and, like that test,
+   * the control never runs, because a deny that did not deny is already the
+   * answer.
+   */
+  it('deny succeeds (=nothing contained): reported unavailable, control never runs', () => {
+    mockedUserInfo.mockReturnValue(asUid(1000));
+    mockedExec.mockReturnValue(Buffer.from('##\n# Host Database\n'));
+
+    const probe = probeSandbox();
+    expect(probe.available).toBe(false);
+    if (probe.available) return;
+    expect(probe.reason).toBe('probe_failed');
+    expect(probe.detail).toContain('/etc/hosts');
+    expect(mockedExec).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Both legs fail, neither message carries a userns signature: this must
+   * read as "bwrap is broken for some other reason", not as the Ubuntu
+   * AppArmor restriction — the second defect this slice fixes (every
+   * non-ENOENT failure used to print the AppArmor remedy regardless of
+   * cause).
+   */
+  it('deny and control both fail with no userns signature: probe_failed, not userns_denied', () => {
+    mockedUserInfo.mockReturnValue(asUid(1000));
+    mockedExec.mockImplementation(() => {
+      throw exitedNonZero("bwrap: Can't mkdir /newroot/etc: No such file or directory");
+    });
+
+    const probe = probeSandbox();
+    expect(probe.available).toBe(false);
+    if (probe.available) return;
+    expect(probe.reason).toBe('probe_failed');
+    expect(probe.detail).toContain('mkdir');
+    expect(probe.detail).not.toMatch(/apparmor/i);
+    expect(probe.remedy).not.toMatch(/apparmor/i);
+    expect(mockedExec).toHaveBeenCalledTimes(2);
   });
 
   it('a missing bwrap is binary_missing, with the install as the remedy', () => {
@@ -215,6 +280,25 @@ describe('the Linux branch (bubblewrap)', () => {
     if (probe.available) return;
     expect(probe.reason).toBe('userns_denied');
     expect(probe.detail).toContain('RTM_NEWADDR');
+    expect(probe.remedy).toMatch(/apparmor/i);
+  });
+
+  /**
+   * bwrap's more direct failure mode: namespace creation refused before it
+   * gets far enough to attempt the loopback setup that produces RTM_NEWADDR.
+   * A second, independent signature for the same underlying restriction —
+   * proving the classifier is a pattern match, not a single hard-coded string.
+   */
+  it('the other userns signature — namespace creation refused — is also named userns_denied', () => {
+    mockedUserInfo.mockReturnValue(asUid(1000));
+    mockedExec.mockImplementation(() => {
+      throw exitedNonZero('bwrap: Creating new namespace failed: Operation not permitted');
+    });
+
+    const probe = probeSandbox();
+    expect(probe.available).toBe(false);
+    if (probe.available) return;
+    expect(probe.reason).toBe('userns_denied');
     expect(probe.remedy).toMatch(/apparmor/i);
   });
 
@@ -326,5 +410,34 @@ describe('the macOS branch (seatbelt)', () => {
     mockedExec.mockReturnValue(Buffer.from('read it fine'));
     probeSandbox();
     expect(mockedExec).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * #213 upstream (cited in ADR-0026): a TMPDIR over ~108 characters breaks the
+ * Unix-domain socket the Linux sandbox bridges its egress proxy through, and
+ * the failure that surfaces is a generic "Sandbox failed to initialize" that
+ * never names TMPDIR. `tmpdirBreaksSandboxSockets` is a pure function — no
+ * mocking needed, unlike the rest of this file — which is the point: doctor's
+ * report of this had no test at all before this slice, on ADR-0026's own word
+ * ("`doctor` controlla la lunghezza di `TMPDIR` su Linux") that it already
+ * existed.
+ */
+describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
+  it('is Linux-only: the same long TMPDIR is harmless on macOS, where Seatbelt does not proxy through a socket', () => {
+    const long = 'x'.repeat(TMPDIR_SUN_PATH_LIMIT + 1);
+    expect(tmpdirBreaksSandboxSockets('darwin', long)).toBe(false);
+  });
+
+  it('flags a Linux TMPDIR past the limit', () => {
+    const long = '/home/muffin/.cache/some/deeply/nested/xdg/runtime/dir'.padEnd(TMPDIR_SUN_PATH_LIMIT + 1, '/x');
+    expect(long.length).toBeGreaterThan(TMPDIR_SUN_PATH_LIMIT);
+    expect(tmpdirBreaksSandboxSockets('linux', long)).toBe(true);
+  });
+
+  it('does not flag a short Linux TMPDIR — including the exact boundary', () => {
+    expect(tmpdirBreaksSandboxSockets('linux', '/tmp')).toBe(false);
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT))).toBe(false);
+    expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT + 1))).toBe(true);
   });
 });

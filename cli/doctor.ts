@@ -1,7 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
-import { probeSandbox } from '../core/sandbox/probe.js';
+import { probeSandbox, tmpdirBreaksSandboxSockets, TMPDIR_SUN_PATH_LIMIT } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
@@ -48,6 +49,13 @@ export type DoctorOptions = {
    * over the real ones, so a test only has to name the probe it is driving.
    */
   supervisorProbes?: Partial<SupervisorProbes>;
+  /**
+   * Test-only: overrides `process.platform` for the TMPDIR-length check
+   * below, so the Linux branch's logic runs in the suite regardless of which
+   * OS is actually running it — the same reason `core/sandbox/probe.test.ts`
+   * mocks `node:os` to exercise bubblewrap from macOS.
+   */
+  platform?: NodeJS.Platform;
 };
 
 export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
@@ -596,6 +604,28 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       `${sandbox.mechanism} unavailable (${sandbox.reason}): ${sandbox.detail} — execution capabilities degrade to ask`,
       sandbox.remedy,
     );
+  }
+
+  // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its
+  // egress proxy through a Unix-domain socket inside TMPDIR, and a TMPDIR
+  // over ~108 characters makes that socket's path too long to bind. The
+  // failure that reaches the owner is `SandboxManager.initialize` throwing a
+  // generic "Sandbox failed to initialize" — nothing in it says TMPDIR, so
+  // without this check the only way to learn the cause is to already know
+  // it. `tmpdir()` is the exact resolution `core/sandbox/executor.ts`'s
+  // `scratch()` relies on (`TMPDIR` if set, else the platform default), so
+  // this checks the value that will actually reach a sandboxed command, not
+  // a guess at it.
+  const tmpdirValue = tmpdir();
+  const effectivePlatform = options.platform ?? process.platform;
+  if (tmpdirBreaksSandboxSockets(effectivePlatform, tmpdirValue)) {
+    warn(
+      'tmpdir',
+      `${tmpdirValue} è lungo ${tmpdirValue.length} caratteri, oltre il limite di ${TMPDIR_SUN_PATH_LIMIT} dei socket Unix su Linux (#213) — il sandbox può fallire a runtime con "Sandbox failed to initialize", un errore che non nomina TMPDIR`,
+      `esporta un TMPDIR più corto (es. /tmp) prima di avviare muffin, o rimuovilo dall'ambiente per usare il default`,
+    );
+  } else if (effectivePlatform === 'linux') {
+    ok('tmpdir', `${tmpdirValue} (${tmpdirValue.length} caratteri, sotto il limite di ${TMPDIR_SUN_PATH_LIMIT})`);
   }
 
   // Was `statSync(p.home)` with the result assigned and voided — the remains of
