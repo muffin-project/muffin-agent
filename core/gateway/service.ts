@@ -418,5 +418,3 @@ export class Gateway {
     return this.exitCode;
   }
 }
-
-export { HEARTBEAT_MS };

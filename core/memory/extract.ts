@@ -53,7 +53,7 @@ const ExtractionResponse = z.object({
   facts: z.array(ExtractedFact).max(20),
 });
 
-export type ExtractedFact = z.infer<typeof ExtractedFact> & { importance: number };
+type ExtractedFact = z.infer<typeof ExtractedFact> & { importance: number };
 
 /**
  * Two booleans into three levels. Kept as a named function, not inlined, so the
@@ -64,7 +64,7 @@ export type ExtractedFact = z.infer<typeof ExtractedFact> & { importance: number
  * `charged` alone does not reach level 2 — a dense one-off nobody would mind
  * forgetting is a story, not a memory worth protecting.
  */
-export function deriveImportance(f: { matters: boolean; charged: boolean }): number {
+function deriveImportance(f: { matters: boolean; charged: boolean }): number {
   if (f.matters && f.charged) return IMPORTANCE_CHARGED;
   if (f.matters) return IMPORTANCE_NOTABLE;
   return IMPORTANCE_ROUTINE;
@@ -317,7 +317,7 @@ function words(text: string): string[] {
  * time: an enum enforced at ingest is the closed ontology that had to be thrown
  * away once already.
  */
-export function canonicalPredicate(raw: string): string {
+function canonicalPredicate(raw: string): string {
   return raw
     .trim()
     .toLowerCase()

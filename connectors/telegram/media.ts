@@ -137,7 +137,7 @@ export async function downloadToVault(
   return { vaultPath: relative, bytes: buffer.byteLength };
 }
 
-export class MediaTooLarge extends Error {
+class MediaTooLarge extends Error {
   constructor(readonly bytes: number) {
     super(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ${MAX_DOWNLOAD_BYTES / 1e6}MB del Bot API pubblico`);
     this.name = 'MediaTooLarge';

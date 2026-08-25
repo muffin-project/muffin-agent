@@ -87,7 +87,7 @@ function normaliseVerdictJson(value: unknown): unknown {
 
 const Verdict = z.preprocess(normaliseVerdictJson, VERDICT_SHAPE);
 
-export type JudgeVerdict = z.infer<typeof Verdict>;
+type JudgeVerdict = z.infer<typeof Verdict>;
 
 /**
  * Why the judge's answer could not be turned into a verdict — distinct from

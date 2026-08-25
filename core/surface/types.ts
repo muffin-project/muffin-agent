@@ -65,7 +65,7 @@ export function notDelivered(why: string): DeliveryOutcome {
  * 4096, Discord 2000, a terminal none — so nothing above has to know which
  * surface it is talking to in order to fit inside it.
  */
-export type SurfaceLimits = {
+type SurfaceLimits = {
   /** Longest single message, in characters of the final rendered text. */
   readonly maxMessageChars: number;
   /** Largest attachment this surface will accept from us, in bytes. */
@@ -92,14 +92,11 @@ export type SurfaceLimits = {
  *   and what a capable surface degrades to on its own (non-TTY stdout,
  *   `--no-stream`, the first failed edit of a session — Hermes's rule).
  */
-export type StreamingTransport = 'stdout' | 'edit' | 'off';
+type StreamingTransport = 'stdout' | 'edit' | 'off';
 
 export type StreamingCapability = {
   readonly transport: StreamingTransport;
 };
-
-/** The floor every `Surface` can declare without lying: no live rewrite. */
-export const STREAMING_OFF: StreamingCapability = { transport: 'off' };
 
 /**
  * A place Muffin can be reached and can answer.
@@ -177,19 +174,6 @@ export type FileSpec = {
   /** Shown alongside the file where the surface supports one. Truncated by the implementation to its own caption limit. */
   caption?: string;
 };
-
-/**
- * A surface that also *listens*. Separate from `Surface` because delivery and
- * reception have different lifetimes: the scheduler holds a `Surface` for as
- * long as a job takes, while a connector's `run` owns a socket for the life of
- * the process. A surface that only speaks (an outbound webhook, say) is a
- * legitimate `Surface` and would have nothing to put in `run`.
- */
-export interface ListeningSurface extends Surface {
-  /** Receives until stopped or aborted. Rejects only on a fault worth reporting. */
-  run(signal?: AbortSignal): Promise<void>;
-  stop(): void;
-}
 
 /** Who is speaking and whose memory this belongs to. */
 export type SurfaceIdentity = { principal: Principal; tenant: TenantId };

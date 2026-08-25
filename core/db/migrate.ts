@@ -46,7 +46,7 @@ export type Migration = {
  * (`migrateUnpartitioned`), so "store DDL is purely additive" is a premise to
  * re-check, not an axiom.
  */
-export const MIGRATIONS: Migration[] = [
+const MIGRATIONS: Migration[] = [
   {
     version: 2,
     description: "jobs.kind — un job può essere uno script, e uno script non chiama il modello",

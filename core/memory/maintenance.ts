@@ -80,7 +80,7 @@ export function normaliseObject(value: string): string {
 }
 
 /** One merge the sweep performed: the survivor, and what it retired. */
-export type Merge = {
+type Merge = {
   subject: string;
   predicate: string;
   object: string;

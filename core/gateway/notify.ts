@@ -144,7 +144,7 @@ export function createNotifier(
  * so the lookup of a Linux-only binary never happens on the dev machine.
  * Throws on ENOENT or a non-zero exit so `createNotifier` can report it.
  */
-export const systemdNotifySink: NotifySink = (payload) => {
+const systemdNotifySink: NotifySink = (payload) => {
   const result = spawnSync('systemd-notify', payload.split('\n'), { stdio: 'ignore' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`systemd-notify è uscito con ${result.status}`);

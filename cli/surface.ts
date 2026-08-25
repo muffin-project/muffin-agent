@@ -559,7 +559,7 @@ export function telegramVault(runtime: Runtime, root: string): NonNullable<Conne
 }
 
 /** Same adapter as `telegramVault`, over Discord's connector deps shape. */
-export function discordVault(runtime: Runtime, root: string): NonNullable<DiscordConnectorDeps['vault']> {
+function discordVault(runtime: Runtime, root: string): NonNullable<DiscordConnectorDeps['vault']> {
   return {
     root,
     reindexPath: (tenantId, vaultPath, defaultTier) =>

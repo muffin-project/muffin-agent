@@ -10,7 +10,7 @@
  * See docs/adr/0008.
  */
 
-export type Role = 'user' | 'assistant';
+type Role = 'user' | 'assistant';
 
 /**
  * `cache: 'stable'` marks the end of a cacheable prefix. Positional, not a
@@ -85,7 +85,7 @@ export type ToolSpec = {
  * `thinking: 'adaptive'`. Harmless today only because the light lane — the one
  * place Haiku 4.5 runs — never consults a profile at all.
  */
-export type ThinkingMode = 'adaptive' | 'off';
+type ThinkingMode = 'adaptive' | 'off';
 
 export type ChatCall = {
   model: string;
@@ -110,7 +110,7 @@ export type ChatCall = {
 
 export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'refusal' | 'error';
 
-export type Usage = {
+type Usage = {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;

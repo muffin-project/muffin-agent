@@ -54,7 +54,7 @@ export function sha256(data: Buffer | string): string {
 }
 
 /** Deterministic walk: the manifest must not depend on directory iteration order. */
-export function listRotFiles(rotDir: string): string[] {
+function listRotFiles(rotDir: string): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir).sort()) {
@@ -177,7 +177,7 @@ export function hardeningHolds(
     : { holds: true };
 }
 
-export function buildManifest(rotDir: string, rotVersion: string, installedAt: string): RotManifest {
+function buildManifest(rotDir: string, rotVersion: string, installedAt: string): RotManifest {
   return {
     schemaVersion: 1,
     rotVersion,

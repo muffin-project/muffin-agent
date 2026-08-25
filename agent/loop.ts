@@ -193,7 +193,7 @@ export type ApprovalRequest = {
   taint: TrustTier;
 };
 
-export type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
+type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
 
 /** Thrown by a tool call that needs an approval this surface cannot obtain. */
 class ApprovalRequired extends Error {
@@ -213,7 +213,7 @@ export type SpendEntry = {
   cacheWriteTokens: number;
 };
 
-export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
+type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
 
 export type ToolOutcome = {
   content: string;
