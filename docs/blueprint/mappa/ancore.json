@@ -886,7 +886,7 @@
   },
   "cli/jobs.ts:63": {
     "path": "cli/jobs.ts",
-    "line": 67,
+    "line": 75,
     "testo": "export function cmdJobsAdd(home: string, argv: string[]): number {"
   },
   "cli/main.ts:101": {
