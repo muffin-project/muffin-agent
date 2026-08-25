@@ -370,3 +370,71 @@ describe('makeJobRunner — B7 identity resolution', () => {
     expect(rows.n).toBe(1); // never a second, competing turn
   });
 });
+
+/**
+ * Il probe del judge di questa slice, reso permanente.
+ *
+ * La prima stesura scriveva la riga del turno **dopo** `exec.run()`. Un crash
+ * a metà script non lasciava quindi nessuna riga, `resolveBound` legge
+ * l'assenza di riga come «non è ancora partito niente, quindi non è un
+ * duplicato», e al riavvio lo script ripartiva: `exec.run()` chiamato due
+ * volte, osservato dal judge con un probe. Uno script che manda una mail o
+ * addebita qualcosa lo farebbe due volte, e la riga finale mostrerebbe
+ * un'esecuzione sola — la duplicazione non lascia traccia.
+ */
+describe('makeJobRunner — uno script non gira due volte', () => {
+  const SCRIPT_SPEC = {
+    cron: '0 8 * * *',
+    timezone: 'Europe/Rome',
+    channel: 'cli',
+    kind: 'script' as const,
+    script: 'echo ciao',
+  };
+
+  it('un crash a metà script non fa ripartire lo script al riavvio', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    // Uno script che non ritorna mai: è il processo che muore mentre gira.
+    let partenze = 0;
+    const appeso = {
+      run: async (): Promise<never> => {
+        partenze += 1;
+        return new Promise<never>(() => {});
+      },
+    };
+
+    // Prima esecuzione: parte e resta appesa (il processo muore qui).
+    void makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(partenze).toBe(1);
+
+    // Riavvio: la stessa occorrenza viene risolta di nuovo. In gara con un
+    // timeout, perché il difetto che questo test esiste per catturare fa
+    // ripartire lo script — e lo script appeso non torna mai: senza la gara
+    // il fallimento sarebbe un timeout del test invece dell'asserzione, cioè
+    // un rosso che non dice cosa è andato storto.
+    const seconda = await Promise.race([
+      makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined),
+      new Promise((r) => setTimeout(() => r('BLOCCATO'), 1500)),
+    ]);
+
+    // Lo script NON è ripartito, e il secondo giro dice che il lavoro è di
+    // qualcun altro invece di rifarlo.
+    expect(partenze).toBe(1);
+    expect(seconda).toEqual({ deferred: true });
+    expect(provider.calls).toBe(0);
+  });
+
+  it('senza sandbox non esegue, e lo dice', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    const outcome = await makeJobRunner(deps, fires, null, { cwd: '/tmp' })(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('error');
+    expect(outcome.text).toContain('sandbox');
+    expect(provider.calls).toBe(0);
+  });
+});

@@ -3,7 +3,7 @@ import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
 import type { ExecResult } from '../core/sandbox/executor.js';
-import type { TurnCounters, TurnOutcome } from '../core/turns/store.js';
+import { SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
 import { recoveredText } from './recovered-text.js';
 
@@ -304,24 +304,43 @@ async function runScript(
     contextBuilt: true,
   };
 
-  const record = (outcome: TurnOutcome, text: string): JobOutcome => {
-    const riga = deps.turns.create({
-      id: turnId,
-      principal: { kind: 'system', source: 'scheduler' },
-      tenant: 'host',
-      surface: job.channel,
-      sessionId: session.id,
-      // Non un modello, e non una stringa vuota che sembri un difetto: la
-      // riga deve dire da sola perché non c'è stata inferenza.
-      model: '(script: nessun modello)',
-      messages: [
-        { role: 'user', content: [{ type: 'text', text: `script: ${job.script ?? ''}` }] },
-        { role: 'assistant', content: [{ type: 'text', text }] },
-      ],
-      taint: 0,
-      counters,
-      replyTo: { channel: job.channel },
-    });
+  const comando = job.script ?? '';
+
+  /**
+   * La riga **prima** dell'effetto, e non dopo.
+   *
+   * Era il contrario, e il judge di questa slice l'ha rotto con un probe: un
+   * crash a metà script non lasciava nessuna riga, `resolveBound` legge
+   * l'assenza di riga come *"nothing has run yet, so this is not a
+   * duplicate"*, e al riavvio lo script ripartiva. `exec.run()` chiamato due
+   * volte, osservato. Uno script che manda una mail o addebita qualcosa lo
+   * farebbe due volte, e la riga finale mostrerebbe un'esecuzione sola,
+   * ordinaria: la duplicazione non lascia traccia.
+   *
+   * È la stessa disciplina che `agent/loop.ts` si dà per il percorso a
+   * obiettivo — *"The record, before anything happens — and not inside a
+   * try"* — e `sys.shell` dichiara già `rerunnable: false` proprio perché un
+   * comando "may have sent something, moved something, or charged something".
+   * Con la riga scritta prima, un crash lascia uno stato `running` che
+   * `resolveBound` rinvia invece di rieseguire.
+   */
+  const aperta = deps.turns.create({
+    id: turnId,
+    principal: { kind: 'system', source: 'scheduler' },
+    tenant: 'host',
+    surface: job.channel,
+    sessionId: session.id,
+    // `SCRIPT_MODEL`, non una stringa scritta a mano: `agent/loop.ts` la legge
+    // per rifiutarsi di riprendere attraverso il modello un turno che il
+    // modello non ha mai visto.
+    model: SCRIPT_MODEL,
+    messages: [{ role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] }],
+    taint: 0,
+    counters,
+    replyTo: { channel: job.channel },
+  });
+
+  const chiudi = (outcome: TurnOutcome, text: string): JobOutcome => {
     // Il token di claim che `create` ha appena scritto: `finish` chiude solo
     // la riga di cui si è titolari, ed è la stessa fence che impedisce a un
     // secondo processo di chiudere il lavoro di un altro.
@@ -330,13 +349,13 @@ async function runScript(
       {
         outcome,
         messages: [
-          { role: 'user', content: [{ type: 'text', text: `script: ${job.script ?? ''}` }] },
+          { role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] },
           { role: 'assistant', content: [{ type: 'text', text }] },
         ],
         taint: 0,
         counters,
       },
-      riga.claimToken,
+      aperta.claimToken,
     );
     return { stopped: outcome, text, turnId };
   };
@@ -344,7 +363,7 @@ async function runScript(
   if (exec === null) {
     // Fail closed. Uno script gira senza nessuno che guardi: se il
     // contenimento non c'è, non è il momento di fare a meno del contenimento.
-    return record(
+    return chiudi(
       'error',
       `Job "${job.id.slice(0, 8)}" non eseguito: la sandbox non è disponibile su questa macchina, ` +
         `e uno script schedulato non gira senza contenimento. \`muffin doctor\` dice cosa manca.`,
@@ -354,7 +373,7 @@ async function runScript(
   let result: ExecResult;
   try {
     result = await exec.run({
-      command: job.script ?? '',
+      command: comando,
       cwd: scope.cwd,
       // La stessa radice che `makeShellTool` concede a `sys.shell`: uno script
       // schedulato non ottiene più autorità sul filesystem di quanta ne
@@ -363,7 +382,7 @@ async function runScript(
       ...(scope.timeoutMs === undefined ? {} : { timeoutMs: scope.timeoutMs }),
     });
   } catch (error) {
-    return record('error', `Job "${job.id.slice(0, 8)}" non è partito: ${error instanceof Error ? error.message : String(error)}`);
+    return chiudi('error', `Job "${job.id.slice(0, 8)}" non è partito: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Cosa dice, e quando. Lo stdout è la voce dello script — vuoto significa
@@ -372,14 +391,14 @@ async function runScript(
   // in silenzio è peggio di un controllo che non esiste, perché sembra verde.
   const out = result.stdout.trim();
   if (result.timedOut) {
-    return record('error', `Job "${job.id.slice(0, 8)}": lo script ha superato il tempo massimo.${out ? `\n${out}` : ''}`);
+    return chiudi('error', `Job "${job.id.slice(0, 8)}": lo script ha superato il tempo massimo.${out ? `\n${out}` : ''}`);
   }
   if (result.code !== 0) {
     const err = result.stderr.trim();
-    return record(
+    return chiudi(
       'error',
       `Job "${job.id.slice(0, 8)}": uscita ${result.code}.${out ? `\n${out}` : ''}${err ? `\n${err}` : ''}`,
     );
   }
-  return record('answered', out);
+  return chiudi('answered', out);
 }

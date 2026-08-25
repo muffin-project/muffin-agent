@@ -430,8 +430,15 @@ export class Scheduler {
      * giù» non deve dire niente nei giorni in cui il sito è su, e la
      * differenza fra silenzio e messaggio vuoto è tutta la differenza fra un
      * controllo che si può tenere acceso e uno che si finisce per spegnere.
+     *
+     * `error` è escluso, e non per simmetria. Un turno può finire in errore
+     * con testo vuoto — il ramo del claim perso in `agent/loop.ts` lo fa —
+     * e quella riga assorbita qui diventerebbe indistinguibile da «girato,
+     * niente da dire»: nessuno stamperebbe più niente, e un esito perso in
+     * una race di fencing avrebbe lo stesso aspetto di una giornata in cui il
+     * sito era su. Il silenzio è una risposta; un guasto silenzioso no.
      */
-    if (outcome.text.trim() === '') {
+    if (outcome.text.trim() === '' && outcome.stopped !== 'error') {
       try {
         this.settleFire(job);
         this.store.markRan(job.id);
