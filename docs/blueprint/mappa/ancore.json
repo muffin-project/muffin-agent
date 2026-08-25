@@ -806,12 +806,12 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 261,
+    "line": 269,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 53,
+    "line": 61,
     "testo": "export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {"
   },
   "cli/gateway.ts:27": {
@@ -2621,22 +2621,22 @@
   },
   "probe.ts:129": {
     "path": "core/sandbox/probe.ts",
-    "line": 129,
+    "line": 217,
     "testo": "function probeBubblewrap(): SandboxProbe {"
   },
   "probe.ts:130": {
     "path": "core/sandbox/probe.ts",
-    "line": 130,
+    "line": 218,
     "testo": "if (userInfo().uid === 0) {"
   },
   "probe.ts:61": {
     "path": "core/sandbox/probe.ts",
-    "line": 61,
+    "line": 87,
     "testo": "function probeSeatbelt(): SandboxProbe {"
   },
   "probe.ts:99": {
     "path": "core/sandbox/probe.ts",
-    "line": 99,
+    "line": 125,
     "testo": "// A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a"
   },
   "process.ts:146": {
