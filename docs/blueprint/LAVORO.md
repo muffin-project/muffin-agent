@@ -17,10 +17,13 @@ stop pre-dogfood e uso reale.
   versionate con guardia e backup pre-reshaping validato, `stampFresh`,
   `muffin backup`/`restore` WAL-safe. Il giro 1 (ADJUST) ha trovato e fatto
   chiudere l'aside non WAL-safe e il backup non validato.
-- **S3 — hardening minimo (D12-min + E6), questa sessione, prossima.** L'ASK
-  mostra l'azione concreta (comando+cwd, URL, pid) e il perché del taint su
-  REPL e Telegram; un ask non consegnabile fallisce visibilmente; il cap sulle
-  tool call vale anche per un batch dentro una singola risposta del modello.
+- **S3 — chiusa (`slice/ask-dice-cosa`).** L'ASK mostra l'azione concreta
+  (per `resourceKind: 'none'` la risorsa è derivata dagli argomenti della
+  call) e il taint del turno, su REPL e sul rendering in coda dello
+  scheduler; un ask non consegnabile falliva già visibilmente; il tetto
+  `maxToolCallsPerTurn` ora vale per singola call anche dentro un batch,
+  con rifiuti espliciti leggibili dal modello. Residui → DOGFOOD: coda
+  durevole degli ask, budget per-capability.
 - **S4 — bring-up modello locale + install reale + smoke journey, ultima.**
   Eval sul locale = smoke, provider funzionante ammesso come ponte.
 
@@ -36,7 +39,7 @@ Discord `handle()` non bound. REPL non-TTY su `wip/repl-linereader-pipe-eof`.
 PERCORSO §0 possiede l'ordine; le righe A6/A7/A8 riflettono il meccanismo S2 e
 restano BLOCKER di Gate solo per scenario/verbo residui (DOGFOOD).
 
-**Next action:** integrare questa riconciliazione FAST, poi S3 su
-`slice/ask-dice-cosa`; a S1+S3 chiuse → S4 e stop pre-dogfood.
+**Next action:** S4 (bring-up Qwen3 27B + install reale + smoke journey);
+a S1 chiusa (Codex, #90) → stop pre-dogfood.
 
 **Owner decision pendente:** nessuna.
