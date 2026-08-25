@@ -51,32 +51,41 @@ export function probeSandbox(): SandboxProbe {
 export const TMPDIR_SUN_PATH_LIMIT = 108;
 
 /**
- * What the runtime appends *under* the owner's tmpdir before any socket is
- * born — because 108 is a budget for the WHOLE path, and the first version of
- * this check spent it all on the directory alone. A judge caught the
+ * The longest suffix the sandbox appends to the owner's tmpdir to name a
+ * socket — because 108 is a budget for the WHOLE path, and the first version
+ * of this check spent it all on the directory alone. A judge caught the
  * consequence: for every tmpdir between 74 and 108 characters `doctor` said
  * `ok` while the real socket path was already past the limit — a green on
  * exactly the machine this check exists to warn.
  *
- * Measured, component by component, in the code that builds the path — not
- * estimated (repo rule: a number is produced in the same breath it is
- * written):
+ * The second version measured real code and still got the model wrong, which
+ * is why this comment now names the *reachability* of each component and not
+ * just its length (giro 2 of the same judge):
  *
- *  - `/muffin-exec-XXXXXX`  → 19 — our own executor's scratch, which becomes
- *    the child's TMPDIR (`core/sandbox/executor.ts`: `mkdtempSync(join(
- *    tmpdir(), 'muffin-exec-'))`, then `out['TMPDIR'] = scratch`);
- *  - `/srt-obs-XXXXXX/sXXXXXXXX.sock` → 30 — the deepest socket the pinned
- *    `@anthropic-ai/sandbox-runtime` creates under that TMPDIR
- *    (dist/sandbox/linux-violation-monitor.js: `mkdtempSync(join(tmpdir(),
- *    'srt-obs-'))` + `s${randomBytes(4).toString('hex')}.sock`); its other
- *    sockets (`srt-mux-<pid>-<seq>.sock`, `srt-tt-…`) stay shorter at ≤25
- *    even with a 7-digit pid.
+ *  - **The live one.** `/claude-socks-<16 hex>.sock` → **35** (and its twin
+ *    `claude-http-…` → 34): created directly under the host's `tmpdir()` by
+ *    `initializeLinuxNetworkBridge` (pinned `@anthropic-ai/sandbox-runtime`,
+ *    dist/sandbox/linux-sandbox-utils.js: `join(tmpdir(),
+ *    'claude-socks-' + socketId + '.sock')` with `socketId =
+ *    randomBytes(8).toString('hex')`), reached unconditionally on Linux from
+ *    `SandboxManager.initialize` — which our executor calls with defaults.
+ *  - **Not counted, and why.** `srt-obs-XXXXXX/sXXXXXXXX.sock` (30) sits
+ *    behind `enableLogMonitor`, which defaults to `false` and is never set by
+ *    our only caller (`core/sandbox/executor.ts`) — dead in production. The
+ *    executor's own scratch (`/muffin-exec-XXXXXX`, 19) is NOT an addend
+ *    either: `initialize()` runs and binds its sockets *before* `scratch()`
+ *    exists, against the host `tmpdir()` — the two are siblings, not nested
+ *    (the previous 49 = 19+30 modelled a nesting that does not exist, and was
+ *    safe only by coincidence). `srt-mux-<pid>-<seq>.sock` stays ≤ 25 even at
+ *    `pid_max = 4194304` (1+8+7+1+3+5); `srt-credmask-`/`srt-ca-` create
+ *    regular files, never sockets.
  *
- * 19 + 30 = 49. Exact, so deliberately unpadded — but pinned to the versions
- * we ship: bumping `@anthropic-ai/sandbox-runtime` is the event that can move
- * the second component, and this comment is where the next measurer starts.
+ * So: 35, the longest reachable suffix, exact and unpadded. Pinned to the
+ * versions we ship — bumping `@anthropic-ai/sandbox-runtime` is the event
+ * that can move it, and `linux-sandbox-utils.js` is where the next measurer
+ * starts.
  */
-export const SANDBOX_TMPDIR_OVERHEAD = 49;
+export const SANDBOX_TMPDIR_OVERHEAD = 35;
 
 /**
  * Would this TMPDIR break the Linux sandbox's socket bridge? Pure function —
@@ -241,15 +250,28 @@ const APPARMOR_REMEDY =
  */
 function isUsernsDenied(detail: string): boolean {
   if (/RTM_NEWADDR/i.test(detail)) return true;
-  if (/operation not permitted/i.test(detail) && /(user namespace|userns|creating new namespace)/i.test(detail)) {
+  if (/operation not permitted/i.test(detail) && /(user namespace|userns)/i.test(detail)) {
     return true;
   }
-  // Verbatim upstream (containers/bubblewrap, bubblewrap.c, letta 26/08/2026):
-  // «No permissions to create a new namespace, likely because the kernel does
-  // not allow non-privileged user namespaces.» — la negazione userns detta con
-  // parole che NON contengono «operation not permitted», quindi il ramo sopra
-  // non la vede. Senza questa riga il caso più parlante di tutti — bwrap che
-  // spiega da solo la causa — finiva in `probe_failed` senza rimedio.
+  // I due messaggi con cui bwrap stesso muore quando la creazione del
+  // namespace è rifiutata — verbatim upstream (containers/bubblewrap,
+  // bubblewrap.c, letta 26/08/2026), incondizionati e non appesi a
+  // «operation not permitted», perché nessuno dei due lo contiene:
+  //
+  //   EPERM  «No permissions to create a new namespace, likely because the
+  //          kernel does not allow non-privileged user namespaces.»
+  //   EINVAL «Creating new namespace failed, likely because the kernel does
+  //          not support user namespaces.»
+  //
+  // Il giro 1 del judge aveva trovato la provenienza falsa del secondo; il
+  // giro 2 ha trovato di peggio: stava in un ramo in AND con «operation not
+  // permitted», che il messaggio reale non contiene mai — irraggiungibile, e
+  // il suo test passava su una stringa ibrida fabbricata. Un kernel senza
+  // CONFIG_USER_NS (EINVAL) finiva in `probe_failed` senza rimedio. Nota per
+  // chi legge il rimedio: per EINVAL il profilo AppArmor non basta — lì è il
+  // kernel a non avere i user namespaces — ma la classificazione resta
+  // giusta, e il detail verbatim di bwrap lo dice da solo.
+  if (/creating new namespace failed/i.test(detail)) return true;
   if (/no permissions to create a new namespace/i.test(detail)) return true;
   return false;
 }

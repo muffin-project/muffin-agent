@@ -292,7 +292,15 @@ describe('the Linux branch (bubblewrap)', () => {
   it('the other userns signature — namespace creation refused — is also named userns_denied', () => {
     mockedUserInfo.mockReturnValue(asUid(1000));
     mockedExec.mockImplementation(() => {
-      throw exitedNonZero('bwrap: Creating new namespace failed: Operation not permitted');
+      // La stringa REALE di bubblewrap.c per EINVAL (kernel senza
+      // CONFIG_USER_NS) — la prima stesura usava un ibrido fabbricato
+      // («…failed: Operation not permitted») che bwrap non emette mai, e il
+      // ramo che doveva coprire questo caso era irraggiungibile sul messaggio
+      // vero: il test passava, la macchina reale finiva in probe_failed
+      // (judge #116, giro 2).
+      throw exitedNonZero(
+        'bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.',
+      );
     });
 
     const probe = probeSandbox();
@@ -330,7 +338,7 @@ describe('the Linux branch (bubblewrap)', () => {
     for (const failure of [
       missingBinary('bwrap'),
       exitedNonZero('bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted'),
-      exitedNonZero('bwrap: Creating new namespace failed: Operation not permitted'),
+      exitedNonZero('bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.'),
       exitedNonZero(''),
     ]) {
       mockedExec.mockImplementation(() => {
