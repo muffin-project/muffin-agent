@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { backupNow, restoreFrom, RestoreRefused } from './backup.js';
-import { schemaVersionOf } from '../core/db/migrate.js';
+import { schemaVersionOf, currentSchemaVersion } from '../core/db/migrate.js';
 
 /**
  * RETURN S2, A8-minimo: an online backup that is valid while a resident
@@ -74,12 +74,17 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     expect(existsSync(asideCopy!)).toBe(true);
     const restored = new DatabaseCtor(dbPath, { readonly: true });
     expect(restored.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 1 });
-    expect(schemaVersionOf(restored)).toBe(1); // migrate() ran and stamped the baseline
+    // `migrate()` ha girato dopo il ripristino, e ha portato il backup fino
+    // alla forma del codice corrente — non l'ha lasciato alla versione che
+    // aveva quando è stato preso. È la proprietà che rende un backup vecchio
+    // utilizzabile da un binario nuovo, e prima che esistesse una migrazione
+    // vera questa riga non poteva distinguerla da "non è successo niente".
+    expect(schemaVersionOf(restored)).toBe(currentSchemaVersion());
     restored.close();
     const aside = new DatabaseCtor(asideCopy!, { readonly: true });
     expect(aside.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 2 }); // nothing destroyed
     aside.close();
-    expect(applied).toEqual([]);
+    expect(applied).toEqual([2]);
   });
 
   it('refuses while the gateway is alive', () => {

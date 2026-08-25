@@ -5,6 +5,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
+import { SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
@@ -662,6 +663,17 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
   });
 }
 
+/** Il testo del primo messaggio utente, per dire *quale* script era partito. */
+function textOfFirstUserMessage(messages: Message[]): string | null {
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    for (const b of m.content) {
+      if (b.type === 'text' && b.text) return b.text;
+    }
+  }
+  return null;
+}
+
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
 export type ResumeRefusal = {
   turnId: string;
@@ -729,6 +741,45 @@ export async function resumeTurn(
     // Not an error: two lanes over one database is the normal case for the
     // seconds a REPL and a gateway overlap, and the loser has nothing to do.
     return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+  }
+
+  /**
+   * Un turno che il modello non ha mai visto non si riprende col modello.
+   *
+   * Un job `script` scrive una riga in `turns` come qualsiasi altro lavoro —
+   * è ciò che gli dà identità durevole — ma non c'è nessuna inferenza da
+   * riprendere: la riga porta un comando, non una conversazione. Senza questa
+   * guardia un crash a metà script finiva alla lane, che lo riprendeva
+   * chiamando il modello con `script: echo …` come se fosse una richiesta
+   * dell'owner: un costo, una risposta inventata, e consegnata.
+   *
+   * E non si riesegue nemmeno lo script. `sys.shell` dichiara
+   * `rerunnable: false` perché un comando *"may have sent something, moved
+   * something, or charged something"*: dopo un crash lo stato non è "non
+   * fatto" né "fatto" ma **forse fatto**, ed è ciò che va detto invece di
+   * scegliere una delle due e sbagliare a caso.
+   */
+  if (record.model === SCRIPT_MODEL) {
+    const comando = textOfFirstUserMessage(record.messages);
+    const testo =
+      `Un job script era partito quando il processo è morto, e non è ri-eseguibile: ` +
+      `**non posso sapere se ha avuto effetto**. Non l'ho rifatto.` +
+      (comando ? `\n\n${comando}` : '') +
+      `\n\nControlla lo stato prima di rilanciarlo.`;
+    deps.turns.finish(
+      record.id,
+      { outcome: 'error', messages: record.messages, taint: record.taint, counters: record.counters },
+      record.claimToken,
+    );
+    return {
+      turnId: record.id,
+      traceId: record.id,
+      stopped: 'error',
+      text: testo,
+      taint: record.taint,
+      iterations: 0,
+      usage: record.counters.usage,
+    };
   }
 
   const span = deps.tracer.start(
