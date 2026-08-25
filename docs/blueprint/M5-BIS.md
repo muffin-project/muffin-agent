@@ -62,6 +62,16 @@ embeddings locali (`qwen3-embedding:0.6b` su Ollama, default già in
 smoke/evidence, **non gate di qualità** — la scelta provider non tiene Muffin
 spento.
 
+**Install reale eseguita il 25/08/2026**, sulla macchina dell'owner: backup
+validato prima che il codice nuovo toccasse il database di agosto, `~/.muffin`
+migrata (29 tabelle, schema v1), provider OpenRouter con `qwen/qwen3.8-27b`,
+recall della memoria di agosto verificato in un turno reale, gateway vivo sotto
+launchd con un job schedulato eseguito da solo. Due difetti trovati **solo**
+installando davvero: la unit non diceva a launchd dove sta `node` (#101, il
+gateway non era mai partito: exit 127 ogni dieci secondi) e `doctor` su una
+home non ancora avviata dà un rimedio sbagliato su un database che esiste
+(follow-up). Resta il pairing Telegram, che richiede il token dell'owner.
+
 **Regola di stop**: soddisfatti S1–S4, **stop pre-dogfood development** →
 install reale → Muffin torna in uso. Voice, immagini, undo, busy semantics e il
 resto vengono ordinati dal dogfood (ROADMAP §14-day), salvo nuove evidenze di
