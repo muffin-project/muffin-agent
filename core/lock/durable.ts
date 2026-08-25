@@ -184,11 +184,9 @@ export function heldBy(
  * would otherwise never reach a database written before this change — the
  * exact gap the audit's P27 finding names for `turns`/`jobs`/the lock tables.
  *
- * `core/memory/store.ts` carries its own copy of this same five-line pattern,
- * predating this one. Exported so the fencing columns this slice adds do not
- * add a *third* copy; folding all of them into one shared helper — P27's own
- * fix — is a smaller, separate change than this slice's mandate and is left
- * for it.
+ * Exported because every store that migrates a column shares this one copy:
+ * `core/memory/store.ts` carried its own private duplicate, predating this
+ * one, until the P27 follow-up slice folded it in here.
  */
 export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
