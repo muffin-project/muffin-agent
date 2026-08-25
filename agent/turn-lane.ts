@@ -33,7 +33,7 @@ import { resumeTurn, type LoopDeps } from './loop.js';
  * the failure is recorded on the row — never merged with how the *turn* ended,
  * which is a second question and never the same one.
  */
-export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void>;
+export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'possibly_sent'>;
 
 /**
  * A surface with nowhere to send. Used by a runtime that has no connector
@@ -125,14 +125,14 @@ export function makeLaneRunner(
    */
   async function sendAndRecord(d: LoopDeps, record: TurnRecord, text: string): Promise<void> {
     try {
-      await deliver(record, text);
-      mark(d, record.id, 'sent');
+      const outcome = await deliver(record, text);
+      mark(d, record.id, outcome === 'possibly_sent' ? 'possibly_sent' : 'sent');
     } catch (error) {
       mark(d, record.id, `failed:${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  function mark(d: LoopDeps, turnId: string, state: 'sent' | `failed:${string}`): void {
+  function mark(d: LoopDeps, turnId: string, state: 'sent' | 'possibly_sent' | `failed:${string}`): void {
     try {
       d.turns.delivered(turnId, state);
     } catch {

@@ -14,6 +14,7 @@ import { buildPdf, pagesWithoutText } from '../../core/documents/fixtures/pdf.js
 import { TelegramConnector } from './connector.js';
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
+import { TelegramDeliveryStore } from './delivery.js';
 
 /**
  * The acceptance scenario, run the way the owner runs it: a PDF sent to the bot.
@@ -131,7 +132,8 @@ function harness(bytes: Buffer | Buffer[], script: ChatResult[] = []) {
   const connector = new TelegramConnector({
     loop: { ...runtime.deps, provider } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
-    inbox: new UpdateInbox(new DatabaseCtor(':memory:')),
+    inbox: new UpdateInbox(runtime.db),
+    delivery: new TelegramDeliveryStore(runtime.db),
     api,
     // Exactly the wiring `cli/surface.ts` builds, including the runtime's own
     // vault — a connector indexing into a second root would produce documents

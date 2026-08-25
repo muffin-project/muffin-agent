@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import type { JobFireStore } from '../core/scheduler/job-fires.js';
 import type { Job } from '../core/scheduler/jobs.js';
 import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
-import type { TurnRecord } from '../core/turns/store.js';
 import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
+import { recoveredText } from './recovered-text.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -109,39 +109,6 @@ async function testStall(envVar: string): Promise<void> {
 }
 
 /**
- * The text a live turn would have delivered, reconstructed for one a later
- * tick found already `done`.
- *
- * `TurnRecord.messages` does not hold it: `drive` (`agent/loop.ts`) only
- * appends the model's final text-only round to the **session file**
- * (`deps.sessions.append`, the `'answered'` branch) — the in-turn transcript
- * stops at the last tool round, because nothing needs to feed a finished
- * turn's own answer back into its own next model call. The session file is
- * exactly what that branch wrote, verbatim, so reading it back is not a
- * reconstruction for the common case — it is the same string.
- *
- * For any other outcome (`ask`, `error`, `cap`, `budget`) the original wording
- * genuinely is not recoverable this way — `ask`'s "In coda per te…" text, for
- * one, is built from `ApprovalRequest`, which is never persisted — and
- * inventing a plausible-looking one would be exactly the kind of claim
- * `docs/JUDGE.md` asks not to make. Named honestly instead.
- */
-function recoveredText(deps: LoopDeps, record: TurnRecord): string {
-  if (record.outcome === 'answered') {
-    const ref = deps.sessions.open(record.sessionId);
-    const messages = deps.sessions.read(ref);
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.role === 'assistant' && m.content.trim() !== '') return m.content;
-    }
-  }
-  return (
-    `Il job ha concluso con esito "${record.outcome ?? 'sconosciuto'}" prima che la consegna fosse ` +
-    `registrata; il testo originale non è stato recuperato dopo un riavvio.`
-  );
-}
-
-/**
  * Create (or finish creating) the turn for an occurrence whose fire is
  * already bound to `turnId`, and run it. The only path in this file that ever
  * calls the model.
@@ -236,7 +203,7 @@ async function resolveBound(
   // between a turn finishing and `Scheduler.settle` running at all). Recover
   // the text and hand back a normal outcome: `Scheduler` delivers and settles
   // exactly as it would for a live run, never calling `runJob` a second time.
-  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps, existing), turnId: existing.id };
+  return { stopped: existing.outcome ?? 'error', text: recoveredText(deps.sessions, existing), turnId: existing.id };
 }
 
 export function makeJobRunner(deps: LoopDeps, fires: JobFireStore): RunJob {

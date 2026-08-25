@@ -156,20 +156,20 @@ describe('telegram presence · streaming (B11)', () => {
     vi.useFakeTimers();
     try {
       const { api, calls } = fakeApi((recorded) => ({
-        editMessageText: async (_chatId, _messageId, html) => {
-          recorded.push({ method: 'editMessageText', at: Date.now(), text: html });
+        sendMessageDraft: async (_chatId, _draftId, html) => {
+          recorded.push({ method: 'sendMessageDraft', at: Date.now(), text: html });
+          if (html === '') return true;
           throw new Error('telegram rejected it');
         },
       }));
-      const presence = await startPresence(api, 1, { isPrivate: false, placeholder: 'sto guardando…' });
+      const presence = await startPresence(api, 1, { isPrivate: true });
 
       presence.streamText('primo tentativo');
       await vi.advanceTimersByTimeAsync(0);
       presence.streamText('secondo tentativo, non deve nemmeno provare');
       await vi.advanceTimersByTimeAsync(5000);
 
-      const edits = calls.filter((c) => c.method === 'editMessageText');
-      expect(edits).toHaveLength(1); // exactly one attempt, ever, for this session
+      expect(liveDrafts(calls)).toHaveLength(1); // exactly one content attempt, ever, for this session
       expect(presence.lastStreamedRaw()).toBeUndefined();
 
       await presence.stop();
@@ -263,16 +263,13 @@ describe('telegram presence · streaming (B11)', () => {
     await expect(presence.stop()).resolves.toBeUndefined();
   });
 
-  it('a group placeholder that never sent has nothing to edit, so streamText is a safe no-op rather than an edit to a nonexistent message', async () => {
+  it('group presence never creates an unjournaled message, so a crash cannot orphan a placeholder', async () => {
     vi.useFakeTimers();
     try {
-      const { api, calls } = fakeApi(() => ({
-        sendMessage: async () => {
-          throw new Error('placeholder send failed');
-        },
-      }));
+      const { api, calls } = fakeApi();
       const presence = await startPresence(api, 1, { isPrivate: false, placeholder: 'sto guardando…' });
-      expect(presence.editMessageId).toBeUndefined();
+      expect('editMessageId' in presence).toBe(false);
+      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
 
       presence.streamText('qualcosa');
       await vi.advanceTimersByTimeAsync(2000);

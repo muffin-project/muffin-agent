@@ -524,7 +524,8 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
     // B8's own guarantee, checked here rather than only claimed: a turn that
     // finished and whose delivery never settled — `pending` on a `done` row —
-    // or was reported failed by the surface. D3 (judge, PR #42): `undelivered()`
+    // was reported failed by the surface, or crossed the remote boundary with
+    // no readable response (`possibly_sent`). D3 (judge, PR #42): `undelivered()`
     // had no caller and no test before this; a job could say "inviato" to
     // nobody, forever, with nothing anywhere reading the query built to catch
     // it. Reported only when `turns` exists — an absent table already said so
@@ -538,9 +539,9 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
         warn(
           'consegne',
-          `${undelivered.length} turni con delivery mai arrivata nelle ultime 24h — la più vecchia: ` +
+          `${undelivered.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
             `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
-          'il lavoro è stato fatto ma non ha raggiunto il canale: controlla che la superficie sia connessa e raggiungibile',
+          'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
         );
       } else if (undelivered !== null) {
         ok('consegne', 'nessuna delivery mancante nelle ultime 24h');

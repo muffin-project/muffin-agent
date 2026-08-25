@@ -10,18 +10,18 @@ import { renderForTelegram } from './render.js';
  * keepalive below has existed since this file's first line rather than being
  * added back after production found the gap the hard way (the previous
  * system's own history, ADR-133 → ADR-138). What changed with B11 is that the
- * same draft — and, in a group, the same placeholder-turned-answer — is no
- * longer only a heartbeat: `streamText` feeds it the turn's growing text, and
+ * same draft is no longer only a heartbeat: `streamText` feeds it the turn's
+ * growing text, and
  * once that starts, the heartbeat stops on its own (Hermes's rule, verbatim:
  * the draft **is** the activity indicator, no pulsing typing underneath it —
  * old Muffin's own regression test, `streaming_callbacks.test.ts`, exists
  * because that rule was violated once already, elsewhere).
  *
  * Groups have no draft (`sendMessageDraft` is documented for private chats
- * only — see `api.ts`), so there the presence is a message that becomes the
- * answer: send a placeholder, edit it as the text grows, edit it one last
- * time with the finished answer. One message, never two, and no "sto
- * pensando" left stranded above the reply.
+ * only — see `api.ts`). A real placeholder cannot be safe on the Bot API: if
+ * Telegram accepts it but its response is lost, there is no message id to edit
+ * or delete after recovery. Groups therefore use only the self-expiring chat
+ * action; their final answer goes through the durable delivery owner.
  */
 
 /** The draft's own preview window is undocumented in its exact renewal
@@ -60,11 +60,6 @@ function nextDraftId(): number {
 
 export type Presence = {
   /**
-   * Where the answer should go. In a group this is the placeholder message to
-   * edit; in a private chat there is nothing to edit and the answer is sent new.
-   */
-  editMessageId?: number;
-  /**
    * Feed the turn's growing text — B11. Rate-limited to at most one live
    * update per `MIN_LIVE_UPDATE_MS` and coalescing: a call that arrives
    * before the window opens is not dropped, it replaces what the next
@@ -98,7 +93,7 @@ export type Presence = {
 
 export type PresenceOptions = {
   isPrivate: boolean;
-  /** Shown in a group while the turn runs. Replaced by the answer. */
+  /** Legacy caller input. Groups deliberately do not materialise it. */
   placeholder?: string;
   now?: () => number;
 };
@@ -151,7 +146,6 @@ export async function startPresence(
   await safely(() => api.sendChatAction(chatId));
   actionTimer = setInterval(() => void safely(() => api.sendChatAction(chatId)), ACTION_RENEW_MS);
 
-  let editMessageId: number | undefined;
   const draftId = nextDraftId();
 
   if (options.isPrivate) {
@@ -159,13 +153,6 @@ export async function startPresence(
     // behind if the turn dies. But it needs renewing, which is the whole lesson.
     await safely(() => api.sendMessageDraft(chatId, draftId, ''));
     draftTimer = setInterval(() => void safely(() => api.sendMessageDraft(chatId, draftId, '')), DRAFT_RENEW_MS);
-  } else if (options.placeholder) {
-    // No draft in groups. A message that becomes the answer: the edit replaces
-    // it, so there is never a "sto pensando" left stranded above the reply.
-    await safely(async () => {
-      const sent = await api.sendMessage(chatId, options.placeholder!);
-      editMessageId = sent.message_id;
-    });
   }
 
   /** The activity IS the draft/edit now — the heartbeats that used to say "still here" would only fight it (Hermes's rule; see the file docstring). */
@@ -199,11 +186,9 @@ export async function startPresence(
     const rendered = parts[0] ?? '';
     lastLiveAt = now();
 
-    const ok = options.isPrivate
-      ? await safely(() => api.sendMessageDraft(chatId, draftId, rendered))
-      : editMessageId !== undefined
-        ? await safely(() => api.editMessageText(chatId, editMessageId!, rendered))
-        : false; // a group whose placeholder never sent has nothing to edit
+    // Groups deliberately have no material live message: their only presence
+    // is the self-expiring chat action, so there is nothing durable to update.
+    const ok = options.isPrivate ? await safely(() => api.sendMessageDraft(chatId, draftId, rendered)) : false;
 
     if (!ok) {
       disabled = true;
@@ -234,7 +219,6 @@ export async function startPresence(
   }
 
   return {
-    ...(editMessageId !== undefined ? { editMessageId } : {}),
     streamText,
     lastStreamedRaw: () => lastStreamedRaw,
     async stop() {

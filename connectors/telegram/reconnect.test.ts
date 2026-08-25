@@ -6,6 +6,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import type { TelegramApiLike } from './api.js';
 import { TelegramConnector, type ConnectorDeps } from './connector.js';
 import { UpdateInbox } from './updates.js';
+import { TelegramDeliveryStore } from './delivery.js';
 
 /**
  * A1's second gap (ADR-0035, "continuity belongs to Muffin, not the pid"):
@@ -27,6 +28,7 @@ function baseDeps(over: Partial<ConnectorDeps> & Pick<ConnectorDeps, 'api' | 'in
   return {
     loop: {} as LoopDeps,
     sessions: {} as SessionStore,
+    delivery: new TelegramDeliveryStore(new DatabaseCtor(':memory:')),
     config: { token: 't' },
     ...over,
   };
