@@ -145,9 +145,16 @@ jobs:
       # resta un salto (è il caso del portatile macOS su piattaforme che il
       # sandbox non copre); con la variabile diventa rosso, ed è l'unica forma
       # in cui «9 saltati» smette di leggersi come «9 passati».
+      # `MUFFIN_REQUIRE_SYSTEMD=1` è la stessa disciplina per l'altro pezzo di
+      # produzione: la unit systemd. Il plist ha `plutil -lint` sul portatile;
+      # la unit — il file della VPS — aveva solo asserzioni su stringhe, e
+      # questo è l'unico runner con `systemd-analyze`. Se il parser sparisse
+      # dall'immagine, senza la variabile il test tornerebbe a saltare in
+      # silenzio e l'unica verifica reale della unit sparirebbe con lui.
       - name: suite
         env:
           MUFFIN_REQUIRE_SANDBOX: '1'
+          MUFFIN_REQUIRE_SYSTEMD: '1'
         run: npx vitest run --reporter=dot
 
 # ---------------------------------------------------------------------------
