@@ -43,4 +43,22 @@ describe('ADR-0052 · composition survives before Work materialisation', () => {
     expect(afterRestart.bind(10, 'turn-b')).toBe('turn-a');
     expect((db.prepare(`SELECT count(*) AS n FROM telegram_compositions`).get() as { n: number }).n).toBe(1);
   });
+
+  it('does not consume sibling events merely because an unsealed composition exists', () => {
+    const db = new DatabaseCtor(':memory:');
+    const box = new UpdateInbox(db);
+    box.accept([{ update_id: 10 }, { update_id: 11 }], NOW);
+    box.include(10, 'album:77');
+    box.include(11, 'album:77');
+
+    // Before a Work exists, membership only says these events may compose. A
+    // local disposition of one event cannot silently erase the other.
+    box.settle(10, NOW);
+    box.markProcessed(10, NOW);
+
+    expect(box.get(10)?.settledAt).toBe(NOW);
+    expect(box.get(11)?.settledAt).toBeNull();
+    expect(box.pending().map((event) => event.updateId)).toEqual([11]);
+    expect(box.compositionOf(11)).toEqual({ compositionId: 'album:77', workId: null });
+  });
 });
