@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
+import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -198,6 +199,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const db = new DatabaseCtor(p.db);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
+  // Versioned schema lifecycle before any store constructs (RETURN S2): the
+  // additive store DDL below stays the fresh-install path; ordered reshapings,
+  // the old-code-on-newer-data guard and the pre-migration VACUUM INTO backup
+  // live in one place. A boot with nothing pending costs zero here.
+  migrate(db, { backupDir: join(p.home, 'backups') });
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);

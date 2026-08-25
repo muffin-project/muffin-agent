@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import * as sqliteVec from 'sqlite-vec';
 import { probeSandbox } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
@@ -267,6 +268,15 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       n: number;
     };
     ok('database', `${p.db}, ${tables.n} tables`);
+
+    const schema = schemaVersionOf(db);
+    if (schema === null) {
+      warn('schema', 'nessuna schema_version: database mai avviato da questo codice', 'parte al primo avvio del runtime');
+    } else if (schema > currentSchemaVersion()) {
+      fail('schema', `database v${schema}, codice v${currentSchemaVersion()}`, 'aggiorna il codice');
+    } else {
+      ok('schema', `v${schema} (codice v${currentSchemaVersion()})`);
+    }
 
     // The semantic half of recall, checked rather than assumed. Three separate
     // defences against the vector index being silently empty were written into
