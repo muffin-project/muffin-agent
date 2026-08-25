@@ -40,8 +40,43 @@ import { probeSandbox } from '../../core/sandbox/probe.js';
  * itself, not on the OS: this test needs a sandbox, and which mechanism
  * provides it is not its business. With bubblewrap available (CI installs the
  * AppArmor profile Ubuntu 24.04 needs) it now runs on Linux too.
+ *
+ * Ma «gira anche su Linux» e «se non gira su Linux qualcuno lo scopre» sono due
+ * affermazioni diverse, e per un po' qui c'è stata solo la prima. Il probe
+ * decideva da solo, e un `it.runIf` che non parte è verde: il giorno in cui il
+ * profilo AppArmor smettesse di applicarsi su una futura immagine ubuntu,
+ * questa riga di DoD sparirebbe dal giro e il job resterebbe verde. È esatta-
+ * mente il «9 saltati letto come 9 passati» che `core/sandbox/executor.test.ts`
+ * documenta come già successo — la disciplina era stata scritta lì e non era
+ * arrivata al file accanto.
  */
-const contained = probeSandbox().available;
+const probe = probeSandbox();
+const contained = probe.available;
+/**
+ * Dove il contenimento *deve* essere dimostrabile, un salto è un difetto.
+ * Impostata in CI, sul runner che sta al posto della VPS di produzione; assente
+ * sul portatile, dove saltare su una piattaforma non coperta è un fatto sulla
+ * macchina e non un difetto. Stessa variabile e stessa lettura di
+ * `core/sandbox/executor.test.ts`, di proposito: due nomi per la stessa regola
+ * si sarebbero scollati.
+ */
+const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+
+describe('questa accettazione dichiara se il sandbox ha davvero girato', () => {
+  it('o il contenimento c’è, o il salto è dichiarato — e dove era richiesto, saltare è fallire', () => {
+    if (contained) return;
+    const perche = probe.available ? '' : `${probe.reason}: ${probe.detail}`;
+    if (containmentRequired) {
+      throw new Error(
+        `MUFFIN_REQUIRE_SANDBOX=1 e su questo host non c'è contenimento — ${perche}. ` +
+          `La riga di DoD "un comando da CLI gira dentro il sandbox" non è stata verificata, ` +
+          `e questo rosso è la variabile che funziona: un contenimento saltato non deve mai leggersi come passato.`,
+      );
+    }
+    console.warn(`[sandbox] accettazione M3 SALTATA — ${perche}`);
+    expect(perche).not.toBe('');
+  });
+});
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-m3-accept-'));
