@@ -1,0 +1,163 @@
+# Gli hook e gli script di sessione sotto `.claude/` hanno 53 test, e fino a
+# oggi non li eseguiva nessuno proprio quando servivano.
+#
+# ## Il punto cieco (trovato il 25/08/2026, integrando la PR #107)
+#
+# Due fatti veri separatamente, sbagliati insieme:
+#
+#  · `vitest.config.ts` **non** esclude `.claude/` — l'esclusione è ristretta a
+#    `**/.claude/worktrees/**`, e il commento lì spiega perché: la versione
+#    larga `**/.claude/**` aveva già lasciato passare un cap non testato. Con
+#    l'include di default di vitest (`**/*.test.ts`), i file di test sotto
+#    `.claude/` **fanno parte della suite** e girano su ogni `npm test`.
+#  · ma `ci.yml` e `accettazione.yml` hanno entrambi `.claude/**` in
+#    `paths-ignore`.
+#
+# Conseguenza: una PR che tocca **solo** roba sotto `.claude/` non fa partire
+# nessun workflow. Quei test non girano esattamente nel momento in cui il
+# codice che provano è cambiato — l'unico momento in cui contano. Non è
+# ipotetico: la PR #107 (`guard-restore-discard.mjs`, più il suo test) è stata
+# mergiata con **zero check**, provata solo in locale.
+#
+# Ed è più largo di come sembrava guardando la #107. Misurato, non deducendolo
+# dai nomi dei file (`npx vitest run .claude`):
+#
+#     .claude/hooks/guard-review-branch.test.ts     16 test
+#     .claude/deleghe.test.ts                       19 test
+#     .claude/hooks/guard-restore-discard.test.ts    7 test
+#     .claude/riconcilia.test.ts                     6 test
+#     .claude/hooks/inject-state.test.ts             5 test
+#                                                   -------
+#                                              5 file, 53 test
+#
+# Non solo gli hook, quindi: anche `deleghe.mjs` e `riconcilia.mjs`, che sono
+# gli script da cui una sessione nuova ricostruisce lo stato. Un filtro sui
+# soli `hooks/**` avrebbe lasciato 25 test su 53 nello stesso buco — cioè
+# avrebbe rifatto il difetto mentre diceva di chiuderlo.
+#
+# ## Perché non le due soluzioni più corte
+#
+# **Togliere `.claude/**` da `paths-ignore`.** Riporterebbe sotto CI tutto
+# `.claude/`: comandi, impostazioni, digest delle deleghe, worktree. È
+# precisamente ciò che quell'ignore comprava, e niente di tutto ciò ha un test
+# da eseguire.
+#
+# **Riscrivere il filtro come `paths` con negazione dentro `ci.yml`.** È
+# legale, e la forma esatta sarebbe questa (docs GitHub, `workflow-syntax`,
+# lette alla fonte il 25/08 — non ricordate):
+#
+#     paths: ['**', '!docs/**', '!.claude/**', '.claude/hooks/**', '!README.md', …]
+#
+# perché «non puoi usare entrambi i filtri `paths` e `paths-ignore` per lo
+# stesso evento», e dentro `paths` vale che «un pattern negativo che segue una
+# corrispondenza positiva esclude il percorso; un pattern positivo che segue
+# una corrispondenza negativa lo include di nuovo» (l'ordine conta, e almeno
+# un pattern senza `!` è obbligatorio).
+#
+# Funzionerebbe, e costa troppo. Con quella forma una PR di soli hook paga
+# `verifica` **intera** e `accettazione` **intera**. Misurato sul run
+# 32897293175 di `ci.yml`, per step:
+#
+#     checkout 4s · setup-node 5s · apt-get bwrap/socat/ripgrep 18s ·
+#     npm ci 12s · typecheck 9s · suite 156s        →  ~205s
+#
+# più `accettazione` a ~220s: **circa sette minuti** per 53 test che non
+# toccano né il sandbox Linux né il binario reale.
+#
+# ## Cosa fa invece questo job, e cosa costa
+#
+# Gira **solo** sui file di `.claude/` che hanno un test, e fa solo le due cose
+# che uno di quei file può rompere: il typecheck (`tsconfig.json` include
+# `.claude/hooks/**/*.ts` e `**/*.test.ts`, quindi un errore di tipo lì è un
+# rosso di `tsc`, non di vitest) e i suoi test. Niente apt-get del sandbox —
+# nessuno di questi test lo tocca — e niente suite di accettazione: nessun
+# sorgente di prodotto referenzia `.claude/` (verificato con grep, non
+# dedotto). Stima sugli stessi step misurati sopra, con la suite ridotta ai 53
+# test (~13s in locale, di cui 10 sono `deleghe.test.ts` che spawna processi):
+# **~45s** contro ~425s, cioè quasi 10× meno sul caso che il punto cieco
+# riguarda.
+#
+# Il costo, detto e non nascosto: su una PR **mista** (`.claude/` + sorgenti)
+# questi test girano due volte, perché `verifica` esegue la suite intera. Sono
+# ~45s sopra i ~425s che quella PR paga già — il 10% — e comprano che il caso
+# solo-`.claude/` scenda da sette minuti a meno di uno. Restringerlo di più non
+# è esprimibile in `paths`: si sceglie quale dei due casi pagare, e si paga sul
+# caso raro.
+#
+# `npm ci` ripagato qui è la ragione per cui questo secondo job è accettabile,
+# ed è anche una correzione al punto 4 di `ci.yml` — «un solo job […] la parte
+# lenta (`better-sqlite3` è nativo)». Sullo stesso run misurato, `npm ci` è
+# **12s** e la suite **156s**: l'install non è la parte lenta. Il punto 4 resta
+# valido per un altro motivo (spezzare typecheck e suite non compra nulla), non
+# per quello scritto.
+#
+# ## Il filtro, e perché è per forma e non per nome
+#
+# `paths` sotto è un elenco di **forme**, non di file. `.claude/*.mjs` e
+# `.claude/**/*.test.ts` fanno sì che uno script o un test aggiunto domani sotto
+# `.claude/` entri qui da solo. Un elenco di nomi (`deleghe.mjs`,
+# `riconcilia.mjs`, …) sarebbe invecchiato nella direzione pericolosa: il primo
+# file nuovo sarebbe tornato invisibile, che è il difetto che questo file
+# esiste per chiudere. Restano fuori — di proposito, e sono senza test —
+# `.claude/commands/**`, `.claude/settings.json`, `.claude/loop.md`,
+# `.claude/deleghe/**` (digest rigenerati) e `.claude/worktrees/**`.
+#
+# Il trigger ricalca `ci.yml`: `pull_request` più il push su `main` soltanto,
+# così un push su una slice non paga due run per la stessa verifica, e
+# `concurrency` con `cancel-in-progress` — il risparmio più grosso e il più
+# facile da dimenticare.
+
+name: strumenti
+
+on:
+  pull_request:
+    paths:
+      - '.claude/hooks/**'
+      - '.claude/*.mjs'
+      - '.claude/*.test.ts'
+      - '.claude/**/*.test.ts'
+  push:
+    branches: [main]
+    paths:
+      - '.claude/hooks/**'
+      - '.claude/*.mjs'
+      - '.claude/*.test.ts'
+      - '.claude/**/*.test.ts'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  strumenti:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # `tsconfig.json` include `.claude/hooks/**/*.ts` e `**/*.test.ts`: senza
+      # questo step un errore di tipo qui passerebbe invisibile e verrebbe
+      # fuori solo alla prossima PR di sorgenti, attribuito a quella.
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      # Il filtro posizionale di vitest è una sottostringa sul percorso del
+      # file. Se un giorno non corrispondesse più niente, vitest esce **1**
+      # («No test files found», verificato senza pipe): questo job diventa
+      # rosso invece di dichiarare verde una copertura che non c'è, che è
+      # esattamente il modo in cui il buco qui sopra è nato.
+      #
+      # Senza pipe, come in `ci.yml`: `cmd | tail` riporta l'exit status di
+      # `tail`.
+      - name: suite degli strumenti di sessione
+        run: npx vitest run .claude --reporter=dot
