@@ -36,3 +36,31 @@ Ha ragione, e la decisione sopra va stretta invece che difesa. Rileggendo l'evid
 **Cosa non è ancora deciso e va deciso quando si costruisce**: se il tool scrive direttamente o *propone* (Letta sta arretrando verso propose-only, #3118 — e il nostro esito `DRAFT` del kernel esiste già per questa forma); e se un fatto scritto dal modello debba portare un `origin` proprio invece di `inferred`, cioè se "dedotto da me mentre parlavo" e "dedotto dalla pipeline" siano la stessa cosa per il recall. Non le decidiamo qui: le decide il primo turno in cui il tool esiste.
 
 **Segnale che questo emendamento era sbagliato**: duplicati quasi-identici fra fatti scritti dal tool ed estratti (contati sulla revisione a freddo), oppure una scrittura del modello che sopravvive a una contraddizione che avrebbe dovuto chiuderla.
+
+---
+
+## Emendamento (2026-08-21) — il fork direct-write/propose è chiuso da ADR-0051
+
+La formulazione dell'11/08 «il modello può scrivere attraverso un tool» va letta
+come una tappa storica, non come la semantica corrente. La decisione owner del
+21/08 chiude il fork lasciato aperto sopra:
+
+> **Muffin può decidere cosa vale la pena ricordare, ma produce una
+> `MemoryProposal`; una sola reconciliation posseduta dalla Home applica le
+> transizioni canoniche delle Beliefs.**
+
+Quindi il tool futuro non è semanticamente `memory.write` ma `memory.propose`,
+anche se la UX potrà chiamarlo `remember`. Tenant, source identity,
+speaker/provenance e trust/taint sono derivati dal runtime, non scelti dal
+modello. Una proposal agentica non è una belief attiva e non entra nel recall
+come verità canonica finché non attraversa reconciliation.
+
+La seconda domanda che l'emendamento dell'11/08 lasciava aperta è chiusa nello
+stesso punto: **agent-inferred e pipeline-inferred devono restare distinguibili
+semanticamente**, anche se il nome fisico dell'enum verrà scelto quando esisterà
+lo schema. Una deduzione del modello non diventa owner-stated per il fatto di
+essere stata formulata nel turno dell'owner.
+
+ADR-0051 possiede rationale, conseguenze, threat boundary e ciò che resta
+intenzionalmente lasciato all'implementazione. Questo ADR conserva la storia del
+cambio di direzione; ADR-0051 possiede la forma corrente.
