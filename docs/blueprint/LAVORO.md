@@ -20,12 +20,19 @@ concreto su authority/data/effect. Non da questa lista.
 
 **Aperto per l'owner:** Telegram non è ancora abilitato (serve il token del
 bot); `doctor` segnala due chiavi API, in `~/.muffin/secrets/` (quella usata) e
-in `~/.config/muffin/secrets/` — cancellare quella che non si vuole ruotare.
+in `~/.config/muffin/secrets/` — cancellare quella che non si vuole ruotare; il
+job di prova `922ac8b7` riparte ogni giorno alle 18:24 finché non lo si toglie
+(`muffin jobs remove 922ac8b7`).
 
-**Follow-up registrati (non slice).** Dall'install: `doctor` su una home che
-non ha ancora avviato il codice nuovo mostra un `✗ database` con rimedio
-sbagliato («run `muffin init` to create it») su un database che esiste — le
-tabelle nuove nascono al primo boot del runtime. Dal judge #90: il meccanismo
+**Follow-up registrati (non slice).** Dal primo uso reale: il REPL muore su
+input non-TTY (`readline was closed`), quindi nessuno script può parlare a
+Muffin — branch `wip/repl-linereader-pipe-eof`. Muffin ricorre a `sys.shell`
+per rispondere a domande su se stesso (tre volte in sei turni), perché non ha
+`sys.inspect`: è E7 vista in funzione, e su `muffin run`, che non può chiedere
+approvazione, quei turni finiscono in un vicolo cieco. Dall'install: `doctor`
+su una home che non ha ancora avviato il codice nuovo mostra un `✗ database`
+con rimedio sbagliato («run `muffin init` to create it») su un database che
+esiste — le tabelle nuove nascono al primo boot del runtime. Dal judge #90: il meccanismo
 N eventi → 1 composizione non ha ancora un assembler che lo chiami (in
 produzione resta 1 evento = 1 Work, dichiarato nel codice); `possibly_sent` non
 distingue «crashato» da «vivo e in volo» e genera un falso allarme
@@ -33,8 +40,8 @@ all'operatore. Dal judge S2: la mutazione interna a `snapshotTo` sopravvive ai
 test (difesa in profondità dichiarata); il catch di `cmdRestore` mostra stack
 per errori non-`RestoreRefused`; il ramo doctor «behind» è irraggiungibile
 finché `MIGRATIONS` è vuota; TOCTOU gateway e assenza di repl-lock restano
-dichiarati. Da #78: finestra di pairing, Discord `handle()` non bound. REPL
-non-TTY su `wip/repl-linereader-pipe-eof`. `riconcilia.mjs` regex DONE.
+dichiarati. Da #78: finestra di pairing, Discord `handle()` non bound.
+`riconcilia.mjs` regex DONE.
 
 **Branch aperti:** solo `slice/readme-open-source-v1` (#84), ferma di proposito
 — il README pubblico non contiene falsità ma la milestone non è il lancio.
