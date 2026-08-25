@@ -71,6 +71,34 @@ export class SchemaAheadError extends Error {
   }
 }
 
+/**
+ * A fresh install is born at HEAD: nothing exists to reshape, so every version
+ * is stamped without running its `up()` — migrations are written against
+ * yesterday's populated data, not against an empty database that already has
+ * today's shape by construction (`muffin init` calls this; every later boot
+ * goes through `migrate()` and finds nothing pending).
+ */
+export function stampFresh(
+  db: Database.Database,
+  migrations: readonly Migration[] = MIGRATIONS,
+  now: () => Date = () => new Date(),
+): void {
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_version (
+       version     INTEGER PRIMARY KEY,
+       description TEXT    NOT NULL,
+       applied_at  TEXT    NOT NULL
+     )`,
+  );
+  const stamp = db.prepare(
+    `INSERT OR IGNORE INTO schema_version (version, description, applied_at) VALUES (?, ?, ?)`,
+  );
+  stamp.run(BASELINE_VERSION, 'baseline — store-owned idempotent DDL', now().toISOString());
+  for (const m of migrations) {
+    stamp.run(m.version, `${m.description} (fresh install — born at this shape)`, now().toISOString());
+  }
+}
+
 export type MigrateResult = { applied: number[]; backup: string | null; version: number };
 
 export function migrate(

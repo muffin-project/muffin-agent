@@ -9,6 +9,7 @@ import {
   rebuildTable,
   SchemaAheadError,
   schemaVersionOf,
+  stampFresh,
   type Migration,
 } from './migrate.js';
 
@@ -183,5 +184,21 @@ describe('currentSchemaVersion', () => {
   it('is the baseline with no migrations and the last version with some', () => {
     expect(currentSchemaVersion([])).toBe(1);
     expect(currentSchemaVersion([widenKindCheck])).toBe(2);
+  });
+});
+
+describe('stampFresh — a fresh install is born at HEAD', () => {
+  it('stamps every version without running any up(), and the next migrate() is a no-op', () => {
+    const { db, backups } = fileDb();
+    let ran = 0;
+    const list: Migration[] = [{ version: 2, description: 'reshape del passato', up: () => void ran++ }];
+
+    stampFresh(db, list);
+
+    expect(ran).toBe(0); // nothing to reshape on an empty database
+    expect(schemaVersionOf(db)).toBe(2);
+    const res = migrate(db, { backupDir: backups, migrations: list });
+    expect(res).toEqual({ applied: [], backup: null, version: 2 });
+    expect(ran).toBe(0);
   });
 });
