@@ -72,7 +72,7 @@ import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
  */
 export const STALE_AFTER_MS = 60 * 60 * 1000;
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS send_lock (
   id        INTEGER PRIMARY KEY CHECK (id = 1),
   pid       INTEGER,

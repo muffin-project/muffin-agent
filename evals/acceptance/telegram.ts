@@ -37,7 +37,7 @@ import type { AddressInfo } from 'node:net';
 export type FakeUpdate = Record<string, unknown>;
 
 /** One outbound call the binary made, in order. */
-export type SentCall = { method: string; payload: Record<string, unknown> };
+type SentCall = { method: string; payload: Record<string, unknown> };
 
 export type FakeTelegram = {
   /** `https://127.0.0.1:<port>` — what `--api-base` is given. */

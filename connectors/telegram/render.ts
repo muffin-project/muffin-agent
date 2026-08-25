@@ -23,7 +23,7 @@
 export const TELEGRAM_MAX = 4096;
 
 /** Escapes the three characters HTML mode cares about. Nothing else needs touching. */
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 

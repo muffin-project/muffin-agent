@@ -118,7 +118,7 @@ export const waitCapability: CapabilityDecl = {
   hostOnly: true,
 };
 
-export const waitSpec: ToolSpec = {
+const waitSpec: ToolSpec = {
   name: 'wait',
   description:
     'Suspend this turn and come back later. The turn is persisted and the runtime is released — ' +

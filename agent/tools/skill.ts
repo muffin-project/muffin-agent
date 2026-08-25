@@ -30,7 +30,7 @@ export const skillCapability: CapabilityDecl = {
   hostOnly: true,
 };
 
-export const skillSpec: ToolSpec = {
+const skillSpec: ToolSpec = {
   name: 'skill_read',
   description:
     'Read a skill. With just the name, returns its SKILL.md (activate the skill by following it). ' +

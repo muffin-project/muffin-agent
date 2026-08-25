@@ -51,7 +51,7 @@ export type SkillScan = {
   problems: string[];
 };
 
-export function skillsRoot(home: string): string {
+function skillsRoot(home: string): string {
   return join(paths(home).home, 'skills');
 }
 

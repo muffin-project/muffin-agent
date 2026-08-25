@@ -39,7 +39,7 @@ const API = 'https://discord.com/api/v10';
 /** Required by Discord's reference, in this exact shape. */
 const USER_AGENT = 'DiscordBot (https://github.com/GiustoPiedimonte/muffin-agent, 0.0.0)';
 
-export class DiscordError extends Error {
+class DiscordError extends Error {
   constructor(
     readonly status: number,
     readonly description: string,
@@ -68,7 +68,7 @@ export class DiscordError extends Error {
  * The full object Discord sends is much larger; this is the part that is
  * ours, with the same optionality the hand-written type used to declare.
  */
-export const DiscordAttachmentSchema = z.object({
+const DiscordAttachmentSchema = z.object({
   id: z.string(),
   filename: z.string(),
   size: z.number(),

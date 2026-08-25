@@ -5,7 +5,7 @@ import { paths } from '../core/config/config.js';
 import { readGateway } from '../core/gateway/lock.js';
 import { currentSchemaVersion, migrate, schemaVersionOf, snapshotTo } from '../core/db/migrate.js';
 
-export const BACKUP_USAGE = `uso:
+const BACKUP_USAGE = `uso:
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO) + quick_check
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le migrazioni`;

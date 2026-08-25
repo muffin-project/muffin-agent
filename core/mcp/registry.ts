@@ -70,7 +70,7 @@ export class McpConfigError extends Error {
   }
 }
 
-export function registryPath(home: string): string {
+function registryPath(home: string): string {
   return join(paths(home).home, 'mcp.json');
 }
 
