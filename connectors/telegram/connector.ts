@@ -114,7 +114,7 @@ export type ConnectorDeps = {
  * inside a fence; it is never compared against anything and never decides a
  * principal (ADR-0046 §1: display names are content, not identity).
  */
-export type ForwardedOrigin = { kind: 'user' | 'hidden_user' | 'chat' | 'channel'; label: string };
+type ForwardedOrigin = { kind: 'user' | 'hidden_user' | 'chat' | 'channel'; label: string };
 
 /** What one update turns into, or null when it is not ours to handle. */
 export type Incoming = {

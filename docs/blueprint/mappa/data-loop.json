@@ -346,7 +346,7 @@
     "verdict": "M5-BIS B11 chiuso su CLI/REPL e sulle chat private Telegram (slice/streaming): adapter, loop, superficie, test del cablaggio con provider SSE finto via buildRuntime reale (cli/repl.test.ts, connectors/telegram/streaming.test.ts). Un burst, non un flusso token-per-token: agent/loop.ts bufferizza tutto un giro e lo rilascia in un colpo solo a `done` senza tool call (mai un punto prima e' conoscibile — vedi TurnInput.onDelta), quindi un singolo giro produce tipicamente UN aggiornamento dal vivo in privato, non molti scaglionati nel tempo. Nei gruppi il placeholder materiale e' stato rimosso: la Bot API non offre idempotency key per recuperare in sicurezza un send accettato con risposta persa; resta `typing` effimero e la risposta finale durable. `muffin run` (headless) resta non-streaming per scelta, come prima. Discord resta OFF (B17, fuori scope)."
   },
   "context": {
-    "assembleFn": "agent/loop.ts:1771-1830 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPrompts, una volta al boot)",
+    "assembleFn": "agent/loop.ts:1771-1830 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPromptBlocks + renderSystemPrompts, una volta al boot)",
     "blocks": [
       {
         "name": "system prompt (classe owner|group)",

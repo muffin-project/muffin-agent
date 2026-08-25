@@ -24,7 +24,7 @@ import type { ProactiveDecision, ProactiveKind } from './proactivity.js';
 // use it is deliberately not being built here (inventing another unmeasured
 // constant is what the research note warns against), so an index today is a
 // write cost with no reader. It comes back with its query, not before.
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS proactive_fires (
   anchor     TEXT PRIMARY KEY,
   kind       TEXT NOT NULL,

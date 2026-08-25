@@ -25,7 +25,7 @@ import { PAGE_SEPARATOR, type ExtractedDocument } from './extract.js';
  * a "parte 3" that spanned four recalled chunks would be a second vocabulary
  * for the same document.
  */
-export const PART_TARGET_CHARS = 2_000;
+const PART_TARGET_CHARS = 2_000;
 
 /** Rows before the index stops listing and starts saying what it left out. */
 export const MAX_OUTLINE_PARTS = 16;

@@ -17,7 +17,7 @@ import type { TrustTier } from '../policy/types.js';
  * summaries: a lossy write here would be unrecoverable later.
  */
 
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
+type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
 
 export type SessionMessage = {
   role: MessageRole;

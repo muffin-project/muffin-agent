@@ -25,7 +25,7 @@ import type Database from 'better-sqlite3';
  * coercion the moment a caller was less careful than this file.
  */
 
-export const DISCORD_SCHEMA = `
+const DISCORD_SCHEMA = `
 CREATE TABLE IF NOT EXISTS discord_messages (
   message_id    TEXT PRIMARY KEY,
   payload       TEXT NOT NULL,

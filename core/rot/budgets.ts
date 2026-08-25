@@ -37,7 +37,7 @@ import type { QuietHours } from '../scheduler/proactivity.js';
  * shared file must not create it.
  */
 
-export type BudgetsSource = 'sealed' | 'fallback';
+type BudgetsSource = 'sealed' | 'fallback';
 
 export type SealedBudgets = {
   /** The caps that bind `BudgetEngine`. */

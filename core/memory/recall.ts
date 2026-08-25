@@ -77,7 +77,7 @@ export type RecallItem = {
  * An ISO timestamp, or `'all'` for every instant at once — the whole chain of
  * what was ever believed, each row labelled with when it held.
  */
-export type RecallWhen = string | 'all';
+type RecallWhen = string | 'all';
 
 /** `'all'` is a sentinel, not a date, and this is the one place that knows it. */
 export const EVERY_INSTANT = 'all';
@@ -186,7 +186,7 @@ export function checkTemporalWindow(
  * available outcome — worse than "I don't know", which is at least true and
  * which the owner can act on.
  */
-export type RecallGap = {
+type RecallGap = {
   kind: 'temporal';
   /** The entity the graph was interrogated about. */
   entity: string;
@@ -354,7 +354,7 @@ const PROTECTED_SLOTS = 1;
  * kept a 2024 separation and dropped `works_at`. With one reserved slot the
  * charged fact still survives and five recency slots still describe now.
  */
-export function selectForExpansion(facts: Fact[]): Fact[] {
+function selectForExpansion(facts: Fact[]): Fact[] {
   if (facts.length <= EXPANSION_SLOTS) return facts;
 
   const byRecency = facts.slice(0, EXPANSION_SLOTS);
@@ -390,8 +390,6 @@ export function selectForExpansion(facts: Fact[]): Fact[] {
   return kept.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
 }
 
-/** Re-exported so callers can reason about when reranking will actually fire. */
-export { RERANK_MIN_CANDIDATES } from './rerank.js';
 import { RERANK_MIN_CANDIDATES } from './rerank.js';
 
 export async function recall(

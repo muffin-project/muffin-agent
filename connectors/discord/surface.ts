@@ -28,7 +28,7 @@ import { DISCORD_MAX, renderForDiscord } from './render.js';
  */
 
 /** `discord` or `discord:<channelId>` → the channel to send to, or null when it is neither. */
-export function channelIdFor(channel: string, ownerUserId: string | undefined): string | null {
+function channelIdFor(channel: string, ownerUserId: string | undefined): string | null {
   if (channel === 'discord') return ownerUserId !== undefined ? DEFAULT_CHANNEL : null;
   if (!channel.startsWith('discord:')) return null;
   const id = channel.slice('discord:'.length);
