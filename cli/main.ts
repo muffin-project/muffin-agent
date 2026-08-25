@@ -862,8 +862,11 @@ async function cmdSurface(argv: string[]): Promise<number> {
   const home = paths().home;
   if (sub === 'list' || sub === undefined) return cmdSurfaceList(home);
   if (sub === 'enable' && id) {
-    const { values } = parseArgs({ args: rest, options: { owner: { type: 'string' } } });
-    return cmdSurfaceEnable(home, id, values.owner);
+    const { values } = parseArgs({
+      args: rest,
+      options: { owner: { type: 'string' }, 'api-base': { type: 'string' } },
+    });
+    return cmdSurfaceEnable(home, id, values.owner, values['api-base']);
   }
   if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
   process.stderr.write(SURFACE_USAGE);

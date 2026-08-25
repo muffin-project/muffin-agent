@@ -79,15 +79,20 @@ function parseInventory(): InventoryRow[] {
  */
 const NOT_PROVABLE_HERE: Record<string, string> = {
   C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
-  // `TelegramApi.baseUrl` (`connectors/telegram/api.ts`) ha un default ma
-  // nessun override in produzione — `cli/surface.ts` chiama sempre `new
-  // TelegramApi(token)`, mai un secondo argomento — quindi il binario reale
-  // non può essere puntato a un Bot API finto senza toccare quel cablaggio,
-  // fuori mandato per `slice/ingress-forward`. Il minimo di B16 è provato dal
-  // punto d'ingresso di produzione con un `TelegramApiLike` finto invece
-  // (`connectors/telegram/forward-taint.test.ts`, stesso livello di
-  // `document-arrival.test.ts`/`group-context.test.ts`), non dal binario.
-  B16: 'nessun binario spawnabile contro un Bot API finto: TelegramApi non ha override di baseUrl in produzione (cli/surface.ts)',
+  // B16 non è più qui. L'override esiste ora in produzione —
+  // `surfaces.telegram.apiBase`, con `muffin surface enable telegram
+  // --api-base <url>` — e non come cablaggio da test: Telegram pubblica il Bot
+  // API come server ospitabile («You can run it locally and send the requests
+  // to your own server instead of https://api.telegram.org»,
+  // core.telegram.org/bots/api), quindi la manopola è una modalità di
+  // deployment documentata che *per costruzione* rende la superficie
+  // provabile. `evals/acceptance/telegram.ts` è il Bot API finto che ne
+  // approfitta, e `scenarios/b-telegram-pairing.accept.ts` guida il binario
+  // vero attraverso pairing, sconosciuto e codice sbagliato.
+  //
+  // La lezione, per chi aggiungerà la prossima superficie: la ragione per cui
+  // questa riga è rimasta qui per settimane non era la difficoltà, era che
+  // mancava un argomento a un costruttore che lo accettava già.
 };
 
 export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
