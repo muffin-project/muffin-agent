@@ -1,5 +1,6 @@
 import type { Message, MessageOrigin, Update } from '@grammyjs/types';
-import { runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
+import { randomBytes } from 'node:crypto';
+import { recoveredText, runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
@@ -9,7 +10,7 @@ import { TelegramError, type TelegramApiLike } from './api.js';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForTelegram } from './render.js';
-import { UpdateInbox } from './updates.js';
+import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
  * Telegram as an adapter over the one loop, not a second engine.
@@ -30,6 +31,16 @@ import { UpdateInbox } from './updates.js';
  *     A private chat with the owner is `host`; a group is its own tenant; anyone
  *     who is not the owner is a `member` with the taint that comes with it.
  *  3. **Nothing is answered twice**, including across a restart.
+ *
+ *     Mechanised, not merely intended (`slice/inbound-unit`, ADR-0035
+ *     emendamento №6): every `update_id` binds to exactly one durable turn
+ *     identity, the same `claim`/`bind`/`settle` shape B7 proved for a job's
+ *     `(job_id, scheduled_for)` — `resolve` below resolves that identity
+ *     *before* the model is ever touched, so a crash anywhere between
+ *     accepting an update and marking it processed resumes the one turn it
+ *     already started rather than minting a second one, and a turn that
+ *     already answered is redelivered or settled from its durable record,
+ *     never recomputed.
  */
 
 export type TelegramConfig = {
@@ -469,16 +480,279 @@ export class TelegramConnector {
       }
 
       try {
-        await this.handle(incoming);
-        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        await this.resolve(stored, incoming);
       } catch (error) {
         // Stays pending: it may well work after a restart, and dropping it is
         // the data loss the inbox exists to prevent, arriving by another road.
+        // `resolve` never throws once a turn has actually run the model — only
+        // a *delivery* attempt can still fail here (fresh or recovered), so a
+        // retry on the next drain redelivers a durable result rather than
+        // recomputing one (fault point 6).
         const reason = error instanceof Error ? error.message : String(error);
         this.deps.inbox.markFailed(stored.updateId, reason);
         (this.deps.log ?? (() => {}))(`telegram: update ${stored.updateId} fallito — ${reason}`);
       }
     }
+  }
+
+  /**
+   * `update_id → turn_id`, resolved *before* anything else touches this
+   * update — pairing included, since a pairing attempt never creates a turn
+   * and an update already bound to one is by construction never a pairing
+   * code (`slice/inbound-unit`, ADR-0035 emendamento №6).
+   *
+   * Mirrors `agent/scheduler-run.ts`'s `makeJobRunner`: `stored.turnId` is
+   * this update's own `job_fires`-shaped claim, read once from the row
+   * `pending()` already loaded, never recomputed.
+   */
+  private async resolve(stored: StoredUpdate, incoming: Incoming): Promise<void> {
+    if (stored.turnId !== null) return this.resolveBound(stored, incoming, stored.turnId);
+
+    if (await this.tryPair(incoming)) {
+      this.deps.inbox.markProcessed(stored.updateId, this.now());
+      return;
+    }
+
+    const minted = randomBytes(16).toString('hex');
+    const winner = this.deps.inbox.bind(stored.updateId, minted);
+    // Lost the race: some other bind landed first (two overlapping drains, or
+    // this same call resolving a retry). No turn to run — `minted` was never
+    // written anywhere — so this resolves the winner's id exactly as if it
+    // had found it already bound at the top of this call.
+    if (winner !== minted) return this.resolveBound(stored, incoming, winner);
+    await this.runFresh(stored, incoming, winner);
+  }
+
+  /**
+   * This update is already bound to `turnId` — from a previous pass of this
+   * same call, a crashed one before it, or a race with itself resolved a
+   * moment ago. Never calls the model: only recovers or defers.
+   */
+  private async resolveBound(stored: StoredUpdate, incoming: Incoming, turnId: string): Promise<void> {
+    const existing = this.deps.loop.turns.get(turnId);
+    if (existing === null) {
+      // Fault point 2: the bind landed, the turn row did not — a crash
+      // between the two. Nothing has run yet, so this is not a duplicate:
+      // finish exactly what was interrupted, with the identity already
+      // committed, never a second one.
+      return this.runFresh(stored, incoming, turnId);
+    }
+    if (existing.status !== 'done') {
+      // Fault points 3/4: some pass already created this turn — this call a
+      // moment ago (the loser of a bind race), or a crashed one before it —
+      // and it belongs to the turn's own resume machinery now (reclaim, the
+      // turn lane), not to a second call into the model for the same update.
+      // Nothing to do here: the update stays pending, and the next drain (or
+      // restart) re-checks once the turn is actually `done`.
+      (this.deps.log ?? (() => {}))(
+        `telegram: update ${stored.updateId} già legato al turno ${turnId.slice(0, 12)} (${existing.status}) — rimando`,
+      );
+      return;
+    }
+    // `done`: the model already ran. Resolve delivery without ever recomputing.
+    if (stored.settledAt !== null || existing.delivery === 'sent' || existing.delivery === 'undeliverable') {
+      // Fault points 5/7: already delivered — by this same connector's
+      // earlier pass, or by an independent turn-lane delivery. `settledAt`
+      // proves it even when the turn's own bookkeeping column did not land
+      // (the residual `runFresh` names: `sendMessage` returned before
+      // `recordDelivery` ran).
+      if (existing.delivery !== 'sent' && existing.delivery !== 'undeliverable') this.recordDelivery(turnId, 'sent');
+      this.finish(stored.updateId, this.now());
+      return;
+    }
+    // `pending` (never delivered) or `failed:<why>` (attempted and refused) —
+    // recover the text, retry the send, never recompute (fault points 5 and 6).
+    if (existing.replyTo === null) {
+      this.recordDelivery(turnId, 'undeliverable');
+      this.finish(stored.updateId, this.now());
+      return;
+    }
+    const text = recoveredText(this.deps.loop, existing);
+    try {
+      await this.deliverTo(existing.replyTo, text);
+    } catch (error) {
+      this.recordDelivery(turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
+      throw error; // stays pending; the next drain retries the send, not the model
+    }
+    this.deps.inbox.settle(stored.updateId, this.now());
+    this.recordDelivery(turnId, 'sent');
+    this.deps.inbox.markProcessed(stored.updateId, this.now());
+  }
+
+  /**
+   * Create (or finish creating) the turn for an update whose identity is
+   * already bound to `turnId`, and run it. The only path in this file that
+   * ever calls the model — mirrors `agent/scheduler-run.ts`'s `runFresh`.
+   */
+  private async runFresh(stored: StoredUpdate, incoming: Incoming, turnId: string): Promise<void> {
+    const { principal, tenant } = principalFor(incoming, this.deps.config.ownerUserId);
+    const presence = await startPresence(this.deps.api, incoming.chatId, {
+      isPrivate: incoming.isPrivate,
+      placeholder: 'sto guardando…',
+    });
+
+    try {
+      // What this message's content adds on top of the sender's own tier —
+      // set once and reused below for the download's vault tier and for the
+      // turn's own, so a forwarded attachment cannot land in memory at the
+      // sender's tier from one call while the turn itself starts at tier 2
+      // from the other (M5-BIS B16, ADR-0044 amendment).
+      const contentTaint = contentTaintOf(incoming);
+
+      // The file lands and is indexed **before** the turn runs, so the agent
+      // finds it in memory rather than being told about a path it cannot read.
+      // A failed download does not fail the turn: the message still deserves an
+      // answer, and an honest one says the file did not arrive.
+      const arrival = incoming.attachment
+        ? await this.ingest(incoming, incoming.attachment, tenant, maxTier(tierOf(principal), contentTaint))
+        : null;
+
+      // M5-BIS B11: fed to `presence.streamText`, which owns the rate limit,
+      // the coalescing and the transport choice (draft vs. edit) — this
+      // closure only accumulates, exactly like the REPL's own `onDelta` does
+      // for `process.stdout` (`cli/repl.ts`). `deltaText` grows to
+      // `result.text` byte for byte (`agent/loop.ts`'s `trimChunkEdges`),
+      // which is what lets the finalisation below compare the two directly.
+      let deltaText = '';
+      const onDelta = (delta: TurnDelta): void => {
+        deltaText += delta.text;
+        presence.streamText(deltaText);
+      };
+
+      // Fault point 2, made observable: a real crash here lands after `bind`
+      // committed this update's identity and before the turn row exists at
+      // all — the same test-only seam `agent/scheduler-run.ts` uses for the
+      // same window (`MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS`, #76).
+      await testStall('MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_BIND_MS');
+
+      const result = await runTurn(this.deps.loop, {
+        principal,
+        tenant,
+        surface: 'telegram',
+        // One session per chat, so a conversation continues where it left off
+        // and two chats never share one.
+        session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
+        text: composeTurnText(incoming, arrival),
+        // M5-BIS B16: a forwarded message's content is not the principal's own
+        // words, so the turn cannot be allowed to start at the principal's
+        // tier alone. `agent/loop.ts` takes `max(tierOf(principal),
+        // contentTaint)` for the row's starting taint and for the episode/
+        // session writes of this same message — one number, read in three
+        // places that used to be able to disagree.
+        contentTaint,
+        // The identity `bind` already committed, threaded in so the row this
+        // call writes is the row the update is already pointing at — never a
+        // second, competing one (`slice/inbound-unit`, ADR-0035 emendamento №6).
+        id: turnId,
+        // Where the answer goes, on the record rather than only on this stack.
+        // Nothing reads it yet — the turn is still delivered from right here,
+        // below — and that is the point of writing it now: the day the lane
+        // delivers instead of this function, the address is already durable and
+        // this call site does not have to be reopened to put it there.
+        // `channel` is that address in `SurfaceRegistry` terms — added for
+        // #41's lane (turno sospeso), the same field `makeJobRunner`
+        // (`agent/scheduler-run.ts`) already writes for a scheduled job.
+        replyTo: {
+          chatId: incoming.chatId,
+          messageId: incoming.messageId,
+          channel: `telegram:${incoming.chatId}`,
+          ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
+        },
+        // The registry address for *this* conversation — always the fully
+        // qualified `telegram:<chatId>`, even for the owner's own private
+        // chat: a mid-turn tool addressing a follow-up delivery needs the
+        // exact room the turn came from, not the surface's default (which
+        // `telegram` alone would mean, and which is the owner's chat
+        // regardless of which group this turn is actually in).
+        replyChannel: `telegram:${incoming.chatId}`,
+        onDelta,
+      });
+
+      // B11: no more live updates once the turn itself is over. Called here,
+      // explicitly, before any finalisation network call below — not only in
+      // the `finally` — because `stop()` is idempotent and this is what
+      // cancels a coalesced, still-pending live update before it can race
+      // the final edit and land after it with stale, mid-turn text.
+      await presence.stop();
+
+      // A suspended turn has produced nothing to deliver. Rendering `''` would
+      // send an empty message (`renderForTelegram('')` is `['']`) and record
+      // `sent` on a turn that has not answered — the owner would read it as the
+      // answer. The placeholder stays as the truth of the moment, and the lane's
+      // `deliverTo` replaces it when the turn resumes: the mirror of the guard
+      // `agent/turn-lane.ts` already has on the resume path. Found by the
+      // integrated judge of the dev→main promotion (#44), between #41 and #42.
+      //
+      // The *update* is nonetheless fully handled: a turn exists, is bound,
+      // and has been handed to the turn lane — mirrors
+      // `core/scheduler/scheduler.ts`'s own suspended branch, which settles
+      // and advances the schedule regardless of whether the *turn* has
+      // finished answering. Settling here is what stops this same update
+      // from being re-checked on every future drain; whatever answer
+      // eventually comes is the lane's own delivery, unrelated to this row.
+      if (result.stopped === 'suspended') {
+        this.finish(stored.updateId, this.now());
+        return;
+      }
+
+      // Fault point 5, made observable: a real crash here lands after the
+      // turn reaches `done` and before any delivery is ever attempted.
+      await testStall('MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_DONE_MS');
+
+      try {
+        const parts = renderForTelegram(result.text);
+        for (const [i, part] of parts.entries()) {
+          // The placeholder becomes the first part rather than sitting above it.
+          if (i === 0 && presence.editMessageId !== undefined) {
+            // B11: if live streaming already left this message showing
+            // exactly the finished answer, skip the edit rather than send a
+            // knowably-redundant one. Whether Telegram treats an edit with
+            // unchanged content as a harmless no-op or an error is not
+            // something this environment can verify (no token to probe
+            // with — PRACTICES §2) — dropping the call removes the
+            // dependency on the answer instead of assuming either one.
+            if (presence.lastStreamedRaw() !== result.text) {
+              await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
+            }
+          } else {
+            await this.deps.api.sendMessage(incoming.chatId, part, {
+              ...(i === 0 ? { replyTo: incoming.messageId } : {}),
+            });
+          }
+        }
+        // The send landed — settle this update's fire *before* the
+        // bookkeeping write below, so a crash between the two still proves
+        // delivery happened on the next resolution (fault point 5's exact
+        // residual: `sendMessage` returned before `recordDelivery` ran).
+        // Mirrors `Scheduler`'s own `settleFire` immediately before
+        // `markRan`, never after.
+        this.deps.inbox.settle(stored.updateId, this.now());
+        this.recordDelivery(result.turnId, 'sent');
+      } catch (error) {
+        // The second outcome, kept apart from the first: the *turn* answered,
+        // the *delivery* did not. `core/scheduler/scheduler.ts:166-171` already
+        // paid for merging these — a failed delivery must never make work run
+        // again, because that doubles it. Rethrown unchanged, so the update
+        // stays pending exactly as before — retried by `resolveBound` above,
+        // never by a second call into the model.
+        this.recordDelivery(result.turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+      this.deps.inbox.markProcessed(stored.updateId, this.now());
+    } finally {
+      await presence.stop();
+    }
+  }
+
+  /**
+   * The last two writes for an update, always together and always in this
+   * order — settle, then mark processed — mirroring `job_fires`'s own "solo
+   * dopo il settlement avanza la schedule" (fault point 7), applied to an
+   * update instead of a fire.
+   */
+  private finish(updateId: number, at: string): void {
+    this.deps.inbox.settle(updateId, at);
+    this.deps.inbox.markProcessed(updateId, at);
   }
 
   /**
@@ -528,133 +802,6 @@ export class TelegramConnector {
     return true;
   }
 
-  private async handle(incoming: Incoming): Promise<void> {
-    if (await this.tryPair(incoming)) return;
-    const { principal, tenant } = principalFor(incoming, this.deps.config.ownerUserId);
-    const presence = await startPresence(this.deps.api, incoming.chatId, {
-      isPrivate: incoming.isPrivate,
-      placeholder: 'sto guardando…',
-    });
-
-    try {
-      // What this message's content adds on top of the sender's own tier —
-      // set once and reused below for the download's vault tier and for the
-      // turn's own, so a forwarded attachment cannot land in memory at the
-      // sender's tier from one call while the turn itself starts at tier 2
-      // from the other (M5-BIS B16, ADR-0044 amendment).
-      const contentTaint = contentTaintOf(incoming);
-
-      // The file lands and is indexed **before** the turn runs, so the agent
-      // finds it in memory rather than being told about a path it cannot read.
-      // A failed download does not fail the turn: the message still deserves an
-      // answer, and an honest one says the file did not arrive.
-      const arrival = incoming.attachment
-        ? await this.ingest(incoming, incoming.attachment, tenant, maxTier(tierOf(principal), contentTaint))
-        : null;
-
-      // M5-BIS B11: fed to `presence.streamText`, which owns the rate limit,
-      // the coalescing and the transport choice (draft vs. edit) — this
-      // closure only accumulates, exactly like the REPL's own `onDelta` does
-      // for `process.stdout` (`cli/repl.ts`). `deltaText` grows to
-      // `result.text` byte for byte (`agent/loop.ts`'s `trimChunkEdges`),
-      // which is what lets the finalisation below compare the two directly.
-      let deltaText = '';
-      const onDelta = (delta: TurnDelta): void => {
-        deltaText += delta.text;
-        presence.streamText(deltaText);
-      };
-
-      const result = await runTurn(this.deps.loop, {
-        principal,
-        tenant,
-        surface: 'telegram',
-        // One session per chat, so a conversation continues where it left off
-        // and two chats never share one.
-        session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
-        text: composeTurnText(incoming, arrival),
-        // M5-BIS B16: a forwarded message's content is not the principal's own
-        // words, so the turn cannot be allowed to start at the principal's
-        // tier alone. `agent/loop.ts` takes `max(tierOf(principal),
-        // contentTaint)` for the row's starting taint and for the episode/
-        // session writes of this same message — one number, read in three
-        // places that used to be able to disagree.
-        contentTaint,
-        // Where the answer goes, on the record rather than only on this stack.
-        // Nothing reads it yet — the turn is still delivered from right here,
-        // below — and that is the point of writing it now: the day the lane
-        // delivers instead of this function, the address is already durable and
-        // this call site does not have to be reopened to put it there.
-        // `channel` is that address in `SurfaceRegistry` terms — added for
-        // #41's lane (turno sospeso), the same field `makeJobRunner`
-        // (`agent/scheduler-run.ts`) already writes for a scheduled job.
-        replyTo: {
-          chatId: incoming.chatId,
-          messageId: incoming.messageId,
-          channel: `telegram:${incoming.chatId}`,
-          ...(presence.editMessageId === undefined ? {} : { editMessageId: presence.editMessageId }),
-        },
-        // The registry address for *this* conversation — always the fully
-        // qualified `telegram:<chatId>`, even for the owner's own private
-        // chat: a mid-turn tool addressing a follow-up delivery needs the
-        // exact room the turn came from, not the surface's default (which
-        // `telegram` alone would mean, and which is the owner's chat
-        // regardless of which group this turn is actually in).
-        replyChannel: `telegram:${incoming.chatId}`,
-        onDelta,
-      });
-
-      // B11: no more live updates once the turn itself is over. Called here,
-      // explicitly, before any finalisation network call below — not only in
-      // the `finally` — because `stop()` is idempotent and this is what
-      // cancels a coalesced, still-pending live update before it can race
-      // the final edit and land after it with stale, mid-turn text.
-      await presence.stop();
-
-      // A suspended turn has produced nothing to deliver. Rendering `''` would
-      // send an empty message (`renderForTelegram('')` is `['']`) and record
-      // `sent` on a turn that has not answered — the owner would read it as the
-      // answer. The placeholder stays as the truth of the moment, and the lane's
-      // `deliverTo` replaces it when the turn resumes: the mirror of the guard
-      // `agent/turn-lane.ts` already has on the resume path. Found by the
-      // integrated judge of the dev→main promotion (#44), between #41 and #42.
-      if (result.stopped === 'suspended') return;
-
-      try {
-        const parts = renderForTelegram(result.text);
-        for (const [i, part] of parts.entries()) {
-          // The placeholder becomes the first part rather than sitting above it.
-          if (i === 0 && presence.editMessageId !== undefined) {
-            // B11: if live streaming already left this message showing
-            // exactly the finished answer, skip the edit rather than send a
-            // knowably-redundant one. Whether Telegram treats an edit with
-            // unchanged content as a harmless no-op or an error is not
-            // something this environment can verify (no token to probe
-            // with — PRACTICES §2) — dropping the call removes the
-            // dependency on the answer instead of assuming either one.
-            if (presence.lastStreamedRaw() !== result.text) {
-              await this.deps.api.editMessageText(incoming.chatId, presence.editMessageId, part);
-            }
-          } else {
-            await this.deps.api.sendMessage(incoming.chatId, part, {
-              ...(i === 0 ? { replyTo: incoming.messageId } : {}),
-            });
-          }
-        }
-        this.recordDelivery(result.turnId, 'sent');
-      } catch (error) {
-        // The second outcome, kept apart from the first: the *turn* answered,
-        // the *delivery* did not. `core/scheduler/scheduler.ts:166-171` already
-        // paid for merging these — a failed delivery must never make work run
-        // again, because that doubles it. Rethrown unchanged, so the update
-        // stays pending exactly as before.
-        this.recordDelivery(result.turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
-        throw error;
-      }
-    } finally {
-      await presence.stop();
-    }
-  }
-
   /**
    * Writes how the delivery went, and is not allowed to fail the delivery.
    *
@@ -664,7 +811,7 @@ export class TelegramConnector {
    * successful send would mark the update failed and send the whole answer a
    * second time on the next drain.
    */
-  private recordDelivery(turnId: string, delivery: 'sent' | `failed:${string}`): void {
+  private recordDelivery(turnId: string, delivery: 'sent' | 'undeliverable' | `failed:${string}`): void {
     try {
       this.deps.loop.turns.delivered(turnId, delivery);
     } catch (error) {
@@ -763,4 +910,20 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function backoffMs(attempt: number): number {
   const base = Math.min(1000 * 2 ** attempt, 30_000);
   return base + Math.floor(Math.random() * 1000);
+}
+
+/**
+ * Test-only pause, a no-op unless a scenario sets the env var — identical in
+ * shape to `agent/scheduler-run.ts`'s own `testStall` (same precedent as
+ * `MUFFIN_GATEWAY_TICK_MS`, #76), kept local rather than imported for the
+ * reason `backoffMs` above already states: a four-line function shared across
+ * two otherwise-unrelated modules is not yet worth a cross-module dependency.
+ * The two windows it can widen are real production races (a real crash
+ * between two writes), but each is microseconds wide in normal operation:
+ * too narrow for an external test process to land on reliably without this.
+ * Never set outside `evals/acceptance` and this file's own tests.
+ */
+async function testStall(envVar: string): Promise<void> {
+  const ms = Number(process.env[envVar]);
+  if (Number.isFinite(ms) && ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
 }

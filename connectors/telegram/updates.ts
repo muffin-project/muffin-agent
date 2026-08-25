@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { ensureColumn } from '../../core/lock/durable.js';
 
 /**
  * The inbox: every update lands here before its offset is confirmed.
@@ -24,6 +25,23 @@ import type Database from 'better-sqlite3';
  *
  * The same ethic as the memory plane: evidence is recorded before anything is
  * decided about it.
+ *
+ * ## `turn_id`/`settled_at` — the identity bridge ADR-0035 emendamento №5 already named
+ *
+ * *"Ogni `update_id` mappa a UNA sola identità durevole di turno"* (owner,
+ * `slice/inbound-unit`'s mandate) is the same shape `core/scheduler/job-fires.ts`
+ * proves for a job occurrence — `claim` → `bind` → `settle` — with one
+ * simplification the job case does not have: **`accept()` already creates this
+ * row before any handling starts**, so there is no separate `claim()` to write.
+ * A `job_fires` row has to be created *by* the scheduler, because `jobs` only
+ * holds the recurrence rule, not a row per occurrence; a Telegram update is
+ * already one row per occurrence from the moment it lands. Two columns, added
+ * with `ensureColumn` on the table this repo already ships, host the rest of
+ * the same three-method shape (`bind`, `settle`, plus this class's own
+ * pre-existing `pending`/`markProcessed` standing in for `claim`/settle's
+ * schedule-advance) — not a second table, and not a shared framework with
+ * `job_fires`: ADR-0035 emendamento №5 refuses the generalisation until a third
+ * consumer exists, and two instances are not a third.
  */
 
 export const TELEGRAM_SCHEMA = `
@@ -56,14 +74,75 @@ export type StoredUpdate = {
   /** The raw update, exactly as Telegram sent it. Parsed by the caller, not here. */
   payload: string;
   receivedAt: string;
+  /** `null` until this update is bound to a durable turn identity (`bind`). */
+  turnId: string | null;
+  /** `null` until this update's delivery has been settled (`settle`). */
+  settledAt: string | null;
 };
 
 export class UpdateInbox {
+  private readonly bindStmt: Database.Statement;
+  private readonly settleStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+
   constructor(
     private readonly db: Database.Database,
     private readonly connector = 'telegram',
   ) {
     db.exec(TELEGRAM_SCHEMA);
+    // Additive, for a database written before this slice — see
+    // `ensureColumn`'s own docstring in `core/lock/durable.ts`. `NULL` on
+    // every pre-existing row reads exactly as "not yet bound" / "not yet
+    // settled", which is the truth for a row nobody has resolved this way
+    // before today.
+    ensureColumn(db, 'telegram_updates', 'turn_id', 'turn_id TEXT');
+    ensureColumn(db, 'telegram_updates', 'settled_at', 'settled_at TEXT');
+    // Guarded on `turn_id IS NULL`, exactly like `JobFireStore.bind`: whichever
+    // caller's write lands first wins, and a loser's `changes === 0` is how
+    // `bind` below knows to hand back the winner's id instead of its own —
+    // never two turns for one update, even if two passes both decided this
+    // update looked unbound at once.
+    this.bindStmt = db.prepare(`UPDATE telegram_updates SET turn_id = ? WHERE update_id = ? AND turn_id IS NULL`);
+    // Guarded on `settled_at IS NULL` for the same reason: idempotent under a
+    // retry, and the first settlement is the one that counts.
+    this.settleStmt = db.prepare(`UPDATE telegram_updates SET settled_at = ? WHERE update_id = ? AND settled_at IS NULL`);
+    this.getStmt = db.prepare(
+      `SELECT update_id AS updateId, payload, received_at AS receivedAt, turn_id AS turnId, settled_at AS settledAt
+       FROM telegram_updates WHERE update_id = ?`,
+    );
+  }
+
+  /**
+   * First writer wins, and every caller — first or raced — gets back the id
+   * that actually landed rather than the one it proposed. A caller that lost
+   * never has a turn of its own to run: it asks what the winner's id is and
+   * defers to it, which is what makes a second, competing turn for the same
+   * update structurally unreachable rather than merely unlikely. Mirrors
+   * `core/scheduler/job-fires.ts`'s `JobFireStore.bind` exactly.
+   */
+  bind(updateId: number, turnId: string): string {
+    this.bindStmt.run(turnId, updateId);
+    const row = this.getStmt.get(updateId) as { turnId: string | null } | undefined;
+    if (!row || row.turnId === null) throw new Error(`telegram_updates senza turn_id dopo bind per ${updateId}`);
+    return row.turnId;
+  }
+
+  /**
+   * Marks this update's delivery fully settled. Idempotent, so a duplicate
+   * drain or a retried delivery never moves `settled_at` a second time.
+   * `TelegramConnector` calls this immediately before marking the update
+   * processed and never after — the same ordering `core/scheduler/scheduler.ts`
+   * uses for `job_fires` ("solo dopo il settlement avanza la schedule"),
+   * applied to an update instead of a fire.
+   */
+  settle(updateId: number, at: string): void {
+    this.settleStmt.run(at, updateId);
+  }
+
+  /** This update's own row, including its turn binding — for recovery and tests. */
+  get(updateId: number): StoredUpdate | null {
+    const row = this.getStmt.get(updateId) as StoredUpdate | undefined;
+    return row ?? null;
   }
 
   /**
@@ -123,7 +202,7 @@ export class UpdateInbox {
   pending(limit = 50): StoredUpdate[] {
     return this.db
       .prepare(
-        `SELECT update_id AS updateId, payload, received_at AS receivedAt
+        `SELECT update_id AS updateId, payload, received_at AS receivedAt, turn_id AS turnId, settled_at AS settledAt
          FROM telegram_updates WHERE processed_at IS NULL
          ORDER BY update_id LIMIT ?`,
       )
