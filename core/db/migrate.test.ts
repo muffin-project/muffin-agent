@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
   rebuildTable,
   SchemaAheadError,
   schemaVersionOf,
+  assertSnapshotOk,
   stampFresh,
   type Migration,
 } from './migrate.js';
@@ -200,5 +201,22 @@ describe('stampFresh — a fresh install is born at HEAD', () => {
     const res = migrate(db, { backupDir: backups, migrations: list });
     expect(res).toEqual({ applied: [], backup: null, version: 2 });
     expect(ran).toBe(0);
+  });
+});
+
+describe('snapshotTo/assertSnapshotOk — a snapshot is validated or it is not a backup', () => {
+  it('rejects a file that is not a database', () => {
+    const d = dir();
+    const garbage = join(d, 'garbage.db');
+    writeFileSync(garbage, 'non sono un database');
+    expect(() => assertSnapshotOk(garbage)).toThrow();
+  });
+
+  it('the automatic pre-migrate backup passes the shared validation (judge #93, blocking finding 2)', () => {
+    const { db, backups } = fileDb();
+    seedOldShape(db);
+    migrate(db, { backupDir: backups });
+    const res = migrate(db, { backupDir: backups, migrations: [widenKindCheck] });
+    expect(() => assertSnapshotOk(res.backup!)).not.toThrow();
   });
 });

@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../core/config/config.js';
 import { readGateway } from '../core/gateway/lock.js';
-import { currentSchemaVersion, migrate, schemaVersionOf } from '../core/db/migrate.js';
+import { currentSchemaVersion, migrate, schemaVersionOf, snapshotTo } from '../core/db/migrate.js';
 
 export const BACKUP_USAGE = `uso:
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO) + quick_check
@@ -29,19 +29,9 @@ export function backupNow(
   const file = join(dir, `muffin-${now().toISOString().replace(/[:.]/g, '-')}.db`);
   const db = new DatabaseCtor(dbPath);
   try {
-    db.prepare(`VACUUM INTO ?`).run(file);
+    snapshotTo(db, file);
   } finally {
     db.close();
-  }
-  const check = new DatabaseCtor(file, { readonly: true });
-  try {
-    const verdict = check.pragma('quick_check', { simple: true });
-    if (verdict !== 'ok') {
-      rmSync(file, { force: true });
-      throw new Error(`quick_check sul backup: ${String(verdict)} — file scartato`);
-    }
-  } finally {
-    check.close();
   }
   return { file, bytes: statSync(file).size };
 }
@@ -103,8 +93,18 @@ export function restoreFrom(
     } finally {
       live.close();
     }
-    aside = `${dbPath}.pre-restore-${now().toISOString().replace(/[:.]/g, '-')}`;
-    copyFileSync(dbPath, aside);
+    aside = `${dbPath}.pre-restore-${now().toISOString().replace(/[:.]/g, '-')}.db`;
+    // VACUUM INTO, never a raw file copy: after any unclean exit the newest
+    // committed rows sit only in `-wal`, which a copy of the main file misses
+    // and the cleanup below then deletes — the aside would be the safety net
+    // that silently lost exactly the rows worth saving (judge #93, blocking
+    // finding 1, proven with a SIGKILLed writer).
+    const current = new DatabaseCtor(dbPath);
+    try {
+      snapshotTo(current, aside);
+    } finally {
+      current.close();
+    }
   }
   rmSync(`${dbPath}-wal`, { force: true });
   rmSync(`${dbPath}-shm`, { force: true });
