@@ -687,17 +687,18 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
   });
 
   it('warns anche nella fascia 74–108: il budget è del path del socket, non della directory', () => {
-    // Il difetto che il judge ha trovato nel primo giro: 108 speso tutto su
-    // TMPDIR nudo, mentre il runtime ci appende sotto 49 caratteri misurati
-    // (scratch dell'executor + socket più profondo del bridge). Un TMPDIR di
-    // 80 caratteri lasciava doctor verde e il sandbox rotto a runtime.
+    // Il difetto del giro 1 del judge: 108 speso tutto su TMPDIR nudo, mentre
+    // il bridge del sandbox appende il suo socket più lungo (35 caratteri
+    // misurati, claude-socks-<16hex>.sock) direttamente sotto quella
+    // directory. Un TMPDIR di 80 caratteri lasciava doctor verde e il sandbox
+    // rotto a runtime.
     const dir = home();
     vi.stubEnv('TMPDIR', '/x'.repeat(40)); // 80 chars: sotto 108 da solo, oltre col percorso reale
     const report = runDoctor(dir, { platform: 'linux' });
     const c = report.checks.find((x) => x.name === 'tmpdir');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('80');
-    expect(c?.detail).toContain('49');
+    expect(c?.detail).toContain('35');
     rmSync(dir, { recursive: true, force: true });
   });
 
