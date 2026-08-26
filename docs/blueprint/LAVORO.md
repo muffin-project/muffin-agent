@@ -6,12 +6,11 @@ osservato vince quando diverge da questo file.
 
 **Muffin è installato e in uso (25/08/2026).** RETURN TO OWNER è chiusa: il
 dettaglio è in `M5-BIS.md` §RETURN. Installazione reale: `~/.muffin` vivo,
-OpenRouter, gateway sotto launchd, un job già eseguito da solo, backup validato.
+OpenRouter, gateway vivo sotto launchd, backup validato.
 
-**Regola di stop attiva.** Niente sviluppo pre-dogfood: il prossimo lavoro
-nasce da un failure osservato usando Muffin, da una requirement owner già
-decisa, da una migrazione che rimandare renderebbe costosa, o da un rischio
-concreto su authority/data/effect. Non da questa lista.
+**Regola di stop attiva.** Il prossimo lavoro nasce da un failure osservato
+usando Muffin, da una requirement owner decisa, da una migrazione costosa da
+rimandare, o da un rischio su authority/data/effect. Non da questa lista.
 
 **Aperto per l'owner:** token del bot Telegram; billing GitHub per la CI.
 
@@ -29,11 +28,14 @@ doctor verde → `uninstall` non lascia niente.
 **solo su TTY**: il percorso che fa un umano non lo prova nessun test (via:
 pilotare un pty con `script`). (b) `gateway install` **stampa** i comandi del
 supervisore, non li esegue: la catena ha un passo manuale, e il modo di
-provarlo è eseguire i comandi che ha stampato. (c) Senza CI il gate Linux si
-rifà in locale in un container Docker. (d) L'installazione viva è indietro di
-18 commit su `dev` e `muffin update` non è mai stato eseguito davvero: dopo
-l'E2E, promozione `dev`→`main` e update reale. (e) E7 riconfermato dal vivo:
-a «che modello usi?» risponde che non lo sa — onesto, ma è il buco.
+provarlo è eseguire i comandi che ha stampato. (c) Gate Linux senza CI:
+`npm run test:acceptance:linux`. Prima corsa: 28/29, e **un reperto CRITICAL**
+— il probe dice `available` mentre l'esecuzione vera muore su `Can't mount
+proc`, perché probe ed esecutore invocano bwrap per strade diverse (diretto vs
+`SandboxManager`): in un container su VPS `doctor` sarebbe verde e ogni script
+fallirebbe. (d) L'installazione viva è 18 commit indietro e `muffin update`
+non è mai girato davvero: dopo l'E2E, `dev`→`main` e update reale. (e) E7 dal
+vivo: a «che modello usi?» dice che non lo sa.
 
 **Coda decisa dall'owner:** 1) **E2E unico** (in volo); 2) **ASK durevole** —
 un'approvazione pendente non sopravvive a un crash; 3) **note di avanzamento
@@ -58,8 +60,7 @@ da in-volo; TOCTOU gateway; repl-lock assente; finestra pairing; Discord
 `handle()` non bound; coppie discord↔telegram (dedup solo con trigger).
 
 **Truth maintenance:** M5-BIS possiede status Gate e classificazione RETURN;
-PERCORSO §0 possiede l'ordine, ed è chiuso. Le righe A6/A7/A8 e D12/E6 hanno il
-meccanismo in HEAD e restano BLOCKER di Gate solo per i residui DOGFOOD.
-`dev` resta privato: il lancio è un'altra decisione.
+PERCORSO §0 l'ordine, ed è chiuso. A6/A7/A8 e D12/E6 hanno il meccanismo in
+HEAD, BLOCKER solo per i residui DOGFOOD. `dev` resta privato.
 
 **Owner decision pendente:** nessuna.
