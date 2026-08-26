@@ -321,6 +321,35 @@ describe('migrazione 3 — facts.pinned', () => {
     expect(untouched.pinned).toBe(0);
   });
 
+  it('non appunta ciò che `addFact` aveva rifiutato: il tenant group col suo "owner", il tier non-owner, l\'inferito', () => {
+    const { db, backups } = fileDb();
+    seedOldFacts(db);
+    // A group chat produces its own entity literally named "owner" —
+    // `extract.ts` hands that subject to the model on any tenant — and its
+    // facts carry the member's tier (≥2), which `addFact`'s gate refuses to
+    // pin. The backfill is a second write path to the same bit: without the
+    // same gate it would flip exactly these rows.
+    db.prepare(
+      `INSERT INTO entities (id, tenant_id, kind, name, recorded_at) VALUES (3, 'group:telegram:9', 'person', 'owner', '2026-08-12T10:00:00Z')`,
+    ).run();
+    const raw = db.prepare(
+      `INSERT INTO facts (id, tenant_id, subject_id, predicate, object_value, recorded_at, episode_id, trust_tier, confidence, origin, extraction_v)
+       VALUES (?, ?, ?, ?, ?, '2026-08-12T10:00:00Z', 1, ?, 0.9, ?, 1)`,
+    );
+    raw.run(5, 'group:telegram:9', 3, 'created', 'owner', 2, 'said');
+    raw.run(6, 'group:telegram:9', 3, 'works_as', 'barista', 2, 'said');
+    // Host tenant but inferred, not said: tier alone is not the whole gate.
+    raw.run(7, 'host', 2, 'works_as', 'painter', 0, 'inferred');
+    migrate(db, { backupDir: backups, migrations: [] });
+
+    migrate(db, { backupDir: backups });
+
+    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
+    expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]); // the host backfill, and nothing else
+    const refused = db.prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7) AND pinned = 0`).all() as { id: number }[];
+    expect(refused.map((r) => r.id)).toEqual([5, 6, 7]);
+  });
+
   it('non fallisce su un database dove `facts` non esiste ancora', () => {
     const { db, backups } = fileDb();
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
