@@ -164,12 +164,18 @@ describe('web_search', () => {
 
     const after = buildRuntime(home, workspace);
     expect(after.deps.tools.map((t) => t.spec.name)).toContain('web_search');
+    // `resource: { kind: 'query', ... }`, not `{ kind: 'none' }`: since
+    // `slice/egress-params`, `sys.search` declares `resourceKind: 'query'`
+    // (was `'none'`), and the kernel now refuses a query capability handed
+    // anything else — the same fail-closed check `sys.http` already had for
+    // `url` (`core/policy/decide.ts`). A hand-built request still has to
+    // match what `resourceFor` (`agent/loop.ts`) would actually produce.
     expect(after.deps.decide({
       principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
       tenant: 'host',
       capability: 'sys.search',
-      resource: { kind: 'none' },
-      args: {},
+      resource: { kind: 'query', value: 'qualcosa' },
+      args: { query: 'qualcosa' },
       taint: 0,
     }).effect).not.toBe('deny');
   });

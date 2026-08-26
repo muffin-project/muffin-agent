@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
-import { runInit } from './init.js';
+import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
+import { probeSandbox } from '../core/sandbox/probe.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
@@ -30,6 +32,7 @@ import {
   GATEWAY_USAGE,
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
+import { cmdBackup, cmdRestore } from './backup.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -42,7 +45,22 @@ import {
   type ProviderKind,
 } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
-import { chooseProvider, describeProviderChoice, keyHint, looksLikeTelegramToken } from './onboarding.js';
+import { cmdPromptShow, PROMPT_USAGE } from './prompt-show.js';
+import {
+  askLocalOrApi,
+  askModelChoice,
+  chooseProvider,
+  describeModelChoice,
+  describeProviderChoice,
+  describeSandboxProbe,
+  describeSupervisor,
+  keyHint,
+  localModelChoices,
+  looksLikeTelegramToken,
+  OPENROUTER_MODEL_FAMILIES,
+  probeLocalRuntime,
+  type ModelChoiceReason,
+} from './onboarding.js';
 
 /**
  * Entry point.
@@ -55,20 +73,36 @@ const USAGE = `muffin — agente personale, sempre acceso
 alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
 
   muffin (o: muffin repl)       avvia l'agente: REPL + ogni surface abilitata
+                                [--stream|--no-stream] forza la risposta a
+                                comparire mentre si forma, o solo a fine
+                                turno (di default: sì su un terminale reale,
+                                mai su una pipe)
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
 comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
-              [--base-url URL] [--model NOME] [--light-model NOME] [--api-key CHIAVE]
+              [--base-url URL] [--model NOME] [--light-model NOME]
+                                la chiave arriva da stdin o dal prompt nascosto,
+                                mai da argv: echo -n "$KEY" | muffin init
+              [--local [DIR]]  home di prova separata (default ~/.muffin-local),
+                                riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
+  muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
+  muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
+                                mette da parte il db corrente, riapplica le
+                                migrazioni
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
                                 nessuna finestra aperta. \`muffin init\` propone
                                 di installarlo; \`run\` lo lancia il supervisore.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
+  muffin prompt show [--surface cli|telegram|discord] [--member] [--tenant ID] [--blocks]
+                                il system prompt che il modello riceverebbe
+                                davvero, sulla home corrente — niente chiamate
+                                al modello, segreti redatti
   muffin secret set NOME [--persist]
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
@@ -149,8 +183,31 @@ function loadDotenvIfPresent(): void {
   }
 }
 
-async function main(argv: string[]): Promise<number> {
+/**
+ * `--stream`/`--no-stream` → the explicit override `runRepl`'s own
+ * `opts.stream` takes — absent means "decide from `process.stdout.isTTY`",
+ * which is what a real terminal always gets. `--stream` exists for the
+ * mirror-image case autodetection cannot see: a pipe that still wants the
+ * progressive text (`muffin repl --stream | tee log`, and the acceptance
+ * scenario for B11, which drives the real binary over a pipe and has no TTY
+ * to autodetect from). `--no-stream` wins if a script passes both — the
+ * conservative direction, matching how a config hierarchy resolves a
+ * conflicting pair elsewhere in this CLI (flag beats flag, most restrictive
+ * beats least).
+ */
+function streamOverride(argv: string[]): boolean | undefined {
+  if (argv.includes('--no-stream')) return false;
+  if (argv.includes('--stream')) return true;
+  return undefined;
+}
+
+async function main(rawArgv: string[]): Promise<number> {
   loadDotenvIfPresent();
+  // Stripped before the switch below, not parsed per-branch, so reading them
+  // is the same whether they ride with a bare `muffin` (`command` ends up
+  // `undefined`, not the flag string) or with `muffin repl`.
+  const stream = streamOverride(rawArgv);
+  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream');
   const [typed, ...rest] = argv;
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
@@ -160,13 +217,17 @@ async function main(argv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      return runRepl();
+      return runRepl(paths().home, stream !== undefined ? { stream } : {});
     case 'init':
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
     case 'doctor':
       return cmdDoctor(rest);
+    case 'backup':
+      return cmdBackup(rest);
+    case 'restore':
+      return cmdRestore(rest);
     case 'rot':
       return cmdRot(rest);
     case 'uninstall':
@@ -185,6 +246,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdGateway(rest);
     case 'observe':
       return cmdObserve(paths().home, rest);
+    case 'prompt':
+      return cmdPrompt(rest);
     case 'secret':
       return cmdSecret(rest);
     case 'trace':
@@ -194,7 +257,7 @@ async function main(argv: string[]): Promise<number> {
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl();
+      return runRepl(paths().home, stream !== undefined ? { stream } : {});
     }
     case '--help':
     case '-h':
@@ -212,8 +275,77 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * La chiave da stdin quando `muffin init` gira in una pipe; `undefined` quando
+ * stdin e un terminale (allora si usa il prompt nascosto) o e vuoto.
+ *
+ * `readFileSync(0)` e non un readline: e la stessa lettura di
+ * `muffin secret set`, e un `init` in CI non ha un TTY su cui aprire un prompt.
+ */
+/**
+ * Tutto stdin, anche quando fd 0 e non-bloccante e il produttore e lento.
+ *
+ * Il difetto che questa funzione esiste per chiudere, misurato due volte dal
+ * judge di questa slice: `readFileSync(0)` su fd 0 non-bloccante lancia
+ * **EAGAIN** appena i dati non sono ancora arrivati, e il `catch` intorno lo
+ * leggeva come «nessuna chiave» — quindi `pass show`, `op read`, `gpg -d`
+ * fallivano **in silenzio**, e il fail-closed di `MUFFIN_API_KEY` rimandava a
+ * una porta che non si apre.
+ *
+ * Il fd resta non-bloccante e non c'e niente da fare qui: lo mette
+ * `process.stdin`, toccato a import time nel grafo dei moduli (bisect del
+ * judge: `import('./repl.js')` basta). `isatty(0)` sposta la guardia, non il
+ * problema; `openSync('/dev/stdin')` nemmeno — eredita la stessa open file
+ * description. Quindi si ritenta, con una scadenza, e un errore di lettura non
+ * diventa mai «nessun valore».
+ */
+function readAllStdin(primoByteMs = 3_000, poiMs = 60_000): string {
+  const chunks: Buffer[] = [];
+  const buf = Buffer.alloc(64 * 1024);
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  let visto = 0;
+  // Due scadenze, e la differenza conta: **prima** del primo byte si aspetta
+  // poco, perche il caso comune di un'attesa infinita e uno stdin ereditato e
+  // muto (CI, un servizio) — e restare fermi trenta secondi in silenzio e la
+  // cosa che fa credere a chi guarda che il comando sia piantato. **Dopo** il
+  // primo byte si aspetta a lungo, perche un produttore vero (`pass show`,
+  // `gpg -d`, un blob grosso) puo metterci. La scadenza si rinnova a ogni
+  // chunk: un flusso lungo non e un flusso fermo.
+  let deadline = Date.now() + primoByteMs;
+  for (;;) {
+    let read: number;
+    try {
+      read = readSync(0, buf, 0, buf.length, null);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EOF') break;
+      if (code !== 'EAGAIN') throw error;
+      if (Date.now() > deadline) {
+        throw new Error(
+          visto === 0
+            ? `stdin non ha prodotto niente entro ${Math.round(primoByteMs / 1000)}s`
+            : `stdin si e fermato dopo ${visto} byte e non ha chiuso entro ${Math.round(poiMs / 1000)}s`,
+        );
+      }
+      Atomics.wait(wait, 0, 0, 20); // 20ms, senza bruciare la CPU
+      continue;
+    }
+    if (read === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, read)));
+    visto += read;
+    deadline = Date.now() + poiMs;
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function readKeyFromStdin(): string | undefined {
+  if (isatty(0)) return undefined;
+  const value = readAllStdin().trim();
+  return value === '' ? undefined : value;
+}
+
 async function cmdInit(argv: string[]): Promise<number> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: argv,
     options: {
       hardened: { type: 'boolean' },
@@ -223,14 +355,49 @@ async function cmdInit(argv: string[]): Promise<number> {
       model: { type: 'string' },
       'light-model': { type: 'string' },
       'api-key': { type: 'string' },
+      local: { type: 'boolean' },
     },
-    allowPositionals: false,
+    allowPositionals: true,
   });
+
+  if (!values.local && positionals.length > 0) {
+    process.stderr.write(`muffin init: argomento posizionale "${positionals[0]}" ha senso solo con --local\n`);
+    return 78;
+  }
 
   const providerFlag = values.provider as ProviderKind | undefined;
   if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {
     process.stderr.write(`--provider deve essere anthropic o openai-compat\n`);
     return 78;
+  }
+
+  // --local (M5-BIS A9): a throwaway second home for a "fresh install"
+  // rehearsal, resolved and guarded before anything below reads or writes
+  // through it. `home` replaces every default `paths().home` call for the
+  // rest of this function; when `--local` is absent it is that same default,
+  // so the non-local path behaves exactly as before.
+  const realHome = paths().home;
+  let home = realHome;
+  if (values.local) {
+    const local = resolveLocalHome(positionals[0]);
+    if (isSameOrNestedPath(local, realHome)) {
+      process.stderr.write(
+        `--local ${local} coincide con la home reale (${realHome}) o ci sta dentro — rifiuto.\n` +
+          `Scegli una directory fuori da ${realHome}.\n`,
+      );
+      return 78;
+    }
+    home = local;
+  }
+
+  // "Durante l'installazione deve capire la macchina" (owner, verbatim) —
+  // before any question, not instead of doctor: `probeSandbox` already runs a
+  // real containment, but until now only `muffin doctor` ever read the result,
+  // so a first run learned about a broken sandbox by running a *second*
+  // command. Headless is untouched: nothing here prints or blocks off a TTY.
+  if (process.stdin.isTTY) {
+    process.stderr.write(describeSandboxProbe(probeSandbox()));
+    process.stderr.write(describeSupervisor(process.platform));
   }
 
   // Acquire the key: flag > env > an already-stored secret > an interactive
@@ -242,15 +409,83 @@ async function cmdInit(argv: string[]): Promise<number> {
   // The stored-secret step is what makes `muffin uninstall --yes && muffin init`
   // a loop again now that the key no longer has to sit in a `.env` the agent can
   // read: `--persist` put it outside the home the wipe reaches, so the chain
-  // answers and nothing is prompted or copied.
-  let apiKey = values['api-key'] ?? process.env['MUFFIN_API_KEY'];
-  const stored = apiKey ? null : locateSecret('secret://provider_api_key');
+  // answers and nothing is prompted or copied. `--local` reads that very same
+  // chain against its own `home` below — never a copy (ADR-0030's `--local`
+  // amendment).
+  // **Mai da argv** (direttiva owner 2026-08-18, ADR-0048 §revisione). Un valore
+  // in `argv` sta nella shell history e nel `ps` di chiunque sulla macchina, ed
+  // è un segreto anche prima di essere registrato nel backend: `--api-key
+  // CHIAVE` non è deprecato con un avviso — è **rifiutato**, perché un avviso
+  // arriva quando la chiave è già finita nella history. Stessa forma che
+  // `muffin secret set` ha sempre avuto (vedi `cmdSecret`).
+  if (values['api-key'] !== undefined) {
+    process.stderr.write(
+      `--api-key non accetta piu un valore: una chiave in argv finisce nella shell history e nel ps di chiunque.\n` +
+        `  Passala da stdin:  echo -n "$KEY" | muffin init\n` +
+        `  Oppure lancia muffin init in un terminale e incollala al prompt nascosto.\n` +
+        `  Se e gia stata usata cosi, ruotala.\n`,
+    );
+    return 78;
+  }
+  // **Nemmeno dall'environment** (decisione owner 2026-08-18). `environ` ha
+  // permessi piu stretti di `cmdline`, ma la forma non cambia: un env generico
+  // e un vettore generico, e la garanzia dice che il valore va dal backend dei
+  // segreti al consumatore privilegiato al sink di autenticazione, senza
+  // passare da model, env generico, argv, risultati di tool, DB, log, superfici
+  // o approvazioni. Fail closed, e il messaggio nomina **solo la variabile**:
+  // mai il valore, mai la lunghezza, mai un prefisso.
+  if (process.env['MUFFIN_API_KEY'] !== undefined) {
+    process.stderr.write(
+      `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+        `  Oppure passala a init:  echo -n "$KEY" | muffin init\n` +
+        `  Poi togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
+    );
+    return 78;
+  }
+  // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
+  // `secret set` usa da sempre.
+  let apiKey: string | undefined;
+  try {
+    apiKey = readKeyFromStdin();
+  } catch (error) {
+    // Come `cmdSecret`: uno stack trace di Node non e un messaggio, e questa e
+    // la prima cosa che una macchina nuova vede.
+    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 78;
+  }
+  const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
   }
-  if (!apiKey && !stored && process.stdin.isTTY) {
+
+  // Locale-o-API (owner, verbatim: "chiedere se si vuole andare in locale o in
+  // API") — asked only when nothing already answers it: an explicit
+  // --provider/--base-url, or a key already on file (fresh or stored), both
+  // already decide the provider under ADR-0036, and asking again would be
+  // exactly the "decide silently, then ask anyway" shape that ADR forbids in
+  // the other direction. `askLocalOrApi` itself only runs when a probe found
+  // something to offer, so there is never a question with one real answer.
+  let localRuntime: { baseUrl: string; models: readonly string[] } | undefined;
+  if (process.stdin.isTTY && !providerFlag && values['base-url'] === undefined && !apiKey && !stored) {
+    const probe = await probeLocalRuntime();
+    if (probe.available) localRuntime = await askLocalOrApi(probe);
+  }
+
+  if (!localRuntime && !apiKey && !stored && process.stdin.isTTY) {
     process.stderr.write(keyHint(providerFlag, values['base-url']));
     apiKey = await promptSecret('Chiave API (nascosta — incollala, o invio per saltare): ');
+  }
+
+  // A local runtime needs no key from the owner, but `readSecret` at boot
+  // (agent/runtime.ts) still requires *something* to be on file for
+  // `provider.apiKeyRef` — an empty secret is a hard failure there, not a
+  // degrade. Writing this placeholder through the same `apiKey` option a real
+  // key travels through is not new secret-handling, just a harmless value
+  // flowing through the existing one; skipped whenever a real key already
+  // answers (fresh, stored, or the owner pasted one instead of going local).
+  if (localRuntime && !apiKey && !stored) {
+    apiKey = 'local-runtime-no-key-needed';
   }
 
   // Caught regardless of --provider: a pasted Telegram token is not a key for
@@ -274,17 +509,53 @@ async function cmdInit(argv: string[]): Promise<number> {
   // (`describeProviderChoice`) — ADR-0036: ask only what cannot be inferred,
   // and never decide silently.
   const keyForInference = apiKey ?? (stored ? readFileSync(stored.path, 'utf8').trim() : undefined);
-  const choice = chooseProvider(providerFlag, keyForInference, values['base-url']);
+  // `localRuntime` already decided the provider (a probe, not a key prefix) —
+  // `chooseProvider` never sees it, same as an explicit --provider always
+  // wins over inference. `describeProviderChoice` still says it out loud
+  // through the same call, via the 'local' reason.
+  const choice = localRuntime
+    ? { provider: 'openai-compat' as const, baseUrl: localRuntime.baseUrl, reason: 'local' as const }
+    : chooseProvider(providerFlag, keyForInference, values['base-url']);
   process.stderr.write(describeProviderChoice(choice, keyForInference));
+
+  // Modello (owner, verbatim: "chiedere che modello si vuole usare") — asked
+  // only when nothing already names one, and only on a TTY; headless keeps
+  // today's compiled default from `defaultModels`. Anthropic diretto gets no
+  // question at all: one family, nothing to choose among.
+  let mainModel = values.model;
+  let lightModel = values['light-model'];
+  let modelReason: ModelChoiceReason = mainModel || lightModel ? 'explicit' : 'default';
+  if (!mainModel && process.stdin.isTTY) {
+    const pick = localRuntime
+      ? await askModelChoice(
+          localModelChoices(localRuntime.models),
+          `\nModello (tra quelli offerti da ${localRuntime.baseUrl}):`,
+        )
+      : choice.provider === 'openai-compat'
+        ? await askModelChoice(OPENROUTER_MODEL_FAMILIES, '\nChe famiglia di modello?')
+        : undefined;
+    if (pick) {
+      mainModel = pick.main;
+      lightModel ??= pick.light;
+      modelReason = 'chosen';
+    }
+  }
+  const resolvedModels = defaultModels({
+    provider: choice.provider,
+    ...(mainModel ? { mainModel } : {}),
+    ...(lightModel ? { lightModel } : {}),
+  });
+  process.stderr.write(describeModelChoice(resolvedModels.main, resolvedModels.light, modelReason));
 
   const steps = runInit({
     ...(values.hardened ? { hardened: true } : {}),
     ...(values.force ? { force: true } : {}),
     provider: choice.provider,
     ...(choice.baseUrl ? { baseUrl: choice.baseUrl } : {}),
-    ...(values.model ? { mainModel: values.model } : {}),
-    ...(values['light-model'] ? { lightModel: values['light-model'] } : {}),
+    ...(mainModel ? { mainModel } : {}),
+    ...(lightModel ? { lightModel } : {}),
     ...(apiKey ? { apiKey } : {}),
+    home,
   });
 
   for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\n`);
@@ -294,7 +565,15 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 1;
   }
 
-  await offerGateway();
+  if (values.local) {
+    // Never `offerGateway()` here: it installs a *system* unit pointed at
+    // `paths().home` unconditionally (`cli/gateway.ts`'s `planUnit`) — the
+    // real home, not this one — which is exactly backwards for a directory
+    // that exists to be thrown away.
+    process.stderr.write(`\nPer usarla: export MUFFIN_HOME=${home}\n`);
+  } else {
+    await offerGateway();
+  }
   process.stderr.write(`\nOra: muffin doctor\n`);
   return 0;
 }
@@ -455,10 +734,15 @@ async function cmdMemory(argv: string[]): Promise<number> {
   if (sub === 'stats') return cmdMemoryStats(home);
 
   if (sub === 'review') {
-    const [verb, id] = rest;
-    if (verb === undefined) return cmdMemoryReview(home);
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: { verbose: { type: 'boolean' } },
+      allowPositionals: true,
+    });
+    const [verb, id] = positionals;
+    if (verb === undefined) return cmdMemoryReview(home, values.verbose === true);
     if (verb !== 'keep') {
-      process.stderr.write(`usage: muffin memory review [keep <fact-id>]\n`);
+      process.stderr.write(`usage: muffin memory review [keep <fact-id>] [--verbose]\n`);
       return 78;
     }
     const factId = Number(id);
@@ -545,6 +829,20 @@ async function cmdMemory(argv: string[]): Promise<number> {
   return 78;
 }
 
+/**
+ * `prompt` has one sub-verb today, `show`. A dispatcher rather than a
+ * top-level `cmdPromptShow` in the switch above so a second sub-verb (say,
+ * `prompt diff` against a previous snapshot) has somewhere to land without
+ * touching `main`'s own switch again — the same shape `cmdMemory`/`cmdVault`
+ * already use for their own sub-verbs.
+ */
+function cmdPrompt(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub === 'show') return cmdPromptShow(paths().home, rest);
+  process.stderr.write(PROMPT_USAGE);
+  return 78;
+}
+
 async function cmdVault(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
   const home = paths().home;
@@ -618,7 +916,24 @@ async function cmdMcp(argv: string[]): Promise<number> {
         return 78;
       }
       const eq = flags[i + 1]!.indexOf('=');
-      env[flags[i + 1]!.slice(0, eq)] = flags[i + 1]!.slice(eq + 1);
+      const key = flags[i + 1]!.slice(0, eq);
+      const value = flags[i + 1]!.slice(eq + 1);
+      // Solo riferimenti, mai valori (direttiva owner 2026-08-18): `--env
+      // GITHUB_TOKEN=ghp_…` metteva il token nel `ps` di chiunque e nella shell
+      // history, ed era l'unico modo documentato di dare una chiave a un server
+      // MCP. Ora si registra con `muffin secret set` (stdin) e qui viaggia il
+      // nome: `--env GITHUB_TOKEN=secret://mcp_gh_token`, risolto al momento
+      // della connessione dentro il sink privilegiato (`core/mcp/connect.ts`).
+      if (!value.startsWith('secret://')) {
+        process.stderr.write(
+          `--env ${key}=… non accetta un valore: finirebbe nel ps di chiunque e nella shell history.\n` +
+            `  Registra il segreto:  echo -n "$TOKEN" | muffin secret set mcp_${key.toLowerCase()}\n` +
+            `  Poi passa il riferimento:  --env ${key}=secret://mcp_${key.toLowerCase()}\n` +
+            `  Un valore che non è un segreto (un flag, un percorso) mettilo negli argomenti del comando, dopo --.\n`,
+        );
+        return 78;
+      }
+      env[key] = value;
       i++;
     }
     return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env);
@@ -632,8 +947,11 @@ async function cmdSurface(argv: string[]): Promise<number> {
   const home = paths().home;
   if (sub === 'list' || sub === undefined) return cmdSurfaceList(home);
   if (sub === 'enable' && id) {
-    const { values } = parseArgs({ args: rest, options: { owner: { type: 'string' } } });
-    return cmdSurfaceEnable(home, id, values.owner);
+    const { values } = parseArgs({
+      args: rest,
+      options: { owner: { type: 'string' }, 'api-base': { type: 'string' } },
+    });
+    return cmdSurfaceEnable(home, id, values.owner, values['api-base']);
   }
   if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
   process.stderr.write(SURFACE_USAGE);
@@ -652,9 +970,12 @@ function cmdSecret(argv: string[]): number {
   // shell history and in every `ps` on the machine.
   let value = '';
   try {
-    value = readFileSync(0, 'utf8').trim();
-  } catch {
-    /* empty stdin falls through to the check below */
+    value = readAllStdin().trim();
+  } catch (error) {
+    // Un errore di lettura non e «nessun valore»: dirlo com'e, invece di
+    // suggerire una pipe che l'utente ha appena usato.
+    process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 78;
   }
   if (!value) {
     process.stderr.write(`no value on stdin — pipe it: echo -n "$KEY" | muffin secret set ${name}\n`);

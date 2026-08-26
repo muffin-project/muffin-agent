@@ -216,6 +216,52 @@ describe('muffin memory review', () => {
     expect(text.split('estrazione fallita')).toHaveLength(2);
     expect(text).toContain('3×');
   });
+
+  /** Three judge failures on the same (subject, predicate), each with its own raw response. */
+  function homeWithJudgeFailures(): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-memory-judge-errors-'));
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    const responses = ['', 'non è JSON e non lo sarà mai', '{"confidence":"alta"}'];
+    const reasons = ['vuota', 'non-json', 'schema: verdict — Invalid option'];
+    responses.forEach((raw, i) => {
+      store.recordReview({
+        tenantId: 'host',
+        kind: 'error',
+        subject: 'owner',
+        predicate: 'interest',
+        detail:
+          `giudice non disponibile su owner/interest: tengo entrambi i valori [${reasons[i]}]\n` +
+          `risposta grezza: ${raw || '(vuota)'}`,
+        createdAt: `2026-08-16T10:0${i}:00Z`,
+      });
+    });
+    db.close();
+    return home;
+  }
+
+  it('folds three judge failures on the same pair even though each raw response differs', () => {
+    // The tension this proves is resolved: a judge-unavailable row's `detail`
+    // carries the model's own words (`ingest.ts`), which are free to differ
+    // call to call even for the exact same recurring failure. Folding on the
+    // literal text — correct for "estrazione fallita", above — would stop
+    // grouping this kind of row at all. `errorGroups` (`maintenance.ts`) folds
+    // on the `subject`/`predicate` columns instead when they are present.
+    const { out } = capture();
+    expect(cmdMemoryReview(homeWithJudgeFailures())).toBe(0);
+    const text = out.join('');
+    // One grouped line, not three — and the default view names the typed
+    // reason but never shows the raw response.
+    expect(text.split('giudice non disponibile su owner/interest')).toHaveLength(2);
+    expect(text).toContain('3×');
+    expect(text).not.toContain('risposta grezza');
+  });
+
+  it('--verbose adds the raw response the default view leaves out', () => {
+    const { out } = capture();
+    expect(cmdMemoryReview(homeWithJudgeFailures(), true)).toBe(0);
+    expect(out.join('')).toContain('risposta grezza');
+  });
 });
 
 describe('muffin memory search — cmdMemorySearch reached beyond the argv rejections', () => {

@@ -98,7 +98,7 @@ export type TodoItem = {
   updatedAt: string;
 };
 
-export const TODO_SCHEMA = `
+const TODO_SCHEMA = `
 CREATE TABLE IF NOT EXISTS todos (
   tenant      TEXT NOT NULL,
   session_id  TEXT NOT NULL,

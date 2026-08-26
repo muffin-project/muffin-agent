@@ -97,6 +97,23 @@ export type UnitOptions = {
   configHome?: string;
   homeDir?: string;
   /**
+   * The directory of the Node interpreter this install is running under —
+   * `dirname(process.execPath)`. The caller probes, the planner stays pure.
+   *
+   * Found on the owner's machine during the RETURN install, and it made the
+   * supervisor's whole promise false: `launchctl bootstrap` returned 0, the
+   * agent never came up, and `gateway.err` said `env: node: No such file or
+   * directory` — exit 127, every ten seconds. `exec` deliberately points at
+   * the launcher symlink (see `resolveLauncher`), which is a script starting
+   * `#!/usr/bin/env node`; neither launchd nor systemd puts a Homebrew or nvm
+   * Node on the PATH it hands a service. So the unit has to say where the
+   * interpreter is, or it supervises nothing.
+   *
+   * The system directories stay in the list: the gateway spawns other things,
+   * and a PATH holding only Node would break them.
+   */
+  interpreterDir?: string | undefined;
+  /**
    * Is `systemd-notify(1)` on PATH? The caller probes; the planner stays pure.
    *
    * It decides `Type=notify` against `Type=exec`, and getting it wrong is not a
@@ -114,11 +131,27 @@ export type UnitOptions = {
   systemdNotify?: boolean;
 };
 
+/** The system directories a service still needs, after the interpreter's own. */
+const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+
+/** `PATH` for the unit, or `null` when the caller did not say where Node is. */
+function unitPath(interpreterDir: string | undefined): string | null {
+  if (interpreterDir === undefined || interpreterDir === '') return null;
+  return [interpreterDir, ...SYSTEM_PATH.filter((d) => d !== interpreterDir)].join(':');
+}
+
 export function planUnit(options: UnitOptions): UnitPlan {
   return options.platform === 'darwin' ? launchdPlan(options) : systemdPlan(options);
 }
 
-function systemdPlan({ home, exec, configHome, homeDir, systemdNotify = true }: UnitOptions): UnitPlan {
+function systemdPlan({
+  home,
+  exec,
+  configHome,
+  homeDir,
+  systemdNotify = true,
+  interpreterDir,
+}: UnitOptions): UnitPlan {
   const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
   const path = join(dir, `${SERVICE_NAME}.service`);
   const supervision = systemdNotify
@@ -155,7 +188,8 @@ ExecStart=${exec.join(' ')}
 # sposta fa fallire systemd allo CHDIR prima ancora che il runtime carichi, e
 # Restart=always va in crash-loop su una directory morta (ADR-0035).
 WorkingDirectory=${home}
-Environment=MUFFIN_HOME=${home}
+Environment=MUFFIN_HOME=${home}${unitPath(interpreterDir) === null ? '' : `
+Environment=PATH=${unitPath(interpreterDir)}`}
 
 Restart=always
 RestartSec=${RESTART_SEC}
@@ -174,6 +208,16 @@ RestartSec=${RESTART_SEC}
 # Il rate limit di systemd NON è disabilitato, di proposito (ADR-0035): è
 # l'ultima rete sotto questa riga.
 RestartPreventExitStatus=${EXIT_PERMANENT} ${EXIT_STOPPED}
+# ${EXIT_STOPPED} qui e NON ${EXIT_PERMANENT}, ed è la riga che decide cosa vede chi guarda.
+# \`RestartPreventExitStatus\` dice a systemd di non riavviare; non dice che
+# l'uscita andava bene. Senza questa riga un normale \`muffin gateway stop\`
+# lascia la unit in stato \`failed\`: \`systemctl --user --failed\` la elenca e
+# \`doctor\` — che da questa slice chiede davvero \`is-failed\` — allarmerebbe a
+# ogni arresto voluto, che è il modo più rapido per insegnare a ignorarlo.
+# ${EXIT_PERMANENT} resta fuori di proposito: config assente, secret mancante o root of
+# trust che rifiuta *sono* un guasto, e devono restare rossi in systemd finché
+# qualcuno li guarda.
+SuccessExitStatus=${EXIT_STOPPED}
 # I figli — server MCP, sandbox — li chiude il cgroup, non il parent.
 KillMode=mixed
 # Più lungo del nostro budget di drenaggio (${Math.round(DRAIN_BUDGET_MS / 1000)}s), o systemd
@@ -207,7 +251,7 @@ WantedBy=default.target
   };
 }
 
-function launchdPlan({ home, exec, homeDir }: UnitOptions): UnitPlan {
+function launchdPlan({ home, exec, homeDir, interpreterDir }: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const args = exec.map((a) => `      <string>${xml(a)}</string>`).join('\n');
   const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -225,7 +269,13 @@ ${args}
   <key>EnvironmentVariables</key>
   <dict>
     <key>MUFFIN_HOME</key>
-    <string>${xml(home)}</string>
+    <string>${xml(home)}</string>${
+      unitPath(interpreterDir) === null
+        ? ''
+        : `
+    <key>PATH</key>
+    <string>${xml(unitPath(interpreterDir) as string)}</string>`
+    }
   </dict>
   <key>RunAtLoad</key>
   <true/>

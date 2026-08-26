@@ -7,13 +7,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
-import { paths } from '../core/config/config.js';
+import { loadConfig, paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
+import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
+import type { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
+import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
-import { cmdGatewayRun, stopCaveat } from './gateway.js';
+import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -63,6 +66,56 @@ function overdueJob(dir: string): string {
     const job = new JobStore(db).add({ cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' });
     db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(new Date(Date.now() - 60_000).toISOString(), job.id);
     return job.id;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * A `waiting` turn nobody is running, already past its deadline — `due()`'s
+ * second disjunct (`status = 'waiting' AND wake_at <= now`), the one B3 route
+ * `TurnLane` reads and `overdueJob` above has no equivalent of. Written
+ * through the real `TurnStore` rather than by hand so the JSON columns and the
+ * fencing token are exactly what production writes.
+ */
+function waitingTurn(dir: string): string {
+  const db = new DatabaseCtor(paths(dir).db);
+  try {
+    const id = 'turno-in-attesa';
+    const counters = {
+      iterations: 1,
+      recoveriesUsed: 0,
+      transportRetriesLeft: 2,
+      toolCallsMade: 0,
+      nudgedForCompletion: false,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      spentUsd: 0,
+      resumes: 0,
+      contextBuilt: true,
+    };
+    const created = new TurnStore(db).create(
+      {
+        id,
+        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'cli:stillowner',
+        // The runtime's own pinned model, not a literal: a resume refuses
+        // outright on a mismatch (`resumeTurn`, ADR-0037), which would prove
+        // the refusal path rather than `stillOwner`.
+        model: loadConfig(dir).models.main,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'controlla più tardi' }] }],
+        taint: 0,
+        counters,
+      },
+      process.pid,
+    );
+    new TurnStore(db).suspend(
+      id,
+      { messages: [], taint: 0, counters, wakeAt: new Date(Date.now() - 60_000).toISOString(), waitFor: null },
+      created.claimToken,
+    );
+    return id;
   } finally {
     db.close();
   }
@@ -362,6 +415,181 @@ describe("cmdGatewayRun's own assembly", () => {
       await fake.close();
     }
   });
+
+  /**
+   * A completions server that answers only once released — the seam this next
+   * test needs to steal the gateway's claim *while* a job is genuinely in
+   * flight, the exact window P20 is about: `Gateway.tick` used to beat once
+   * and then run both lanes to completion with nothing re-checking ownership
+   * inside.
+   */
+  function gatedCompletionsServer(): Promise<{ url: string; requests: number; release: () => void; close: () => Promise<void> }> {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const state = { requests: 0 };
+    return new Promise((resolve) => {
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          state.requests += 1;
+          void gate.then(() => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                id: 'fake-1',
+                model: 'fake',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'fatto.' } }],
+                usage: { prompt_tokens: 1, completion_tokens: 1 },
+              }),
+            );
+          });
+        });
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (addr === null || typeof addr === 'string') throw new Error('no port assigned');
+        resolve({
+          url: `http://127.0.0.1:${addr.port}/v1`,
+          get requests() {
+            return state.requests;
+          },
+          release,
+          close: () => new Promise((r) => server.close(() => r())),
+        });
+      });
+    });
+  }
+
+  it('a claim stolen while a job is in flight is caught before delivery — stillOwner (P20)', async () => {
+    const fake = await gatedCompletionsServer();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-stillowner-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+      overdueJob(dir);
+
+      const signals = new EventEmitter();
+      const done = cmdGatewayRun(dir, { signals, tickMs: 5, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+
+      // The job's model call has genuinely reached the server and is held
+      // open by the gate — this is "a run in flight", not a guess about timing.
+      await vi.waitFor(() => expect(fake.requests).toBeGreaterThan(0), { timeout: 5000, interval: 5 });
+
+      // Steal the claim from outside, exactly as a second gateway winning a
+      // legitimate race would leave the row: a fresh pid and a fresh
+      // holder_id, written directly rather than through `GatewayLock.claim`
+      // so this does not depend on this test's own pid being distinguishable
+      // from the real gateway's.
+      const steal = new DatabaseCtor(paths(dir).db);
+      steal
+        .prepare(`UPDATE gateway_lock SET pid = ?, holder_id = ?, taken_at = ? WHERE id = 1`)
+        .run(process.pid + 1, 'a-different-holder', new Date().toISOString());
+      steal.close();
+
+      // Now let the model call resolve. If `stillOwner` were not wired in,
+      // `Scheduler.run` would proceed straight to `deliver` and the turn's
+      // `delivery` column would read `sent`.
+      fake.release();
+      await new Promise((r) => setTimeout(r, 300));
+
+      const check = new DatabaseCtor(paths(dir).db, { readonly: true });
+      const turn = check.prepare(`SELECT delivery FROM turns LIMIT 1`).get() as { delivery: string | null } | undefined;
+      check.close();
+      expect(turn?.delivery ?? null).not.toBe('sent');
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  }, 10_000);
+
+  it("TurnLane's own stillOwner refuses a due turn the instant the claim is stolen — R1", async () => {
+    // R1 (judge, round 2): the heist test above proves the *scheduler's*
+    // `stillOwner`, and the same technique cannot also prove the turn lane's.
+    // `Gateway.tick` always calls `lock.beat()` — the same `lock` `stillOwner`
+    // reads — *first*, and a `beat()` failure drains the whole process before
+    // `turnLane.tick()` runs again (`core/gateway/service.ts`'s `tick`); since
+    // `isCurrentClaim()` and `beat()`'s own fencing read the identical
+    // holder_id/pid match, `turnLane.tick()` can only ever run on a beat that
+    // has *just* succeeded, moments earlier, in the same synchronous call — so
+    // it can never observe a theft the surrounding gateway has not already
+    // reacted to. Verified: extending the heist test above with a waiting
+    // turn and asserting it stays untouched still passed with `stillOwner`
+    // deleted from the `TurnLane` construction in `cli/gateway.ts`.
+    //
+    // `onAssembled` (test-only; see its docstring on `cmdGatewayRun`) hands
+    // back the *real* `turnLane`/`lock` this run builds, so this test can ask
+    // the lane the question `stillOwner` exists to answer directly, at a
+    // moment of its own choosing — independent of whether the gateway's own
+    // heartbeat would ever get to ask it first.
+    const fake = await fakeCompletionsServer();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-turnlane-stillowner-'));
+      homes.push(dir);
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: fake.url, apiKey: 'sk-fake-local-server' });
+
+      let assembled: { turnLane: TurnLane; lock: GatewayLock } | undefined;
+      const signals = new EventEmitter();
+      // An hour: long enough that no *automatic* tick lands during this test
+      // beyond `serve()`'s own single one at start, so nothing but this
+      // test's own direct call ever ticks `turnLane` from here on.
+      const done = cmdGatewayRun(
+        dir,
+        { signals, tickMs: 3_600_000, sleep: () => new Promise((r) => setTimeout(r, 1)) },
+        (parts) => (assembled = parts),
+      );
+
+      await vi.waitFor(
+        () => {
+          const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+          try {
+            const row = db.prepare(`SELECT pid FROM gateway_lock WHERE id = 1`).get() as { pid: number | null } | undefined;
+            expect(row?.pid).toBe(process.pid);
+          } finally {
+            db.close();
+          }
+        },
+        { timeout: 5000, interval: 5 },
+      );
+      expect(assembled).toBeDefined();
+
+      // Stolen *before* the turn below exists: whichever side of `serve()`'s
+      // own single automatic tick this lands on, that tick cannot deliver the
+      // row for real — either it runs first and finds nothing due yet, or it
+      // runs after and its own `beat()` already fails, so it never reaches
+      // `turnLane.tick()` at all.
+      const steal = new DatabaseCtor(paths(dir).db);
+      steal
+        .prepare(`UPDATE gateway_lock SET pid = ?, holder_id = ?, taken_at = ? WHERE id = 1`)
+        .run(process.pid + 1, 'a-different-holder', new Date().toISOString());
+      steal.close();
+
+      const turnId = waitingTurn(dir);
+
+      // The real lane, asked directly — bypassing `Gateway.tick`'s own beat
+      // entirely, which is the whole point of `onAssembled`.
+      assembled!.turnLane.tick(new Date());
+      // `tick` starts a resume in the background when it proceeds; give one a
+      // moment to happen if `stillOwner` did not stop it — `fake` answers
+      // immediately, so a resume that started would already be done.
+      await new Promise((r) => setTimeout(r, 200));
+
+      const check = new DatabaseCtor(paths(dir).db, { readonly: true });
+      const row = check.prepare(`SELECT status, claimed_by AS claimedBy FROM turns WHERE id = ?`).get(turnId) as
+        | { status: string; claimedBy: number | null }
+        | undefined;
+      check.close();
+      // Untouched: exactly what `waitingTurn` suspended, claimed by nobody.
+      expect(row).toEqual({ status: 'waiting', claimedBy: null });
+
+      signals.emit('SIGTERM');
+      await done;
+    } finally {
+      await fake.close();
+    }
+  }, 10_000);
 });
 
 /**
@@ -418,25 +646,88 @@ describe('the claim can change under a REPL that is already ticking', () => {
     expect(w.said.join(' ')).toContain(`passato al gateway (pid ${process.pid})`);
   });
 
-  it('the laptop lid: a stale claim reads free, and the wake-up beat takes it back', async () => {
-    // A suspended gateway stops beating, so on wake its claim is older than ten
-    // heartbeats and reads as dead — correctly, on the evidence a REPL opened at
-    // that moment has. Seconds later the gateway resumes and beats, and this
-    // session has to give the store back. Boot-time reading gets this exactly
-    // backwards: it decides "no gateway" and keeps that answer for the session.
+  it('the laptop lid, briefly: a live-but-quiet claim still reads present — P20', async () => {
+    // Before the fix, `heldBy` asked the wall clock before it ever asked
+    // whether the holder was alive, so ten missed heartbeats alone — a laptop
+    // asleep for a few minutes, not dead — read as "no gateway" and this
+    // session would start a second scheduler underneath a gateway that was
+    // about to resume. `alive` says true throughout: the process object is
+    // still there, exactly what a genuine sleep (not a kill) looks like.
     const w = world();
     const lock = new GatewayLock(w.db, () => true);
     const asleep = new Date(Date.now() - STALE_AFTER_MS - 1000);
     lock.claim(asleep, 'in attesa', process.pid);
 
-    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
-    expect(standDown()).toBe(false); // stale: this session is right to tick
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), true);
+    // Past the ordinary heartbeat horizon, still alive: still deferred to.
+    // This exact instant is where the pre-fix code declared it gone.
+    expect(standDown()).toBe(true);
+  });
 
-    // The gateway wakes up and beats.
-    lock.beat(new Date(), 'in attesa', process.pid);
+  it('a claim past the hard horizon reads free, and a fresh claim takes the store back', async () => {
+    // Once genuinely past the hard horizon — the pid-reuse backstop, wide
+    // enough that no realistically-long sleep or stall reaches it — the claim
+    // is correctly read as gone and this session ticks. `alive` still says
+    // true (a wedged process, or an ordinary reused pid): the horizon, not
+    // liveness, is what is being exercised here.
+    const w = world();
+    const lock = new GatewayLock(w.db, () => true);
+    const wedged = new Date(Date.now() - STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 1000);
+    lock.claim(wedged, 'in attesa', process.pid);
+
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), false);
+    expect(standDown()).toBe(false); // past the hard horizon: this session is right to tick
+
+    // A gateway claims fresh — a supervisor restart, or the same process
+    // finally re-claiming from scratch rather than resuming as if its old
+    // claim were still good (which P21's `refresh` fix now refuses: the same
+    // stale claim beating instead of re-claiming would not reach this point
+    // at all, see `core/lock/durable.test.ts`'s refresh-horizon tests).
+    new GatewayLock(w.db, () => true).claim(new Date(), 'in attesa', process.pid);
 
     expect(standDown()).toBe(true);
     expect(w.said.join(' ')).toContain('passato al gateway');
+  });
+
+  it('a job due while the gateway sleeps past the hard horizon runs exactly once — the REPL takes it, and the waking gateway cannot silently resume', async () => {
+    // The end-to-end shape of P21's fix, in one test: a gateway claimed the
+    // store, then went silent for longer than the hard horizon (a real sleep,
+    // not a kill — `alive` says true throughout). The REPL correctly judges
+    // it gone and runs the due job. When the gateway's own timer next fires —
+    // it "wakes up" — its `beat()` must refuse rather than resume as if
+    // nothing happened, which is exactly the asymmetry the audit found:
+    // `readGateway` already judged this claim absent, but `DurableLock.refresh`
+    // used to be guarded on `pid` alone and would have pushed `taken_at`
+    // forward regardless, resurrecting a claim the REPL had already taken.
+    const w = world();
+    const gatewayLock = new GatewayLock(w.db, () => true);
+    const wedged = new Date(Date.now() - STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 1000);
+    gatewayLock.claim(wedged, 'in attesa', process.pid);
+
+    const standDown = gatewayStandDown(w.db, (l) => w.said.push(l), true);
+    expect(standDown()).toBe(false); // the REPL now owns the ticker
+
+    const runJob = vi.fn(async () => ({ stopped: 'answered' as const, text: 'brief', turnId: 'turn-repl' }));
+    const replScheduler = new Scheduler(
+      w.jobs, runJob, async (_c, t) => (w.delivered.push(t), DELIVERED),
+      undefined, (e) => w.events.push(e), undefined, standDown, undefined, new ModelLane(),
+    );
+    replScheduler.tick();
+    await flush();
+
+    expect(runJob).toHaveBeenCalledOnce();
+    expect(w.delivered).toEqual(['brief']);
+    expect(w.jobs.get(w.job.id)!.lastRunAt).not.toBeNull();
+
+    // Now the gateway "wakes up" and its interval timer fires a beat, exactly
+    // as `Gateway.tick` does before it would ever call `scheduler.tick` again.
+    const wokenBeat = gatewayLock.beat(new Date(), 'in attesa', process.pid);
+    expect(wokenBeat).toBe(false); // P21: cannot resume the claim it already lost
+
+    // So even a scheduler built on the *same* lock, ticking right now, would
+    // find nothing to do either way — the fire already happened once, and
+    // this "gateway" is not the owner any more regardless.
+    expect(w.jobs.due(new Date())).toEqual([]);
   });
 
   it('a gateway that dies gives the jobs back, and that is announced too', () => {
@@ -586,7 +877,7 @@ describe('muffin init offers the gateway', () => {
     // forbids — and every test in this file runs off a pipe.
     const dir = mkdtempSync(join(tmpdir(), 'muffin-gw-init-'));
     homes.push(dir);
-    const r = muffin(dir, ['init', '--api-key', 'sk-never-called']);
+    const r = muffin(dir, ['init'], 'sk-never-called');
 
     expect(r.err).toContain('muffin gateway install');
     const unit =
@@ -594,5 +885,22 @@ describe('muffin init offers the gateway', () => {
         ? join(dir, 'Library/LaunchAgents/ai.muffin.gateway.plist')
         : join(dir, '.config/systemd/user/muffin-gateway.service');
     expect(existsSync(unit)).toBe(false);
+  });
+});
+
+describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed up a spawned gateway', () => {
+  it('is undefined on everything a real install would ever set', () => {
+    expect(tickMsFromEnv(undefined)).toBeUndefined();
+    expect(tickMsFromEnv('')).toBeUndefined();
+  });
+
+  it('ignores a value that could not possibly be a tick interval', () => {
+    expect(tickMsFromEnv('not-a-number')).toBeUndefined();
+    expect(tickMsFromEnv('0')).toBeUndefined();
+    expect(tickMsFromEnv('-50')).toBeUndefined();
+  });
+
+  it('parses a real override', () => {
+    expect(tickMsFromEnv('250')).toBe(250);
   });
 });

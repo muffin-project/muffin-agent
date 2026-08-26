@@ -779,6 +779,41 @@ against the original vector-half code with the gate temporarily removed and
 confirmed to fail before being restored (`core/memory/recall.test.ts`, "does
 not let a superseded fact surface through the semantic half either").
 
+## A required parameter missing from a call site is invisible when the failure is swallowed by design **(this build)**
+
+`connectors/telegram/api.ts#sendMessageDraft` sent `{chat_id, text, parse_mode}`
+to Telegram's Bot API. The method's real contract — verified against Context7's
+mirror of the official reference and the changelog, 2026-08-17, while building
+M5-BIS B11 — requires a fourth field, `draft_id`, non-zero. Every call this
+adapter ever made was missing it, so every call answered 400.
+
+Nothing noticed, for one reason: `connectors/telegram/presence.ts` calls this
+method only inside `safely()`, a wrapper written on purpose to swallow any
+presence failure — "a typing indicator that takes the turn down with it has
+inverted its own priority" — because showing the owner a real answer must never
+be blocked by a decorative heartbeat failing. That design is correct. Its
+consequence, unexamined, is that a call which *always* fails looks identical to
+one that occasionally does: no error surfaces anywhere, `doctor` has no probe
+for it (there is no token to probe with in development, and PRACTICES §2's own
+rule for that case — do not assume, drop the dependency — was not applied
+here; it was assumed instead), and the docstring above the call read "the
+keepalive exists from day one," stated as if day one had ever worked.
+
+The claim was inherited, not verified: `docs/blueprint/adr/0025-transport-
+telegram.md` described `sendMessageDraft`'s contract from the old Muffin
+system's own history (its ADR-133/138) and was never checked against the
+current Bot API in this repository. The inherited fact carried the missing
+parameter along with it.
+
+**Instead:** the signature is now `sendMessageDraft(chatId, draftId, text)`,
+matching the verified contract, and `ADR-0025` carries a dated §revisione
+naming exactly what was corrected and what could not be re-verified either way
+(the draft's exact TTL-refresh behaviour — no token to probe with, so the
+mitigation is a conservative call cadence rather than an assumed number). The
+general lesson: a swallowed failure needs a *positive* signal that the
+mechanism it guards ever succeeds — a counter, a trace attribute, something a
+`doctor` check or a test can read — not only the absence of a visible one.
+
 ## Cleanup after a merge is conditional on the merge, not on the intent to merge
 
 `gh pr merge 39` failed (the map file had been regenerated on both sides), the
@@ -791,3 +826,305 @@ re-pushed, so nothing was lost; the PR had to be reopened by hand.
 `git merge-base --is-ancestor`), never in the same breath as the merge command.
 The rule was already written for the reverse case (`cmd | tail` hides the exit
 status): the mistake here was acting on the *plan* rather than on the *state*.
+
+## Staleness checked before liveness steals a claim from someone alive **(this build)**
+
+`core/lock/durable.ts`'s `heldBy()` — the one function every lock in this repo
+shares (`send_lock`, `gateway_lock`, `ingest_lock`, and `turns.claimed_by`
+through the same helper) — asked the wall clock first: `if (now - takenAt >
+staleAfterMs) return null`, and only reached `alive(pid)` when that was false.
+Free, dead and stale were meant to collapse to one answer by design; what
+actually happened is that stale *pre-empted* dead-or-alive, so a process that
+was genuinely still running — a laptop asleep mid-turn, one synchronous batch
+past the horizon, a single long tool call — read exactly like a corpse the
+moment it missed a heartbeat. A second process then claimed the same row and
+ran it too: P19 (a turn's tool calls executed twice), P20 (a gateway's
+delivery raced a second gateway's), P21 (a REPL and a sleeping gateway both
+ticking one job store). Adversarial audit found all three from the same
+five-line function, on 2026-08-16.
+
+The second half of the same defect: none of the three writes that end a
+turn's claim (`checkpoint`, `finish`, `suspend` in `core/turns/store.ts`) were
+guarded on *who* held it — only `id`, or `id` plus `status`. So even the rare,
+narrow case where a steal *was* legitimate (the true horizon, not the bug)
+still let the loser overwrite the winner's transcript, silently, because
+nothing on the write path had ever been told to check.
+
+A bare `pid` guard would not have been enough to fix either half on its own:
+pids are reused by the OS within hours on a busy machine, so "is this pid
+alive" and "is this the same holder that took the claim" are different
+questions, and a naive fix (compare `alive(pid)` first, nothing else) would
+have quietly re-opened the reuse case the original wall-clock check was
+guarding against, in the other direction. The fix that held both properties at
+once: liveness gates first (dead is free immediately, no horizon needed), a
+live holder is protected until a *hard* horizon several times wider than the
+lock's own normal cadence (long enough that a real stall never trips it, short
+enough that a genuinely wedged or reused pid does not wedge the claim
+forever), and every acquisition mints a random holder token that every
+subsequent write must carry back — `changes === 0` on a fenced write is the
+caller's own proof that its claim is gone, independent of any clock.
+
+**Found while fixing it, not while breaking it:** `agent/lane-wiring.test.ts`'s
+B3 test simulated an hour of wait time by jumping `Gateway.tick()`'s injected
+clock forward in one call, with zero beats in between. Under the old,
+buggy `heldBy` this was harmless — nothing ever checked whether *this*
+process's own claim had gone stale from its own perspective. Once the fix
+made `refresh()` apply the same rule to the gateway's own heartbeat, that
+same test started failing: from the gateway's point of view, its own claim
+had gone unrefreshed for the "elapsed" hour, so it correctly refused to
+believe it still owned the lock and drained. The test's shortcut had been
+silently relying on the exact bug being fixed. **Instead:** a test that
+simulates elapsed time across a claim-holding loop has to simulate the
+*heartbeats* too, not just the deadline the heartbeats exist to protect —
+otherwise the test is only proof that the bug lets a wide clock-jump go
+unnoticed, dressed up as proof that the feature works.
+
+## A line of error that saves our own sentence and not the model's answer is a failure that cannot be explained **(this build)**
+
+Real install, 2026-08-16, OpenRouter with light = `anthropic/claude-haiku-4.5`.
+The REPL printed `consolidamento: giudice non disponibile su owner/interest:
+tengo entrambi i valori` three times running, once for `owner/asked_to`, and
+`muffin memory review` showed 4 rows in the archive, 0 to decide. Nothing
+distinguished the four occurrences: same sentence, no model output, no
+reason. `judge.ts` builds that sentence itself, in the code, whenever the
+light model's answer could not be turned into a verdict — an empty response,
+prose with no JSON, or JSON the schema rejects were three different problems
+and all three produced the identical fallback text. The durable
+`memory_review` row that was supposed to be the record of what happened
+recorded only what *we* say when we do not know what happened.
+
+The repeat count compounded the opacity rather than adding information:
+`core/memory/consolidator.ts`'s per-round log printed one line per candidate
+fact `reconcile` judged, not one per distinct failure, so three candidates on
+the same (subject, predicate) that each failed the judge produced three
+copies of a sentence that already said nothing.
+
+**Instead:** the judge distinguishes *why* it could not answer
+(`JudgeFailureReason` in `core/memory/judge.ts`: empty · non-JSON · a named
+schema field) and carries the model's own sanitised, truncated response
+alongside it; `ingest.ts` writes both into the review row's `detail` — first
+line the typed summary, everything after it the raw answer, so
+`muffin memory review` shows the reason by default and `--verbose` reveals
+the model's words without a second column or a migration (`detail` stays
+free text, per `store.ts`'s own note that a register tracking more than that
+would be the workflow engine this was asked not to become). Before writing
+any of that off as "unavailable", the schema now tolerates the innocuous
+shapes a light model actually produces — a quoted `confidence`, a
+Title-Cased key, `"  Supersede  "` — via typed zod coercion, so a real
+answer is not thrown into the same bucket as no answer at all; an
+unrecognised verdict still is, deliberately. The per-round log folds
+repeats by (subject, predicate) instead of printing one line per candidate,
+which is the direct fix for the three-times-running symptom above.
+
+Each of the three claims — the raw response reaches the row, the tolerant
+parsing does not swallow real verdicts, the log stops repeating — has a
+mutation-tested regression: `core/memory/ingest.test.ts` (typed reasons and
+raw response; removing the save turns the assertions red), `judge.ts`'s
+coercion (removing `z.coerce.number()` or the key-normalisation turns the
+"tolerates innocuous formatting" tests red on exactly the shape it was meant
+to fix), and `core/memory/ingest.test.ts`'s `formatConsolidationLines`
+suite (reverting to `report.errors` verbatim reproduces the three-line
+symptom in the test itself). A fourth, smaller instance of the same family
+turned up wiring this fix in: `Consolidator.execute()`'s own internal logger
+and `cli/memory.ts`'s `cmdMemoryExtract` each printed the grouped line
+independently, so a hand-typed `muffin memory extract` still showed it
+twice until the internal logger learned to stay quiet on `trigger:
+'manual'` — caught by running the real binary
+(`evals/acceptance/scenarios/e-cost.accept.ts`, E5), not by either unit
+suite alone, because each printer's own test only ever looked at itself.
+
+## An atteso-rosso that accepts any error is a test that cannot notice it has become false **(this build)**
+
+`evals/acceptance/scenario.ts` ran every M5-BIS row still marked "missing" as
+`it.fails`, which only answers "did it throw". D10's manifest reason named
+`slice/taint-in-ingresso` as the branch that would close it; that slice
+merged 2026-08-15 and a judge on PR #28 closed its failure-path gap the next
+day, but the row stayed "atteso-rosso" for two more days because the
+scenario's own assertion queried `turn_tool_calls` for a call the kernel
+*denies* — which never reaches `runTool`'s execution path, so it never wrote
+that row even on the day the fix landed. The scenario kept throwing, for a
+reason unrelated to the one the manifest named, and `it.fails` cannot tell
+the two apart.
+
+**Instead:** `atteso-rosso` entries now carry a required
+`expectFailure: RegExp | ((error) => boolean)`, checked against the actual
+thrown error inside a plain `it`. A throw that matches is still correctly
+red; one that does not is `rosso-inatteso`, not "va bene così".
+
+> **A test that can pass no matter what broke is not weaker evidence than no
+> test — it is evidence with the sign flipped, because the row it covers now
+> reads "verified" to everyone who has not read the assertion.**
+
+## Symlink resolution has to cover the leaf and the parent, not just the middle **(this build)**
+
+`agent/tools/fs.ts`'s `resolveInScope()` already had a test named exactly for
+this — *"is not fooled by a symlink that leaves the scope"* — and it passed,
+on every commit, while two other symlink shapes walked straight through.
+
+The function resolved a symlink that sat in the *middle* of a path (a
+directory somewhere above the file actually being touched) correctly from the
+start: `realpathSync` on a longer path always resolves an intermediate
+component, so nothing special had to be written for that case and nothing
+was. What it never resolved was the *exact path requested* — the terminal
+component — nor a symlinked *ancestor found by walking up* because the
+requested file did not exist yet. Both took the same branch, written for a
+third, narrower case (a write must refuse a terminal symlink outright,
+never resolve it), and that branch returned the link's own location with its
+parent canonicalised — never the target. So `resolveInScope` computed a path
+that was inside `root` by construction, on exactly the two shapes where the
+underlying `readFileSync`/`readdirSync`/`writeFileSync` does not stop at the
+link: it follows it, all the way, because that is what the terminal
+component of a path means to the OS. A `denyRead` secrets directory reached
+by a symlink placed anywhere inside `root` was readable verbatim; `fs_write`
+of a *new* file through a symlinked parent directory landed wherever the
+link pointed. Both shipped past a green suite and past `STATE.md`'s own
+record of "closed" (2026-08-06: *"quattro bypass del containment fs
+[...] chiusi"* — dangling symlink, hard link, case, and the read-side
+deny-list skip; none of those four is a terminal symlink or a symlinked
+parent). Found by the 2026-08-16 adversarial audit (P29 CRITICAL, P28
+MEDIUM), closed in `slice/fs-containment`.
+
+**Instead:** when a function's job is "resolve whatever the OS will actually
+touch", enumerate the path's own components explicitly — *the exact
+requested path*, *every ancestor reached by walking up*, *every intermediate
+component along an existing prefix* — and ask the symlink question of each
+one by name, rather than writing one branch and trusting it to fire on
+every case a single test happened to construct. A test named for the general
+property ("is not fooled by a symlink") tests the one shape its author
+built a fixture for; the shape the author did not think of stays green by
+never being asked. `docs/PRACTICES.md` §5's "test the wiring, not the logic"
+is usually read as "does production call this at all" — the same rule
+applies one level down, to whether a test's *fixture* actually exercises
+every branch its *name* claims to cover.
+
+## A surface can die for the life of the process while everything around it reports healthy **(this build)**
+
+`TelegramConnector.run()` called `getMe()` once, outside any retry loop and
+before `this.running` was even set. At boot, before the network or DNS is
+ready — `Wants=network-online.target` in the generated systemd unit does not
+guarantee it, and on a laptop the Wi-Fi routinely comes up after the unit
+does — that call threw. The throw escaped `run()` whole. `connectSurfaces`
+(`cli/surface.ts`) started the connector with `void connector.run().catch(…)`,
+which is correct for *"a crash of the surface must not take the REPL down"*
+and wrong for everything past that: the `.catch` printed one line
+("telegram: caduta") and returned, and nothing ever called `run()` again.
+
+The gateway around it kept reporting exactly what it should: the lock held,
+`muffin gateway status` showing a live pid, the scheduler ticking, `doctor`
+naming a healthy gateway. Every one of those checks was true. None of them
+asked whether the *surface* the owner actually talks to was still there.
+A dead poller and a live gateway produce the identical process-level signal
+— a running pid — and nothing in this codebase compared the two before this
+slice, the same shape `AGENTS.md`'s own opening lesson names for a written,
+tested, documented mechanism reached by nothing: here the mechanism was
+reached once, failed once, and nothing was left standing to reach it again.
+
+**Instead:** a component whose job is "stay connected to something outside
+this process" needs its own retry loop from the moment it starts, not a
+`.catch` at the call site — a `.catch` answers "did starting it throw", never
+"is it still working a minute from now". And a supervisor question ("is a
+process alive") is not the same question as a capability question ("is the
+thing that process is supposed to provide still reachable") — `doctor`'s new
+`supervisore` check (`core/gateway/supervisor.ts`) is the same distinction
+one level up: a live gateway pid and a supervised one are two different
+facts, and conflating them is exactly how "attivo" stopped meaning
+"reachable". Fixed with a capped, jittered backoff around `getMe()` plus a
+poll-loop `try` that also covers `inbox.accept`/`drain()` — no throw inside
+the loop is allowed to end it, only `stop()`/an aborted signal is — and
+proved red on the pre-fix code before the fix landed
+(`connectors/telegram/reconnect.test.ts`).
+
+## A swallowed intent write makes "not started" and "started" indistinguishable **(this build)**
+
+`agent/loop.ts`'s two-phase tool record (ADR-0042 §6) exists to turn a crash
+mid-call into a fact instead of a guess: an intent row with no outcome row
+reads as "maybe done", and a non-rerunnable tool's resume refuses to repeat it
+for exactly that reason — the whole point of writing the intent row *before*
+the handler runs. `runTool` wrote that row through `deps.turns.startToolCall`
+inside a `try/catch` that swallowed the error and let `tool.handler` run
+regardless, justified by a comment that reasoned from `checkpoint`'s own
+swallow: a tool that worked must not be turned into a failed turn by a
+bookkeeping write.
+
+That reasoning holds for the *outcome* write and does not hold for the
+*intent* write, because the two are not symmetric. A crashed outcome write
+leaves the row open, which a resume already treats as uncertain — the
+harmless direction, and `recordOutcome` still swallows on purpose today. A
+crashed **intent** write, with the handler left free to run anyway, leaves
+*no row at all* — which a resume reads as "never started" and reruns. For a
+non-rerunnable tool (a message send, a shell command) that is the exact
+double-effect the two-phase record was built to prevent, produced by the
+mechanism meant to prevent it. `docs/blueprint/gate1/MANDATO-DAY-1.md` names
+this invariant 1, "EFFECT WAL", and states the failing shape verbatim:
+*"Provo a registrare l'intent e, se fallisce, continuo" NON soddisfa la
+proprietà* — which is a description of the code as it stood, not a
+hypothetical.
+
+A companion gap sat one level down in the same table:
+`TurnStore.endToolCall`'s `tier` parameter was optional, so a caller that
+omitted it wrote a silent `NULL` and skipped the taint bump with no error anywhere
+(audit P05, BLOCKER,
+`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md:153`) —
+even though `ToolOutcome.tier` was already required one level up (ADR-0044).
+The guarantee lived in the caller's discipline, not in the callee's type:
+ORCHESTRATION.md §15's exact shape of "the type permits the wrong state",
+where the fix is the same move it names — a form that fails on its own, not
+one that depends on someone remembering.
+
+*Found and fixed in `slice/wal-intent`, following the 2026-08-17 triage that
+named it the first item on Gate 1's critical path.*
+
+**Instead:** `runTool` now treats the intent write as a precondition, not a
+courtesy — `startToolCall` failing refuses the call outright, before
+`tool.handler` is ever reached, for every tool alike (`rerunnable` decides
+nothing here; the gate sits upstream of that question, one rule instead of
+one per tool). The refusal is an honest `tool_result` error the model reads
+like any other tool failure, at tier 0 — no byte entered this process for the
+call, so nothing raises taint — and there is no `endToolCall` for a call that
+never got an intent row to close. `endToolCall`'s `tier` became mandatory in
+the signature; every real caller already passed it, so `tsc` was the only
+thing that needed to check.
+
+`agent/turn-record.test.ts` proves the gate by mutation, not just by
+addition: reintroducing the swallowed `try/catch` turns the new
+non-rerunnable and rerunnable cases red (the spy handler is called even
+though `startToolCall` threw) while every other test in the file, including
+the happy path, stays green — the failure is specific to the removed gate,
+not a side effect of a broader breakage.
+
+## A crash after the interesting output looks exactly like a successful run **(this build)**
+
+`node .claude/deleghe.mjs riprendi` was declared healthy by two agents, in two
+sessions, within an hour of each other — and it exited 1. It prints its
+sections in order, and the `TypeError` that killed it (`v.slug.padEnd` on four
+delegations closed without ever being registered) fires inside the *last* loop.
+Everything a reader cares about — the delegation counts, the diagnosis, the
+parked set — is already on stdout when the process dies. The output does not
+look truncated. It looks finished.
+
+Both readers then filtered it: one grepped the section headers to report the
+counts, the other filtered for lines starting with `✗`. Neither filter can
+carry an exit status, and `cmd | grep` reports grep's. So the check that
+existed to verify the command consumed exactly the part of its output that was
+still true, and discarded the one signal that was not.
+
+The generalizable shape is not "we forgot to check `$?`". It is that **a
+filter chosen to make output readable is chosen from the output you expect**,
+so it is structurally blind to the failure you did not — and the more useful
+the filter, the more complete the surviving output looks. This is the house
+defect (`ORCHESTRATION.md` §11: *dichiarato e non collegato*) turned on the
+people applying it: a mechanism that ran is not the claim; the claim is that
+it ran *and finished*, and only one of those is visible in the text.
+
+The form that cannot lie is the one the repo already writes down for mutating
+commands — redirect to a file, read the status, then look at the content:
+
+```bash
+node .claude/deleghe.mjs riprendi > /tmp/r.out 2>&1; echo "exit=$?"
+```
+
+And the defect underneath had the same shape as its own discovery: the crash
+came from a delegation in a *partial* state — a `chiudi` row with no `registra`
+row, left by a session compacted mid-flight — which is precisely the state the
+tool exists to survive. A recovery tool that dies on incomplete input is a
+recovery tool that works only when nothing went wrong.

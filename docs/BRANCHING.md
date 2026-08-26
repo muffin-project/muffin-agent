@@ -1,88 +1,112 @@
-# Rami
+# Branching and integration
 
-Due permanenti, e i rami di lavoro sono usa-e-getta.
+This file owns Git/PR mechanics. Verification profiles live in
+`ORCHESTRATION.md`; review semantics live in `JUDGE.md`.
 
+## Shape
+
+```text
+main <- dev <- slice/<claim>
 ```
-main ←── dev ←── slice/<cosa>
-```
 
-| | cosa contiene | chi ci scrive |
-|---|---|---|
-| **`main`** | ciò che è stato **revisionato e verificato**. È la risposta a "cosa regge". | solo un merge da `dev` |
-| **`dev`** | l'integrazione: slice arrivate, verdi, non ancora giudicate tutte insieme | merge dalle slice |
-| **`slice/<cosa>`** | un cambiamento coerente, vita breve | chi lavora |
+- **`main`**: integrated state promoted after an independent review of the whole
+  release/integration boundary.
+- **`dev`**: current integration branch for completed slices.
+- **`slice/<claim>`**: short-lived branch for one coherent change.
 
-## Perché due e non uno
+`dev` exists because integration and release confidence are different questions.
+If that distinction stops buying evidence, remove the branch rather than defend
+it by tradition.
 
-Per un progetto a un solo autore la risposta di default sarebbe **uno**: main più
-rami di feature brevi. `dev` aggiunge un passaggio, e un passaggio senza scopo
-diventa cerimonia da saltare.
+## Slice rules
 
-Il suo scopo qui è preciso: **`dev` è dove una slice sta mentre viene giudicata,
-e `main` è dove arriva dopo.** Prima di questa separazione cinque PR sono restate
-aperte per un giorno intero mentre `main` non si muoveva, perché non c'era un
-posto dove una cosa potesse essere *finita ma non ancora approvata*. Con `dev`
-quel posto esiste, e `main` smette di essere l'unica misura di progresso.
+1. Normal work starts on `slice/<claim>`, not directly on `main`/`dev`.
+2. A STANDARD or CRITICAL slice owns one primary claim.
+3. Coherent independent FAST maintenance changes may share a slice/PR when they
+   remain separately reviewable.
+4. Do not build deep PR stacks. If slice B materially depends on A, integrate A
+   into `dev`, then rebase/branch B from the new integration state.
+5. Delete the work branch after merge.
+6. Integrate with a merge commit, not a squash. Once the branch is gone, the
+   subject `Merge pull request #NN from <owner>/<branch>` is the local witness
+   `node .claude/deleghe.mjs riprendi` uses to derive that a delegation's work
+   is integrated; a squash erases it and finished work shows up as live again.
 
-Se un giorno il giudizio diventa automatico e istantaneo, `dev` perde il suo
-scopo e va tolto. Un ramo si tiene finché risponde a una domanda.
+A good slice title can state the claim without an unrelated "and".
 
-## Le regole
+## Before implementation
 
-1. **Il lavoro non nasce su `main` né su `dev`.** Nasce su `slice/<cosa>`.
-2. **Una slice è coerente**, non "tutto quello che ho fatto oggi". Il metro:
-   riesci a scrivere il titolo della PR senza usare "e"?
-3. **Una slice entra in `dev` verde**: `npm run build` e `npx vitest run` puliti,
-   e i test nuovi verificati *rossi* prima del fix (`PRACTICES.md` §5).
-4. **Da `dev` a `main` si passa solo per un verdetto terminale** — `MERGE`,
-   oppure `BLOCKED`/`REJECT` che rimandano indietro (`docs/JUDGE.md`).
-5. **Niente stack profondi.** Le PR impilate di 5 livelli hanno prodotto rebase
-   a catena, conflitti risolti da automatismi che hanno silenziosamente disfatto
-   fix corretti, e un commit atterrato nella PR sbagliata. Se una slice dipende
-   da un'altra, si aspetta che la prima entri in `dev`.
-6. **Il ramo si cancella al merge**, locale e remoto. Un ramo mergiato che resta
-   è un invito a ripartire da uno stato vecchio.
+Record in the PR or work handoff:
 
-## Commit, PR e checkpoint
+- the claim;
+- FAST / STANDARD / CRITICAL profile;
+- what evidence could falsify it;
+- any owner decision that genuinely blocks the shape.
 
-Una slice non resta una massa non recuperabile fino alla fine. I checkpoint
-sono decisi **prima** del lavoro e hanno una prova osservabile:
+Open a draft PR early when the work is substantial enough that a durable remote
+checkpoint buys recovery/reviewability. A trivial FAST edit does not need a
+ceremonial draft lifecycle.
 
-1. **Decisione fissata** — scope e, se serve, ADR sono leggibili. Si apre una PR
-   draft; il link entra nello stato. Prima di questo punto il lavoro può ancora
-   cambiare forma senza fingere stabilità.
-2. **Meccanismo raggiunto** — il percorso di produzione arriva al cambiamento e
-   il test di wiring fallisce senza quella cucitura. Si crea un commit coerente
-   e si aggiorna la PR; non serve aspettare tutta la slice per avere un punto di
-   ripresa.
-3. **Slice verificata** — `npm run build`, `npx vitest run`, scenario di
-   fallimento, accettazione richiesta, documenti/stato e viste derivate sono
-   aggiornati. La PR esce da draft e chiede il verdetto di `JUDGE.md`.
-4. **Integrazione** — solo un verdetto terminale `MERGE` autorizza il merge in
-   `dev`. Il passaggio `dev`→`main` è un checkpoint separato: suite sull'insieme
-   integrato e nuovo verdetto terminale.
+## Integration checkpoints
 
-“Commit continuo” non significa un commit per ogni file: significa che nessuna
-unità verificabile o passaggio rischioso vive soltanto nel worktree. Un commit
-deve poter essere descritto e verificato da solo. `WIP` è ammesso solo sulla
-slice/draft PR, mai come requisito d'ingresso in `dev`. Un merge non è un gesto
-periodico né automatico: avviene al checkpoint scritto, con la prova dello stato
-che si sta promuovendo.
+### 1. Scope is stable
 
-## Cosa NON abbiamo, e perché va saputo
+The claim and profile are explicit. Architectural decisions that cannot be
+recovered from code have the appropriate ADR/current authority update.
 
-**Nessuna protezione su `main`.** `gh api .../branches/main/protection` risponde
-403: serve GitHub Pro o un repo pubblico. Quindi *"solo un merge da `dev` scrive
-su `main`"* è una convenzione, non un vincolo — chiunque abbia accesso può
-pushare direttamente, e nessun meccanismo lo ferma.
+### 2. Claim is implemented and evidenced
 
-Detto qui perché la regola sopra sembra applicata e non lo è. Quando il repo
-diventerà pubblico, o con Pro, la protezione va accesa: è il gradino quattro
-della scala di `PRACTICES.md` §6 per una regola che oggi sta al gradino uno.
+The branch contains the code/docs and the evidence budget required by
+`ORCHESTRATION.md`.
 
-**La CI esiste, il gate no.** `.github/workflows/ci.yml` esegue typecheck e suite
-su ogni PR e sui push a `dev`/`main`, col sandbox Linux richiesto. Questo rende
-il risultato osservabile e ripetibile; senza branch protection non obbliga però
-GitHub a richiedere il verde prima del merge o a impedire un push diretto.
-Quindi la regola 3 ha un meccanismo di verifica, ma il suo enforcement resta una
-convenzione finché la protection non può rendere il check obbligatorio.
+Do not replace evidence with "CI will catch it". Do not replace CI with a local
+run when the actual merge gate requires CI. Report what was actually observed.
+
+### 3. Slice -> `dev`
+
+- **FAST**: orchestrator integrates after relevant checks + diff review.
+- **STANDARD**: orchestrator integrates after claim-appropriate evidence and the
+  normal integration checks available for the repository.
+- **CRITICAL**: requires a fresh independent `JUDGE.md` verdict `MERGE` on the
+  relevant head before integration.
+
+A change in `dev` invalidates only evidence whose production path/test/contract
+was materially touched. Evidence is reusable by commit/head, not globally reset
+by every merge.
+
+### 4. `dev` -> `main`
+
+This is an integrated-system checkpoint, not a replay of every slice review.
+Run the suite/journeys appropriate to the release boundary and review the
+composition of changes since the previous promotion.
+
+## Current-state reconciliation is part of integration
+
+After an integration that changes active work, Gate status or ordering:
+
+- update the authoritative Gate row only if its evidence/status changed;
+- update `PERCORSO-CRITICO.md` only if ordering/dependency changed;
+- update `LAVORO.md` when live work/next action changed;
+- do not update the retired `STATE.md` chronicle.
+
+Run `.claude/riconcilia.mjs` when its checked surfaces are affected. Keep that
+checker narrow: its job is to catch known handoff/PR/branch drift, not to become
+a universal consistency engine.
+
+## CI and branch protection are observed facts
+
+Do not encode temporary GitHub quota, branch-protection availability or current
+plan limits as permanent branching policy.
+
+At integration time, observe which checks/protections actually exist and report
+limitations. A convention is not an enforced gate merely because this file says
+it should be one.
+
+## Commits are recovery points, not activity counters
+
+Commit a coherent verified unit before a risky transition or when losing the
+worktree/context would be materially expensive. Do not create a commit per file
+or per thought.
+
+The PR tells reviewers what claim is being promoted; Git history tells them what
+changed; evidence tells them why the claim should be believed.

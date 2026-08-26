@@ -77,7 +77,7 @@ export type RecallItem = {
  * An ISO timestamp, or `'all'` for every instant at once — the whole chain of
  * what was ever believed, each row labelled with when it held.
  */
-export type RecallWhen = string | 'all';
+type RecallWhen = string | 'all';
 
 /** `'all'` is a sentinel, not a date, and this is the one place that knows it. */
 export const EVERY_INSTANT = 'all';
@@ -186,7 +186,7 @@ export function checkTemporalWindow(
  * available outcome — worse than "I don't know", which is at least true and
  * which the owner can act on.
  */
-export type RecallGap = {
+type RecallGap = {
   kind: 'temporal';
   /** The entity the graph was interrogated about. */
   entity: string;
@@ -278,6 +278,9 @@ export type RecallResult = {
 /** RRF constant. 60 is the value from the original paper and the field default. */
 const K = 60;
 
+/** The durable episode role. Trust and speaker are deliberately separate axes. */
+type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
+
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
 
@@ -351,7 +354,7 @@ const PROTECTED_SLOTS = 1;
  * kept a 2024 separation and dropped `works_at`. With one reserved slot the
  * charged fact still survives and five recency slots still describe now.
  */
-export function selectForExpansion(facts: Fact[]): Fact[] {
+function selectForExpansion(facts: Fact[]): Fact[] {
   if (facts.length <= EXPANSION_SLOTS) return facts;
 
   const byRecency = facts.slice(0, EXPANSION_SLOTS);
@@ -387,8 +390,6 @@ export function selectForExpansion(facts: Fact[]): Fact[] {
   return kept.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
 }
 
-/** Re-exported so callers can reason about when reranking will actually fire. */
-export { RERANK_MIN_CANDIDATES } from './rerank.js';
 import { RERANK_MIN_CANDIDATES } from './rerank.js';
 
 export async function recall(
@@ -410,6 +411,19 @@ export async function recall(
   // past. Under the default instant — now — it stays out, which is what
   // `superseded_at` is for.
   const includeSuperseded = when !== undefined;
+
+  // `role` lives on the durable episode row. Do not duplicate it into every
+  // retrieval projection just to render provenance: FTS, vector and
+  // neighbourhood all converge here, so one cached lookup per unique episode
+  // is the single seam that decides who actually said the text. Missing role
+  // fails closed as unattributed; tier 0 alone can never manufacture "tu".
+  const episodeRoles = new Map<number, EpisodeRole | null>();
+  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string => {
+    if (!episodeRoles.has(id)) {
+      episodeRoles.set(id, deps.store.episodeById(tenantId, id)?.role ?? null);
+    }
+    return describeEpisodeSource(episodeRoles.get(id) ?? null, tier, at, surface);
+  };
 
   const fuse = (key: string, item: RecallItem, rank: number): void => {
     const contribution = 1 / (K + rank + 1);
@@ -443,7 +457,7 @@ export async function recall(
       id: hit.id,
       text: hit.content,
       trustTier: hit.trustTier,
-      source: describeTier(hit.trustTier, hit.createdAt, hit.connector),
+      source: episodeSource(hit.id, hit.trustTier, hit.createdAt, hit.connector),
       score: 0,
       surface: hit.connector,
       // Retired evidence comes back only when the past was asked for, and it
@@ -532,7 +546,7 @@ export async function recall(
           id: hit.sourceId,
           text: hit.text,
           trustTier: provenance.trustTier,
-          source: describeTier(provenance.trustTier, provenance.createdAt, connector),
+          source: episodeSource(hit.sourceId, provenance.trustTier, provenance.createdAt, connector),
           score: 0,
           surface: connector,
           ...(provenance.supersededAt == null ? {} : { expired: true }),
@@ -670,7 +684,7 @@ export async function recall(
           id: near.id,
           text: near.content,
           trustTier: near.trustTier,
-          source: describeTier(near.trustTier, near.createdAt, near.connector),
+          source: episodeSource(near.id, near.trustTier, near.createdAt, near.connector),
           // Zero, and it never competes: it was appended, not ranked.
           score: 0,
           surface: near.connector,
@@ -766,13 +780,40 @@ export function recallTaint(result: RecallResult): TrustTier {
   return result.items.reduce<TrustTier>((max, item) => (item.trustTier > max ? item.trustTier : max), 0);
 }
 
-function describeTier(tier: TrustTier, when: string, surface?: string): string {
-  const who =
-    tier === 0 ? 'tu' : tier === 1 ? 'contatto noto' : tier === 2 ? 'gruppo/sconosciuto' : 'web o tool esterno';
-  // The surface joins the provenance string rather than getting a field of its
-  // own in the prompt: `knowledge/README.md` describes context as *dove /
-  // quando / con-chi*, and "who said it, where, when" is one phrase, not three.
+function tierSpeaker(tier: TrustTier): string {
+  return tier === 0 ? 'tu' : tier === 1 ? 'contatto noto' : tier === 2 ? 'gruppo/sconosciuto' : 'web o tool esterno';
+}
+
+function describeSource(who: string, when: string, surface?: string): string {
   return `${who}${surface ? ` via ${surface}` : ''}, ${when.slice(0, 10)}`;
+}
+
+/**
+ * Episode role answers "who produced these bytes"; tier answers "how much
+ * authority do these bytes carry". Conflating the two is how an agent message
+ * at tier 0 used to become `[tu ...]` on recall. For non-user episodes the
+ * speaker remains explicit while a non-zero tier is also shown as context, so
+ * fixing attribution never launders the trust provenance that reply taint was
+ * built to preserve. Unknown role fails closed: absence of attribution can
+ * never be promoted to owner speech.
+ */
+function describeEpisodeSource(role: EpisodeRole | null, tier: TrustTier, when: string, surface?: string): string {
+  const who =
+    role === 'agent'
+      ? 'Muffin'
+      : role === 'tool'
+        ? 'tool'
+        : role === 'system'
+          ? 'sistema'
+          : role === 'user'
+            ? tierSpeaker(tier)
+            : 'origine non attribuita';
+  const trustContext = role === 'user' || tier === 0 ? '' : ` · contesto: ${tierSpeaker(tier)}`;
+  return describeSource(`${who}${trustContext}`, when, surface);
+}
+
+function describeTier(tier: TrustTier, when: string, surface?: string): string {
+  return describeSource(tierSpeaker(tier), when, surface);
 }
 
 /**

@@ -15,6 +15,7 @@ import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
+import { makeSearchTool, searchCapability, type SearchBackend } from './tools/search.js';
 import { shellCapability } from './tools/shell.js';
 
 /**
@@ -269,7 +270,7 @@ describe('the price of the same rule, through the same turn', () => {
 
     // The owner was asked — not skipped, and not refused outright — and this
     // harness's `approve` says yes, so the command actually ran.
-    expect(h.approvals).toEqual(['sys.shell on (no resource)']);
+    expect(h.approvals).toEqual(['sys.shell']);
     expect(ran).toEqual(['shell_run']);
   });
 
@@ -463,5 +464,199 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
     expect(h.fetched).toEqual([]);
     expect(h.approvals).toEqual([]);
     expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
+  });
+});
+
+/**
+ * Mandato inv. 7 (P04-1/P04-2, audit 2026-08-16): the kernel's egress branch
+ * only ever looked at the HOSTNAME, so a turn that had read a stranger's file
+ * could still put those bytes in the query string of an allowlisted host, and
+ * `sys.search` skipped the branch entirely (`resourceKind: 'none'`). Same
+ * harness, same POISONED file, same real `runTool`/`resourceFor`/`decide`
+ * chain as every describe block above — the allowlist is the only thing that
+ * changes, because the params gate only has something to prove once a host is
+ * actually reachable.
+ */
+const ALLOWED_HOST = 'allowed.example.com';
+const withParamsAllowed = () =>
+  createDecide({
+    matrix: POLICY_FLOOR,
+    capabilities: new Map(decls.map((d) => [d.id, d])),
+    budgetExhausted: () => false,
+    hardened: true,
+    egressAllowed: (host) => host === ALLOWED_HOST,
+  });
+
+describe('params on an allowlisted host — the gate http_get skipped until now (P04-1)', () => {
+  const WITH_PARAMS = `https://${ALLOWED_HOST}/collect?q=SECRET-BYTES`;
+
+  it('after a tier-3 fetch, a query string on an allowlisted host asks the owner and shows the whole URL', async () => {
+    // Il primo passo NON è più `fs_read`: da quando la soglia spedita è 2
+    // (decisione owner 2026-08-17) il disco dell'owner non arma il gate — è
+    // esattamente il punto della decisione. Ciò che lo arma è il tier 3, il
+    // mondo esterno: qui una fetch allowlisted **senza** parametri (che il
+    // gate lascia passare, vedi il test più sotto) il cui risultato torna a
+    // tier 3 e alza il turno.
+    const h = harness([
+      callTool('http_get', { url: `https://${ALLOWED_HOST}/pagina` }),
+      callTool('http_get', { url: WITH_PARAMS }),
+    ]);
+    h.deps.decide = withParamsAllowed();
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-params-1'),
+      text: 'leggi nota.md e poi apri quel link',
+    });
+
+    // Not skipped (the defect this closes) and not a wall (the harness's
+    // `approve` says yes, same as every `ask`-then-approve test above): the
+    // owner was asked and shown the exact URL, not just the kernel's prose.
+    expect(h.approvals).toEqual([`egress con parametri verso host allowlisted: ${WITH_PARAMS}`]);
+    expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
+  });
+
+  it('the same fetch needs no approval at all with no read behind it (taint 0, below the ceiling)', async () => {
+    const h = harness([callTool('http_get', { url: WITH_PARAMS })]);
+    h.deps.decide = withParamsAllowed();
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-params-2'),
+      text: 'apri quel link',
+    });
+
+    expect(h.approvals).toEqual([]);
+    expect(h.fetched).toEqual([WITH_PARAMS]);
+  });
+
+  it('a host on the allowlist with NO params still needs no approval after the same read (unaffected by this gate)', async () => {
+    const h = harness([
+      callTool('web_search', { query: 'qualcosa dal web' }),
+      callTool('http_get', { url: `https://${ALLOWED_HOST}/` }),
+    ]);
+    h.deps.decide = withParamsAllowed();
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-params-3'),
+      text: 'leggi nota.md e poi apri la pagina',
+    });
+
+    expect(h.approvals).toEqual([]);
+    expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/`]);
+  });
+});
+
+describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)', () => {
+  /**
+   * Wires the production `makeSearchTool`/`searchCapability` into the same
+   * harness, the way `read-then-exfiltrate` wires the production
+   * `makeFsTools`/`httpCapability`: the question under test is what the real
+   * factory hands back, not a stand-in for it.
+   */
+  function searchHarness(script: ChatResult[]) {
+    const h = harness(script);
+    const searched: string[] = [];
+    const backend: SearchBackend = {
+      id: 'fake',
+      endpoint: 'https://search.example.invalid/',
+      search: async (query) => {
+        searched.push(query);
+        return [{ title: 't', url: 'https://search.example.invalid/r', snippet: 's' }];
+      },
+    };
+    // Un tool tier-3 per armare il gate: da quando la soglia spedita è 2
+    // (owner, 17/08) il disco non basta più, e in questo describe l'allowlist è
+    // vuota, quindi nemmeno una fetch. Stessa forma del describe della shell.
+    const webish: CapabilityDecl = {
+      id: 'demo.web',
+      risk: 'low',
+      reversible: 'yes',
+      rerunnable: true,
+      resourceKind: 'none',
+      policyArgs: [],
+      hostOnly: false,
+      maxTaint: 3,
+    };
+    h.deps.capabilities = new Map([...h.deps.capabilities!, [searchCapability.id, searchCapability], [webish.id, webish]]);
+    h.deps.tools = [
+      ...h.deps.tools,
+      makeSearchTool(backend),
+      {
+        capability: webish.id,
+        spec: { name: 'web_like', description: 'stands in for a tier-3 fetch', inputSchema: { type: 'object', properties: {} } },
+        throwTier: 0,
+        handler: () => ({ content: 'contenuto dal web', tier: 3 as const }),
+      },
+    ];
+    h.deps.decide = createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: h.deps.capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => false,
+    });
+    return { ...h, searched };
+  }
+
+  it('after a read, a search asks the owner and shows the query — never runs unapproved', async () => {
+    const h = searchHarness([
+      // In questo describe l'allowlist è vuota, quindi una fetch non può alzare
+      // il turno: si usa il tool tier-3 dichiarato dall'harness, come fa il
+      // describe della shell più sopra. Il punto resta «il turno ha letto il
+      // mondo esterno», non «quale tool l'ha letto».
+      callTool('web_like', {}),
+      callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
+    ]);
+    // The owner says no this time: the assertion that matters is that the
+    // search was gated at all, which only shows up as "never ran" when it is
+    // refused. This is the mutation-sensitive half — see the comment below.
+    h.deps.approve = async (request) => {
+      h.approvals.push(request.prompt);
+      return 'deny';
+    };
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-search-1'),
+      text: 'leggi nota.md e poi cerca MUFFIN-SECRET-9f3a7c21',
+    });
+
+    // The mutation this test exists to catch: put `resourceKind: 'none'` back
+    // on `searchCapability` and `decide()` never reaches `gateParams` at all —
+    // it falls straight through to the risk-class switch (medium,
+    // reversible:'yes') and returns a silent `allow`, so `h.approvals` would
+    // be empty and `h.searched` would hold the query regardless of the read.
+    // Both assertions have to hold for the fix to be real, not just the
+    // second one, which a straight allow also happens to satisfy... except it
+    // does not: under the mutation the backend runs immediately, so
+    // `h.searched` would equal `['MUFFIN-SECRET-9f3a7c21']` here, not `[]`.
+    expect(h.approvals).toEqual(['ricerca: "MUFFIN-SECRET-9f3a7c21"']);
+    expect(h.searched).toEqual([]);
+    expect(h.provider.seen.join('\n')).toMatch(/L'owner ha rifiutato/);
+  });
+
+  it('a clean turn (taint 0) still searches with no approval needed — a gate, not a wall', async () => {
+    const h = searchHarness([callTool('web_search', { query: 'previsioni domani' })]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-search-2'),
+      text: 'cerca previsioni domani',
+    });
+
+    expect(h.approvals).toEqual([]);
+    expect(h.searched).toEqual(['previsioni domani']);
   });
 });

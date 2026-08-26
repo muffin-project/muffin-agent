@@ -66,6 +66,17 @@ export type LaneDeps = {
   run: LaneRun;
   gate?: ForegroundGate;
   standDown?: StandDown;
+  /**
+   * "Is the claim this process is running under still, right now, the one it
+   * was minted for?" — P20's fix, the same one `core/scheduler/scheduler.ts`
+   * takes. `standDown` is the REPL's question (has *some other* gateway shown
+   * up); this is the gateway's own answer about *itself*, and `standDown`
+   * gives it none — the gateway always passes `() => false` for that one.
+   * Wired from `cli/gateway.ts` as `() => lock.isCurrentClaim()`; defaults to
+   * always-true for the REPL (which owns no gateway claim to re-verify) and
+   * for tests that do not exercise this axis.
+   */
+  stillOwner?: () => boolean;
   onEvent?: (e: LaneEvent) => void;
   clock?: () => Date;
   /** Injected for the same reason the store injects it: a test needs a dead pid. */
@@ -96,6 +107,7 @@ export class TurnLane {
   private readonly modelLane: ModelLane;
   private readonly gate: ForegroundGate;
   private readonly standDown: StandDown;
+  private readonly stillOwner: () => boolean;
   private readonly onEvent: (e: LaneEvent) => void;
   private readonly clock: () => Date;
   private readonly alive: (pid: number) => boolean;
@@ -104,6 +116,7 @@ export class TurnLane {
     this.modelLane = deps.modelLane;
     this.gate = deps.gate ?? ALWAYS_IDLE;
     this.standDown = deps.standDown ?? (() => false);
+    this.stillOwner = deps.stillOwner ?? (() => true);
     this.onEvent = deps.onEvent ?? (() => {});
     this.clock = deps.clock ?? (() => new Date());
     this.alive = deps.alive ?? pidAlive;
@@ -143,6 +156,15 @@ export class TurnLane {
     const [row] = this.deps.turns.due(now, 1);
     if (!row) return;
 
+    // Re-verified right before the row is actually taken, the same point
+    // `modelLane.take` is (P20) — `standDown` above only proves nobody owned
+    // the store when this tick *began*, and, for the gateway's own turn lane,
+    // proves nothing at all (`standDown` is a constant `false` there). This is
+    // what catches a claim taken over between the top of this tick and here.
+    if (!this.stillOwner()) {
+      this.onEvent({ kind: 'deferred', reason: 'handover' });
+      return;
+    }
     if (this.modelLane.take(LANE_TURNS) !== null) {
       this.onEvent({ kind: 'deferred', reason: 'in_flight' });
       return;

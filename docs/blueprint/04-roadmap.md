@@ -326,7 +326,7 @@ prima il lettore, poi lo scrittore); **l'audit dei predicati** a metà (l'invari
 sinonimia, cioè una chiamata al modello — contro la regola di costo — o un
 vocabolario chiuso, contro ADR-0032). **Il decadimento della confidenza è
 rifiutato**, non rimandato: non c'è un tasso difendibile, ⬤ l'unica soglia sulla
-confidenza in tutto il repo è `extract.ts:176` *prima* della scrittura (quindi
+confidenza in tutto il repo è `extract.ts:192` *prima* della scrittura (quindi
 sarebbe una mutazione senza lettore), e il giorno che un lettore ci fosse una
 credenza scivolata sotto soglia diventerebbe irrecuperabile **senza `expired_at`
 né `superseded_by`**: una cancellazione senza traccia. Una **passata di scadenza**
@@ -680,6 +680,22 @@ si riattivano prima dei quattordici giorni. Questo ordine differisce
 dall'architettura: il comportamento gruppo può aspettare, la forma che porta
 tenant, principal, provenienza e capability non può diventare host-only nel
 frattempo.
+
+**Cosa conta come «tornare indietro»** (direttiva owner, 2026-08-17 — senza
+questa definizione al giorno 8 il Gate 1 diventa ambiguo). La tesi dice
+*primary interface*, non «mai più toccare un'app». Quindi:
+
+> **Fallback** = usare intenzionalmente un altro agente general-purpose per
+> svolgere un compito personale che avrei ragionevolmente affidato a Muffin,
+> perché Muffin non può farlo o non mi fido di affidarglielo.
+
+**Non conta**: Claude Code usato per sviluppare Muffin; IDE/editor; strumenti
+specialistici non agentici (Gmail aperto a mano, Google Maps, utility banali);
+i gruppi, già esclusi; azioni manuali che l'owner sceglie deliberatamente di
+fare a mano. **Conta**: aprire ChatGPT (o un altro agente) e dire «fammi
+questa ricerca» perché Muffin non regge una ricerca lunga. Così il Gate 1 è
+falsificabile: ogni fallback si registra con la capability mancante che l'ha
+causato, e quella capability entra nell'inventario.
 
 **Gate 2 — Cutover** (il vecchio si spegne). Richiede MVP + **M6** (introspezione) + **M7** (gruppi con isolamento) + **migrazione della memoria completata e verificata** (02 §8) + **una settimana in parallelo** senza regressioni misurate. Motivo del vincolo: il Muffin in produzione oggi ha gruppi vivi e anni di memoria — spegnerlo prima di averli significa perdere capability che usi, ed è esattamente ciò che l'owner esclude.
 

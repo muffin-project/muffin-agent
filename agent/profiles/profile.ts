@@ -115,7 +115,7 @@ export const CONSERVATIVE: Profile = {
 };
 
 /** The hard ceiling. Not a profile setting: no profile may raise it. */
-export const MAX_ITERATIONS_HARD_CAP = 40;
+const MAX_ITERATIONS_HARD_CAP = 40;
 
 /**
  * Parsed, not cast (PRACTICES §4) — and the history is why. `recovery` used to

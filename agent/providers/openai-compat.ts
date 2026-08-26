@@ -1,12 +1,14 @@
 import OpenAI from 'openai';
 import {
   ProviderError,
+  ProviderStreamError,
   type ChatCall,
   type ChatResult,
   type ContentBlock,
   type Message,
   type Provider,
   type StopReason,
+  type StreamEvent,
 } from './types.js';
 
 /**
@@ -111,58 +113,26 @@ export class OpenAICompatProvider implements Provider {
 
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
-      const response = await this.client.chat.completions.create(
-        {
-          model: call.model,
-          max_tokens: call.maxOutputTokens,
-          // Absent stays absent. Local servers want temperature 0 and get it;
-          // a gateway fronting a model that removed sampling gets no field at
-          // all rather than a `temperature: undefined` some strict parser will
-          // reject. (OpenRouter drops unsupported parameters instead of 400ing
-          // — `temperature` is not in claude-sonnet-5's supported_parameters
-          // there — but "the gateway forgives us" is not a contract.)
-          ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
-          messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
-          ...(call.tools && call.tools.length > 0
-            ? {
-                tools: call.tools.map((t) => ({
-                  type: 'function' as const,
-                  function: { name: t.name, description: t.description, parameters: t.inputSchema },
-                })),
-                tool_choice: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const),
-              }
-            : {}),
-        },
-        call.signal ? { signal: call.signal } : {},
-      );
+      const response = await this.client.chat.completions.create(this.requestBody(call), call.signal ? { signal: call.signal } : {});
 
       const choice = response.choices[0];
       if (!choice) throw new ProviderError('provider returned no choices', true);
 
       const text = (choice.message.content ?? '').trim();
-      const toolCalls = (choice.message.tool_calls ?? []).map((tc) => {
-        // A tool call whose arguments do not parse is an error here, where the
-        // recovery cascade can see it, not three layers down inside a tool.
+      const toolCalls: RawToolCall[] = (choice.message.tool_calls ?? []).map((tc) => {
+        // A tool call shaped wrong is an error here, where the recovery
+        // cascade can see it, not three layers down inside a tool. Parsing
+        // itself is deferred to `toChatResult`, the one place both this method
+        // and `chatStream` turn accumulated JSON text into `args` — so a
+        // malformed-arguments error is classified identically on both paths.
         if (!('function' in tc)) throw new ProviderError(`unsupported tool call type`, false);
-        let args: unknown;
-        try {
-          args = JSON.parse(tc.function.arguments || '{}');
-        } catch {
-          // `output`, not transport: the model wrote this, and no amount of
-          // waiting rewrites it. The loop routes it to the profile's cascade.
-          throw new ProviderError(`malformed tool arguments from ${tc.function.name}`, true, undefined, 'output');
-        }
-        return { id: tc.id, name: tc.function.name, args };
+        return { id: tc.id, name: tc.function.name, argsRaw: tc.function.arguments };
       });
 
-      return {
+      return toChatResult({
         text: text.length > 0 ? text : null,
         toolCalls,
-        // Empty, said out loud rather than omitted: this adapter never asks for
-        // reasoning, so there is never any to carry. If that changes, this is
-        // the line that has to change with it — see the header.
-        thinking: [],
-        stopReason: mapStopReason(choice.finish_reason, toolCalls.length > 0),
+        finishReason: choice.finish_reason,
         usage: {
           inputTokens: response.usage?.prompt_tokens ?? 0,
           outputTokens: response.usage?.completion_tokens ?? 0,
@@ -173,10 +143,128 @@ export class OpenAICompatProvider implements Provider {
           cacheWriteTokens: response.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
         model: response.model,
-      };
+      });
     } catch (error) {
       throw wrap(error);
     }
+  }
+
+  /**
+   * SSE `data: {...}` chunks over the SDK the file already depends on:
+   * `chat.completions.create({..., stream: true})` returns
+   * `Stream<ChatCompletionChunk>` (`AsyncIterable`, `node_modules/openai`
+   * v7.4.0, `src/core/streaming.ts`), terminated by the wire's own `data:
+   * [DONE]` — the SDK consumes that sentinel itself and simply ends iteration;
+   * there is no `[DONE]` case in this switch because nothing here ever sees
+   * one. Confirmed against `developers.openai.com`'s streaming-events
+   * reference, 2026-08-16: `delta.content` accumulates per choice,
+   * `delta.tool_calls[i]` carries `index` (never re-sent id/name after the
+   * first fragment for that index) and incremental `function.arguments`
+   * fragments, and the final `usage` chunk only arrives when the request sets
+   * `stream_options.include_usage: true` — set below, or every streamed call
+   * would report zero usage forever, the same silent-zero defect ADR-0008
+   * exists to name.
+   *
+   * Tool-call parsing happens once, after the loop, unlike the Anthropic
+   * adapter's per-block `content_block_stop`: OpenAI's wire has no equivalent
+   * "this tool call is done" event mid-stream, only accumulation by index
+   * until the stream itself ends — so there is nothing to parse until then.
+   */
+  async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {
+    let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+    try {
+      stream = await this.client.chat.completions.create(
+        { ...this.requestBody(call), stream: true, stream_options: { include_usage: true } },
+        call.signal ? { signal: call.signal } : {},
+      );
+    } catch (error) {
+      // Nothing was ever streamed — `chat()`'s own failure shape, not the
+      // stream breaking mid-flight. See the matching comment in
+      // `anthropic.ts#chatStream`.
+      throw wrap(error);
+    }
+
+    let text = '';
+    const toolCalls = new Map<number, RawToolCall>();
+    let finishReason: string | null = null;
+    let usage: OpenAI.Chat.Completions.ChatCompletionChunk['usage'];
+    let model = call.model;
+    // See `ProviderStreamError.partial`.
+    let receivedAnyEvent = false;
+
+    try {
+      for await (const chunk of stream) {
+        receivedAnyEvent = true;
+        model = chunk.model;
+        if (chunk.usage) usage = chunk.usage;
+        const choice = chunk.choices[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+
+        const delta = choice?.delta;
+        if (delta?.content) {
+          text += delta.content;
+          yield { type: 'text_delta', text: delta.content };
+        }
+        for (const tc of delta?.tool_calls ?? []) {
+          const existing = toolCalls.get(tc.index);
+          if (existing === undefined) {
+            toolCalls.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', argsRaw: tc.function?.arguments ?? '' });
+            yield {
+              type: 'tool_call_delta',
+              index: tc.index,
+              ...(tc.id ? { id: tc.id } : {}),
+              ...(tc.function?.name ? { name: tc.function.name } : {}),
+            };
+          } else if (tc.function?.arguments) {
+            existing.argsRaw += tc.function.arguments;
+          }
+          if (tc.function?.arguments) yield { type: 'tool_call_delta', index: tc.index, argsDelta: tc.function.arguments };
+        }
+      }
+    } catch (error) {
+      throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
+    }
+
+    yield {
+      type: 'done',
+      result: toChatResult({
+        text: text.trim().length > 0 ? text.trim() : null,
+        toolCalls: [...toolCalls.values()],
+        finishReason,
+        usage: {
+          inputTokens: usage?.prompt_tokens ?? 0,
+          outputTokens: usage?.completion_tokens ?? 0,
+          cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
+          cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
+        },
+        model,
+      }),
+    };
+  }
+
+  /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
+  private requestBody(call: ChatCall): Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, 'stream'> {
+    return {
+      model: call.model,
+      max_tokens: call.maxOutputTokens,
+      // Absent stays absent. Local servers want temperature 0 and get it;
+      // a gateway fronting a model that removed sampling gets no field at
+      // all rather than a `temperature: undefined` some strict parser will
+      // reject. (OpenRouter drops unsupported parameters instead of 400ing
+      // — `temperature` is not in claude-sonnet-5's supported_parameters
+      // there — but "the gateway forgives us" is not a contract.)
+      ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+      messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
+      ...(call.tools && call.tools.length > 0
+        ? {
+            tools: call.tools.map((t) => ({
+              type: 'function' as const,
+              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+            })),
+            tool_choice: call.toolChoice === 'none' ? ('none' as const) : ('auto' as const),
+          }
+        : {}),
+    };
   }
 
   /**
@@ -209,6 +297,49 @@ export class OpenAICompatProvider implements Provider {
     }));
     return { role: 'system', content: parts as OpenAI.Chat.ChatCompletionContentPartText[] };
   }
+}
+
+/** A tool call before parsing — the shape `chat()` and `chatStream()` both accumulate into. */
+type RawToolCall = { id: string; name: string; argsRaw: string };
+
+/**
+ * One response, in the shape `chat()` and `chatStream()` both reduce to —
+ * plain values rather than an SDK response object, because `chatStream`
+ * assembles these from chunks and has no `ChatCompletion` to slice fields out
+ * of. Parses tool-call JSON exactly once, here, so a malformed-arguments
+ * `ProviderError` is the same error on both paths rather than two similar ones
+ * that could drift.
+ */
+function toChatResult(response: {
+  text: string | null;
+  toolCalls: RawToolCall[];
+  finishReason: string | null;
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  model: string;
+}): ChatResult {
+  const toolCalls = response.toolCalls.map((tc) => {
+    let args: unknown;
+    try {
+      args = JSON.parse(tc.argsRaw || '{}');
+    } catch {
+      // `output`, not transport: the model wrote this, and no amount of
+      // waiting rewrites it. The loop routes it to the profile's cascade.
+      throw new ProviderError(`malformed tool arguments from ${tc.name}`, true, undefined, 'output');
+    }
+    return { id: tc.id, name: tc.name, args };
+  });
+
+  return {
+    text: response.text,
+    toolCalls,
+    // Empty, said out loud rather than omitted: this adapter never asks for
+    // reasoning, so there is never any to carry. If that changes, this is
+    // the line that has to change with it — see the header.
+    thinking: [],
+    stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
+    usage: response.usage,
+    model: response.model,
+  };
 }
 
 function flatten(block: ContentBlock): string {

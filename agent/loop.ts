@@ -4,22 +4,29 @@ import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
+import { tierOf } from '../core/surface/types.js';
+import { SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
+import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import { tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
+import { historyTaint, reinjectedHistory, type ReinjectedHistory } from './context/history-taint.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
 import { recoveryStep, type RecoveryFailure } from './profiles/recovery.js';
 import {
   ProviderError,
+  ProviderStreamError,
   type ChatCall,
+  type ChatResult,
   type ContentBlock,
   type Message,
   type Provider,
+  type StreamEvent,
   type ToolSpec,
 } from './providers/types.js';
 
@@ -170,10 +177,23 @@ export type ApprovalRequest = {
   capability: string;
   /** The kernel's own wording, not a paraphrase. */
   prompt: string;
+  /**
+   * The concrete subject of the call: the kernel's resource when it has one
+   * (path, URL, query bytes), otherwise a render of the call's own arguments —
+   * a shell command with its cwd, a pid with its name. An approval whose
+   * subject is invisible is theater (D12): "approvi sys.shell?" is not a
+   * question anyone can answer.
+   */
   resource?: string | undefined;
+  /**
+   * The turn's taint when the ask fired — "why am I being asked" is half of
+   * the answer. 0 = owner speaking directly; higher tiers mean untrusted
+   * content has already entered the turn, so the surface should say so.
+   */
+  taint: TrustTier;
 };
 
-export type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
+type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
 
 /** Thrown by a tool call that needs an approval this surface cannot obtain. */
 class ApprovalRequired extends Error {
@@ -193,7 +213,7 @@ export type SpendEntry = {
   cacheWriteTokens: number;
 };
 
-export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
+type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
 
 export type ToolOutcome = {
   content: string;
@@ -379,7 +399,36 @@ export type TurnInput = {
   surface: string;
   session: SessionRef;
   text: string;
+  /**
+   * What `text` carries **beyond** the principal's own tier — content a
+   * surface had to type out separately from the sender's own prose to keep it
+   * honest (ADR-0046 §2: a forwarded message's original content, chiefly).
+   * Absent/`0` is indistinguishable from "this surface has no such concept
+   * yet", which is every caller but Telegram's connector today.
+   *
+   * The turn's starting taint is `max(tierOf(principal), contentTaint)`
+   * (`initialTaint` below), computed once and reused at `enqueueTurn`,
+   * `runTurn` and the episode/session writes inside `drive` — one number, so
+   * a forwarded message cannot enter memory at the sender's tier from one of
+   * those call sites while the turn itself starts higher from another
+   * (M5-BIS B16).
+   */
+  contentTaint?: TrustTier;
   signal?: AbortSignal;
+  /**
+   * Mint the row under this identity instead of a fresh random one.
+   *
+   * Absent on every caller that predates it (a REPL turn, a Telegram message):
+   * `runTurn` keeps generating its own id, unchanged. It exists for a caller
+   * that must know the turn's identity *before* the model is ever called —
+   * B7's `job_fires` bridge binds `(job.id, job.nextFireAt)` to a turn id and
+   * only then calls `runTurn`, so that a crash between the bind and this call
+   * has somewhere durable to point at rather than a turn that never got made.
+   * `deps.turns.create` already takes any caller-supplied id (`enqueueTurn`
+   * does the same, for the same store); this only threads one in from the one
+   * caller that has to pick it first.
+   */
+  id?: string | undefined;
   /**
    * Where the answer has to go, for a surface that delivers **out of band**.
    *
@@ -401,7 +450,32 @@ export type TurnInput = {
    * always has.
    */
   replyChannel?: string | undefined;
+  /**
+   * Where the *final* answer's text arrives while it is still forming — M5-BIS
+   * B11. Per-turn, not per-runtime: a REPL prints to its own stdout, a
+   * Telegram chat edits its own draft, and a job with no live surface passes
+   * nothing at all, which is also the default that keeps `stream: false` on
+   * the wire exactly as before this field existed (see `drive`, the call to
+   * `deps.provider.chatStream`).
+   *
+   * **Only the round that ends the turn ever reaches this.** A round that
+   * calls a tool is the model "thinking aloud" between tool calls, not the
+   * answer, and the loop cannot tell which a round will be until it is over —
+   * `content_block_start` can be text for several blocks and then a
+   * `tool_use` at the very end. So every round is buffered internally and
+   * flushed here only once `result.toolCalls.length === 0` is already known,
+   * which is also the one branch that immediately finishes the turn — a
+   * suspend can only be armed by a tool call, so a round that streamed here
+   * can never be followed by one that suspends. "Stream, then retract" was
+   * the alternative and is rejected on purpose: it would mean a surface
+   * un-showing text it already showed, which is a worse promise than showing
+   * it late.
+   */
+  onDelta?: ((delta: TurnDelta) => void) | undefined;
 };
+
+/** One increment of the final answer's text, already past the tool-call filter above. */
+export type TurnDelta = { type: 'text'; text: string };
 
 export type TurnResult = {
   text: string;
@@ -458,6 +532,22 @@ export type TurnResult = {
 export const MAX_RESUMES = 3;
 
 /**
+ * `max(the principal's own tier, whatever content-taint the caller measured)`
+ * — the one formula `enqueueTurn`, `runTurn` and the episode/session writes
+ * inside `drive` all have to agree on. Before `TurnInput.contentTaint`
+ * existed the four of them each wrote `principal.kind === 'member' ? 2 : 0`
+ * separately (`core/surface/types.ts`'s own `tierOf` docstring already named
+ * the risk of a fourth copy); a fifth copy here would have been exactly the
+ * kind of seam a forwarded message could land on the wrong side of, at
+ * whichever one of the four someone forgot to update.
+ */
+function initialTaint(input: TurnInput): TrustTier {
+  const base = tierOf(input.principal);
+  const content = input.contentTaint ?? 0;
+  return content > base ? content : base;
+}
+
+/**
  * Write the row, and let something else run it.
  *
  * This is the whole of B2 — *"un turno lungo restituisce entro ~500 ms e
@@ -487,7 +577,7 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     sessionId: input.session.id,
     model: deps.model,
     messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
-    taint: input.principal.kind === 'member' ? 2 : 0,
+    taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
@@ -510,12 +600,24 @@ function freshCounters(): TurnCounters {
 }
 
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
-  const turn = deps.tracer.start('muffin.turn', {
-    [ATTR.principalKind]: input.principal.kind,
-    [ATTR.tenant]: input.tenant,
-    [ATTR.surface]: input.surface,
-    [ATTR.requestModel]: deps.model,
-  });
+  const turn = deps.tracer.start(
+    'muffin.turn',
+    {
+      [ATTR.principalKind]: input.principal.kind,
+      [ATTR.tenant]: input.tenant,
+      [ATTR.surface]: input.surface,
+      [ATTR.requestModel]: deps.model,
+    },
+    // `SimpleTracer.start` takes `traceId = parent?.traceId ?? id(16)` — handing
+    // it `remoteParent(input.id)` is the one existing lever that makes the
+    // trace id (and so `record.id` below) exactly `input.id` instead of a
+    // freshly minted one. Reused rather than duplicated: this is not a resume,
+    // but the tracer does not need to know that, and `resumeTurn` already
+    // established that a handle carrying only a `traceId` is enough. The one
+    // cosmetic cost is `parentSpanId` reading as the marker id instead of
+    // `null` on this turn's very first span, in the trace JSONL only.
+    input.id === undefined ? undefined : remoteParent(input.id),
+  );
 
   /**
    * The record, before anything happens — and **not** inside a try.
@@ -548,7 +650,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // fails silently rather than loudly.
     model: deps.model,
     messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
-    taint: input.principal.kind === 'member' ? 2 : 0,
+    taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
   });
@@ -557,7 +659,19 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     session: input.session,
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
+    ...(input.onDelta ? { onDelta: input.onDelta } : {}),
   });
+}
+
+/** Il testo del primo messaggio utente, per dire *quale* script era partito. */
+function textOfFirstUserMessage(messages: Message[]): string | null {
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    for (const b of m.content) {
+      if (b.type === 'text' && b.text) return b.text;
+    }
+  }
+  return null;
 }
 
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
@@ -627,6 +741,45 @@ export async function resumeTurn(
     // Not an error: two lanes over one database is the normal case for the
     // seconds a REPL and a gateway overlap, and the loser has nothing to do.
     return { turnId, why: 'claimed', detail: `il turno ${turnId} è stato preso da un altro processo` };
+  }
+
+  /**
+   * Un turno che il modello non ha mai visto non si riprende col modello.
+   *
+   * Un job `script` scrive una riga in `turns` come qualsiasi altro lavoro —
+   * è ciò che gli dà identità durevole — ma non c'è nessuna inferenza da
+   * riprendere: la riga porta un comando, non una conversazione. Senza questa
+   * guardia un crash a metà script finiva alla lane, che lo riprendeva
+   * chiamando il modello con `script: echo …` come se fosse una richiesta
+   * dell'owner: un costo, una risposta inventata, e consegnata.
+   *
+   * E non si riesegue nemmeno lo script. `sys.shell` dichiara
+   * `rerunnable: false` perché un comando *"may have sent something, moved
+   * something, or charged something"*: dopo un crash lo stato non è "non
+   * fatto" né "fatto" ma **forse fatto**, ed è ciò che va detto invece di
+   * scegliere una delle due e sbagliare a caso.
+   */
+  if (record.model === SCRIPT_MODEL) {
+    const comando = textOfFirstUserMessage(record.messages);
+    const testo =
+      `Un job script era partito quando il processo è morto, e non è ri-eseguibile: ` +
+      `**non posso sapere se ha avuto effetto**. Non l'ho rifatto.` +
+      (comando ? `\n\n${comando}` : '') +
+      `\n\nControlla lo stato prima di rilanciarlo.`;
+    deps.turns.finish(
+      record.id,
+      { outcome: 'error', messages: record.messages, taint: record.taint, counters: record.counters },
+      record.claimToken,
+    );
+    return {
+      turnId: record.id,
+      traceId: record.id,
+      stopped: 'error',
+      text: testo,
+      taint: record.taint,
+      iterations: 0,
+      usage: record.counters.usage,
+    };
   }
 
   const span = deps.tracer.start(
@@ -708,6 +861,16 @@ async function drive(
      * `toolContext` is built below.
      */
     replyChannel?: string | undefined;
+    /**
+     * Same story as `replyChannel`, immediately above: live only on a fresh
+     * turn, absent on a resume for the same reason — a process that picks a
+     * suspended turn back up (the gateway's lane, a reboot) is not the one
+     * holding whatever REPL or Telegram chat asked the *previous* attempt to
+     * stream. See `TurnInput.onDelta` for why that is never a gap in what the
+     * owner sees: no delta can have reached a surface on a round that goes on
+     * to suspend.
+     */
+    onDelta?: ((delta: TurnDelta) => void) | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -732,6 +895,7 @@ async function drive(
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
+    ...(options.onDelta ? { onDelta: options.onDelta } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -836,7 +1000,16 @@ async function drive(
         role: 'user',
         kind: 'message',
         content: input.text,
-        trustTier: input.principal.kind === 'member' ? 2 : 0,
+        // `record.taint`, not `initialTaint(input)`: the `input` in scope
+        // here is `drive`'s own reconstruction from `record` a few dozen
+        // lines up, which has no `contentTaint` to read (resume has none to
+        // reconstruct, so it is not carried). `record.taint` is the value
+        // `enqueueTurn`/`runTurn` already computed with `initialTaint` at
+        // creation — a forwarded message's episode is the exact "enters
+        // memory at the owner's tier" step the audit named (M5-BIS B16), and
+        // this is the row this slice exists to stop writing at tier 0 for
+        // content nobody at tier 0 actually said.
+        trustTier: record.taint,
         createdAt: now().toISOString(),
       });
     }
@@ -885,28 +1058,59 @@ async function drive(
     const open = deps.todos.open(input.tenant, input.session.id);
     snapshot.raiseTaint(planTaint(open));
 
-    messages.length = 0;
-    messages.push(...buildContext(deps, input, recalled, open));
+    /**
+     * The session transcript, and the taint that comes with it — same order,
+     * same reason, one line down from the plan above (ADR-0044 §Revisione,
+     * "la history non lava la provenienza"; MANDATO-DAY-1 invariant 2).
+     *
+     * `reinjectedHistory` is the same cut `buildContext` renders — computed
+     * once here so the two can never disagree about what "reinjected" means
+     * (`agent/context/history-taint.ts`'s own docstring). `taintForIds` is one
+     * query for every `traceId` this window carries, not one per message: a
+     * long session can hand this dozens of rows to resolve.
+     */
+    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
+    const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
+    snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
 
+    messages.length = 0;
+    messages.push(...buildContext(input, recalled, open, spoken));
+
+    // `record.taint`, the same substitution and for the same reason as the
+    // episode write above: `initialTaint(input)` here would read `drive`'s
+    // own reconstructed `input`, which never carries `contentTaint`.
+    // `record.taint` is what `enqueueTurn`/`runTurn` already computed with
+    // `initialTaint` at creation — never a literal 0 that would make a group
+    // turn's own user line, or a forwarded message's (M5-BIS B16), read as
+    // clean once a later turn in the same conversation reinjects it
+    // (`agent/context/history-taint.ts`, ADR-0044 §"la history non lava la
+    // provenienza").
     deps.sessions.append(input.session, {
       role: 'user',
       content: input.text,
       surface: input.surface,
       createdAt: now().toISOString(),
       traceId: turn.traceId,
+      tier: record.taint,
     });
     // Marked before the first model call, so a crash inside recall replays the
     // preamble (one duplicated episode, absorbed by consolidation) while a
     // crash anywhere after it does not. The window is the microseconds between
     // two synchronous SQLite writes.
     contextBuilt = true;
-    checkpoint();
+    // Lost the claim before the turn even got going — reachable only if
+    // `resumeTurn`'s own `claim()` won a row a steal then immediately took
+    // back, a vanishingly narrow window. `finish` re-attempts its own fenced
+    // write, finds the same fencing failure, and returns the honest
+    // lost-claim result without pretending anything was said.
+    if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
   } else if (options.resumed === true) {
     // A resumed turn re-enters a transcript that a crash may have left with a
     // question and no answer. Repairing it is not optional: a `tool_use` block
     // without its `tool_result` is a malformed request, and the provider says
     // so on the very first call.
-    await reconcile();
+    const lostClaim = await reconcile();
+    if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
       const waitFor = decodeWaitFor(record.waitFor);
       const why = waitFor !== null && satisfied(waitFor) ? 'event' : 'timer';
@@ -928,7 +1132,12 @@ async function drive(
       // this saves is the state a process that dies here would otherwise take
       // with it — the transcript, the taint it has climbed to, and how much of
       // each budget is spent.
-      checkpoint();
+      //
+      // This is also the checkpoint most likely to catch a lost claim: it runs
+      // once per iteration, so a turn stolen mid-flight (P19 — a live pid past
+      // the hard horizon, or a genuine crash-and-reclaim elsewhere) discovers
+      // it here, before the next model call rather than after it.
+      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
       if (deps.budgetExhausted(input.tenant)) {
         return finish(turn, 'budget', 'Budget esaurito: mi fermo prima di spendere altro.', iterations, usage);
       }
@@ -979,7 +1188,12 @@ async function drive(
         // an explicit `undefined` can still be a key on the wire, an absent
         // key never is.
         ...(deps.profile.thinking !== 'unset' ? { thinking: deps.profile.thinking } : {}),
-        stream: false,
+        // B11: streaming is requested exactly when someone can hear it. A turn
+        // with no `onDelta` sink (a job, a headless `muffin run`, a provider
+        // that never implements `chatStream`) sends this `false`, the request
+        // is byte-identical to before this field could ever be `true`, and
+        // `requestChatResult` below never touches `chatStream` at all.
+        stream: Boolean(input.onDelta && deps.provider.chatStream),
         ...(input.signal ? { signal: input.signal } : {}),
       };
 
@@ -989,9 +1203,45 @@ async function drive(
         turn,
       );
 
+      /**
+       * This round's text, in the granularity it actually arrived on the
+       * wire — released to `input.onDelta` only once this round is confirmed
+       * to be the one that answers (below, past the completion gate). Reset
+       * every iteration on purpose: a round the completion gate nudges and
+       * retries must not leak its (superseded) draft into the round that
+       * replaces it, and `textChunks` being declared inside the loop body is
+       * what guarantees that without an explicit clear.
+       */
+      let textChunks: string[] = [];
+
+      /**
+       * One call, whichever door gets there. Streams when `call.stream` says
+       * to and the provider can; a stream that breaks mid-flight falls back
+       * to a single plain `chat()` for *this* attempt only — a transport
+       * retry on a *later* iteration rebuilds `call` fresh and may stream
+       * again, which is not "twice silently": each attempt is its own
+       * `muffin.chat_call` span. `textChunks` is cleared before falling back
+       * because a broken stream's partial text belongs to a request that
+       * never finished, not to the one that replaces it.
+       */
+      const requestChatResult = async (): Promise<ChatResult> => {
+        if (!call.stream || !deps.provider.chatStream) return deps.provider.chat(call);
+        try {
+          return await drainStream(deps.provider.chatStream(call), (text) => textChunks.push(text));
+        } catch (error) {
+          if (!(error instanceof ProviderStreamError)) throw error;
+          textChunks = [];
+          chatSpan.setAttributes({
+            'muffin.stream.fell_back_to_non_stream': true,
+            'muffin.stream.partial': error.partial,
+          });
+          return deps.provider.chat({ ...call, stream: false });
+        }
+      };
+
       let result;
       try {
-        result = await deps.provider.chat(call);
+        result = await requestChatResult();
       } catch (error) {
         chatSpan.end({ error });
         // Two failures wearing one type, and they take different doors.
@@ -1098,12 +1348,35 @@ async function drive(
           turn.setAttributes({ 'muffin.completion.unresolved': true });
         }
 
+        // B11, and the one line that makes `TurnInput.onDelta`'s contract
+        // true rather than aspirational: **here**, past the `continue` above,
+        // is the earliest point in the whole function that a round is
+        // provably the one that answers — a round the completion gate nudges
+        // never reaches this line at all. `textChunks` replays in the order
+        // and granularity `drainStream` buffered it, which is the provider's
+        // own chunking — `trimChunkEdges` is the one adjustment, and it exists
+        // because `text` above is `result.text`, which both adapters `.trim()`
+        // once at the end; the raw chunks are not. Skipping it would mean a
+        // response with incidental leading or trailing whitespace streams one
+        // string and finishes having "said" a different (trimmed) one, which
+        // is exactly the byte-identical guarantee a surface's own test
+        // checks (`cli/repl.test.ts`).
+        if (input.onDelta && textChunks.length > 0) {
+          for (const chunk of trimChunkEdges(textChunks)) input.onDelta({ type: 'text', text: chunk });
+        }
+
         deps.sessions.append(input.session, {
           role: 'assistant',
           content: text,
           surface: input.surface,
           createdAt: now().toISOString(),
           traceId: turn.traceId,
+          // The turn's taint *right now* — read the same way the memory
+          // episode a few lines down does, and for the same reason (03 §2):
+          // an answer derived from tier-3 content is tier-3 the moment it is
+          // written, not a literal 0 a later turn in this session would
+          // reinject as clean.
+          tier: snapshot.currentTaint(),
         });
         if (deps.memory) {
           deps.memory.store.addEpisode({
@@ -1177,16 +1450,49 @@ async function drive(
       // `tool_use` blocks in it — and `reconcile` below would have nothing to
       // repair, while the intent rows in `turn_tool_calls` described calls the
       // transcript did not contain. Two records of one batch, disagreeing.
-      checkpoint();
+      //
+      // Checked before the tool calls below are allowed to run: a batch about
+      // to have real effects is exactly the point `stillOwner`-style guards
+      // exist for, and this table's own fencing is the one that reaches every
+      // caller of `runTurn`/`resumeTurn`, not only the gateway's lanes.
+      //
+      // The residual window, named the way `core/scheduler/scheduler.ts`'s own
+      // delivery check names its (judge, round 2, R4/R6): a claim stolen
+      // *after* this line has already run is not seen here — this check only
+      // sees a steal that happened before it — so the batch below can execute
+      // under a claim that is taken from it moments later, and the loss is
+      // only caught at the checkpoint that opens the next iteration of this
+      // loop. Bounded by one batch's duration, and it is the effect the fenced
+      // `checkpoint`/`finish`/`suspend` writes stop from *landing*, not one
+      // that stops a tool call already in flight from completing.
+      if (!checkpoint()) return finish(turn, 'error', '', iterations, usage);
 
       const results: ContentBlock[] = [];
-      toolCallsMade += result.toolCalls.length;
       for (const call_ of result.toolCalls) {
         // Checked between tools, not only before the next model call: a Ctrl+C
         // during a run of tool calls used to do nothing visible until the batch
         // finished, which for a slow batch is indistinguishable from being
         // ignored.
         if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+        // The ceiling counts CALLS, not iterations. `cap` above bounds trips
+        // through this loop, but nothing upstream bounds how many `tool_use`
+        // blocks one completion carries — a single response with 40 calls
+        // used to execute all 40 under a profile that promised 15 (E6,
+        // RETURN S3). Refused calls still get a tool_result: a hole in the
+        // batch is a protocol error every provider rejects, and the model
+        // should read why it was stopped instead of retrying blind.
+        if (toolCallsMade >= deps.profile.maxToolCallsPerTurn) {
+          results.push({
+            type: 'tool_result',
+            toolCallId: call_.id,
+            content:
+              `Tetto di ${deps.profile.maxToolCallsPerTurn} tool call per turno raggiunto: chiamata non eseguita. ` +
+              `Chiudi il turno con quello che hai, o dì all'owner cosa resta da fare.`,
+            isError: true,
+          });
+          continue;
+        }
+        toolCallsMade += 1;
         try {
           results.push(await runTool(deps, snapshot, turn, call_, input, exposed, toolContext));
         } catch (error) {
@@ -1233,24 +1539,35 @@ async function drive(
   /**
    * The turn's state, saved at a point where nothing is in flight.
    *
-   * Swallowed, and this is the one place in this file where swallowing is the
-   * right call — with the reason, because "caught and ignored" is how guards
-   * here have died before. A checkpoint that fails leaves the row **stale**,
-   * not wrong: the next one overwrites it, and a process that dies before then
-   * is reclaimed as interrupted, which is exactly what it was. Rethrowing would
-   * instead take down a turn that is still perfectly able to answer, over a
-   * write whose only job is to make a *future* failure cheaper. `Gateway.drain`
-   * closing the database under a long turn is not hypothetical — it is the
-   * measured crash in `core/scheduler/scheduler.ts:174-181`.
+   * An **exception** is still swallowed, and this is the one place in this
+   * file where swallowing it is the right call — with the reason, because
+   * "caught and ignored" is how guards here have died before. A checkpoint
+   * that throws leaves the row **stale**, not wrong: the next one overwrites
+   * it, and a process that dies before then is reclaimed as interrupted,
+   * which is exactly what it was. Rethrowing would instead take down a turn
+   * that is still perfectly able to answer, over a write whose only job is to
+   * make a *future* failure cheaper. `Gateway.drain` closing the database
+   * under a long turn is not hypothetical — it is the measured crash in
+   * `core/scheduler/scheduler.ts:174-181`. The failure is on the span, so
+   * "the record stopped being written" is visible in a trace instead of being
+   * inferred from a stale row.
    *
-   * The failure is on the span, so "the record stopped being written" is
-   * visible in a trace instead of being inferred from a stale row.
+   * A **fenced-out write** (P19) is a different fact and is not swallowed: it
+   * means another process's claim is on this row now, not that the write
+   * merely failed. Returns `false`, and every caller checks it — a checkpoint
+   * that could not land is the caller's cue to stop the turn without any
+   * further effect, not to keep iterating against a row it no longer owns.
    */
-  function checkpoint(): void {
+  function checkpoint(): boolean {
     try {
-      deps.turns.checkpoint(record.id, { messages, taint: snapshot.currentTaint(), counters: counters() });
+      return deps.turns.checkpoint(
+        record.id,
+        { messages, taint: snapshot.currentTaint(), counters: counters() },
+        record.claimToken,
+      );
     } catch (error) {
       turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      return true;
     }
   }
 
@@ -1268,13 +1585,17 @@ async function drive(
   function suspendHere(spec: WaitSpec): TurnResult {
     const wrote = (() => {
       try {
-        return deps.turns.suspend(record.id, {
-          messages,
-          taint: snapshot.currentTaint(),
-          counters: counters(),
-          wakeAt: spec.wakeAt,
-          waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
-        });
+        return deps.turns.suspend(
+          record.id,
+          {
+            messages,
+            taint: snapshot.currentTaint(),
+            counters: counters(),
+            wakeAt: spec.wakeAt,
+            waitFor: spec.waitFor === null ? null : encodeWaitFor(spec.waitFor),
+          },
+          record.claimToken,
+        );
       } catch (error) {
         turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
         return false;
@@ -1282,6 +1603,13 @@ async function drive(
     })();
 
     if (!wrote) {
+      // Covers two different facts with one fallback, and that is deliberate:
+      // a genuine write failure (the pre-existing case) and a fenced-out write
+      // — the claim is gone (P19) — both mean "the wait cannot be honoured",
+      // and `finish` below independently re-checks its own fencing. If the
+      // claim really is gone, `finish`'s own write fails too and it returns
+      // the honest lost-claim result instead of this text — so the message
+      // here only ever reaches an owner when the *first* case is what happened.
       return finish(
         turn,
         'error',
@@ -1343,12 +1671,18 @@ async function drive(
    *  - **not started** — neither row. Run it, through the same kernel path as
    *    any other call, because the permission matrix may have tightened while
    *    the turn was dead and a resume should inherit that.
+   *
+   * Returns `null` to continue normally, or a `TurnResult` when its own final
+   * checkpoint discovers the claim is gone (P19): the repair above may itself
+   * have run tool calls with real effects, so by the time that is discovered
+   * there is nothing left to do but stop and say so, exactly like the
+   * checkpoints in the main loop.
    */
-  async function reconcile(): Promise<void> {
+  async function reconcile(): Promise<TurnResult | null> {
     const last = messages[messages.length - 1];
-    if (last === undefined || last.role !== 'assistant') return;
+    if (last === undefined || last.role !== 'assistant') return null;
     const pending = last.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (pending.length === 0) return;
+    if (pending.length === 0) return null;
 
     const recorded = deps.turns.recordedOutcomes(record.id);
     const uncertain = new Map(deps.turns.uncertainCalls(record.id).map((c) => [c.callId, c]));
@@ -1418,25 +1752,36 @@ async function drive(
     }
 
     messages.push({ role: 'user', content: repaired });
-    checkpoint();
+    return checkpoint() ? null : finish(turn, 'error', '', iterations, usage);
   }
 
-  /** The single write that ends the row. Same swallow, same reason, one caveat. */
-  function closeRecord(outcome: TurnOutcome): void {
+  /**
+   * The single write that ends the row. Same exception-swallow, same reason,
+   * one caveat — and, since P19, a second return path that is not swallowed.
+   *
+   * Returns whether the write actually landed. `false` means fenced out: the
+   * claim on this row belongs to someone else now, and `finish` (below) turns
+   * that into the honest lost-claim result instead of returning a `TurnResult`
+   * that claims an outcome this row does not, in fact, record.
+   */
+  function closeRecord(outcome: TurnOutcome): boolean {
     try {
-      deps.turns.finish(record.id, {
-        outcome,
-        messages,
-        taint: snapshot.currentTaint(),
-        counters: counters(),
-      });
+      return deps.turns.finish(
+        record.id,
+        { outcome, messages, taint: snapshot.currentTaint(), counters: counters() },
+        record.claimToken,
+      );
     } catch (error) {
       // The caveat: unlike a checkpoint, nothing comes after this one. The row
       // stays `running` and the next boot reclaims it as interrupted — a turn
       // that answered, reported as "we cannot say". That is the safe direction
       // of the two, and it is not silent: the attribute below is the trace's
-      // record that the outcome could not be written.
+      // record that the outcome could not be written. An exception is treated
+      // as "could not write" (the pre-existing behaviour, `true`), never as
+      // "lost the claim" — those are different facts and only the second one
+      // is what a fenced `changes === 0` means.
       turn.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+      return true;
     }
   }
 
@@ -1498,7 +1843,27 @@ async function drive(
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
-    closeRecord(stopped);
+    const written = closeRecord(stopped);
+    if (!written) {
+      // The claim is gone (P19): every caller of `finish` above already
+      // detected this from its *own* fenced write (a checkpoint, a suspend
+      // that fell back here) or is discovering it only now, right at the end.
+      // Either way the row does not, in fact, say what `stopped`/`text` claim
+      // — some other process's write is what is really on it — so neither may
+      // be returned. No `announceEnd`: the process that now owns this row is
+      // the one whose job it is to say the turn ended, not this one.
+      span.setAttributes({ 'muffin.turn.lost_claim': true });
+      span.end({ status: 'error' });
+      return {
+        text: '',
+        iterations: iters,
+        traceId: span.traceId,
+        turnId: record.id,
+        stopped: 'error',
+        taint: snapshot.currentTaint(),
+        usage: used,
+      };
+    }
     span.end({ status: stopped === 'error' ? 'error' : 'ok' });
     // Last thing before the return, so the span is closed and the result is
     // built: the hook is not allowed to see a half-finished turn, and it is not
@@ -1542,12 +1907,23 @@ function closeRow(
   detail: string,
 ): void {
   try {
-    deps.turns.finish(record.id, {
-      outcome,
-      messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
-      taint: record.taint,
-      counters: record.counters,
-    });
+    // `record.claimToken` is the one `claim()` just handed back a moment ago
+    // in `resumeTurn` — both callers of this function run immediately after a
+    // winning claim, before anything could plausibly steal it. If something
+    // did (an exceptionally narrow race), the write is fenced out the same as
+    // anywhere else: `changes === 0`, nothing overwritten, and there is
+    // nothing further this function needs to do about it — the refusal it
+    // reports to its own caller does not depend on this write having landed.
+    deps.turns.finish(
+      record.id,
+      {
+        outcome,
+        messages: [...record.messages, { role: 'assistant', content: [{ type: 'text', text: detail }] }],
+        taint: record.taint,
+        counters: record.counters,
+      },
+      record.claimToken,
+    );
   } catch (error) {
     span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
   }
@@ -1604,6 +1980,23 @@ function lastUserText(messages: Message[]): string {
  */
 function assertNever(x: never): never {
   throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
+}
+
+/**
+ * Render a tool call's arguments as the one-line subject of an approval —
+ * `command: rm -rf /tmp/x · cwd: /tmp` — for capabilities whose kernel
+ * resource is `none`. Flat key: value pairs, no prose: the owner is deciding,
+ * not reading. Capped because an argument can be a whole file body, and a
+ * question that scrolls is a question nobody reads to the end of.
+ */
+function summarizeCallArgs(args: unknown): string | undefined {
+  if (args === null || typeof args !== 'object') return undefined;
+  const parts = Object.entries(args as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+  if (parts.length === 0) return undefined;
+  const joined = parts.join(' · ');
+  return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
 }
 
 async function runTool(
@@ -1708,7 +2101,19 @@ async function runTool(
       const request: ApprovalRequest = {
         capability,
         prompt: decision.ask.prompt,
-        ...(resource.kind === 'path' ? { resource: resource.value } : {}),
+        // `path` carried this alone; `url` and `query` joined it (mandato inv.
+        // 7, egress-params) so approving a params-gated fetch or search shows
+        // the exact bytes, not just the kernel's prose — the gap ADR-0044
+        // §revisione named and left open ("l'URL che sys.http sta per
+        // raggiungere ... non compaiono nel testo che l'owner vede"). For a
+        // `resourceKind: 'none'` capability the kernel has nothing to offer,
+        // so the call's own arguments are the action — `sys.shell`'s
+        // command+cwd, a pid+name — and hiding them made the ask
+        // unanswerable (D12-min, RETURN S3).
+        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
+          ? { resource: resource.value }
+          : { resource: summarizeCallArgs(call.args) }),
+        taint: snapshot.currentTaint(),
       };
       if (!deps.approve) {
         // No channel on this surface: the turn stops and says what it wanted,
@@ -1753,13 +2158,27 @@ async function runTool(
    * world and an intent row for it would be a lie about what was attempted.
    */
   const decl = deps.capabilities?.get(capability);
-  recordIntent(deps, ctx.turnId, span, {
+  const intentError = recordIntent(deps, ctx.turnId, span, {
     callId: call.id,
     tool: call.name,
     capability,
     rerunnable: decl?.rerunnable === true,
     args,
   });
+  if (intentError !== null) {
+    // EFFECT WAL (MANDATO-DAY-1 invariant 1): the write above did not land, so
+    // the handler must not run — a missing intent row has to mean "never
+    // started", never "started, but its own receipt got lost". No byte has
+    // left this process for this call, so nothing raises taint, and there is
+    // no `recordOutcome` here either: there is no intent row for it to close.
+    span.end({ status: 'error', error: intentError });
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: `Intento non registrabile sul record durevole: chiamata non eseguita — ${intentError}`,
+      isError: true,
+    };
+  }
 
   try {
     // `ctx` carries everything `input.tenant`/`input.principal`/`replyChannel`
@@ -1772,6 +2191,17 @@ async function runTool(
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool
     // that honestly reports 0 costs the turn nothing.
     snapshot.raiseTaint(outcome.tier);
+    // The write boundary (owner, 2026-08-17; ADR-0048): every sink a tool
+    // result reaches from here — the durable record, the session JSONL, and
+    // the `tool_result` that later gets persisted into `turns.messages` by
+    // `closeRecord`/checkpoint — reads this one value. Redacting once, here,
+    // before any of the three, is provably sufficient (P34-2): none of
+    // `endToolCall`, `SessionStore.append` or `TurnStore.finish` transforms
+    // `content` again, they store exactly what they are given. This is a
+    // best-effort text scan (class 3, `redact.ts`), not the structural
+    // guarantee — a backend-known secret never reaches this variable in the
+    // first place, because no tool handler ever calls `readSecret`.
+    const safeContent = redactText(outcome.content);
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -1784,29 +2214,38 @@ async function runTool(
     // written with the tier absent, which is the version of that same argument
     // one level down: a resumed turn cannot inherit a provenance nobody stated.
     recordOutcome(deps, ctx.turnId, span, call.id, {
-      content: outcome.content,
+      content: safeContent,
       isError: outcome.isError === true,
       tier: outcome.tier,
     });
     deps.sessions.append(input.session, {
       role: 'tool',
-      content: outcome.content,
+      content: safeContent,
       toolCallId: call.id,
       toolName: call.name,
       surface: input.surface,
       createdAt: (deps.now ?? (() => new Date()))().toISOString(),
       traceId: parent.traceId,
+      // The outcome's own declared provenance — not reinjected as history by
+      // `buildContext` today (it filters to user/assistant only), set anyway
+      // so the row is never a silent "clean" for whatever reads it next.
+      tier: outcome.tier,
     } satisfies SessionMessage);
     span.end({ status: outcome.isError ? 'error' : 'ok' });
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: outcome.content,
+      content: safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.
-    const detail = error instanceof Error ? error.message : String(error);
+    // Redacted for the same reason and at the same boundary as the success
+    // path above: an error can carry a header or a query string right back
+    // out (`http_get` against a URL the model built), and this is the one
+    // point that covers the durable record, the session and `turns.messages`
+    // for the failure exit too.
+    const detail = redactText(error instanceof Error ? error.message : String(error));
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
@@ -1827,27 +2266,44 @@ async function runTool(
 }
 
 /**
- * The two record writes, with their failure swallowed for the same reason
- * `checkpoint` swallows its own: a tool that worked must not be turned into a
- * failed turn by a bookkeeping write. What a lost write costs is stated where
- * it lands — a missing intent row reads as "not started" (the resume calls the
- * handler again, which for a non-re-runnable tool is the very thing the row
- * exists to prevent), a missing outcome row reads as "maybe done" (the resume
- * is too careful, which is the harmless direction).
+ * The write-ahead half — a gate now, not a courtesy.
+ *
+ * This used to swallow the failure the same way `checkpoint` swallows its
+ * own, on the reasoning that a tool which goes on to work must not be turned
+ * into a failed turn by a bookkeeping write. That reasoning missed what a lost
+ * write actually costs here: with the handler left free to run anyway, a
+ * missing intent row stopped meaning "never started" and started meaning
+ * "started, but its own receipt did not survive" — for a non-rerunnable tool,
+ * exactly the ambiguity this row exists to remove (ADR-0042 §6). MANDATO-DAY-1
+ * names this invariant 1, "EFFECT WAL": no side effect may start unless its
+ * intent is durable first, and "I tried to record it and carried on anyway"
+ * does not satisfy that. So the failure is returned instead, and the caller
+ * below refuses the call rather than guess which way is safe to fail.
  */
 function recordIntent(
   deps: LoopDeps,
   turnId: string,
   span: SpanHandle,
   call: { callId: string; tool: string; capability: string; rerunnable: boolean; args: unknown },
-): void {
+): string | null {
   try {
     deps.turns.startToolCall(turnId, call);
+    return null;
   } catch (error) {
-    span.setAttributes({ 'muffin.turn.record_error': error instanceof Error ? error.message : String(error) });
+    const detail = error instanceof Error ? error.message : String(error);
+    span.setAttributes({ 'muffin.turn.record_error': detail });
+    return detail;
   }
 }
 
+/**
+ * The outcome write — failure still swallowed, deliberately asymmetric with
+ * `recordIntent` above. A tool that already worked must not be turned into a
+ * failed turn by a bookkeeping write on the way out, and what a lost write
+ * costs here is stated where it lands: a missing outcome row reads as "maybe
+ * done" (the resume is too careful, which is the harmless direction) —
+ * never as "not started", which would be the false reading.
+ */
 function recordOutcome(
   deps: LoopDeps,
   turnId: string,
@@ -1878,15 +2334,21 @@ function recordOutcome(
  * highest-risk capability in the matrix was going to arrive with a gate that
  * silently did not fire.
  *
- * Only `url` and `path` are lifted. A `tenant` resource is not in the args —
- * it is the turn's tenant — and inventing one here would change what the kernel
+ * `url`, `path` and `query` are lifted. `query` joined the other two so that
+ * `sys.search` could stop declaring `resourceKind: 'none'` — the mechanism
+ * this function already provides needed no new case, only a wider guard
+ * (mandato inv. 7, P04-2). A `tenant` resource is not in the args — it is the
+ * turn's tenant — and inventing one here would change what the kernel
  * decides for every memory read.
  */
 function resourceFor(
   decl: CapabilityDecl | undefined,
   args: Record<string, unknown>,
 ): DecisionRequest['resource'] {
-  if (!decl || (decl.resourceKind !== 'url' && decl.resourceKind !== 'path')) {
+  if (
+    !decl ||
+    (decl.resourceKind !== 'url' && decl.resourceKind !== 'path' && decl.resourceKind !== 'query')
+  ) {
     return { kind: 'none' };
   }
   for (const name of decl.policyArgs) {
@@ -1904,7 +2366,6 @@ function resourceFor(
  * stable content, or the cache prefix is invalidated on every turn.
  */
 function buildContext(
-  deps: LoopDeps,
   input: TurnInput,
   recalled: ContentBlock[],
   /**
@@ -1917,9 +2378,18 @@ function buildContext(
    * caller has the snapshot; this has the strings.
    */
   open: TodoItem[],
+  /**
+   * The session history, already cut to what will actually be reinjected —
+   * **taint-accounted by the caller**, same reasoning as `open` immediately
+   * above and the same reason it is a parameter rather than a re-read here:
+   * `drive` computed `historyTaint` over this exact `kept` set and raised the
+   * snapshot with it before calling this function, so a second, independent
+   * read-and-slice in here could only ever disagree with that one by
+   * accident. See `agent/context/history-taint.ts`'s `reinjectedHistory`.
+   */
+  spoken: ReinjectedHistory,
 ): Message[] {
-  const history = deps.sessions.read(input.session);
-  const spoken = history.filter((m) => m.role === 'user' || m.role === 'assistant');
+  const { kept, dropped } = spoken;
 
   // A REPL session used all afternoon would otherwise grow until the provider
   // refuses the request — and then refuse it again on every following turn,
@@ -1929,9 +2399,6 @@ function buildContext(
   // The cut is at the front and it is announced, so the model knows there is a
   // before rather than believing the conversation started here. Recall is what
   // brings back the parts that mattered, which is the whole reason it exists.
-  const kept = spoken.slice(-MAX_HISTORY_TURNS);
-  const dropped = spoken.length - kept.length;
-
   const messages: Message[] = [];
   if (dropped > 0) {
     messages.push({
@@ -2033,6 +2500,71 @@ function makeSnapshot(
 function retryDelayMs(attempt: number): number {
   const ceiling = Math.min(8_000, 500 * 2 ** (attempt - 1));
   return Math.floor(Math.random() * ceiling);
+}
+
+/**
+ * The loop's one and only extraction point for `Provider.chatStream` — every
+ * caller of a provider's stream goes through this, so "what counts as a text
+ * delta" and "what does `done` mean" are answered once.
+ *
+ * `onChunk` receives each `text_delta` in the exact granularity the provider
+ * yielded it — the buffer `requestChatResult` above later replays, unchanged,
+ * to `input.onDelta`. `thinking_delta`, `tool_call_delta` and `usage` events
+ * are consumed and dropped here: nothing downstream of this function has ever
+ * needed a tool call before it is complete (the loop reads `result.toolCalls`,
+ * already parsed, off the `done` event), and a surface receives text only —
+ * see `TurnDelta`.
+ */
+async function drainStream(events: AsyncIterable<StreamEvent>, onChunk: (text: string) => void): Promise<ChatResult> {
+  for await (const event of events) {
+    if (event.type === 'text_delta') onChunk(event.text);
+    if (event.type === 'done') return event.result;
+  }
+  // A well-behaved provider's last event is always `done` (its own contract —
+  // see `Provider.chatStream`'s docstring). An iterable that ends without one
+  // is exactly the shape of transport this repo has no other name for than a
+  // broken stream, so it takes the same door: the caller's one-time fallback
+  // to `chat()`, `partial: true` because getting this far means every event up
+  // to the missing `done` did arrive.
+  throw new ProviderStreamError('provider stream ended without a done event', true);
+}
+
+/**
+ * Drops leading/trailing whitespace-only chunks and trims the edges of the
+ * first and last real one — so `chunks.map(c=>c.text).join('')` after this
+ * equals exactly `full.trim()`, chunk boundaries elsewhere untouched.
+ *
+ * Internal whitespace (a blank line the model wrote on purpose) is never
+ * touched: the loop stops walking in from each end at the first chunk that
+ * turns out to have real content, same as `String.prototype.trim` stops at
+ * the first non-whitespace character — this is that same rule applied chunk
+ * by chunk instead of character by character, because a surface streaming
+ * this live has no "whole string" to call `.trim()` on until the end.
+ */
+function trimChunkEdges(chunks: string[]): string[] {
+  const out = [...chunks];
+  while (out.length > 0) {
+    const trimmed = out[0]!.trimStart();
+    if (trimmed === out[0]) break; // no leading whitespace on this chunk — done
+    if (trimmed === '') {
+      out.shift(); // this chunk was whitespace-only — drop it, keep walking
+      continue;
+    }
+    out[0] = trimmed;
+    break;
+  }
+  while (out.length > 0) {
+    const last = out.length - 1;
+    const trimmed = out[last]!.trimEnd();
+    if (trimmed === out[last]) break;
+    if (trimmed === '') {
+      out.pop();
+      continue;
+    }
+    out[last] = trimmed;
+    break;
+  }
+  return out;
 }
 
 /** Sleeps, unless the turn is abandoned first. */

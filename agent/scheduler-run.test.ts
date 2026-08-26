@@ -1,6 +1,21 @@
+import DatabaseCtor from 'better-sqlite3';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { jobOutcomeFromTurn } from './scheduler-run.js';
-import type { TurnResult } from './loop.js';
+import { createDecide } from '../core/policy/decide.js';
+import { POLICY_FLOOR } from '../core/policy/matrix.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
+import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
+import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
+import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
+import { resumeTurn } from './loop.js';
+import type { LoopDeps, TurnResult } from './loop.js';
+import { CONSERVATIVE } from './profiles/profile.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 
 const base: TurnResult = {
   text: '',
@@ -31,7 +46,7 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco' },
+      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco', taint: 0 },
     });
     expect(out.stopped).toBe('ask');
     expect(out.text).toContain('In coda per te');
@@ -45,10 +60,27 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?' },
+      pending: { capability: 'sys.shell', prompt: 'eseguo lo script?', taint: 0 },
     });
     expect(out.text).toContain('sys.shell');
     expect(out.text).not.toContain('undefined');
+  });
+
+  it('a tainted ASK says why it deserves suspicion; taint 0 stays silent', () => {
+    const tainted = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 2 },
+    });
+    expect(tainted.text).toContain('turno a taint 2');
+    const clean = jobOutcomeFromTurn({
+      ...base,
+      stopped: 'ask',
+      text: '',
+      pending: { capability: 'outward.send', prompt: 'inoltro?', resource: 'mail:x', taint: 0 },
+    });
+    expect(clean.text).not.toContain('taint');
   });
 
   it('other terminal states pass through unchanged', () => {
@@ -58,5 +90,400 @@ describe('jobOutcomeFromTurn', () => {
       turnId: 't',
     });
     expect(jobOutcomeFromTurn({ ...base, stopped: 'budget', text: 'cap raggiunto' }).stopped).toBe('budget');
+  });
+});
+
+/**
+ * `makeJobRunner` — B7's identity resolution.
+ *
+ * Real `TurnStore`, `JobStore`, `JobFireStore`, `SessionStore`, on one real
+ * (`:memory:`) `better-sqlite3` connection — the same store classes production
+ * wires, never a scheduler mock. Only the model is faked (`Scripted`, a
+ * `Provider`), which is the one thing a unit test cannot avoid faking and the
+ * one thing every assertion below is checking the call count of.
+ */
+
+class Scripted implements Provider {
+  readonly kind = 'openai-compat' as const;
+  calls = 0;
+  constructor(private readonly script: ChatResult[]) {}
+  async chat(_call?: ChatCall): Promise<ChatResult> {
+    const next = this.script[this.calls++];
+    if (!next) throw new Error('lo script è finito — il modello non doveva essere richiamato di nuovo');
+    return next;
+  }
+}
+
+const answer = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  model: 'test',
+});
+
+/** `TurnCounters`, freshly — `agent/loop.ts`'s own `freshCounters` is not exported. */
+function counters(): NonNullable<Parameters<TurnStore['create']>[0]>['counters'] {
+  return {
+    iterations: 0,
+    recoveriesUsed: 0,
+    transportRetriesLeft: 2,
+    toolCallsMade: 0,
+    nudgedForCompletion: false,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    spentUsd: 0,
+    resumes: 0,
+    contextBuilt: false,
+  };
+}
+
+const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'controlla il backup', channel: 'cli' };
+
+function fixture(script: ChatResult[]) {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-scheduler-run-'));
+  const db = new DatabaseCtor(':memory:');
+  const turns = new TurnStore(db);
+  const todos = new TodoStore(db);
+  const jobs = new JobStore(db);
+  const fires = new JobFireStore(db);
+  const provider = new Scripted(script);
+  const deps: LoopDeps = {
+    provider,
+    profile: CONSERVATIVE,
+    model: 'test-model',
+    tools: [],
+    decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(), budgetExhausted: () => false, hardened: true }),
+    tracer: new SimpleTracer(new JsonlExporter(home)),
+    sessions: new SessionStore(home),
+    turns,
+    todos,
+    budgetExhausted: () => false,
+    systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
+  };
+  return { deps, db, jobs, fires, provider };
+}
+
+describe('makeJobRunner — B7 identity resolution', () => {
+  it('a fresh occurrence creates exactly one turn and binds the fire to it', async () => {
+    const { deps, db, jobs, fires, provider } = fixture([answer('ecco il brief')]);
+    const job = jobs.add(SPEC);
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('answered');
+    expect(outcome.text).toBe('ecco il brief');
+    expect(provider.calls).toBe(1);
+
+    const fire = fires.get(job.id, job.nextFireAt.toISOString());
+    expect(fire?.turnId).toBe(outcome.turnId);
+    expect(deps.turns.get(outcome.turnId!)?.status).toBe('done');
+    const rows = db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
+    expect(rows.n).toBe(1);
+  });
+
+  it('the SAME occurrence resolved twice — before anything settles it — never re-runs the model (fault point 6)', async () => {
+    // job.nextFireAt does not move between the two calls (nothing calls
+    // `markRan`), so `scheduledFor` is identical both times — exactly a
+    // second tick, or a second process, reaching the same due job before
+    // `Scheduler` ever gets to deliver/settle the first pass.
+    const { deps, db, jobs, fires, provider } = fixture([answer('primo e unico giro')]);
+    const job = jobs.add(SPEC);
+
+    const first = await makeJobRunner(deps, fires)(job, undefined);
+    if (!('stopped' in first)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(first)}`);
+    expect(first.text).toBe('primo e unico giro');
+
+    const second = await makeJobRunner(deps, fires)(job, undefined);
+    expect(provider.calls).toBe(1); // the model ran exactly once, not twice
+    if (!('stopped' in second)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(second)}`);
+    expect(second.turnId).toBe(first.turnId);
+    // Recovered from the session file the first pass wrote — not re-asked.
+    expect(second.text).toBe('primo e unico giro');
+
+    const rows = db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
+    expect(rows.n).toBe(1); // never a second turn for the same occurrence
+  });
+
+  it('a turn already done and already delivered settles without touching the model — fault point 5/6', async () => {
+    const { deps, jobs, fires, provider } = fixture([answer('non deve mai essere chiamato')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+    fires.claim(job.id, scheduledFor);
+    const turnId = fires.bind(job.id, scheduledFor, 'turn-done-delivered');
+    const rec = deps.turns.create(
+      {
+        id: turnId,
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'sess-done-delivered',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+        taint: 0,
+        counters: counters(),
+        replyTo: { channel: 'cli' },
+      },
+      99999,
+    );
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.delivered(rec.id, 'sent'); // some other pass already delivered it
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    expect(provider.calls).toBe(0);
+    if (!('settleOnly' in outcome)) throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.turnId).toBe(turnId);
+    expect(outcome.outcome).toBe('answered');
+    expect(outcome.delivered).toBe(true);
+  });
+
+  it('a turn already done but recorded undeliverable also settles without touching the model, and says delivered:false', async () => {
+    const { deps, jobs, fires, provider } = fixture([answer('non deve mai essere chiamato')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+    fires.claim(job.id, scheduledFor);
+    const turnId = fires.bind(job.id, scheduledFor, 'turn-undeliverable');
+    const rec = deps.turns.create(
+      {
+        id: turnId,
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: 'sess-undeliverable',
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+        taint: 0,
+        counters: counters(),
+        replyTo: { channel: 'cli' },
+      },
+      99999,
+    );
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.delivered(rec.id, 'undeliverable');
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    expect(provider.calls).toBe(0);
+    if (!('settleOnly' in outcome)) throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.delivered).toBe(false);
+  });
+
+  it('a turn already done but not yet delivered recovers the text from the session file — fault point 5', async () => {
+    const { deps, jobs, fires, provider } = fixture([answer('non deve mai essere chiamato')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+    fires.claim(job.id, scheduledFor);
+    const turnId = fires.bind(job.id, scheduledFor, 'turn-crash-before-settle');
+
+    const session = deps.sessions.open('job-recover-session');
+    deps.sessions.append(session, {
+      role: 'assistant',
+      content: 'la risposta che il crash non ha mai consegnato',
+      surface: 'cli',
+      createdAt: new Date().toISOString(),
+      traceId: turnId,
+    });
+    const rec = deps.turns.create(
+      {
+        id: turnId,
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: session.id,
+        model: 'test-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+        taint: 0,
+        counters: counters(),
+        replyTo: { channel: 'cli' },
+      },
+      99999,
+    );
+    deps.turns.finish(rec.id, { outcome: 'answered', messages: rec.messages, taint: 0, counters: rec.counters }, rec.claimToken);
+    // delivery is still 'pending' — nothing has told the channel yet.
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    expect(provider.calls).toBe(0); // never called the model again
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('answered');
+    expect(outcome.text).toBe('la risposta che il crash non ha mai consegnato');
+    expect(outcome.turnId).toBe(turnId);
+  });
+
+  it.each(['running', 'interrupted', 'waiting'] as const)(
+    "a fire bound to a turn that is still '%s' defers — belongs to the turn lane, not this call (fault point 4)",
+    async (status) => {
+      const { deps, db, jobs, fires, provider } = fixture([answer('non deve mai essere chiamato')]);
+      const job = jobs.add(SPEC);
+      const scheduledFor = job.nextFireAt.toISOString();
+      fires.claim(job.id, scheduledFor);
+      const turnId = fires.bind(job.id, scheduledFor, `turn-${status}`);
+      deps.turns.create(
+        {
+          id: turnId,
+          principal: { kind: 'system', source: 'scheduler' },
+          tenant: 'host',
+          surface: 'cli',
+          sessionId: `sess-${status}`,
+          model: 'test-model',
+          messages: [{ role: 'user', content: [{ type: 'text', text: jobPayload(job) }] }],
+          taint: 0,
+          counters: counters(),
+          replyTo: { channel: 'cli' },
+        },
+        99999,
+      );
+      // `create` always leaves a fresh row 'running'; the other two statuses
+      // this fault point covers are reached the way a real crash/suspend
+      // leaves them, not by re-deriving the mechanism here.
+      if (status !== 'running') db.prepare(`UPDATE turns SET status = ? WHERE id = ?`).run(status, turnId);
+
+      const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+      expect(provider.calls).toBe(0);
+      expect(outcome).toEqual({ deferred: true });
+      // The fire stays exactly as it was — not settled, still pointing at the
+      // one turn that already exists.
+      const fire = fires.get(job.id, scheduledFor);
+      expect(fire?.settledAt).toBeNull();
+      expect(fire?.turnId).toBe(turnId);
+    },
+  );
+
+  it('an occurrence that arrives already bound (to any id) is always resolved through that id, never a competing one', async () => {
+    // Stands in for the runner losing the bind race a moment before this call:
+    // by the time `makeJobRunner` reads the fire, `turn_id` is already set to
+    // an id it did not mint. `job_fires.test.ts` proves the store's own
+    // first-writer-wins guarantee directly; this proves the runner obeys it.
+    const { deps, db, jobs, fires, provider } = fixture([answer('completa il binding interrotto')]);
+    const job = jobs.add(SPEC);
+    const scheduledFor = job.nextFireAt.toISOString();
+    fires.claim(job.id, scheduledFor);
+    fires.bind(job.id, scheduledFor, 'turn-winner'); // bound, but never created — fault point 2
+
+    const outcome = await makeJobRunner(deps, fires)(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.turnId).toBe('turn-winner'); // never a freshly minted id
+    expect(provider.calls).toBe(1); // completing the interrupted bind runs once
+    const rows = db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
+    expect(rows.n).toBe(1); // never a second, competing turn
+  });
+});
+
+/**
+ * Il probe del judge di questa slice, reso permanente.
+ *
+ * La prima stesura scriveva la riga del turno **dopo** `exec.run()`. Un crash
+ * a metà script non lasciava quindi nessuna riga, `resolveBound` legge
+ * l'assenza di riga come «non è ancora partito niente, quindi non è un
+ * duplicato», e al riavvio lo script ripartiva: `exec.run()` chiamato due
+ * volte, osservato dal judge con un probe. Uno script che manda una mail o
+ * addebita qualcosa lo farebbe due volte, e la riga finale mostrerebbe
+ * un'esecuzione sola — la duplicazione non lascia traccia.
+ */
+describe('makeJobRunner — uno script non gira due volte', () => {
+  const SCRIPT_SPEC = {
+    cron: '0 8 * * *',
+    timezone: 'Europe/Rome',
+    channel: 'cli',
+    kind: 'script' as const,
+    script: 'echo ciao',
+  };
+
+  it('un crash a metà script non fa ripartire lo script al riavvio', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    // Uno script che non ritorna mai: è il processo che muore mentre gira.
+    let partenze = 0;
+    const appeso = {
+      run: async (): Promise<never> => {
+        partenze += 1;
+        return new Promise<never>(() => {});
+      },
+    };
+
+    // Prima esecuzione: parte e resta appesa (il processo muore qui).
+    void makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(partenze).toBe(1);
+
+    // Riavvio: la stessa occorrenza viene risolta di nuovo. In gara con un
+    // timeout, perché il difetto che questo test esiste per catturare fa
+    // ripartire lo script — e lo script appeso non torna mai: senza la gara
+    // il fallimento sarebbe un timeout del test invece dell'asserzione, cioè
+    // un rosso che non dice cosa è andato storto.
+    const seconda = await Promise.race([
+      makeJobRunner(deps, fires, appeso, { cwd: '/tmp' })(job, undefined),
+      new Promise((r) => setTimeout(() => r('BLOCCATO'), 1500)),
+    ]);
+
+    // Lo script NON è ripartito, e il secondo giro dice che il lavoro è di
+    // qualcun altro invece di rifarlo.
+    expect(partenze).toBe(1);
+    expect(seconda).toEqual({ deferred: true });
+    expect(provider.calls).toBe(0);
+  });
+
+  it('senza sandbox non esegue, e lo dice', async () => {
+    const { deps, jobs, fires, provider } = fixture([]);
+    const job = jobs.add(SCRIPT_SPEC);
+
+    const outcome = await makeJobRunner(deps, fires, null, { cwd: '/tmp' })(job, undefined);
+
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    expect(outcome.stopped).toBe('error');
+    expect(outcome.text).toContain('sandbox');
+    expect(provider.calls).toBe(0);
+  });
+
+  it('un turno script interrotto non si riprende col modello, e lo script non viene rifatto', async () => {
+    // L'altra metà del crash a metà script, sul percorso che NON passa dallo
+    // scheduler: la riga `running` di un processo morto viene reclamata come
+    // `interrupted` al boot, e la turn-lane la riprende con `resumeTurn`.
+    // Prima della guardia su SCRIPT_MODEL la lane chiamava il modello con
+    // «script: echo …» come fosse una richiesta dell'owner — un costo, una
+    // risposta inventata, e consegnata. Il judge del giro 2 ha provato la
+    // guardia sana con un probe usa-e-getta; questo è quel probe reso
+    // permanente, perché era a un refactor di distanza dal rompersi in
+    // silenzio.
+    const { deps, provider } = fixture([answer('mai chiamato')]);
+
+    // La riga esattamente come la scrive `runScript`: stesso principal,
+    // stesso modello sentinella, stesso primo messaggio.
+    const morto = 999_999_983; // un pid che non esiste: la reclaim lo vede morto
+    const riga = deps.turns.create(
+      {
+        id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        principal: { kind: 'system', source: 'scheduler' },
+        tenant: 'host',
+        surface: 'cli',
+        sessionId: deps.sessions.open('job-test').id,
+        model: SCRIPT_MODEL,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'script: echo ciao' }] }],
+        taint: 0,
+        counters: { ...counters(), contextBuilt: true },
+        replyTo: { channel: 'cli' },
+      },
+      morto,
+    );
+    expect(riga.status).toBe('running');
+
+    // Il boot successivo: il pid è morto, la riga diventa `interrupted`.
+    const reclaimed = deps.turns.reclaim(new Date());
+    expect(reclaimed.map((r) => r.id)).toContain(riga.id);
+
+    const esito = await resumeTurn(deps, riga.id);
+    if (!('stopped' in esito)) throw new Error(`atteso un esito terminale, ricevuto ${JSON.stringify(esito)}`);
+
+    // Il modello non è mai stato toccato, lo script non è stato rieseguito, e
+    // il testo dice la sola cosa vera: forse fatto, non rifatto.
+    expect(provider.calls).toBe(0);
+    expect(esito.stopped).toBe('error');
+    expect(esito.text).toContain("Non l'ho rifatto");
+    expect(esito.text).toContain('echo ciao');
+    expect(deps.turns.get(riga.id)?.status).toBe('done');
   });
 });

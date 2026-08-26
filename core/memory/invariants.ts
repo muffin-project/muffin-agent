@@ -20,9 +20,9 @@ import type Database from 'better-sqlite3';
  *            untidily).
  */
 
-export type Severity = 'error' | 'warning';
+type Severity = 'error' | 'warning';
 
-export type Violation = {
+type Violation = {
   id: string;
   severity: Severity;
   /** What this protects, in the terms of the thing that goes wrong without it. */

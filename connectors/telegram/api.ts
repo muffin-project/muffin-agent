@@ -40,7 +40,27 @@ export type SendOptions = {
   preview?: boolean;
 };
 
-export class TelegramApi {
+/**
+ * The subset of `TelegramApi` every caller actually uses — extracted so a
+ * test can hand `presence.ts`/`connector.ts` a fake that records calls and
+ * timing (M5-BIS B11) without instantiating the real class, which `private
+ * readonly token` would otherwise make impossible: TypeScript's structural
+ * typing treats private members as nominal, so a plain object literal can
+ * never satisfy `TelegramApi` itself, only an interface like this one.
+ */
+export interface TelegramApiLike {
+  call<T>(method: string, payload?: Record<string, unknown>, attempt?: number): Promise<T>;
+  upload<T>(method: string, body: FormData): Promise<T>;
+  getMe(): Promise<User>;
+  getUpdates(offset: number, allowed?: string[]): Promise<Update[]>;
+  sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
+  editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  sendChatAction(chatId: number, action?: string): Promise<boolean>;
+  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
+  fileUrl(fileId: string): Promise<string>;
+}
+
+export class TelegramApi implements TelegramApiLike {
   constructor(
     private readonly token: string,
     private readonly baseUrl = 'https://api.telegram.org',
@@ -54,6 +74,25 @@ export class TelegramApi {
    * becomes a hard one.
    */
   async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0): Promise<T> {
+    return this.request<T>(method, payload, true, true, attempt);
+  }
+
+  /**
+   * One HTTP attempt for a user-visible effect. The Bot API exposes no client
+   * idempotency token, so a transport failure after acceptance is ambiguous and
+   * retrying it here can create a second visible message.
+   */
+  private effect<T>(method: string, payload: Record<string, unknown>): Promise<T> {
+    return this.request<T>(method, payload, false, true, 0);
+  }
+
+  private async request<T>(
+    method: string,
+    payload: Record<string, unknown>,
+    retryTransport: boolean,
+    retryRejected: boolean,
+    attempt: number,
+  ): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
@@ -63,27 +102,45 @@ export class TelegramApi {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      // A network failure is retryable once; a second one is the network's
-      // answer and pretending otherwise just delays it.
-      if (attempt === 0) {
+      // Reads retry one network failure. User-visible effects deliberately do
+      // not: after an unreadable response the remote side may have accepted
+      // the request, and a second send can become a second visible message.
+      if (retryTransport && attempt === 0) {
         await sleep(1000);
-        return this.call<T>(method, payload, 1);
+        return this.request<T>(method, payload, retryTransport, retryRejected, 1);
       }
-      throw new TelegramError(0, error instanceof Error ? error.message : String(error));
+      // `.name`, never `.message` — the same choice `media.ts` already makes
+      // and for the same reason: the URL this `fetch` just failed on carries
+      // the bot token (Telegram, unlike Discord, puts it in the path — see
+      // this file's own header comment), and `.name` ("TypeError",
+      // "AbortError") says what kind of failure this was without risking
+      // whatever a future runtime decides to put in `.message`. Probed
+      // 2026-08-17 against this Node's `fetch` (DNS failure, connection
+      // refused, timeout, malformed URL): `.message` never carried the URL
+      // today, but a promise about a dependency's *next* version is not one
+      // this file can keep, and the fix costs nothing.
+      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
     }
 
-    const body = (await response.json()) as
+    let body:
       | { ok: true; result: T }
       | { ok: false; description: string; parameters?: { retry_after?: number } };
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      // Headers without a readable Bot API result do not prove whether a
+      // mutating request landed. Status 0 is the connector's "unknown" class.
+      throw new TelegramError(0, 'risposta Telegram non leggibile');
+    }
 
     if (body.ok) return body.result;
 
     const retryAfter = body.parameters?.retry_after;
-    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+    if (retryRejected && attempt === 0 && (response.status === 429 || response.status >= 500)) {
       // Plus a second: `retry_after` is when the window opens, not when it is
       // safe to be inside it.
       await sleep((retryAfter ?? 1) * 1000 + 1000);
-      return this.call<T>(method, payload, 1);
+      return this.request<T>(method, payload, retryTransport, retryRejected, 1);
     }
     throw new TelegramError(response.status, body.description, retryAfter);
   }
@@ -101,11 +158,17 @@ export class TelegramApi {
    * layer gets to make.
    */
   async upload<T>(method: string, body: FormData): Promise<T> {
-    const response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
-      method: 'POST',
-      body,
-      signal: AbortSignal.timeout(120_000),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
+        method: 'POST',
+        body,
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      // Same reasoning as `call`'s catch: this URL carries the token too.
+      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
+    }
     const payload = (await response.json()) as { ok: true; result: T } | { ok: false; description: string };
     if (!payload.ok) throw new TelegramError(response.status, payload.description);
     return payload.result;
@@ -132,7 +195,7 @@ export class TelegramApi {
   }
 
   sendMessage(chatId: number, html: string, options: SendOptions = {}): Promise<Message> {
-    return this.call<Message>('sendMessage', {
+    return this.effect<Message>('sendMessage', {
       chat_id: chatId,
       text: html,
       parse_mode: 'HTML',
@@ -142,7 +205,7 @@ export class TelegramApi {
   }
 
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean> {
-    return this.call<Message | boolean>('editMessageText', {
+    return this.effect<Message | boolean>('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text: html,
@@ -160,12 +223,31 @@ export class TelegramApi {
   }
 
   /**
-   * The ephemeral draft bubble. Private chats only — groups answer
-   * `TEXTDRAFT_PEER_INVALID` — and its TTL is about thirty seconds, fixed,
-   * extended by nothing. See `presence.ts` for why that matters.
+   * The ephemeral draft bubble — M5-BIS B11. Bot API 9.3 (2025-12-31,
+   * business bots only), opened to every bot in 9.5 (2026-03-01) —
+   * verified against the official changelog and reference,
+   * platform.claude's Context7 mirror of core.telegram.org/bots/api,
+   * 2026-08-16. Private chats only (`chat_id` is documented as "the target
+   * **private** chat"; there is no declared group behaviour to name, so
+   * none is claimed here). `draft_id` is **required and must be non-zero**
+   * — the parameter this method was missing before this slice, silently:
+   * every call landed a 400 that `presence.ts`'s `safely()` wrapper
+   * swallowed, so the keepalive this method backs had never actually
+   * refreshed anything in production. Reuse the same `draftId` across calls
+   * that update one ongoing preview; a fresh one per turn is `presence.ts`'s
+   * job, not this method's.
+   *
+   * The doc calls the preview "a temporary 30-second preview" without
+   * stating whether a repeat call *resets* that window — but repeat calls
+   * are the method's own stated purpose ("stream a partial message... while
+   * being generated"), so a preview that could not outlive 30 seconds
+   * regardless of how often it is refreshed would make the method useless
+   * for exactly the case it says it is for. Not asserted as fact — only
+   * `presence.ts`'s own choice to call this at least once a second either
+   * way, comfortably inside any reading of "30 seconds," is asserted.
    */
-  sendMessageDraft(chatId: number, text: string): Promise<boolean> {
-    return this.call<boolean>('sendMessageDraft', { chat_id: chatId, text, parse_mode: 'HTML' });
+  sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean> {
+    return this.call<boolean>('sendMessageDraft', { chat_id: chatId, draft_id: draftId, text, parse_mode: 'HTML' });
   }
 
   /**

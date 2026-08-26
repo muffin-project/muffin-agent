@@ -27,9 +27,9 @@ import type { RotManifest } from './verify.js';
  * borrow a three-field type).
  */
 
-export type RotSeverity = 'error' | 'warning';
+type RotSeverity = 'error' | 'warning';
 
-export type RotViolation = {
+type RotViolation = {
   id: 'sealed_file_unread' | 'reader_gone' | 'allowlist_stale';
   severity: RotSeverity;
   /** What this protects, in the terms of the thing that goes wrong without it. */
@@ -51,7 +51,7 @@ export type RotReadersResult = {
 };
 
 /** Where a sealed file is opened, in production. `file:function`, verified below. */
-export type RotReaderRef = {
+type RotReaderRef = {
   /** Repo-relative path of the module, e.g. `core/net/egress.ts`. */
   module: string;
   /** The function inside it that does the reading. */
@@ -150,7 +150,7 @@ export const ROT_READERS: RotEntry[] = [
     readers: [
       {
         module: 'agent/context/assemble.ts',
-        fn: 'buildSystemPrompts',
+        fn: 'buildSystemPromptBlocks',
         why: "the owner's conduct pact, concatenated into every system prompt after persona and before the voice",
       },
     ],

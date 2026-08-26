@@ -56,7 +56,7 @@ export type ExtractedDocument = {
   chars: number;
 };
 
-export type ExtractionFailure =
+type ExtractionFailure =
   /** Bytes we have no extractor for — an image, an archive, a binary. */
   | 'unsupported'
   /** A PDF that parsed and holds no text: a scan, and there is no OCR here. */

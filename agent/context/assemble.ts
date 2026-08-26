@@ -158,18 +158,36 @@ export function todoSection(open: TodoItem[]): string {
 }
 
 /**
- * Both prompts, assembled once.
+ * One block of a system prompt, named and sourced.
+ *
+ * `name`/`source` exist for exactly one consumer, `muffin prompt show
+ * --blocks` (`cli/prompt-show.ts`): the mandate is that inspection reads the
+ * production assembly rather than a second description of it, and a function
+ * that returned only the joined string had nothing for that command to show
+ * *provenance* with. `source` is a human sentence, not a machine-checked path —
+ * good enough for a stderr/`--blocks` header, not meant to be parsed back.
+ */
+export type PromptBlock = { name: string; source: string; text: string };
+
+/** Named blocks, per class, in assembly order — before they are joined into `SystemPrompts`. */
+export type SystemPromptBlocks = Readonly<Record<TenantClass, readonly PromptBlock[]>>;
+
+/**
+ * Both prompts' blocks, assembled once — the structure `renderSystemPrompts`
+ * joins into the two cacheable strings below, and the structure `prompt show
+ * --blocks` renders with headers. One function computes the blocks so the two
+ * consumers cannot describe a different assembly from each other.
  *
  * Called from `buildRuntime`, at boot, exactly like the single prompt it
  * replaces — the peers that band their prompts build them per session, not per
  * turn, and a per-turn rebuild would read three files off disk on every
  * message for a string that cannot have changed.
  */
-export function buildSystemPrompts(
+export function buildSystemPromptBlocks(
   home: string,
   safeMode: boolean,
   skillsSection = '',
-): SystemPrompts {
+): SystemPromptBlocks {
   const p = paths(home);
 
   // Three files: the shared character, the owner's constraints, the voice.
@@ -189,19 +207,20 @@ export function buildSystemPrompts(
   // cache-stable order the comparable harnesses use and the order of authority:
   // who it is, then how it speaks, then what it is doing right now.
   const voice = authored(p.voice);
+  const safeModeBlock = safeMode ? SAFE_MODE_NOTE : '';
 
   // The owner class must stay byte-identical to the single prompt that existed
   // before the split. Not tidiness: every session with a warm prefix goes cold
   // on a one-byte change, silently, and the behaviour shifts with it. Pinned by
   // sha256 in `assemble.test.ts`.
-  const owner = concat([
-    persona,
-    identity,
-    voice,
-    skillsSection,
-    WORK_RULES,
-    safeMode ? SAFE_MODE_NOTE : '',
-  ]);
+  const owner: PromptBlock[] = [
+    { name: 'persona', source: 'persona.md', text: persona },
+    { name: 'identity', source: 'rot/identity.md', text: identity },
+    { name: 'voice', source: 'voice.md', text: voice },
+    { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
+    { name: 'work-rules', source: 'agent/context/assemble.ts (WORK_RULES)', text: WORK_RULES },
+    { name: 'safe-mode', source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)', text: safeModeBlock },
+  ];
 
   // The group class. Four differences from the owner's, each with a reason:
   //
@@ -229,9 +248,22 @@ export function buildSystemPrompts(
   // The operational rules and the safe-mode note stay: they are about the turn,
   // not about the owner, and an agent that cannot say why it just refused is
   // the silent failure this repository keeps paying for.
-  const group = concat([GROUP_PERSONA, voice, WORK_RULES, safeMode ? SAFE_MODE_NOTE : '']);
+  const group: PromptBlock[] = [
+    { name: 'persona', source: 'agent/context/assemble.ts (GROUP_PERSONA)', text: GROUP_PERSONA },
+    { name: 'voice', source: 'voice.md', text: voice },
+    { name: 'work-rules', source: 'agent/context/assemble.ts (WORK_RULES)', text: WORK_RULES },
+    { name: 'safe-mode', source: 'agent/context/assemble.ts (SAFE_MODE_NOTE)', text: safeModeBlock },
+  ];
 
   return { owner, group };
+}
+
+/** Joins a class's blocks into the string the loop sends — `concat`'s existing rule, applied per class. */
+export function renderSystemPrompts(blocks: SystemPromptBlocks): SystemPrompts {
+  return {
+    owner: concat(blocks.owner.map((b) => b.text)),
+    group: concat(blocks.group.map((b) => b.text)),
+  };
 }
 
 /** Empty parts drop out; the rest are separated by a blank line. */

@@ -8,7 +8,7 @@ import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
-import { runTurn } from '../agent/loop.js';
+import { runTurn, type TurnDelta } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
@@ -23,7 +23,7 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 
 const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
-/spend   quanto hai speso questo mese
+/spend   quanto hai speso questo mese e oggi
 /exit    esci (o Ctrl+D)`;
 
 /**
@@ -97,7 +97,26 @@ export function gatewayStandDown(
   };
 }
 
-export async function runRepl(home = paths().home): Promise<number> {
+export async function runRepl(
+  home = paths().home,
+  opts: {
+    /**
+     * Overrides the TTY autodetection below — `--no-stream`, or a test that
+     * wants a deterministic answer regardless of what `process.stdout.isTTY`
+     * happens to be under the test runner. Absent means "decide from the
+     * terminal", which is the only thing `muffin` itself ever passes.
+     */
+    stream?: boolean;
+    /**
+     * Where the readline interface reads from. Injectable for the same reason
+     * `cli/prompt.ts`'s functions already take an `input` parameter: a real
+     * run always means `process.stdin`, and a wiring test needs a stream it
+     * controls, that ends on its own once the scripted lines are consumed —
+     * `process.stdin` in a test process has no such ending.
+     */
+    stdin?: NodeJS.ReadableStream;
+  } = {},
+): Promise<number> {
   let runtime: Runtime;
   try {
     runtime = buildRuntime(home);
@@ -128,6 +147,26 @@ export async function runRepl(home = paths().home): Promise<number> {
   // in text — the same registry `deliver` uses, one call later.
   attachSendFile(runtime, home, surfaces.registry);
 
+  /**
+   * B11: whether *this* turn attaches `TurnInput.onDelta` at all.
+   *
+   * `cliSurface` (inside `connectSurfaces`, above) already declared its own
+   * `streaming` capability from this exact same `process.stdout.isTTY` check
+   * — this is the second, independent read of it, because `opts.stream` can
+   * make this REPL run *more* conservative than what the surface says is
+   * possible (`--no-stream`), and the capability object has no room to carry
+   * a per-invocation override. A capability says what a surface *can* do; a
+   * turn still decides whether to use it, the same way a browser supporting
+   * a feature is not the same claim as a page turning it on.
+   *
+   * `!process.stdout.isTTY` also covers `muffin run` never reaching this
+   * function at all (headless has its own code path, `cli/run.ts`, and never
+   * attaches a sink) and a piped `muffin | tee log` — `result.text` still
+   * carries the whole answer either way, so nothing is lost, only the live
+   * redraw.
+   */
+  const streamEnabled = opts.stream ?? process.stdout.isTTY === true;
+
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.
   let mcpLines: string[] = [];
@@ -150,7 +189,7 @@ export async function runRepl(home = paths().home): Promise<number> {
       `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
   );
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input: opts.stdin ?? process.stdin, output: process.stdout });
   redrawPrompt = () => rl.prompt();
 
   // The terminal is the surface that *can* ask, so here the kernel's `ask`
@@ -160,6 +199,13 @@ export async function runRepl(home = paths().home): Promise<number> {
   runtime.deps.approve = async (request) => {
     process.stderr.write(`\n⚠ ${request.prompt}\n`);
     if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
+    // Taint 0 is the quiet default; anything above it means untrusted content
+    // already steered this turn, and that changes the answer more often than
+    // the capability name does.
+    if (request.taint > 0) {
+      const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][request.taint];
+      process.stderr.write(`   contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}\n`);
+    }
     const answer = (await rl.question(`   approvi "${request.capability}"? [s/N] `)).trim().toLowerCase();
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
     process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
@@ -233,12 +279,18 @@ export async function runRepl(home = paths().home): Promise<number> {
   );
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
     deliver,
     foreground,
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'yielded') {
+        // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
+        // an aborted job retried silently on every tick before this.
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro\n`);
+      } else if (e.kind === 'not_recorded') {
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\n`);
       }
     },
     undefined,
@@ -250,6 +302,12 @@ export async function runRepl(home = paths().home): Promise<number> {
     // serialises this scheduler against itself, which is the whole property
     // this session needs.
     new ModelLane(),
+    // `stillOwner` — the REPL's scheduler holds no gateway claim to
+    // re-verify, same default as every other REPL/test construction.
+    undefined,
+    // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
+    // installed yet, or its claim gone stale) gets the same identity bridge.
+    (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
@@ -288,8 +346,15 @@ export async function runRepl(home = paths().home): Promise<number> {
         }
         if (line === '/spend') {
           const s = runtime.budget.status();
+          // `status()` only ever answers the month — E2's own claim is "so
+          // quanto costa una giornata", and tenantTodayUsd('host') existed
+          // (core/budget/budget.ts) with nothing calling it: BudgetEngine's
+          // per-tenant-daily gate excludes the owner outright
+          // (`tenantExhausted`), so the number was computed and never read.
+          const today = runtime.budget.tenantTodayUsd('host');
           process.stderr.write(
-            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n`,
+            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n` +
+              `oggi: $${today.toFixed(4)}\n`,
           );
           continue;
         }
@@ -299,6 +364,25 @@ export async function runRepl(home = paths().home): Promise<number> {
 
       controller = new AbortController();
       try {
+        /**
+         * B11: the leading `\n` moves here, written once, before the first
+         * delta — so a streamed turn's stdout bytes are `\n` + every chunk in
+         * order, and an unstreamed one is `\n` + `result.text`, and those are
+         * required to be the *same* bytes (`repl.test.ts`). Nothing is
+         * flushed a second time below when `streamedAnyText` ends up true:
+         * `result.text` was already written, chunk by chunk, as it formed.
+         */
+        let streamedAnyText = false;
+        const onDelta = streamEnabled
+          ? (delta: TurnDelta): void => {
+              if (!streamedAnyText) {
+                process.stdout.write('\n');
+                streamedAnyText = true;
+              }
+              process.stdout.write(delta.text);
+            }
+          : undefined;
+
         const result = await runTurn(runtime.deps, {
           principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
           tenant: 'host',
@@ -312,8 +396,9 @@ export async function runRepl(home = paths().home): Promise<number> {
           // just `cli` — the owner is on this machine, so `cliSurface`'s
           // `deliverFile` names the path rather than moving any bytes.
           replyChannel: 'cli',
+          ...(onDelta ? { onDelta } : {}),
         });
-        process.stdout.write(`\n${result.text}\n\n`);
+        process.stdout.write(streamedAnyText ? '\n\n' : `\n${result.text}\n\n`);
         if (result.stopped === 'suspended') {
           /**
            * A suspended turn prints nothing above (its text is empty), so

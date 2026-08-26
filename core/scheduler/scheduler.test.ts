@@ -1,7 +1,14 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { JobStore, type Job } from './jobs.js';
-import { Scheduler, type ForegroundGate, type JobOutcome, type SchedulerEvent } from './scheduler.js';
+import {
+  Scheduler,
+  type FireDeferred,
+  type FireSettleOnly,
+  type ForegroundGate,
+  type JobOutcome,
+  type SchedulerEvent,
+} from './scheduler.js';
 import { ModelLane } from '../turns/model-lane.js';
 import { DELIVERED, notDelivered } from '../surface/types.js';
 
@@ -97,6 +104,60 @@ describe('Scheduler.tick', () => {
     expect(store.due(AFTER_FIRE).length).toBe(1);
   });
 
+  describe('stillOwner — P20: this gateway re-verifies its own claim, not just whether some other one exists', () => {
+    it('does not start a due job when the claim is already gone — the tick-start check', async () => {
+      const { store, clock, set } = storeWith();
+      set(AFTER_FIRE);
+      const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
+      const events: SchedulerEvent[] = [];
+      const sched = new Scheduler(
+        store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock, undefined, undefined,
+        new ModelLane(),
+        () => false, // a second gateway already holds the real claim
+      );
+
+      sched.tick();
+      await flush();
+      expect(runJob).not.toHaveBeenCalled();
+      expect(events).toContainEqual({ kind: 'deferred', reason: 'handover' });
+      // Not consumed — the winner's own tick will pick it up.
+      expect(store.due(AFTER_FIRE).length).toBe(1);
+    });
+
+    it('does not deliver a job whose claim was taken over while it was in flight — the pre-delivery check', async () => {
+      // The exact race P20 names: `Gateway.tick` beats once (stillOwner still
+      // true at that instant), the job's run takes seconds to minutes, and a
+      // second gateway wins the claim before this run finishes.
+      const { store, job, clock, set } = storeWith();
+      set(AFTER_FIRE);
+      let stillOwn = true;
+      let release!: () => void;
+      const gateOpen = new Promise<void>((r) => (release = r));
+      const runJob = vi.fn(async (): Promise<JobOutcome> => {
+        await gateOpen;
+        return { stopped: 'answered', text: 'done', turnId: TURN };
+      });
+      const deliver = vi.fn(async () => DELIVERED);
+      const events: SchedulerEvent[] = [];
+      const sched = new Scheduler(
+        store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, undefined,
+        new ModelLane(),
+        () => stillOwn,
+      );
+
+      sched.tick(); // stillOwner is true here — the run starts
+      await flush();
+      stillOwn = false; // a second gateway wins the claim mid-run
+      release();
+      await flush();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(events.some((e) => e.kind === 'yielded')).toBe(true);
+      // markRan did not run either — the fire is still due for the new owner.
+      expect(store.get(job.id)!.lastRunAt).toBeNull();
+    });
+  });
+
   it('a yielded (aborted) job is neither delivered nor marked ran — it retries', async () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);
@@ -179,17 +240,28 @@ describe('Scheduler.tick', () => {
     it('records the delivery before advancing the schedule', async () => {
       // Ordering, not decoration: a crash between the two must leave a fire that
       // has not moved rather than a delivery nobody recorded.
+      //
+      // Spied directly on `store.markRan`, not inferred from the `'ran'` event:
+      // that event fires *after* every write `settle` makes, so tracking it via
+      // `onEvent` proves `recordDelivery` ran before the event, never that it
+      // ran before `markRan` specifically — a swap of the two lines inside
+      // `settle` would have left this passing. Found while mutation-testing the
+      // equivalent B7 ordering claim below, which copied this file's own
+      // pattern and inherited the same gap.
       const { store, job, clock, set } = storeWith();
       set(AFTER_FIRE);
       const order: string[] = [];
+      const originalMarkRan = store.markRan.bind(store);
+      vi.spyOn(store, 'markRan').mockImplementation((id) => {
+        order.push('markRan');
+        return originalMarkRan(id);
+      });
       const sched = new Scheduler(
         store,
         async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
         async () => DELIVERED,
         undefined,
-        (e) => {
-          if (e.kind === 'ran') order.push('markRan');
-        },
+        () => {},
         clock,
         undefined,
         () => order.push('recordDelivery'),
@@ -280,5 +352,211 @@ describe('Scheduler.tick', () => {
 
       expect(recorded).toEqual([]);
     });
+  });
+});
+
+/**
+ * B7 — `job_fires`. `runJob` can now hand back `FireDeferred`/`FireSettleOnly`
+ * instead of a `JobOutcome`; these prove `Scheduler` reacts to each correctly
+ * without ever needing a real `job_fires` row — that identity resolution is
+ * `agent/scheduler-run.ts`'s job and is proved against it directly
+ * (`agent/scheduler-run.test.ts`). This file proves what `Scheduler` does
+ * with each of the three shapes it can now receive.
+ */
+describe('Scheduler.tick — B7 sentinels', () => {
+  it('a deferred outcome touches nothing: no deliver, no settleFire, no markRan — the job stays due', async () => {
+    const { store, job, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const deliver = vi.fn(async () => DELIVERED);
+    const runJob = vi.fn(async (): Promise<FireDeferred> => ({ deferred: true }));
+    const events: SchedulerEvent[] = [];
+    const settled: string[] = [];
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+      undefined,
+      (j) => settled.push(j.id),
+    );
+
+    sched.tick();
+    await flush();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(settled).toEqual([]);
+    expect(store.get(job.id)!.lastRunAt).toBeNull();
+    expect(events).toContainEqual({ kind: 'deferred', reason: 'bound_turn_pending' });
+    // Not consumed — the fire is still due, exactly where the turn lane's own
+    // machinery (or the next tick's job_fires check) will find it again.
+    expect(store.due(AFTER_FIRE).length).toBe(1);
+  });
+
+  it('a settleOnly outcome settles the fire and marks the job ran, without ever calling deliver', async () => {
+    const { store, job, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const deliver = vi.fn(async () => DELIVERED);
+    const runJob = vi.fn(
+      async (): Promise<FireSettleOnly> => ({ settleOnly: true, turnId: TURN, outcome: 'answered', delivered: true }),
+    );
+    const events: SchedulerEvent[] = [];
+    const settled: string[] = [];
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+      undefined,
+      (j) => settled.push(j.id),
+    );
+
+    sched.tick();
+    await flush();
+
+    // The whole point: text already went out (or definitively did not)
+    // through some other path, so a second call to `deliver` here would send
+    // it again.
+    expect(deliver).not.toHaveBeenCalled();
+    expect(settled).toEqual([job.id]);
+    expect(store.get(job.id)!.lastRunAt).not.toBeNull();
+    const ran = events.find((e) => e.kind === 'ran');
+    expect(ran).toMatchObject({ kind: 'ran', stopped: 'answered', delivered: true });
+  });
+
+  it('a settleOnly outcome carries delivered:false through to the event when the other mechanism could not deliver', async () => {
+    const { store, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const runJob = vi.fn(
+      async (): Promise<FireSettleOnly> => ({ settleOnly: true, turnId: TURN, outcome: 'answered', delivered: false }),
+    );
+    const events: SchedulerEvent[] = [];
+    const sched = new Scheduler(
+      store,
+      runJob,
+      async () => DELIVERED,
+      undefined,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
+
+    sched.tick();
+    await flush();
+
+    const ran = events.find((e) => e.kind === 'ran');
+    expect(ran).toMatchObject({ kind: 'ran', stopped: 'answered', delivered: false });
+  });
+
+  /**
+   * Fault point 7, "solo dopo il settlement avanza la schedule" — proved as an
+   * ordering, and spied directly on `store.markRan` rather than inferred from
+   * the `'ran'` event (see the comment on `records the delivery before
+   * advancing the schedule`, above, for why that indirection does not
+   * actually pin the order).
+   *
+   * Mutated by hand while writing this slice (not left in the tree): swapping
+   * `this.settleFire(job)` and `this.store.markRan(job.id)` in `settle` turns
+   * this test red — `order` comes back `['markRan', 'settleFire:…']` —
+   * confirming the assertion is load-bearing on the real ordering.
+   */
+  it('settleFire runs before markRan on the normal delivered path', async () => {
+    const { store, job, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const order: string[] = [];
+    const originalMarkRan = store.markRan.bind(store);
+    vi.spyOn(store, 'markRan').mockImplementation((id) => {
+      order.push('markRan');
+      return originalMarkRan(id);
+    });
+    const sched = new Scheduler(
+      store,
+      async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+      async () => DELIVERED,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+      undefined,
+      (j) => order.push(`settleFire:${j.id}`),
+    );
+
+    sched.tick();
+    await flush();
+
+    expect(order).toEqual([`settleFire:${job.id}`, 'markRan']);
+  });
+
+  /**
+   * Same ordering, the suspended path — its own call site in `run`, not
+   * `settle`, so it needs its own proof. Mutated the same way: swapping the
+   * two lines in the suspended branch turns this test red too.
+   */
+  it('settleFire runs before markRan on the suspended path', async () => {
+    const { store, job, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const order: string[] = [];
+    const originalMarkRan = store.markRan.bind(store);
+    vi.spyOn(store, 'markRan').mockImplementation((id) => {
+      order.push('markRan');
+      return originalMarkRan(id);
+    });
+    const sched = new Scheduler(
+      store,
+      async (): Promise<JobOutcome> => ({ stopped: 'suspended', text: 'aspetto un evento', turnId: TURN }),
+      async () => DELIVERED,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+      undefined,
+      () => order.push('settleFire'),
+    );
+
+    sched.tick();
+    await flush();
+
+    expect(order).toEqual(['settleFire', 'markRan']);
+    expect(store.get(job.id)!.lastRunAt).not.toBeNull();
+  });
+
+  it('settleFire defaults to a no-op — every pre-existing construction site behaves exactly as before B7', async () => {
+    // No eleventh argument at all, matching every call site in this file
+    // above and in production before B7. If the default were anything other
+    // than a true no-op, one of the 14 pre-existing tests in this file would
+    // already have failed.
+    const { store, job, clock, set } = storeWith();
+    set(AFTER_FIRE);
+    const sched = new Scheduler(
+      store,
+      async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+      async () => DELIVERED,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
+
+    sched.tick();
+    await flush();
+
+    expect(store.get(job.id)!.lastRunAt).not.toBeNull();
   });
 });

@@ -35,7 +35,7 @@
     {
       "cmd": "muffin doctor",
       "sub": [],
-      "file": "cli/main.ts:167-168,396-405 -> cli/doctor.ts:44",
+      "file": "cli/main.ts:167-168,396-405 -> cli/doctor.ts:52",
       "what": "Diagnosi che esegue i controlli invece di assumerli.",
       "wired": true,
       "note": "--online e' un flag accettato ma inerte: 'online check not implemented in M0' (cli/doctor.ts:248). Nessun check sulle skill (vedi gaps)."
@@ -70,7 +70,7 @@
         "stats",
         "check"
       ],
-      "file": "cli/main.ts:173-174,441-500 -> cli/memory.ts",
+      "file": "cli/main.ts:181-182,441-500 -> cli/memory.ts",
       "what": "Ispeziona la memoria: perche' un fatto, cerca, statistiche, contraddizioni.",
       "wired": true,
       "note": "Alias italiano: `muffin memoria` (cli/main.ts:101). `why`/`stats`/`review`/`check` aprono solo il DB, nessun provider."
@@ -271,7 +271,7 @@
       {
         "n": 7,
         "stage": "il modello attiva una skill",
-        "file": "agent/tools/skill.ts:32-45",
+        "file": "agent/tools/skill.ts:33-45",
         "what": "Durante il turno il modello chiama skill_read con {name, file?}; senza file legge SKILL.md."
       },
       {
@@ -287,7 +287,7 @@
         "what": "Ritorna {content, tier:1} — non fenced, perche' sono istruzioni owner-installate/auditate — e questo alza il taint del turno come farebbe un fatto detto dall'owner."
       }
     ],
-    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:345-346,488; core/skills/skills.ts:59-117). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:124-132, agganciato in agent/runtime.ts:534) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:32-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:70-113). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:114-121).",
+    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:345-346,488; core/skills/skills.ts:59-117). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:124-132, agganciato in agent/runtime.ts:534) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:33-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:70-113). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:114-121).",
     "taint": "tier 1, non fenced (owner-installed/owner-audited) — a differenza dei risultati MCP che sono tier 3 e fenced di default. file: agent/tools/skill.ts:114-121.",
     "installed": []
   },
@@ -365,7 +365,8 @@
         "file (document/audio/voice/video -> vault, indicizzato prima che il turno giri, tramite reindexPath scoperto sul tenant di chi ha inviato)",
         "image (photo, prende la size piu' grande)",
         "attachment in uscita: sendDocument (media.ts) ha ora un chiamante reale — telegramSurface.deliverFile (connectors/telegram/surface.ts), raggiunto sia da send_file (agent/tools/deliver.ts) sia da un job schedulato",
-        "errors (retry su 429/5xx con retry_after, backoff su 409 'altro poller attivo', un update fallito resta pending e riprovato al prossimo drain; una consegna fallita torna {delivered:false,why} invece di un'eccezione)"
+        "errors (retry su 429/5xx con retry_after, backoff su 409 'altro poller attivo', un update fallito resta pending e riprovato al prossimo drain; una consegna fallita torna {delivered:false,why} invece di un'eccezione)",
+        "M5-BIS B11 chiuso per le chat private (slice/streaming): handle() passa onDelta a runTurn (connector.ts:354), che alimenta presence.streamText e aggiorna la bozza sendMessageDraft con draft_id. Rate limit e coalescing in presence.ts:238 (streamText), spento per sessione al primo update fallito, mai piu' di un messaggio Telegram (overflow -> consegna normale a fine turno). stop() (presence.ts:240) e' l'ultimo atto dello streaming, non una cancellazione: manda il pending prima di fermarsi. Nei gruppi non esiste piu' un placeholder materiale da editare: solo sendChatAction effimero durante il lavoro e risposta finale attraverso il ledger durable, per non duplicare un send accettato la cui risposta HTTP si sia persa"
       ],
       "gaps": [
         "l'intera superficie e' on/off (muffin surface enable/disable telegram): non esiste un modo per abilitarla per un singolo gruppo o disabilitare un gruppo specifico",
@@ -543,7 +544,7 @@
     {
       "n": 6,
       "step": "offerta di installare il gateway",
-      "file": "cli/main.ts:296,317-333",
+      "file": "cli/main.ts:308,329-345",
       "what": "Y/n una sola volta, dentro lo stesso setup; su pipe stampa solo il comando, non installa nulla di silenzioso."
     },
     {
@@ -567,7 +568,7 @@
     },
     {
       "what": "CHIUSO (era: consegna non cablata su canali non-cli, markRan cieco all'esito). `Deliver` ora ritorna `DeliveryOutcome` (`{delivered:true}` o `{delivered:false, why}`) invece di `Promise<void>`, e `Scheduler.settle` e' l'unico chiamante di `markRan`: scrive l'esito sulla riga del turno (`core/turns/store.ts` `delivered`/`undelivered`) prima di avanzare la schedulazione, per ogni superficie nel registro",
-      "evidence": "core/surface/types.ts (DeliveryOutcome, Surface); core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:240 (settle), :268 (l'unico markRan); cli/repl.ts, cli/gateway.ts, cli/observe.ts costruiscono tutti il deliver dallo stesso registry invece di tre implementazioni proprie; core/turns/store.ts (readUndelivered) cablato nel check 'consegne' di cli/doctor.ts (D3, judge PR #42, 2026-08-16 — undelivered() aveva zero chiamanti e zero test prima di questo)",
+      "evidence": "core/surface/types.ts (DeliveryOutcome, Surface); core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:458 (settle), :491 (il suo markRan); cli/repl.ts, cli/gateway.ts, cli/observe.ts costruiscono tutti il deliver dallo stesso registry invece di tre implementazioni proprie; core/turns/store.ts (readUndelivered) cablato nel check 'consegne' di cli/doctor.ts (D3, judge PR #42, 2026-08-16 — undelivered() aveva zero chiamanti e zero test prima di questo)",
       "why_it_matters": "Un job la cui consegna fallisce non puo' piu' risultare 'eseguito': `muffin doctor` legge davvero `TurnStore.undelivered()` ora (check 'consegne'), non solo lo dichiara — warn con quanti turni e il piu' vecchio. B14 (allegato prodotto) e' READY per l'owner da questa stessa slice, non piu' un buco: vedi la riga 'discord' sotto per il suo stato."
     },
     {

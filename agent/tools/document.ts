@@ -45,7 +45,7 @@ export const documentCapability: CapabilityDecl = {
   hostOnly: false,
 };
 
-export const documentReadSpec: ToolSpec = {
+const documentReadSpec: ToolSpec = {
   name: 'document_read',
   description:
     'Read an exact portion of a document already in your memory — a PDF, a DOCX, a note. ' +
