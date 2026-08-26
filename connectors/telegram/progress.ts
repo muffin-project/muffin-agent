@@ -59,6 +59,19 @@ import { escapeHtml } from './render.js';
  */
 const MIN_EDIT_MS = 3_000;
 
+/**
+ * How long `stop()` will wait for a send already on the wire before giving up
+ * on tidying the status line.
+ *
+ * The real answer is delivered *after* `stop()` returns, so this is time the
+ * owner spends waiting for their reply. Two seconds covers an ordinary Bot API
+ * round trip several times over; past that, the honest trade is to leave a
+ * cosmetic line behind rather than hold back the thing they actually asked
+ * for. Deliberately unrelated to `api.ts`'s own request timeout: that one
+ * bounds a request, this one bounds *the answer's patience with us*.
+ */
+const STOP_WAIT_MS = 2_000;
+
 export type ProgressReporter = {
   /** Feed one fact about the turn's own progress — see `TurnInput.onProgress`. */
   report(event: TurnEvent): void;
@@ -203,9 +216,24 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
       // the very first `sendMessage` saw `null`, deleted nothing, and left a
       // status line the owner keeps forever — with both `stop()` calls
       // returning cleanly and nothing logged anywhere.
+      //
+      // **With a ceiling of its own**, because waiting is a cost paid by the
+      // thing that matters. The real answer goes out after this (`runFresh`
+      // awaits `stop()` before `deliverTo`), so every second spent here is a
+      // second the owner waits for the reply — to tidy up a cosmetic line.
+      //
+      // Without a ceiling the wait was bounded only by `api.ts`'s own
+      // `REQUEST_TIMEOUT_MS` plus a retry that honours `retry_after`: tens of
+      // seconds, and up to a minute or two when a 429 with a long
+      // `retry_after` is followed by a second attempt that also stalls. A
+      // judge measured the unbounded version by advancing fake timers a full
+      // day with a blocked send — `stop()` never returned. Bounded here, the
+      // worst case is `STOP_WAIT_MS` and the failure mode is the one this
+      // whole reporter treats as acceptable: a status line left behind, which
+      // is cosmetic, rather than an answer held back, which is not.
       if (inFlight !== null) {
         try {
-          await inFlight;
+          await Promise.race([inFlight, new Promise<void>((resolve) => setTimeout(resolve, STOP_WAIT_MS))]);
         } catch {
           // `sendNow` already swallows and disables; nothing to add.
         }

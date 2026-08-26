@@ -248,4 +248,9 @@
 {"id":"rot-harden","chiuso":"PR #138 integrata dopo judge MERGE; follow-up EACCES sul reseal in una slice a parte","quando":"2026-08-26T15:26:20.421Z"}
 {"id":"progresso-telegram","slug":"progresso-telegram","cosa":"il progresso arriva su Telegram con draft+edit, non una riga per evento (sonnet, CRITICAL)","quando":"2026-08-26T15:26:37.451Z"}
 {"id":"deriva-doctor","slug":"deriva-doctor","cosa":"doctor vede i file di init rimasti indietro, distinguendo 'vecchia versione spedita' da 'modificato dall owner' (sonnet)","quando":"2026-08-26T15:26:37.497Z"}
-{"id":"judge-142","slug":"judge-142","cosa":"judge su PR #142 head 70edad1: puo mai dire che il lavoro dell owner e sovrascrivibile?","quando":"2026-08-26T16:12:20.327Z"}
+{"id":"judge-142b","slug":"judge-142b","cosa":"judge fresco su #142 head a6ba7d4 dopo ADJUST: le riparazioni reggono e non hanno spostato la classificazione","quando":"2026-08-26T16:48:38.671Z"}
+{"id":"judge-143b","slug":"judge-143b","cosa":"judge fresco su #143 head 91c5430 dopo ADJUST: la serializzazione regge e stop non lascia orfani","quando":"2026-08-26T16:49:37.911Z"}
+{"id":"judge-142c","slug":"judge-142c","cosa":"terzo judge su #142 head eac55e1: il filtro non ha aperto altro","quando":"2026-08-26T17:11:48.667Z"}
+{"id":"progresso-telegram","chiuso":"PR #143 integrata dopo ADJUST riparato e judge fresco MERGE","quando":"2026-08-26T17:16:51.411Z"}
+{"id":"judge-143","chiuso":"ADJUST: race in progress.ts, riparata","quando":"2026-08-26T17:16:51.457Z"}
+{"id":"judge-143b","chiuso":"MERGE; due follow-up sostanziali in slice separata","quando":"2026-08-26T17:16:51.503Z"}
