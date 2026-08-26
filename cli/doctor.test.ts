@@ -17,6 +17,8 @@ import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
+import { VectorIndex } from '../core/memory/vectors.js';
+import type { Embedder } from '../core/memory/embed.js';
 
 /**
  * Doctor exists to say which of two indistinguishable states you are in.
@@ -899,4 +901,70 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       rmSync(checkout, { recursive: true, force: true });
     }
   });
+});
+
+
+/**
+ * Contare non è chiedere.
+ *
+ * I due numeri della riga `vector index` dicono che ciò che è **già**
+ * indicizzato è coerente. Non dicono niente su ciò che verrà. Sull'installazione
+ * dell'owner, il 27/08: ollama giù dal 25, tre righe in `memory_review` che lo
+ * dicevano, il gateway che stampava «il recall resta testuale» a ogni giro — e
+ * questa riga verde, «55 chunks, 55 vectors, in sync». Tutto vero, tutto
+ * fuorviante. `agent/runtime.ts` lo scrive accanto al punto in cui costruisce
+ * l'embedder: la differenza «deve essere visibile in `doctor`». Non lo era.
+ */
+describe("l'indice coerente non dice che l'embedder risponda", () => {
+  class Finto implements Embedder {
+    readonly id = 'finto:test';
+    readonly dimensions = 4;
+    async embed(texts: string[]): Promise<Float32Array[]> {
+      return texts.map((_, i) => Float32Array.from([1, 0, 0, i]));
+    }
+  }
+
+  /** Una home con l'indice pieno e coerente — l'unico stato in cui la riga era verde. */
+  async function conIndice(): Promise<string> {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const index = new VectorIndex(db, new Finto());
+    await index.index('host', [{ kind: 'episode', sourceId: 1, text: 'un frammento qualsiasi' }], '2026-08-27T00:00:00Z');
+    db.close();
+    return dir;
+  }
+
+  it('resta verde quando la sonda risponde', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('in sync');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('avvisa quando i numeri tornano ma l embedder non risponde, e dice perché', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    // I due numeri restano: non sono sbagliati, sono insufficienti.
+    expect(c?.detail).toContain('coerenti');
+    expect(c?.detail).toContain('fetch failed');
+    expect(c?.detail).toContain('solo testuale');
+    expect(c?.remedy).toContain('ollama');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('non resta appesa a un embedder che accetta la connessione e non risponde', async () => {
+    // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:
+    // `doctor` è ciò che si lancia quando la macchina è già strana.
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', { embedderProbe: () => new Promise<void>(() => {}) });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('nessuna risposta entro');
+    rmSync(dir, { recursive: true, force: true });
+  }, 10_000);
 });
