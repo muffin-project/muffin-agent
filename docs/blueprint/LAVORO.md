@@ -17,8 +17,8 @@ di policy. L'id è quello che il turno stampa: dodici caratteri, ora accettati
 come prefisso (erano l'unico id rifiutato).
 
 **Misurato con quella vista, da guardare.** (a) **La cache di prompt non
-prende**: 18 `chat_call` veri in un giorno, 174012 token di input, 4800 letti
-da cache = **2.8%**; 17/18 riportano l'attributo, uno solo colpisce. (b) Ogni
+prende**, 2.8% su 18 chiamate vere, e non è colpa del nostro prefisso: misura e
+ipotesi in `research/cache-prompt-2026-08-26.md`. (b) Ogni
 `sys.shell` è `effect=ask`, nessuna eccezione: la lamentela dell'owner è un
 dato. (c) `memory.recall` gira **senza vettori** (`EmbedderUnavailable`).
 (d) Un `memory.ingest` da solo: 129s, zero chiamate al modello.
