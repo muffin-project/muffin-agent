@@ -150,6 +150,12 @@ export const paths = (home = muffinHome()) => ({
   config: join(home, 'config.json'),
   db: join(home, 'muffin.db'),
   rot: join(home, 'rot'),
+  // What `muffin init` copied from `defaults/` and the hash it had that day —
+  // written once per file, at copy time, by `recordCopied`
+  // (core/config/defaults-drift.ts), never touched again by anything else
+  // (not even `muffin rot reseal`). `muffin doctor` reads it to tell "never
+  // touched since init" from "the owner edited this" without needing Git.
+  defaultsManifest: join(home, 'defaults-manifest.json'),
   // Outside the root of trust on purpose: the voice is the part that learns,
   // so the agent may propose changes to it through the ratchet. `identity.md`
   // lives under rot/ and stays fixed. One entry here rather than the same
