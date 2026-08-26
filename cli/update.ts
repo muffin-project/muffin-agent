@@ -49,6 +49,20 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * `main` is deliberately the channel this reads from — `dev` stays where
  * development happens; the two are not the same question `muffin update`
  * exists to answer.
+ *
+ * ## The one update this command cannot perform
+ *
+ * Its own arrival. An installation older than this file answers `comando
+ * sconosciuto: update`, because the command ships *in the version being
+ * updated to* — measured on the owner's own machine, 26/08/2026, which was
+ * installed the day before. That first hop is manual and looks exactly like
+ * what this command automates, minus the release directory: stop the
+ * supervised gateway (`launchctl bootout` / `systemctl --user stop`, because
+ * `npm ci` deletes `node_modules` under a live process), fast-forward the
+ * checkout to `origin/main`, `npm ci && npm run compile`, bring the gateway
+ * back. From then on the launcher points at a checkout this command
+ * recognises (`currentOrBootstrap` below reads exactly that state as the
+ * bootstrap marker), and every later update is one command.
  */
 
 export type UpdateStep = { name: string; done: boolean; detail: string };
