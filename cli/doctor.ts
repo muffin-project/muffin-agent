@@ -1,6 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as sqliteVec from 'sqlite-vec';
 import { tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -17,6 +19,8 @@ import { readConsolidation } from '../core/memory/consolidator.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
+import { findCheckoutRoot } from './update.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -57,6 +61,13 @@ export type DoctorOptions = {
    * mocks `node:os` to exercise bubblewrap from macOS.
    */
   platform?: NodeJS.Platform;
+  /**
+   * Test-only: overrides the real `findCheckoutRoot` (`cli/update.ts`)
+   * resolution the defaults-drift check below runs — `null` exercises the
+   * declared-unknown path (rule 3) without needing a process actually
+   * running outside a Git checkout.
+   */
+  checkoutRoot?: string | null;
 };
 
 export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -216,6 +227,29 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         'il kernel sta già trattando questa installazione come single-user; per la prevenzione vera il RoT deve appartenere a un altro utente OS, altrimenti metti `rot.mode` a "single-user" e togli la pretesa',
       );
     }
+  }
+
+  // What `muffin init` copied from `defaults/` and never touches again — not
+  // because `muffin update` should overwrite it (`defaults/` exists to be
+  // edited by the owner, agent/context/assemble.ts), but because nothing
+  // before this told the owner their copy had fallen behind. Measured on the
+  // owner's own machine (docs/blueprint/research/deriva-defaults-2026-08-26.md):
+  // persona.md, voice.md and rot/identity.md sat at their `init`-day content
+  // for weeks — the assembled prompt was half the size HEAD ships — and
+  // nothing anywhere said so. See defaultsDriftCheck below for the two
+  // opposite verdicts this can reach and why they must never be confused.
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const checkoutRoot = options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
+  const drift = diagnoseDefaultsDrift(home, checkoutRoot);
+  if (drift.length === 0) {
+    warn(
+      'defaults',
+      "nessun registro d'installazione (installazione precedente a questa funzione) e nessun checkout Git leggibile — " +
+        'non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall\'owner o sono rimasti al giorno di `init`',
+      'esegui da un checkout Git di questo repository per un confronto affidabile',
+    );
+  } else {
+    for (const d of drift) defaultsDriftCheck(ok, warn, d);
   }
 
   // The caps that bind, and which file they came from. Same shape of invisible
@@ -680,6 +714,60 @@ export function formatReport(report: DoctorReport): string {
     return c.remedy ? `${head}\n  → ${c.remedy}` : head;
   });
   return lines.join('\n');
+}
+
+/**
+ * One `DefaultDrift` (core/config/defaults-drift.ts) turned into one line.
+ *
+ * `'up-to-date'` and `'owner-modified'` are both `ok`: there is nothing to
+ * do, in the second case *because* it is the owner's and must not be
+ * touched — "dillo e basta", the research doc's own words. Only
+ * `'adoptable'` and `'unknown'` carry a remedy — the first a real command,
+ * the second an honest "I cannot tell" (ADR-0008: declared, never guessed).
+ *
+ * `'adoptable'` under `rot/` gets the safe-mode consequence stated BEFORE
+ * the command, never silently: copying into a sealed path makes
+ * `verify()`'s hash check diverge (`core/rot/verify.ts`), which drops the
+ * install into safe mode until `muffin rot reseal` — an act of the owner's
+ * own authority, so this only ever names it, never runs it (same posture as
+ * `core/rot/harden.ts`'s printed plan).
+ */
+function defaultsDriftCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  d: DefaultDrift,
+): void {
+  const name = `default ${d.path}`;
+  switch (d.status) {
+    case 'up-to-date':
+    case 'owner-modified':
+      ok(name, d.detail);
+      return;
+    case 'missing':
+      warn(name, d.detail, "`muffin init` lo ricrea — oppure, se l'hai tolto di proposito, ignora questa riga");
+      return;
+    case 'unknown':
+      warn(
+        name,
+        d.detail,
+        `confronta a mano con defaults/${d.path} nel repository, oppure ignora se preferisci gestirlo tu`,
+      );
+      return;
+    case 'adoptable': {
+      const cmd = d.adoptCommand ?? '(comando non disponibile)';
+      const remedy = d.sealed
+        ? `questo file è dentro il sigillo (rot/): adottarlo fa divergere l'hash sigillato e manda l'installazione in ` +
+          `safe mode — conseguenza da decidere tu, mai automatica. Se la vuoi: ${cmd} — quindi \`muffin rot reseal\` ` +
+          "(atto della tua autorità: solo lui fa uscire l'installazione dalla safe mode)"
+        : cmd;
+      warn(name, d.detail, remedy);
+      return;
+    }
+    default: {
+      const _exhaustive: never = d.status;
+      throw new Error(`defaults drift: stato non gestito (${String(_exhaustive)})`);
+    }
+  }
 }
 
 /**
