@@ -472,10 +472,61 @@ export type TurnInput = {
    * it late.
    */
   onDelta?: ((delta: TurnDelta) => void) | undefined;
+  /**
+   * A fact about this turn's own progress, fired the moment it becomes true
+   * — a round starting, a model call finishing, a tool call starting or
+   * ending. M5-BIS B13: a long turn saying it is alive *structurally*, not
+   * cosmetically (`turns.updated_at` is the structural data B13 names as
+   * already existing with no reader; this is the reader, and the
+   * surface-facing half B13 was still missing).
+   *
+   * **A second sink, not a wider `onDelta`.** The two exist for opposite
+   * invariants, and merging them would put progress under a buffering rule
+   * built for a different problem. `onDelta` carries the final answer's own
+   * text, which a surface must never have to *un-show* once printed — so
+   * every round is buffered internally and only the one that turns out to
+   * be terminal ever reaches it (see `onDelta`'s own docstring immediately
+   * above). A progress event reports something that has **already
+   * happened** — the round already started, the call already finished, the
+   * tool already began or ended — so nothing later can contradict it and
+   * there is nothing to retract. It is emitted immediately, every round,
+   * tool calls included, whether or not that round turns out to be the one
+   * that answers.
+   *
+   * Absent on a resume for the same reason `onDelta` is (see `drive`'s
+   * `options.onDelta` docstring): no live surface is holding the previous
+   * attempt.
+   */
+  onProgress?: ((event: TurnEvent) => void) | undefined;
 };
 
 /** One increment of the final answer's text, already past the tool-call filter above. */
 export type TurnDelta = { type: 'text'; text: string };
+
+/**
+ * One fact about a turn's own progress, already true by the time it is
+ * emitted — see `TurnInput.onProgress`. A discriminated union so each
+ * variant declares exactly the fields it has, rather than one shape wide
+ * enough for all four with the unused ones silently `undefined`.
+ *
+ * Every field here is read from the same values the sibling
+ * `muffin.chat_call`/`muffin.tool_call` spans are given, at the same call
+ * site that creates or ends them — never recomputed, so the trace and this
+ * channel cannot silently disagree about what happened.
+ */
+export type TurnEvent =
+  | { type: 'round'; n: number }
+  | {
+      type: 'model';
+      model: string;
+      ms: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      stopReason: string;
+    }
+  | { type: 'tool_start'; name: string; capability: string }
+  | { type: 'tool_end'; name: string; ms: number; isError: boolean };
 
 export type TurnResult = {
   text: string;
@@ -660,6 +711,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
     ...(input.onDelta ? { onDelta: input.onDelta } : {}),
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
   });
 }
 
@@ -871,6 +923,13 @@ async function drive(
      * to suspend.
      */
     onDelta?: ((delta: TurnDelta) => void) | undefined;
+    /**
+     * Same story as `onDelta`, immediately above: live only on a fresh turn,
+     * absent on a resume, because the process picking a suspended turn back
+     * up is not the one holding whatever REPL was rendering the previous
+     * attempt's progress. See `TurnInput.onProgress`.
+     */
+    onProgress?: ((event: TurnEvent) => void) | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -896,6 +955,7 @@ async function drive(
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -1145,6 +1205,12 @@ async function drive(
         return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
       }
       iterations += 1;
+      // Reports the number this line just committed to — the same counter
+      // `muffin.chat_call` below is about to tag itself with
+      // (`ATTR.turnIteration`). A retry re-enters this loop and increments it
+      // again, so a recovered attempt is correctly seen as its own round, not
+      // folded into the one it replaced.
+      input.onProgress?.({ type: 'round', n: iterations });
 
       // Old tool payloads are cleared before the request, not after: what goes
       // out is smaller, what is on record is whole. Nothing is removed, so every
@@ -1202,6 +1268,12 @@ async function drive(
         { [ATTR.requestModel]: deps.model, [ATTR.turnIteration]: iterations },
         turn,
       );
+      // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
+      // exposes `setAttributes`/`end`), so `ms` for the `model` progress event
+      // below is timed here, at the same call site that starts the span it
+      // describes — not a second stopwatch with its own idea of when the
+      // request began.
+      const chatCallStartedAt = Date.now();
 
       /**
        * This round's text, in the granularity it actually arrived on the
@@ -1308,6 +1380,22 @@ async function drive(
         [ATTR.stopReason]: result.stopReason,
       });
       chatSpan.end();
+      // Same values as the attributes just above, read off the same `result`
+      // — never recomputed — plus `ms` from the stopwatch started next to
+      // this span's own creation. Only the completed call reaches here: a
+      // request that threw took the `catch` above and either retried
+      // (its own fresh `round` event covers that) or propagated, so there is
+      // no "the model call finished, badly" progress event — the next
+      // `round` (or the turn ending) already says that much.
+      input.onProgress?.({
+        type: 'model',
+        model: result.model,
+        ms: Date.now() - chatCallStartedAt,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+        stopReason: result.stopReason,
+      });
 
       // Nothing at all: recover rather than presenting silence as an answer.
       if (!result.text && result.toolCalls.length === 0) {
@@ -2037,6 +2125,18 @@ async function runTool(
 
   const args = (call.args ?? {}) as Record<string, unknown>;
   const capability = tool.capability;
+  // Reported only from here on — an unknown tool (`!tool` above) never gets a
+  // `tool_start`, because it never had a `capability` to report and no call
+  // was ever really attempted, so there is nothing for a `tool_end` to pair
+  // with either. `toolCallStartedAt` is this function's own stopwatch, timed
+  // the same way `chatCallStartedAt` is above: `SpanHandle` does not expose
+  // `span`'s clock back to its caller, so `ms` below is measured at the same
+  // call site that reports the start it is measuring from, not guessed at.
+  const toolCallStartedAt = Date.now();
+  input.onProgress?.({ type: 'tool_start', name: call.name, capability });
+  const emitToolEnd = (isError: boolean): void => {
+    input.onProgress?.({ type: 'tool_end', name: call.name, ms: Date.now() - toolCallStartedAt, isError });
+  };
   // The kernel decides on a *resource*, so anything it is supposed to gate has
   // to be lifted out of the args here. `url` was missing, and the consequence
   // was not a weaker check but no check at all: the egress branch in decide.ts
@@ -2076,6 +2176,7 @@ async function runTool(
   switch (decision.effect) {
     case 'deny':
       span.end({ status: 'error', error: decision.code });
+      emitToolEnd(true);
       return {
         type: 'tool_result',
         toolCallId: call.id,
@@ -2089,6 +2190,7 @@ async function runTool(
       // worse than refusing — the caller had already decided the write was
       // reversible.
       span.end({ status: 'error', error: 'draft_unavailable' });
+      emitToolEnd(true);
       return {
         type: 'tool_result',
         toolCallId: call.id,
@@ -2119,12 +2221,14 @@ async function runTool(
         // No channel on this surface: the turn stops and says what it wanted,
         // rather than the tool reporting a failure it did not have.
         span.end({ status: 'error', error: 'ask_unavailable' });
+        emitToolEnd(true);
         throw new ApprovalRequired(request);
       }
       const answer = await deps.approve(request);
       span.setAttributes({ 'muffin.policy.approval': answer });
       if (answer === 'deny') {
         span.end({ status: 'error', error: 'ask_denied' });
+        emitToolEnd(true);
         return {
           type: 'tool_result',
           toolCallId: call.id,
@@ -2172,6 +2276,7 @@ async function runTool(
     // left this process for this call, so nothing raises taint, and there is
     // no `recordOutcome` here either: there is no intent row for it to close.
     span.end({ status: 'error', error: intentError });
+    emitToolEnd(true);
     return {
       type: 'tool_result',
       toolCallId: call.id,
@@ -2232,6 +2337,7 @@ async function runTool(
       tier: outcome.tier,
     } satisfies SessionMessage);
     span.end({ status: outcome.isError ? 'error' : 'ok' });
+    emitToolEnd(outcome.isError === true);
     return {
       type: 'tool_result',
       toolCallId: call.id,
@@ -2261,6 +2367,7 @@ async function runTool(
     // produced must agree, exactly as ADR-0044 requires of the success path.
     recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
+    emitToolEnd(true);
     return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
   }
 }
