@@ -1,0 +1,519 @@
+import DatabaseCtor from 'better-sqlite3';
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, offerGatewayRestart, runUpdate } from './update.js';
+
+/**
+ * `muffin update` — release built alongside (git worktree), never in place;
+ * an atomic launcher-symlink flip is the only thing a live gateway can see
+ * change. The worktree/flip/prune mechanics are exercised against REAL git
+ * repositories (cheap, and it is exactly the part worth not mocking); only
+ * `npm ci`, the smoke test and "read the new schema version" — the three
+ * seams that would otherwise shell out to a real `npm install` or spawn a
+ * real node subprocess per test — are faked.
+ */
+
+type FakeResult = { status: number; stdout: string; stderr: string };
+type FakeGit = (args: string[], cwd: string) => FakeResult;
+
+const ok = (): FakeResult => ({ status: 0, stdout: '', stderr: '' });
+const fail = (stderr: string): (() => FakeResult) => () => ({ status: 1, stdout: '', stderr });
+
+function dir(prefix: string): string {
+  // Resolved once, here: `runUpdate` realpath-resolves the checkout it finds
+  // (so `findOwnedLaunchers`' identity check compares like with like), and a
+  // test asserting exact paths back against a raw `mkdtempSync` result would
+  // be one macOS `/tmp` → `/private/tmp` hop away from a spurious mismatch.
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+function sh(cmd: string, args: string[], cwd: string): string {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
+  return r.stdout;
+}
+
+function realGit(args: string[], cwd: string): FakeResult {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+type Fixture = { remote: string; seed: string; installed: string };
+
+/** A bare "remote", a `seed` clone that pushes commits to it, and `installed` — the clone `runUpdate` treats as the running checkout, already at the first commit. */
+function makeFixture(): Fixture {
+  const remote = dir('muffin-update-remote-');
+  sh('git', ['init', '-q', '--bare', remote], remote);
+  const seed = dir('muffin-update-seed-');
+  sh('git', ['init', '-q'], seed);
+  sh('git', ['config', 'user.email', 't@t'], seed);
+  sh('git', ['config', 'user.name', 't'], seed);
+  writeFileSync(join(seed, 'version.txt'), 'v1\n');
+  sh('git', ['add', '.'], seed);
+  sh('git', ['commit', '-qm', 'v1'], seed);
+  sh('git', ['branch', '-M', 'main'], seed);
+  sh('git', ['remote', 'add', 'origin', remote], seed);
+  sh('git', ['push', '-q', '-u', 'origin', 'main'], seed);
+
+  const installed = dir('muffin-update-installed-');
+  sh('git', ['clone', '-q', remote, installed], tmpdir());
+  return { remote, seed, installed };
+}
+
+function pushNewVersion(f: Fixture, label: string): void {
+  writeFileSync(join(f.seed, 'version.txt'), `${label}\n`);
+  sh('git', ['commit', '-qam', label], f.seed);
+  sh('git', ['push', '-q', 'origin', 'main'], f.seed);
+}
+
+/** A bootstrap launcher pointed straight at the main checkout's own build — exactly what `install.sh` leaves behind before any `muffin update` has ever run. */
+function seedLauncher(installed: string): { bindir: string; entry0: string } {
+  const entry0 = join(installed, 'dist', 'cli', 'main.js');
+  mkdirSync(dirname(entry0), { recursive: true });
+  writeFileSync(entry0, '// v1 build\n');
+  const bindir = dir('muffin-update-bindir-');
+  symlinkSync(entry0, join(bindir, 'muffin'));
+  return { bindir, entry0 };
+}
+
+function releaseDirNames(installed: string): string[] {
+  const releasesPath = join(installed, '.releases');
+  if (!existsSync(releasesPath)) return [];
+  return readdirSync(releasesPath, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+}
+
+describe('findCheckoutRoot', () => {
+  it('resolves the git top-level from the checkout itself', () => {
+    const f = makeFixture();
+    expect(findCheckoutRoot(f.installed)).toBe(f.installed);
+  });
+
+  it('returns null outside any git repository', () => {
+    expect(findCheckoutRoot(dir('muffin-update-notgit-'))).toBeNull();
+  });
+});
+
+describe('findOwnedLaunchers / atomicSymlink', () => {
+  it('finds a launcher resolving inside the checkout and ignores a foreign one', () => {
+    const checkout = dir('muffin-update-checkout-');
+    const inside = join(checkout, 'dist', 'cli', 'main.js');
+    mkdirSync(dirname(inside), { recursive: true });
+    writeFileSync(inside, '// ours');
+    const foreign = dir('muffin-update-foreign-');
+    writeFileSync(join(foreign, 'main.js'), '// someone else — e.g. Cinnamon on Linux Mint');
+
+    const bindir = dir('muffin-update-bindir-');
+    symlinkSync(inside, join(bindir, 'muffin'));
+    symlinkSync(join(foreign, 'main.js'), join(bindir, 'muffin-agent'));
+
+    expect(findOwnedLaunchers(checkout, [bindir])).toEqual([join(bindir, 'muffin')]);
+  });
+
+  it('still finds a launcher whose target does not exist yet, as long as the target path is inside the checkout', () => {
+    // The realistic case: right after a flip to a release whose `dist/` a
+    // real build has not finished writing (or, in every other test here,
+    // where `npm ci`/the smoke test are faked and never write one at all).
+    // `realpathSync` alone would call this "foreign" — wrongly, since the
+    // path is plainly ours — which is the bug this helper exists to avoid.
+    const checkout = dir('muffin-update-checkout2-');
+    const bindir = dir('muffin-update-bindir2-');
+    symlinkSync(join(checkout, 'dist', 'cli', 'main.js'), join(bindir, 'muffin')); // dangling, but inside checkout
+    expect(findOwnedLaunchers(checkout, [bindir])).toEqual([join(bindir, 'muffin')]);
+  });
+
+  it('ignores a bindir entry that is not a symlink at all to us', () => {
+    const checkout = dir('muffin-update-checkout3-');
+    const bindir = dir('muffin-update-bindir3-');
+    // No `muffin`/`muffin-agent` entry exists in this bindir at all.
+    expect(findOwnedLaunchers(checkout, [bindir])).toEqual([]);
+  });
+
+  it('atomicSymlink replaces an existing link without leaving a tmp file behind', () => {
+    const d = dir('muffin-update-swap-');
+    const a = join(d, 'a.js');
+    const b = join(d, 'b.js');
+    writeFileSync(a, 'a');
+    writeFileSync(b, 'b');
+    const link = join(d, 'link');
+    symlinkSync(a, link);
+
+    atomicSymlink(b, link);
+
+    expect(readlinkSync(link)).toBe(b);
+    expect(readdirSync(d).some((n) => n.includes('.tmp-'))).toBe(false);
+  });
+
+  it('atomicSymlink creates a fresh link when none existed', () => {
+    const d = dir('muffin-update-swap2-');
+    const target = join(d, 't.js');
+    writeFileSync(target, 't');
+    const link = join(d, 'link');
+    atomicSymlink(target, link);
+    expect(readlinkSync(link)).toBe(target);
+  });
+});
+
+describe('fetchFailureRemedy', () => {
+  it('recognizes an auth failure and points at the deploy key/token', () => {
+    expect(fetchFailureRemedy('fatal: Authentication failed for \'https://...\'')).toMatch(/deploy key|token/);
+    expect(fetchFailureRemedy('fatal: Could not read from remote repository.')).toMatch(/deploy key|token/);
+    expect(fetchFailureRemedy("remote: Invalid username or password.")).toMatch(/deploy key|token/);
+  });
+
+  it('falls back to a generic connectivity remedy for anything else', () => {
+    expect(fetchFailureRemedy('fatal: unable to access: could not resolve host github.com')).toMatch(/deploy key|token/);
+    expect(fetchFailureRemedy('fatal: some unrelated plumbing error')).not.toMatch(/deploy key/);
+  });
+});
+
+describe('runUpdate — happy path (bootstrap: no prior release recorded)', () => {
+  it('builds a release worktree alongside, backs up, and flips the launcher without touching the main worktree', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.steps.every((s) => s.done)).toBe(true);
+
+    const names = releaseDirNames(f.installed);
+    expect(names.length).toBe(1);
+    const releaseDir = join(f.installed, '.releases', names[0]!);
+    expect(readFileSync(join(releaseDir, 'version.txt'), 'utf8').trim()).toBe('v2');
+
+    // the launcher now points at the new release's entry
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(join(releaseDir, 'dist', 'cli', 'main.js'));
+    // the main worktree is exactly as it was
+    expect(readFileSync(join(f.installed, 'version.txt'), 'utf8').trim()).toBe('v1');
+    expect(realGit(['status', '--porcelain', '--untracked-files=no'], f.installed).stdout.trim()).toBe('');
+
+    const current = JSON.parse(readFileSync(join(f.installed, '.releases', 'current'), 'utf8')) as { sha: string; entry: string };
+    expect(current.entry).toBe(join(releaseDir, 'dist', 'cli', 'main.js'));
+    const previous = JSON.parse(readFileSync(join(f.installed, '.releases', 'previous'), 'utf8')) as { sha: string; entry: string };
+    expect(previous.entry).toBe(entry0); // bootstrap: "previous" is the main worktree's own build
+  });
+
+  it('reports the backup scope and the migrations delta honestly', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+    mkdirSync(home, { recursive: true });
+    const db = new DatabaseCtor(join(home, 'muffin.db'));
+    db.pragma('journal_mode = WAL');
+    db.exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (1, 'baseline', ?)`).run(new Date().toISOString());
+    db.close();
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 3,
+    });
+
+    expect(result.code).toBe(0);
+    const backupStep = result.steps.find((s) => s.name === 'backup');
+    expect(backupStep?.detail).toMatch(/memoria.*episodi.*job.*budget.*indice del vault|copre il database/);
+    expect(backupStep?.detail).toMatch(/NON copre/);
+    expect(backupStep?.detail).toContain(join(home, 'vault'));
+    expect(backupStep?.detail).toContain(join(home, 'secrets'));
+    expect(backupStep?.detail).toContain(join(home, 'rot'));
+
+    const schemaStep = result.steps.find((s) => s.name === 'schema');
+    expect(schemaStep?.detail).toMatch(/v1/);
+    expect(schemaStep?.detail).toMatch(/v3/);
+    expect(schemaStep?.detail).toMatch(/in sospeso/);
+  });
+});
+
+describe('runUpdate — failures never touch the running tree', () => {
+  it('deletes the release and leaves the launcher untouched when npm ci fails inside it', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: fail('npm ERR! could not resolve dependency'),
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.steps.find((s) => s.name === 'npm ci')?.done).toBe(false);
+    expect(releaseDirNames(f.installed)).toEqual([]);
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(entry0);
+    expect(existsSync(join(f.installed, '.releases', 'current'))).toBe(false);
+    // no dangling worktree registration left behind either
+    expect(realGit(['worktree', 'list'], f.installed).stdout.trim().split('\n').length).toBe(1);
+  });
+
+  it('deletes the release and leaves the launcher untouched when the smoke test fails', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: fail('Error: Cannot find module'),
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.steps.find((s) => s.name === 'smoke test')?.done).toBe(false);
+    expect(releaseDirNames(f.installed)).toEqual([]);
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(entry0);
+  });
+
+  it('stops honestly, with the auth remedy, when git fetch fails — and touches nothing', () => {
+    const f = makeFixture();
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+    const fakeGit: FakeGit = (args, cwd) => (args[0] === 'fetch' ? fail("fatal: Authentication failed for 'https://example/repo.git'")() : realGit(args, cwd));
+
+    const result = runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], git: fakeGit });
+
+    expect(result.code).toBe(1);
+    const step = result.steps.find((s) => s.name === 'fetch');
+    expect(step?.done).toBe(false);
+    expect(step?.detail).toMatch(/deploy key|token/);
+    expect(releaseDirNames(f.installed)).toEqual([]);
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(entry0);
+  });
+
+  it('refuses honestly when the running module is not inside a git checkout at all', () => {
+    const result = runUpdate({ moduleDir: dir('muffin-update-notgit2-'), home: dir('muffin-update-home-') });
+    expect(result.code).toBe(1);
+    expect(result.steps[0]?.done).toBe(false);
+    expect(result.steps[0]?.detail).toMatch(/non sembra un checkout git/);
+  });
+});
+
+describe('runUpdate — dry-run and already-updated', () => {
+  it('dry-run reports the distance and creates nothing', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({ moduleDir: f.installed, home, dryRun: true });
+
+    expect(result.code).toBe(0);
+    expect(result.steps.find((s) => s.name === 'dry-run')?.detail).toMatch(/dietro di 1 commit/);
+    expect(existsSync(join(f.installed, '.releases'))).toBe(false);
+    expect(readFileSync(join(f.installed, 'version.txt'), 'utf8').trim()).toBe('v1');
+  });
+
+  it('reports already-updated and does nothing when there is nothing new on origin/main', () => {
+    const f = makeFixture(); // never pushed a second commit
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({ moduleDir: f.installed, home });
+
+    expect(result.code).toBe(0);
+    expect(result.steps.some((s) => /già aggiornato/.test(s.detail))).toBe(true);
+    expect(existsSync(join(f.installed, '.releases'))).toBe(false);
+  });
+});
+
+describe('runUpdate — release pruning across cycles', () => {
+  it('keeps only current+previous, pruning anything older once a third release lands', () => {
+    const f = makeFixture();
+    const { bindir } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+    const deps = { moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+
+    pushNewVersion(f, 'v2');
+    expect(runUpdate(deps).code).toBe(0);
+    const afterFirst = releaseDirNames(f.installed);
+    expect(afterFirst.length).toBe(1);
+    const releaseA = afterFirst[0]!;
+
+    pushNewVersion(f, 'v3');
+    expect(runUpdate(deps).code).toBe(0);
+    const afterSecond = releaseDirNames(f.installed);
+    expect(afterSecond.length).toBe(2);
+    expect(afterSecond).toContain(releaseA); // still kept, as "previous"
+    const releaseB = afterSecond.find((n) => n !== releaseA)!;
+
+    pushNewVersion(f, 'v4');
+    const third = runUpdate(deps);
+    expect(third.code).toBe(0);
+    const afterThird = releaseDirNames(f.installed);
+    expect(afterThird.length).toBe(2);
+    expect(afterThird).toContain(releaseB); // now "previous"
+    expect(afterThird).not.toContain(releaseA); // pruned: neither current nor previous anymore
+    expect(third.steps.find((s) => s.name === 'pulizia')?.detail).toContain(releaseA);
+  });
+});
+
+describe('runUpdate --rollback', () => {
+  it('refuses when there is no previous release recorded', () => {
+    const f = makeFixture();
+    const result = runUpdate({ moduleDir: f.installed, home: dir('muffin-update-home-'), rollback: true });
+    expect(result.code).toBe(1);
+    expect(result.steps.find((s) => s.name === 'rollback')?.detail).toMatch(/nessuna release precedente/);
+  });
+
+  it('flips back to the previous release, and a second rollback toggles forward again', () => {
+    const f = makeFixture();
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+    const deps = { moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+
+    pushNewVersion(f, 'v2');
+    expect(runUpdate(deps).code).toBe(0);
+    const releaseEntry = readlinkSync(join(bindir, 'muffin'));
+    expect(releaseEntry).not.toBe(entry0);
+
+    const rolledBack = runUpdate({ ...deps, rollback: true });
+    expect(rolledBack.code).toBe(0);
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(entry0);
+
+    const toggledForward = runUpdate({ ...deps, rollback: true });
+    expect(toggledForward.code).toBe(0);
+    expect(readlinkSync(join(bindir, 'muffin'))).toBe(releaseEntry);
+  });
+
+  it('refuses when the database is already migrated past the release being restored', () => {
+    const f = makeFixture();
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+
+    pushNewVersion(f, 'v2');
+    expect(
+      runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 }).code,
+    ).toBe(0);
+
+    mkdirSync(home, { recursive: true });
+    const db = new DatabaseCtor(join(home, 'muffin.db'));
+    db.exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`);
+    db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (5, 'ahead', ?)`).run(new Date().toISOString());
+    db.close();
+
+    const rb = runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], rollback: true, readNewSchemaVersion: () => 1 });
+
+    expect(rb.code).toBe(1);
+    const step = rb.steps.find((s) => s.name === 'rollback');
+    expect(step?.done).toBe(false);
+    expect(step?.detail).toMatch(/SchemaAheadError|si rifiuterà/);
+    expect(readlinkSync(join(bindir, 'muffin'))).not.toBe(entry0); // nothing flipped
+  });
+});
+
+describe('offerGatewayRestart', () => {
+  function captureErr(fn: () => Promise<void>): Promise<string> {
+    let out = '';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      out += String(chunk);
+      return true;
+    });
+    return fn().finally(() => spy.mockRestore()).then(() => out);
+  }
+
+  it('when nothing is supervised: says so, and that the new code lands at the next start anyway', async () => {
+    const out = await captureErr(() =>
+      offerGatewayRestart(dir('muffin-update-home-'), {
+        yes: false,
+        platform: 'linux',
+        gatewayRunning: false,
+        supervisorProbes: { unitFileExists: () => false },
+      }),
+    );
+    expect(out).toMatch(/nessun gateway supervisionato/);
+    expect(out).toMatch(/prossimo riavvio/);
+  });
+
+  it('--yes restarts immediately via the platform-correct command, without asking', async () => {
+    let restarted: string[] | null = null;
+    const out = await captureErr(() =>
+      offerGatewayRestart(dir('muffin-update-home-'), {
+        yes: true,
+        platform: 'linux',
+        gatewayRunning: false,
+        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, lingerEnabled: () => true },
+        restart: (argv) => {
+          restarted = argv;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      }),
+    );
+    expect(restarted).toEqual(['systemctl', '--user', 'restart', 'muffin-gateway.service']);
+    expect(out).toMatch(/riavviato/);
+  });
+
+  it('on decline: still says the new code lands at the next restart, even an involuntary one', async () => {
+    const out = await captureErr(() =>
+      offerGatewayRestart(dir('muffin-update-home-'), {
+        yes: false,
+        platform: 'linux',
+        gatewayRunning: false,
+        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, lingerEnabled: () => true },
+        promptFn: async () => 'n',
+      }),
+    );
+    expect(out).toMatch(/entra comunque al prossimo riavvio/);
+    expect(out).toMatch(/crash/);
+  });
+
+  it('uses launchctl kickstart on darwin', async () => {
+    let restarted: string[] | null = null;
+    await captureErr(() =>
+      offerGatewayRestart(dir('muffin-update-home-'), {
+        yes: true,
+        platform: 'darwin',
+        gatewayRunning: false,
+        supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
+        restart: (argv) => {
+          restarted = argv;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      }),
+    );
+    expect(restarted?.[0]).toBe('launchctl');
+    expect(restarted?.[1]).toBe('kickstart');
+    expect(restarted?.[2]).toBe('-k');
+  });
+});
+
+describe('cmdUpdate — argument parsing', () => {
+  it('returns 78 on an unrecognized flag, before touching anything', async () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await cmdUpdate(['--nonsense'])).toBe(78);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

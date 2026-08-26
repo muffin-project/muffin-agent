@@ -21,6 +21,10 @@ id_rsa.*
 secrets/
 .muffin/
 
+# `muffin update`'s side-by-side releases (git worktrees + current/previous
+# bookkeeping) — build output and machine state, never source.
+.releases/
+
 # Scratch files a review agent leaves in the shared working tree. It runs in
 # THIS tree, so anything it writes is visible to `git add -A` — which swept one
 # into a commit and turned the suite red. Ignored by name so a concurrent probe
