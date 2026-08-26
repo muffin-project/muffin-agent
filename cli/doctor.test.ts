@@ -562,6 +562,22 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('un episodio che non lancia non salva un giro andato a vuoto — 13 errori su 14, zero fatti', async () => {
+    // Lo stato vero dell'installazione dell'owner il 27/08, letto da
+    // `consolidation_runs`: dopo il cambio di modello del 25/08 i tre giri sono
+    // stati 3/3, 10/11 e 13/14 errori, sempre con zero fatti. Il primo avvisava,
+    // gli altri due erano **verdi** — bastava un episodio che non avesse
+    // lanciato perché `errors >= episodes` fallisse per uno, e la corsia morta
+    // si leggeva come una settimana tranquilla. Che è esattamente l'unica
+    // confusione che questo check esiste per togliere.
+    const dir = home();
+    seedRun(dir, 'ran', 13, { episodes: 14, facts: 0 });
+    const c = await check(dir, 'consolidamento');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('13 errori su 14 episodi');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('stays green when the sweep threw but the batch worked', async () => {
     // `errors >= episodes` alone is not the condition. The maintenance sweep
     // pushes its own failure into `report.errors`, so a one-episode run that
