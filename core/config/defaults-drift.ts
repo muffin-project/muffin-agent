@@ -68,17 +68,30 @@ export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<DefaultsRegistry>;
     if (parsed.schemaVersion !== REGISTRY_SCHEMA_VERSION || !Array.isArray(parsed.files)) return null;
-    // Each entry, not just the array around them. A file that is valid JSON,
-    // carries the right schema version and holds a `null` in `files` — partial
-    // corruption, an interrupted write, a hand edit — used to pass this check
-    // and throw three functions later on `null.path`, taking the whole report
-    // with it. `null` is this module's established "cannot trust this, ignore
-    // it" answer and it already degrades safely to rule 2.
-    const wellFormed = parsed.files.every(
-      (f) => typeof f === 'object' && f !== null && typeof f.path === 'string' && typeof f.sha256 === 'string',
+    // Each entry, not just the array around them — a `files` holding a `null`
+    // (partial corruption, an interrupted write, a hand edit) used to pass
+    // this check and throw three functions later on `null.path`.
+    //
+    // **Filtered, not rejected**, and the difference is the whole safety
+    // property of this module. Returning `null` for the whole registry over
+    // one bad entry pushes every *other* tracked file off rule 1 — an exact
+    // hash recorded at copy time, deterministic — and down onto rule 2, which
+    // searches history and carries the known limitation that content matching
+    // an old commit reads as adoptable. A file the owner had deliberately
+    // reverted to an old shipped text would then flip from `owner-modified`
+    // (safe, no command offered) to `adoptable`, with a ready `cp` that
+    // destroys their edit — the exact false positive this slice exists to
+    // prevent, reachable through an entry that has nothing to do with that
+    // file. Found by the fresh judge on the repair itself.
+    //
+    // A survivor list keeps every entry that can still be trusted and drops
+    // only the ones that cannot. Per-path lookups behave identically whether
+    // this returns `null` or an empty `files`.
+    const files = parsed.files.filter(
+      (f): f is RegistryEntry =>
+        typeof f === 'object' && f !== null && typeof f.path === 'string' && typeof f.sha256 === 'string',
     );
-    if (!wellFormed) return null;
-    return parsed as DefaultsRegistry;
+    return { ...(parsed as DefaultsRegistry), files };
   } catch {
     return null;
   }
@@ -316,10 +329,20 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
  */
 export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null, git: Git = REAL_GIT): DefaultDrift[] {
   const registry = readDefaultsRegistry(home);
-  const trackedPaths =
-    checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults'))
-      ? listDefaultsTree(join(checkoutRoot, 'defaults'))
-      : (registry?.files.map((f) => f.path) ?? []);
+  // The listing itself can fail — an unreadable `defaults/` directory, not a
+  // file under it — and it runs before the per-file guard below, so uncaught
+  // it would still take the whole report down for a reason narrower than the
+  // one that guard was added for. Falling back to what the registry knows is
+  // strictly better than reporting nothing.
+  let trackedPaths: string[];
+  try {
+    trackedPaths =
+      checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults'))
+        ? listDefaultsTree(join(checkoutRoot, 'defaults'))
+        : (registry?.files.map((f) => f.path) ?? []);
+  } catch {
+    trackedPaths = registry?.files.map((f) => f.path) ?? [];
+  }
 
   // One file's accident costs one line, never the report.
   //

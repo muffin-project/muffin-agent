@@ -324,23 +324,78 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     }
   });
 
-  it('un registro con una voce malformata è ignorato, non fatale', () => {
+  it('una voce malformata è scartata, non fatale — e le altre restano', () => {
     // JSON valido, schema giusto, `files` è un array — ma una voce è `null`.
-    // La guardia vecchia controllava solo l array e lasciava arrivare `null`
+    // La guardia originale controllava solo l array e lasciava arrivare `null`
     // fino a `.find()`, tre funzioni più in là, su `null.path`.
     const h = home();
     writeFileSync(
       paths(h).defaultsManifest,
-      `${JSON.stringify({ schemaVersion: 1, installedAt: '2026-08-01T00:00:00Z', files: [null] })}\n`,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        installedAt: '2026-08-01T00:00:00Z',
+        files: [null, { path: 'voice.md', sha256: 'abc' }],
+      })}\n`,
     );
-    expect(readDefaultsRegistry(h)).toBeNull();
+    // Filtrato, non rifiutato: la voce buona sopravvive alla voce rotta.
+    expect(readDefaultsRegistry(h)?.files).toEqual([{ path: 'voice.md', sha256: 'abc' }]);
 
     const checkout = makeCheckout();
     writeFileSync(join(h, 'persona.md'), 'v1\n');
-    // Non lancia, e degrada alla regola 2 invece di fingere di sapere.
     expect(findPersona(diagnoseDefaultsDrift(h, checkout))?.status).toBe('up-to-date');
     rmSync(checkout, { recursive: true, force: true });
     rmSync(h, { recursive: true, force: true });
+  });
+
+  it('una voce corrotta NON trascina gli altri file sulla regola 2 — il raggio di scoppio è una voce', () => {
+    // Il difetto che la prima riparazione ha *introdotto*, trovato dal judge
+    // fresco: azzerare l'intero registro per una voce rotta spinge ogni altro
+    // file dalla regola 1 — hash esatto registrato alla copia, deterministica
+    // — giù sulla regola 2, che cerca nella storia e porta il limite noto per
+    // cui un contenuto uguale a un vecchio commit si legge come adottabile.
+    //
+    // Lo scenario è quello dell'owner che ha **deliberatamente ripristinato**
+    // un testo vecchio: con il registro sano è `owner-modified` e non gli si
+    // propone niente. Senza, diventa `adoptable` con un `cp` pronto che
+    // cancella la sua scelta — per colpa di una voce che non lo riguarda.
+    const checkout = makeCheckout();
+    const oldSha = commit(checkout, 'persona.md', 'TESTO_VECCHIO\n', 'persona vecchia');
+    commit(checkout, 'persona.md', 'TESTO_NUOVO\n', 'persona nuova');
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'TESTO_VECCHIO\n'); // ripristino voluto
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('TESTO_DI_INIT\n') }]);
+
+    // Con il registro integro: la regola 1 decide, e decide bene.
+    expect(findPersona(diagnoseDefaultsDrift(h, checkout))?.status).toBe('owner-modified');
+
+    // Ora si corrompe una voce che non c'entra niente con persona.md.
+    const registry = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as { files: unknown[] };
+    registry.files.push({ path: 'un-altro-file.md' }); // manca `sha256`
+    writeFileSync(paths(h).defaultsManifest, `${JSON.stringify(registry)}\n`);
+
+    const after = findPersona(diagnoseDefaultsDrift(h, checkout));
+    expect(after?.status).toBe('owner-modified');
+    expect(after?.adoptCommand).toBeUndefined();
+    expect(after?.detail).not.toContain(oldSha.slice(0, 7));
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it('una directory `defaults/` illeggibile costa il rapporto? no: ripiega su ciò che il registro sa', () => {
+    const checkout = makeCheckout();
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
+    chmodSync(join(checkout, 'defaults'), 0o000);
+    try {
+      const all = diagnoseDefaultsDrift(h, checkout);
+      // Non lancia, e i percorsi che il registro conosce restano diagnosticati.
+      expect(all.map((d) => d.path)).toContain('persona.md');
+    } finally {
+      chmodSync(join(checkout, 'defaults'), 0o755);
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(h, { recursive: true, force: true });
+    }
   });
 
   it('un checkout shallow lo dice, invece di cercare in una fetta di storia e chiamarla storia', () => {
