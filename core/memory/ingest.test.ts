@@ -1146,3 +1146,89 @@ describe('lo span del giudice dice quanto è costato', () => {
     });
   });
 });
+
+
+/**
+ * Il passo che costa di più era il solo che non si vedeva.
+ *
+ * Misurato sull'installazione dell'owner il 27/08: un giro idle ha speso 129
+ * secondi contro il modello su quattordici episodi e ha prodotto zero fatti —
+ * e il file di tracce di quel giorno conteneva span `memory.recall` e
+ * `memory.ingest` e nemmeno uno per le chiamate che avevano bruciato il tempo.
+ * Il giudice aveva già ricevuto questo span in #141; l'estrazione è la metà
+ * più grande ed era ancora scoperta.
+ */
+describe("l'estrazione ha il suo span, come il giudice", () => {
+  class Contato extends Scripted {
+    readonly requests: ChatCall[] = [];
+    override async chat(request: ChatCall): Promise<ChatResult> {
+      this.requests.push(request);
+      const base = await super.chat(request);
+      return { ...base, usage: { inputTokens: 611, outputTokens: 73, cacheReadTokens: 4, cacheWriteTokens: 0 } };
+    }
+  }
+
+  type Span = { name: string; attributes: Record<string, unknown>; status?: string };
+
+  async function ingest(replies: string[], contenuti: string[]): Promise<{ spans: Span[]; provider: Contato }> {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-extract-span-'));
+    const provider = new Contato(replies);
+    for (const c of contenuti) episode(store, c);
+    await ingestPending(
+      {
+        store,
+        provider,
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: () => new Date('2026-08-04T12:00:00Z'),
+      },
+      HOST,
+    );
+    const spans = readdirSync(join(home, 'traces'))
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(home, 'traces', f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as Span)
+      .filter((s) => s.attributes['gen_ai.operation.name'] === 'memory.extract');
+    return { spans, provider };
+  }
+
+  it('porta i token di una estrazione riuscita', async () => {
+    const { spans } = await ingest([facts(fact('owner', 'works_as', 'freelancer'))], ['faccio il freelance']);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 611,
+      'gen_ai.usage.output_tokens': 73,
+      'muffin.usage.cache_read_tokens': 4,
+      'muffin.memory.facts': 1,
+    });
+  });
+
+  it('lo span si chiude in errore quando il modello risponde qualcosa di inservibile', async () => {
+    // `extractFacts` non lancia: torna normalmente con `error` valorizzato.
+    // Senza il ramo esplicito lo span si chiudeva verde proprio sui giri che
+    // non producevano niente.
+    const { spans } = await ingest(['questo non è JSON'], ['qualcosa']);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.status).not.toBe('ok');
+  });
+
+  it('chiede al modello un tetto che lascia spazio al reasoning, su entrambe le chiamate della corsia', async () => {
+    // Senza margine sono 1500 per l'estrazione e 500 per il giudice: su un
+    // modello che ragiona la prima torna `stop=max_tokens` a 1502 token in
+    // uscita e la risposta grezza del secondo nel registro è `[vuota]`.
+    // Nessun test teneva questi due numeri, quindi potevano tornare indietro
+    // restando verdi.
+    const { provider } = await ingest(
+      [
+        facts(fact('owner', 'accountant', 'Marco')),
+        facts(fact('owner', 'accountant', 'Lucia')),
+        JSON.stringify({ reasoning: 'cambio', verdict: 'supersede', confidence: 0.95 }),
+      ],
+      ['Marco è il mio commercialista', 'ora è Lucia'],
+    );
+    expect(provider.requests.length).toBeGreaterThanOrEqual(3);
+    for (const r of provider.requests) expect(r.maxOutputTokens).toBeGreaterThan(1500);
+  });
+});

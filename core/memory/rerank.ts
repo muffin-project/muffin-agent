@@ -1,3 +1,4 @@
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
 import { fence } from './spotlight.js';
 import type { RecallItem } from './recall.js';
@@ -80,7 +81,9 @@ export class LlmReranker implements Reranker {
             ],
           },
         ],
-        maxOutputTokens: 200,
+        // Il più piccolo dei tre e quindi il primo a morire: 200 token non
+        // bastano nemmeno a iniziare a ragionare. Vedi `REASONING_HEADROOM`.
+        maxOutputTokens: 200 + REASONING_HEADROOM,
         temperature: 0,
         stream: false,
       });

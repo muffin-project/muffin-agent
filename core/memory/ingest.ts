@@ -312,11 +312,40 @@ export async function ingestPending(
 
       report.episodes += 1;
 
-      const extraction = await extractFacts(deps.provider, deps.model, {
-        content: episode.content,
-        speakerName: episode.role === 'user' ? 'owner' : episode.role,
-        trustTier: episode.trustTier,
+      // The step that costs the most and was the only one nobody could see.
+      //
+      // Measured on the owner's install on 27/08: one idle round spent 129
+      // seconds against the model across fourteen episodes and produced zero
+      // facts — and the trace file for that day held `memory.recall` and
+      // `memory.ingest` spans and not one for the calls that burned the time.
+      // The judge got this same span in #141 for the same reason; extraction is
+      // the larger half and was still missing.
+      const extractSpan = deps.tracer.start(
+        'muffin.chat_call',
+        { [ATTR.operationName]: 'memory.extract', [ATTR.requestModel]: deps.model },
+        span,
+      );
+      let extraction: Awaited<ReturnType<typeof extractFacts>>;
+      try {
+        extraction = await extractFacts(deps.provider, deps.model, {
+          content: episode.content,
+          speakerName: episode.role === 'user' ? 'owner' : episode.role,
+          trustTier: episode.trustTier,
+        });
+      } catch (error) {
+        extractSpan.end({ error });
+        throw error;
+      }
+      extractSpan.setAttributes({
+        [ATTR.usageInputTokens]: extraction.usage.inputTokens,
+        [ATTR.usageOutputTokens]: extraction.usage.outputTokens,
+        [ATTR.cacheReadTokens]: extraction.usage.cacheReadTokens,
+        'muffin.memory.facts': extraction.facts.length,
       });
+      // A model that answers something unusable is not an exception — the
+      // function returns normally with `error` set — so without this the span
+      // would close green on the exact rounds that produced nothing.
+      extractSpan.end(extraction.error === undefined ? undefined : { error: new Error(extraction.error) });
 
       if (extraction.error) {
         const detail = `episodio ${episode.id}: ${extraction.error}`;

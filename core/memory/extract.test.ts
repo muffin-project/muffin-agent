@@ -156,3 +156,70 @@ describe('looksInjected — what the filter does and does not flag', () => {
     expect(looksInjected(fact('Giusto', 'interest', 'è sempre stato virtuoso col violino'))).toBe(false);
   });
 });
+
+/**
+ * La corsia leggera contro un modello che ragiona.
+ *
+ * Misurato sull'installazione dell'owner il 27/08 (`qwen/qwen3.8-27b`): con
+ * tetto 1500 l'estrazione tornava `stop=max_tokens` dopo 1502 token in uscita
+ * e `content` vuoto, e la riga di errore diceva solo «nessuna risposta dal
+ * modello» — la stessa frase che avrebbe detto per un modello spento, per una
+ * chiave scaduta o per una rete giù. Dodici episodi hanno ritentato per due
+ * giorni contro quella frase.
+ */
+describe('un fallimento porta la prova, non il sintomo', () => {
+  class Silent implements Provider {
+    readonly kind = 'openai-compat' as const;
+    seen: ChatCall | null = null;
+    constructor(
+      private readonly stop: ChatResult['stopReason'],
+      private readonly out: number,
+      private readonly thinking?: ChatResult['thinking'],
+    ) {}
+    async chat(request: ChatCall): Promise<ChatResult> {
+      this.seen = request;
+      return {
+        text: null,
+        toolCalls: [],
+        ...(this.thinking === undefined ? {} : { thinking: this.thinking }),
+        stopReason: this.stop,
+        usage: { inputTokens: 900, outputTokens: this.out, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        model: 'test',
+      };
+    }
+  }
+
+  it('distingue «il tetto ha mangiato la risposta» da «il modello non ha risposto»', async () => {
+    const p = new Silent('max_tokens', 1502);
+    const r = await extractFacts(p, 'm', INPUT);
+    expect(r.facts).toEqual([]);
+    expect(r.error).toContain('stop=max_tokens');
+    expect(r.error).toContain('1502 token in uscita');
+  });
+
+  it('dice quando il testo è finito nel canale del reasoning, che questo percorso non legge', async () => {
+    const p = new Silent('end', 800, [{ type: 'thinking', thinking: 'x', signature: 's' }]);
+    const r = await extractFacts(p, 'm', INPUT);
+    expect(r.error).toContain('reasoning');
+  });
+
+  it("l'uso è riportato anche quando non è uscito niente — speso non è gratis, è non registrato", async () => {
+    const r = await extractFacts(new Silent('max_tokens', 1502), 'm', INPUT);
+    expect(r.usage.inputTokens).toBe(900);
+    expect(r.usage.outputTokens).toBe(1502);
+  });
+
+  it('un JSON illeggibile arriva con le parole che non si sono lasciate leggere', async () => {
+    const r = await extractFacts(new Scripted('Certo! Ecco i fatti che ho trovato:'), 'm', INPUT);
+    expect(r.error).toContain('Certo! Ecco i fatti');
+  });
+
+  it('il tetto lascia spazio al reasoning che il profilo chiede spento e l adapter non spegne', async () => {
+    // Senza questo margine il tetto è 1500 e su un modello che ragiona la
+    // corsia è morta: nessun test la teneva, quindi poteva tornare indietro
+    // restando verde.
+    const p = new Silent('max_tokens', 10);
+    await extractFacts(p, 'm', INPUT);
+    expect(p.seen?.maxOutputTokens).toBeGreaterThan(1500);
+  });
+});
