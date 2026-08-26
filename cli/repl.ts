@@ -8,7 +8,7 @@ import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
-import { runTurn, type TurnDelta } from '../agent/loop.js';
+import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
 import { paths } from '../core/config/config.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
@@ -50,6 +50,38 @@ export function makeReplCliWrite(rl: { prompt: () => void }): (text: string) => 
       rl.prompt();
     }
   };
+}
+
+/**
+ * B13: one `TurnInput.onProgress` event, one line, in Italian — the owner's
+ * own wording for "still alive", not the trace's `muffin.*` vocabulary.
+ *
+ * Pure and exported on purpose: a unit test checks the wording without
+ * running a turn (or faking a TTY) at all, the same reason `makeReplCliWrite`
+ * above is its own function rather than inlined where it is used.
+ */
+export function formatProgressLine(event: TurnEvent): string {
+  switch (event.type) {
+    case 'round':
+      return `· giro ${event.n}`;
+    case 'model':
+      return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
+    case 'tool_start':
+      return `· ${event.name}…`;
+    case 'tool_end':
+      return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
+    default:
+      return assertNever(event);
+  }
+}
+
+/**
+ * Same guarantee `agent/loop.ts`'s own copy gives `TurnEvent`'s sibling
+ * unions: a fifth variant nobody taught this `switch` about is a compile
+ * error here, not a blank line the owner has to guess the meaning of.
+ */
+function assertNever(x: never): never {
+  throw new Error(`unreachable: unhandled variant ${JSON.stringify(x)}`);
 }
 
 /**
@@ -166,6 +198,28 @@ export async function runRepl(
    * redraw.
    */
   const streamEnabled = opts.stream ?? process.stdout.isTTY === true;
+
+  /**
+   * B13: whether *this* turn attaches `TurnInput.onProgress` at all.
+   *
+   * Gated on **`process.stderr`**'s own TTY-ness, not `process.stdout`'s
+   * (`streamEnabled`, just above) — progress lines are written to stderr
+   * (below), so the stream whose interactivity decides whether to bother is
+   * the one the lines actually land on. A REPL with only stdout redirected
+   * (`muffin > risposte.txt`) still shows progress on the terminal, because
+   * stderr is still a TTY there; a fully non-interactive run (both streams
+   * redirected — cron, `muffin < script > log 2>&1`) attaches nothing, the
+   * same way `onDelta` attaches nothing to `muffin run` (see `streamEnabled`
+   * above).
+   *
+   * No `opts` override, unlike `streamEnabled`: there is no `--no-progress`
+   * a human needs a deterministic escape hatch for, so nothing here has to
+   * carry one. A test that wants this on or off sets `process.stderr.isTTY`
+   * directly before calling `runRepl`, the same kind of stream fake
+   * `cli/prompt.test.ts` and `cli/onboarding.test.ts` already construct by
+   * hand for `isTTY`.
+   */
+  const progressEnabled = process.stderr.isTTY === true;
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.
@@ -382,6 +436,11 @@ export async function runRepl(
               process.stdout.write(delta.text);
             }
           : undefined;
+        const onProgress = progressEnabled
+          ? (event: TurnEvent): void => {
+              process.stderr.write(`${formatProgressLine(event)}\n`);
+            }
+          : undefined;
 
         const result = await runTurn(runtime.deps, {
           principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
@@ -397,6 +456,7 @@ export async function runRepl(
           // `deliverFile` names the path rather than moving any bytes.
           replyChannel: 'cli',
           ...(onDelta ? { onDelta } : {}),
+          ...(onProgress ? { onProgress } : {}),
         });
         process.stdout.write(streamedAnyText ? '\n\n' : `\n${result.text}\n\n`);
         if (result.stopped === 'suspended') {
