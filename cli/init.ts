@@ -61,8 +61,14 @@ export function resolveLocalHome(dirArg: string | undefined): string {
  * needs this because the directory `--local` names is usually about to be
  * created, so a plain `realpathSync` would throw `ENOENT` on the one case that
  * matters most (a first rehearsal of a fresh install).
+ *
+ * Exported for `cli/update.ts`'s launcher-identity check: a launcher symlink
+ * can legitimately point at a release whose `dist/` a failed build never
+ * finished writing, and the same "resolve as far as it exists" need applies —
+ * `realpathSync` alone throws `ENOENT` on that dangling target exactly when
+ * the caller most needs an answer, not an exception.
  */
-function realishPath(target: string): string {
+export function realishPath(target: string): string {
   let current = resolve(target);
   const missing: string[] = [];
   while (!existsSync(current)) {

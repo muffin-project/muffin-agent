@@ -33,6 +33,7 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
+import { cmdUpdate } from './update.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -93,6 +94,13 @@ comandi operatore:
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le
                                 migrazioni
+  muffin update [--dry-run] [--yes]
+                                aggiorna da origin/main: release affiancata
+                                (git worktree + npm ci), backup, poi scambio
+                                atomico del launcher — il gateway vivo resta
+                                sul codice vecchio finché non riparte
+  muffin update --rollback [--yes]
+                                torna alla release precedente (flip inverso)
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
@@ -228,6 +236,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdBackup(rest);
     case 'restore':
       return cmdRestore(rest);
+    case 'update':
+      return cmdUpdate(rest);
     case 'rot':
       return cmdRot(rest);
     case 'uninstall':
