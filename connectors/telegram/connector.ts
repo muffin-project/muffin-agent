@@ -1,6 +1,6 @@
 import type { Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
-import { runTurn, type LoopDeps, type TurnDelta } from '../../agent/loop.js';
+import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
@@ -16,6 +16,7 @@ import {
 } from './delivery.js';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
 import { startPresence } from './presence.js';
+import { startProgress } from './progress.js';
 import { renderForTelegram } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
@@ -616,6 +617,14 @@ export class TelegramConnector {
       isPrivate: incoming.isPrivate,
       placeholder: 'sto guardando…',
     });
+    // M5-BIS B13: a second, independent status surface — see `progress.ts`'s
+    // own file docstring for why this is not folded into `presence` above.
+    // Unconditional, same as `onDelta`/`presence` just above: no per-surface
+    // gate like the REPL's `isTTY` check, because there is no "non-interactive
+    // Telegram" the way there is a piped terminal.
+    const progress = startProgress(this.deps.api, incoming.chatId, {
+      ...(this.deps.log ? { log: this.deps.log } : {}),
+    });
 
     try {
       // What this message's content adds on top of the sender's own tier —
@@ -643,6 +652,13 @@ export class TelegramConnector {
       const onDelta = (delta: TurnDelta): void => {
         deltaText += delta.text;
         presence.streamText(deltaText);
+      };
+      // M5-BIS B13: the sibling sink, same shape — this closure only forwards,
+      // `progress.ts`'s own `report` owns the rate limit, the coalescing and
+      // the create-vs-edit choice, exactly as `presence.streamText` does above
+      // for `onDelta`.
+      const onProgress = (event: TurnEvent): void => {
+        progress.report(event);
       };
 
       // Fault point 2, made observable: a real crash here lands after `bind`
@@ -689,14 +705,18 @@ export class TelegramConnector {
         // regardless of which group this turn is actually in).
         replyChannel: `telegram:${incoming.chatId}`,
         onDelta,
+        onProgress,
       });
 
-      // B11: no more live updates once the turn itself is over. Called here,
-      // explicitly, before any finalisation network call below — not only in
-      // the `finally` — because `stop()` is idempotent and this is what
-      // cancels a coalesced, still-pending live update before it can race
-      // the final edit and land after it with stale, mid-turn text.
+      // B11/B13: no more live updates once the turn itself is over. Called
+      // here, explicitly, before any finalisation network call below — not
+      // only in the `finally` — because `stop()` is idempotent and this is
+      // what cancels a coalesced, still-pending live update before it can
+      // race the final edit and land after it with stale, mid-turn text (and,
+      // for `progress`, what removes the status message before the real
+      // answer is sent — never leaving it orphaned above the reply).
       await presence.stop();
+      await progress.stop();
 
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
@@ -755,6 +775,7 @@ export class TelegramConnector {
       this.deps.inbox.markProcessed(stored.updateId, this.now());
     } finally {
       await presence.stop();
+      await progress.stop();
     }
   }
 
