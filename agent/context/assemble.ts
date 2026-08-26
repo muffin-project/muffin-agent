@@ -271,10 +271,34 @@ function concat(parts: string[]): string {
   return parts.filter((s) => s.length > 0).join('\n\n');
 }
 
+/**
+ * The operating half of the prompt — and for a long time the only half that was
+ * three lines while identity and voice ran to eleven thousand characters.
+ *
+ * Every rule added here closes a gap the **runtime** does not already close,
+ * which is the test each candidate has to pass. A denial, for instance, already
+ * arrives at the model carrying its own "non insistere" (`runTool`'s `deny`
+ * branch), so repeating that here would buy nothing and cost a cacheable prefix
+ * on every turn. What the runtime cannot say is what to do *before* a call.
+ *
+ * The three that earned their place, each from a real trace (26/08/2026):
+ *
+ *  - **Asking in prose for what the kernel already gates.** High-risk
+ *    capabilities go through `ask` and the owner answers a real prompt. A model
+ *    that also writes "vuoi che lo faccia?" makes him answer the same question
+ *    twice, once in a sentence and once in a dialog.
+ *  - **Re-calling a tool whose answer it already has.** One turn issued four
+ *    `fs_list` in ten seconds, two of them inside the same second.
+ *  - **Silence over long work.** One turn ran 300 seconds across eleven model
+ *    calls and said nothing until it was over.
+ */
 const WORK_RULES = [
   '## Come lavori',
   '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
+  "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
+  "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
+  '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
 ].join('\n');
 
