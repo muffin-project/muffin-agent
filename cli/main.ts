@@ -4,7 +4,7 @@ import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
-import { probeSandbox } from '../core/sandbox/probe.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
@@ -403,12 +403,18 @@ async function cmdInit(argv: string[]): Promise<number> {
   }
 
   // "Durante l'installazione deve capire la macchina" (owner, verbatim) —
-  // before any question, not instead of doctor: `probeSandbox` already runs a
-  // real containment, but until now only `muffin doctor` ever read the result,
-  // so a first run learned about a broken sandbox by running a *second*
-  // command. Headless is untouched: nothing here prints or blocks off a TTY.
+  // before any question, not instead of doctor. `SandboxExecutor.verify()`
+  // runs a real init + contained round trip through the SAME door the runtime
+  // uses (`SandboxManager`), not just the narrower probe — until now only
+  // `muffin doctor` ever read even the narrower result, so a first run learned
+  // about a broken sandbox by running a *second* command; a probe-only read
+  // here would also have missed the 26/08/2026 container where the probe was
+  // green and the real invocation still could not mount `/proc`. Headless is
+  // untouched: nothing here prints or blocks off a TTY.
   if (process.stdin.isTTY) {
-    process.stderr.write(describeSandboxProbe(probeSandbox()));
+    const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+    process.stderr.write(describeSandboxProbe(await sandboxExecutor.verify()));
+    await sandboxExecutor.close();
     process.stderr.write(describeSupervisor(process.platform));
   }
 
@@ -685,13 +691,13 @@ async function cmdUninstall(argv: string[]): Promise<number> {
   return 0;
 }
 
-function cmdDoctor(argv: string[]): number {
+async function cmdDoctor(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: { json: { type: 'boolean' }, online: { type: 'boolean' } },
     allowPositionals: false,
   });
-  const report = runDoctor(paths().home, values.online ? { online: true } : {});
+  const report = await runDoctor(paths().home, values.online ? { online: true } : {});
   process.stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : `${formatReport(report)}\n`);
   return report.exitCode;
 }
