@@ -449,3 +449,118 @@ describe('telegram progress · un invio lento non produce due messaggi né un or
     }
   });
 });
+
+/**
+ * I due follow-up del judge fresco su #143 — uno su un comportamento che la
+ * riparazione ha **introdotto**, l'altro su una guardia che nessuno dei
+ * diciassette test esercitava.
+ */
+describe('telegram progress · il tetto di stop() e la guardia della catena', () => {
+  it('stop() non tiene la risposta in ostaggio di un invio che non torna', async () => {
+    // Misurato dal judge sulla versione senza tetto: timer finti avanzati di
+    // ventiquattro ore con un invio bloccato, e `stop()` non tornava mai.
+    // La risposta vera parte DOPO `stop()` (`runFresh` lo attende prima di
+    // `deliverTo`), quindi quell'attesa la paga l'owner — per ripulire una
+    // riga cosmetica.
+    vi.useFakeTimers();
+    try {
+      let never = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        never = resolve;
+      });
+      const { api, calls } = fakeApi((recorded) => ({
+        sendMessage: async (chatId, html) => {
+          await gate;
+          recorded.push({ method: 'sendMessage', at: Date.now(), text: html, messageId: 900 });
+          return { message_id: 900, date: 0, chat: { id: chatId, type: 'private' } } as never;
+        },
+      }));
+      const progress = startProgress(api, 1);
+
+      progress.report(round(1));
+      await vi.advanceTimersByTimeAsync(0); // invio sul filo, e non tornerà
+
+      let resolved = false;
+      const stopping = progress.stop().then(() => {
+        resolved = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(resolved).toBe(false); // aspetta, ma non per sempre
+      await vi.advanceTimersByTimeAsync(1_000); // superato STOP_WAIT_MS
+      await stopping;
+      expect(resolved).toBe(true);
+
+      // Il compromesso dichiarato: resta una riga cosmetica, non una risposta
+      // trattenuta. Non c'era un id da cancellare, quindi niente deleteMessage.
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
+      never(); // libera il gate per non lasciare la promise appesa
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('mai due chiamate insieme: un anello che finisce non deve slegare la catena', async () => {
+    // La guardia `if (inFlight === mine)` nel `finally` di `send()` è
+    // necessaria, e togliendola tutti e diciassette i test restavano verdi.
+    //
+    // Lo scenario che la cattura ha bisogno di tre anelli, non due: serve un
+    // invio che **finisce** mentre il successivo è ancora sul filo. Senza la
+    // guardia, il `finally` del primo azzera `inFlight` — che nel frattempo
+    // punta al secondo — e il terzo invio non si incatena a niente: parte
+    // subito, insieme al secondo. È la stessa classe di difetto che #143
+    // ripara, un livello più in profondità.
+    vi.useFakeTimers();
+    try {
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      let releaseSend = (): void => {};
+      let releaseEdit = (): void => {};
+      const sendGate = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const editGate = new Promise<void>((resolve) => {
+        releaseEdit = resolve;
+      });
+      let firstEdit = true;
+      const { api } = fakeApi(() => ({
+        sendMessage: async (chatId) => {
+          concurrent += 1;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          await sendGate; // il primo anello: lento, ma finirà
+          concurrent -= 1;
+          return { message_id: 900, date: 0, chat: { id: chatId, type: 'private' } } as never;
+        },
+        editMessageText: async () => {
+          concurrent += 1;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          if (firstEdit) {
+            firstEdit = false;
+            await editGate; // il secondo anello: ancora sul filo quando arriva il terzo
+          }
+          concurrent -= 1;
+          return true;
+        },
+      }));
+      const progress = startProgress(api, 1);
+
+      progress.report(round(1));
+      await vi.advanceTimersByTimeAsync(0); // sendMessage parte e si blocca
+      progress.report(toolStart('a'));
+      await vi.advanceTimersByTimeAsync(3_000); // il secondo si incatena al primo
+
+      releaseSend(); // il PRIMO finisce: qui il finally senza guardia azzera inFlight
+      await vi.advanceTimersByTimeAsync(0); // il secondo parte e si blocca
+
+      progress.report(toolStart('b')); // il terzo, mentre il secondo è fuori
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(maxConcurrent).toBe(1);
+
+      releaseEdit();
+      await vi.advanceTimersByTimeAsync(0);
+      await progress.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
