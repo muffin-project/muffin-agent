@@ -396,8 +396,20 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
       // episode that succeeded and then tripped the sweep would otherwise land
       // here reading as total failure — a warn over a batch that worked.
+      //
+      // **La soglia è la maggioranza, non la totalità**, e la differenza è
+      // stata misurata sull'installazione dell'owner il 27/08: gli ultimi tre
+      // giri erano 3 errori su 3 episodi, 10 su 11 e 13 su 14, tutti con zero
+      // fatti — la corsia era morta dal cambio di modello del 25/08. Il primo
+      // avvisava; gli altri due leggevano `ok` **verdi**, perché un solo
+      // episodio che non ha lanciato bastava a far fallire `errors >= episodes`
+      // per uno. Il commento sopra dice «una *minoranza* di errori è una corsia
+      // che si sta curando»: 13 su 14 non è una minoranza, quindi era la
+      // soglia a essere sbagliata, non la forma. E `facts === 0` continua a
+      // fare il lavoro che il caso dello sweep chiede — un giro che ha
+      // prodotto un fatto non arriva qui comunque.
       const nothingGotThrough =
-        last.episodes > 0 && last.errors >= last.episodes && last.facts === 0;
+        last.episodes > 0 && last.facts === 0 && last.errors * 2 > last.episodes;
 
       // `ConsolidationOutcome` is a closed union of four (`ran | budget | busy
       // | error`); a `switch` with an exhaustive `default` is what makes a
