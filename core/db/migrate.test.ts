@@ -340,14 +340,20 @@ describe('migrazione 3 — facts.pinned', () => {
     raw.run(6, 'group:telegram:9', 3, 'works_as', 'barista', 2, 'said');
     // Host tenant but inferred, not said: tier alone is not the whole gate.
     raw.run(7, 'host', 2, 'works_as', 'painter', 0, 'inferred');
+    // Host fact whose subject is ANOTHER tenant's "owner" entity. No write
+    // path can produce this today (`upsertEntity`/`findEntity` resolve within
+    // the tenant), so it goes in by hand — it is what makes the tenant
+    // scoping on the backfill's subqueries load-bearing instead of decorative
+    // (judge #122 giro 2 follow-up).
+    raw.run(8, 'host', 3, 'works_as', 'plumber', 0, 'said');
     migrate(db, { backupDir: backups, migrations: [] });
 
     migrate(db, { backupDir: backups });
 
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]); // the host backfill, and nothing else
-    const refused = db.prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7) AND pinned = 0`).all() as { id: number }[];
-    expect(refused.map((r) => r.id)).toEqual([5, 6, 7]);
+    const refused = db.prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7, 8) AND pinned = 0`).all() as { id: number }[];
+    expect(refused.map((r) => r.id)).toEqual([5, 6, 7, 8]);
   });
 
   it('non fallisce su un database dove `facts` non esiste ancora', () => {
