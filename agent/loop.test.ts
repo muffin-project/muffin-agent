@@ -1336,4 +1336,119 @@ describe('agent loop · progress (B13)', () => {
     const result = await runTurn(d, input(store)); // no onProgress attached
     expect(result).toMatchObject({ stopped: 'answered', text: 'ok' });
   });
+
+  /**
+   * The pairing invariant on the branches where the tool never runs.
+   *
+   * `runTool` has seven exits and every one of them closes the pair, but the
+   * tests written with the channel only ever drove two of them — success and
+   * a throwing handler. The judge on #136 proved the gap the honest way:
+   * deleting `emitToolEnd(true)` from the kernel's `deny` branch left the
+   * suite at 57/57 green. A surface that shows a spinner per `tool_start` and
+   * clears it per `tool_end` would have hung there forever, on the one path
+   * that is *supposed* to be common.
+   *
+   * One case per exit that refuses before executing, driven from the outside
+   * — through a real policy verdict or a real approver, not by calling
+   * `runTool` directly — because the point is that the production path
+   * reaches them.
+   */
+  describe('closes the tool_start/tool_end pair on every exit that refuses', () => {
+    const high: CapabilityDecl[] = [
+      { id: 'demo.high', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+    ];
+    const undoable: CapabilityDecl[] = [
+      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+    ];
+
+    /** A tool that records if it ran, so "refused" is proved and not assumed. */
+    const tool = (capability: string, name: string, ran: string[]): RegisteredTool => ({
+      capability,
+      spec: { name, description: 'x', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
+      handler: () => {
+        ran.push(name);
+        return { content: 'eseguito', tier: 0 as const };
+      },
+    });
+
+    const kernel = (decls: CapabilityDecl[], budgetExhausted = false) =>
+      createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities: new Map(decls.map((c) => [c.id, c])),
+        budgetExhausted: () => budgetExhausted,
+        hardened: false,
+      });
+
+    it('deny: the kernel refuses outright', async () => {
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_high'), answer('ok')], {
+        decide: kernel(high, true), // budget_exhausted, and high risk is not exempt
+        tools: [tool('demo.high', 'demo_high', ran)],
+      });
+      const events: TurnEvent[] = [];
+      await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+      expect(ran).toEqual([]);
+      expect(byType(events, 'tool_start')).toHaveLength(1);
+      expect(byType(events, 'tool_end')).toEqual([
+        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+      ]);
+    });
+
+    it('draft: a reversible verdict with no undo journal to honour it', async () => {
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
+        decide: kernel(undoable),
+        tools: [tool('demo.draft', 'demo_draft', ran)],
+      });
+      const events: TurnEvent[] = [];
+      await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+      expect(ran).toEqual([]);
+      expect(byType(events, 'tool_start')).toHaveLength(1);
+      expect(byType(events, 'tool_end')).toEqual([
+        expect.objectContaining({ type: 'tool_end', name: 'demo_draft', isError: true }) as unknown as TurnEvent,
+      ]);
+    });
+
+    it('ask_denied: the owner was asked and said no', async () => {
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_high'), answer('ok')], {
+        decide: kernel(high),
+        approve: async () => 'deny',
+        tools: [tool('demo.high', 'demo_high', ran)],
+      });
+      const events: TurnEvent[] = [];
+      await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+      expect(ran).toEqual([]);
+      expect(byType(events, 'tool_start')).toHaveLength(1);
+      expect(byType(events, 'tool_end')).toEqual([
+        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+      ]);
+    });
+
+    it('ask_unavailable: no approval channel, so the turn stops mid-call', async () => {
+      // This exit *throws* `ApprovalRequired` instead of returning a tool
+      // result — the one branch where a missing `tool_end` would be easiest to
+      // excuse and worst to live with, since the surface is left holding an
+      // open call the turn will never come back to on its own.
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_high'), answer('ok')], {
+        decide: kernel(high),
+        tools: [tool('demo.high', 'demo_high', ran)],
+      });
+      const noApprover = { ...d, approve: undefined };
+      const events: TurnEvent[] = [];
+      const result = await runTurn(noApprover, { ...input(store), onProgress: (e) => events.push(e) });
+
+      expect(ran).toEqual([]);
+      expect(result.stopped).toBe('ask');
+      expect(byType(events, 'tool_start')).toHaveLength(1);
+      expect(byType(events, 'tool_end')).toEqual([
+        expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
+      ]);
+    });
+  });
 });
