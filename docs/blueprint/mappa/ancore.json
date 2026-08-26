@@ -396,7 +396,7 @@
   },
   "agent/providers/types.ts:107": {
     "path": "agent/providers/types.ts",
-    "line": 107,
+    "line": 133,
     "testo": "stream: boolean;"
   },
   "agent/runtime.ts:104": {
@@ -1481,7 +1481,7 @@
   },
   "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 167,
+    "line": 212,
     "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
@@ -1521,37 +1521,37 @@
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 341,
+    "line": 370,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 358,
+    "line": 387,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 360,
+    "line": 389,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 361,
+    "line": 390,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 494,
+    "line": 523,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 495,
+    "line": 524,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 509,
+    "line": 538,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1571,12 +1571,12 @@
   },
   "core/memory/judge.ts:105": {
     "path": "core/memory/judge.ts",
-    "line": 105,
+    "line": 106,
     "testo": "/**"
   },
   "core/memory/judge.ts:153": {
     "path": "core/memory/judge.ts",
-    "line": 153,
+    "line": 154,
     "testo": "export const SUPERSEDE_THRESHOLD = 0.75;"
   },
   "core/memory/maintenance.ts:132": {
@@ -1671,12 +1671,12 @@
   },
   "core/memory/rerank.ts:47": {
     "path": "core/memory/rerank.ts",
-    "line": 47,
+    "line": 48,
     "testo": "export class LlmReranker implements Reranker {"
   },
   "core/memory/rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 64,
+    "line": 65,
     "testo": "try {"
   },
   "core/memory/schema.ts:151": {
@@ -2356,22 +2356,22 @@
   },
   "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 204,
+    "line": 263,
     "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
   "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 209,
+    "line": 268,
     "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
     "path": "core/memory/extract.ts",
-    "line": 25,
+    "line": 26,
     "testo": "const ExtractedFact = z.object({"
   },
   "extract.ts:67": {
     "path": "core/memory/extract.ts",
-    "line": 76,
+    "line": 77,
     "testo": "function deriveImportance(f: { matters: boolean; charged: boolean }): number {"
   },
   "fs.ts:257": {
@@ -2411,7 +2411,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 381,
+    "line": 410,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
@@ -2751,7 +2751,7 @@
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 64,
+    "line": 65,
     "testo": "try {"
   },
   "runtime.ts:284": {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { fence } from './spotlight.js';
 import { IMPORTANCE_CHARGED, IMPORTANCE_NOTABLE, IMPORTANCE_ROUTINE } from './schema.js';
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { TrustTier } from '../policy/types.js';
 
@@ -153,7 +154,51 @@ export type ExtractionResult = {
   rejected: number;
   /** Set when the model returned something unusable, so the caller can decide. */
   error?: string;
+  /**
+   * What the call cost, on **every** exit including the three failures.
+   *
+   * Same reason the judge got its own (#141): the spend is billed either way
+   * (`agent/providers/light-lane.ts`), so a failed extraction that reports no
+   * usage does not read as *free*, it reads as *unrecorded* — and the two look
+   * identical on a per-step view. Measured on the owner's install on 27/08: a
+   * consolidation round burned 129 seconds against a model and produced
+   * nothing, and no span anywhere carried a single token of it.
+   */
+  usage: ExtractionUsage;
 };
+
+/**
+ * Why the model's answer could not be used, said in terms that separate the
+ * causes instead of naming the symptom.
+ *
+ * "nessuna risposta dal modello" was true and useless: it is the same sentence
+ * whether the ceiling ate the answer, the model spent its budget reasoning and
+ * returned an empty `content`, or it tried to call a tool that was never
+ * offered. Those need opposite fixes, and the owner's install sat on this exact
+ * line for two days with twelve episodes retrying forever.
+ *
+ * So the line carries the three things that tell them apart: where the model
+ * stopped, how many tokens it emitted, and whether anything came back on a
+ * channel this path does not read.
+ */
+/** The same three numbers `JudgeOutcome.usage` carries, and for the same reason. */
+export type ExtractionUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+
+function whyUnusable(result: {
+  stopReason: string;
+  usage: ExtractionUsage;
+  toolCalls: { name: string }[];
+  thinking?: { type: string }[];
+}): string {
+  const parts = [`stop=${result.stopReason}`, `${result.usage.outputTokens} token in uscita`];
+  if (result.toolCalls.length > 0) {
+    parts.push(`ha provato a chiamare ${result.toolCalls.map((t) => t.name).join(', ')} — qui non ci sono tool`);
+  }
+  if (result.thinking !== undefined && result.thinking.length > 0) {
+    parts.push(`${result.thinking.length} blocchi di reasoning: il testo è finito lì`);
+  }
+  return `nessuna risposta dal modello (${parts.join(' · ')})`;
+}
 
 export async function extractFacts(
   provider: Provider,
@@ -179,21 +224,35 @@ export async function extractFacts(
         ],
       },
     ],
-    maxOutputTokens: 1500,
+    // 1500 era il budget della risposta, e resta quello: la lista di fatti
+    // non è cresciuta. Quello che si aggiunge è lo spazio per il reasoning che
+    // il profilo chiede spento e l'adapter non sa spegnere — vedi
+    // `REASONING_HEADROOM`, dove c'è la misura.
+    maxOutputTokens: 1500 + REASONING_HEADROOM,
     temperature: 0,
     stream: false,
   });
 
-  if (!result.text) return { facts: [], rejected: 0, error: 'nessuna risposta dal modello' };
+  const usage = result.usage;
+
+  if (!result.text) return { facts: [], rejected: 0, usage, error: whyUnusable(result) };
 
   const parsed = parseJson(result.text);
-  if (!parsed.ok) return { facts: [], rejected: 0, error: parsed.error };
+  if (!parsed.ok) {
+    // The model's own words, bounded. `muffin memory review --verbose` already
+    // shows the judge's raw answer for the same reason: a parse error without
+    // the thing that failed to parse cannot be acted on, and re-running to see
+    // it costs another call against the same model that just failed.
+    const head = result.text.slice(0, 200).replace(/\s+/g, ' ');
+    return { facts: [], rejected: 0, usage, error: `${parsed.error} — ha risposto: "${head}"` };
+  }
 
   const validated = ExtractionResponse.safeParse(parsed.value);
   if (!validated.success) {
     return {
       facts: [],
       rejected: 0,
+      usage,
       error: `schema non valido: ${validated.error.issues[0]?.message ?? 'sconosciuto'}`,
     };
   }
@@ -212,7 +271,7 @@ export async function extractFacts(
     }
     facts.push(f);
   }
-  return { facts, rejected };
+  return { facts, rejected, usage };
 }
 
 /**

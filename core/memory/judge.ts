@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { fence } from './spotlight.js';
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { Fact } from './store.js';
 
@@ -267,7 +268,10 @@ export async function judgeContradiction(
         ],
       },
     ],
-    maxOutputTokens: 500,
+    // Un verdetto è corto e resta corto; è il ragionamento davanti a essere
+    // incomprimibile da qui. Con 500 secchi la risposta grezza nel registro è
+    // `[vuota]` — vedi `REASONING_HEADROOM`.
+    maxOutputTokens: 500 + REASONING_HEADROOM,
     temperature: 0,
     stream: false,
   });
