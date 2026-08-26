@@ -242,3 +242,4 @@
 {"id":"judge-129-giro1","chiuso":"MERGE, zero bloccanti; 3 follow-up applicati da me in 390be7e con mutazioni sulle reti nuove","quando":"2026-08-26T13:14:28.888Z"}
 {"id":"canale-progresso","slug":"canale-progresso","cosa":"B11+: canale di progresso separato da onDelta — il turno dice cosa sta facendo mentre lo fa (sonnet, CRITICAL)","quando":"2026-08-26T14:13:39.700Z"}
 {"id":"rot-harden","slug":"rot-harden","cosa":"il perché di ogni ASK su sys.shell, e i comandi per uscirne: doctor esplicito + muffin rot harden che STAMPA (sonnet)","quando":"2026-08-26T14:22:28.833Z"}
+{"id":"judge-136","slug":"judge-136","cosa":"judge CRITICAL su PR #136 head d7f8fb5: il canale di progresso raggiunge davvero il turno, e non ritratta mai","quando":"2026-08-26T14:51:32.501Z"}
