@@ -20,15 +20,15 @@ concreto su authority/data/effect. Non da questa lista.
 quella da non ruotare (`doctor` le nomina); `muffin jobs remove 922ac8b7`;
 billing GitHub per la CI.
 
-**Fatto 25–26/08** (dettaglio = git log): #106..#119. CI **senza minuti**
+**Fatto 25–26/08** (dettaglio = git log): #106..#122. Le ultime due: #121
+`muffin update` (release affiancate + flip atomico del symlink, mai mutare
+l'albero che gira; `main` è il canale) e #122 memoria appuntata (CRITICAL,
+2 giri di judge: iniezione incondizionata a budget 12; pin solo tier-0/said,
+gate nel codice — `addFact` E il backfill della migrazione 3; mai nei tenant
+group; supersessione vince; `muffin memory pin/unpin`). CI **senza minuti**
 (billing): merge con gate locale dichiarato in un commento sulla PR.
 
-**In volo (26/08):** `slice/memoria-appuntata` (CRITICAL, judge: colonna
-`pinned`, iniezione incondizionata a budget fisso; vincoli: pin solo da fonte
-owner/tier-0 — è un canale di persistenza per injection — mai nei tenant
-group, supersessione vince sul pin) e `slice/comando-update` (STANDARD:
-release affiancate in worktree + flip atomico del symlink del launcher, mai
-mutare l'albero che gira; `main` è il canale).
+**In volo:** niente.
 
 **Coda decisa dall'owner:** 1) test **E2E unico** — install pulita → token →
 gateway vivo → conversazione (il «MOLTO IMPORTANTE», oggi provato a pezzi);
@@ -36,11 +36,10 @@ gateway vivo → conversazione (il «MOLTO IMPORTANTE», oggi provato a pezzi);
 3) **note di avanzamento sui turni lunghi** — con **validazione della
 compaction** (Slipstream, arxiv 2605.08580: un sommario sbagliato è danno
 silenzioso — si valida contro la traiettoria, non solo si produce);
-4) dedup `gateway↔repl`. All'integrazione delle slice in volo: **THESIS.md
-riceve la cornice «sistema agentico»** (Agent = Model + Harness; organi;
-core/archival; il killer 2026 è il context drift, non l'esaurimento).
+4) dedup `gateway↔repl`.
 
-**Conclusioni di design da non riscoprire:** `/new` = operazione di CONTESTO,
+**Conclusioni di design da non riscoprire** (cornice «sistema agentico»:
+THESIS §5): `/new` = operazione di CONTESTO,
 mai di memoria (pipeline tutte fuori sessione, verificato); superfici
 residenti → sessione infinita + compaction, il consolidatore idle è l'analogo
 del sonno; identità owner = pre-caricata, la somiglianza è per la coda lunga.
