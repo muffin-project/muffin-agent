@@ -14,28 +14,29 @@ rimandare, o da un rischio su authority/data/effect. Non da questa lista.
 
 **Aperto per l'owner:** token del bot Telegram; billing GitHub per la CI.
 
-**Fatto 25–26/08** (dettaglio = git log): #106..#127 — fra cui #121 `muffin
+**Fatto 25–26/08** (dettaglio = git log): #106..#129 — fra cui #121 `muffin
 update`, #122 memoria appuntata, #126 gate Linux in container, #127 **A10: il
-giro dell'owner** (un solo scenario, dalla macchina pulita alla risposta;
-gamba Linux provata con `systemd-analyze verify`). CI **senza minuti**: merge
-con gate locale dichiarato in un commento sulla PR.
+giro dell'owner** (dalla macchina pulita alla risposta; gamba Linux provata
+con `systemd-analyze verify`), #129 **il sandbox si prova dalla porta vera**
+(self-test reale in `ensureInit`, `contain_failed`, +45ms solo su
+doctor/init). CI **senza minuti**: merge con gate locale in un commento.
 
-**In volo:** `slice/probe-porta-vera` (CRITICAL): il probe del sandbox deve
-significare «ho eseguito qualcosa di contenuto qui», non «bwrap risponde a
-una mia invocazione».
+**In volo:** niente.
 
 **Scoperto il 26/08, da non riperdere.** (a) `init` fa le domande di #117
 **solo su TTY**: il percorso che fa un umano non lo prova nessun test (via:
 pilotare un pty con `script`). (b) `gateway install` **stampa** i comandi del
-supervisore, non li esegue: la catena ha un passo manuale, e il modo di
-provarlo è eseguire i comandi che ha stampato. (c) Gate Linux senza CI:
-`npm run test:acceptance:linux`. Prima corsa: 28/29, e **un reperto CRITICAL**
-— il probe dice `available` mentre l'esecuzione vera muore su `Can't mount
-proc`, perché probe ed esecutore invocano bwrap per strade diverse (diretto vs
-`SandboxManager`): in un container su VPS `doctor` sarebbe verde e ogni script
-fallirebbe. In riparazione. (d) L'installazione viva è 18 commit indietro e `muffin update`
-non è mai girato davvero: dopo l'E2E, `dev`→`main` e update reale. (e) E7 dal
+supervisore, non li esegue: il modo di provarlo è eseguire i comandi che ha
+stampato. (c) L'installazione viva è ~20 commit indietro e `muffin update` non
+è mai girato davvero: prossimo passo, `dev`→`main` e update reale. (d) E7 dal
 vivo: a «che modello usi?» dice che non lo sa.
+
+**Tool design vs prassi 2026** — confronto con fonti datate in
+`research/tool-design-2026-08-26.md`. Siamo avanti dove conta (idempotenza
+tenuta invece che dichiarata; taint→egress = lethal trifecta). Il primo dei
+quattro scarti vale una slice: **il confine degli argomenti non esiste** — lo
+`inputSchema` non valida niente, e un commento in `agent/providers/types.ts`
+promette una validazione che non c'è.
 
 **Coda decisa dall'owner** (l'E2E è fatto, A10): 1) **ASK durevole** —
 un'approvazione pendente non sopravvive a un crash; 2) **note di avanzamento
