@@ -4,27 +4,29 @@
 Muffin, da una requirement owner decisa, da una migrazione costosa da
 rimandare, o da un rischio su authority/data/effect. Non da questa lista.
 
-**Aperto per l'owner:** token del bot Telegram; billing GitHub per la CI.
+**Aperto per l'owner:** token bot Telegram; billing GitHub CI.
 
-**Installazione viva su `main`, verificata (26/08).** #131 + update reale:
-migrazione 3 sul DB vero, «Yo!» risponde con l'identità, `doctor` col solo WARN
-RoT single-user. Trappola del primo update: `cli/update.ts`.
+**Installazione viva su `main` (26/08):** migrazione 3 sul DB vero, «Yo!»
+risponde con l'identità, `doctor` col solo WARN RoT single-user. Trappola del
+primo update: `cli/update.ts`.
 
 **CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
 
-**In volo:** `muffin trace turn <id>` — ogni step con durata, token e decisione
-di policy. L'id è quello che il turno stampa: dodici caratteri, ora accettati
-come prefisso (erano l'unico id rifiutato).
+**Il prompt vivo è del 9 agosto** — 11498 caratteri contro 22477: `update` non
+tocca ciò che `init` ha copiato, e la persona approvata il 17/08 non è mai
+arrivata all'agente che gira. `policy.json`/`budgets.json` derivano ma **non**
+funzionalmente. Prova e disegno: `research/deriva-defaults-2026-08-26.md`.
+Prossima slice, in `doctor`; il reseal del RoT resta scelta dell'owner.
 
-**Misurato con quella vista, da guardare.** (a) **La cache di prompt non
-prende**: 18 `chat_call` veri in un giorno, 174012 token di input, 4800 letti
-da cache = **2.8%**; 17/18 riportano l'attributo, uno solo colpisce. (b) Ogni
+**Misurato con quella vista.** (a) **La cache non prende**, 2.8% su 18
+chiamate, e non è il nostro prefisso: `research/cache-prompt-2026-08-26.md`.
+(b) Ogni
 `sys.shell` è `effect=ask`, nessuna eccezione: la lamentela dell'owner è un
 dato. (c) `memory.recall` gira **senza vettori** (`EmbedderUnavailable`).
 (d) Un `memory.ingest` da solo: 129s, zero chiamate al modello.
 
-**Ordine deciso** (owner: «fai tutto, nell'ordine che reputi migliore»).
-1) trace per step **fatto**. 2) **Canale di progresso**, delegato: NON allargare
+**Ordine deciso.** 1) trace per step **fatto** (#133). 2) **Canale di
+progresso**, delegato: NON allargare
 `TurnDelta` (porta solo la risposta finale, bufferizzata fino al round terminale
 per non ritrattare testo) ma un secondo sink `onProgress` — un evento di
 progresso racconta ciò che è già successo, quindi non si ritratta mai.
@@ -55,11 +57,10 @@ di memoria; il consolidatore idle è l'analogo del sonno; identità owner
 pre-caricata, la somiglianza è per la coda lunga. Claude è un coding agent,
 Muffin no (ADR-0027): le lezioni si trasferiscono SELETTIVAMENTE.
 
-**Follow-up registrati.** REPL muore su input non-TTY; manca `sys.inspect`
-(E7); `doctor` pre-boot dà rimedio sbagliato; composizione N→1 senza assembler;
+**Follow-up registrati.** REPL muore su input non-TTY; `doctor` pre-boot dà rimedio sbagliato; composizione N→1 senza assembler;
 `possibly_sent` non distingue crash da in-volo; TOCTOU gateway; repl-lock
 assente; finestra pairing; Discord `handle()` non bound.
 
-**Truth maintenance:** M5-BIS possiede status Gate e classificazione RETURN;
-PERCORSO §0 l'ordine, chiuso. A6/A7/A8 e D12/E6: meccanismo in HEAD, BLOCKER
-solo per i residui DOGFOOD. `dev` resta privato.
+**Truth maintenance:** M5-BIS possiede status Gate e RETURN, PERCORSO §0
+l'ordine. A6/A7/A8 e D12/E6: meccanismo in HEAD, BLOCKER solo per i residui
+DOGFOOD. `dev` resta privato.
