@@ -121,6 +121,16 @@ CREATE TABLE IF NOT EXISTS facts (
   importance    INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2),
   extraction_v  INTEGER NOT NULL,
   superseded_by INTEGER REFERENCES facts(id),
+  -- The nucleus (slice/memoria-appuntata): a pinned fact enters the MEMORIA
+  -- block of every turn unconditionally, before the similarity search even
+  -- runs — the fix for "Yo!" not matching the episode where the owner's name
+  -- was given. Deliberately not a tier alongside trust_tier/importance: those
+  -- two answer "how much to trust it" and "how much it would hurt to forget
+  -- it"; this answers only "is it in context right now, or does something
+  -- have to go looking for it". addFact() is the one place allowed to set it
+  -- to 1 (see its own comment) — a row written directly, or by anything that
+  -- skips that gate, stays 0 by default, which is the safe direction.
+  pinned        INTEGER NOT NULL DEFAULT 0,
   CHECK ((object_id IS NULL) <> (object_value IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(tenant_id, subject_id, predicate);

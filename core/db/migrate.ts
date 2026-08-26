@@ -73,6 +73,74 @@ const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'goal'`);
     },
   },
+  {
+    version: 3,
+    description:
+      "facts.pinned — un nucleo di fatti che il recall per somiglianza non deve poter far dimenticare",
+    up: (db) => {
+      // Same guard as migration 2, same reason: `facts` is created by
+      // `MemoryStore`, which runs after this runner. A fresh install never
+      // reaches this branch — `MEMORY_SCHEMA` already carries the column.
+      const esiste = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facts'`)
+        .get() as unknown;
+      if (esiste === undefined) return;
+
+      const colonne = db.prepare(`PRAGMA table_info(facts)`).all() as Array<{ name: string }>;
+      if (!colonne.some((c) => c.name === 'pinned')) {
+        db.exec(`ALTER TABLE facts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+      }
+
+      // The one-time backfill the ALTER alone cannot do: the owner's own
+      // identity facts, recorded before `pinned` existed, have to become
+      // pinned too — otherwise every install that predates this migration
+      // keeps the exact failure this column was written to fix (2026-08-26
+      // dogfood: "Yo!" did not match the episode that carried the owner's
+      // name, and nothing forced it into context).
+      //
+      // Recognising "the owner entity" from schema alone has no general
+      // answer — `upsertEntity`/`findEntity` match on literal name, so the
+      // real database this shipped against holds the owner's identity forked
+      // across two rows: an entity literally named "owner" (`extract.ts`'s
+      // own naming convention for the first-person speaker) and a second one
+      // under the owner's real name, linked only by one fact shaped
+      // `<real name> — created — owner`. Both sides of that fork are honoured
+      // here, narrowly: the entity named "owner", and any entity that is the
+      // subject of an (active) `created` fact whose value is "owner" — not a
+      // general entity-resolution rule, which is a different, larger problem
+      // this slice does not take on. `works_as`/`created` are the exact two
+      // predicates the real install had recorded for that identity; the set
+      // stays this small on purpose, same reasoning as
+      // `DEFAULT_FUNCTIONAL_PREDICATES` — grown by audit, not by guessing,
+      // because every predicate added here pins itself into every future turn.
+      //
+      // This UPDATE is a second write path to `pinned`, so it carries the
+      // same gate as `MemoryStore.addFact` (`trust_tier = 0 AND origin =
+      // 'said'`), verbatim. Without it, a group tenant's own "owner"-named
+      // entity — `extract.ts` hands the literal subject "owner" to the model
+      // on any tenant — would get facts pinned here that `addFact` had
+      // correctly refused at write time. `tenant_id = 'host'` on the UPDATE
+      // and on both subqueries is defence in depth for the same hazard: the
+      // backfill exists to restore the *owner's* identity, and the owner
+      // lives in the host tenant only; it must not depend on `tierOf` never
+      // granting tier 0 inside a group.
+      db.exec(`
+        UPDATE facts SET pinned = 1
+        WHERE expired_at IS NULL AND pinned = 0
+          AND tenant_id = 'host'
+          AND trust_tier = 0 AND origin = 'said'
+          AND predicate IN ('works_as', 'created')
+          AND subject_id IN (
+            SELECT id FROM entities
+             WHERE tenant_id = 'host' AND lower(trim(name)) = 'owner'
+            UNION
+            SELECT subject_id FROM facts
+             WHERE tenant_id = 'host' AND predicate = 'created'
+               AND lower(trim(object_value)) = 'owner' AND expired_at IS NULL
+          )
+      `);
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;

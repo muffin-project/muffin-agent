@@ -12,10 +12,12 @@ import { runRepl } from './repl.js';
 import {
   cmdMemoryCheck,
   cmdMemoryExtract,
+  cmdMemoryPin,
   cmdMemoryReview,
   cmdMemoryReviewKeep,
   cmdMemorySearch,
   cmdMemoryStats,
+  cmdMemoryUnpin,
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
@@ -771,6 +773,15 @@ async function cmdMemory(argv: string[]): Promise<number> {
   if (sub === 'check') {
     const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });
     return cmdMemoryCheck(home, values.json === true);
+  }
+
+  if (sub === 'pin' || sub === 'unpin') {
+    const id = Number(rest[0]);
+    if (!Number.isInteger(id) || id <= 0) {
+      process.stderr.write(`usage: muffin memory ${sub} <fact-id>\n`);
+      return 78;
+    }
+    return sub === 'pin' ? cmdMemoryPin(home, id) : cmdMemoryUnpin(home, id);
   }
 
   if (sub === 'search') {

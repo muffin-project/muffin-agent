@@ -891,132 +891,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 139,
+    "line": 141,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 197,
+    "line": 199,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 199,
+    "line": 201,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 201,
+    "line": 203,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 203,
+    "line": 205,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 182,
+    "line": 184,
     "testo": "*/"
   },
   "cli/main.ts:169": {
     "path": "cli/main.ts",
-    "line": 207,
+    "line": 209,
     "testo": "if (argv.includes('--no-stream')) return false;"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 209,
+    "line": 211,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 213,
+    "line": 215,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 215,
+    "line": 217,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 217,
+    "line": 219,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 219,
+    "line": 221,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 221,
+    "line": 223,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 223,
+    "line": 225,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 225,
+    "line": 227,
     "testo": "case 'run':"
   },
   "cli/main.ts:189": {
     "path": "cli/main.ts",
-    "line": 227,
+    "line": 229,
     "testo": "case 'repl':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 229,
+    "line": 231,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 242,
+    "line": 244,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 246,
+    "line": 248,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 360,
+    "line": 362,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 379,
+    "line": 381,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 515,
+    "line": 517,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 561,
+    "line": 563,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 571,
+    "line": 573,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 602,
+    "line": 604,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 767,
+    "line": 769,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1041,12 +1041,12 @@
   },
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
-    "line": 175,
+    "line": 177,
     "testo": "// Printed before the early return, because a gap is the answer to a"
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 256,
+    "line": 258,
     "testo": "total.skippedEmpty += report.skippedEmpty;"
   },
   "cli/memory.ts:28": {
@@ -1056,7 +1056,7 @@
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 326,
+    "line": 328,
     "testo": "* `verbose` reveals the judge's raw response on a row it could not read"
   },
   "cli/observe.ts:67": {
@@ -1476,7 +1476,7 @@
   },
   "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 150,
+    "line": 167,
     "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
@@ -1491,62 +1491,62 @@
   },
   "core/memory/ingest.ts:117": {
     "path": "core/memory/ingest.ts",
-    "line": 126,
+    "line": 151,
     "testo": "* `judgeUnavailable` below instead, kept apart rather than folded in here."
   },
   "core/memory/ingest.ts:176": {
     "path": "core/memory/ingest.ts",
-    "line": 185,
+    "line": 210,
     "testo": "`giudice non disponibile su ${g.subject}/${g.predicate}` +"
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 245,
+    "line": 270,
     "testo": "// would read as \"stuck\" on exactly the page that was working."
   },
   "core/memory/ingest.ts:237": {
     "path": "core/memory/ingest.ts",
-    "line": 247,
+    "line": 272,
     "testo": "deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 282,
+    "line": 307,
     "testo": "if (episode.kind === 'document') {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 316,
+    "line": 341,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 333,
+    "line": 358,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 335,
+    "line": 360,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 336,
+    "line": 361,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 460,
+    "line": 494,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 461,
+    "line": 495,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 475,
+    "line": 509,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -1601,67 +1601,67 @@
   },
   "core/memory/recall.ts:279": {
     "path": "core/memory/recall.ts",
-    "line": 279,
+    "line": 288,
     "testo": "const K = 60;"
   },
   "core/memory/recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 305,
+    "line": 314,
     "testo": "* discarded."
   },
   "core/memory/recall.ts:369": {
     "path": "core/memory/recall.ts",
-    "line": 372,
+    "line": 393,
     "testo": "// Least important, and among equals the oldest. The `<`-only reduce that was"
   },
   "core/memory/recall.ts:396": {
     "path": "core/memory/recall.ts",
-    "line": 397,
+    "line": 418,
     "testo": "tenantId: string,"
   },
   "core/memory/recall.ts:428": {
     "path": "core/memory/recall.ts",
-    "line": 442,
+    "line": 463,
     "testo": "if (textHits.length > 0) strategies.push('fts');"
   },
   "core/memory/recall.ts:432": {
     "path": "core/memory/recall.ts",
-    "line": 446,
+    "line": 467,
     "testo": "options.surface ? `superficie=${options.surface}` : '',"
   },
   "core/memory/recall.ts:435": {
     "path": "core/memory/recall.ts",
-    "line": 449,
+    "line": 470,
     "testo": "]"
   },
   "core/memory/recall.ts:441": {
     "path": "core/memory/recall.ts",
-    "line": 455,
+    "line": 476,
     "testo": "fuse(`episode:${hit.id}`, {"
   },
   "core/memory/recall.ts:527": {
     "path": "core/memory/recall.ts",
-    "line": 541,
+    "line": 562,
     "testo": "if (options.surface !== undefined && connector !== options.surface) return;"
   },
   "core/memory/recall.ts:586": {
     "path": "core/memory/recall.ts",
-    "line": 600,
+    "line": 621,
     "testo": "...(nearest"
   },
   "core/memory/recall.ts:593": {
     "path": "core/memory/recall.ts",
-    "line": 607,
+    "line": 628,
     "testo": ": {}),"
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 679,
+    "line": 700,
     "testo": "const key = `episode:${near.id}`;"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 722,
+    "line": 788,
     "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
@@ -1676,12 +1676,12 @@
   },
   "core/memory/schema.ts:151": {
     "path": "core/memory/schema.ts",
-    "line": 151,
+    "line": 161,
     "testo": "CREATE TABLE IF NOT EXISTS profiles ("
   },
   "core/memory/schema.ts:217": {
     "path": "core/memory/schema.ts",
-    "line": 217,
+    "line": 227,
     "testo": "export const EXTRACTION_VERSION = 1;"
   },
   "core/memory/schema.ts:25": {
@@ -1706,32 +1706,32 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 148,
+    "line": 163,
     "testo": "*"
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 163,
+    "line": 178,
     "testo": "private readonly ingestLock: IngestLock;"
   },
   "core/memory/store.ts:218": {
     "path": "core/memory/store.ts",
-    "line": 214,
+    "line": 240,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "core/memory/store.ts:237": {
     "path": "core/memory/store.ts",
-    "line": 233,
+    "line": 259,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 252,
+    "line": 278,
     "testo": "releaseIngestLock(pid: number = process.pid): void {"
   },
   "core/memory/store.ts:295": {
     "path": "core/memory/store.ts",
-    "line": 291,
+    "line": 317,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
@@ -1741,37 +1741,37 @@
   },
   "core/memory/store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 511,
     "testo": "/**"
   },
   "core/memory/store.ts:572": {
     "path": "core/memory/store.ts",
-    "line": 568,
+    "line": 541,
     "testo": "/**"
   },
   "core/memory/store.ts:610": {
     "path": "core/memory/store.ts",
-    "line": 606,
+    "line": 574,
     "testo": "FROM facts f"
   },
   "core/memory/store.ts:637": {
     "path": "core/memory/store.ts",
-    "line": 633,
+    "line": 733,
     "testo": "searchEpisodes("
   },
   "core/memory/store.ts:700": {
     "path": "core/memory/store.ts",
-    "line": 696,
+    "line": 796,
     "testo": "episodeNeighbourhood("
   },
   "core/memory/store.ts:829": {
     "path": "core/memory/store.ts",
-    "line": 825,
+    "line": 925,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
   "core/memory/store.ts:958": {
     "path": "core/memory/store.ts",
-    "line": 954,
+    "line": 1054,
     "testo": "f.superseded_by AS supersededBy"
   },
   "core/memory/vectors.ts:106": {
@@ -2346,12 +2346,12 @@
   },
   "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 187,
+    "line": 204,
     "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
   "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 192,
+    "line": 209,
     "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
@@ -2361,7 +2361,7 @@
   },
   "extract.ts:67": {
     "path": "core/memory/extract.ts",
-    "line": 67,
+    "line": 76,
     "testo": "function deriveImportance(f: { matters: boolean; charged: boolean }): number {"
   },
   "fs.ts:257": {
@@ -2401,7 +2401,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 356,
+    "line": 381,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
@@ -2676,52 +2676,52 @@
   },
   "recall.ts:290": {
     "path": "core/memory/recall.ts",
-    "line": 293,
+    "line": 302,
     "testo": "* model-typed. Fixed at the primitive instead of at each boundary so a third"
   },
   "recall.ts:293": {
     "path": "core/memory/recall.ts",
-    "line": 296,
+    "line": 305,
     "testo": "const MAX_NEIGHBOURS = 5;"
   },
   "recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 305,
+    "line": 314,
     "testo": "* discarded."
   },
   "recall.ts:375": {
     "path": "core/memory/recall.ts",
-    "line": 378,
+    "line": 399,
     "testo": "(min, f) =>"
   },
   "recall.ts:503": {
     "path": "core/memory/recall.ts",
-    "line": 517,
+    "line": 538,
     "testo": "validFrom: fact.validFrom,"
   },
   "recall.ts:588": {
     "path": "core/memory/recall.ts",
-    "line": 602,
+    "line": 623,
     "testo": "nearest: {"
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 669,
+    "line": 690,
     "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 689,
+    "line": 710,
     "testo": "score: 0,"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 745,
+    "line": 811,
     "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 764,
+    "line": 830,
     "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
@@ -2786,17 +2786,17 @@
   },
   "schema.ts:130": {
     "path": "core/memory/schema.ts",
-    "line": 130,
+    "line": 140,
     "testo": "-- Not plane 3: this is not reconstructible from the episodes, so it is not"
   },
   "schema.ts:178": {
     "path": "core/memory/schema.ts",
-    "line": 178,
+    "line": 188,
     "testo": "export const DEFAULT_FUNCTIONAL_PREDICATES = ["
   },
   "schema.ts:217": {
     "path": "core/memory/schema.ts",
-    "line": 217,
+    "line": 227,
     "testo": "export const EXTRACTION_VERSION = 1;"
   },
   "schema.ts:57": {
@@ -2846,17 +2846,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 117,
+    "line": 132,
     "testo": "since?: string | undefined;"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 148,
+    "line": 163,
     "testo": "*"
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 181,
+    "line": 196,
     "testo": "`origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,"
   },
   "store.ts:21": {
@@ -2866,27 +2866,27 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 224,
+    "line": 250,
     "testo": ".all(tenantId, extractionV, limit) as Episode[];"
   },
   "store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 511,
     "testo": "/**"
   },
   "store.ts:740": {
     "path": "core/memory/store.ts",
-    "line": 736,
+    "line": 836,
     "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
   },
   "store.ts:903": {
     "path": "core/memory/store.ts",
-    "line": 899,
+    "line": 999,
     "testo": "* Where a recalled chunk came from and how much it is worth."
   },
   "store.ts:935": {
     "path": "core/memory/store.ts",
-    "line": 931,
+    "line": 1031,
     "testo": "// recall has nothing else to read it from. Without it an inferred"
   },
   "tracer.ts:94": {

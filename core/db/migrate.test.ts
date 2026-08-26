@@ -246,7 +246,11 @@ describe('migrazione 2 — jobs.kind', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2]);
+    // [2, 3]: this fixture has no `facts` table, so migration 3 (added by
+    // `slice/memoria-appuntata`) is a genuine no-op here — but `migrate()`
+    // still runs and stamps it, the same way migration 2 itself no-ops (and
+    // still counts) on a database where `jobs` is absent, two tests below.
+    expect(res.applied).toEqual([2, 3]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -262,8 +266,101 @@ describe('migrazione 2 — jobs.kind', () => {
   it('non fallisce su un database dove `jobs` non esiste ancora', () => {
     const { db, backups } = fileDb();
     // È il caso di ogni installazione fresca: `migrate()` gira in
-    // `agent/runtime.ts` PRIMA che `JobStore` crei la propria tabella.
+    // `agent/runtime.ts` PRIMA che `JobStore` crei la propria tabella —
+    // e prima che `MemoryStore` crei `facts`, motivo per cui la 3 arriva
+    // fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(2);
+    expect(schemaVersionOf(db)).toBe(3);
+  });
+});
+
+describe('migrazione 3 — facts.pinned', () => {
+  /** The pre-`pinned` shape of `facts`/`entities`, old enough to predate this column. */
+  function seedOldFacts(db: DatabaseCtor.Database): void {
+    db.exec(`
+      CREATE TABLE entities (
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, kind TEXT NOT NULL,
+        name TEXT NOT NULL, summary TEXT, recorded_at TEXT NOT NULL, expired_at TEXT)`);
+    db.exec(`
+      CREATE TABLE facts (
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, subject_id INTEGER NOT NULL,
+        predicate TEXT NOT NULL, object_id INTEGER, object_value TEXT,
+        valid_from TEXT, valid_to TEXT, recorded_at TEXT NOT NULL, expired_at TEXT,
+        episode_id INTEGER NOT NULL, speaker_id INTEGER,
+        trust_tier INTEGER NOT NULL, confidence REAL NOT NULL, origin TEXT NOT NULL DEFAULT 'said',
+        importance INTEGER NOT NULL DEFAULT 0, extraction_v INTEGER NOT NULL, superseded_by INTEGER)`);
+    db.prepare(
+      `INSERT INTO entities (id, tenant_id, kind, name, recorded_at) VALUES (?, 'host', 'person', ?, '2026-08-01T10:00:00Z')`,
+    ).run(1, 'Giusto Piedimonte');
+    db.prepare(
+      `INSERT INTO entities (id, tenant_id, kind, name, recorded_at) VALUES (?, 'host', 'person', ?, '2026-08-01T10:00:00Z')`,
+    ).run(2, 'owner');
+    const addFact = db.prepare(
+      `INSERT INTO facts (id, tenant_id, subject_id, predicate, object_value, recorded_at, episode_id, trust_tier, confidence, extraction_v)
+       VALUES (?, 'host', ?, ?, ?, '2026-08-11T10:00:00Z', 1, 0, 0.9, 1)`,
+    );
+    // The real 2026-08-26 dogfood shape: identity forked across two entities.
+    addFact.run(1, 1, 'works_as', 'AI engineer'); // Giusto Piedimonte — works_as — AI engineer
+    addFact.run(2, 1, 'created', 'owner'); // Giusto Piedimonte — created — owner
+    addFact.run(3, 2, 'works_as', 'freelancer'); // owner — works_as — freelancer
+    addFact.run(4, 2, 'interest', 'how AI memory works'); // owner — interest — … (never pinned)
+  }
+
+  it('adds the column and pins the owner identity facts real installs had recorded, leaving the rest alone', () => {
+    const { db, backups } = fileDb();
+    seedOldFacts(db);
+    migrate(db, { backupDir: backups, migrations: [] }); // baseline v1, as an old install would have
+
+    const res = migrate(db, { backupDir: backups });
+
+    expect(res.applied).toEqual([2, 3]);
+    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
+    expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
+    // Rows survive untouched — this is a backfill, not a rewrite.
+    const untouched = db.prepare(`SELECT pinned FROM facts WHERE id = 4`).get() as { pinned: number };
+    expect(untouched.pinned).toBe(0);
+  });
+
+  it('non appunta ciò che `addFact` aveva rifiutato: il tenant group col suo "owner", il tier non-owner, l\'inferito', () => {
+    const { db, backups } = fileDb();
+    seedOldFacts(db);
+    // A group chat produces its own entity literally named "owner" —
+    // `extract.ts` hands that subject to the model on any tenant — and its
+    // facts carry the member's tier (≥2), which `addFact`'s gate refuses to
+    // pin. The backfill is a second write path to the same bit: without the
+    // same gate it would flip exactly these rows.
+    db.prepare(
+      `INSERT INTO entities (id, tenant_id, kind, name, recorded_at) VALUES (3, 'group:telegram:9', 'person', 'owner', '2026-08-12T10:00:00Z')`,
+    ).run();
+    const raw = db.prepare(
+      `INSERT INTO facts (id, tenant_id, subject_id, predicate, object_value, recorded_at, episode_id, trust_tier, confidence, origin, extraction_v)
+       VALUES (?, ?, ?, ?, ?, '2026-08-12T10:00:00Z', 1, ?, 0.9, ?, 1)`,
+    );
+    raw.run(5, 'group:telegram:9', 3, 'created', 'owner', 2, 'said');
+    raw.run(6, 'group:telegram:9', 3, 'works_as', 'barista', 2, 'said');
+    // Host tenant but inferred, not said: tier alone is not the whole gate.
+    raw.run(7, 'host', 2, 'works_as', 'painter', 0, 'inferred');
+    // Host fact whose subject is ANOTHER tenant's "owner" entity. No write
+    // path can produce this today (`upsertEntity`/`findEntity` resolve within
+    // the tenant), so it goes in by hand — it is what makes the tenant
+    // scoping on the backfill's subqueries load-bearing instead of decorative
+    // (judge #122 giro 2 follow-up).
+    raw.run(8, 'host', 3, 'works_as', 'plumber', 0, 'said');
+    migrate(db, { backupDir: backups, migrations: [] });
+
+    migrate(db, { backupDir: backups });
+
+    const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
+    expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]); // the host backfill, and nothing else
+    const refused = db.prepare(`SELECT id FROM facts WHERE id IN (5, 6, 7, 8) AND pinned = 0`).all() as { id: number }[];
+    expect(refused.map((r) => r.id)).toEqual([5, 6, 7, 8]);
+  });
+
+  it('non fallisce su un database dove `facts` non esiste ancora', () => {
+    const { db, backups } = fileDb();
+    // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
+    // there for this migration to touch — same guard, same reason as jobs.kind.
+    expect(() => migrate(db, { backupDir: backups })).not.toThrow();
+    expect(schemaVersionOf(db)).toBe(3);
   });
 });

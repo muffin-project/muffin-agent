@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../core/config/config.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { runInit } from './init.js';
-import { cmdMemoryReview, cmdMemoryReviewKeep, cmdMemorySearch, cmdMemoryStats } from './memory.js';
+import {
+  cmdMemoryPin,
+  cmdMemoryReview,
+  cmdMemoryReviewKeep,
+  cmdMemorySearch,
+  cmdMemoryStats,
+  cmdMemoryUnpin,
+} from './memory.js';
 
 /**
  * `cmdMemoryStats` and `cmdMemoryReview`: `cmdMemoryExtract`'s fix (the batch
@@ -74,6 +81,24 @@ function homeWithContradiction(): { home: string; existing: number; incoming: nu
   });
   db.close();
   return { home, existing, incoming };
+}
+
+/** A home holding one ordinary, unpinned fact — the target for pin/unpin. */
+function homeWithFact(): { home: string; factId: number } {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-memory-pin-'));
+  const db = new DatabaseCtor(paths(home).db);
+  const store = new MemoryStore(db);
+  const episodeId = store.addEpisode({
+    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+    kind: 'message', content: 'mi chiamo Giusto', trustTier: 0, createdAt: '2026-08-26T10:00:00Z',
+  });
+  const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-26T10:00:00Z');
+  const factId = store.addFact({
+    tenantId: 'host', subjectId, predicate: 'name', objectValue: 'Giusto',
+    episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-26T10:00:00Z',
+  });
+  db.close();
+  return { home, factId };
 }
 
 function capture(): { out: string[]; err: string[] } {
@@ -261,6 +286,62 @@ describe('muffin memory review', () => {
     const { out } = capture();
     expect(cmdMemoryReview(homeWithJudgeFailures(), true)).toBe(0);
     expect(out.join('')).toContain('risposta grezza');
+  });
+
+  it('lists the pinned facts, and their presence alone does not make the exit code non-zero', () => {
+    // Pinned is informational, not a question awaiting a decision: `review`'s
+    // exit code stays keyed on open contradictions/errors, none of which this
+    // home has.
+    const { home, factId } = homeWithFact();
+    expect(cmdMemoryPin(home, factId)).toBe(0);
+
+    vi.restoreAllMocks();
+    const { out } = capture();
+    expect(cmdMemoryReview(home)).toBe(0);
+    const text = out.join('');
+    expect(text).toContain('appuntati');
+    expect(text).toContain(`#${factId}`);
+  });
+});
+
+describe('muffin memory pin / unpin', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('pins a fact, and review/why read the change back', () => {
+    const { home, factId } = homeWithFact();
+    const { out } = capture();
+
+    expect(cmdMemoryPin(home, factId)).toBe(0);
+    expect(out.join('')).toContain(`#${factId}`);
+
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    expect(store.factById('host', factId)?.pinned).toBe(1);
+    expect(store.pinnedFacts('host').map((f) => f.id)).toEqual([factId]);
+    db.close();
+  });
+
+  it('unpins a fact back out of the unconditional core', () => {
+    const { home, factId } = homeWithFact();
+    expect(cmdMemoryPin(home, factId)).toBe(0);
+    vi.restoreAllMocks();
+    const { out } = capture();
+
+    expect(cmdMemoryUnpin(home, factId)).toBe(0);
+    expect(out.join('')).toContain(`#${factId}`);
+
+    const db = new DatabaseCtor(paths(home).db);
+    const store = new MemoryStore(db);
+    expect(store.factById('host', factId)?.pinned).toBe(0);
+    db.close();
+  });
+
+  it('refuses an id that names no fact, for both pin and unpin', () => {
+    const { home } = homeWithFact();
+    const { err } = capture();
+    expect(cmdMemoryPin(home, 999999)).toBe(1);
+    expect(cmdMemoryUnpin(home, 999999)).toBe(1);
+    expect(err.join('')).toContain('nessun fatto #999999');
   });
 });
 
