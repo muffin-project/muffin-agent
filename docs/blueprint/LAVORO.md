@@ -14,15 +14,15 @@ rimandare, o da un rischio su authority/data/effect. Non da questa lista.
 
 **Aperto per l'owner:** token del bot Telegram; billing GitHub per la CI.
 
-**Fatto 25–26/08** (dettaglio = git log): #106..#124 — fra cui #121 `muffin
-update` (release affiancate + flip atomico del symlink) e #122 memoria
-appuntata (2 giri di judge). CI **senza minuti**: merge con gate locale
-dichiarato in un commento sulla PR.
+**Fatto 25–26/08** (dettaglio = git log): #106..#127 — fra cui #121 `muffin
+update`, #122 memoria appuntata, #126 gate Linux in container, #127 **A10: il
+giro dell'owner** (un solo scenario, dalla macchina pulita alla risposta;
+gamba Linux provata con `systemd-analyze verify`). CI **senza minuti**: merge
+con gate locale dichiarato in un commento sulla PR.
 
-**In volo:** `slice/e2e-giro-owner` (STANDARD): UNO scenario col giro intero
-in una casa sola — init → chiave → `gateway install` (unit validata dal
-parser della piattaforma) → gateway vivo → conversazione su superficie →
-doctor verde → `uninstall` non lascia niente.
+**In volo:** `slice/probe-porta-vera` (CRITICAL): il probe del sandbox deve
+significare «ho eseguito qualcosa di contenuto qui», non «bwrap risponde a
+una mia invocazione».
 
 **Scoperto il 26/08, da non riperdere.** (a) `init` fa le domande di #117
 **solo su TTY**: il percorso che fa un umano non lo prova nessun test (via:
@@ -33,15 +33,15 @@ provarlo è eseguire i comandi che ha stampato. (c) Gate Linux senza CI:
 — il probe dice `available` mentre l'esecuzione vera muore su `Can't mount
 proc`, perché probe ed esecutore invocano bwrap per strade diverse (diretto vs
 `SandboxManager`): in un container su VPS `doctor` sarebbe verde e ogni script
-fallirebbe. (d) L'installazione viva è 18 commit indietro e `muffin update`
+fallirebbe. In riparazione. (d) L'installazione viva è 18 commit indietro e `muffin update`
 non è mai girato davvero: dopo l'E2E, `dev`→`main` e update reale. (e) E7 dal
 vivo: a «che modello usi?» dice che non lo sa.
 
-**Coda decisa dall'owner:** 1) **E2E unico** (in volo); 2) **ASK durevole** —
-un'approvazione pendente non sopravvive a un crash; 3) **note di avanzamento
+**Coda decisa dall'owner** (l'E2E è fatto, A10): 1) **ASK durevole** —
+un'approvazione pendente non sopravvive a un crash; 2) **note di avanzamento
 sui turni lunghi**, con **validazione della compaction** (Slipstream, arxiv
 2605.08580: un sommario sbagliato è danno silenzioso — si valida contro la
-traiettoria, non solo si produce); 4) dedup `gateway↔repl`.
+traiettoria, non solo si produce); 3) dedup `gateway↔repl`.
 
 **Conclusioni di design da non riscoprire** (cornice «sistema agentico»:
 THESIS §5): `/new` = operazione di CONTESTO, mai di memoria (pipeline tutte

@@ -46,7 +46,10 @@ docker run --rm \
   bash -euo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null
-    apt-get install -y -qq bubblewrap socat ripgrep curl ca-certificates >/dev/null
+    # systemd non serve per farlo girare: serve systemd-analyze, che e il
+    # parser con cui lo scenario A10 valida la unit di produzione. Senza, la
+    # gamba Linux di A10 degrada a "non eseguibile qui" invece di verificare.
+    apt-get install -y -qq bubblewrap socat ripgrep curl ca-certificates systemd >/dev/null
     if ! command -v node >/dev/null; then
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
       apt-get install -y -qq nodejs >/dev/null
