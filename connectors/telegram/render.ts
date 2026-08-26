@@ -22,8 +22,15 @@
 /** Telegram's limit for a text message. Captions are 1024, handled by the caller. */
 export const TELEGRAM_MAX = 4096;
 
-/** Escapes the three characters HTML mode cares about. Nothing else needs touching. */
-function escapeHtml(text: string): string {
+/**
+ * Escapes the three characters HTML mode cares about. Nothing else needs touching.
+ *
+ * Exported for `progress.ts`: a status line is built from our own Italian prose
+ * plus a tool/model name that ultimately comes from the model's own output
+ * (`call.name` on a `tool_start`/`tool_end` event), so it goes through the same
+ * escaping the answer's own text does rather than trusting it by construction.
+ */
+export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 

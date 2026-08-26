@@ -45,6 +45,10 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
       calls.push({ method: 'editMessageText', at: Date.now(), text: html });
       return true;
     },
+    deleteMessage: async () => {
+      calls.push({ method: 'deleteMessage', at: Date.now() });
+      return true;
+    },
     sendChatAction: async () => {
       calls.push({ method: 'sendChatAction', at: Date.now() });
       return true;
