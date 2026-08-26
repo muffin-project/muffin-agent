@@ -178,11 +178,26 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // supervised, `warn` (never `fail`) on one that does not. Either is
           // legitimate and neither is this scenario's concern.
           'supervisore',
+          // Una macchina che non può contenere lo dice qui, e da #129 lo dice
+          // PRIMA di eseguire invece che dentro l'uscita di un job. È il caso
+          // normale in un container (il kernel di molti host nega il mount di
+          // /proc dentro lo userns), cioè proprio dove questo giro gira quando
+          // lo lancia `gate-linux.sh`: rifiutarlo qui renderebbe A10 rossa su
+          // ogni Linux containerizzato — la piattaforma di produzione — per un
+          // fatto dell'ospite, non del prodotto. Ammesso, mai in silenzio: la
+          // riga viene stampata sotto, con la ragione che doctor ha dato.
+          'sandbox',
         ];
         for (const line of warnLines) {
           if (!expectedWarnNames.some((name) => line.startsWith(`! ${name}`))) {
             throw new Error(`doctor riporta un WARN non dichiarato a questo punto del giro: "${line}"\n\n${doctor.out}`);
           }
+        }
+        const sandboxWarn = warnLines.find((l) => l.startsWith('! sandbox'));
+        if (sandboxWarn) {
+          // Dichiarato, non saltato: chi legge il log sa che il giro è passato
+          // su una macchina senza contenimento, e quale ragione ha dato doctor.
+          console.warn(`[A10] questa macchina non contiene, e doctor lo dice prima di eseguire: ${sandboxWarn.trim()}`);
         }
         if (!warnLines.some((l) => l.startsWith('! root of trust mode') && l.includes('single-user'))) {
           throw new Error(`doctor non nomina "root of trust mode: single-user":\n${doctor.out}`);
