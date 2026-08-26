@@ -1008,6 +1008,22 @@ function cmdSecret(argv: string[]): number {
   // outside the working directory, 0700/0600, and on the tools' deny-read list.
   const at = writeSecret(name, value, paths().home, persist ? 'persistent' : 'home');
   process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
+  // Said here, not only by `doctor`, because here is the moment the person is
+  // holding the key: the read chain takes the FIRST location that exists
+  // (`locateSecret`), so writing a second copy can be a write into a file
+  // nothing ever reads — and every symptom of that is somewhere else ("ho
+  // cambiato la chiave e usa ancora quella vecchia"). Observed on the owner's
+  // own install, 2026-08-26: `secret set --persist` landed behind a home copy
+  // written months earlier by `init`, and only `doctor` ever said so.
+  const copies = locateSecretAll(`secret://${name}`, paths().home);
+  const winner = copies[0];
+  if (copies.length > 1 && winner) {
+    process.stderr.write(
+      winner.path === at
+        ? `! esiste anche ${copies[1]?.path}, che da ora non viene più letta — cancellala, così resta una sola chiave da ruotare\n`
+        : `! questa copia non verrà mai usata: ${winner.path} ha la precedenza. Cancella quella che non vuoi (${winner.path}), oppure riscrivi il segreto lì\n`,
+    );
+  }
   return 0;
 }
 
