@@ -6,7 +6,7 @@ import { formatReport, runDoctor } from './doctor.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
-import { formatSpan, readSpans } from './trace.js';
+import { formatSpan, formatTurn, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
 import { runRepl } from './repl.js';
 import {
@@ -132,6 +132,9 @@ ispezione:
   muffin observe [--send]       cosa è rimasto in silenzio, e cosa farebbe il
                                 cancello di proattività. Manda solo con --send.
   muffin trace tail [-n N] [--errors] | grep PATTERN
+  muffin trace turn <id>        il turno passo per passo: cosa ha fatto, quanto
+                                ci ha messo, quanti token — l'id è quello che il
+                                turno stampa alla fine ("trace c22cb4445952")
 
 Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 78 configurazione non valida
 `;
@@ -1035,8 +1038,10 @@ function cmdSecret(argv: string[]): number {
 
 function cmdTrace(argv: string[]): number {
   const [sub, ...rest] = argv;
-  if (sub !== 'tail' && sub !== 'grep') {
-    process.stderr.write(`usage: muffin trace tail [-n N] [--errors] | muffin trace grep PATTERN\n`);
+  if (sub !== 'tail' && sub !== 'grep' && sub !== 'turn') {
+    process.stderr.write(
+      `usage: muffin trace tail [-n N] [--errors] | muffin trace grep PATTERN | muffin trace turn <id>\n`,
+    );
     return 78;
   }
   const { values, positionals } = parseArgs({
@@ -1045,7 +1050,6 @@ function cmdTrace(argv: string[]): number {
       n: { type: 'string', short: 'n' },
       errors: { type: 'boolean' },
       json: { type: 'boolean' },
-      trace: { type: 'string' },
     },
     allowPositionals: true,
   });
@@ -1055,22 +1059,34 @@ function cmdTrace(argv: string[]): number {
     process.stderr.write(`usage: muffin trace grep PATTERN\n`);
     return 78;
   }
+  // `turn` takes the id a finished turn prints — twelve characters of the
+  // thirty-two, matched as a prefix in `readSpans`. It replaces an undocumented
+  // `--trace` flag that took the *whole* id and so could never be fed the one
+  // the product hands you.
+  const turnId = sub === 'turn' ? positionals[0] : undefined;
+  if (sub === 'turn' && !turnId) {
+    process.stderr.write(`usage: muffin trace turn <id>   (l'id che il turno stampa: "trace c22cb4445952")\n`);
+    return 78;
+  }
 
   const spans = readSpans(paths().home, {
-    limit: Number(values.n ?? 40),
+    // A turn is asked for whole: its own steps, not the last N of them.
+    limit: turnId ? 10_000 : Number(values.n ?? 40),
     ...(pattern ? { pattern } : {}),
-    ...(values.trace ? { traceId: values.trace } : {}),
+    ...(turnId ? { traceId: turnId } : {}),
     ...(values.errors ? { errorsOnly: true } : {}),
   });
 
   if (spans.length === 0) {
-    process.stderr.write(`no spans matched\n`);
+    process.stderr.write(turnId ? `nessuno span per il turno ${turnId}\n` : `no spans matched\n`);
     return 1;
   }
   process.stdout.write(
     values.json
       ? `${spans.map((s) => JSON.stringify(s)).join('\n')}\n`
-      : `${spans.map(formatSpan).join('\n')}\n`,
+      : turnId
+        ? formatTurn(spans)
+        : `${spans.map(formatSpan).join('\n')}\n`,
   );
   return 0;
 }
