@@ -1128,3 +1128,48 @@ came from a delegation in a *partial* state — a `chiudi` row with no `registra
 row, left by a session compacted mid-flight — which is precisely the state the
 tool exists to survive. A recovery tool that dies on incomplete input is a
 recovery tool that works only when nothing went wrong.
+
+## A local fault that erases more than itself, quietly, is one defect wearing three faces **(this build)**
+
+Three consecutive independent reviews of the same module found the same defect
+in three different places, and each round fixed only the place it was found.
+
+- Round 1: one unreadable **file** threw out of the whole report — and out of
+  `doctor` itself, so every check queued behind it never ran.
+- Round 2: one malformed **registry entry** nulled the whole registry, pushing
+  every *other* file off an exact recorded hash and down onto a history search
+  that carries a known false positive. The repair for round 1 introduced it.
+- Round 3: one unreadable **subdirectory** erased the siblings already found
+  beside it. Six files became one; the five that vanished were readable, and
+  the one that survived looked like a complete report of a small tree.
+
+Same shape every time: **a local accident deleting more state than the accident
+justifies, and deleting it silently**. Silence is the half that does the damage.
+A report that crashes gets investigated. A report that is quietly short gets
+believed — and it is *most* believed by the person who ran the tool precisely
+because they suspected something, which is when the tool was built to speak.
+
+Two things generalize.
+
+**The reviews were converging on the module and diverging on the class.** Each
+verdict named a site; each repair closed that site; the next review found the
+next one. Site-by-site repair on a defect that has a shape is not convergence,
+it is enumeration — and the enumeration is only over the places somebody has
+looked so far. The signal that this is happening is not the count of rounds. It
+is that the *third* finding could be described in the same sentence as the
+first without changing a word.
+
+**The fix for a shape is a place, not a patch.** One function that a caught
+failure has to pass through, which is structurally incapable of producing more
+than one entry and incapable of producing an undeclared one. It does not make
+the failures rarer; it makes their blast radius a property of the type rather
+than of whoever wrote that particular `catch`. Then the containment nets go
+where the fault is — inside the subtree, inside the entry — and the level above
+stops being the thing that turns a small fault into a large one.
+
+There is a corollary about writers. Reading past an entry you do not understand
+is prudence; **rewriting the file without it is not the same act**. It happens
+on an ordinary run, needs no corruption of its own, leaves no trace and does
+not come back — while whatever wrote that entry is precisely what someone would
+want to look at later. A reader that ignores what it cannot parse is careful; a
+writer that drops it is destroying the evidence of the thing being diagnosed.
