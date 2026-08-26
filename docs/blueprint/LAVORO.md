@@ -8,47 +8,53 @@ osservato vince quando diverge da questo file.
 chiusa: S1–S4 in `M5-BIS.md` §RETURN, che possiede il dettaglio: qui resta solo
 ciò che serve per scegliere il prossimo lavoro.
 
-**Stato dell'installazione reale**, provato sulla macchina dell'owner:
-`~/.muffin` (database di agosto, 29 tabelle, schema v1), provider OpenRouter
-con `qwen/qwen3.8-27b` e `qwen/qwen3.7-flash`, gateway vivo sotto launchd, un
-job schedulato eseguito da solo. Backup validato prima della migrazione.
+**Installazione reale**: `~/.muffin` vivo, OpenRouter (famiglia Qwen),
+gateway sotto launchd, un job già eseguito da solo. Backup validato.
 
 **Regola di stop attiva.** Niente sviluppo pre-dogfood: il prossimo lavoro
 nasce da un failure osservato usando Muffin, da una requirement owner già
 decisa, da una migrazione che rimandare renderebbe costosa, o da un rischio
 concreto su authority/data/effect. Non da questa lista.
 
-**Aperto per l'owner:** Telegram non è ancora abilitato (serve il token del
-bot); `doctor` segnala due chiavi API, in `~/.muffin/secrets/` (quella usata) e
-in `~/.config/muffin/secrets/` — cancellare quella che non si vuole ruotare; il
-job di prova `922ac8b7` riparte ogni giorno alle 18:24 finché non lo si toglie
-(`muffin jobs remove 922ac8b7`).
+**Aperto per l'owner:** token del bot Telegram; delle 2 chiavi API cancellare
+quella da non ruotare (`doctor` le nomina); `muffin jobs remove 922ac8b7`;
+billing GitHub per la CI.
 
-**Fatto il 25/08 sera:** job **script** (#106, CRITICAL, 3 giri di judge —
-esattamente-una-volta attraverso i crash, fail-closed senza sandbox, prima
-migrazione vera + `ensureColumn` difensivo); guard sul ripristino distruttivo
-(#107); Linux-first (#110: la unit systemd passa da `systemd-analyze` in CI,
-`SuccessExitStatus`, `doctor` chiede `is-failed`, gate `MUFFIN_REQUIRE_*`);
-`strumenti.yml` (CI sugli hook); `knip.json` + 3 dipendenze morte rimosse.
+**Fatto 25–26/08** (dettaglio = git log): #106..#119. CI **senza minuti**
+(billing): merge con gate locale dichiarato in un commento sulla PR.
 
-**Coda decisa dall'owner (25/08):** 1) installazione che **interroga** la
-macchina — locale o API, quale modello, probe sandbox/supervisore in `init`;
-si porta dietro 2 reperti audit (rimedio AppArmor nell'installer, `doctor`
-onesto sul seccomp saltato su Linux); 2) note di avanzamento sui turni lunghi
-(un turno sospeso riprende i messaggi, non un sommario); 3) probe bubblewrap
-senza controllo positivo + TMPDIR (confine contenimento, judge). Direttive
-trasversali: Linux prima (VPS), modificare>aggiungere, difese permanenti.
+**In volo (26/08):** `slice/memoria-appuntata` (CRITICAL, judge: colonna
+`pinned`, iniezione incondizionata a budget fisso; vincoli: pin solo da fonte
+owner/tier-0 — è un canale di persistenza per injection — mai nei tenant
+group, supersessione vince sul pin) e `slice/comando-update` (STANDARD:
+release affiancate in worktree + flip atomico del symlink del launcher, mai
+mutare l'albero che gira; `main` è il canale).
 
-**Follow-up registrati (non slice).** Dal primo uso reale: REPL muore su input
-non-TTY; manca `sys.inspect` (E7, tre ricorsi a `sys.shell` in sei turni, su
-`muffin run` vicolo cieco); `doctor` su home pre-boot dà rimedio sbagliato su
-database esistente. Dai judge: N eventi → 1 composizione senza assembler;
-`possibly_sent` non distingue crash da in-volo; catch di `cmdRestore` con
-stack; TOCTOU gateway; repl-lock assente; finestra pairing; Discord `handle()`
-non bound. Da knip/jscpd (25/08): ~52 export orfani da de-esportare; cablaggio
-runtime duplicato `cli/gateway.ts`↔`cli/repl.ts` (già costato il bug del
-giro 1 di #106: la copia REPL era rimasta senza esecutore) e coppie
-discord↔telegram nei connettori — dedup con trigger, non estrazioni premature.
+**Coda decisa dall'owner:** 1) test **E2E unico** — install pulita → token →
+gateway vivo → conversazione (il «MOLTO IMPORTANTE», oggi provato a pezzi);
+2) **ASK durevole** — un'approvazione pendente non sopravvive a un crash;
+3) **note di avanzamento sui turni lunghi** — con **validazione della
+compaction** (Slipstream, arxiv 2605.08580: un sommario sbagliato è danno
+silenzioso — si valida contro la traiettoria, non solo si produce);
+4) dedup `gateway↔repl`. All'integrazione delle slice in volo: **THESIS.md
+riceve la cornice «sistema agentico»** (Agent = Model + Harness; organi;
+core/archival; il killer 2026 è il context drift, non l'esaurimento).
+
+**Conclusioni di design da non riscoprire:** `/new` = operazione di CONTESTO,
+mai di memoria (pipeline tutte fuori sessione, verificato); superfici
+residenti → sessione infinita + compaction, il consolidatore idle è l'analogo
+del sonno; identità owner = pre-caricata, la somiglianza è per la coda lunga.
+Regole: Linux prima; modificare>aggiungere; esplorare prima di costruire;
+su agenti aggiornarsi a OGGI (web). Le lezioni Claude↔Muffin si trasferiscono
+SELETTIVAMENTE: Claude è un coding agent, Muffin no (ADR-0027) — ma la porta
+«programmare via subagenti» resta aperta, da decidere con un trigger.
+
+**Follow-up registrati (non slice).** Dogfood: REPL muore su input non-TTY;
+manca `sys.inspect` (E7, 3 vicoli ciechi su `muffin run`); `doctor` su home
+pre-boot dà rimedio sbagliato. Judge: composizione N→1 senza assembler;
+`possibly_sent` non distingue crash da in-volo; TOCTOU gateway; repl-lock
+assente; finestra pairing; Discord `handle()` non bound; coppie
+discord↔telegram (dedup solo con trigger).
 
 **Branch aperti:** nessuno. #84 (README pubblico) è stata aggiornata a HEAD
 (fact-check senza claim falsi) e mergiata il 26/08 — in `dev`, che resta
