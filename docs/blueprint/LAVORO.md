@@ -25,11 +25,10 @@ chiamate, e non è il nostro prefisso: `research/cache-prompt-2026-08-26.md`.
 dato. (c) `memory.recall` gira **senza vettori** (`EmbedderUnavailable`).
 (d) Un `memory.ingest` da solo: 129s, zero chiamate al modello.
 
-**Ordine deciso.** 1) trace per step **fatto** (#133). 2) **Canale di
-progresso**, delegato: NON allargare
-`TurnDelta` (porta solo la risposta finale, bufferizzata fino al round terminale
-per non ritrattare testo) ma un secondo sink `onProgress` — un evento di
-progresso racconta ciò che è già successo, quindi non si ritratta mai.
+**Ordine deciso.** 1) trace per step **fatto** (#133). 2) canale di progresso **fatto** (#136,
+judge MERGE): `onProgress` accanto a `onDelta`, che porta solo la risposta
+finale. **Ma solo il REPL lo cabla, Telegram no** — e là serve draft+edit, non
+una riga per evento (rate limit): **prossima slice**.
 3) **`sys.shell` chiede sempre**: non è un difetto ma `decide.ts:245` — allow
 silenzioso solo se `ctx.hardened`, falso perché `rot/` è dello stesso uid che
 gira l'agente. La via è **rendere vera** la modalità hardened (utente di
