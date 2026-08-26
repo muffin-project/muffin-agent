@@ -6,6 +6,7 @@ import { formatReport, runDoctor } from './doctor.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
+import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
 import { formatSpan, formatTurn, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
 import { runRepl } from './repl.js';
@@ -117,7 +118,10 @@ comandi operatore:
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
                                 \`init\` lo ritrova senza re-incollarlo
-  muffin rot verify | reseal
+  muffin rot verify | reseal | harden
+                                \`harden\` non esegue nulla: stampa i comandi
+                                per rendere vera la modalità hardened su
+                                questa macchina, e cosa cambia una volta fatto
   muffin uninstall [--yes]      rimuove ~/.muffin (config, chiavi, memoria). Una
                                 chiave scritta con --persist vive fuori: resta,
                                 e il comando lo dice.
@@ -735,7 +739,19 @@ function cmdRot(argv: string[]): number {
     return 0;
   }
 
-  process.stderr.write(`usage: muffin rot verify | reseal\n`);
+  if (sub === 'harden') {
+    // Explains and proposes, never executes — see core/rot/harden.ts. Every
+    // line of the plan goes to stdout ("stdout carries the answer", this
+    // file's own header above), the same as `muffin doctor`: this command's
+    // whole job is the printed report, not a side comment on some other
+    // action.
+    const plan = buildHardenPlan(paths().home, mode);
+    process.stdout.write(formatHardenPlan(plan));
+    if (!plan.owner.known) return 2;
+    return plan.done ? 0 : 1;
+  }
+
+  process.stderr.write(`usage: muffin rot verify | reseal | harden\n`);
   return 78;
 }
 
