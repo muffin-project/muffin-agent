@@ -41,6 +41,31 @@ export const CONSOLIDATION_PRINCIPAL = {
   source: 'consolidation',
 } as const satisfies Principal;
 
+/**
+ * Identity predicates that pin themselves at the moment they are recorded,
+ * with no judgment call left to the extractor. Small and hardcoded on
+ * purpose, the same shape as `schema.ts`'s `DEFAULT_FUNCTIONAL_PREDICATES`:
+ * grown by audit, never guessed at, because every predicate added here pins
+ * itself into every future turn forever. These two are the exact predicates
+ * the real dogfood database had recorded for the owner's identity before this
+ * column existed (migration 3's own backfill targets the same pair).
+ */
+const BOOTSTRAP_IDENTITY_PREDICATES = new Set(['works_as', 'created']);
+
+/**
+ * Whether `subject` is the extraction pipeline's own name for the person on
+ * the other end of the conversation — not a guess: `speakerName` below hands
+ * the extractor literally `'owner'` for every user-role episode, and
+ * `extract.ts`'s SYSTEM prompt (rule 5's own worked example) instructs it to
+ * use that same literal word as `subject` for a first-person fact. A fact
+ * whose `subject` is that word is therefore about the owner by construction
+ * of this pipeline's contract, on any tenant, not by matching this
+ * install's real name into the source.
+ */
+function isOwnerSubject(subject: string): boolean {
+  return subject.trim().toLowerCase() === 'owner';
+}
+
 export type IngestDeps = {
   store: MemoryStore;
   provider: Provider;
@@ -390,6 +415,7 @@ async function reconcile(
     validFrom: string | null;
     confidence: number;
     importance: number;
+    pinned: boolean;
   },
   episode: { id: number; trustTier: 0 | 1 | 2 | 3; content: string | null },
   now: Date,
@@ -418,6 +444,14 @@ async function reconcile(
       // Never derived from confidence, and never allowed to raise it: intensity
       // changes how accurate a memory feels, not how accurate it is.
       importance: fact.importance,
+      // The extractor's own strict-vocabulary request, OR the small bootstrap
+      // rule: a fact about the owner (by this pipeline's own subject-naming
+      // convention, see `isOwnerSubject`) on one of the two identity
+      // predicates the real install had already recorded before this column
+      // existed. Either way this is only a *request* — `addFact`'s own gate
+      // is what actually decides, from `episode.trustTier`/`origin` here, not
+      // from anything this module claims.
+      pinned: fact.pinned || (isOwnerSubject(fact.subject) && BOOTSTRAP_IDENTITY_PREDICATES.has(fact.predicate)),
       extractionV: EXTRACTION_VERSION,
       recordedAt: now.toISOString(),
     });
@@ -541,10 +575,23 @@ async function reconcile(
     });
   }
 
+  // Pin follows the *current* belief, not a specific row — a pinned fact
+  // superseded here would otherwise vanish from every future turn's
+  // unconditional core the moment the owner corrects it (a new name, a new
+  // stated preference), which is the opposite of what pinning that belief
+  // meant. Gated on this episode's own trust tier, same as `addFact`'s gate:
+  // a low-trust message that talks the judge into a supersede must not be
+  // able to ride the old fact's pin onto the new one — `candidate.pinned`
+  // says the *old* value was owner-said, it says nothing about this one.
+  const carryPin = (): void => {
+    if (candidate.pinned === 1 && episode.trustTier === 0) deps.store.setPinned(tenantId, newId, true);
+  };
+
   switch (verdict.verdict) {
     case 'supersede':
       deps.store.supersede(tenantId, candidate.id, newId, now.toISOString());
       report.superseded += 1;
+      carryPin();
       break;
     case 'temporal_scope':
       deps.store.supersede(
@@ -555,6 +602,7 @@ async function reconcile(
         verdict.oldValidTo ?? fact.validFrom ?? now.toISOString(),
       );
       report.superseded += 1;
+      carryPin();
       break;
     case 'review':
       // Both stay. The owner is told, rather than the system choosing quietly
