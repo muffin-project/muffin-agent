@@ -21,7 +21,25 @@ export type SandboxProbe =
   | {
       available: false;
       mechanism: 'seatbelt' | 'bubblewrap' | 'none';
-      reason: 'binary_missing' | 'userns_denied' | 'unsupported_platform' | 'probe_failed';
+      reason:
+        | 'binary_missing'
+        | 'userns_denied'
+        | 'unsupported_platform'
+        | 'probe_failed'
+        // This probe's own bwrap/sandbox-exec invocation held, but a later real
+        // containment — executed through `SandboxManager` (`core/sandbox/
+        // executor.ts`'s `ensureInit`, the exact door `SandboxExecutor.run` uses)
+        // — did not. Distinguishable from `probe_failed` on purpose: that reason
+        // means THIS module's own two-legged check did not observe a deny/allow
+        // split; `contain_failed` means the check held here but the runtime's own
+        // invocation, built by the vendored package rather than by this file,
+        // failed to contain (or failed outright) on this host. The reperto this
+        // reason exists for: 26/08/2026, a container where the probe's own
+        // `--unshare-all` legs (no `--proc` mount at all) reported `available`
+        // while `SandboxManager`'s real Linux invocation — which does mount a
+        // fresh `/proc` (linux-sandbox-utils.js) — died with `bwrap: Can't mount
+        // proc on /newroot/proc: Operation not permitted`.
+        | 'contain_failed';
       detail: string;
       remedy: string;
     };
@@ -220,7 +238,15 @@ const DENY_ARGV = ['--ro-bind', '/', '/', '--tmpfs', '/etc', '--unshare-all', '-
  */
 const ALLOW_ARGV = ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent', 'cat', '/etc/hosts'];
 
-const APPARMOR_REMEDY =
+/**
+ * Exported so `core/sandbox/executor.ts`'s real self-test (which runs through
+ * `SandboxManager`, not through this module's own bwrap invocation) can
+ * classify what it sees with the exact same hard-won regex — not a second,
+ * inevitably-drifting copy of it. Same reasoning as `tmpdirBreaksSandboxSockets`
+ * above: the probe module is the source of truth on how a bwrap failure reads,
+ * not a README or a second hand-rolled check.
+ */
+export const APPARMOR_REMEDY =
   'unprivileged user namespaces are restricted (Ubuntu 24.04+ default). ' +
   'Add an AppArmor profile for bwrap granting `userns` and reload it with apparmor_parser -r; ' +
   'lowering kernel.apparmor_restrict_unprivileged_userns works too but disarms the protection host-wide';
@@ -249,7 +275,7 @@ const APPARMOR_REMEDY =
  *    it gets far enough to attempt the loopback setup that produces the
  *    first message.
  */
-function isUsernsDenied(detail: string): boolean {
+export function isUsernsDenied(detail: string): boolean {
   if (/RTM_NEWADDR/i.test(detail)) return true;
   if (/operation not permitted/i.test(detail) && /(user namespace|userns)/i.test(detail)) {
     return true;
@@ -352,7 +378,8 @@ function probeBubblewrap(): SandboxProbe {
   return { available: true, mechanism: 'bubblewrap' };
 }
 
-function message(error: unknown): string {
+/** Exported for the same reason as `isUsernsDenied`: one error-text extractor, not two. */
+export function message(error: unknown): string {
   if (error && typeof error === 'object') {
     const e = error as { stderr?: Buffer | string; message?: string };
     const stderr = e.stderr ? String(e.stderr).trim() : '';
