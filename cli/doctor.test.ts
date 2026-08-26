@@ -14,6 +14,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
 
 /**
@@ -733,5 +734,36 @@ describe('sandboxOkDetail — the sandbox "ok" line is honest about which platfo
     expect(line).toContain('bubblewrap');
     expect(line.toLowerCase()).toContain('weaker');
     expect(line).toMatch(/unix.socket/i);
+  });
+});
+
+describe('la riga sandbox di doctor viene dalla porta vera, non dal probe economico', () => {
+  /**
+   * La rete che mancava (judge #129, secondo follow-up): il meccanismo era
+   * coperto, ma niente inchiodava *doctor* a `verify()`. Un ritorno accidentale
+   * a `probeSandbox()` — una riga — non lo avrebbe visto nessun test, e
+   * riaprirebbe esattamente il reperto: doctor verde su una macchina dove il
+   * primo comando contenuto muore con l'errore grezzo di bwrap dentro un job.
+   */
+  it('un contenimento che fallisce alla prova reale finisce nella riga, con la sua ragione', async () => {
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'contain_failed',
+      detail: "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+      remedy: 'questa macchina non può contenere: nessun comando verrà eseguito',
+    });
+    try {
+      const line = await check(dir, 'sandbox');
+      expect(spia).toHaveBeenCalled(); // rossa se doctor tornasse al probe nudo
+      expect(line?.level).toBe('warn');
+      expect(line?.detail).toContain('contain_failed');
+      expect(line?.detail).toContain('mount proc');
+      expect(line?.remedy).toContain('non può contenere');
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
