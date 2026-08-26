@@ -477,3 +477,55 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
     }
   });
 });
+
+describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)', () => {
+  it('su un install appena fatto: stampa il piano su stdout, exit 1, e non tocca mai il filesystem', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+
+    const before = readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8');
+    const r = muffin(env, ['rot', 'harden']);
+
+    // 1, non 0 né 2: come `doctor` in warn, non un errore bloccante — ma
+    // nemmeno "va tutto bene", perché non lo va ancora.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(join(dir, 'rot'));
+    expect(r.out).toContain('sudo chown');
+    expect(r.out).toContain('sys.shell');
+    // Mai eseguito: il manifest — quindi rot/ — non cambia di una virgola.
+    expect(readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8')).toBe(before);
+    expect(r.err).toBe('');
+  });
+
+  it('un secondo giro dopo `init --hardened` distingue "OS non ancora sistemato" dal caso precedente', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init', '--hardened'], 'sk-ant-fixture');
+
+    const r = muffin(env, ['rot', 'harden']);
+    // Il file resta di proprietà dell'utente che ha girato `init`: dichiarare
+    // "hardened" da solo non regge ancora, quindi il piano va comunque
+    // proposto — è esattamente il difetto misurato che questa slice chiude.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('sudo chown');
+    // E la sezione "dichiaralo in config.json" non compare più, perché quella
+    // parte è già vera.
+    expect(r.out).not.toContain('config.json');
+  });
+
+  it('`rot` senza sub, o con un sub sconosciuto, nomina harden nello usage', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+    const r = muffin(env, ['rot', 'bogus']);
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('harden');
+  });
+
+  it('--help elenca `harden` accanto a verify | reseal', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
+    expect(r.out).toContain('muffin rot verify | reseal | harden');
+  });
+});

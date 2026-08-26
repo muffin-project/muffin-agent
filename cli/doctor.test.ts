@@ -63,6 +63,23 @@ describe('doctor names the source of the permission matrix', () => {
   });
 });
 
+describe('doctor names the everyday consequence of single-user, and the remedy for it', () => {
+  it('names sys.shell asking every time, and points at `muffin rot harden`', async () => {
+    // `runInit` without `--hardened` seals `single-user` (cli/init.ts) — the
+    // mode every fresh install actually has. Before this slice the line named
+    // the mechanism (detection, not prevention) but not what the owner feels
+    // from it: every high-risk capability asking, always, with no command
+    // that gets them out of it.
+    const dir = home();
+    const c = await check(dir, 'root of trust mode');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('single-user');
+    expect(c?.detail).toContain('sys.shell');
+    expect(c?.remedy).toContain('muffin rot harden');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('doctor names which profile the configured model resolves to', () => {
   it('is ok, naming the resolved profile, when nothing was dropped', async () => {
     const dir = home(); // cli/init.ts writes models.main = claude-sonnet-5
