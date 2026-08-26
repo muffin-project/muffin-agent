@@ -84,7 +84,10 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     const aside = new DatabaseCtor(asideCopy!, { readonly: true });
     expect(aside.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 2 }); // nothing destroyed
     aside.close();
-    expect(applied).toEqual([2]);
+    // [2, 3]: this fixture has no `facts` table, so migration 3
+    // (`slice/memoria-appuntata`) no-ops here the same way migration 2 itself
+    // no-ops on a database with no `jobs` — both still run and stamp.
+    expect(applied).toEqual([2, 3]);
   });
 
   it('refuses while the gateway is alive', () => {
