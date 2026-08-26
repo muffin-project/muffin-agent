@@ -83,17 +83,26 @@ describe('the owner-class prompt does not move', () => {
    * its job — re-capture the hash in the same commit as the edit, so the cache
    * invalidation is a thing someone decided rather than a thing that happened.
    *
+   * Note that the three files named above are not the only inputs: `WORK_RULES`
+   * in `assemble.ts` is a fourth, and it is the one the re-capture below moved.
+   *
+   * Re-captured 2026-08-26 (`slice/come-lavori`): three rules added to
+   * `WORK_RULES`, each closing a gap the runtime does not close on its own —
+   * see that constant's docstring for which trace produced which rule. The
+   * assembly order is unchanged. Previous pin, for the record:
+   * `7dbab742425de4af2b473f7e509a72e82cb501ddc2d3e50527e700f1f6740c53`.
+   *
    * Re-captured 2026-08-17 (`slice/identita`, A2/A3): commit c090dce replaced
    * the three template files with the owner's real, authored text (persona.md
-   * and voice.md rewritten, identity.md filled in for the first time) — the
-   * hash below is that text through the *unchanged* assembly order, not a new
+   * and voice.md rewritten, identity.md filled in for the first time) — that
+   * hash was that text through the *unchanged* assembly order, not a new
    * mechanism. 22,477 chars / 22,772 UTF-8 bytes, against 11,498 chars before
    * (roughly double — see the PR body for the full before/after and the
-   * `group` class' smaller delta). Previous pin, for the record:
+   * `group` class' smaller delta). Pin before that one:
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '7dbab742425de4af2b473f7e509a72e82cb501ddc2d3e50527e700f1f6740c53';
+    'a83e22ce2ab67a953c1c0b1af96c38a67ff5271593d903d1ca87c728724cde73';
 
   it('is byte-identical to the single prompt that preceded the split', () => {
     const runtime = boot(bootHome());
@@ -234,9 +243,20 @@ describe('what a group turn is allowed to be told', () => {
   it('keeps the operational rules, which are not about the owner', () => {
     const runtime = boot(bootHome());
     try {
-      const { group } = runtime.deps.systemPrompts;
+      const { group, owner } = runtime.deps.systemPrompts;
       expect(group).toContain('## Come lavori');
       expect(group).toContain('Non fingere di aver fatto');
+      // The three rules added on 26/08 are about the turn too, so they belong
+      // to both classes — `WORK_RULES` is one constant in both lists, and this
+      // pins that it stays that way rather than being forked per class.
+      for (const rule of [
+        'lo chiede il kernel',
+        'chiediti cosa è cambiato',
+        'prima di partire',
+      ]) {
+        expect(group).toContain(rule);
+        expect(owner).toContain(rule);
+      }
       // Form rules apply everywhere: a second voice for groups is how the two
       // drift, and drift in this file is measured in emoji thresholds.
       expect(group).toContain('Niente azioni simulate');
