@@ -52,6 +52,13 @@ export type FactInput = {
   origin?: FactOrigin;
   /** 0 routine · 1 notable · 2 charged. Defaults to routine. */
   importance?: number;
+  /**
+   * Requested pin. Defaults to false, and requesting it is not granting it:
+   * `addFact` only honours this when `trustTier` is 0 and `origin` is `said`
+   * — see its own comment. A caller here is a proposal, not an instruction,
+   * because the caller can be an extractor reading someone else's words.
+   */
+  pinned?: boolean;
   extractionV: number;
   recordedAt: string;
 };
@@ -77,6 +84,14 @@ export type Fact = {
   importance: number;
   /** The fact that replaced this one, if any. Recall shows it; `why` follows it. */
   supersededBy: number | null;
+  /**
+   * 0 or 1 — SQLite has no boolean, and this follows `importance`'s own
+   * convention of reading the CHECK-less integer bare rather than narrowing
+   * it at the boundary. 1 means recall injects it into every turn's MEMORIA
+   * block unconditionally, ahead of anything similarity found; see
+   * `recall.ts`'s pinned-core comment for the whole mechanism.
+   */
+  pinned: number;
 };
 
 /**
@@ -186,6 +201,17 @@ export class MemoryStore {
       'importance',
       'importance INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2)',
     );
+    // Same net, for the same reason, for the column `slice/memoria-appuntata`
+    // adds: `migrate()` carries this forward for anyone who boots through it
+    // (migration 3), but `cli/memory.ts` and other direct openers construct a
+    // `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own
+    // `ensureColumn` call exists to close (judge #106 giro 2).
+    ensureColumn(db, 'facts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
+    // The pinned lookup runs on every recall call — every turn with memory
+    // enabled — so it earns the same treatment `idx_facts_active` gives
+    // `expired_at`. Placed after `ensureColumn`, never before: on a database
+    // still missing the column this would fail with "no such column: pinned".
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_pinned ON facts(tenant_id, pinned)`);
     const seed = db.prepare(
       `INSERT OR IGNORE INTO functional_predicates (predicate, declared_at) VALUES (?, datetime('now'))`,
     );
@@ -305,15 +331,33 @@ export class MemoryStore {
     );
   }
 
+  /**
+   * The one gate for `pinned`, and it lives here rather than in the extractor
+   * or the CLI, on purpose: **the model can be wrong**. `extract.ts` asks for
+   * a pin on a strict, narrow vocabulary, but it reads whatever text arrived —
+   * a group chat, a forwarded message, a web page — and "remember this
+   * forever" is exactly the sentence a prompt injection wants to plant,
+   * because a pinned fact reaches every future turn unconditionally, with no
+   * similarity check standing between it and the model. Restricting the
+   * *request* to `trustTier === 0` (owner-tier evidence) and `origin ===
+   * 'said'` (something someone actually said, never an inference) at the one
+   * place every fact write passes through means a caller proposing `pinned`
+   * on tainted input is silently corrected here, not trusted to have checked
+   * already. `muffin memory pin` does not go through this path — it calls
+   * `setPinned` directly on an existing row, which is the CLI's own,
+   * always-honoured channel: typing at a terminal on the owner's own machine
+   * *is* the trust tier this gate is checking for.
+   */
   addFact(input: FactInput): number {
+    const pinned = input.pinned === true && input.trustTier === 0 && (input.origin ?? 'said') === 'said';
     const info = this.db
       .prepare(
         `INSERT INTO facts (tenant_id, subject_id, predicate, object_id, object_value,
                             valid_from, valid_to, recorded_at, episode_id, speaker_id,
-                            trust_tier, confidence, origin, importance, extraction_v)
+                            trust_tier, confidence, origin, importance, pinned, extraction_v)
          VALUES (@tenantId, @subjectId, @predicate, @objectId, @objectValue,
                  @validFrom, @validTo, @recordedAt, @episodeId, @speakerId,
-                 @trustTier, @confidence, @origin, @importance, @extractionV)`,
+                 @trustTier, @confidence, @origin, @importance, @pinned, @extractionV)`,
       )
       .run({
         ...input,
@@ -325,8 +369,64 @@ export class MemoryStore {
         speakerId: input.speakerId ?? null,
         origin: input.origin ?? 'said',
         importance: input.importance ?? 0,
+        // better-sqlite3 cannot bind a JS boolean; SQLite has no boolean type
+        // to bind it to either, which is the same fact `Fact.pinned` reading
+        // back as 0/1 rather than `boolean` is documenting.
+        pinned: pinned ? 1 : 0,
       });
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * The CLI's own channel, always honoured — no trust-tier gate, because
+   * typing `muffin memory pin <id>` at a terminal on the owner's own machine
+   * is what `addFact`'s gate is checking *for*: there is no more-trusted
+   * source than that to defer to. Also how a pinned fact's status is meant to
+   * carry forward onto its successor when the owner corrects a pinned belief
+   * (`ingest.ts`'s `reconcile`, gated there on the *new* fact's own trust tier
+   * before calling this — this method itself does not re-check, the same
+   * division of labour `supersede` already has with its callers).
+   *
+   * Returns whether a row actually changed, the same `changes`-based shape
+   * `JobStore.disable` uses, so a caller can tell "no such fact for this
+   * tenant" from "already in that state".
+   */
+  setPinned(tenantId: string, factId: number, pinned: boolean): boolean {
+    const info = this.db
+      .prepare(`UPDATE facts SET pinned = ? WHERE id = ? AND tenant_id = ?`)
+      .run(pinned ? 1 : 0, factId, tenantId);
+    return info.changes > 0;
+  }
+
+  /**
+   * The nucleus: active, pinned facts for this tenant, newest first — the
+   * same ordering `activeFacts` uses, for the same reason (recall's budget
+   * cut keeps the most recent when there are more than it can show).
+   *
+   * `expired_at IS NULL` is not an afterthought: a fact that was pinned and
+   * has since been superseded or retired must not keep reaching every future
+   * turn just because nobody unpinned it by hand first — otherwise correcting
+   * a pinned belief (a new name, a new preference) would leave the *old* one
+   * cemented in context forever, the opposite of what recall already does for
+   * every other fact. `recall.ts` is the one caller, and it is the only
+   * caller allowed to skip a relevance check against this list.
+   */
+  pinnedFacts(tenantId: string): Fact[] {
+    return this.db
+      .prepare(
+        `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
+                f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
+                f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
+                f.expired_at AS expiredAt, f.episode_id AS episodeId,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
+                f.superseded_by AS supersededBy
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         LEFT JOIN entities o ON o.id = f.object_id
+         WHERE f.tenant_id = ? AND f.pinned = 1 AND f.expired_at IS NULL
+         ORDER BY f.recorded_at DESC`,
+      )
+      .all(tenantId) as Fact[];
   }
 
   /**
@@ -396,7 +496,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -426,7 +526,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -469,7 +569,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -545,7 +645,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -581,7 +681,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -601,7 +701,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -950,7 +1050,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id
@@ -993,7 +1093,7 @@ export class MemoryStore {
                 f.object_value AS objectValue, f.object_id AS objectId, o.name AS objectName,
                 f.valid_from AS validFrom, f.valid_to AS validTo, f.recorded_at AS recordedAt,
                 f.expired_at AS expiredAt, f.episode_id AS episodeId,
-                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance,
+                f.trust_tier AS trustTier, f.confidence, f.origin, f.importance, f.pinned,
                 f.superseded_by AS supersededBy
          FROM facts f
          JOIN entities s ON s.id = f.subject_id

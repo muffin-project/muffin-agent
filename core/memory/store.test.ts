@@ -346,3 +346,96 @@ describe('memory store', () => {
     expect(row?.trustTier).toBe(3);
   });
 });
+
+describe('memory store — pinned facts', () => {
+  it('migrates a database that predates pinned, without losing its rows', () => {
+    // Same proof as origin/importance above, for the column this slice adds:
+    // an existing `facts` table means `CREATE TABLE IF NOT EXISTS` is a no-op,
+    // so `pinned` can only arrive through `ensureColumn`.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`
+      CREATE TABLE facts (
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, subject_id INTEGER NOT NULL,
+        predicate TEXT NOT NULL, object_id INTEGER, object_value TEXT,
+        valid_from TEXT, valid_to TEXT, recorded_at TEXT NOT NULL, expired_at TEXT,
+        episode_id INTEGER NOT NULL, speaker_id INTEGER,
+        trust_tier INTEGER NOT NULL, confidence REAL NOT NULL,
+        extraction_v INTEGER NOT NULL, superseded_by INTEGER)`);
+    db.prepare(
+      `INSERT INTO facts (id, tenant_id, subject_id, predicate, object_value, recorded_at,
+                          episode_id, trust_tier, confidence, extraction_v)
+       VALUES (1, 'host', 1, 'accountant', 'Marco', '2026-05-01T10:00:00Z', 1, 0, 0.9, 1)`,
+    ).run();
+
+    const s = new MemoryStore(db);
+    db.prepare(`INSERT INTO entities (id, tenant_id, kind, name, recorded_at)
+                VALUES (1, 'host', 'person', 'Giusto', '2026-05-01T10:00:00Z')`).run();
+
+    expect(s.factById(HOST, 1)!.pinned).toBe(0);
+    expect(s.pinnedFacts(HOST)).toEqual([]);
+  });
+
+  it('addFact only honours a requested pin when the source is owner-tier and said, never on the model\'s say-so alone', () => {
+    // The gate `MemoryStore.addFact` itself owns, precisely because a caller
+    // can be an extractor reading a group chat or a forwarded message: asking
+    // for `pinned` is not the same as being granted it.
+    const s = store();
+    const me = s.upsertEntity(HOST, 'owner', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, HOST, 'nota', 2); // tier 2: a group/stranger episode
+    const base = {
+      tenantId: HOST, subjectId: me, predicate: 'preferred_name', objectValue: 'Giusto',
+      episodeId: ep, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+    };
+    const strangerId = s.addFact({ ...base, trustTier: 2, pinned: true });
+    expect(s.factById(HOST, strangerId)!.pinned).toBe(0);
+
+    const inferredId = s.addFact({ ...base, trustTier: 0, origin: 'inferred', pinned: true });
+    expect(s.factById(HOST, inferredId)!.pinned).toBe(0);
+
+    const honestId = s.addFact({ ...base, trustTier: 0, origin: 'said', pinned: true });
+    expect(s.factById(HOST, honestId)!.pinned).toBe(1);
+  });
+
+  it('pinnedFacts returns only active, pinned rows for the asking tenant, newest first', () => {
+    const s = store();
+    const hostMe = s.upsertEntity(HOST, 'owner', 'person', '2026-08-04T10:00:00Z');
+    const groupMe = s.upsertEntity(GROUP, 'owner', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, HOST, 'nota');
+    const groupEp = episode(s, GROUP, 'nota');
+    const base = { episodeId: ep, trustTier: 0 as const, origin: 'said' as const, confidence: 0.9, extractionV: 1 };
+
+    const older = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'name', objectValue: 'Giusto', recordedAt: '2026-08-01T10:00:00Z', pinned: true });
+    const newer = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'city', objectValue: 'Cagliari', recordedAt: '2026-08-04T10:00:00Z', pinned: true });
+    const notPinned = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'interest', objectValue: 'vela', recordedAt: '2026-08-05T10:00:00Z' });
+    // A different tenant's own pinned fact must never surface here — the same
+    // isolation every other method in this class already holds.
+    s.addFact({ ...base, tenantId: GROUP, subjectId: groupMe, episodeId: groupEp, predicate: 'name', objectValue: 'Impostore', recordedAt: '2026-08-04T10:00:00Z', pinned: true });
+
+    const pinned = s.pinnedFacts(HOST);
+    expect(pinned.map((f) => f.id)).toEqual([newer, older]);
+    expect(pinned.some((f) => f.id === notPinned)).toBe(false);
+
+    // setPinned: the CLI's own always-honoured channel, unpin then re-pin.
+    expect(s.setPinned(HOST, newer, false)).toBe(true);
+    expect(s.pinnedFacts(HOST).map((f) => f.id)).toEqual([older]);
+    expect(s.setPinned(HOST, newer, true)).toBe(true);
+    expect(s.pinnedFacts(HOST).map((f) => f.id)).toEqual([newer, older]);
+    // A fact that is not this tenant's own is refused, not silently a no-op
+    // that happens to touch nothing — the caller can tell the two apart.
+    expect(s.setPinned(GROUP, newer, false)).toBe(false);
+    expect(s.setPinned(HOST, 999999, true)).toBe(false);
+  });
+
+  it('an expired pinned fact drops out — supersession wins over the pin', () => {
+    const s = store();
+    const me = s.upsertEntity(HOST, 'owner', 'person', '2026-08-04T10:00:00Z');
+    const ep = episode(s, HOST, 'nota');
+    const base = { tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const, origin: 'said' as const, confidence: 0.9, extractionV: 1 };
+    const oldId = s.addFact({ ...base, predicate: 'name', objectValue: 'Giusto', recordedAt: '2026-08-01T10:00:00Z', pinned: true });
+    const newId = s.addFact({ ...base, predicate: 'name', objectValue: 'G.', recordedAt: '2026-08-05T10:00:00Z', pinned: true });
+    s.supersede(HOST, oldId, newId, '2026-08-05T10:00:00Z');
+
+    const pinned = s.pinnedFacts(HOST);
+    expect(pinned.map((f) => f.id)).toEqual([newId]);
+  });
+});
