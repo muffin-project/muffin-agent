@@ -11,7 +11,7 @@ import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
-import { runTurn, type LoopDeps, type RegisteredTool, type TurnDelta } from './loop.js';
+import { runTurn, type LoopDeps, type RegisteredTool, type TurnDelta, type TurnEvent } from './loop.js';
 import { CONSERVATIVE, type Profile, type RecoveryStrategy } from './profiles/profile.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { ProviderError, ProviderStreamError, type ChatCall, type ChatResult, type Provider, type StreamEvent } from './providers/types.js';
@@ -1211,5 +1211,129 @@ describe('agent loop · streaming (B11)', () => {
     // edges were touched (the leading whitespace-only chunk dropped, the
     // trailing whitespace-only chunk dropped, nothing in between rewritten).
     expect(received).toEqual(['ecco ', 'la risposta']);
+  });
+});
+
+/** Every event of one kind, narrowed — so a test can read `.ms`/`.capability`/etc without an `as`. */
+function byType<T extends TurnEvent['type']>(events: TurnEvent[], type: T): Extract<TurnEvent, { type: T }>[] {
+  return events.filter((e): e is Extract<TurnEvent, { type: T }> => e.type === type);
+}
+
+describe('agent loop · progress (B13)', () => {
+  it('reports each round once, in the order the loop enters it', async () => {
+    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('fatto')]);
+    const events: TurnEvent[] = [];
+    const result = await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(result.text).toBe('fatto');
+    expect(byType(events, 'round')).toEqual([
+      { type: 'round', n: 1 },
+      { type: 'round', n: 2 },
+    ]);
+  });
+
+  it('renumbers a retried round instead of folding it into the one it replaced', async () => {
+    // `nothing()` is a `ChatResult` the provider genuinely returned — text
+    // null, no tool calls — so it drives the empty-result recovery cascade
+    // (`recover('empty')`), which `continue`s back to the top of the loop: a
+    // real second pass, not a redo of the first hidden from this channel.
+    const { deps: d, store } = deps([nothing(), answer('ripreso')], {
+      profile: { ...CONSERVATIVE, recovery: ['nudge'] },
+    });
+    const events: TurnEvent[] = [];
+    const result = await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(result.text).toBe('ripreso');
+    expect(byType(events, 'round')).toEqual([
+      { type: 'round', n: 1 },
+      { type: 'round', n: 2 },
+    ]);
+    // Both attempts really did reach the provider and come back with a
+    // `ChatResult` (an empty one, the first time) — `model` reports that a
+    // call finished, not that it was useful.
+    expect(byType(events, 'model')).toHaveLength(2);
+  });
+
+  it('does not report a model event for an attempt that threw — only the retried round covers it', async () => {
+    // Same shape as "does not spend a cascade step on a transport failure"
+    // above: a transport error never produces a `ChatResult`, so there is
+    // nothing for `model` to report on that attempt.
+    const { deps: d, store } = deps([new ProviderError('502 upstream', true), answer('ripreso')]);
+    const events: TurnEvent[] = [];
+    const result = await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(result.text).toBe('ripreso');
+    expect(byType(events, 'round')).toEqual([
+      { type: 'round', n: 1 },
+      { type: 'round', n: 2 },
+    ]);
+    expect(byType(events, 'model')).toHaveLength(1);
+  });
+
+  it('reports the finished model call with the same values the chat span records', async () => {
+    const { deps: d, store } = deps([answer('ecco')]);
+    const events: TurnEvent[] = [];
+    await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    const [ev] = byType(events, 'model');
+    expect(ev).toMatchObject({
+      type: 'model',
+      model: 'test',
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      stopReason: 'end',
+    });
+    expect(typeof ev?.ms).toBe('number');
+    expect(ev?.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('orders a tool-calling round as round → model → tool_start → tool_end, then the next round', async () => {
+    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('fatto')]);
+    const events: TurnEvent[] = [];
+    await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(events.map((e) => e.type)).toEqual(['round', 'model', 'tool_start', 'tool_end', 'round', 'model']);
+    // The round that called the tool is tagged `tool_use` — the same value
+    // `checkCompletion`/the transcript itself would agree on, not a guess.
+    expect(events[1]).toMatchObject({ type: 'model', stopReason: 'tool_use' });
+  });
+
+  it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
+    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('fatto')]);
+    const events: TurnEvent[] = [];
+    await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(byType(events, 'tool_start')).toEqual([{ type: 'tool_start', name: 'demo_read', capability: 'demo.read' }]);
+    const [end] = byType(events, 'tool_end');
+    expect(end).toMatchObject({ type: 'tool_end', name: 'demo_read', isError: false });
+    expect(typeof end?.ms).toBe('number');
+    expect(end?.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports isError:true on tool_end when the handler throws, and the turn still recovers', async () => {
+    const { deps: d, store } = deps([callTool('demo_boom'), answer('recuperato')]);
+    const events: TurnEvent[] = [];
+    const result = await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(result.text).toBe('recuperato');
+    expect(byType(events, 'tool_end')).toEqual([
+      expect.objectContaining({ type: 'tool_end', name: 'demo_boom', isError: true }) as unknown as TurnEvent,
+    ]);
+  });
+
+  it('never reports tool_start/tool_end for a hallucinated tool name — no capability to name, no call attempted', async () => {
+    const { deps: d, store } = deps([callTool('tool_che_non_esiste'), answer('mi scuso')]);
+    const events: TurnEvent[] = [];
+    await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
+
+    expect(byType(events, 'tool_start')).toEqual([]);
+    expect(byType(events, 'tool_end')).toEqual([]);
+  });
+
+  it('runs a full turn, tool call included, with no onProgress sink at all', async () => {
+    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('ok')]);
+    const result = await runTurn(d, input(store)); // no onProgress attached
+    expect(result).toMatchObject({ stopped: 'answered', text: 'ok' });
   });
 });
