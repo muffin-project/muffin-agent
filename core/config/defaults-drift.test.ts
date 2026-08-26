@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -381,7 +381,7 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     rmSync(h, { recursive: true, force: true });
   });
 
-  it('una directory `defaults/` illeggibile costa il rapporto? no: ripiega su ciò che il registro sa', () => {
+  it('una directory `defaults/` illeggibile costa il rapporto? no: ripiega su ciò che il registro sa — e lo dice', () => {
     const checkout = makeCheckout();
     const h = home();
     writeFileSync(join(h, 'persona.md'), 'v1\n');
@@ -391,11 +391,90 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
       const all = diagnoseDefaultsDrift(h, checkout);
       // Non lancia, e i percorsi che il registro conosce restano diagnosticati.
       expect(all.map((d) => d.path)).toContain('persona.md');
+      // Ma il ripiego non è gratis: la lista è più corta di quella vera, e una
+      // lista più corta di righe sicure di sé è esattamente il modo in cui
+      // questo modulo mentiva prima di esistere. Quindi lo dichiara.
+      const declared = all.find((d) => d.path === 'defaults/');
+      expect(declared?.status).toBe('unknown');
+      expect(declared?.detail).toContain('registro');
     } finally {
       chmodSync(join(checkout, 'defaults'), 0o755);
       rmSync(checkout, { recursive: true, force: true });
       rmSync(h, { recursive: true, force: true });
     }
+  });
+
+  it('una **sottodirectory** illeggibile costa quella sottodirectory, non i fratelli già trovati', () => {
+    // Il terzo giro di review, la terza volta con la stessa forma: un guasto
+    // locale cancellava più stato di quanto il guasto giustificasse. Qui il
+    // walk lanciava, la rete un livello sopra prendeva tutto, e sei file
+    // diventavano uno — i cinque spariti erano perfettamente leggibili.
+    const checkout = makeCheckout();
+    mkdirSync(join(checkout, 'defaults', 'sub'), { recursive: true });
+    writeFileSync(join(checkout, 'defaults', 'sub', 'e.md'), 'e\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'id\n');
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    writeFileSync(join(h, 'voice.md'), 'v1 voice\n');
+    chmodSync(join(checkout, 'defaults', 'sub'), 0o000);
+    try {
+      const all = diagnoseDefaultsDrift(h, checkout);
+      const paths = all.map((d) => d.path);
+      // I fratelli fuori dal sottoalbero rotto — inclusi quelli *già trovati*
+      // prima di incontrarlo, e quelli sotto un'altra sottodirectory.
+      expect(paths).toContain('persona.md');
+      expect(paths).toContain('voice.md');
+      expect(paths).toContain('rot/identity.md');
+      // E il buco è visibile, al suo posto, invece di essere un'assenza.
+      const hole = all.find((d) => d.path === 'sub/');
+      expect(hole?.status).toBe('unknown');
+      expect(hole?.detail).toContain('non ho potuto elencarla');
+    } finally {
+      chmodSync(join(checkout, 'defaults', 'sub'), 0o755);
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  it('un symlink penzolante sotto defaults/ è una riga, non la fine del walk', () => {
+    // Il trigger che non chiede nessun permesso ostile: `statSync` segue i
+    // symlink, quindi uno rotto lancia durante l'elenco. Stessa famiglia di
+    // un checkout che un deploy sta ancora scrivendo mentre `doctor` legge.
+    const checkout = makeCheckout();
+    symlinkSync(join(checkout, 'defaults', 'non-esiste.md'), join(checkout, 'defaults', 'penzola.md'));
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    writeFileSync(join(h, 'voice.md'), 'v1 voice\n');
+    const all = diagnoseDefaultsDrift(h, checkout);
+    expect(all.find((d) => d.path === 'persona.md')?.status).toBe('up-to-date');
+    expect(all.find((d) => d.path === 'voice.md')?.status).toBe('up-to-date');
+    expect(all.find((d) => d.path === 'penzola.md')?.status).toBe('unknown');
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it('`recordCopied` riscrive il registro senza cancellare le voci che non sa leggere', () => {
+    // Leggere oltre una voce incomprensibile è prudenza; cancellarla non è lo
+    // stesso atto. Succedeva su un `init` ordinario, senza bisogno di nessuna
+    // corruzione propria, senza traccia e senza ritorno — mentre ciò che
+    // l'aveva scritta è precisamente la cosa che qualcuno vorrebbe guardare.
+    const h = home();
+    writeFileSync(
+      paths(h).defaultsManifest,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        installedAt: '2026-08-01T00:00:00Z',
+        files: [{ path: 'voice.md', sha256: 'abc' }, { path: 'bad.md' }],
+      })}\n`,
+    );
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
+
+    const onDisk = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as { files: unknown[] };
+    expect(onDisk.files).toContainEqual({ path: 'bad.md' });
+    // E la voce illeggibile non è diventata leggibile per finta: chi legge
+    // continua a scartarla, come prima.
+    expect(readDefaultsRegistry(h)?.files.map((f) => f.path).sort()).toEqual(['persona.md', 'voice.md']);
+    rmSync(h, { recursive: true, force: true });
   });
 
   it('un checkout shallow lo dice, invece di cercare in una fetta di storia e chiamarla storia', () => {

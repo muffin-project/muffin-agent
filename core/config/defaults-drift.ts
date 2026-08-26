@@ -63,6 +63,17 @@ const REGISTRY_SCHEMA_VERSION = 1;
  * a thrown error.
  */
 export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
+  return readRegistryPartitioned(home)?.registry ?? null;
+}
+
+/**
+ * The same read, keeping the entries the filter below throws away.
+ *
+ * Only `recordCopied` wants them, and only so it can write them back
+ * untouched: dropping an entry from a report is reversible the moment the
+ * file becomes readable again, dropping it from the file on disk is not.
+ */
+function readRegistryPartitioned(home: string): { registry: DefaultsRegistry; unparsed: unknown[] } | null {
   const file = paths(home).defaultsManifest;
   if (!existsSync(file)) return null;
   try {
@@ -87,11 +98,14 @@ export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
     // A survivor list keeps every entry that can still be trusted and drops
     // only the ones that cannot. Per-path lookups behave identically whether
     // this returns `null` or an empty `files`.
-    const files = parsed.files.filter(
-      (f): f is RegistryEntry =>
-        typeof f === 'object' && f !== null && typeof f.path === 'string' && typeof f.sha256 === 'string',
-    );
-    return { ...(parsed as DefaultsRegistry), files };
+    const isEntry = (f: unknown): f is RegistryEntry =>
+      typeof f === 'object' &&
+      f !== null &&
+      typeof (f as RegistryEntry).path === 'string' &&
+      typeof (f as RegistryEntry).sha256 === 'string';
+    const files = parsed.files.filter(isEntry);
+    const unparsed = (parsed.files as unknown[]).filter((f) => !isEntry(f));
+    return { registry: { ...(parsed as DefaultsRegistry), files }, unparsed };
   } catch {
     return null;
   }
@@ -112,30 +126,104 @@ export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
  */
 export function recordCopied(home: string, entries: { path: string; content: Buffer }[]): void {
   if (entries.length === 0) return;
-  const existing = readDefaultsRegistry(home);
-  const byPath = new Map(existing?.files.map((f) => [f.path, f] as const));
+  const read = readRegistryPartitioned(home);
+  const byPath = new Map(read?.registry.files.map((f) => [f.path, f] as const));
   for (const e of entries) byPath.set(e.path, { path: e.path, sha256: sha256(e.content) });
-  const registry: DefaultsRegistry = {
+  // Entries this module could not parse are written back exactly as they
+  // were found, at the end so the sorted part stays deterministic.
+  //
+  // Reading past them is safe and already proven; *deleting* them is not the
+  // same act. It happens on a routine `init`, needs no corruption of its own,
+  // leaves no trace, and cannot be undone — while whatever wrote them (a hand
+  // edit, an interrupted write, a future schema) is precisely the thing
+  // somebody would want to look at afterwards. A reader that ignores what it
+  // does not understand is careful; a writer that erases it is not.
+  const registry = {
     schemaVersion: REGISTRY_SCHEMA_VERSION,
-    installedAt: existing?.installedAt ?? new Date().toISOString(),
-    files: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)),
+    installedAt: read?.registry.installedAt ?? new Date().toISOString(),
+    files: [...[...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)), ...(read?.unparsed ?? [])],
   };
   writeFileSync(paths(home).defaultsManifest, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
 }
 
-/** Relative, `/`-separated paths under `defaultsDir`, deterministic order — same shape as verify.ts's `listRotFiles`. */
-function listDefaultsTree(defaultsDir: string): string[] {
-  const out: string[] = [];
+/**
+ * One thing to diagnose. Either a file we found, or a place we could not
+ * look — never a place that silently is not there.
+ */
+type TreeEntry = { path: string; failure: string | null };
+
+/**
+ * Relative, `/`-separated paths under `defaultsDir`, deterministic order —
+ * same shape as verify.ts's `listRotFiles`.
+ *
+ * The walk contains its own failures instead of throwing them, and it
+ * contains them **where they happen**: a subdirectory that cannot be read
+ * costs that subdirectory, not the siblings already found beside it. It
+ * throwing used to be caught one level up, which cost the whole tree — six
+ * files became one, and the five that vanished were perfectly readable.
+ *
+ * The failure keeps the position it would have had, so the report reads in
+ * the same order whether or not anything failed, and the hole is visible
+ * next to what surrounds it rather than appended somewhere at the end.
+ *
+ * `statSync` follows symlinks, so a dangling one under `defaults/` throws
+ * here rather than at read time: that is one of the two ways this fires
+ * without anyone touching a permission bit. The other is a checkout being
+ * written while `doctor` reads it — a state `cli/update.ts` names in its
+ * own comments as real.
+ */
+function listDefaultsTree(defaultsDir: string): TreeEntry[] {
+  const out: TreeEntry[] = [];
   const walk = (dir: string, prefix: string): void => {
-    for (const entry of readdirSync(dir).sort()) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir).sort();
+    } catch (error) {
+      // `defaults/` itself: there is a better answer one level up (the
+      // registry still names the files `init` copied), so this one keeps
+      // travelling. Every level below it stops here, because above it there
+      // is nothing better — only the siblings this would otherwise erase.
+      if (prefix === '') throw error;
+      out.push({ path: `${prefix}/`, failure: `non ho potuto elencarla: ${(error as Error).message}` });
+      return;
+    }
+    for (const entry of entries) {
       const full = join(dir, entry);
       const rel = prefix ? `${prefix}/${entry}` : entry;
-      if (statSync(full).isDirectory()) walk(full, rel);
-      else out.push(rel);
+      try {
+        if (statSync(full).isDirectory()) walk(full, rel);
+        else out.push({ path: rel, failure: null });
+      } catch (error) {
+        out.push({ path: rel, failure: `non ho potuto guardarla: ${(error as Error).message}` });
+      }
     }
   };
   walk(defaultsDir, '');
   return out;
+}
+
+/**
+ * The single place where a caught failure becomes a report entry.
+ *
+ * Three consecutive reviews of this module found the same shape of defect in
+ * three different places: a local accident — one unreadable file, one
+ * malformed registry entry, one unreadable subdirectory — erasing more state
+ * than the accident justified, and usually in silence. Each round repaired
+ * its own site; none of them closed the shape.
+ *
+ * So the shape gets one home. Every path that catches something routes
+ * through here, and this function can only ever produce **one** entry, which
+ * is always declared (ADR-0008: degrade declared, never in silence). It is
+ * structurally unable to drop a sibling, blank a list, or return a confident
+ * status for something nobody managed to look at.
+ */
+function undiagnosable(relPath: string, reason: string): DefaultDrift {
+  return {
+    path: relPath,
+    sealed: relPath.startsWith('rot/'),
+    status: 'unknown',
+    detail: reason,
+  };
 }
 
 function installedPathOf(home: string, relPath: string): string {
@@ -329,19 +417,30 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
  */
 export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null, git: Git = REAL_GIT): DefaultDrift[] {
   const registry = readDefaultsRegistry(home);
-  // The listing itself can fail — an unreadable `defaults/` directory, not a
-  // file under it — and it runs before the per-file guard below, so uncaught
-  // it would still take the whole report down for a reason narrower than the
-  // one that guard was added for. Falling back to what the registry knows is
-  // strictly better than reporting nothing.
-  let trackedPaths: string[];
+  const fromRegistry = (): TreeEntry[] => (registry?.files ?? []).map((f) => ({ path: f.path, failure: null }));
+
+  // What to diagnose. The checkout is the real answer; the registry is a
+  // fallback that only knows the files `init` happened to copy.
+  //
+  // `listDefaultsTree` now contains a failure inside the subtree that caused
+  // it, so the only thing still arriving here is `defaults/` itself being
+  // unlistable — the one case where falling back to the registry is genuinely
+  // better than what the walk could return.
+  //
+  // But it is not free: the fallback silently narrows the report to an older,
+  // shorter list, and a shorter list of confident-looking lines is exactly how
+  // this module lied before it existed. So the fallback says so.
+  let entries: TreeEntry[];
+  let listingFailure: DefaultDrift | null = null;
   try {
-    trackedPaths =
-      checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults'))
-        ? listDefaultsTree(join(checkoutRoot, 'defaults'))
-        : (registry?.files.map((f) => f.path) ?? []);
-  } catch {
-    trackedPaths = registry?.files.map((f) => f.path) ?? [];
+    entries =
+      checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults')) ? listDefaultsTree(join(checkoutRoot, 'defaults')) : fromRegistry();
+  } catch (error) {
+    entries = fromRegistry();
+    listingFailure = undiagnosable(
+      'defaults/',
+      `non ho potuto elencare il checkout (${(error as Error).message}) — sotto c'è solo ciò che il registro d'installazione già conosceva`,
+    );
   }
 
   // One file's accident costs one line, never the report.
@@ -352,19 +451,13 @@ export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null,
   // check queued *after* this block (budget, database, schema, gateway,
   // sandbox, traces) never ran, and the owner got a stack trace precisely when
   // the machine was already in the state that made them run `doctor`.
-  //
-  // The degraded status is declared, not guessed (ADR-0008) — the same posture
-  // this module already takes when `git log` cannot answer.
-  return trackedPaths.map((relPath) => {
+  const diagnosed = entries.map((entry) => {
+    if (entry.failure !== null) return undiagnosable(entry.path, entry.failure);
     try {
-      return diagnoseOne(home, checkoutRoot, registry, relPath, git);
+      return diagnoseOne(home, checkoutRoot, registry, entry.path, git);
     } catch (error) {
-      return {
-        path: relPath,
-        sealed: relPath.startsWith('rot/'),
-        status: 'unknown' as const,
-        detail: `non ho potuto leggerla: ${(error as Error).message}`,
-      };
+      return undiagnosable(entry.path, `non ho potuto leggerla: ${(error as Error).message}`);
     }
   });
+  return listingFailure === null ? diagnosed : [listingFailure, ...diagnosed];
 }
