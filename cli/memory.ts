@@ -364,6 +364,18 @@ export function cmdMemoryReview(home: string, verbose = false): number {
       out.push('');
     }
 
+    // Not a problem awaiting a decision — the pinned core is informational,
+    // shown here because `review` is already the place a human looks to see
+    // what memory is doing beyond the last search, and nothing more natural
+    // exists yet. Never affects the exit code below, which stays keyed on
+    // `summary.open` alone.
+    const pinned = store.pinnedFacts(TENANT);
+    if (pinned.length > 0) {
+      out.push('appuntati — sempre nel contesto, a prescindere dal recall:');
+      for (const f of pinned) out.push(`   ${factLine(f)}`);
+      out.push('');
+    }
+
     if (out.length === 0) {
       // Told apart from "the register is empty", because they are different
       // findings: nothing recorded means the lane has never had to ask, and
@@ -424,6 +436,53 @@ export function cmdMemoryReviewKeep(home: string, factId: number): number {
 
 function objectOf(f: Fact): string {
   return f.objectName ?? f.objectValue ?? '?';
+}
+
+/**
+ * `muffin memory pin <fact-id>` / `unpin <fact-id>` — the owner's own always-
+ * honoured channel onto `MemoryStore.setPinned` (see that method's own
+ * comment: a terminal on the owner's machine is the trust tier `addFact`'s
+ * gate is checking for, so there is no further gate to apply here).
+ *
+ * Not yet reachable from `muffin memory` itself: `cli/main.ts`'s `cmdMemory`
+ * owns the argv dispatch for every subcommand here (`why`/`search`/…) and is
+ * explicitly out of scope for this slice — another change is in flight
+ * against that same function. These two are written and tested against
+ * `MemoryStore` directly; wiring them in is two `if (sub === …)` blocks once
+ * that file is free again.
+ */
+export function cmdMemoryPin(home: string, factId: number): number {
+  const { db, store } = openStore(home);
+  try {
+    const fact = store.factById(TENANT, factId);
+    if (!fact) {
+      process.stderr.write(`nessun fatto #${factId}\n`);
+      return 1;
+    }
+    store.setPinned(TENANT, factId, true);
+    process.stdout.write(
+      `#${factId} appuntato — resta nel contesto ad ogni turno, anche quando il recall non lo trova.\n`,
+    );
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+export function cmdMemoryUnpin(home: string, factId: number): number {
+  const { db, store } = openStore(home);
+  try {
+    const fact = store.factById(TENANT, factId);
+    if (!fact) {
+      process.stderr.write(`nessun fatto #${factId}\n`);
+      return 1;
+    }
+    store.setPinned(TENANT, factId, false);
+    process.stdout.write(`#${factId} non è più appuntato — torna al recall ordinario.\n`);
+    return 0;
+  } finally {
+    db.close();
+  }
 }
 
 export function cmdMemoryStats(home: string): number {
