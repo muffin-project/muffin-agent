@@ -39,3 +39,6 @@ zz-*
 
 # Character-eval transcripts: evidence of a run, not of the repo.
 evals/character/out/
+
+# lo scratch del gate Linux locale (evals/acceptance/gate-linux.sh)
+.gate-linux/
