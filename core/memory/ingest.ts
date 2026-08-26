@@ -518,7 +518,19 @@ async function reconcile(
         incoming: episode.content ?? undefined,
       },
     });
-    judgeSpan.setAttributes({ 'muffin.memory.verdict': verdict.verdict, 'muffin.memory.judge_confidence': verdict.confidence });
+    judgeSpan.setAttributes({
+      'muffin.memory.verdict': verdict.verdict,
+      'muffin.memory.judge_confidence': verdict.confidence,
+      // The same three attribute names the loop's own `muffin.chat_call` sets,
+      // because this span carries that same name and a reader cannot be
+      // expected to know which of the two produced it. Without them a judged
+      // step showed a duration and a model and no tokens, which on a per-step
+      // view reads as *free* rather than as *unrecorded* — the spend was
+      // always billed (`agent/providers/light-lane.ts`), only invisible.
+      [ATTR.usageInputTokens]: verdict.usage.inputTokens,
+      [ATTR.usageOutputTokens]: verdict.usage.outputTokens,
+      [ATTR.cacheReadTokens]: verdict.usage.cacheReadTokens,
+    });
     judgeSpan.end();
   } catch (error) {
     judgeSpan.end({ error });
