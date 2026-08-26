@@ -222,6 +222,20 @@ export type JudgeOutcome = {
    * unexplained sentence for both.
    */
   failure?: { reason: JudgeFailureReason; rawResponse: string };
+  /**
+   * What the call cost, so the span can say it.
+   *
+   * The judge's span is named `muffin.chat_call` — the same name the loop's
+   * metered calls carry — and it was the only one of the two that reported no
+   * tokens. On a per-step view that reads as *free*, not as *unrecorded*,
+   * which is the worse of the two misreadings: the spend itself was always
+   * billed (`agent/providers/light-lane.ts` wraps this provider), so the gap
+   * was never money, only the ability to see where it went.
+   *
+   * Present on every outcome including the three failures, because a call
+   * that could not be parsed still cost what it cost.
+   */
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 };
 
 export async function judgeContradiction(
@@ -260,12 +274,22 @@ export async function judgeContradiction(
 
   // One outcome shape for all three ways the answer could not be read, so a
   // caller sees exactly one thing change between them: `failure.reason`.
+  // Read once, attached to every way out: a call that could not be parsed
+  // still cost what it cost, and an outcome that omits it would make the
+  // failures look cheaper than the successes.
+  const usage = {
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadTokens,
+  };
+
   const unavailable = (reason: JudgeFailureReason, rawResponse: string): JudgeOutcome => ({
     verdict: 'coexist',
     reasoning: 'giudice non disponibile: tengo entrambi',
     confidence: 0,
     downgraded: true,
     failure: { reason, rawResponse: sanitizeRawResponse(rawResponse) },
+    usage,
   });
 
   if (!result.text) return unavailable({ kind: 'empty' }, '');
@@ -292,6 +316,7 @@ export async function judgeContradiction(
       reasoning: `${v.reasoning} [confidenza ${v.confidence.toFixed(2)} sotto la soglia ${SUPERSEDE_THRESHOLD}: non ritiro nulla]`,
       confidence: v.confidence,
       downgraded: true,
+      usage,
     };
   }
 
@@ -301,6 +326,7 @@ export async function judgeContradiction(
     confidence: v.confidence,
     ...(v.oldValidTo ? { oldValidTo: v.oldValidTo } : {}),
     downgraded: false,
+    usage,
   };
 }
 

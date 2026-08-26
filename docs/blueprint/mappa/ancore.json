@@ -1021,7 +1021,7 @@
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 794,
+    "line": 817,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {

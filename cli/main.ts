@@ -734,9 +734,32 @@ function cmdRot(argv: string[]): number {
   }
 
   if (sub === 'reseal') {
-    const manifest = seal(paths().home, '1', new Date());
-    process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
-    return 0;
+    // The one failure this command was built to produce, and the only one it
+    // used to answer with a Node stack trace.
+    //
+    // `muffin rot harden` tells the owner, correctly, that after hardening
+    // "`muffin rot reseal` ti servirà un privilegio che oggi non ti serve"
+    // (`core/rot/harden.ts`). Following that advice and forgetting `sudo` is
+    // therefore the expected mistake, not an exotic one — and `main()` has no
+    // top-level catch, so the reward for doing what we asked was a raw
+    // `Error: EACCES` with a stack. Named by the judge on PR #138.
+    try {
+      const manifest = seal(paths().home, '1', new Date());
+      process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
+      return 0;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        process.stderr.write(
+          `non posso riscrivere il sigillo in ${paths().home}/rot: permesso negato.\n` +
+            'Se hai reso vera la modalità hardened, il RoT non è più tuo ed è voluto: ' +
+            'rifai questo comando con il privilegio che serve (es. `sudo`).\n',
+        );
+        return 77; // EX_NOPERM
+      }
+      process.stderr.write(`reseal fallito: ${(error as Error).message}\n`);
+      return 74; // EX_IOERR
+    }
   }
 
   if (sub === 'harden') {
