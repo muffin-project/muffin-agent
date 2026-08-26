@@ -956,3 +956,104 @@ describe('the default turn pays no temporal-gate cost', () => {
     expect(neighbourhoodSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('recall — the pinned core (slice/memoria-appuntata)', () => {
+  it('reproduces the 2026-08-26 failure: a pinned identity fact reaches the MEMORIA block even when the query matches nothing', async () => {
+    // The real failure: the owner typed "Yo!" in a fresh session and Muffin
+    // asked for a name it already had, because the fact recall would have
+    // needed lived on an episode from weeks earlier that shares no word and
+    // no meaning with a two-letter greeting. Pinned facts do not go through
+    // that search at all.
+    const { store } = harness(false);
+    const me = store.upsertEntity(HOST, 'Giusto Piedimonte', 'person', NOW);
+    const ep = episode(store, 'lavoro come AI engineer');
+    const factId = store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'works_as', objectValue: 'AI engineer',
+      episodeId: ep, trustTier: 0, origin: 'said', confidence: 0.9, extractionV: 1,
+      recordedAt: NOW, pinned: true,
+    });
+
+    const result = await recall({ store }, HOST, 'Yo!');
+    expect(result.items.some((i) => i.kind === 'fact' && i.id === factId)).toBe(true);
+
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('Giusto Piedimonte');
+    expect(rendered).toContain('AI engineer');
+  });
+
+  it('never lets one tenant\'s pinned facts reach another tenant\'s turn', async () => {
+    const { store } = harness(false);
+    const GROUP = 'group:telegram:9';
+    const me = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const ep = episode(store, 'nota');
+    store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'name', objectValue: 'Giusto',
+      episodeId: ep, trustTier: 0, origin: 'said', confidence: 0.9, extractionV: 1,
+      recordedAt: NOW, pinned: true,
+    });
+
+    const result = await recall({ store }, GROUP, 'Yo!');
+    expect(result.items).toHaveLength(0);
+    expect(renderForPrompt(result)).toBe('');
+  });
+
+  it('drops a pinned fact once it is superseded — the block shows the successor, never the retired belief', async () => {
+    const { store } = harness(false);
+    const me = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const ep = episode(store, 'nota');
+    const base = {
+      tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const,
+      origin: 'said' as const, confidence: 0.9, extractionV: 1,
+    };
+    const oldId = store.addFact({ ...base, predicate: 'name', objectValue: 'Giusto', recordedAt: '2026-08-01T10:00:00Z', pinned: true });
+    const newId = store.addFact({ ...base, predicate: 'name', objectValue: 'G.', recordedAt: '2026-08-05T10:00:00Z', pinned: true });
+    store.supersede(HOST, oldId, newId, '2026-08-05T10:00:00Z');
+
+    const result = await recall({ store }, HOST, 'tuttaltra domanda che non tocca nessuno dei due');
+    const factIds = result.items.filter((i) => i.kind === 'fact').map((i) => i.id);
+    expect(factIds).toEqual([newId]);
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('G.');
+    expect(rendered).not.toContain('Giusto');
+  });
+
+  it('does not print a pinned fact twice when ordinary recall already found it', async () => {
+    const { store } = harness(false);
+    const me = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'Marco è il commercialista');
+    const factId = store.addFact({
+      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Marco',
+      episodeId: ep, trustTier: 0, origin: 'said', confidence: 0.9, extractionV: 1,
+      recordedAt: NOW, pinned: true,
+    });
+
+    // Capitalised, so the graph hop finds this entity on its own — the pinned
+    // channel must recognise it is already there and not add a second copy.
+    const result = await recall({ store }, HOST, 'Marco è ancora il commercialista?');
+    expect(result.items.filter((i) => i.kind === 'fact' && i.id === factId)).toHaveLength(1);
+  });
+
+  it('keeps only the most recent PINNED_BUDGET facts and says how many did not fit', async () => {
+    const { store } = harness(false);
+    const me = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const ep = episode(store, 'nota');
+    const ids: number[] = [];
+    for (let i = 0; i < 14; i++) {
+      ids.push(
+        store.addFact({
+          tenantId: HOST, subjectId: me, predicate: `fact_${i}`, objectValue: `v${i}`,
+          episodeId: ep, trustTier: 0, origin: 'said', confidence: 0.9, extractionV: 1,
+          recordedAt: `2026-08-${String(i + 1).padStart(2, '0')}T10:00:00Z`, pinned: true,
+        }),
+      );
+    }
+
+    const result = await recall({ store }, HOST, 'query generica che non nomina niente');
+    const factIds = result.items.filter((i) => i.kind === 'fact').map((i) => i.id);
+    // Newest twelve survive — the same recency-wins rule `selectForExpansion`
+    // already uses for the graph hop's own cut.
+    expect(factIds).toEqual([...ids].reverse().slice(0, 12));
+    expect(result.pinnedOverflow).toBe(2);
+    expect(renderForPrompt(result)).toContain('altri 2 fatti appuntati');
+  });
+});

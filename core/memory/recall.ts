@@ -273,6 +273,15 @@ export type RecallResult = {
    * run"; this covers "the half ran and the memory does not reach that far".
    */
   gaps: RecallGap[];
+  /**
+   * Pinned facts `PINNED_BUDGET` could not fit this turn — recency decided
+   * which stayed, same rule `selectForExpansion` already uses for the graph
+   * hop. 0 on the ordinary path (most tenants pin a handful of things, not
+   * dozens), and reported in the rendered block itself, not only here: a
+   * silent cut is the failure `MAX_CONTEXT_ITEMS`'s own `tetto(...)` strategy
+   * exists to avoid, and this is the same guarantee for the pinned core.
+   */
+  pinnedOverflow: number;
 };
 
 /** RRF constant. 60 is the value from the original paper and the field default. */
@@ -326,6 +335,18 @@ export const MAX_CONTEXT_ITEMS = 40;
  * the whole budget importance gets to spend on retrieval.
  */
 const PROTECTED_SLOTS = 1;
+
+/**
+ * The pinned core's own budget — fixed, small, and a plain constant on
+ * purpose: the accepted fix for "the owner cannot get their own name back"
+ * is a boolean column and an unconditional injection, not a new tier system
+ * with its own knobs (owner directive, 2026-08-26). Twelve is a handful of
+ * stable-identity facts (a name, a couple of standing preferences), not a
+ * budget meant to hold a profile — `EXPANSION_SLOTS` (6) is the comparable
+ * number for one entity's whole active fact set, and the pinned core spans
+ * however many entities the owner has pinned something on.
+ */
+const PINNED_BUDGET = 12;
 
 /**
  * Which of an entity's facts reach the fusion, and in what order.
@@ -696,14 +717,59 @@ export async function recall(
     kept = [...kept, ...context];
   }
 
+  // --- the pinned core: unconditional, and first ----------------------------
+  //
+  // Everything above this line is retrieval: a query goes in, and what comes
+  // back depends on how well the query happened to match. That is exactly
+  // the shape that failed on 2026-08-26 — the owner typed "Yo!", the episode
+  // that carried their name shares no word and no meaning with it, and the
+  // fact never got a chance to be ranked, let alone kept. A handful of facts
+  // cannot be allowed to depend on phrasing: they enter here, unconditionally,
+  // ahead of anything similarity found, which is the one deliberately
+  // un-ranked step in this whole function.
+  //
+  // This is a different layer from `rot/identity.md`, not a replacement for
+  // it: identity.md is the constitution the owner writes by hand and that
+  // never learns on its own — who Muffin is, what it will not do. The pinned
+  // core is the layer that *does* learn, one fact at a time, through the
+  // ordinary ingestion pipeline (`ingest.ts`) or a deliberate `muffin memory
+  // pin`. Bootstrap auto-pin (migration 3) exists at all because identity.md
+  // ships empty — today nothing in the constitution says the owner's own
+  // name, and this is the layer built to hold that instead.
+  //
+  // Deduped against what retrieval already found — a pinned fact recall
+  // ranked well on its own must not print twice — and filtered to what is
+  // still active: `pinnedFacts` already drops anything expired, but a fact
+  // superseded in the *same* call (vanishingly rare, cheap to guard anyway)
+  // would otherwise slip past a store-level check taken before this line ran.
+  const alreadyFound = new Set(kept.filter((i) => i.kind === 'fact').map((i) => i.id));
+  const pinnedCandidates = deps.store
+    .pinnedFacts(tenantId)
+    .filter((f) => f.expiredAt === null && !alreadyFound.has(f.id));
+  const pinnedOverflow = Math.max(0, pinnedCandidates.length - PINNED_BUDGET);
+  const pinnedItems: RecallItem[] = pinnedCandidates.slice(0, PINNED_BUDGET).map((f) => ({
+    kind: 'fact',
+    id: f.id,
+    text: factText(f),
+    trustTier: f.trustTier,
+    source: describeTier(f.trustTier, f.recordedAt),
+    score: 0,
+    validFrom: f.validFrom,
+    validTo: f.validTo,
+    origin: f.origin,
+  }));
+  kept = [...pinnedItems, ...kept];
+
   // The hard backstop: ranked results occupy the front of `kept` and
   // neighbours were appended after them, so a cut here drops context before it
   // ever drops something that actually matched the query. A cut that fires is
   // exactly the case `strategies` exists to report: a recall that came back
   // worse than it looks has to say so, the same rule `vector-non-configurato`
-  // already follows.
+  // already follows. The pinned core is now at the front of `kept` too, but it
+  // never has to compete for this cut in practice — `PINNED_BUDGET` (12) is
+  // far under `MAX_CONTEXT_ITEMS` (40).
   if (kept.length > MAX_CONTEXT_ITEMS) strategies.push(`tetto(${MAX_CONTEXT_ITEMS})`);
-  return { items: kept.slice(0, MAX_CONTEXT_ITEMS), strategies, gaps };
+  return { items: kept.slice(0, MAX_CONTEXT_ITEMS), strategies, gaps, pinnedOverflow };
 }
 
 /** One fact as a line: subject, predicate, object. Written once, read by four callers. */
@@ -734,7 +800,7 @@ function successorOf(store: MemoryStore, tenantId: string, fact: Fact): Fact | n
  * only works if the boundary is unambiguous.
  */
 export function renderForPrompt(result: RecallResult): string {
-  if (result.items.length === 0 && result.gaps.length === 0) return '';
+  if (result.items.length === 0 && result.gaps.length === 0 && result.pinnedOverflow === 0) return '';
   const lines = result.items.map(
     (item) =>
       `- [${item.source}${temporalLabel(item)}` +
@@ -762,6 +828,14 @@ export function renderForPrompt(result: RecallResult): string {
           ? `; la cosa più vicina che ho è del ${gap.nearest.recordedAt.slice(0, 10)}: ${gap.nearest.text}`
           : '') +
         `. Dillo, non rispondere con quello che vale oggi.`,
+    );
+  }
+
+  // The one line that says the pinned core itself got cut — never silent,
+  // same argument as the gaps loop just above and `tetto(...)` in `recall.ts`.
+  if (result.pinnedOverflow > 0) {
+    lines.push(
+      `- [appuntati] altri ${result.pinnedOverflow} fatti appuntati non entrano nel budget di questo turno.`,
     );
   }
   // Framed as low-authority context to use silently, not a turn to answer. The
