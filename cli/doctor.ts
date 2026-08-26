@@ -195,8 +195,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
-      'single-user: tampering is detected, not prevented — a process running as this user can undo the read-only bits',
-      'prevention needs the RoT owned by another OS user; `--hardened` alone only records a claim',
+      'single-user: le manomissioni sono rilevate, non impedite — un processo che gira come questo utente può ' +
+        'disfare i bit read-only da solo. Conseguenza che si sente ogni giorno: senza prevenzione vera, ogni ' +
+        'capability ad alto rischio (`sys.shell` in testa) ti chiede sempre conferma, mai un allow silenzioso',
+      '`muffin rot harden` stampa i comandi per rendere vera la prevenzione su questa macchina, e cosa cambia una volta fatto',
     );
   } else {
     const hardening = hardeningHolds(home);
