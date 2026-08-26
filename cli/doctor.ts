@@ -16,6 +16,7 @@ import { readGateway } from '../core/gateway/lock.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
+import { OllamaEmbedder } from '../core/memory/embed.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -68,6 +69,12 @@ export type DoctorOptions = {
    * running outside a Git checkout.
    */
   checkoutRoot?: string | null;
+  /**
+   * Test-only: sostituisce la sonda vera dell'embedder, così la suite non
+   * chiama `localhost:11434` millenovecento volte. Un rifiuto sta per
+   * «l'embedder non risponde», con il messaggio che l'owner leggerà.
+   */
+  embedderProbe?: () => Promise<void>;
 };
 
 export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -362,7 +369,35 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       } else if (chunks === 0) {
         warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
       } else {
-        ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+        // Contare non è chiedere. I due numeri dicono che ciò che è **già**
+        // indicizzato è coerente; non dicono niente su ciò che verrà, e
+        // `agent/runtime.ts` lo scrive esplicitamente accanto al punto in cui
+        // costruisce l'embedder: «an embedder that is not running turns
+        // semantic recall into keyword search, and the difference has to be
+        // visible in `doctor`». Non lo era.
+        //
+        // Misurato sull'installazione dell'owner il 27/08: ollama giù,
+        // `memory_review` con tre righe che lo dicevano dal 25, il gateway che
+        // stampava «il recall resta testuale» a ogni giro — e questa riga
+        // verde, «55 chunks, 55 vectors, in sync». Tutto vero e tutto
+        // fuorviante: la metà semantica del recall era spenta da due giorni.
+        //
+        // Locale e a tempo, non dietro `--online`: quel flag copre la
+        // raggiungibilità di un servizio esterno, questa è una porta su
+        // 127.0.0.1 che rifiuta subito quando è chiusa. Il tetto serve per il
+        // caso opposto — un server che accetta la connessione e non risponde —
+        // perché `doctor` è ciò che si lancia quando la macchina è già strana.
+        const embedderError = await probeEmbedder(options.embedderProbe);
+        if (embedderError === null) {
+          ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+        } else {
+          warn(
+            'vector index',
+            `${chunks} chunks, ${vectors} vectors coerenti, ma l'embedder non risponde (${embedderError}): ` +
+              'niente di nuovo viene indicizzato e il recall è solo testuale',
+            'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL',
+          );
+        }
       }
     }
     // Has the memory lane ever run? Third of the same shape, and the one that
@@ -805,5 +840,38 @@ function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
     return (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
   } catch {
     return null;
+  }
+}
+
+/** Quanto si aspetta un embedder che ha accettato la connessione e non risponde. */
+const EMBEDDER_PROBE_MS = 1_500;
+
+/**
+ * `null` quando l'embedder ha risposto; il motivo, in parole, quando no.
+ *
+ * Una sola stringa da mettere in una riga, non un booleano: «connessione
+ * rifiutata» e «non ha risposto entro un secondo e mezzo» mandano l'owner in
+ * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
+ * stessa che ha tenuto ferma la corsia della memoria per due giorni.
+ */
+async function probeEmbedder(override?: () => Promise<void>): Promise<string | null> {
+  const run = override ?? (async (): Promise<void> => void (await new OllamaEmbedder().embed(['probe'])));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`nessuna risposta entro ${EMBEDDER_PROBE_MS}ms`)), EMBEDDER_PROBE_MS);
+        // Il tetto non deve tenere in vita il processo quando la sonda ha già
+        // risposto: senza questo, ogni `muffin doctor` riuscito resterebbe
+        // appeso al proprio timer.
+        timer.unref();
+      }),
+    ]);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
