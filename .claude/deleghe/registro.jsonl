@@ -246,3 +246,5 @@
 {"id":"canale-progresso","chiuso":"PR #136 integrata dopo judge MERGE; follow-up copertura rami in #139","quando":"2026-08-26T15:15:51.277Z"}
 {"id":"judge-136","chiuso":"verdetto MERGE, nessun bloccante; 4 follow-up, 2 applicati in #139, Telegram resta la prossima slice","quando":"2026-08-26T15:15:51.327Z"}
 {"id":"rot-harden","chiuso":"PR #138 integrata dopo judge MERGE; follow-up EACCES sul reseal in una slice a parte","quando":"2026-08-26T15:26:20.421Z"}
+{"id":"progresso-telegram","slug":"progresso-telegram","cosa":"il progresso arriva su Telegram con draft+edit, non una riga per evento (sonnet, CRITICAL)","quando":"2026-08-26T15:26:37.451Z"}
+{"id":"deriva-doctor","slug":"deriva-doctor","cosa":"doctor vede i file di init rimasti indietro, distinguendo 'vecchia versione spedita' da 'modificato dall owner' (sonnet)","quando":"2026-08-26T15:26:37.497Z"}
