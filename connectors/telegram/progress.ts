@@ -102,9 +102,33 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
   let lastShownText: string | undefined;
   let lastLiveAt = 0;
   let flushTimer: NodeJS.Timeout | null = null;
+  /**
+   * The call currently on the wire, or `null`.
+   *
+   * `flushTimer` only ever said whether a flush was **scheduled**, never
+   * whether a send was **in flight**, and the gap between those two produced
+   * exactly the two failures this reporter exists to avoid — both found by the
+   * judge on #143, both without any crash:
+   *
+   *  - **Two status messages.** `flush()` cleared `flushTimer` before awaiting
+   *    `send()`, so a second `report()` could schedule and fire while the
+   *    first send was still out. `send()` picks `sendMessage` vs
+   *    `editMessageText` by reading `messageId`, and both calls could read it
+   *    as `null` — two real messages, `messageId` left holding whichever
+   *    assignment landed last, and the other one unreferenced forever.
+   *  - **A message nothing ever deletes.** `stop()` read `messageId`
+   *    synchronously. Called while the first send was still out, it saw
+   *    `null`, deleted nothing, and set `stopped` — and the send that resolved
+   *    afterwards wrote its id into a closure no one reads again.
+   *
+   * A slow round trip is not exotic here: `api.ts` retries a 429 internally
+   * with a sleep that routinely exceeds `MIN_EDIT_MS`. And long turns — the
+   * only reason this feature exists — are the likeliest to contain one.
+   */
+  let inFlight: Promise<void> | null = null;
 
   /** The one place that actually calls Telegram — create on the first send, edit on every one after. */
-  async function send(text: string): Promise<void> {
+  async function sendNow(text: string): Promise<void> {
     lastLiveAt = now();
     const id = messageId;
     try {
@@ -118,6 +142,21 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
     } catch (error) {
       disabled = true;
       log(`telegram: stato di avanzamento sospeso — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Serialised: never two calls on the wire at once, so `messageId` is read
+   * and written by one send at a time and `sendMessage` can happen at most
+   * once per reporter.
+   */
+  async function send(text: string): Promise<void> {
+    const mine = (inFlight ?? Promise.resolve()).then(() => sendNow(text));
+    inFlight = mine;
+    try {
+      await mine;
+    } finally {
+      if (inFlight === mine) inFlight = null;
     }
   }
 
@@ -159,6 +198,18 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
       // still waiting) — it is the turn being *done*, where the thing to show
       // is the real answer, not one more cosmetic line.
       stopped = true;
+      // Wait for whatever is on the wire before asking which message exists.
+      // Reading `messageId` synchronously here meant that a `stop()` racing
+      // the very first `sendMessage` saw `null`, deleted nothing, and left a
+      // status line the owner keeps forever — with both `stop()` calls
+      // returning cleanly and nothing logged anywhere.
+      if (inFlight !== null) {
+        try {
+          await inFlight;
+        } catch {
+          // `sendNow` already swallows and disables; nothing to add.
+        }
+      }
       const id = messageId;
       if (id !== null) {
         try {

@@ -359,3 +359,93 @@ describe('telegram progress · startProgress (M5-BIS B13)', () => {
     }
   });
 });
+
+/**
+ * Latenza sul lato **Bot API**, che nessun test simulava.
+ *
+ * Il judge su #143 ha trovato qui due guasti, entrambi **senza crash**:
+ * `flushTimer` diceva soltanto se un flush fosse *programmato*, mai se un
+ * invio fosse *in volo*. Nel divario ci stavano due messaggi di stato invece
+ * di uno, e un messaggio che nessuno cancella mai — con entrambe le chiamate a
+ * `stop()` che ritornavano pulite e niente da nessuna parte a dirlo.
+ *
+ * Non è un caso di frontiera: `api.ts` ritenta un 429 al suo interno con una
+ * pausa che supera regolarmente `MIN_EDIT_MS`, e i turni lunghi — l'unica
+ * ragione per cui questa funzione esiste — sono i più esposti.
+ */
+describe('telegram progress · un invio lento non produce due messaggi né un orfano', () => {
+  /** Un `sendMessage` che resta sul filo finché non lo si lascia andare. */
+  function slowSendApi(): { api: TelegramApiLike; calls: Recorded[]; release: () => void } {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { api, calls } = fakeApi((recorded) => ({
+      sendMessage: async (chatId, html) => {
+        await gate;
+        const messageId = 900;
+        recorded.push({ method: 'sendMessage', at: Date.now(), text: html, messageId });
+        return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
+      },
+    }));
+    return { api, calls, release };
+  }
+
+  it('al massimo un sendMessage per reporter, anche se il primo è ancora sul filo', async () => {
+    vi.useFakeTimers();
+    try {
+      const { api, calls, release } = slowSendApi();
+      const progress = startProgress(api, 1);
+
+      progress.report(round(1));
+      await vi.advanceTimersByTimeAsync(0); // il flush parte: sendMessage è sul filo, bloccato
+      expect(calls).toHaveLength(0); // non è ancora tornato
+
+      // Un secondo evento mentre il primo invio non è ancora tornato. Senza la
+      // serializzazione entrambi leggono `messageId === null` e chiamano
+      // `sendMessage`: due messaggi veri, e quello perdente resta orfano per
+      // sempre perché `stop()` conosce un id solo.
+      progress.report(toolStart('shell_run'));
+      await vi.advanceTimersByTimeAsync(3000); // si riapre la finestra del throttle
+
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      await progress.stop();
+
+      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+      // E il secondo evento è arrivato come modifica di quel messaggio, non
+      // come messaggio nuovo.
+      expect(calls.filter((c) => c.method === 'editMessageText').length).toBeGreaterThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('se stop() ritorna, il messaggio che ha creato non sopravvive — anche correndo contro il primo invio', async () => {
+    // Il più semplice dei due: un evento solo, e `stop()` arriva mentre il
+    // `sendMessage` è ancora fuori. Prima leggeva `messageId` in modo
+    // sincrono, vedeva `null`, non cancellava niente e usciva pulito — e
+    // l'invio che si risolveva dopo scriveva il suo id in una closure che
+    // nessuno rilegge.
+    vi.useFakeTimers();
+    try {
+      const { api, calls, release } = slowSendApi();
+      const progress = startProgress(api, 1);
+
+      progress.report(round(1));
+      await vi.advanceTimersByTimeAsync(0); // invio sul filo
+
+      const stopping = progress.stop();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      await stopping;
+      await progress.stop(); // il secondo, come lo chiama davvero il connettore
+
+      expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(1);
+      expect(calls.find((c) => c.method === 'deleteMessage')?.messageId).toBe(900);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
