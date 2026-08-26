@@ -249,3 +249,4 @@
 {"id":"progresso-telegram","slug":"progresso-telegram","cosa":"il progresso arriva su Telegram con draft+edit, non una riga per evento (sonnet, CRITICAL)","quando":"2026-08-26T15:26:37.451Z"}
 {"id":"deriva-doctor","slug":"deriva-doctor","cosa":"doctor vede i file di init rimasti indietro, distinguendo 'vecchia versione spedita' da 'modificato dall owner' (sonnet)","quando":"2026-08-26T15:26:37.497Z"}
 {"id":"judge-142","slug":"judge-142","cosa":"judge su PR #142 head 70edad1: puo mai dire che il lavoro dell owner e sovrascrivibile?","quando":"2026-08-26T16:12:20.327Z"}
+{"id":"judge-143","slug":"judge-143","cosa":"judge CRITICAL su PR #143: il progresso condivide sendMessage con la risposta durevole","quando":"2026-08-26T16:18:04.840Z"}
