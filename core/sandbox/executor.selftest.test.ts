@@ -173,4 +173,51 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(initialize).not.toHaveBeenCalled();
     expect(wrapWithSandboxArgv).not.toHaveBeenCalled();
   });
+
+  // I due casi che il judge di #129 ha verificato trascrivendo a mano il flusso
+  // di controllo, perché rete non ce n'era: il riuso dell'esecutore DOPO un
+  // fallimento, e due chiamate sovrapposte mentre il self-test è in volo.
+  // Senza questi, la riscrittura del single-flight che chiude il primo
+  // follow-up di quel judge sarebbe un cambio non provato proprio sul percorso
+  // che decide se un comando gira contenuto o non gira affatto.
+  it('dopo un self-test fallito ogni chiamata successiva rifiuta ancora, e il self-test costoso non si ripaga', async () => {
+    wrapWithSandboxArgv.mockImplementation(async () => ({ argv: BROKEN_INVOCATION, env: {} }));
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+    const dir = mktempWorkspace();
+
+    const first = await executor.verify();
+    expect(first.available).toBe(false);
+    const legsAfterFirst = wrapWithSandboxArgv.mock.calls.length;
+    const initsAfterFirst = initialize.mock.calls.length;
+
+    await expect(executor.run({ command: 'true', cwd: dir, writeScope: [dir] })).rejects.toThrow(
+      /sandbox unavailable: contain_failed/,
+    );
+    await expect(executor.run({ command: 'true', cwd: dir, writeScope: [dir] })).rejects.toThrow(
+      /sandbox unavailable: contain_failed/,
+    );
+    const again = await executor.verify();
+    expect(again.available).toBe(false);
+
+    // Fail-closed ogni volta, e il verdetto arriva dal probe ormai negativo:
+    // né `initialize()` né una gamba del self-test vengono ripagate.
+    expect(initialize.mock.calls.length).toBe(initsAfterFirst);
+    expect(wrapWithSandboxArgv.mock.calls.length).toBe(legsAfterFirst);
+  });
+
+  it('due chiamate sovrapposte mentre il self-test è in volo condividono un solo giro', async () => {
+    wrapWithSandboxArgv.mockImplementation(async (command, _shell, customConfig) => ({
+      argv: denyReadOf(customConfig).length > 0 ? BROKEN_INVOCATION : ['/bin/sh', '-c', command],
+      env: {},
+    }));
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const [a, b] = await Promise.all([executor.verify(), executor.verify()]);
+    expect(a.available).toBe(b.available);
+    // Un solo initialize() per due chiamate concorrenti: il single-flight
+    // regge anche quando la seconda arriva prima che la prima abbia risposto.
+    expect(initialize).toHaveBeenCalledTimes(1);
+  });
 });

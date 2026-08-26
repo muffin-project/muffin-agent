@@ -157,11 +157,33 @@ export class SandboxExecutor {
     return this.scratchDir;
   }
 
+  /**
+   * Single-flight, and the reset that lets a later call try again lives HERE —
+   * in one place, after the await, where it is actually reached.
+   *
+   * It used to be two resets inside the body below, and the first of them was
+   * dead code (judge #129, follow-up, proven with a repro): the synchronous
+   * `!status.available` branch runs while the right-hand side of `??=` is
+   * still being evaluated, so the assignment overwrote the `null` a moment
+   * later and that branch memoised a rejected promise instead of clearing it.
+   * Harmless in effect — every later call still rejected, fail-closed — but
+   * the two branches behaved differently while looking identical, which is
+   * the kind of thing the next edit builds on and gets wrong.
+   */
   private async ensureInit(): Promise<void> {
-    this.initPromise ??= (async () => {
+    this.initPromise ??= this.initOnce();
+    try {
+      await this.initPromise;
+    } catch (error) {
+      this.initPromise = null;
+      throw error;
+    }
+  }
+
+  private async initOnce(): Promise<void> {
+    {
       const status = this.status();
       if (!status.available) {
-        this.initPromise = null;
         throw new Error(`sandbox unavailable: ${status.reason} — ${status.remedy}`);
       }
 
@@ -211,11 +233,9 @@ export class SandboxExecutor {
         // reset() before handing back control, same as `close()` would.
         await SandboxManager.reset().catch(() => {});
         this.cachedProbe = { available: false, mechanism: status.mechanism, ...failure };
-        this.initPromise = null;
         throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.remedy}`);
       }
-    })();
-    return this.initPromise;
+    }
   }
 
   /**

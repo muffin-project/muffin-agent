@@ -1986,12 +1986,12 @@
   },
   "core/sandbox/executor.ts:117": {
     "path": "core/sandbox/executor.ts",
-    "line": 358,
+    "line": 378,
     "testo": "filesystem: {"
   },
   "core/sandbox/executor.ts:118": {
     "path": "core/sandbox/executor.ts",
-    "line": 359,
+    "line": 379,
     "testo": "denyRead: [...this.guards.denyRead],"
   },
   "core/sandbox/executor.ts:63": {
@@ -2331,17 +2331,17 @@
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
-    "line": 353,
+    "line": 373,
     "testo": "// v1 skips the optional apply-seccomp layer: two open bugs break it on"
   },
   "executor.ts:114": {
     "path": "core/sandbox/executor.ts",
-    "line": 355,
+    "line": 375,
     "testo": "// Declared limit: Unix-socket hardening is off on Linux."
   },
   "executor.ts:168": {
     "path": "core/sandbox/executor.ts",
-    "line": 409,
+    "line": 429,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
   "extract.ts:187": {
