@@ -108,6 +108,29 @@ continue without owner re-paste.
 A worker summary is **not evidence**. Verify the load-bearing claims before acting
 on them. Empty/placeholder output is failure, not completion.
 
+### What parallel workers actually share
+
+A worktree isolates the checkout. It does not isolate anything else, and three
+things collide silently. All three were measured on 2026-08-26, with several
+workers in flight at once.
+
+**The scratchpad directory.** Two workers each wrote `pr-body.md` at the same
+path; one of them found its PR body replaced by another slice's. Nothing
+errored. Say it in the brief: temporary files get names of the worker's own,
+never a generic one.
+
+**The CPU.** A full suite that normally takes ~85s took 204s under load, and two
+acceptance scenarios failed on *timeout* — not on an assertion. Rerun those
+files alone before diagnosing: a timeout under contention is not a defect, and
+an assertion failure is one even under load. Whichever way it goes, declare the
+path in the PR instead of showing only the final green.
+
+**The generated map.** `ancore.json` and `mappa.html` conflict between any two
+slices that move cited lines — which is most of them. Resolve by rerunning
+`ancore.mjs` then `build.mjs`, never by hand-editing the artefacts. This is
+cheaper for the orchestrator to do once at merge time than for each worker to
+attempt against a moving base.
+
 ## 5. Research budget
 
 Research is commissioned to change a decision, not to make the process look
