@@ -2,7 +2,8 @@ import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
-import { probeSandbox, tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
+import { tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
@@ -58,7 +59,7 @@ export type DoctorOptions = {
   platform?: NodeJS.Platform;
 };
 
-export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
+export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
@@ -593,7 +594,17 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
     fail('database', String(error), 'run `muffin init` to create it');
   }
 
-  const sandbox = probeSandbox();
+  // `verify()`, not `probeSandbox()` directly: the probe alone proves bwrap/
+  // sandbox-exec exist and hold on ITS OWN narrow invocation, which is not the
+  // same claim as "the runtime's own execution path (SandboxManager) actually
+  // contains a command" — a container was found (26/08/2026) where the two
+  // disagreed, with the probe green and every real job script dying on a raw
+  // `bwrap: Can't mount proc` inside its own exit. `verify()` pays for a real
+  // init + one contained round trip so doctor tells the truth before a session
+  // starts, not after a job's output turns out to carry an unsandboxed error.
+  const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+  const sandbox = await sandboxExecutor.verify();
+  await sandboxExecutor.close();
   if (sandbox.available) {
     ok('sandbox', sandboxOkDetail(sandbox));
   } else {

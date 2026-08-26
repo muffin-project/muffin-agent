@@ -14,6 +14,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
 
 /**
@@ -39,22 +40,22 @@ function home(): string {
 
 afterEach(() => vi.unstubAllEnvs());
 
-const check = (dir: string, name: string): Check | undefined =>
-  runDoctor(dir).checks.find((c) => c.name === name);
+const check = async (dir: string, name: string): Promise<Check | undefined> =>
+  (await runDoctor(dir)).checks.find((c) => c.name === name);
 
 describe('doctor names the source of the permission matrix', () => {
-  it('says the sealed file when the sealed file spoke', () => {
+  it('says the sealed file when the sealed file spoke', async () => {
     const dir = home();
-    const c = check(dir, 'policy matrix');
+    const c = await check(dir, 'policy matrix');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('rot/policy.json');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('says fallback, with the reason, when the file could not be used', () => {
+  it('says fallback, with the reason, when the file could not be used', async () => {
     const dir = home();
     writeFileSync(join(paths(dir).rot, 'policy.json'), 'not json at all');
-    const c = check(dir, 'policy matrix');
+    const c = await check(dir, 'policy matrix');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('fallback');
     expect(c?.remedy).toBeTruthy();
@@ -63,15 +64,15 @@ describe('doctor names the source of the permission matrix', () => {
 });
 
 describe('doctor names which profile the configured model resolves to', () => {
-  it('is ok, naming the resolved profile, when nothing was dropped', () => {
+  it('is ok, naming the resolved profile, when nothing was dropped', async () => {
     const dir = home(); // cli/init.ts writes models.main = claude-sonnet-5
-    const c = check(dir, 'model profile');
+    const c = await check(dir, 'model profile');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toBe('claude-sonnet-5 -> frontier');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fails and names the cost when the configured model falls back to conservative', () => {
+  it('fails and names the cost when the configured model falls back to conservative', async () => {
     // D3 + D4 (judge, 2026-08-13): `profile.ts:109` and ADR-0037 both say a
     // stale profile is "nominato in `doctor`" — false until this test: the
     // problems used to reach only `bootLines` (stderr at boot), which
@@ -94,7 +95,7 @@ describe('doctor names which profile the configured model resolves to', () => {
         notes: '',
       }),
     );
-    const report = runDoctor(dir, { profilesDir });
+    const report = await runDoctor(dir, { profilesDir });
     const c = report.checks.find((x) => x.name === 'model profile');
 
     expect(c?.level).toBe('fail');
@@ -113,7 +114,7 @@ describe('doctor names which profile the configured model resolves to', () => {
     rmSync(profilesDir, { recursive: true, force: true });
   });
 
-  it('warns without failing when a problem fires but the configured model is unaffected', () => {
+  it('warns without failing when a problem fires but the configured model is unaffected', async () => {
     // A dropped profile that the owner's actual model never would have
     // matched is still worth a line — just not a `fail`: nothing this owner
     // runs today is degraded by it.
@@ -146,7 +147,7 @@ describe('doctor names which profile the configured model resolves to', () => {
         notes: '',
       }),
     );
-    const report = runDoctor(dir, { profilesDir });
+    const report = await runDoctor(dir, { profilesDir });
     const c = report.checks.find((x) => x.name === 'model profile');
 
     expect(c?.level).toBe('warn');
@@ -160,20 +161,20 @@ describe('doctor names which profile the configured model resolves to', () => {
 });
 
 describe('doctor runs the root-of-trust readers invariant', () => {
-  it('passes on a fresh install', () => {
+  it('passes on a fresh install', async () => {
     const dir = home();
-    expect(check(dir, 'rot readers')?.level).toBe('ok');
+    expect((await check(dir, 'rot readers'))?.level).toBe('ok');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fails, and exits non-zero, on a sealed file nothing reads', () => {
+  it('fails, and exits non-zero, on a sealed file nothing reads', async () => {
     // The wiring half: an invariant that runs nowhere is the defect examining
     // itself. Asserted on the exit code too, because a check that only prints
     // is a check a script can ignore.
     const dir = home();
     writeFileSync(join(paths(dir).rot, 'decorative.json'), '{"binding":true}\n');
     seal(dir, '1', new Date());
-    const report = runDoctor(dir);
+    const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'rot readers');
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('decorative.json');
@@ -191,7 +192,7 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
    * called directly, so it proves the mechanism is reached rather than only
    * that its logic is correct.
    */
-  it('warns, naming the count and the oldest, when a done turn never settled its delivery', () => {
+  it('warns, naming the count and the oldest, when a done turn never settled its delivery', async () => {
     const dir = home();
     const db = new DatabaseCtor(paths(dir).db);
     const store = new TurnStore(db);
@@ -225,14 +226,14 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
     store.finish('turn-undelivered-1', { outcome: 'answered', messages: [], taint: 0, counters }, undelivered.claimToken);
     db.close();
 
-    const c = check(dir, 'consegne');
+    const c = await check(dir, 'consegne');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('1 turni');
     expect(c?.detail).toContain('turn-undeliv'); // TurnRecord.id.slice(0, 12)
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is ok, naming none missing, when every delivered turn actually settled', () => {
+  it('is ok, naming none missing, when every delivered turn actually settled', async () => {
     const dir = home();
     const db = new DatabaseCtor(paths(dir).db);
     const store = new TurnStore(db);
@@ -263,53 +264,53 @@ describe('doctor reads undelivered turns — D3 (judge, PR #42)', () => {
     store.delivered('turn-settled-1', 'sent'); // the settlement `Scheduler.settle` writes in production
     db.close();
 
-    const c = check(dir, 'consegne');
+    const c = await check(dir, 'consegne');
     expect(c?.level).toBe('ok');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('says nothing at all on a fresh install — no turns table yet, not a fabricated "ok"', () => {
+  it('says nothing at all on a fresh install — no turns table yet, not a fabricated "ok"', async () => {
     // Same posture as the 'turni' check right above this one in doctor.ts: an
     // absent table means no turn has ever run here, which is the correct
     // state on day one, not a second thing to report alongside it.
     const dir = home();
-    expect(check(dir, 'consegne')).toBeUndefined();
+    expect(await check(dir, 'consegne')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });
 
 describe('doctor names the spend cap and where it came from', () => {
-  it('says the sealed file, with the numbers', () => {
+  it('says the sealed file, with the numbers', async () => {
     // Same class of invisible fact as the matrix above, and worse in
     // consequence: `rot/budgets.json` and `config.json` carried identical caps
     // for months, so nothing anywhere distinguished "the seal holds the cap"
     // from "the seal holds a copy of the cap".
     const dir = home();
-    const c = check(dir, 'tetto di spesa');
+    const c = await check(dir, 'tetto di spesa');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('rot/budgets.json');
     expect(c?.detail).toContain('80');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns, with the reason, when the compiled floor is what answered', () => {
+  it('warns, with the reason, when the compiled floor is what answered', async () => {
     const dir = home();
     writeFileSync(join(paths(dir).rot, 'budgets.json'), 'not json at all');
-    const c = check(dir, 'tetto di spesa');
+    const c = await check(dir, 'tetto di spesa');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('compilati');
     expect(c?.remedy).toContain('rot reseal');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('reports a config still carrying the old cap, instead of migrating in silence', () => {
+  it('reports a config still carrying the old cap, instead of migrating in silence', async () => {
     const dir = home();
     const file = paths(dir).config;
     const config = JSON.parse(readFileSync(file, 'utf8'));
     config.schemaVersion = 1;
     config.budget = { monthlyUsd: 500, perTenantDailyUsd: 9 };
     writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
-    const c = check(dir, 'config migrata');
+    const c = await check(dir, 'config migrata');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('monthlyUsd 500');
     rmSync(dir, { recursive: true, force: true });
@@ -317,9 +318,9 @@ describe('doctor names the spend cap and where it came from', () => {
 });
 
 describe('doctor names which secret store answered', () => {
-  it('names the backend and the path, so a chain is never silent', () => {
+  it('names the backend and the path, so a chain is never silent', async () => {
     const dir = home();
-    const c = check(dir, 'api key');
+    const c = await check(dir, 'api key');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('home');
     expect(c?.detail).toContain(join(paths(dir).secrets, 'provider_api_key'));
@@ -329,13 +330,13 @@ describe('doctor names which secret store answered', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns when a second copy exists, because the losing one looks identical', () => {
+  it('warns when a second copy exists, because the losing one looks identical', async () => {
     // The failure this exists for: an owner migrates the key to the persistent
     // store, the old copy in the home keeps answering, and every symptom of a
     // successful migration is present.
     const dir = home();
     writeSecret('provider_api_key', 'sk-never-called', dir, 'persistent');
-    const c = check(dir, 'api key');
+    const c = await check(dir, 'api key');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non viene mai usata');
     expect(c?.remedy).toBeTruthy();
@@ -379,16 +380,16 @@ describe('doctor names the memory questions waiting on the owner', () => {
     db.close();
   };
 
-  it('says nothing on an install with no open question', () => {
+  it('says nothing on an install with no open question', async () => {
     const dir = home();
-    expect(check(dir, 'memoria da decidere')).toBeUndefined();
+    expect(await check(dir, 'memoria da decidere')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns, with the command that answers it, when one is open', () => {
+  it('warns, with the command that answers it, when one is open', async () => {
     const dir = home();
     seedContradiction(dir);
-    const c = check(dir, 'memoria da decidere');
+    const c = await check(dir, 'memoria da decidere');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('1 contraddizioni');
     expect(c?.remedy).toContain('muffin memory review');
@@ -433,16 +434,16 @@ describe('doctor names turns whose answer has nowhere to go', () => {
     db.close();
   };
 
-  it('says nothing on an install where every answer had somewhere to go', () => {
+  it('says nothing on an install where every answer had somewhere to go', async () => {
     const dir = home();
-    expect(check(dir, 'turni senza indirizzo')).toBeUndefined();
+    expect(await check(dir, 'turni senza indirizzo')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns, and names the count, when one is stranded', () => {
+  it('warns, and names the count, when one is stranded', async () => {
     const dir = home();
     seedUndeliverable(dir);
-    const c = check(dir, 'turni senza indirizzo');
+    const c = await check(dir, 'turni senza indirizzo');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('1 turni con risposta senza indirizzo');
     rmSync(dir, { recursive: true, force: true });
@@ -487,10 +488,10 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     db.close();
   };
 
-  it('is ok, with the numbers, on a clean run', () => {
+  it('is ok, with the numbers, on a clean run', async () => {
     const dir = home();
     seedRun(dir, 'ran');
-    const report = runDoctor(dir);
+    const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('12 episodi');
@@ -499,7 +500,7 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('names the failed episodes even when it stays green', () => {
+  it('names the failed episodes even when it stays green', async () => {
     // The defect, at the size it actually shipped: a third of the batch failed
     // to extract and the line carried nothing but the successes. Still `ok` on
     // purpose — a failed extraction is left unmarked and retried next fire, so a
@@ -508,7 +509,7 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     // to be an alarm.
     const dir = home();
     seedRun(dir, 'ran', 4);
-    const report = runDoctor(dir);
+    const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('4 falliti');
@@ -521,18 +522,18 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     // failed episodes move nothing.
     const clean = home();
     seedRun(clean, 'ran');
-    expect(report.exitCode).toBe(runDoctor(clean).exitCode);
+    expect(report.exitCode).toBe((await runDoctor(clean)).exitCode);
 
     rmSync(dir, { recursive: true, force: true });
     rmSync(clean, { recursive: true, force: true });
   });
 
-  it('warns when the whole batch went nowhere, because those episodes come back', () => {
+  it('warns when the whole batch went nowhere, because those episodes come back', async () => {
     // What does not heal on its own: every attempted episode failed and nothing
     // was added, so the same rows fail again next run, and again.
     const dir = home();
     seedRun(dir, 'ran', 12, { episodes: 12, facts: 0 });
-    const report = runDoctor(dir);
+    const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('12 errori su 12 episodi');
@@ -540,26 +541,26 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('stays green when the sweep threw but the batch worked', () => {
+  it('stays green when the sweep threw but the batch worked', async () => {
     // `errors >= episodes` alone is not the condition. The maintenance sweep
     // pushes its own failure into `report.errors`, so a one-episode run that
     // extracted a fact and then tripped the sweep arrives here as 1 error over 1
     // episode — and it is not a lane going nowhere.
     const dir = home();
     seedRun(dir, 'ran', 1, { episodes: 1, facts: 1 });
-    const c = check(dir, 'consolidamento');
+    const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('1 falliti');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fails on a run that threw, instead of printing its blank row as green', () => {
+  it('fails on a run that threw, instead of printing its blank row as green', async () => {
     // The bigger half of the same defect: `execute` writes zero episodi and zero
     // fatti when `ingest` throws, which through `ok` is indistinguishable from a
     // quiet week — the exact confusion this check exists to remove.
     const dir = home();
     seedRun(dir, 'error', 1, { episodes: 0, facts: 0 });
-    const report = runDoctor(dir);
+    const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('fallito');
@@ -570,17 +571,17 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns, naming the cap, when the budget stopped the lane', () => {
+  it('warns, naming the cap, when the budget stopped the lane', async () => {
     const dir = home();
     seedRun(dir, 'budget', 0, { episodes: 0, facts: 0 });
-    const c = check(dir, 'consolidamento');
+    const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('budget mensile esaurito');
     expect(c?.remedy).toContain('rot reseal');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is ok on a lock refusal, and says so — it is the guarantee working', () => {
+  it('is ok on a lock refusal, and says so — it is the guarantee working', async () => {
     // `busy` is the lane lock refusing a second extraction, which is the
     // opposite of a failure. Green, but the word has to appear: zero episodi and
     // zero fatti with no explanation is the shape this whole block distrusts.
@@ -595,7 +596,7 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     // means exactly that on a `ran` row.
     const dir = home();
     seedRun(dir, 'busy', 1, { episodes: 0, facts: 0 });
-    const c = check(dir, 'consolidamento');
+    const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('busy');
     expect(c?.detail).not.toContain('falliti');
@@ -613,9 +614,9 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
   // installed a real unit is not a test (this file's own header names the
   // same trap for XDG_CONFIG_HOME).
 
-  it('warns with the install command when nothing is installed and no gateway runs', () => {
+  it('warns with the install command when nothing is installed and no gateway runs', async () => {
     const dir = home();
-    const report = runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const report = await runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
     const c = report.checks.find((x) => x.name === 'supervisore');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non riparte da solo');
@@ -625,7 +626,7 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('names the live-but-unsupervised case when a gateway is actually running', () => {
+  it('names the live-but-unsupervised case when a gateway is actually running', async () => {
     const dir = home();
     const db = new DatabaseCtor(paths(dir).db);
     // The same shape `readGateway` reads: a pid this process can truthfully
@@ -641,7 +642,7 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     );
     db.close();
 
-    const report = runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
+    const report = await runDoctor(dir, { supervisorProbes: { unitFileExists: () => false } });
     const gateway = report.checks.find((x) => x.name === 'gateway');
     const supervisor = report.checks.find((x) => x.name === 'supervisore');
     expect(gateway?.level).toBe('ok'); // sanity: the fixture really did register as a live gateway
@@ -650,13 +651,13 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is ok once the unit is installed and the platform confirms it is engaged', () => {
+  it('is ok once the unit is installed and the platform confirms it is engaged', async () => {
     const dir = home();
     const engaged: Partial<SupervisorProbes> =
       process.platform === 'darwin'
         ? { unitFileExists: () => true, launchdLoaded: () => true }
         : { unitFileExists: () => true, systemdEnabled: () => true, lingerEnabled: () => true };
-    const report = runDoctor(dir, { supervisorProbes: engaged });
+    const report = await runDoctor(dir, { supervisorProbes: engaged });
     const supervisor = report.checks.find((x) => x.name === 'supervisore');
     expect(supervisor?.level).toBe('ok');
     rmSync(dir, { recursive: true, force: true });
@@ -673,10 +674,10 @@ describe('doctor asks whether a supervisor, not just a process, is behind the ga
  * `core/sandbox/probe.test.ts` uses to mock `node:os` for the same reason.
  */
 describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213, ADR-0026)', () => {
-  it('warns, naming the length, the limit and #213, when TMPDIR is past the socket-path limit on Linux', () => {
+  it('warns, naming the length, the limit and #213, when TMPDIR is past the socket-path limit on Linux', async () => {
     const dir = home(); // must exist before TMPDIR is stubbed: home() mkdtemps under the real one
     vi.stubEnv('TMPDIR', '/x'.repeat(60)); // 120 chars, past the 108-byte sun_path limit
-    const report = runDoctor(dir, { platform: 'linux' });
+    const report = await runDoctor(dir, { platform: 'linux' });
     const c = report.checks.find((x) => x.name === 'tmpdir');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('120');
@@ -686,7 +687,7 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('warns anche nella fascia 74–108: il budget è del path del socket, non della directory', () => {
+  it('warns anche nella fascia 74–108: il budget è del path del socket, non della directory', async () => {
     // Il difetto del giro 1 del judge: 108 speso tutto su TMPDIR nudo, mentre
     // il bridge del sandbox appende il suo socket più lungo (35 caratteri
     // misurati, claude-socks-<16hex>.sock) direttamente sotto quella
@@ -694,7 +695,7 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
     // rotto a runtime.
     const dir = home();
     vi.stubEnv('TMPDIR', '/x'.repeat(40)); // 80 chars: sotto 108 da solo, oltre col percorso reale
-    const report = runDoctor(dir, { platform: 'linux' });
+    const report = await runDoctor(dir, { platform: 'linux' });
     const c = report.checks.find((x) => x.name === 'tmpdir');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('80');
@@ -702,36 +703,67 @@ describe('doctor names a TMPDIR that would break the Linux sandbox sockets (#213
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is ok, naming the limit, when TMPDIR is short on Linux', () => {
+  it('is ok, naming the limit, when TMPDIR is short on Linux', async () => {
     const dir = home();
     vi.stubEnv('TMPDIR', '/tmp');
-    const report = runDoctor(dir, { platform: 'linux' });
+    const report = await runDoctor(dir, { platform: 'linux' });
     const c = report.checks.find((x) => x.name === 'tmpdir');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('/tmp');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('says nothing on a platform where the sandbox does not proxy through a Unix socket', () => {
+  it('says nothing on a platform where the sandbox does not proxy through a Unix socket', async () => {
     const dir = home();
     vi.stubEnv('TMPDIR', '/x'.repeat(60));
-    const report = runDoctor(dir, { platform: 'darwin' });
+    const report = await runDoctor(dir, { platform: 'darwin' });
     expect(report.checks.find((x) => x.name === 'tmpdir')).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });
 
 describe('sandboxOkDetail — the sandbox "ok" line is honest about which platform actually contained it', () => {
-  it('is a plain summary for seatbelt', () => {
+  it('is a plain summary for seatbelt', async () => {
     const line = sandboxOkDetail({ available: true, mechanism: 'seatbelt' });
     expect(line).toContain('seatbelt');
     expect(line).not.toContain('weaker');
   });
 
-  it('names the Linux gap on bubblewrap — Unix-socket hardening is off there (executor.ts, #428/#429)', () => {
+  it('names the Linux gap on bubblewrap — Unix-socket hardening is off there (executor.ts, #428/#429)', async () => {
     const line = sandboxOkDetail({ available: true, mechanism: 'bubblewrap' });
     expect(line).toContain('bubblewrap');
     expect(line.toLowerCase()).toContain('weaker');
     expect(line).toMatch(/unix.socket/i);
+  });
+});
+
+describe('la riga sandbox di doctor viene dalla porta vera, non dal probe economico', () => {
+  /**
+   * La rete che mancava (judge #129, secondo follow-up): il meccanismo era
+   * coperto, ma niente inchiodava *doctor* a `verify()`. Un ritorno accidentale
+   * a `probeSandbox()` — una riga — non lo avrebbe visto nessun test, e
+   * riaprirebbe esattamente il reperto: doctor verde su una macchina dove il
+   * primo comando contenuto muore con l'errore grezzo di bwrap dentro un job.
+   */
+  it('un contenimento che fallisce alla prova reale finisce nella riga, con la sua ragione', async () => {
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'contain_failed',
+      detail: "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+      remedy: 'questa macchina non può contenere: nessun comando verrà eseguito',
+    });
+    try {
+      const line = await check(dir, 'sandbox');
+      expect(spia).toHaveBeenCalled(); // rossa se doctor tornasse al probe nudo
+      expect(line?.level).toBe('warn');
+      expect(line?.detail).toContain('contain_failed');
+      expect(line?.detail).toContain('mount proc');
+      expect(line?.remedy).toContain('non può contenere');
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

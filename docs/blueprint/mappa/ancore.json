@@ -806,13 +806,13 @@
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 269,
+    "line": 270,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 61,
-    "testo": "export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {"
+    "line": 52,
+    "testo": "supervisorProbes?: Partial<SupervisorProbes>;"
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
@@ -996,27 +996,27 @@
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 517,
+    "line": 523,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 563,
+    "line": 569,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 573,
+    "line": 579,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 604,
+    "line": 610,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 769,
+    "line": 775,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1986,27 +1986,27 @@
   },
   "core/sandbox/executor.ts:117": {
     "path": "core/sandbox/executor.ts",
-    "line": 117,
+    "line": 378,
     "testo": "filesystem: {"
   },
   "core/sandbox/executor.ts:118": {
     "path": "core/sandbox/executor.ts",
-    "line": 118,
+    "line": 379,
     "testo": "denyRead: [...this.guards.denyRead],"
   },
   "core/sandbox/executor.ts:63": {
     "path": "core/sandbox/executor.ts",
-    "line": 63,
+    "line": 134,
     "testo": "export class SandboxExecutor {"
   },
   "core/sandbox/executor.ts:75": {
     "path": "core/sandbox/executor.ts",
-    "line": 75,
+    "line": 146,
     "testo": "status(): SandboxProbe {"
   },
   "core/sandbox/probe.ts:31": {
     "path": "core/sandbox/probe.ts",
-    "line": 31,
+    "line": 49,
     "testo": "export function probeSandbox(): SandboxProbe {"
   },
   "core/scheduler/firelog.ts:27": {
@@ -2331,17 +2331,17 @@
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
-    "line": 112,
+    "line": 373,
     "testo": "// v1 skips the optional apply-seccomp layer: two open bugs break it on"
   },
   "executor.ts:114": {
     "path": "core/sandbox/executor.ts",
-    "line": 114,
+    "line": 375,
     "testo": "// Declared limit: Unix-socket hardening is off on Linux."
   },
   "executor.ts:168": {
     "path": "core/sandbox/executor.ts",
-    "line": 168,
+    "line": 429,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
   "extract.ts:187": {
@@ -2621,22 +2621,22 @@
   },
   "probe.ts:129": {
     "path": "core/sandbox/probe.ts",
-    "line": 285,
+    "line": 311,
     "testo": "function probeBubblewrap(): SandboxProbe {"
   },
   "probe.ts:130": {
     "path": "core/sandbox/probe.ts",
-    "line": 286,
+    "line": 312,
     "testo": "if (userInfo().uid === 0) {"
   },
   "probe.ts:61": {
     "path": "core/sandbox/probe.ts",
-    "line": 123,
+    "line": 141,
     "testo": "function probeSeatbelt(): SandboxProbe {"
   },
   "probe.ts:99": {
     "path": "core/sandbox/probe.ts",
-    "line": 161,
+    "line": 179,
     "testo": "// A non-zero exit is not yet evidence. Measured 2026-08-15 on macOS 15: a"
   },
   "process.ts:146": {
