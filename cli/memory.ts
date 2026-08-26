@@ -41,6 +41,8 @@ export const MEMORY_USAGE = `usage:
                                  risposta grezza del giudice quando non era leggibile
   muffin memory stats
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
+  muffin memory pin <fact-id>          il fatto entra in OGNI turno, senza dipendere dalla somiglianza
+  muffin memory unpin <fact-id>        torna alla sola pesca per somiglianza
 `;
 
 function openStore(home: string): { db: DatabaseCtor.Database; store: MemoryStore } {
