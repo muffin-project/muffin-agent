@@ -159,12 +159,13 @@
       "cmd": "muffin trace",
       "sub": [
         "tail",
-        "grep"
+        "grep",
+        "turn"
       ],
-      "file": "cli/main.ts:189-190,626-666",
-      "what": "Legge le proprie tracce JSONL: coda o ricerca per pattern.",
+      "file": "cli/main.ts:134-137,1039-1096",
+      "what": "Legge le proprie tracce JSONL: coda, ricerca per pattern, o un turno passo per passo (durata e token di ogni step).",
       "wired": true,
-      "note": ""
+      "note": "`turn` prende l'id che il turno stampa — dodici caratteri dei trentadue — perche' l'id stampato e quello accettato devono essere lo stesso id."
     },
     {
       "cmd": "muffin --help / -h",
