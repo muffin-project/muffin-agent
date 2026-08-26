@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -527,5 +527,34 @@ describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)'
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
     expect(r.out).toContain('muffin rot verify | reseal | harden');
+  });
+
+  it('un reseal senza permesso di scrivere il sigillo risponde, invece di vomitare uno stack', () => {
+    // Il guasto che `muffin rot harden` **insegna** a produrre: il piano dice
+    // all'owner che dopo l'indurimento il reseal «ti servirà un privilegio che
+    // oggi non ti serve», quindi dimenticare `sudo` è l'errore previsto, non
+    // uno esotico. `main()` non ha una cattura di livello superiore, e la
+    // ricompensa per aver seguito il nostro consiglio era un `Error: EACCES`
+    // con lo stack. Trovato dal judge su #138.
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+
+    // `seal` riscrive `rot/manifest.json` in place, e riscrivere un file che
+    // esiste non chiede il permesso sulla directory: quello serve a creare o
+    // cancellare voci. Quindi il permesso da togliere è quello del file.
+    const manifest = join(dir, 'rot', 'manifest.json');
+    chmodSync(manifest, 0o400);
+    try {
+      const r = muffin(env, ['rot', 'reseal']);
+      expect(r.code).toBe(77); // EX_NOPERM, non un'uscita generica
+      expect(r.err).toContain('permesso negato');
+      expect(r.err).toContain('sudo');
+      // Il punto della slice: una frase, non una traccia di stack.
+      expect(r.err).not.toContain('at ');
+      expect(r.err).not.toContain('EACCES:');
+    } finally {
+      chmodSync(manifest, 0o600); // altrimenti la pulizia del temp non riesce
+    }
   });
 });
