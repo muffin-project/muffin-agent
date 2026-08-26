@@ -55,6 +55,7 @@ export interface TelegramApiLike {
   getUpdates(offset: number, allowed?: string[]): Promise<Update[]>;
   sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  deleteMessage(chatId: number, messageId: number): Promise<boolean>;
   sendChatAction(chatId: number, action?: string): Promise<boolean>;
   sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
@@ -212,6 +213,19 @@ export class TelegramApi implements TelegramApiLike {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     });
+  }
+
+  /**
+   * Removes a message this bot sent — `progress.ts`'s way of making the status
+   * line disappear once a turn ends, rather than leaving it orphaned above the
+   * real answer. `effect()`, not `call()`: on an ambiguous transport failure a
+   * blind retry could hit a message that *did* delete, and the 400 Telegram
+   * gives back ("message to delete not found") is indistinguishable from any
+   * other rejection here — either way `progress.ts` swallows it, because a
+   * leftover status line is cosmetic, never a lost or duplicated answer.
+   */
+  deleteMessage(chatId: number, messageId: number): Promise<boolean> {
+    return this.effect<boolean>('deleteMessage', { chat_id: chatId, message_id: messageId });
   }
 
   /**

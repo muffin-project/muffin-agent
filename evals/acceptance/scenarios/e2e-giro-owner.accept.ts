@@ -374,9 +374,18 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           }
 
           tg.deliver(privateMessage({ id: 999, name: 'Owner' }, 'qual è il mio piatto preferito da oggi?'));
-          await until(() => tg.messages().length >= 2, 20_000);
-          const reply = tg.messages()[1];
-          if (!reply || !reply.text.includes('ricci di mare')) {
+          // By text, not by position: M5-BIS B13 means a real turn can now
+          // also send a `sendMessage` for its own progress status line (the
+          // pairing confirmation above is a real message too) before the
+          // real answer, and `FakeTelegram.messages()` is a flat log of every
+          // `sendMessage` ever made — it does not collapse the status line's
+          // later `editMessageText`/`deleteMessage` calls out of that log the
+          // way a real Telegram client would. So the answer is identified by
+          // its own content, wherever it lands among however many status
+          // updates happened to fire during a real (if fast) gateway turn.
+          await until(() => tg.messages().some((m) => m.text.includes('ricci di mare')), 20_000);
+          const reply = tg.messages().find((m) => m.text.includes('ricci di mare'));
+          if (!reply) {
             throw new Error(`la risposta consegnata su Telegram non contiene il testo atteso: ${JSON.stringify(tg.messages())}`);
           }
 
