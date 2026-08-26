@@ -1,8 +1,14 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeReplCliWrite } from './repl.js';
+import { runInit } from './init.js';
+import { makeReplCliWrite, runRepl } from './repl.js';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, type Surface } from '../core/surface/types.js';
+import { startFakeProvider } from '../evals/acceptance/provider.js';
 
 /**
  * The REPL's delivery path, in isolation from the interactive stdin loop.
@@ -91,6 +97,7 @@ describe('a channel nothing serves', () => {
     const broken: Surface = {
       id: 'rotta',
       limits: { maxMessageChars: 10, maxUploadBytes: 0, maxDownloadBytes: 0 },
+      streaming: { transport: 'off' },
       handles: (c) => c === 'rotta',
       deliver: async () => {
         throw new Error('socket chiuso');
@@ -114,6 +121,7 @@ describe('a channel nothing serves', () => {
     const fake = (id: string): Surface => ({
       id,
       limits: { maxMessageChars: 100, maxUploadBytes: 0, maxDownloadBytes: 0 },
+      streaming: { transport: 'off' },
       handles: (c) => c === id,
       deliver: async (_c, text) => {
         seen.push(`${id}:${text}`);
@@ -126,5 +134,87 @@ describe('a channel nothing serves', () => {
     await registry.deliver('discord', 'ciao');
 
     expect(seen).toEqual(['discord:ciao']);
+  });
+});
+
+/**
+ * The real wiring, B11 — through `buildRuntime` and a fake SSE HTTP server,
+ * not a substituted `Provider` object. PRACTICES §5: this is the test that
+ * fails without the wiring, and a hand-rolled `Provider.chatStream` fake
+ * would not exercise `agent/providers/openai-compat.ts`'s own SSE parsing at
+ * all — the seam this suite exists to prove is `runRepl` → `runTurn` → the
+ * real adapter → a real (if local) socket, same shape
+ * `evals/acceptance/provider.ts`'s own docstring insists on for the
+ * acceptance suite, one layer down from a spawned binary.
+ */
+describe('the REPL streams the final answer while it forms (B11)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A fresh home pointed at `provider`, and nothing else configured. */
+  function homeAgainst(baseUrl: string): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-repl-stream-'));
+    runInit({ home, provider: 'openai-compat', baseUrl, apiKey: 'sk-repl-stream-fake' });
+    return home;
+  }
+
+  /** Feeds one line, then closes — the readline loop's own "closed" catch is what ends `runRepl`. */
+  function stdinWith(line: string): PassThrough {
+    const stdin = new PassThrough();
+    stdin.write(`${line}\n`);
+    stdin.end();
+    return stdin;
+  }
+
+  it('writes the answer as it forms, and the finished text is byte-identical to a non-streamed turn', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'ciao dal muffin finto' }] });
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const written: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        written.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stream: true, stdin: stdinWith('ciao') });
+
+      expect(code).toBe(0);
+      // The wire really did carry more than one delta — this is `wordChunks`'
+      // own split (`evals/acceptance/provider.ts`), and each one arrived as
+      // its own `process.stdout.write` call, not pre-joined upstream.
+      expect(written).toContain('ciao ');
+      expect(written).toContain('dal ');
+      expect(written).toContain('muffin ');
+      // Exactly once: a turn that streamed must not *also* print the
+      // finished text at the end — that would be the same answer twice.
+      const occurrences = written.join('').split('ciao dal muffin finto').length - 1;
+      expect(occurrences).toBe(1);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it('does not stream with --no-stream (opts.stream: false), and still prints the whole answer once', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'risposta intera, non a pezzi' }] });
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const written: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        written.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stream: false, stdin: stdinWith('ciao') });
+
+      expect(code).toBe(0);
+      // The mutation this guards against: delete `stream: Boolean(input.onDelta
+      // && …)` in the loop, or drop the `opts.stream` check in the REPL, and
+      // this turns red because the sink is attached regardless — the request
+      // the fake server actually received is the ground truth, not a mock.
+      expect(provider.main()[0]?.transcript).toBeDefined();
+      expect(written.some((w) => w === 'risposta ')).toBe(false);
+      expect(written.join('')).toContain('risposta intera, non a pezzi');
+    } finally {
+      await provider.close();
+    }
   });
 });

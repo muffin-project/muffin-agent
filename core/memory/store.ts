@@ -7,6 +7,7 @@ import {
   type FactOrigin,
   type ReviewKind,
 } from './schema.js';
+import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
 
 /**
@@ -167,18 +168,20 @@ export class MemoryStore {
     // `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
-    this.ensureColumn('episodes', 'superseded_at', 'superseded_at TEXT');
+    ensureColumn(db, 'episodes', 'superseded_at', 'superseded_at TEXT');
     // Both carry a non-null default so the existing rows migrate in place: an
     // ALTER that adds NOT NULL without one is rejected outright. `said` is the
     // honest backfill rather than a convenient one — extraction has never been
     // allowed to infer (extract.ts rule 2), so every fact recorded before this
     // column existed did come from something someone actually said.
-    this.ensureColumn(
+    ensureColumn(
+      db,
       'facts',
       'origin',
       `origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,
     );
-    this.ensureColumn(
+    ensureColumn(
+      db,
       'facts',
       'importance',
       'importance INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2)',
@@ -187,13 +190,6 @@ export class MemoryStore {
       `INSERT OR IGNORE INTO functional_predicates (predicate, declared_at) VALUES (?, datetime('now'))`,
     );
     for (const p of DEFAULT_FUNCTIONAL_PREDICATES) seed.run(p);
-  }
-
-  private ensureColumn(table: string, column: string, ddl: string): void {
-    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (!columns.some((c) => c.name === column)) {
-      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-    }
   }
 
   // ---- evidence -------------------------------------------------------------

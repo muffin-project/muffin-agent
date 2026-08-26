@@ -1,13 +1,16 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
-import { probeSandbox } from '../core/sandbox/probe.js';
+import { probeSandbox, tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
 import { wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { CONSERVATIVE, loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
@@ -40,6 +43,19 @@ export type DoctorOptions = {
   online?: boolean;
   /** Test-only: overrides the shipped `agent/profiles/` directory. */
   profilesDir?: string;
+  /**
+   * Test-only: overrides the real OS probes `checkSupervisor` reaches for
+   * (`realSupervisorProbes`) — `systemctl`, `loginctl`, `launchctl`. Merged
+   * over the real ones, so a test only has to name the probe it is driving.
+   */
+  supervisorProbes?: Partial<SupervisorProbes>;
+  /**
+   * Test-only: overrides `process.platform` for the TMPDIR-length check
+   * below, so the Linux branch's logic runs in the suite regardless of which
+   * OS is actually running it — the same reason `core/sandbox/probe.test.ts`
+   * mocks `node:os` to exercise bubblewrap from macOS.
+   */
+  platform?: NodeJS.Platform;
 };
 
 export function runDoctor(home = paths().home, options: DoctorOptions = {}): DoctorReport {
@@ -184,7 +200,12 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
   } else {
     const hardening = hardeningHolds(home);
     if (hardening.holds) {
-      ok('root of trust mode', 'hardened: this process cannot write the RoT — prevention, verified now');
+      ok(
+        'root of trust mode',
+        hardening.caveat
+          ? `hardened: prevention verified now, but narrower than usual — ${hardening.caveat}`
+          : 'hardened: this process cannot write the RoT — prevention, verified now',
+      );
     } else {
       fail(
         'root of trust mode',
@@ -255,6 +276,20 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       n: number;
     };
     ok('database', `${p.db}, ${tables.n} tables`);
+
+    const schema = schemaVersionOf(db);
+    if (schema === null) {
+      warn('schema', 'nessuna schema_version: database mai avviato da questo codice', 'parte al primo avvio del runtime');
+    } else if (schema > currentSchemaVersion()) {
+      fail('schema', `database v${schema}, codice v${currentSchemaVersion()}`, 'aggiorna il codice');
+    } else if (schema < currentSchemaVersion()) {
+      // Unreachable while MIGRATIONS is empty (baseline is the ceiling), but
+      // this is the tool the restore path points at — behind must never read
+      // as healthy (judge #93 follow-up).
+      warn('schema', `database v${schema}, codice v${currentSchemaVersion()} — migrazione pendente`, 'avvia il runtime (repl o gateway)');
+    } else {
+      ok('schema', `v${schema} (codice v${currentSchemaVersion()})`);
+    }
 
     // The semantic half of recall, checked rather than assumed. Three separate
     // defences against the vector index being silently empty were written into
@@ -497,7 +532,8 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
     // B8's own guarantee, checked here rather than only claimed: a turn that
     // finished and whose delivery never settled — `pending` on a `done` row —
-    // or was reported failed by the surface. D3 (judge, PR #42): `undelivered()`
+    // was reported failed by the surface, or crossed the remote boundary with
+    // no readable response (`possibly_sent`). D3 (judge, PR #42): `undelivered()`
     // had no caller and no test before this; a job could say "inviato" to
     // nobody, forever, with nothing anywhere reading the query built to catch
     // it. Reported only when `turns` exists — an absent table already said so
@@ -511,9 +547,9 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         const when = oldest.startedAt.slice(0, 16).replace('T', ' ');
         warn(
           'consegne',
-          `${undelivered.length} turni con delivery mai arrivata nelle ultime 24h — la più vecchia: ` +
+          `${undelivered.length} turni con delivery non confermata nelle ultime 24h — la più vecchia: ` +
             `turno ${oldest.id.slice(0, 12)} su ${oldest.surface} (${when}), ${oldest.delivery}`,
-          'il lavoro è stato fatto ma non ha raggiunto il canale: controlla che la superficie sia connessa e raggiungibile',
+          'il lavoro è stato fatto ma la consegna non è confermata: controlla la superficie; non ritentare alla cieca uno stato possibly_sent',
         );
       } else if (undelivered !== null) {
         ok('consegne', 'nessuna delivery mancante nelle ultime 24h');
@@ -537,6 +573,21 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
         'run `muffin gateway install` (o `muffin init`, che te lo propone)',
       );
     }
+
+    // A5's own question asked of the *supervisor* rather than the process:
+    // `readGateway` above is true for a `muffin gateway run` typed by hand,
+    // which is exactly the state ADR-0035 (A1, owner's words) says continuity
+    // must not depend on. Never `fail` (see supervisor.ts) — a missing unit is
+    // a gap to close before trusting a reboot, not a broken install today.
+    const supervisor = checkSupervisor(process.platform, home, gateway !== null, {
+      ...realSupervisorProbes(),
+      ...options.supervisorProbes,
+    });
+    if (supervisor.engaged) {
+      ok('supervisore', supervisor.detail);
+    } else {
+      warn('supervisore', supervisor.detail, supervisor.remedy);
+    }
     db.close();
   } catch (error) {
     fail('database', String(error), 'run `muffin init` to create it');
@@ -544,7 +595,7 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
 
   const sandbox = probeSandbox();
   if (sandbox.available) {
-    ok('sandbox', `${sandbox.mechanism}: a real containment ran and held`);
+    ok('sandbox', sandboxOkDetail(sandbox));
   } else {
     // Not a hard failure: the runtime still starts, execution capabilities just
     // degrade to ask. Silently unsandboxed is the one outcome we refuse.
@@ -552,6 +603,39 @@ export function runDoctor(home = paths().home, options: DoctorOptions = {}): Doc
       'sandbox',
       `${sandbox.mechanism} unavailable (${sandbox.reason}): ${sandbox.detail} — execution capabilities degrade to ask`,
       sandbox.remedy,
+    );
+  }
+
+  // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its
+  // egress proxy through a Unix-domain socket inside TMPDIR, and a TMPDIR
+  // over ~108 characters makes that socket's path too long to bind. The
+  // failure that reaches the owner is `SandboxManager.initialize` throwing a
+  // generic "Sandbox failed to initialize" — nothing in it says TMPDIR, so
+  // without this check the only way to learn the cause is to already know
+  // it. `tmpdir()` is the exact resolution `core/sandbox/executor.ts`'s
+  // `scratch()` relies on (`TMPDIR` if set, else the platform default), so
+  // this checks the value that will actually reach a sandboxed command, not
+  // a guess at it.
+  const tmpdirValue = tmpdir();
+  const effectivePlatform = options.platform ?? process.platform;
+  if (tmpdirBreaksSandboxSockets(effectivePlatform, tmpdirValue)) {
+    // Il conto è sul path INTERO del socket, non su TMPDIR nudo: il runtime
+    // aggiunge sotto questa directory lo scratch dell'executor più il socket
+    // del bridge (SANDBOX_TMPDIR_OVERHEAD, misurato componente per componente
+    // in probe.ts) — è la fascia in cui la prima versione diceva `ok` su una
+    // macchina che a runtime sarebbe esplosa.
+    warn(
+      'tmpdir',
+      `${tmpdirValue} è lungo ${tmpdirValue.length} caratteri: col percorso che il sandbox costruisce ` +
+        `sotto (${SANDBOX_TMPDIR_OVERHEAD} caratteri misurati) supera il limite di ${TMPDIR_SUN_PATH_LIMIT} ` +
+        `dei socket Unix su Linux (#213) — il sandbox può fallire a runtime con "Sandbox failed to ` +
+        `initialize", un errore che non nomina TMPDIR`,
+      `esporta un TMPDIR più corto (es. /tmp) prima di avviare muffin, o rimuovilo dall'ambiente per usare il default`,
+    );
+  } else if (effectivePlatform === 'linux') {
+    ok(
+      'tmpdir',
+      `${tmpdirValue} (${tmpdirValue.length} caratteri: ${tmpdirValue.length}+${SANDBOX_TMPDIR_OVERHEAD} sotto il limite di ${TMPDIR_SUN_PATH_LIMIT})`,
     );
   }
 
@@ -583,6 +667,23 @@ export function formatReport(report: DoctorReport): string {
     return c.remedy ? `${head}\n  → ${c.remedy}` : head;
   });
   return lines.join('\n');
+}
+
+/**
+ * The `ok('sandbox', …)` line, honest about which mechanism actually held.
+ *
+ * A green "sandbox: contained" reads as parity between platforms, and it is
+ * not: `SandboxManager.baseConfig` (core/sandbox/executor.ts) sets
+ * `allowAllUnixSockets: true` on Linux only — two open upstream bugs (#428,
+ * #429) block the seccomp layer that would otherwise deny them — so bubblewrap
+ * holding today says less than seatbelt holding does. One line, not the essay
+ * this comment is: doctor.ts owns being read at a glance.
+ */
+export function sandboxOkDetail(sandbox: Extract<SandboxProbe, { available: true }>): string {
+  const base = `${sandbox.mechanism}: a real containment ran and held`;
+  return sandbox.mechanism === 'bubblewrap'
+    ? `${base} — weaker than macOS: Unix-socket hardening is off on Linux (allowAllUnixSockets, #428/#429)`
+    : base;
 }
 
 /** `null` means the table is not there, which is a different fact from "zero rows". */

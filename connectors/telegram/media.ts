@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import type { Message } from '@grammyjs/types';
-import type { TelegramApi } from './api.js';
+import type { TelegramApiLike } from './api.js';
 
 /**
  * Files in and files out.
@@ -107,7 +107,7 @@ export type Downloaded = {
  * real one is what lands on the disk.
  */
 export async function downloadToVault(
-  api: TelegramApi,
+  api: TelegramApiLike,
   vaultRoot: string,
   spec: MediaSpec,
   updateId: number,
@@ -137,7 +137,7 @@ export async function downloadToVault(
   return { vaultPath: relative, bytes: buffer.byteLength };
 }
 
-export class MediaTooLarge extends Error {
+class MediaTooLarge extends Error {
   constructor(readonly bytes: number) {
     super(`${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ${MAX_DOWNLOAD_BYTES / 1e6}MB del Bot API pubblico`);
     this.name = 'MediaTooLarge';
@@ -159,7 +159,7 @@ export class MediaTooLarge extends Error {
  * decision, which is different from a forgotten one.
  */
 export async function sendDocument(
-  api: TelegramApi,
+  api: TelegramApiLike,
   chatId: number,
   absolutePath: string,
   options: { caption?: string; filename?: string } = {},

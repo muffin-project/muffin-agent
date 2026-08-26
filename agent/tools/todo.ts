@@ -60,7 +60,7 @@ export const todoCapability: CapabilityDecl = {
   hostOnly: true,
 };
 
-export const todoSpec: ToolSpec = {
+const todoSpec: ToolSpec = {
   name: 'todo',
   description:
     'The persistent plan for this conversation. It survives restarts and is shown back to you at the ' +

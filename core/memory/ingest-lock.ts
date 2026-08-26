@@ -55,16 +55,17 @@ import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
  */
 export const STALE_AFTER_MS = 30 * 60 * 1000;
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS ingest_lock (
-  id       INTEGER PRIMARY KEY CHECK (id = 1),
-  pid      INTEGER,
-  taken_at TEXT
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  pid       INTEGER,
+  taken_at  TEXT,
+  holder_id TEXT
 );
 `;
 
 /** Re-exported so callers of `IngestLock` do not also need to import `../lock/durable.js`. */
-export { pidAlive, type LockOutcome };
+export { type LockOutcome };
 
 export class IngestLock {
   private readonly lock: DurableLock;

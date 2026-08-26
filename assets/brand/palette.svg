@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 250" role="img" aria-labelledby="title desc">
+<title id="title">Muffin visual identity v0.1 palette</title><desc id="desc">Ink, Muffin orange, cream, paper, system blue and inverse line.</desc>
+<rect width="1200" height="250" rx="24" fill="#FAF6EE"/>
+<g font-family="system-ui, sans-serif" font-size="18" fill="#07162C">
+<rect x="30" y="45" width="150" height="105" rx="14" fill="#07162C"/><text x="30" y="188">Ink · #07162C</text>
+<rect x="225" y="45" width="150" height="105" rx="14" fill="#FF7A1A"/><text x="225" y="188">Orange · #FF7A1A</text>
+<rect x="420" y="45" width="150" height="105" rx="14" fill="#FFF9EE" stroke="#07162C"/><text x="420" y="188">Cream · #FFF9EE</text>
+<rect x="615" y="45" width="150" height="105" rx="14" fill="#FAF6EE" stroke="#07162C"/><text x="615" y="188">Paper · #FAF6EE</text>
+<rect x="810" y="45" width="150" height="105" rx="14" fill="#1878F2"/><text x="810" y="188">System blue · #1878F2</text>
+<rect x="1005" y="45" width="150" height="105" rx="14" fill="#F8EEDC" stroke="#07162C"/><text x="1005" y="188">Inverse · #F8EEDC</text>
+</g></svg>

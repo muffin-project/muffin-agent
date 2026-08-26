@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths } from '../core/config/config.js';
-import { GatewayLock } from '../core/gateway/lock.js';
+import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { createNotifier } from '../core/gateway/notify.js';
 import { Gateway } from '../core/gateway/service.js';
+import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler } from '../core/scheduler/scheduler.js';
 import { TurnLane } from '../core/turns/lane.js';
@@ -122,7 +123,13 @@ function gatewayOver(deps: LoopDeps, home: string, delivered: { turn: TurnRecord
 
 /** Lets the background run the lane started finish, without a fixed sleep. */
 async function settle(lane: TurnLane): Promise<void> {
-  for (let i = 0; i < 200 && lane.isRunning(); i++) await new Promise((r) => setTimeout(r, 5));
+  // The full suite runs CPU-heavy document, sandbox and subprocess tests in
+  // parallel. One second was enough in isolation but could expire while this
+  // lane was still legitimately holding the shared model token, after which
+  // the test asserted on a turn it had not waited for. Keep polling the actual
+  // ownership signal and fail explicitly if it never clears.
+  for (let i = 0; i < 800 && lane.isRunning(); i++) await new Promise((r) => setTimeout(r, 5));
+  expect(lane.isRunning()).toBe(false);
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
@@ -225,6 +232,37 @@ describe('B2 · il turno torna subito, e la risposta arriva dopo', () => {
     // duplication `Scheduler.run` already learned not to do for jobs.
     expect(provider.calls).toBe(1);
   });
+
+  it('una consegna ambigua resta possibly_sent e non rifà il lavoro', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Scripted([answer('risposta forse già arrivata')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+
+    const turnId = enqueueTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'telegram',
+      session: deps.sessions.open('telegram:ambiguous'),
+      text: 'ciao',
+      replyTo: { chatId: 18 },
+    });
+
+    const lane = new TurnLane({
+      turns: deps.turns,
+      run: makeLaneRunner(deps, async () => 'possibly_sent'),
+      modelLane: new ModelLane(),
+    });
+    lane.tick();
+    await settle(lane);
+    const row = deps.turns.get(turnId)!;
+    runtime.close();
+
+    expect(row.status).toBe('done');
+    expect(row.outcome).toBe('answered');
+    expect(row.delivery).toBe('possibly_sent');
+    expect(provider.calls).toBe(1);
+  });
 });
 
 describe('B3 · un turno sospeso si risveglia dalla corsia del gateway', () => {
@@ -255,14 +293,29 @@ describe('B3 · un turno sospeso si risveglia dalla corsia del gateway', () => {
     // Nothing was said yet — an empty message here would read as an answer.
     expect(delivered).toEqual([]);
 
+    // The wait is an hour; the gateway's own claim only tolerates
+    // `HARD_STALE_MULTIPLIER` heartbeats of silence (P20/P21). A real gateway
+    // beats every 30s the whole time, so this simulates that with a handful of
+    // intermediate ticks rather than one giant jump — jumping `now` straight to
+    // the deadline in one call would make this gateway's *own* claim look
+    // exactly like the stale-but-alive holder P20 exists to protect, and it
+    // would correctly (now) refuse its own beat and drain.
+    const startedAt = Date.now();
+    const wakeAtMs = Date.parse(waiting.wakeAt!);
+    const beatEvery = STALE_AFTER_MS * HARD_STALE_MULTIPLIER - 30_000; // safely inside the hard horizon
+    for (let t = startedAt + beatEvery; t < wakeAtMs - 1000; t += beatEvery) {
+      g.gateway.tick(new Date(t));
+      await settle(g.lane);
+    }
+
     // A beat before the deadline changes nothing.
-    g.gateway.tick(new Date(Date.parse(waiting.wakeAt!) - 1000));
+    g.gateway.tick(new Date(wakeAtMs - 1000));
     await settle(g.lane);
     expect(deps.turns.get(turnId)?.status).toBe('waiting');
     expect(provider.calls).toBe(1);
 
     // A beat after it, and the turn comes back on its own.
-    g.gateway.tick(new Date(Date.parse(waiting.wakeAt!) + 1000));
+    g.gateway.tick(new Date(wakeAtMs + 1000));
     await settle(g.lane);
     const done = deps.turns.get(turnId)!;
     g.close();
@@ -357,7 +410,11 @@ describe('un job che aspetta non perde la risposta', () => {
 
     const jobs = new Jobs(runtime.db);
     const job = jobs.add({ goal: 'controlla il backup', cron: '0 9 * * *', timezone: 'Europe/Rome', channel: 'cli' });
-    const outcome = await makeJobRunner(deps)(jobs.get(job.id)!, undefined);
+    const outcome = await makeJobRunner(deps, runtime.jobFires)(jobs.get(job.id)!, undefined);
+    // A fresh fire, run once: never the `FireDeferred`/`FireSettleOnly`
+    // sentinels B7 added, which only ever come back for an occurrence a
+    // *previous* call already bound.
+    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     // The scheduler is told it has not ended, so it neither delivers an empty
     // message nor leaves the fire due for a second turn.
     expect(outcome.stopped).toBe('suspended');

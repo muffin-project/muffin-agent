@@ -48,7 +48,7 @@ export type ExecResult = {
 export const EXEC_DEFAULT_TIMEOUT_MS = 120_000;
 export const EXEC_MAX_TIMEOUT_MS = 600_000;
 /** Per stream, head+tail around a marker; matches what peers keep inline. */
-export const EXEC_MAX_OUTPUT_CHARS = 30_000;
+const EXEC_MAX_OUTPUT_CHARS = 30_000;
 /** Hard buffering cap per stream so a firehose cannot eat the process heap. */
 const BUFFER_HARD_CAP = 200_000;
 

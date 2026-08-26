@@ -1,212 +1,198 @@
 # Design principles
 
-`THESIS.md` says what this project is betting on. This one says **how to decide**
-— the reasoning that should produce the same answer whether it is the owner or a
-contributor holding the question.
+`THESIS.md` says why Muffin is worth building. `VISION.md` says where the product
+is trying to go. This document says **how to decide** when multiple technical or
+product shapes could satisfy them.
 
-There are seven, on purpose. A list of twenty gets skimmed, not applied.
-
----
+These principles are intentionally few. They are a decision compass, not a
+replacement for evidence, architecture or the verification workflow.
 
 ## P1 — Neuroscience is a lens, not a blueprint
 
-Biology and cognitive science are tools for *identifying computational problems*
-and comparing solutions. They are not a structure to imitate.
+Biology and cognitive science are useful for identifying computational problems
+and comparing solutions. They are not structures Muffin copies by default.
 
-Before adopting a biological mechanism, isolate the problem it solves. If that
-problem does not exist here, the mechanism does not enter, however elegant. If
-it does exist and humans solve it well — layered memory with offline
-consolidation, activation decay over time, invalidating an entity rather than
-expiring on a flat timer — imitate the mechanism. If humans solve it *badly* —
-confirmation bias, unreliable metacognition, planning that ignores its own past
-— do better.
+Before adopting a biological mechanism:
 
-This guards against two symmetrical errors. Biomimicry as a default ("brains
-have a parasympathetic system, so this should too") and anti-biological snobbery
-("that's biology, so it is irrelevant to software"). Both produce bad decisions.
-The question is always: *do humans do this well or badly, for the problem being
-solved?*
+1. isolate the computational problem it solves;
+2. verify that the problem exists here;
+3. ask whether humans solve it well enough to be useful prior art;
+4. choose the software mechanism that best satisfies the problem, even if it no
+   longer resembles the biological metaphor.
 
-**The naming constraint follows from it.** When an evocative biological name is
-used for a mechanism — consolidation, decay, activation, dreaming — pair it at
-least once with a functional description of what it does here, independent of
-brains. The metaphor helps you think; the functional description stops the
-metaphor from smuggling in assumptions that are not true in this system.
+A term such as consolidation, activation, decay or dreaming should be paired at
+least once with a functional description independent of the metaphor. The name
+may inspire the design; it must not smuggle in requirements.
 
-For example, an offline consolidation pass is inspired by sleep but does not
-imitate it. A brain sleeps because it must. A batch job runs at night because it
-is cheaper, the owner is not waiting, and the reports come out coherent. That
-difference in *justification* is what lets you move it later without violating
-anything. If the justification were "brains do it", there would be no room.
+## P2 — The double filter on cognitive harness
 
-## P2 — The double filter on harness
+Every module that performs a cognitive operation faces two independent tests.
 
-Every piece of code that performs a cognitive operation faces two independent
-tests.
+### Capability
 
-**Capability.** Would a current frontier-class model do this well by itself,
-given well-assembled context — with tool calling, structured output and a long
-context window? If yes, the code is substitute scaffolding and is a candidate to
-become a model capability instead: an explicit tool call, a schema, or simply
-better context and one line in the prompt.
+Would a current frontier-class model do this better itself if given correctly
+assembled context, tools and structured output?
 
-**Existence.** Is the computational problem this code solves real, here, now? If
-not, it is a candidate for straight removal regardless of the first answer.
+If yes, custom cognitive code is scaffolding unless it provides another proven
+property such as determinism, cost control or auditability.
 
-The tests are independent, and all four combinations occur. Passes capability
-but fails existence: remove. Fails capability but passes existence: keep, and
-consider turning it into a capability. Fails both: remove. Passes both: leave it
-alone.
+### Existence
 
-Where the evidence is clean — citable research, known benchmarks, accumulated
-experience — remove or transform directly. Where there is genuine ambiguity,
-*simplify before removing*: reduce the module to its minimal form, watch it for a
-few weeks, then decide. That is calibrated prudence, not conservatism, and it is
-not the default.
+Is the computational problem real **here, now**?
 
-**The counterweight, which matters as much as the filter.** P2 is a *reduction*
-filter: it says what to remove or transform among things that exist. It is not
-an argument for *withholding* a capability that is missing. "The model would do
-it by itself" justifies removing harness that does it *on the model's behalf*.
-It never justifies denying the model a **primitive** — a real filesystem,
-sandboxed execution, a tool that does not exist yet — that the owner needs. When
-the problem is missing capability rather than excess harness, the gate is P6
-plus safety, not this one.
+If not, remove or defer the mechanism regardless of how elegant it is.
 
-## P3 — Three levels of adapting to a person
+These tests filter harness that already exists. They do **not** justify refusing
+the model a primitive it genuinely lacks. A model cannot reason its way into a
+filesystem, browser, secret store or durable scheduler that the runtime does not
+expose.
 
-A personal agent adapts on three distinct levels. Telling them apart is what
-makes an open-source project possible at all, because they have different
-homes.
+When evidence is ambiguous, simplify before replacing. Do not preserve a complex
+mechanism indefinitely merely because its value is hard to measure.
 
-**Level 1 — learned data.** Facts, patterns, the graph, episodes, the profile
-that accumulates. It emerges automatically from input; for any person with
-coherent input over time, it populates itself. No configuration. It is the
-substrate. In the repository it is exposed intact — as schema, never as content.
+## P3 — Separate what Muffin is, what Muffin learns and what an owner configures
 
-**Level 2 — agent identity and behaviour.** This has two parts that must not be
-conflated. Voice, relationship and local character are shaped per installation;
-the repository ships a template and the real content lives in the owner's
-directory. The constitutional floor — what the agent may never do, who may
-change policy, which evidence can authorize action — is explicit and versioned.
-It is not inferred from familiarity and cannot be learned away.
+Personalisation has different layers and each needs a different home.
 
-**Level 3 — architectural choices that are actually personal preferences.**
-Numeric thresholds, cadences, how proactive is too proactive, the minimum gap
-between unsolicited messages. These *look* like architecture and are taste. They
-must be parameters, not constants baked into the code.
+### Shipped Muffin identity
 
-The working rule: when writing or changing code, know which level you are on. On
-levels 1 and 2, the mechanism ships intact while personal content stays local.
-On level 3, the decision has to become a parameter or an evidenced adaptation.
-Applied consistently, this makes the open-source extraction a matter of
-*removing content*, not rewriting structure.
+A fresh installation must already be recognisably Muffin. The repository ships
+its default persona/voice and constitutional identity floor in `defaults/`.
 
-## P4 — The model reasons; the code does not
+That is product identity, not owner memory. An open-source user should not have
+to invent Muffin's personality before first use.
 
-The database is memory. Rendering is voice. The model is invoked on curated,
-dense input. Not the other way round.
+### Learned relationship and person model
 
-The characteristic mistake is a cognitive operation implemented as code written
-in advance — weightings, semantic gates, hardcoded classifications — where
-assembled context and one model call would do better and stay adaptable. This is
-the compact form of the whole thesis, and it is worth checking against any new
-module that scores, ranks, filters or decides.
+Facts, preferences, patterns, interaction history and the evolving relationship
+with one owner emerge from evidence over time. They belong to the owner's data,
+not to repository code or a hard-coded founder profile.
 
-The corollary is that classifiers are guilty until proven innocent. Twice in
-this project's history an intent classifier was demoted to monitoring-only
-because its errors were invisible and its value was unmeasured. If you add
-something that decides on the model's behalf, decide *first* how you would find
-out it is wrong.
+The learned relationship may change register and interpretation; it does not
+silently rewrite the constitutional identity floor.
 
-There is one boundary P4 never crosses: **the model is the arbiter of meaning,
-never of safety**. It may interpret the request, the situation and the owner's
-intent. The policy kernel decides whether an effect is allowed from typed facts
-that the model cannot rewrite: principal, capability, resource, taint, budget
-and sealed policy. Better reasoning may improve the proposal; it may not vote
-itself a wider permission.
+### Explicit governance/configuration
 
-That boundary starts at ingress, before the model sees anything. A surface
-resolves authority from a transport-authenticated stable subject identifier,
-never from display names, biographies, usernames, rooms or content. Everything
-else it accepts is parsed into typed, provenance-carrying data — including
-metadata and multimodal extraction — and remains potentially adversarial after
-parsing. The model may interpret those blocks; no block may redefine its own
-principal or trust.
+Budgets, provider choices, hard security policy, installed capabilities and
+other governable settings are explicit, inspectable and versioned where needed.
+They are not inferred merely because Muffin has become familiar with the owner.
+
+### Calibrated preferences
+
+Some numeric/cadence choices — proactivity, notification spacing, thresholds —
+may start as parameters and later become evidence-backed adaptations. Do not
+bake personal taste into architecture merely because the first installation has
+one owner.
+
+The working question is always: **identity, learned data, governance, or
+calibration?** If a design cannot answer, it probably mixes responsibilities.
+
+## P4 — The model owns semantic judgement; code owns deterministic contracts
+
+The model should handle the kind of judgement that depends on context, language,
+ambiguity and changing world knowledge.
+
+Code should enforce the contracts where ambiguity would corrupt state,
+authority, causality or reproducibility.
+
+### Good model-owned judgement
+
+- what a request means;
+- whether two descriptions probably refer to the same real-world concept before
+  an explicit identity merge;
+- what information is relevant to a question;
+- whether an observation is worth mentioning;
+- how to explain, summarise, compare and hypothesise.
+
+### Good code-owned contracts
+
+- authenticated principal identity;
+- canonical resource/path representation;
+- schema validity and actual calendar dates;
+- durable ids and idempotency keys;
+- taint monotonicity;
+- permission/budget decisions;
+- transaction and migration semantics;
+- crash ownership/fencing;
+- intent/outcome ordering;
+- secret boundaries;
+- deterministic protocol state.
+
+The smell is not "code makes a decision". The smell is **hard-coded semantic
+judgement that a correctly contextualised model can perform better and whose
+errors are hard to observe**.
+
+The permanent boundary: the model may interpret meaning and propose an effect;
+it never grants itself authority.
 
 ## P5 — Proprioception before power
 
-A system that does not know whether it is working does not get powerful tools.
+A system that cannot tell whether it worked should not receive more authority.
 
-This is not an argument against giving an agent hands. It is the order in which
-hands are earned: traces that show what actually happened, self-inspection that
-can be queried, invariants that fail loudly. In a system whose characteristic
-failure is *damage that reports success*, knowing your own state is not
-observability hygiene — it is the precondition for being allowed to act.
+Traces, self-inspection, durable outcomes, explicit uncertainty and acceptance
+that reaches the production path are not observability polish. They are the
+precondition for acting safely in a system whose characteristic failure has
+repeatedly been "mechanism exists, reports success, production does not actually
+reach it".
 
-P5 is in tension with P2 whenever proprioception is itself implemented as
-harness, and the resolution is the same: if a model with a self-inspection tool
-produces better proprioception than hardcoded monitoring, the hardcoded version
-gives way.
+Proprioception also enables lower-friction autonomy: a scoped grant can only be
+earned if outcomes are observable enough to support or revoke it.
 
-Proprioception is also how supervision may shrink. Autonomy is never a scalar
-claim that the agent has become "trusted". It is a grant for one capability,
-resource class and context, backed by observable successful history and by a
-recovery path. Grants expire or are revoked, and failures make them regress.
-The constitutional floor and the kernel's monotone confinement do not loosen.
-
-## P6 — YAGNI as an active filter
+## P6 — YAGNI is active and symmetric
 
 Every proposed feature faces two questions:
 
-1. **Is the agent fundamentally broken without this?**
-2. **Does it move toward a continuous point of view, or replace a direct
-   interface the owner still has to operate?**
+1. **Is Muffin materially broken without this for the current use horizon?**
+2. **Does it advance the continuous agent by replacing a direct interface,
+   improving continuity/understanding/presence, or exposing a boundary the core
+   actually needs?**
 
 If neither answer is yes, the feature waits.
 
-P6 and P2 are complementary: P2 filters what exists (what to remove), P6 filters
-what is proposed (what not to add). Together they prevent both harness
-accumulation and unjustified feature growth.
+But YAGNI cuts both ways:
 
-**The scope of the second question is narrower than it looks**, and getting this
-wrong has cost this project time. It applies to the agent's **user-facing
-behaviour**: how it acts, how it speaks, when it intervenes, what it exposes. It
-does **not** apply to the engineering of the project — packaging, installers,
-CLI ergonomics, modularity, developer experience. Those live at the substrate
-and infrastructure level. They must pass question 1; question 2 says nothing
-about them. Rejecting a self-serve installer because "it is not an entity with a
-point of view" is a category error: an agent without an installer is not less of
-an entity, it is only harder to install.
+- do not build a world-state database before a consumer proves its shape;
+- do not refuse a browser capability the owner repeatedly needs merely because
+  browser automation is "a feature";
+- do not create manifests, registries or abstractions before something consumes
+  them;
+- do not keep custom plumbing when a mature library can own generic behaviour
+  without weakening Muffin-specific guarantees.
 
-**And ambition is not the same as being a tool.** Question 2 rejects execution
-*without* a point of view — the mute butler that does as told and never says
-anything. It does not reject ambitious work. An agent that runs an hour-long
-loop fixing an inbox, does multi-step research, lives in the machine's
-processes, *and* understands, *and* has a voice, is **more** of an entity, not
-less. Hands without a voice are a tool; hands with a voice are not. The length
-or ambition of the work is never, by itself, a signal.
+Infrastructure/product-distribution work is judged by whether the product is
+usable and maintainable, not whether it gives Muffin more personality. A
+consumer installer can be essential even though it adds no cognitive insight.
 
-The second question is also what keeps device work honest. A new connector or
-piece of hardware matters when it is a better port onto the same continuous
-agent, or when it makes a direct interface unnecessary. A separate memory,
-persona or policy fork for the device is not a new capability; it is a second
-agent by accident.
+## P7 — Principles are calibrated to a phase
 
-## P7 — These principles are calibrated for a phase
+These principles are durable guidance, not a claim that one phase lasts forever.
 
-This document is not timeless and does not pretend to be. It is written for the
-phase the project is in, and phases change: a reduction phase — cutting
-accumulated scaffolding, moving cognition from code into model capability — asks
-for different instincts than an additive phase, where the problem is capability
-that does not exist yet in code *or* model.
+A private rebuild, owner dogfood, trusted alpha and public ecosystem create
+different failure costs. For example:
 
-A phase transition is a recognisable structural change: the reduction work is
-done; a new model materially changes what is available; the project is released
-publicly and the ecosystem around it changes; or the unit of use moves from a
-session to a continuous agent that owns durable work across surfaces.
+- before DAY-1 a schema can still change aggressively;
+- after real continuity accumulates, migration becomes a first-class obligation;
+- before public release, a local integration can be founder-maintained;
+- after a community forms, extension contracts, compatibility and governance
+  matter much more.
 
-The operating rule: at each transition, **reread this document whole, not
-incrementally**, asking whether the principles are still calibrated or need
-redoing. P7 exists so the other six stay a compass rather than becoming
-doctrine — including this one.
+At a phase transition, reread these principles whole. Change them when evidence
+shows the instincts are miscalibrated; do not let a principle become doctrine
+because it has an identifier.
+
+## Applying the set
+
+A useful order is:
+
+```text
+Does the problem exist?                   P6 / P2 existence
+Who should own the judgement?             P4
+Which personalisation/governance layer?   P3
+Does cognition need special evidence?     P1 / P2 capability
+Can we observe whether it worked?         P5
+Has the project phase changed the cost?   P7
+```
+
+Then use `ARCHITECTURE.md`, `SECURITY.md`, the relevant ADR and executable state
+to design the actual change. These principles do not own current implementation
+or Gate status.

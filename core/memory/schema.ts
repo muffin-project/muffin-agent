@@ -195,7 +195,7 @@ export const DEFAULT_FUNCTIONAL_PREDICATES = [
  * the structural antidote to the old system's vague "I noticed…" firehose —
  * the shape of the sentence is forced by provenance, not by prompt discipline.
  */
-export const FACT_ORIGINS = ['said', 'inferred', 'imported'] as const;
+const FACT_ORIGINS = ['said', 'inferred', 'imported'] as const;
 export type FactOrigin = (typeof FACT_ORIGINS)[number];
 
 /**
@@ -224,5 +224,5 @@ export const EXTRACTION_VERSION = 1;
  * strings on `IngestReport`, printed to stderr by the one caller that existed
  * and lost the moment a second caller (a scheduler) did not print them.
  */
-export const REVIEW_KINDS = ['contradiction', 'error'] as const;
+const REVIEW_KINDS = ['contradiction', 'error'] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];

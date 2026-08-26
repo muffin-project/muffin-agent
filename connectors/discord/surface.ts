@@ -28,7 +28,7 @@ import { DISCORD_MAX, renderForDiscord } from './render.js';
  */
 
 /** `discord` or `discord:<channelId>` → the channel to send to, or null when it is neither. */
-export function channelIdFor(channel: string, ownerUserId: string | undefined): string | null {
+function channelIdFor(channel: string, ownerUserId: string | undefined): string | null {
   if (channel === 'discord') return ownerUserId !== undefined ? DEFAULT_CHANNEL : null;
   if (!channel.startsWith('discord:')) return null;
   const id = channel.slice('discord:'.length);
@@ -63,6 +63,10 @@ export function discordSurface(api: DiscordApi, ownerUserId: string | undefined)
   return {
     id: 'discord',
     limits,
+    // B17: Discord is explicitly out of scope for B11. `'off'` is the honest
+    // answer today, not a placeholder for "not implemented yet" — nothing in
+    // this file has ever progressively rewritten a message.
+    streaming: { transport: 'off' },
 
     handles: (channel) => channelIdFor(channel, ownerUserId) !== null,
 

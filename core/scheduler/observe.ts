@@ -19,7 +19,7 @@ import type { decideProactive, ProactiveContext, ProactiveDecision, ProactiveTri
  */
 
 /** Not a gate decision: the gate was never asked, because this was said already. */
-export type Skipped = { effect: 'skip'; reason: 'already_fired' };
+type Skipped = { effect: 'skip'; reason: 'already_fired' };
 
 export type Observation = {
   absence: Absence;
@@ -76,7 +76,7 @@ export type ComposeAbsence = (a: Absence) => Promise<Composed>;
  * in circulation has no primary source (`research/proattivita-quando-parlare.md`
  * §4).
  */
-export const OBSERVE_LIMIT = 3;
+const OBSERVE_LIMIT = 3;
 
 export function observe(deps: ObserveDeps): Observation[] {
   const out: Observation[] = [];

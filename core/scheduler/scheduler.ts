@@ -1,5 +1,5 @@
 import { LANE_JOBS, ModelLane } from '../turns/model-lane.js';
-import type { DeliveryState, TurnStopped } from '../turns/store.js';
+import type { DeliveryState, TurnOutcome, TurnStopped } from '../turns/store.js';
 import type { DeliveryOutcome } from '../surface/types.js';
 import type { Job, JobStore } from './jobs.js';
 
@@ -71,8 +71,44 @@ export type JobOutcome = {
   turnId: string | null;
 };
 
-/** Runs a job's goal through the loop as the scheduler principal. */
-export type RunJob = (job: Job, signal: AbortSignal | undefined) => Promise<JobOutcome>;
+/**
+ * "This occurrence's bound turn is not mine to run" — job_fires's answer when
+ * a fire already has a `turn_id` and that turn is not `done`. That is either
+ * `runnable`/`running`/`waiting`/`interrupted`: some other pass already
+ * created it (this tick, or a crashed one before it) and it belongs to the
+ * turn lane's normal resume machinery now, not to a second call into the
+ * model for the same occurrence. `Scheduler` does nothing at all with a fire
+ * in this state — no delivery, no `markRan` — and retries the check on the
+ * next tick, which is a cheap poll against a row, not a job re-run.
+ */
+export type FireDeferred = { readonly deferred: true };
+
+/**
+ * "This occurrence's turn already finished, and something already delivered
+ * or definitively failed to deliver it" — the other half of recovering a
+ * `done` turn found on a later tick (B7's fault point 5, "turno `done` prima
+ * di `markRan`"). The turn's own `delivery` column is already terminal
+ * (`sent` / `failed:…` / `undeliverable`), so calling `Deliver` again would
+ * send the answer a second time. `Scheduler` skips straight to marking the
+ * fire settled and calling `markRan` — advancing the schedule without ever
+ * touching the channel.
+ */
+export type FireSettleOnly = {
+  readonly settleOnly: true;
+  turnId: string;
+  outcome: TurnOutcome;
+  /** Whether the *other* mechanism's delivery attempt succeeded. */
+  delivered: boolean;
+};
+
+/**
+ * Runs a job's goal through the loop as the scheduler principal — or says
+ * that this occurrence's identity is already spoken for, one way or the
+ * other. `agent/scheduler-run.ts`'s `makeJobRunner` is the one implementation
+ * and the one place that resolves `(job.id, job.nextFireAt)` against
+ * `job_fires` before ever deciding which of the three shapes to hand back.
+ */
+export type RunJob = (job: Job, signal: AbortSignal | undefined) => Promise<JobOutcome | FireDeferred | FireSettleOnly>;
 
 /**
  * Delivers text to a surface, and **says whether it arrived**.
@@ -123,7 +159,9 @@ export type SchedulerEvent =
    * half the outcome, which is the sentence this whole slice exists to stop.
    */
   | { kind: 'ran'; job: Job; stopped: JobOutcome['stopped']; delivered: boolean }
-  | { kind: 'deferred'; reason: 'foreground' | 'in_flight' | 'handover' }
+  // 'bound_turn_pending' is `FireDeferred`: the fire's turn exists and is not
+  // `done` yet, which belongs to the turn lane's own resume machinery.
+  | { kind: 'deferred'; reason: 'foreground' | 'in_flight' | 'handover' | 'bound_turn_pending' }
   | { kind: 'yielded'; job: Job }
   | { kind: 'delivery_failed'; job: Job; error: string }
   /** The turn ran, and the store could not be told. See `run`. */
@@ -162,6 +200,42 @@ export class Scheduler {
      * that only care about `modelLane` pass `undefined` for the slot before it.
      */
     private readonly modelLane: ModelLane,
+    /**
+     * "Is the claim this process is running under still, right now, the one
+     * it was minted for?" — P20's fix.
+     *
+     * `standDown` answers a different question: "has *some* other gateway
+     * shown up" (the REPL's view, via `readGateway`), and the gateway's own
+     * scheduler always passes `() => false` for it — the gateway's answer to
+     * "do I own this" is structurally always yes, so `standDown` gives the
+     * gateway's own scheduler no protection at all. `stillOwner` is what does:
+     * wired from `cli/gateway.ts` as `() => lock.isCurrentClaim()`, a fresh,
+     * uncached read every call. Checked at the same two points `standDown`
+     * already is — before a job starts (alongside `modelLane.take`) and again
+     * before delivery — because a claim can be taken over *during* a run that
+     * takes minutes, not just at its start (P20: `Gateway.tick` used to check
+     * `beat()` once and then run both lanes with no re-check inside).
+     *
+     * Defaults to always-true: the REPL's own scheduler holds no gateway claim
+     * to re-verify, and most tests do not either — `standDown` alone is their
+     * whole cross-process story, unchanged.
+     */
+    private readonly stillOwner: () => boolean = () => true,
+    /**
+     * Marks this fire's `job_fires` row settled — the last write before
+     * `markRan`, never after (B7, fault point 7: "solo dopo il settlement
+     * avanza la schedule"). Every caller of `this.store.markRan` in this file
+     * calls this immediately first, which is what makes the ordering a
+     * property of this class rather than a convention each call site has to
+     * remember.
+     *
+     * Defaults to a no-op: a scheduler with no `job_fires` behind it (most
+     * tests, today's REPL and gateway wiring being the only two production
+     * constructions) settles nothing and behaves exactly as before this
+     * column existed — additive, never a required rewire of every test that
+     * does not care about occurrence identity.
+     */
+    private readonly settleFire: (job: Job) => void = () => {},
   ) {}
 
   /**
@@ -189,6 +263,14 @@ export class Scheduler {
     const [job] = this.store.due(now);
     if (!job) return;
 
+    // Re-verified right before the job actually starts, the same point
+    // `modelLane.take` is — a claim can be taken over between the top of this
+    // tick and here in principle, and this is the last chance to catch it
+    // before the model is ever called.
+    if (!this.stillOwner()) {
+      this.onEvent({ kind: 'deferred', reason: 'handover' });
+      return;
+    }
     if (this.modelLane.take(LANE_JOBS) !== null) {
       // Somebody took it between the check above and here. Impossible on one
       // event loop today, and cheap insurance against the day it is not.
@@ -202,7 +284,7 @@ export class Scheduler {
 
   private async run(job: Job): Promise<void> {
     const signal = this.gate.signal();
-    let outcome: JobOutcome;
+    let outcome: JobOutcome | FireDeferred | FireSettleOnly;
     try {
       outcome = await this.runJob(job, signal);
     } catch (error) {
@@ -211,6 +293,37 @@ export class Scheduler {
         text: `job fallito: ${error instanceof Error ? error.message : String(error)}`,
         turnId: null,
       };
+    }
+
+    /**
+     * This occurrence's identity is bound to a turn that is not `done` yet —
+     * `makeJobRunner` found it mid-flight (this tick's own run, or a crashed
+     * one before it) or still owed a resume/wake. Neither delivery nor
+     * `markRan` belongs here: the turn lane's ordinary machinery owns finishing
+     * it, and the next tick's `job_fires` check is what notices when it does.
+     */
+    if ('deferred' in outcome) {
+      this.onEvent({ kind: 'deferred', reason: 'bound_turn_pending' });
+      return;
+    }
+
+    /**
+     * The turn is `done` and something else already delivered it (or
+     * definitively could not) — B7's fault point 5, found on a tick that did
+     * not run the model at all. Calling `deliver` again would send a second
+     * copy of an answer that already went out (or retry one that is recorded
+     * as undeliverable for a real reason). The only thing still owed is the
+     * bookkeeping: settle the fire, advance the schedule.
+     */
+    if ('settleOnly' in outcome) {
+      try {
+        this.settleFire(job);
+        this.store.markRan(job.id);
+        this.onEvent({ kind: 'ran', job, stopped: outcome.outcome, delivered: outcome.delivered });
+      } catch (error) {
+        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
     }
 
     // A yield is not a completion: leave the job due, retry when the lane frees.
@@ -232,17 +345,36 @@ export class Scheduler {
      * thing twice, and `markRan` does not move a fire the new owner is about to
      * serve.
      *
+     * `standDown` OR `stillOwner`, not either alone: `standDown` is the REPL's
+     * question ("has some *other* gateway shown up") and is a constant `false`
+     * for the gateway's own scheduler, so on its own it gives the gateway zero
+     * protection against exactly the case named above — a second gateway
+     * claiming mid-run. `stillOwner` (P20) is what answers that one, and it is
+     * the fresh, uncached read a laptop-sleep steal needs: cached state from
+     * the last successful `beat()` would still say "mine" for up to a whole
+     * tick interval after a takeover.
+     *
      * **The residual window is from this line to the `deliver` below** —
      * sub-millisecond, and it is the whole remaining exposure for a duplicate
-     * delivery. What it does *not* cover is a duplicate *execution*: between
-     * the tick-start check and here, both processes may have run the same
-     * goal, so the model is paid for twice. That is bounded by one turn's
-     * duration, it is money and not correctness, and closing it would require
-     * claiming the fire before running it — which ADR-0035 refuses, because
-     * `markRan` being the only writer of `next_fire_at` is what makes a killed
-     * gateway lose no work.
+     * *delivery*.
+     *
+     * The sentence that used to follow this one said closing the duplicate
+     * *execution* risk — two processes both paying for the same goal — would
+     * require claiming the fire before running it, and that ADR-0035 refused
+     * to do so. B7 (`job_fires`, `agent/scheduler-run.ts`) is exactly that
+     * claim, made anyway: `makeJobRunner` binds a `turn_id` to
+     * `(job.id, job.nextFireAt)` *before* the model is ever called, so a
+     * second gateway whose tick-start `stillOwner` was still true reads this
+     * fire as already bound and defers (`FireDeferred`) instead of running the
+     * goal a second time. What that does not buy is a lock: nothing prevents
+     * two processes from racing to bind at once, only from *both* ending up
+     * with a turn to run — `JobFireStore.bind` is `UPDATE … WHERE turn_id IS
+     * NULL`, so exactly one of them wins and the other resolves the winner's
+     * id instead of minting its own. `markRan` stays the only writer of
+     * `next_fire_at`, unchanged — a killed gateway still loses no work, it
+     * just no longer risks paying for the same work twice on the way there.
      */
-    if (this.standDown()) {
+    if (this.standDown() || !this.stillOwner()) {
       this.onEvent({ kind: 'yielded', job });
       return;
     }
@@ -264,9 +396,51 @@ export class Scheduler {
      * `agent/turn-lane.ts` will settle it once the lane resumes the turn), and
      * `markRan` still runs — the fire happened, whether or not it has finished
      * answering.
+     *
+     * `job_fires` is marked settled here too, and that is a deliberate reading
+     * of "settled": this *occurrence* is fully handled by the scheduler — its
+     * turn exists, is bound, and has been handed to the lane — even though the
+     * *turn* has not finished answering yet. The two are different questions.
+     * `next_fire_at` already moves at this same instant (unchanged from before
+     * B7), so a daily job that suspends does not block tomorrow's occurrence;
+     * `job_fires`'s row for *this* occurrence simply stops being interesting to
+     * the scheduler once its identity is settled, which is exactly the state a
+     * fresh process must be able to tell apart from "crashed before this line
+     * ever ran" (fault point 2) on the next restart.
      */
     if (outcome.stopped === 'suspended') {
       try {
+        this.settleFire(job);
+        this.store.markRan(job.id);
+        this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
+      } catch (error) {
+        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    /**
+     * Niente da dire, quindi non dice niente.
+     *
+     * Un job che produce testo vuoto ha **girato**: la sua occorrenza va
+     * settled e la schedulazione avanza. Ma consegnarlo produrrebbe un
+     * messaggio vuoto, che `agent/scheduler-run.ts` descrive già come *"un job
+     * che non ha prodotto niente"* — cioè rumore indistinguibile da un
+     * guasto. È il caso ordinario di un job `script`: «controlla se il sito è
+     * giù» non deve dire niente nei giorni in cui il sito è su, e la
+     * differenza fra silenzio e messaggio vuoto è tutta la differenza fra un
+     * controllo che si può tenere acceso e uno che si finisce per spegnere.
+     *
+     * `error` è escluso, e non per simmetria. Un turno può finire in errore
+     * con testo vuoto — il ramo del claim perso in `agent/loop.ts` lo fa —
+     * e quella riga assorbita qui diventerebbe indistinguibile da «girato,
+     * niente da dire»: nessuno stamperebbe più niente, e un esito perso in
+     * una race di fencing avrebbe lo stesso aspetto di una giornata in cui il
+     * sito era su. Il silenzio è una risposta; un guasto silenzioso no.
+     */
+    if (outcome.text.trim() === '' && outcome.stopped !== 'error') {
+      try {
+        this.settleFire(job);
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
       } catch (error) {
@@ -338,7 +512,12 @@ export class Scheduler {
     // one exit that says "esco comunque" into a stack trace in the journal.
     // The job survives either way (the throw precedes the write, so it stays
     // due), which is why this reports instead of retrying.
+    //
+    // `settleFire` first, in the same try and the same order `run`'s suspended
+    // branch already uses: B7's fault point 7 — "solo dopo il settlement
+    // avanza la schedule" — is this line's ordering, not a separate mechanism.
     try {
+      this.settleFire(job);
       this.store.markRan(job.id);
       this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: delivery.delivered });
     } catch (error) {

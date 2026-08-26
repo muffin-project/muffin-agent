@@ -2,7 +2,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { parseArgs } from 'node:util';
 import { loadConfig, paths } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
-import { JobError, JobStore, type Job } from '../core/scheduler/jobs.js';
+import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
 
 /**
  * `muffin jobs` — the operator surface over scheduled work.
@@ -17,7 +17,11 @@ import { JobError, JobStore, type Job } from '../core/scheduler/jobs.js';
 
 export const JOBS_USAGE = `usage:
   muffin jobs list
-  muffin jobs add --cron "<expr>" [--tz <IANA>] [--channel <surface>] "<goal>"
+  muffin jobs add --cron "<expr>" [--tz <IANA>] [--channel <surface>] "<obiettivo>"
+  muffin jobs add --cron "<expr>" --script "<comando>" [--tz] [--channel]
+                                un comando nella sandbox, senza chiamare il
+                                modello: costa zero token, e parla solo quando
+                                ha qualcosa da dire (stdout vuoto = silenzio)
   muffin jobs remove <id>
 `;
 
@@ -42,7 +46,15 @@ function ownerTimezone(home: string): string {
 
 function fmt(job: Job): string {
   const next = job.nextFireAt.toLocaleString('it-IT', { timeZone: job.timezone, dateStyle: 'short', timeStyle: 'short' });
-  return `${job.id.slice(0, 8)}  ${job.cron.padEnd(14)} ${job.timezone.padEnd(16)} →${job.channel.padEnd(9)} prossima ${next}\n            ${job.goal}`;
+  // `jobPayload`, non `job.goal`: per un job `script` quel campo è undefined
+  // per costruzione, e la lista stampava «undefined» — trovato lanciando il
+  // binario vero, non dai test, che creavano job senza mai elencarli.
+  //
+  // E il tipo è mostrato: uno script gira senza modello e senza che nessuno
+  // guardi, quindi «cosa farà domattina alle 8» deve essere leggibile da
+  // questa riga, non deducibile.
+  const che = job.kind === 'script' ? '$ ' : '';
+  return `${job.id.slice(0, 8)}  ${job.cron.padEnd(14)} ${job.timezone.padEnd(16)} →${job.channel.padEnd(9)} prossima ${next}\n            ${che}${jobPayload(job)}`;
 }
 
 export function cmdJobsList(home: string): number {
@@ -68,22 +80,31 @@ export function cmdJobsAdd(home: string, argv: string[]): number {
       cron: { type: 'string' },
       tz: { type: 'string' },
       channel: { type: 'string' },
+      script: { type: 'string' },
     },
   });
   const goal = positionals.join(' ').trim();
-  if (!values.cron || goal === '') {
+  const script = values.script?.trim() ?? '';
+  if (!values.cron || (goal === '' && script === '')) {
     process.stderr.write(JOBS_USAGE);
+    return 78;
+  }
+  // I due non si mescolano. Un obiettivo passato accanto a `--script` sarebbe
+  // ambiguo proprio dove l'ambiguità costa: uno dei due finirebbe in una shell
+  // o davanti a un modello senza che nessuno abbia deciso quale.
+  if (script !== '' && goal !== '') {
+    process.stderr.write(`--script e un obiettivo sono due job diversi: passane uno solo\n`);
     return 78;
   }
   const config = loadConfig(home);
   const { store, db } = openStore(home);
   try {
-    const job = store.add({
+    const comune = {
       cron: values.cron,
       timezone: values.tz ?? ownerTimezone(home),
       channel: values.channel ?? config.surfaces.default,
-      goal,
-    });
+    };
+    const job = store.add(script !== '' ? { ...comune, kind: 'script' as const, script } : { ...comune, goal });
     const next = job.nextFireAt.toLocaleString('it-IT', { timeZone: job.timezone, dateStyle: 'short', timeStyle: 'short' });
     process.stdout.write(`job ${job.id.slice(0, 8)} creato — prossima esecuzione ${next} (${job.timezone}) su ${job.channel}\n`);
     return 0;

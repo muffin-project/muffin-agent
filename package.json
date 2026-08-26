@@ -25,7 +25,6 @@
     "@grammyjs/types": "^4.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.5",
     "typescript": "^5.7.0",
@@ -40,10 +39,8 @@
     "defuddle": "^0.19.2",
     "js-yaml": "^5.2.3",
     "linkedom": "^0.18.13",
-    "mathml-to-latex": "^1.8.0",
     "openai": "^7.4.0",
     "sqlite-vec": "^0.1.9",
-    "turndown": "^7.2.4",
     "unpdf": "1.8.1",
     "zod": "^4.4.3"
   }

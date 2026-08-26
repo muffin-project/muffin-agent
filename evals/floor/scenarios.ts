@@ -18,7 +18,7 @@ import type { TurnResult } from '../../agent/loop.js';
  * thing that actually breaks is holding a thread across four tool calls.
  */
 
-export type ScenarioContext = {
+type ScenarioContext = {
   result: TurnResult;
   /** Every tool invocation in order, as the loop actually made them. */
   toolCalls: { name: string; args: Record<string, unknown> }[];

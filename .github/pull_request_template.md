@@ -1,37 +1,49 @@
 <!--
-  Questo template esiste per una riga sola di docs/ORCHESTRATION.md §3:
-  «un subagente che dice di aver fatto non è evidenza» — e non vale solo per i
-  subagenti. Una PR che afferma non è una PR che dimostra.
-
-  Cancella le sezioni che non servono. Non cancellare "Come l'ho verificato".
+A PR states one claim and shows the evidence budget that could falsify it.
+Verification profiles live in docs/ORCHESTRATION.md; do not recreate them here.
+Delete optional sections, not the claim/profile/evidence record.
 -->
 
-## Cosa non funzionava
+## Claim
 
-<!-- Il difetto, non la feature. Se la riga giusta è "mancava X", scrivi cosa
-     costava che mancasse. Chi legge fra sei mesi deve capire perché valeva. -->
+<!-- One falsifiable sentence: what becomes true if this PR lands? -->
 
-## Come l'ho verificato
+## Verification profile
 
-<!-- Evidenza, non affermazioni. Il comando eseguito e il suo esito, non "i
-     test passano". Se c'è un test nuovo: è stato visto FALLIRE prima del fix?
-     Se hai misurato qualcosa, il numero va prodotto nello stesso respiro in
-     cui lo scrivi, non ricordato. -->
+**FAST / STANDARD / CRITICAL**
 
-- [ ] `npx tsc --noEmit` pulito
-- [ ] `npx vitest run` verde (quanti test: ___)
-- [ ] Il test nuovo è stato visto rosso prima del fix
-- [ ] Se tocca il comportamento a runtime: eseguito davvero, non solo testato
+<!-- Why this profile? Name the boundary/blast radius, not the diff size. -->
 
-## Decisioni prese qui
+## Evidence required by this claim
 
-<!-- Se questa PR decide qualcosa (§2 di ORCHESTRATION.md), dillo. Una scelta
-     architetturale reversibile presa dentro una PR va nominata, non nascosta
-     nel diff. Se la classe è irreversibile / prodotto / sicurezza / modello
-     dati, quella decisione non si prende in una PR: si porta all'owner prima. -->
+<!-- The minimum evidence that could prove this claim false. Examples: targeted
+unit/integration/acceptance, build/typecheck, mutation of one load-bearing seam,
+fault injection, real-binary/owner-machine path. Do not list checks merely
+because they exist. -->
 
-## Cosa resta aperto
+- 
 
-<!-- Quello che hai trovato e NON hai chiuso, con la ragione. Un difetto noto e
-     scritto è debito; un difetto noto e taciuto è una trappola per il
-     prossimo. -->
+## Observed evidence
+
+<!-- Commands/scenarios and observed result. For a bug/fix, record the pre-fix
+failure when the profile/practice requires it. A subagent report alone is not
+evidence. -->
+
+- 
+
+## Decisions made here
+
+<!-- Only durable decisions actually taken by this PR. Link an ADR when the
+choice merits one. Owner/security/product decisions that required instruction
+should name that instruction rather than hiding it in the diff. -->
+
+## Known residuals / follow-ups
+
+<!-- Findings outside the claim stay visible without silently expanding scope. -->
+
+## Authoritative homes made stale
+
+<!-- Update only sources whose meaning changed. Research/history is not
+"refreshed" into current state; generated views are regenerated when relevant. -->
+
+- [ ] None

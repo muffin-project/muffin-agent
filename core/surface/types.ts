@@ -65,13 +65,37 @@ export function notDelivered(why: string): DeliveryOutcome {
  * 4096, Discord 2000, a terminal none — so nothing above has to know which
  * surface it is talking to in order to fit inside it.
  */
-export type SurfaceLimits = {
+type SurfaceLimits = {
   /** Longest single message, in characters of the final rendered text. */
   readonly maxMessageChars: number;
   /** Largest attachment this surface will accept from us, in bytes. */
   readonly maxUploadBytes: number;
   /** Largest attachment we can pull *from* it, in bytes. */
   readonly maxDownloadBytes: number;
+};
+
+/**
+ * How a surface can show an answer arriving — M5-BIS B11, and Hermes's own
+ * finding stated as a conclusion (`research/hermes-documentazione.md` §3.8):
+ * *"streaming is a capability of the surface, not a global flag"*. A boolean
+ * on a config object would have to mean the same thing on a terminal and on
+ * Telegram, and it does not — a terminal writes to its own stdout, Telegram
+ * has nothing to progressively rewrite except a message it already sent.
+ *
+ * - `'stdout'` — the surface can print growing text to a stream it owns
+ *   (the REPL, when stdout is a TTY).
+ * - `'edit'` — the surface can progressively rewrite a message already sent
+ *   (Telegram, on both transports it ends up choosing between — a business
+ *   draft or a plain edit — see `connectors/telegram/presence.ts`).
+ * - `'off'` — no live rewrite; a caller still gets the full answer, just not
+ *   before the turn ends. The honest default for anything not listed above,
+ *   and what a capable surface degrades to on its own (non-TTY stdout,
+ *   `--no-stream`, the first failed edit of a session — Hermes's rule).
+ */
+type StreamingTransport = 'stdout' | 'edit' | 'off';
+
+export type StreamingCapability = {
+  readonly transport: StreamingTransport;
 };
 
 /**
@@ -86,6 +110,14 @@ export type SurfaceLimits = {
 export interface Surface {
   readonly id: ConnectorId;
   readonly limits: SurfaceLimits;
+  /**
+   * Declared, not discovered — same reasoning as `limits`. Read by the
+   * surface's own turn-running code (the REPL, `TelegramConnector.handle`)
+   * to decide whether to attach `TurnInput.onDelta` at all; `Surface.deliver`
+   * itself never streams; it is always the whole, finished text, which is
+   * why an out-of-band job delivery is unaffected by whatever this says.
+   */
+  readonly streaming: StreamingCapability;
 
   /**
    * Does this surface own this channel, **and can it reach it right now**?
@@ -142,19 +174,6 @@ export type FileSpec = {
   /** Shown alongside the file where the surface supports one. Truncated by the implementation to its own caption limit. */
   caption?: string;
 };
-
-/**
- * A surface that also *listens*. Separate from `Surface` because delivery and
- * reception have different lifetimes: the scheduler holds a `Surface` for as
- * long as a job takes, while a connector's `run` owns a socket for the life of
- * the process. A surface that only speaks (an outbound webhook, say) is a
- * legitimate `Surface` and would have nothing to put in `run`.
- */
-export interface ListeningSurface extends Surface {
-  /** Receives until stopped or aborted. Rejects only on a fault worth reporting. */
-  run(signal?: AbortSignal): Promise<void>;
-  stop(): void;
-}
 
 /** Who is speaking and whose memory this belongs to. */
 export type SurfaceIdentity = { principal: Principal; tenant: TenantId };

@@ -62,6 +62,31 @@ Schema di dettaglio (500 blocchi, 16 nesting, 50 media, 20 colonne tabella) da *
 
 Lunghezza `answerCallbackQuery.text`; schema JSON completo `InputRichMessage`/`RichBlockTable` (pagina reference troppo grande per il fetch); degradazione client Telegram vecchi; max allegati Discord (community: 10); compressione immagini lato Discord (segnale debole).
 
+## Addendum 2026-08-17 — `sendMessageDraft`: contratto completo, e un parametro che mancava in produzione
+
+```
+scritto: 2026-08-17
+verificato: 2026-08-17
+verificato-contro: Context7 (mirror di core.telegram.org/bots/api, trust score 10) + core.telegram.org/bots/api-changelog via WebFetch diretto; incrociato coi sorgenti del vecchio Muffin (telegram_draft.ts) per il caso d'uso, non per il contratto
+modello-strumenti: Claude Sonnet 5, Context7 MCP (resolve-library-id + get-library-docs) e WebFetch; repo clonato e letto, non eseguito contro un bot reale (nessun token in questo ambiente)
+invaliderebbe: una revisione della Bot API che cambi la tabella parametri di sendMessageDraft, o una prova diretta (con token reale) del comportamento di rinnovo della finestra dei 30s
+estende: questo file (sezione "Telegram — capability di output" sopra, che cita sendRichMessageDraft ma non la sendMessageDraft non-rich verificata qui) e ADR-0025 (che ne descriveva il contratto dalla sola storia del vecchio Muffin, mai controllata qui)
+```
+
+**Perché questa ricerca.** M5-BIS B11 (streaming — "la risposta arriva mentre si forma") doveva scegliere fra `sendMessageDraft` e il pattern placeholder+`editMessageText` per le chat private. La domanda che decide: `sendMessageDraft` è disponibile a un bot normale, e con quale contratto esatto? Una risposta sbagliata in una direzione (assumerlo disponibile quando non lo è) avrebbe rotto lo streaming in chat privata; nell'altra (scartarlo quando è disponibile) avrebbe buttato via il canale più pulito dei due.
+
+**Trovato.**
+
+- **Disponibile a ogni bot, non solo business.** Aggiunto in Bot API 9.3 (2025-12-31), inizialmente business-bot-only; aperto a tutti i bot in Bot API 9.5 (2026-03-01, changelog: *"Allowed all bots to use the method sendMessageDraft"*). Oggi (2026-08-17) è disponibile da oltre cinque mesi — non è più il caso limite "troppo nuovo" da trattare con cautela extra.
+- **Parametri esatti** (tabella completa, non solo gli esempi citati altrove in questo file): `chat_id` (Integer, richiesto, **chat privata**), `message_thread_id` (Integer, opzionale), **`draft_id` (Integer, richiesto, non-zero)**, `text` (String, opzionale, 0-4096 caratteri), `parse_mode` (opzionale), `entities` (opzionale). Ritorna `True`.
+- **`draft_id` era assente dalla nostra implementazione.** `connectors/telegram/api.ts` chiamava il metodo con `{chat_id, text, parse_mode}` — mai `draft_id`. Ogni chiamata in produzione falliva con 400, inghiottita in silenzio dal wrapper `safely()` di `presence.ts` (che esiste apposta per non far cadere un turno per un fallimento di sola presenza — corretto come principio, ma qui nascondeva un metodo mai davvero riuscito). Corretto in `slice/streaming`: `sendMessageDraft(chatId, draftId, text)`, con un contatore di processo che genera un `draft_id` non-zero per ogni presenza. Voce gemella in `docs/lessons.md`.
+- **Non stabilito**: se una chiamata successiva con lo stesso `draft_id` rinnova la finestra di anteprima di ~30 secondi o no. La documentazione descrive il metodo come pensato per lo streaming (chiamate ripetute mentre il testo si genera), il che sarebbe incoerente con una finestra che nessuna chiamata rinnova — ma non lo dichiara esplicitamente in nessuna delle due direzioni, e non c'era un token con cui provarlo in questo ambiente. La mitigazione operativa non dipende dalla risposta: chiamare almeno una volta al secondo durante lo streaming attivo resta dentro qualunque lettura ragionevole di "~30 secondi", rinnovata o no.
+- **Il gruppo non è confermato rispondere con un codice d'errore specifico.** Il vincolo verificabile è solo che `chat_id` è documentato come "the target **private** chat" — l'assenza di supporto ai gruppi è reale, il nome dell'errore attribuito altrove (`TEXTDRAFT_PEER_INVALID`) non è confermato da questa fonte.
+
+**Cosa non si è potuto stabilire**: il comportamento esatto di rinnovo della finestra (sopra); se `sendMessage` con lo stesso `draft_id` "solidifichi" il draft in un messaggio vero in una sola chiamata Bot API, o se sia semplicemente che un messaggio reale in arrivo fa sparire qualunque anteprima effimera lato client, indipendentemente da un collegamento esplicito fra i due — la documentazione di `sendMessage` non elenca `draft_id` fra i suoi parametri, il che pesa verso la seconda lettura ma non la conferma. L'implementazione (`connectors/telegram/connector.ts`) non assume nessuna delle due: manda sempre un `sendMessage`/`editMessageText` normale a fine turno, indipendentemente da cosa succeda al draft.
+
 ## Fonti
 
 core.telegram.org/bots/{api,api-changelog,webapps}; docs.discord.com/developers/{resources/message,components/reference,components/overview}; modelcontextprotocol.io/seps/1865; learn.microsoft.com/.../bot-service-channels-reference; hermes-agent.nousresearch.com/docs; testingcatalog.com; vercel.com/changelog; grammy.dev/ref/types/parsemode. Baseline non ri-derivata: ADR-0016/0021/0023/0025, a3-standard, b3-media-rendering.
+
+**Addendum 2026-08-17**: Context7 (`/websites/core_telegram_bots_api`, mirror di core.telegram.org/bots/api) + core.telegram.org/bots/api-changelog via WebFetch diretto.

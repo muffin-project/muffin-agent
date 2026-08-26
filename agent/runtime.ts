@@ -1,6 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
+import { openDb } from '../core/db/open.js';
 import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
+import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -11,7 +13,7 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { buildSystemPrompts } from './context/assemble.js';
+import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
 import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
@@ -31,6 +33,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
@@ -63,6 +66,18 @@ export type Runtime = {
   deps: LoopDeps;
   config: Config;
   /**
+   * La sandbox, o `null` se il contenimento non è disponibile qui.
+   *
+   * Esposta perché un job `script` gira **fuori** da un turno del modello —
+   * niente tool, quindi niente `makeShellTool` a portarsela dietro — e deve
+   * girare contenuto esattamente come ci gira `sys.shell`. `null` è la stessa
+   * informazione che qui sotto decide se esporre `sys.shell`, e il runner dei
+   * job la usa per rifiutare invece di eseguire senza contenimento.
+   */
+  executor: { run: SandboxExecutor['run'] } | null;
+  /** Dove girano gli script dei job: la stessa radice di progetto dei tool. */
+  workspace: string;
+  /**
    * The light lane. Extraction, the contradiction judge and consolidation all
    * run here: they are classification and rewriting, not frontier work, and
    * paying Sonnet prices to turn a sentence into a triple is how a personal
@@ -79,6 +94,15 @@ export type Runtime = {
   budget: BudgetEngine;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
+  /**
+   * The `(job.id, scheduled_for) → turn_id` bridge (B7). Exposed the same way
+   * `jobs` is — `cli/gateway.ts`/`cli/repl.ts` wire it into both `Scheduler`
+   * (settling a fire before `markRan`) and `makeJobRunner` (resolving one
+   * before ever touching the model) — rather than each opening its own
+   * `JobFireStore` on this same `db` and risking two objects disagreeing about
+   * one row.
+   */
+  jobFires: JobFireStore;
   /**
    * That same connection, for the coordination a runtime cannot express through
    * one of its stores — today the gateway lock (ADR-0035), which the REPL reads
@@ -97,6 +121,14 @@ export type Runtime = {
   consolidation: Consolidator;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
+  /**
+   * The named blocks `deps.systemPrompts` was rendered from — the same call,
+   * not a second one. `muffin prompt show --blocks` (`cli/prompt-show.ts`)
+   * reads this for provenance instead of re-deriving which file produced which
+   * span of the string, which would be a second description of the assembly
+   * next to the real one.
+   */
+  promptBlocks: SystemPromptBlocks;
   /**
    * Boot-visible notes a surface should print before the first turn — today,
    * skills that failed to load and why. Empty means nothing was skipped.
@@ -177,12 +209,19 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const budgets = loadSealedBudgets(home);
   const budgetNotes = budgets.notes.map((n) => `! ${n}`);
 
-  const db = new DatabaseCtor(p.db);
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
+  const db = openDb(p.db);
+  // Versioned schema lifecycle before any store constructs (RETURN S2): the
+  // additive store DDL below stays the fresh-install path; ordered reshapings,
+  // the old-code-on-newer-data guard and the pre-migration VACUUM INTO backup
+  // live in one place. A boot with nothing pending costs zero here.
+  migrate(db, { backupDir: join(p.home, 'backups') });
   const budget = new BudgetEngine(db, budgets.caps);
   const jobs = new JobStore(db);
   const turns = new TurnStore(db);
+  // The identity/idempotency bridge from a due occurrence to a durable turn
+  // (B7, ADR-0035 emendamento №5). Same connection as `jobs`/`turns`, same
+  // `CREATE TABLE IF NOT EXISTS` additivity as every other store here.
+  const jobFires = new JobFireStore(db);
   // The plan, on the same connection as everything else (ADR-0022). Built here
   // rather than inside the loop because two things read it — the tool that
   // writes rows and `buildContext`, which shows them back on every turn — and a
@@ -381,7 +420,8 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
   const executor = new SandboxExecutor(guards);
-  if (executor.status().available) {
+  const contained = executor.status().available;
+  if (contained) {
     tools.push(makeShellTool(executor, { root: cwd }));
   }
 
@@ -562,13 +602,29 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     log: (line) => process.stderr.write(`${line}\n`),
   });
 
+  // One prompt per tenant class, assembled here and never per turn: the class
+  // a turn belongs to is a property of who is speaking, and `runTurn` picks.
+  // Built once so each class keeps its own warm cache prefix. Computed as
+  // blocks first and joined once (`renderSystemPrompts`) so `deps.systemPrompts`
+  // and `promptBlocks` below describe the identical assembly rather than two
+  // calls that could drift apart.
+  const promptBlocks = buildSystemPromptBlocks(
+    home,
+    safeMode !== null,
+    skillsPromptSection(skillScan.skills),
+  );
+
   return {
+    executor: contained ? executor : null,
+    workspace: cwd,
     config,
     budget,
     jobs,
+    jobFires,
     db,
     consolidation,
     safeMode,
+    promptBlocks,
     bootLines: [
       ...turnNotes,
       ...waitingNotes,
@@ -617,14 +673,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // hand-typed caller it has had since M2 — which is why an install's facts
       // stay at zero and recall stays keyword-only for its whole life.
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
-      // One prompt per tenant class, assembled here and never per turn: the
-      // class a turn belongs to is a property of who is speaking, and `runTurn`
-      // picks. Built once so each class keeps its own warm cache prefix.
-      systemPrompts: buildSystemPrompts(
-        home,
-        safeMode !== null,
-        skillsPromptSection(skillScan.skills),
-      ),
+      systemPrompts: renderSystemPrompts(promptBlocks),
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {

@@ -54,6 +54,43 @@ describe('JobStore', () => {
     expect(store.list()).toEqual([]);
   });
 
+  it('apre un database scritto prima che `kind` esistesse — il caso di ogni upgrade reale', () => {
+    // La tabella nella forma pre-#106, costruita a mano: `CREATE TABLE IF NOT
+    // EXISTS` è un no-op su una tabella che c'è già, quindi senza la rete
+    // difensiva nel costruttore il `prepare` dell'INSERT esplodeva con «table
+    // jobs has no column named kind» — non per i job script nuovi: per
+    // QUALUNQUE `muffin jobs list` dopo l'aggiornamento, perché `cli/jobs.ts`
+    // apre il database direttamente, senza passare da `migrate()`. Riprodotto
+    // dal judge del giro 2 esattamente così.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`
+      CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        cron TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        next_fire_at TEXT NOT NULL,
+        last_run_at TEXT,
+        active INTEGER NOT NULL DEFAULT 1
+      );
+      INSERT INTO jobs (id, cron, timezone, goal, channel, created_at, next_fire_at, last_run_at, active)
+      VALUES ('vecchio', '0 8 * * *', 'Europe/Rome', 'brief della giornata', 'cli',
+              '2026-06-01T00:00:00.000Z', '2026-06-15T06:00:00.000Z', NULL, 1);
+    `);
+
+    const store = new JobStore(db, () => new Date('2026-06-15T05:00:00Z'));
+    // Il job di prima dell'upgrade è ancora lì, e legge come goal — il default
+    // che la migrazione dichiara.
+    const seen = store.list();
+    expect(seen.map((j) => j.id)).toEqual(['vecchio']);
+    expect(seen[0]!.kind).toBe('goal');
+    // E il database aggiornato accetta anche il vocabolario nuovo.
+    const script = store.add({ cron: '0 9 * * *', timezone: 'Europe/Rome', channel: 'cli', kind: 'script', script: 'echo ciao' });
+    expect(store.get(script.id)?.kind).toBe('script');
+  });
+
   it('survives a restart — a fresh store on the same file sees the job', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-jobs-'));
     const file = join(home, 'jobs.db');

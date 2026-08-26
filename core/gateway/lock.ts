@@ -39,13 +39,14 @@ export const HEARTBEAT_MS = 30_000;
  */
 export const STALE_AFTER_MS = 10 * HEARTBEAT_MS;
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS gateway_lock (
-  id       INTEGER PRIMARY KEY CHECK (id = 1),
-  pid      INTEGER,
-  taken_at TEXT,
-  since    TEXT,
-  status   TEXT
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  pid       INTEGER,
+  taken_at  TEXT,
+  since     TEXT,
+  status    TEXT,
+  holder_id TEXT
 );
 `;
 
@@ -110,6 +111,23 @@ export class GatewayLock {
 
   release(pid: number = process.pid): void {
     this.lock.release(pid);
+  }
+
+  /**
+   * Am I, right now, still the process the row's claim names — not merely a
+   * live pid, but the exact acquisition `claim` won.
+   *
+   * P20's fix: `Gateway.tick` used to check `beat()` once and then run
+   * `scheduler.tick()`/`turnLane.tick()` with no re-check inside, so a single
+   * overlong tick could still be delivering when a second gateway claimed the
+   * lock underneath it. `Scheduler`/`TurnLane` take this as `stillOwner` (wired
+   * in `cli/gateway.ts`) and re-ask it right before the model call and again
+   * right before delivery — the same points `ModelLane.take` already gates —
+   * so a takeover mid-tick is caught before its next effect rather than only
+   * discovered, after the fact, on the next `beat()`.
+   */
+  isCurrentClaim(pid: number = process.pid): boolean {
+    return this.lock.isCurrentHolder(pid);
   }
 }
 

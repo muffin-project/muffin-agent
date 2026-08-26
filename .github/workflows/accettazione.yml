@@ -3,38 +3,67 @@
 # Separato da `ci.yml` per una ragione di costo diversa da quella che tiene
 # `ci.yml` a un job solo. Lì il vincolo era il tempo di install (`npm ci` pagato
 # due volte). Qui è la frequenza: questa suite spawna un processo `node --import
-# tsx cli/main.ts` reale per ogni asserzione — misurato in locale, 12 scenari in
-# ~17s — e non ha bisogno del sandbox Linux che `ci.yml` prepara (nessuno
-# scenario qui chiama `shell_run`), quindi un job condiviso pagherebbe
-# quell'apt-get per niente ogni volta.
+# tsx cli/main.ts` reale per ogni asserzione — misurato in locale, 17 scenari in
+# ~60s — quindi un job condiviso la pagherebbe a ogni push.
 #
-# `pull_request` è deliberatamente assente dal trigger. `ci.yml` gira su ogni
-# push di una PR aperta — è il pattern giusto per typecheck e unit test, che
-# devono essere verdi ad ogni commit. Questa suite gira su push a `dev`/`main`
-# (l'integrazione, dove un rosso conta davvero) e su richiesta
-# (`workflow_dispatch`), non su ogni push di una slice in corso: un owner che
-# itera dieci volte su una PR non deve pagare dieci run da un processo reale
-# per verifica, quando la CI di `dev` la becca comunque prima del merge.
-# Se il costo misurato in pratica risultasse trascurabile anche su
-# `pull_request`, aggiungerlo è una riga — ma si misura, non si assume.
+# ## Il sandbox Linux serve, e la ragione è cambiata (2026-08-25)
 #
-# `npx tsx evals/acceptance/report.ts` non è il gate di questo job: il suo exit
-# code è più severo di quanto serva qui, perché include ogni riga READY
-# dell'inventario senza uno scenario — oggi cinque, nessuna delle quali questa
-# slice ha promesso di chiudere (C2/C3/C7/D4/D6, README della PR). Bloccare il
-# merge su quel numero renderebbe questo job rosso dal primo minuto per un
-# motivo che non riguarda il commit in esame. Il gate vero è la suite stessa:
-# uno scenario `verde` che si rompe, o un `atteso-rosso` che smette di esserlo
-# senza essere promosso (`it.fails` li marca entrambi rosso — vitest.md), fanno
-# fallire lo step `suite` e quindi il job. Il rapporto resta comunque nel log,
-# per intero, perché la domanda "quante righe restano scoperte" non deve
-# sparire solo perché oggi non è quella che decide il verde.
+# Fino a `slice/job-script-only` questo file diceva che la suite «non ha bisogno
+# del sandbox Linux che `ci.yml` prepara (nessuno scenario qui chiama
+# `shell_run`)». Era vero e ha smesso di esserlo nello stesso commit in cui è
+# nato il job script: uno script schedulato **è** esecuzione contenuta, e senza
+# sandbox il runtime fa la cosa giusta — rifiuta di eseguirlo — che però lascia
+# lo scenario ad aspettare un effetto che non arriverà mai.
+#
+# La lezione non è «aggiungi un apt-get». È che lo scenario passava su macOS,
+# dove `sandbox-exec` c'è sempre, e falliva su Linux, dove Muffin andrà davvero
+# a vivere: la piattaforma di destinazione è **Linux, poi** macOS, e una prova
+# verde solo sulla macchina di sviluppo prova la piattaforma che non conta.
+# Questi step sono gli stessi quattro di `ci.yml` — tre pacchetti e il profilo
+# AppArmor — per la stessa ragione documentata lì, e la loro assenza qui era la
+# differenza fra le due configurazioni.
+#
+# `pull_request` (verso `dev`/`main`) è nel trigger; il `push` copre solo
+# `main` — per il push su `dev` e i `paths-ignore` vale il ragionamento al
+# punto 2/2b di `ci.yml` (crediti agli sgoccioli, stesso giorno).
+# Decisione dell'orchestratore (PR #54, giro 2) — reversibile, non policy di
+# prodotto: prima era deliberatamente assente (vedi git blame), e senza di lei
+# uno scenario rotto o una riga `READY` senza prova restavano invisibili fino
+# al merge su `dev`, dove tornare indietro costa più che fermarli prima. Se il
+# costo misurato in pratica (un owner che itera dieci volte su una PR)
+# risultasse un problema, restringerlo è una riga — ma si misura, non si
+# assume.
+#
+# `npx tsx evals/acceptance/report.ts` (ultimo step, senza `|| true`) è il
+# **secondo** gate del job, non solo un log informativo: fallisce anche su una
+# riga `READY` dell'inventario senza uno scenario, o con uno scenario ancora
+# `atteso-rosso` — "pronta" e "provata rossa apposta" non possono essere vere
+# insieme (mandato DAY-1 §4.9). Conseguenza nota, non silenziosa: oggi restano
+# sette righe già `READY` senza scenario qui (B14, C2, C3, C6, C7, D4, D6 —
+# dettaglio in `docs/blueprint/M5-BIS.md`), che un'altra slice in corso
+# (`slice/triage-day1`) riclassifica; finché non è integrata questo step resta
+# rosso su `dev` **per verità, non per rottura** — vedi la PR che ha introdotto
+# questo trigger (#54).
 
 name: accettazione
 
 on:
-  push:
+  pull_request:
     branches: [dev, main]
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
   workflow_dispatch:
 
 concurrency:
@@ -56,16 +85,65 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # I quattro prerequisiti del sandbox su Linux. Il perché di ciascuno è in
+      # `ci.yml`, dove sono stati misurati la prima volta; qui non si ripete, si
+      # tiene identico — due copie divergenti di una configurazione di
+      # contenimento sono peggio di nessuna.
+      - name: prerequisiti del sandbox Linux (bwrap, socat, ripgrep)
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
+
+      - name: profilo AppArmor per bwrap (il rimedio che il probe stampa)
+        run: |
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       - run: npm ci
 
-      # Il gate: uno scenario reale che si rompe fa fallire questo step, e
-      # quindi il job. Senza pipe, per la stessa ragione di `ci.yml`.
-      - name: suite di accettazione
-        run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot
+      # Il sandbox è un **prerequisito di questo job**, non uno sfondo: senza,
+      # gli scenari che eseguono aspettano un effetto che il runtime rifiuta
+      # correttamente di produrre, e falliscono per timeout con un messaggio che
+      # parla d'altro (successo del primo giro di `slice/job-script-only`:
+      # «il gateway non ha mai scritto /il sito non risponde/», causa vera
+      # «la sandbox non è disponibile su questa macchina»).
+      #
+      # Quindi il verdetto del probe si legge **prima** della suite e con exit
+      # non-zero: un contenimento assente diventa una riga sola, non una diagnosi.
+      # È anche l'unico punto in cui questo job vedrebbe il regresso che ha
+      # tenuto no-op per due mesi il sandbox del vecchio Muffin (ADR-0018).
+      - name: il sandbox contiene davvero, qui?
+        run: |
+          npx tsx -e "
+            import('./core/sandbox/probe.js').then((m) => {
+              const p = m.probeSandbox();
+              console.log(JSON.stringify(p, null, 2));
+              if (!p.available) process.exit(1);
+            })
+          "
 
-      # Informativo, non un gate: vedi il commento in testa al file per il
-      # perché. `|| true` così una riga READY scoperta non fa fallire il job,
-      # ma resta scritta nel log — la si nota leggendo, non serve che rompa.
-      - name: rapporto per riga (informativo)
+      # Primo gate: uno scenario reale che si rompe fa fallire questo step, e
+      # quindi il job. Senza pipe, per la stessa ragione di `ci.yml`.
+      # `--reporter=json --outputFile.json=…` alongside `dot`: the same run
+      # feeds the report below, so the suite spawns its real binaries once.
+      # Until 2026-08-23 the report re-ran the whole suite as a subprocess and
+      # the job crossed `timeout-minutes` with every step green — GitHub marks
+      # that `cancelled`, on `dev` too, and a green report in the log was the
+      # only way to tell a timeout from a failure.
+      - name: suite di accettazione
+        run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/accettazione.json
+
+      # Secondo gate — vedi il commento in testa al file. Senza `|| true`: una
+      # riga READY scoperta, o READY con uno scenario ancora atteso-rosso, ora
+      # fa fallire questo step e quindi il job, non solo il log.
+      - name: rapporto per riga
         if: always()
-        run: npx tsx evals/acceptance/report.ts || true
+        env:
+          MUFFIN_ACCEPT_RESULTS: ${{ runner.temp }}/accettazione.json
+        run: npx tsx evals/acceptance/report.ts

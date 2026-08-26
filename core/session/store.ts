@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import type { TrustTier } from '../policy/types.js';
 
 /**
  * Session transcripts.
@@ -16,7 +17,7 @@ import { randomBytes } from 'node:crypto';
  * summaries: a lossy write here would be unrecoverable later.
  */
 
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
+type MessageRole = 'user' | 'assistant' | 'tool' | 'system';
 
 export type SessionMessage = {
   role: MessageRole;
@@ -28,6 +29,25 @@ export type SessionMessage = {
   createdAt: string;
   /** Ties the message to the span that produced it — "why did it do that" is a join. */
   traceId?: string;
+  /**
+   * The trust tier of this message's content, at the moment it was written.
+   *
+   * Additive (ADR-0044 §Revisione — "la history non lava la provenienza"): a
+   * row written before this field existed has none, on disk, forever — JSONL
+   * is append-only and nothing here rewrites a past line. `owner` user text is
+   * 0 (2 for a `member`, the same rule `runTurn`/`enqueueTurn` init with);
+   * `assistant` and `tool` carry the turn's own taint at the instant they were
+   * appended (`PermissionSnapshot.currentTaint()` for assistant, `outcome.tier`
+   * for tool), never a literal — the reason is 03 §2's own sentence, applied
+   * here instead of to the memory episode it was first found missing from:
+   * *"un riassunto di contenuto tier-3 è tier-3, sempre — altrimenti la
+   * sintesi diventa una lavanderia del taint."*
+   *
+   * `agent/context/history-taint.ts` reads this field to raise a **later**
+   * turn's taint before the kernel decides anything, and resolves its absence
+   * (an old row) from `traceId` instead of guessing — see that module.
+   */
+  tier?: TrustTier;
 };
 
 export type SessionRef = { id: string; file: string };

@@ -160,6 +160,22 @@ describe('what the supervisor does with each exit code', () => {
     expect(systemdRestartsAfter(text, EXIT_PERMANENT)).toBe(false);
   });
 
+  it('systemd: uno stop voluto non lascia la unit in `failed`, un guasto permanente sì', () => {
+    // `RestartPreventExitStatus` dice solo di non riavviare — non dice che
+    // l'uscita andava bene. Senza `SuccessExitStatus=143` ogni `muffin gateway
+    // stop` lasciava la unit in stato failed: `systemctl --user --failed` la
+    // elencava, e la sonda is-failed di doctor avrebbe allarmato a ogni arresto
+    // voluto — il modo più rapido per insegnare a ignorarla. Il guasto
+    // permanente invece DEVE restare failed: è il rosso che qualcuno deve
+    // guardare, e la stessa riga che assolve il 143 non deve assolvere lui.
+    const codes = (/^SuccessExitStatus=(.*)$/m.exec(plan().text)?.[1] ?? '')
+      .split(/\s+/)
+      .filter((t) => t.length > 0)
+      .map(Number);
+    expect(codes).toContain(EXIT_STOPPED);
+    expect(codes).not.toContain(EXIT_PERMANENT);
+  });
+
   it('launchd: restarts a crash and a restart-me, and cannot express the other two', () => {
     const { text, warnings } = planUnit({
       platform: 'darwin',
@@ -231,6 +247,61 @@ describe('a permanent failure stays down and says so', () => {
     // versus will-not-fix-itself — has to be expressed to the supervisor, or the
     // process making it changes nothing.
     expect(plan().text).toContain('RestartPreventExitStatus=78');
+  });
+});
+
+describe('la unit systemd passa il parser di systemd', () => {
+  /**
+   * La controparte Linux di `plutil -lint`, e per due anni non c'è stata.
+   *
+   * Il plist aveva un test che lo dà in pasto al parser vero; la unit systemd —
+   * cioè il file di **produzione**, perché Muffin vive su una VPS Linux — era
+   * verificata solo da `toContain` su stringhe. Una direttiva scritta male non
+   * degrada: `systemctl --user enable --now` fallisce, oppure la unit carica e
+   * `Restart=always` cicla. Ed è lo stesso difetto che questa slice ha già
+   * trovato altrove: la prova esisteva per la piattaforma di sviluppo.
+   *
+   * Aggravante che rendeva la cosa invisibile: in CI **non c'è nessun runner
+   * macOS**, quindi il test del plist esce dal `return` qui sotto a ogni giro e
+   * si conta come passato. L'unica prova "il sistema accetta questo file" che
+   * il repo aveva girava solo sul portatile dell'owner.
+   *
+   * `ExecStart`, `WorkingDirectory` e la home puntano a file e directory che
+   * esistono davvero: `systemd-analyze verify` si lamenta di un eseguibile
+   * assente, e una lamentela legittima su un finto path renderebbe il test
+   * rumoroso invece che informativo.
+   */
+  it('produces a systemd unit the system itself accepts', () => {
+    const required = process.env['MUFFIN_REQUIRE_SYSTEMD'] === '1';
+    if (process.platform !== 'linux' && !required) return;
+
+    const probe = spawnSync('systemd-analyze', ['--version'], { encoding: 'utf8' });
+    const haveParser = probe.error === undefined && probe.status === 0;
+    if (!haveParser) {
+      // Su Linux con MUFFIN_REQUIRE_SYSTEMD=1 (la CI, che sta al posto della
+      // VPS) un parser assente è un difetto della macchina di prova, non una
+      // proprietà da assecondare in silenzio — stessa disciplina di
+      // MUFFIN_REQUIRE_SANDBOX in `core/sandbox/executor.test.ts`.
+      if (required) {
+        throw new Error(
+          `MUFFIN_REQUIRE_SYSTEMD=1 ma systemd-analyze non è eseguibile qui ` +
+            `(${probe.error?.message ?? `exit ${String(probe.status)}`}): la unit di produzione resterebbe non verificata`,
+        );
+      }
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-unit-'));
+    const launcher = join(dir, 'muffin');
+    writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const file = join(dir, 'muffin-gateway.service');
+    writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
+
+    const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
+    // L'output intero nel messaggio: un fallimento qui deve dire *quale*
+    // direttiva, non solo che il file non va bene.
+    expect(`${verify.stdout ?? ''}${verify.stderr ?? ''}`.trim()).toBe('');
+    expect(verify.status).toBe(0);
   });
 });
 
@@ -358,5 +429,43 @@ describe('resolveLauncher — what ExecStart is allowed to point at', () => {
     });
     expect(found.warning).not.toMatch(/un altro programma/);
     expect(found.warning).toMatch(/checkout/);
+  });
+});
+
+/**
+ * Trovato sulla macchina dell'owner durante l'install reale (RETURN S4):
+ * `launchctl bootstrap` riusciva, il gateway non partiva, e `gateway.err`
+ * diceva `env: node: No such file or directory` — exit 127. Il launcher è uno
+ * script con shebang `#!/usr/bin/env node`, e né launchd né systemd mettono
+ * nel PATH la directory di un Node installato da Homebrew o nvm. La unit
+ * prometteva continuità dopo il riavvio e non ne dava nessuna.
+ */
+describe('la unit deve dire dove sta node', () => {
+  const base = {
+    home: '/home/x/.muffin',
+    exec: ['/home/x/.local/bin/muffin', 'gateway', 'run'],
+    homeDir: '/home/x',
+    interpreterDir: '/opt/homebrew/bin',
+  };
+
+  it('launchd: PATH nelle EnvironmentVariables contiene la directory dell interprete', () => {
+    const plan = planUnit({ ...base, platform: 'darwin' });
+    expect(plan.text).toContain('<key>PATH</key>');
+    expect(plan.text).toContain('/opt/homebrew/bin');
+    // I percorsi di sistema restano, altrimenti si romperebbe tutto ciò che
+    // il gateway lancia a sua volta.
+    expect(plan.text).toContain('/usr/bin');
+  });
+
+  it('systemd: Environment=PATH contiene la directory dell interprete', () => {
+    const plan = planUnit({ ...base, platform: 'linux' });
+    expect(plan.text).toMatch(/Environment=PATH=[^\n]*\/opt\/homebrew\/bin/);
+    expect(plan.text).toMatch(/Environment=PATH=[^\n]*\/usr\/bin/);
+  });
+
+  it('senza interpreterDir la unit resta valida e non inventa un PATH vuoto', () => {
+    const plan = planUnit({ ...base, interpreterDir: undefined, platform: 'darwin' });
+    expect(plan.text).not.toContain('<key>PATH</key>');
+    expect(plan.text).toContain('<key>MUFFIN_HOME</key>');
   });
 });

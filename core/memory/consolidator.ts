@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { TenantId } from '../policy/types.js';
-import { CONSOLIDATION_PRINCIPAL, type IngestReport } from './ingest.js';
+import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, type IngestReport } from './ingest.js';
 
 /**
  * What makes consolidation start by itself.
@@ -123,7 +123,7 @@ export const CONSOLIDATION_CEILING = 12;
  * the next message" property does not hold. That is what the drain below
  * exists to end.
  */
-export const CONSOLIDATION_BATCH = 20;
+const CONSOLIDATION_BATCH = 20;
 
 /**
  * The drain: what happens when one page was not enough.
@@ -258,7 +258,7 @@ export type ConsolidationTrigger = 'idle' | 'ceiling' | 'manual' | 'drain';
  */
 export type ConsolidationOutcome = 'ran' | 'budget' | 'busy' | 'error';
 
-export const SCHEMA = `
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS consolidation_runs (
   id         INTEGER PRIMARY KEY,
   ran_at     TEXT NOT NULL,
@@ -707,12 +707,34 @@ export class Consolidator {
       superseded: report.superseded,
       indexed: report.indexed,
       review: report.needsReview.length,
-      errors: report.errors.length,
+      // Both counts: a judge failure is exactly as much "a problem this
+      // round" as any entry in `errors`, and `nothingGotThrough` in
+      // `cli/doctor.ts` compares this against `episodes` to tell a lane that
+      // is healing itself from one that is stuck — it needs the total, not
+      // half of it.
+      errors: report.errors.length + report.judgeUnavailable.length,
       ms: Date.now() - started,
       merged,
     };
     this.write(run);
-    for (const e of report.errors) this.deps.log?.(`consolidamento: ${e}`);
+    // Grouped, not one line per candidate — see `formatConsolidationLines`
+    // for why: this is the exact spot that put "giudice non disponibile su
+    // owner/interest" on the owner's screen three times running.
+    //
+    // Skipped on `manual`: its one caller, `cmdMemoryExtract`
+    // (`cli/memory.ts`), already holds this exact `report` and prints its
+    // own summary from it — logging here too meant every line appeared
+    // twice, once as "consolidamento: X" from here and once as "  ! X" from
+    // there. The automatic triggers (idle/ceiling/drain) have no caller
+    // waiting on the report: `notify`/`fire` return nothing, so this line is
+    // the only place an owner watching REPL/gateway stderr ever sees it —
+    // which is why they keep it. The two `deps.log` calls above (budget
+    // skipped, batch threw) stay unconditional on purpose: `cmdMemoryExtract`
+    // explicitly relies on one of them having already said which, and never
+    // reaches this far to duplicate them (both return with `report: null`).
+    if (trigger !== 'manual') {
+      for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
+    }
 
     // The drain. Both halves, and the `busy` exclusion: a lane lock refusal
     // fetched nothing, so `fetched === limit` is false anyway — but stating it

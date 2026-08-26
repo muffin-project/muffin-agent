@@ -44,7 +44,7 @@ export const processCapabilities: CapabilityDecl[] = [
   },
 ];
 
-export const processListSpec: ToolSpec = {
+const processListSpec: ToolSpec = {
   name: 'process_list',
   description:
     'List running processes (pid, user, command). Read-only. Output is capped; ' +
@@ -57,7 +57,7 @@ export const processListSpec: ToolSpec = {
   },
 };
 
-export const processKillSpec: ToolSpec = {
+const processKillSpec: ToolSpec = {
   name: 'process_kill',
   description:
     'Send a signal to one process by pid (default SIGTERM). Refuses pid 0/negative ' +

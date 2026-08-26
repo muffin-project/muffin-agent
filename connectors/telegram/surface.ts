@@ -26,7 +26,7 @@ import { renderForTelegram, TELEGRAM_MAX } from './render.js';
  */
 
 /** `telegram` or `telegram:<chatId>` → the chat, or null when it is neither. */
-export function chatIdFor(channel: string, ownerChatId: number | undefined): number | null {
+function chatIdFor(channel: string, ownerChatId: number | undefined): number | null {
   if (channel === 'telegram') return ownerChatId ?? null;
   if (!channel.startsWith('telegram:')) return null;
   const raw = channel.slice('telegram:'.length);
@@ -55,6 +55,14 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
   return {
     id: 'telegram',
     limits,
+    // Always 'edit', for both transports the connector ends up choosing
+    // between (`connectors/telegram/presence.ts`): a business draft in a
+    // private chat, `editMessageText` on a placeholder in a group. Neither
+    // is this object's own job — `deliver`/`deliverFile` below always send
+    // the whole finished text, out of band, with nothing to progressively
+    // rewrite — this field only declares what the *live* turn path
+    // (`TelegramConnector.handle`) is capable of.
+    streaming: { transport: 'edit' },
 
     handles: (channel) => chatIdFor(channel, ownerChatId) !== null,
 
