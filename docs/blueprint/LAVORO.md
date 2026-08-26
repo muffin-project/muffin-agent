@@ -1,65 +1,71 @@
 # Lavoro corrente
 
 **Regola di stop.** Il prossimo lavoro nasce da un failure osservato usando
-Muffin, da una requirement owner decisa, da una migrazione costosa da
-rimandare, o da un rischio su authority/data/effect. Non da questa lista.
+Muffin, da una requirement owner, da una migrazione costosa da rimandare o da
+un rischio su authority/data/effect. Non da questa lista.
 
-**Aperto per l'owner:** token bot Telegram; billing GitHub CI.
-
-**Installazione viva su `main` (26/08):** migrazione 3 sul DB vero, «Yo!»
-risponde con l'identità. Trappola del primo update: `cli/update.ts`.
+**Aperto per l'owner:** token bot Telegram; billing CI; **promozione `dev` →
+`main`** — l'installazione viva gira su `main`, 44 commit indietro, e `update`
+legge `origin/main`: dice «già aggiornato» mentre l'agente non ha #133–#149.
 
 **CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
-Un check rosso in 2s con zero step è fatturazione, non un test.
+Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
+(successo), si verifica a mano — `git merge-base --is-ancestor origin/dev HEAD`
+— e si dichiara.
 
-**Il prompt vivo è del 9 agosto** — 11498 caratteri contro 22477: `update` non
-tocca ciò che `init` ha copiato, e la persona approvata il 17/08 non è mai
-arrivata all'agente che gira. `policy.json`/`budgets.json` derivano ma **non**
-funzionalmente. Prova: `research/deriva-defaults-2026-08-26.md`. Da #142
-`doctor` lo **vede** e propone il `cp` solo per i file mai toccati: adottarlo
-resta scelta dell'owner, e il reseal del RoT pure.
+## Audit dell'installazione viva (27/08)
 
-**Misurato.** (a) **La cache non prende**, 2.8% su 18 chiamate, e non è il
-nostro prefisso: `research/cache-prompt-2026-08-26.md`. (b) Ogni `sys.shell` è
-`effect=ask`: la lamentela dell'owner è un dato. (c) `memory.recall` gira
-**senza vettori** (`EmbedderUnavailable`). (d) Un `memory.ingest` da solo:
-129s, zero chiamate al modello.
+Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
 
-**Fatto delle quattro lamentele dogfood:** trace per step (#133), progresso su
-REPL (#136) e su Telegram con draft+edit (#143, #145), prompt operativo
-(#135). **Resta la terza**: `sys.shell` chiede sempre per `decide.ts:245` —
-allow silenzioso solo se `ctx.hardened`, falso perché `rot/` è dello stesso uid
-che gira l'agente. La via è **rendere vera** la modalità hardened (utente di
-servizio, `rot/` di un altro uid): sulla VPS si può, il meccanismo c'è da #138.
-Una concessione durevole contraddirebbe ADR-0003.
+**La corsia della memoria era morta dal 25/08**, il giorno del cambio modello
+(sonnet-5 → `qwen/qwen3.8-27b`). Causa misurata: `stop=max_tokens · 1502 token
+in uscita` — il tetto di 1500 speso a ragionare senza scrivere un carattere di
+JSON. Chiuso da #148 (`REASONING_HEADROOM`): `facts` 16 → 17, il primo dal 16
+agosto. `doctor` era **verde** su due dei tre giri morti (#147) e diceva
+`vector index in sync` con l'embedder giù da due giorni (#149).
 
-**Non riaprire.** `muffin run` non ha un timeout di default (`cli/run.ts:59`);
-i 90s erano del mio harness. Il default SDK è 10 min e la guardia «streaming
-oltre 10 min» non ci tocca (4096 `max_tokens` contro 21333).
+**Resta da fare, con le prove già in mano:**
 
-**Da non riperdere.** (a) `init` fa le domande di #117 **solo su TTY**: nessun
-test copre il percorso umano (via: pty con `script`). (b) `gateway install`
-**stampa** i comandi del supervisore, non li esegue. (c) E7 dal vivo: a «che
-modello usi?» dice che non lo sa. (d) **Il confine degli argomenti non
-esiste**: `inputSchema` non valida niente e `agent/providers/types.ts` promette
-il contrario (`research/tool-design-2026-08-26.md`). (e) Le ancore della mappa
-verificano **solo il primo intervallo** di `file:A-B,C-D`.
+1. **Schema intollerante** (prossima slice): il modello piccolo risponde
+   `expected number, received string` e `subjectKind` fuori enum — episodi che
+   ora arrivano fino allo schema e muoiono lì.
+2. **La unit launchd inchioda un path Cellar** (da `dirname(process.execPath)`):
+   Homebrew lo ruota a ogni upgrade e il gateway non parte — 9 `env: node: No
+   such file or directory` in `gateway.err`.
+3. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
+   solo-systemd stampato ovunque: su macOS contraddice `doctor`.
+4. `--version` → `0.0.0`; `memory.rerank` senza span (l'estrazione ce l'ha da
+   #148); l'adapter openai-compat non legge il reasoning, quindi quei token si
+   pagano e il testo si perde — la via vera per (1) e per il tetto.
 
-**Coda owner:** ASK durevole (un'approvazione pendente non sopravvive a un
-crash); note di avanzamento con **validazione della compaction** (arxiv
-2605.08580); dedup gateway/repl.
+**Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
+modello vivo (`research/cache-prompt-2026-08-26.md`). Il prompt vivo è del 9
+agosto (11498 caratteri contro 22477); da #142 `doctor` lo vede.
 
-**Design da non riscoprire** (THESIS §5): `/new` = operazione di CONTESTO, mai
-di memoria; il consolidatore idle è l'analogo del sonno; identità owner
-pre-caricata, la somiglianza è per la coda lunga. Claude è un coding agent,
-Muffin no (ADR-0027): le lezioni si trasferiscono SELETTIVAMENTE.
+**Delle quattro lamentele dogfood ne resta una:** `sys.shell` chiede sempre
+(`decide.ts:245`) — allow silenzioso solo se `ctx.hardened`, falso perché
+`rot/` è dello stesso uid dell'agente. La via è rendere **vera** la modalità
+hardened (utente di servizio, `rot/` di un altro uid): sulla VPS si può, il
+meccanismo c'è da #138. Una concessione durevole contraddirebbe ADR-0003.
 
-**Follow-up registrati.** REPL muore su input non-TTY; `doctor` pre-boot dà
-rimedio sbagliato; composizione N→1 senza assembler; `possibly_sent` non
-distingue crash da in-volo; TOCTOU gateway; repl-lock assente; finestra
-pairing; Discord `handle()` non bound; un 429 persistente spegne il progresso;
-`memory.extract`/`memory.rerank` non emettono span.
+**Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`).
 
-**Truth maintenance:** M5-BIS possiede status Gate e RETURN, PERCORSO §0
-l'ordine. A6/A7/A8 e D12/E6: meccanismo in HEAD, BLOCKER solo per i residui
-DOGFOOD. `dev` resta privato.
+**Da non riperdere.** (a) `init` fa le domande di #117 **solo su TTY**, mai
+testato (via: pty con `script`). (b) `gateway install` **stampa** i comandi del
+supervisore, non li esegue. (c) E7: a «che modello usi?» non lo sa. (d)
+`inputSchema` non valida niente e `types.ts` promette il contrario. (e) Le
+ancore verificano **solo il primo intervallo** di `file:A-B,C-D`.
+
+**Design da non riscoprire:** THESIS §5 e ADR-0027 (le lezioni di Claude si
+trasferiscono SELETTIVAMENTE: non è lo stesso prodotto).
+
+**Coda owner:** ASK durevole; avanzamento con validazione della compaction
+(arxiv 2605.08580); dedup gateway/repl.
+
+**Follow-up.** REPL muore su input non-TTY; `doctor` pre-boot dà rimedio
+sbagliato; composizione N→1 senza assembler; `possibly_sent` non distingue
+crash da in-volo; TOCTOU gateway; repl-lock assente; finestra pairing; Discord
+`handle()` non bound; un 429 persistente spegne il progresso.
+
+**Truth maintenance:** M5-BIS possiede status Gate/RETURN, PERCORSO §0
+l'ordine. `dev` resta privato.
