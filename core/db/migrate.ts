@@ -113,15 +113,30 @@ const MIGRATIONS: Migration[] = [
       // stays this small on purpose, same reasoning as
       // `DEFAULT_FUNCTIONAL_PREDICATES` — grown by audit, not by guessing,
       // because every predicate added here pins itself into every future turn.
+      //
+      // This UPDATE is a second write path to `pinned`, so it carries the
+      // same gate as `MemoryStore.addFact` (`trust_tier = 0 AND origin =
+      // 'said'`), verbatim. Without it, a group tenant's own "owner"-named
+      // entity — `extract.ts` hands the literal subject "owner" to the model
+      // on any tenant — would get facts pinned here that `addFact` had
+      // correctly refused at write time. `tenant_id = 'host'` on the UPDATE
+      // and on both subqueries is defence in depth for the same hazard: the
+      // backfill exists to restore the *owner's* identity, and the owner
+      // lives in the host tenant only; it must not depend on `tierOf` never
+      // granting tier 0 inside a group.
       db.exec(`
         UPDATE facts SET pinned = 1
         WHERE expired_at IS NULL AND pinned = 0
+          AND tenant_id = 'host'
+          AND trust_tier = 0 AND origin = 'said'
           AND predicate IN ('works_as', 'created')
           AND subject_id IN (
-            SELECT id FROM entities WHERE lower(trim(name)) = 'owner'
+            SELECT id FROM entities
+             WHERE tenant_id = 'host' AND lower(trim(name)) = 'owner'
             UNION
             SELECT subject_id FROM facts
-             WHERE predicate = 'created' AND lower(trim(object_value)) = 'owner' AND expired_at IS NULL
+             WHERE tenant_id = 'host' AND predicate = 'created'
+               AND lower(trim(object_value)) = 'owner' AND expired_at IS NULL
           )
       `);
     },
