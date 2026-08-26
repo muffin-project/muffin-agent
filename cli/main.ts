@@ -140,7 +140,8 @@ ispezione:
                                 ci ha messo, quanti token — l'id è quello che il
                                 turno stampa alla fine ("trace c22cb4445952")
 
-Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 78 configurazione non valida
+Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 70 errore imprevisto
+           77 permesso negato · 78 configurazione non valida
 `;
 
 /**
@@ -1153,4 +1154,31 @@ async function cmdRun(argv: string[]): Promise<number> {
   });
 }
 
-process.exitCode = await main(process.argv.slice(2));
+/**
+ * The last line of defence, and the reason it is here rather than at the third
+ * call site that needed it.
+ *
+ * Three separate reviews found the same shape: a command hits an ordinary
+ * filesystem error — `EACCES` resealing a root of trust that hardening has
+ * correctly made read-only, `EACCES` reading a defaults file — and the owner's
+ * reward is a raw Node stack trace. Each time the repair was a `try/catch` at
+ * that one call site, and each time the next new path arrived without it.
+ * Catching per-site treats the symptom; the defect is that `main` could throw
+ * at all.
+ *
+ * So: any error that reaches here becomes a sentence and an exit code. This is
+ * a floor, not a substitute for handling — a command that knows *why* the error
+ * happened still says so itself (see `cmdRot`'s reseal branch, which explains
+ * that a denied write is the hardening working), and a per-item failure that
+ * should only degrade one line of a report still has to be caught where that
+ * line is built. What this guarantees is only that the worst case is readable.
+ */
+try {
+  process.exitCode = await main(process.argv.slice(2));
+} catch (error) {
+  const err = error as NodeJS.ErrnoException;
+  process.stderr.write(`muffin: ${err.message ?? String(error)}\n`);
+  if (process.env.MUFFIN_DEBUG === '1' && err.stack) process.stderr.write(`${err.stack}\n`);
+  else process.stderr.write('(per la traccia completa: MUFFIN_DEBUG=1)\n');
+  process.exitCode = err.code === 'EACCES' || err.code === 'EPERM' ? 77 : 70; // EX_NOPERM / EX_SOFTWARE
+}

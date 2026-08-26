@@ -1,11 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
+import { recordCopied } from '../core/config/defaults-drift.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
@@ -125,6 +126,17 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const personaInstalled = installFile('persona.md', p.persona, options.force ?? false);
   step('persona', personaInstalled ? 'installed persona.md (uguale per tutti)' : 'already present');
 
+  // Only the files this run actually wrote — never the ones found already
+  // present, which may already carry the owner's own edits (see
+  // recordCopied's own docstring for why stamping those would be wrong).
+  // `muffin doctor` reads this back through diagnoseDefaultsDrift to tell a
+  // never-touched shipped file from an owner edit, no Git required.
+  const copiedForRegistry: { path: string; content: Buffer }[] = [];
+  if (personaInstalled) copiedForRegistry.push({ path: 'persona.md', content: readFileSync(p.persona) });
+  if (voiceInstalled) copiedForRegistry.push({ path: 'voice.md', content: readFileSync(p.voice) });
+  for (const f of installed) copiedForRegistry.push({ path: `rot/${f.relPath}`, content: readFileSync(f.dst) });
+  recordCopied(home, copiedForRegistry);
+
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
   // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading
   // the env here too would silently resurrect a key cmdInit deliberately dropped.
@@ -211,22 +223,31 @@ function installFile(name: string, dest: string, force: boolean): boolean {
   return true;
 }
 
-/** Copies the shipped defaults without ever overwriting a personalised file. */
-function installRotDefaults(rotDir: string, force: boolean): string[] {
+/**
+ * Copies the shipped defaults without ever overwriting a personalised file.
+ *
+ * Returns the *relative* path from `rotDir` for each file actually written
+ * (e.g. `evals/voice.json`, not just `voice.json`) — `recordCopied`
+ * (core/config/defaults-drift.ts) needs that full path to key the registry
+ * against `defaults/rot/<relPath>`, and a bare basename would silently
+ * collide two files of the same name nested at different depths.
+ */
+function installRotDefaults(rotDir: string, force: boolean): { relPath: string; dst: string }[] {
   const source = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot');
-  const copied: string[] = [];
-  const walk = (from: string, to: string): void => {
+  const copied: { relPath: string; dst: string }[] = [];
+  const walk = (from: string, to: string, prefix: string): void => {
     mkdirSync(to, { recursive: true });
     for (const entry of readdirSync(from)) {
       const src = join(from, entry);
       const dst = join(to, entry);
-      if (statSync(src).isDirectory()) walk(src, dst);
+      const relPath = prefix ? `${prefix}/${entry}` : entry;
+      if (statSync(src).isDirectory()) walk(src, dst, relPath);
       else if (force || !existsSync(dst)) {
         copyFileSync(src, dst);
-        copied.push(entry);
+        copied.push({ relPath, dst });
       }
     }
   };
-  walk(source, rotDir);
+  walk(source, rotDir, '');
   return copied;
 }
