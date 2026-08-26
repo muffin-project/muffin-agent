@@ -34,6 +34,22 @@ import { UpdateInbox } from './updates.js';
  * proven where it can actually be observed: `presence.test.ts`, driving
  * `streamText` directly across fake-clock time, independent of how
  * `loop.ts` happens to call it today.
+ *
+ * **M5-BIS B13 lives here too**, same reasoning: `progress.test.ts` drives
+ * `startProgress` directly and proves the throttle/coalescing/disable-on-
+ * failure mechanics; the two scenarios below prove the *composition* —
+ * `onProgress` actually reaches `TelegramConnector`'s real Telegram calls,
+ * and the status message is gone before the durable answer goes out. Unlike
+ * the scenarios above, these need `streamingProviderWithRealGap`: every
+ * other provider here resolves through pure microtasks with no real I/O
+ * anywhere in the turn, so `progress.ts`'s own `setTimeout(fn, 0)` (armed by
+ * the turn's first `round` event) would never get a turn to run before
+ * `progress.stop()` cancels it — proven by the fact this file's *other*
+ * three scenarios show zero progress-related calls at all, on purpose (see
+ * `progress.ts`'s `stop()`: no forced final flush, unlike `presence.ts`'s —
+ * the reasoning is in that file). A genuine model call always has this gap
+ * in production (real network I/O); this fake reproduces the gap rather
+ * than the race.
  */
 
 const OWNER = 4242;
@@ -118,7 +134,31 @@ function streamingProviderWithToolCall(toolName: string, chunks: string[], final
   };
 }
 
-type Recorded = { method: string; text?: string };
+/**
+ * Same one-round shape as `streamingProvider`, plus one real macrotask gap
+ * before it resolves — see the file docstring's "M5-BIS B13" paragraph for
+ * why the B13 scenarios need this and the B11 ones above do not. 20ms is
+ * comfortably past Node's own 1ms floor for a `setTimeout(fn, 0)`, so this is
+ * margin, not a tuned value.
+ */
+function streamingProviderWithRealGap(chunks: string[], finalText: string): Provider {
+  return {
+    kind: 'openai-compat' as const,
+    async chat(): Promise<ChatResult> {
+      throw new Error('this scenario must stream, not fall back to chat()');
+    },
+    async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      for (const chunk of chunks) yield { type: 'text_delta', text: chunk };
+      yield {
+        type: 'done',
+        result: { text: finalText, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' },
+      };
+    },
+  };
+}
+
+type Recorded = { method: string; text?: string; messageId?: number };
 
 function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
   const calls: Recorded[] = [];
@@ -135,11 +175,16 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
     },
     getUpdates: async () => [],
     sendMessage: async (chatId, html) => {
-      calls.push({ method: 'sendMessage', text: html });
-      return { message_id: nextMessageId++, date: 0, chat: { id: chatId, type: 'private' } } as never;
+      const messageId = nextMessageId++;
+      calls.push({ method: 'sendMessage', text: html, messageId });
+      return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
     },
-    editMessageText: async (_chatId, _messageId, html) => {
-      calls.push({ method: 'editMessageText', text: html });
+    editMessageText: async (_chatId, messageId, html) => {
+      calls.push({ method: 'editMessageText', text: html, messageId });
+      return true;
+    },
+    deleteMessage: async (_chatId, messageId) => {
+      calls.push({ method: 'deleteMessage', messageId });
       return true;
     },
     sendChatAction: async () => {
@@ -240,6 +285,87 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
       expect(sent).toHaveLength(1);
       expect(sent[0]!.text).toBe(finalText);
       expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+    } finally {
+      runtime.close();
+    }
+  });
+});
+
+describe('a turn reports its own progress and cleans it up before the real answer (M5-BIS B13)', () => {
+  it('creates one status line, then deletes it strictly before the durable answer is sent', async () => {
+    const finalText = 'Fatto, eccolo.';
+    const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);
+    const { api, calls } = recordingApi();
+    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
+
+    try {
+      await deliver(connector, [privateMsg(30)]);
+
+      const methods = calls.map((c) => c.method);
+      const progressLine = calls.find((c) => c.method === 'sendMessage' && c.text !== finalText);
+      const cleanup = calls.find((c) => c.method === 'deleteMessage');
+      const answer = calls.find((c) => c.method === 'sendMessage' && c.text === finalText);
+
+      // Reads as `formatTelegramProgress` (progress.ts), not as anything the
+      // model wrote — proves `onProgress` reached the real Bot API calls, not
+      // only `progress.test.ts`'s own direct-call unit coverage.
+      expect(progressLine?.text).toMatch(/^passaggio \d+ · .+ · \d+s$/);
+      // Removed, not edited into the answer — same message id, then gone.
+      expect(cleanup?.messageId).toBe(progressLine?.messageId);
+      // Never left orphaned above the reply (brief, rule 4): the cleanup is
+      // strictly before the real answer in call order, not merely present
+      // somewhere in the list of calls.
+      expect(methods.indexOf('deleteMessage')).toBeLessThan(methods.lastIndexOf('sendMessage'));
+      expect(answer).toBeDefined();
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('reports progress in groups too — unlike the presence draft, this is not private-chat-only', async () => {
+    const finalText = 'Ecco.';
+    const provider = streamingProviderWithRealGap(['Ec', 'co.'], finalText);
+    const { api, calls } = recordingApi();
+    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
+
+    try {
+      await deliver(connector, [groupMsg(31)]);
+
+      const progressLine = calls.find((c) => c.method === 'sendMessage' && c.text !== finalText);
+      expect(progressLine?.text).toMatch(/^passaggio \d+ · .+ · \d+s$/);
+      expect(calls.some((c) => c.method === 'deleteMessage' && c.messageId === progressLine?.messageId)).toBe(true);
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('swallows a Bot API failure creating the status line — the turn still delivers the real answer (rule 5)', async () => {
+    const finalText = 'Va bene comunque.';
+    const provider = streamingProviderWithRealGap(['Va bene ', 'comunque.'], finalText);
+    const { api: baseApi, calls } = recordingApi();
+    let sendAttempts = 0;
+    // The first `sendMessage` a turn ever makes is always `progress.ts`
+    // creating the status line (before any real answer exists to send) —
+    // failing exactly that one attempt is what proves rule 5 without needing
+    // to reach into `progress.ts`'s own internals.
+    const failingApi: TelegramApiLike = {
+      ...baseApi,
+      sendMessage: async (chatId, html, options) => {
+        sendAttempts += 1;
+        if (sendAttempts === 1) throw new Error('simulato: chat non trovata');
+        return baseApi.sendMessage(chatId, html, options);
+      },
+    };
+    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, failingApi);
+
+    try {
+      await deliver(connector, [privateMsg(32)]);
+
+      expect(sendAttempts).toBe(2); // the failed status line, then the real answer
+      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
+      // Disabled after its one failure (`progress.ts`), so it never attempts
+      // to clean up a status message that was never created.
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }
