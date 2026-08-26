@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
-import { probeSandbox, type SandboxProbe } from './probe.js';
+import { probeSandbox, isUsernsDenied, APPARMOR_REMEDY, message, type SandboxProbe } from './probe.js';
 
 /**
  * The one door to sandboxed execution.
@@ -17,6 +17,26 @@ import { probeSandbox, type SandboxProbe } from './probe.js';
  * Every guarantee this module relies on has a test that executes a real
  * containment (executor.test.ts); trusting the README instead of a probe is
  * how the previous sandbox was a no-op for two months.
+ *
+ * **`ensureInit` self-tests through this same door, and that is deliberate
+ * (reperto 26/08/2026).** `probeSandbox` (`./probe.ts`) proves bwrap/
+ * sandbox-exec exist and hold on ITS OWN narrow invocation — two `execFileSync`
+ * calls, hand-rolled, five lines of bwrap flags. `SandboxManager` builds a
+ * different, much larger invocation (network bridge, credential masking, and on
+ * Linux a fresh `--proc` mount the probe never attempts at all). The two can
+ * disagree: on a container where the outer runtime denies mounting `/proc`,
+ * the probe's own legs never touch `/proc` and report `available`, while the
+ * FIRST real command run through `SandboxManager` dies with `bwrap: Can't
+ * mount proc on /newroot/proc: Operation not permitted` — raw, inside that
+ * command's own stderr. `ensureInit` below runs one trivial contained round
+ * trip through `SandboxManager` itself, right after `initialize()`, before any
+ * caller's actual command ever reaches `wrapWithSandboxArgv`. If containment
+ * does not hold on the real path, the caller gets the same typed `sandbox
+ * unavailable: …` this module already threw for a negative `probeSandbox` —
+ * fail-closed, and never a bwrap parser dump masquerading as a command result.
+ * `verify()` is the read-only twin `doctor`/`muffin init` call to learn this
+ * BEFORE a session ever starts, at the cost of one real init+round-trip
+ * (measured in the PR, not estimated).
  */
 
 export type ExecRequest = {
@@ -47,10 +67,61 @@ export type ExecResult = {
 
 export const EXEC_DEFAULT_TIMEOUT_MS = 120_000;
 export const EXEC_MAX_TIMEOUT_MS = 600_000;
+/**
+ * The self-test's sentinel is a file THIS process creates fresh under its own
+ * scratch dir — not `/etc/hosts` (what `probe.ts`'s own narrower check reads).
+ * Measured, not assumed (2026-08-26, macOS 15): `/etc` is a symlink to
+ * `/private/etc`, and `SandboxManager`'s seatbelt profile denies by
+ * `(subpath "/etc/hosts")` — the literal, unresolved spelling. The kernel
+ * matches sandbox path filters against the RESOLVED vnode, `/private/etc/
+ * hosts`, so that deny rule never fired: `cat /etc/hosts` read clean through a
+ * profile that explicitly denied it, and a self-test built on that path would
+ * report `contain_failed` on every macOS host — a false red, the mirror image
+ * of the bug this file exists to catch. A self-owned scratch file has no
+ * symlinked ancestor to launder the match through.
+ */
+const SELFTEST_SENTINEL_NAME = '.muffin-selftest-sentinel';
+/** Per leg. Two legs, so a hang here costs at most 2×. */
+const SELFTEST_LEG_TIMEOUT_MS = 10_000;
+/**
+ * Belt-and-suspenders over the two per-leg timeouts: bounds `initialize()`
+ * itself, which has no timeout of its own (it may start a network bridge).
+ * "Nessun blocco eterno" — a hang here must resolve to unavailable, not hang
+ * `doctor`/`muffin init`/the first `shell_run` forever.
+ */
+const SELFTEST_OVERALL_TIMEOUT_MS = 25_000;
 /** Per stream, head+tail around a marker; matches what peers keep inline. */
 const EXEC_MAX_OUTPUT_CHARS = 30_000;
 /** Hard buffering cap per stream so a firehose cannot eat the process heap. */
 const BUFFER_HARD_CAP = 200_000;
+
+/** What the real self-test found wrong — same reason taxonomy `probe.ts` uses. */
+type ContainmentFailure = {
+  reason: 'userns_denied' | 'contain_failed';
+  detail: string;
+  remedy: string;
+};
+
+/**
+ * `SandboxManager.initialize()`/`wrapWithSandboxArgv()` threw outright — the
+ * self-test never got to run a command at all (e.g. #213's TMPDIR socket
+ * path, or a dependency check failing). Classified with the same
+ * `isUsernsDenied` heuristic `selfTestContainment` uses, so a userns-denied
+ * failure reads the same whether it surfaces as a thrown rejection or as a
+ * non-zero exit.
+ */
+function classifyContainmentError(error: unknown): ContainmentFailure {
+  const detail = message(error);
+  if (isUsernsDenied(detail)) {
+    return { reason: 'userns_denied', detail, remedy: APPARMOR_REMEDY };
+  }
+  return {
+    reason: 'contain_failed',
+    detail,
+    remedy:
+      'the real sandbox invocation (SandboxManager) failed on this host — see detail; this is the same path the runtime uses to run commands, not the narrower probe',
+  };
+}
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */
 export type ExecGuards = {
@@ -93,9 +164,179 @@ export class SandboxExecutor {
         this.initPromise = null;
         throw new Error(`sandbox unavailable: ${status.reason} — ${status.remedy}`);
       }
-      await SandboxManager.initialize(this.baseConfig());
+
+      // The claim this block exists to make true: `available` means a
+      // contained command actually ran through the SAME door a real caller's
+      // command will use — not that `probeSandbox`'s own narrower invocation
+      // happened to hold. `initialize()` and the round trip share one deadline
+      // so neither can hang `doctor`/`init`/the first `shell_run` forever.
+      //
+      // The timer backing that deadline is captured and cleared once the race
+      // settles — measured, not assumed (2026-08-26): `Promise.race` does not
+      // cancel the losing side, so an uncleared `setTimeout(…, 25_000)` here
+      // kept `doctor`/`init`'s *process* alive for the full 25s after `verify()`
+      // had already resolved in under 100ms, because Node will not exit while a
+      // referenced timer is still pending — a self-inflicted cost so close in
+      // shape to the reperto (a healthy answer, paid for with a silent hang on
+      // the real path) that it would have shipped as this file's own instance
+      // of it.
+      let overallTimer: NodeJS.Timeout | undefined;
+      let failure: ContainmentFailure | null;
+      try {
+        failure = await Promise.race([
+          (async () => {
+            await SandboxManager.initialize(this.baseConfig());
+            return this.selfTestContainment();
+          })(),
+          new Promise<ContainmentFailure>((resolve) => {
+            overallTimer = setTimeout(
+              () =>
+                resolve({
+                  reason: 'contain_failed',
+                  detail: `the real containment self-test did not finish within ${SELFTEST_OVERALL_TIMEOUT_MS}ms`,
+                  remedy: 'the sandbox mechanism (bwrap/sandbox-exec) may be hanging on this host — check for stuck processes',
+                }),
+              SELFTEST_OVERALL_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } catch (error) {
+        failure = classifyContainmentError(error);
+      } finally {
+        clearTimeout(overallTimer);
+      }
+
+      if (failure) {
+        // A throwaway/failed init leaves no live session worth keeping —
+        // reset() before handing back control, same as `close()` would.
+        await SandboxManager.reset().catch(() => {});
+        this.cachedProbe = { available: false, mechanism: status.mechanism, ...failure };
+        this.initPromise = null;
+        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.remedy}`);
+      }
     })();
     return this.initPromise;
+  }
+
+  /**
+   * One trivial deny/allow round trip, through `SandboxManager.
+   * wrapWithSandboxArgv` — the exact call `run()` below makes — rather than
+   * through this file's own bwrap/sandbox-exec flags. Assumes `SandboxManager.
+   * initialize()` already succeeded; this only asks "does a REAL wrapped
+   * command actually get contained".
+   *
+   * Same two-legged shape `probe.ts` uses, for the same reason its own
+   * comments document twice over: a single deny leg cannot tell "containment
+   * held" apart from "the mechanism is broken and everything fails" — the
+   * exact ambiguity that produced this file's incident (the deny leg failing
+   * on `Can't mount proc` looks identical to a held deny unless a control run
+   * is also required to succeed).
+   */
+  private async selfTestContainment(): Promise<ContainmentFailure | null> {
+    const cwd = this.scratch();
+    const sentinelPath = join(cwd, SELFTEST_SENTINEL_NAME);
+    writeFileSync(sentinelPath, 'muffin sandbox self-test — this line must be unreadable during the deny leg\n');
+
+    const runLeg = async (denyRead: string[]): Promise<ExecResult> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SELFTEST_LEG_TIMEOUT_MS);
+      try {
+        const legConfig: Partial<SandboxRuntimeConfig> = {
+          network: {
+            allowedDomains: [],
+            deniedDomains: [],
+            ...(process.platform === 'linux' ? { allowAllUnixSockets: true } : {}),
+          },
+          // `allowWrite: [cwd]` on both legs even though the command only
+          // reads: `run()` below always includes the scratch dir in
+          // allowWrite, and a self-test that omits it is one more gratuitous
+          // difference from the real invocation — exactly the shape of gap
+          // that let this file's own bug hide from the old probe.
+          filesystem: { denyRead, allowWrite: [cwd], denyWrite: [] },
+        };
+        const wrapped = await SandboxManager.wrapWithSandboxArgv(
+          `cat ${sentinelPath}`,
+          undefined,
+          legConfig,
+          controller.signal,
+          cwd,
+        );
+        return await this.spawnCollect(
+          wrapped.argv,
+          this.childEnv(wrapped.env, cwd),
+          { command: `cat ${sentinelPath}`, cwd, writeScope: [cwd], signal: controller.signal },
+          SELFTEST_LEG_TIMEOUT_MS,
+          Date.now(),
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const deny = await runLeg([sentinelPath]);
+    if (deny.timedOut) {
+      // A hang is not a held deny: without this, a stuck bwrap/sandbox-exec
+      // process on the deny leg would read as "denied" and the allow leg below
+      // could then report the sandbox available on a mechanism that never
+      // actually answered.
+      return {
+        reason: 'contain_failed',
+        detail: `the denied read of the self-test sentinel through SandboxManager did not exit within ${SELFTEST_LEG_TIMEOUT_MS}ms — a hang is not evidence of a held deny`,
+        remedy: 'the real sandbox invocation may be hanging on this host — check for stuck bwrap/sandbox-exec processes',
+      };
+    }
+    if (deny.code === 0) {
+      return {
+        reason: 'contain_failed',
+        detail:
+          `a real sandboxed invocation through SandboxManager still let a process read ` +
+          `a file with it explicitly denied — the runtime's own execution path is not containing anything`,
+        remedy: 'check whether the sandbox actually engages for real commands, not only for a narrower probe invocation',
+      };
+    }
+
+    const allow = await runLeg([]);
+    if (allow.code !== 0) {
+      const detail = allow.stderr.trim() || allow.stdout.trim() || `exit ${allow.code}`;
+      if (isUsernsDenied(detail)) {
+        return { reason: 'userns_denied', detail, remedy: APPARMOR_REMEDY };
+      }
+      return {
+        reason: 'contain_failed',
+        detail: `SandboxManager could not run even an unrestricted contained command (${detail}) — the denied read failing above is not evidence of containment when this unrestricted one fails too`,
+        remedy: 'the real sandbox invocation is broken independent of any deny policy — check the mechanism against this kernel/OS/container',
+      };
+    }
+    if (!allow.stdout.includes('muffin sandbox self-test')) {
+      // Exit 0 with the wrong (or empty) content is not yet "read succeeded":
+      // it would also be the signature of `cat` racing a not-yet-flushed
+      // write, or of some other command silently swallowed on this host.
+      return {
+        reason: 'contain_failed',
+        detail: `the unrestricted leg exited 0 but did not read the sentinel's content back (stdout: ${JSON.stringify(allow.stdout.slice(0, 200))})`,
+        remedy: 'the real sandbox invocation is not behaving as a plain read on this host — check the mechanism against this kernel/OS/container',
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * The read-only twin of `run()`: pays the same real self-test `ensureInit`
+   * does, through the same door, but reports the outcome instead of
+   * committing to run a caller's command. `doctor` and `muffin init` call
+   * this — they want the truth about this host before a session starts, not
+   * an attempted execution.
+   */
+  async verify(): Promise<SandboxProbe> {
+    try {
+      await this.ensureInit();
+    } catch {
+      // ensureInit() already downgraded cachedProbe to the honest negative
+      // result before throwing this same information as an Error; status()
+      // below reads the cached value back instead of re-parsing the message.
+    }
+    return this.status();
   }
 
   /**
