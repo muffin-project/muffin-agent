@@ -87,6 +87,32 @@ export type ToolSpec = {
  */
 type ThinkingMode = 'adaptive' | 'off';
 
+/**
+ * Spazio per il reasoning che chiediamo spento e non riusciamo a spegnere.
+ *
+ * `agent/profiles/consumer-local.json` dichiara `"thinking": "off"` proprio per
+ * `*qwen3*`, e le sue stesse note dicono che l'adapter openai-compat non porta
+ * quel comando: è un no-op **dichiarato** (ADR-0008), non nascosto. Quello che
+ * non era stato tracciato è il prezzo, due livelli più in là.
+ *
+ * Misurato sull'installazione dell'owner il 27/08 con `qwen/qwen3.8-27b`:
+ * l'estrazione con tetto 1500 tornava `stop=max_tokens` dopo **1502 token in
+ * uscita** e `content` vuoto — il modello spendeva l'intero budget a ragionare
+ * e non arrivava a scrivere un carattere di JSON. Stesso episodio, stesso
+ * modello, tetto 8000: **un fatto estratto**. La risposta grezza del giudice
+ * nel registro è `[vuota]` per la stessa ragione, con un tetto di 500.
+ *
+ * Alzare un tetto non è chiedere più token: `max_tokens` è un limite, non una
+ * richiesta, quindi per un modello che non ragiona questo non costa niente. Per
+ * uno che ragiona sostituisce «paghi 1502 token per NIENTE, a ogni giro, per
+ * sempre» con «paghi e ottieni un fatto, e l'episodio smette di tornare».
+ *
+ * Va via il giorno in cui l'adapter porta davvero il comando — che è una
+ * decisione con un prezzo (schema al confine, token di reasoning fatturati), e
+ * quindi una slice sua, non un contrabbando dentro una correzione.
+ */
+export const REASONING_HEADROOM = 6_000;
+
 export type ChatCall = {
   model: string;
   system: ContentBlock[];

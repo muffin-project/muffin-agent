@@ -87,4 +87,13 @@ describe('reranking', () => {
     await new LlmReranker(at, 'light').rerank('q', items(RERANK_MIN_CANDIDATES), 3);
     expect(at.calls).toBe(1);
   });
+it('chiede un tetto che lascia spazio al reasoning — 200 token non bastano nemmeno a iniziare', async () => {
+    // Il più piccolo dei tre tetti della corsia leggera, e quindi il primo a
+    // morire contro un modello che ragiona: misurato il 27/08, l'estrazione con
+    // 1500 tornava `stop=max_tokens` a 1502 token in uscita. Con 200 non c'è
+    // nemmeno una domanda da porsi.
+    const provider = new Scripted('{"order":[14,3,7]}');
+    await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
+    expect(provider.seen[0]?.maxOutputTokens).toBeGreaterThan(200);
+  });
 });
