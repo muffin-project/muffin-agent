@@ -446,12 +446,8 @@ function objectOf(f: Fact): string {
  * comment: a terminal on the owner's machine is the trust tier `addFact`'s
  * gate is checking for, so there is no further gate to apply here).
  *
- * Not yet reachable from `muffin memory` itself: `cli/main.ts`'s `cmdMemory`
- * owns the argv dispatch for every subcommand here (`why`/`search`/…) and is
- * explicitly out of scope for this slice — another change is in flight
- * against that same function. These two are written and tested against
- * `MemoryStore` directly; wiring them in is two `if (sub === …)` blocks once
- * that file is free again.
+ * Dispatched from `cli/main.ts`'s `cmdMemory` like every other subcommand
+ * here; id validation lives there, next to `why`'s.
  */
 export function cmdMemoryPin(home: string, factId: number): number {
   const { db, store } = openStore(home);
