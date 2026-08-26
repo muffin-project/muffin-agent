@@ -12,15 +12,15 @@ primo update: `cli/update.ts`.
 
 **CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
 
-**Il prompt vivo è del 9 agosto.** `~/.muffin/persona.md`, `voice.md`,
-`rot/identity.md`: byte-identici a versioni spedite il 9–10/08, diversi da HEAD,
-e **non** modificati dall'owner: la persona approvata (c090dce, 17/08) non è mai
-arrivata all'agente vivo — 11498 caratteri contro 22477. `doctor` non lo vede:
-prossima slice; il reseal del RoT resta scelta dell'owner.
+**Il prompt vivo è del 9 agosto** — 11498 caratteri contro 22477: `update` non
+tocca ciò che `init` ha copiato, e la persona approvata il 17/08 non è mai
+arrivata all'agente che gira. `policy.json`/`budgets.json` derivano ma **non**
+funzionalmente. Prova e disegno: `research/deriva-defaults-2026-08-26.md`.
+Prossima slice, in `doctor`; il reseal del RoT resta scelta dell'owner.
 
-**Misurato con quella vista, da guardare.** (a) **La cache di prompt non
-prende**, 2.8% su 18 chiamate vere, e non è colpa del nostro prefisso: misura e
-ipotesi in `research/cache-prompt-2026-08-26.md`. (b) Ogni
+**Misurato con quella vista.** (a) **La cache non prende**, 2.8% su 18
+chiamate, e non è il nostro prefisso: `research/cache-prompt-2026-08-26.md`.
+(b) Ogni
 `sys.shell` è `effect=ask`, nessuna eccezione: la lamentela dell'owner è un
 dato. (c) `memory.recall` gira **senza vettori** (`EmbedderUnavailable`).
 (d) Un `memory.ingest` da solo: 129s, zero chiamate al modello.
