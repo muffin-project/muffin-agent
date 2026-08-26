@@ -305,8 +305,8 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
     return home;
   }
 
-  it('`muffin doctor` avverte quando nessun gateway può svegliarlo', () => {
-    const check = runDoctor(homeWithASuspendedTurn()).checks.find((c) => c.name === 'turni sospesi');
+  it('`muffin doctor` avverte quando nessun gateway può svegliarlo', async () => {
+    const check = (await runDoctor(homeWithASuspendedTurn())).checks.find((c) => c.name === 'turni sospesi');
     expect(check?.level).toBe('warn');
     expect(check?.detail).toContain('nessun gateway attivo');
     // The number and the deadline, because "some turns are waiting" is not
@@ -323,35 +323,35 @@ describe('un turno sospeso senza gateway non è un turno perso in silenzio', () 
     expect(notes).toContain('1 turni sospesi');
   });
 
-  it('e non è un allarme quando il gateway c’è', () => {
+  it('e non è un allarme quando il gateway c’è', async () => {
     const home = homeWithASuspendedTurn();
     // A live claim, taken by this very process, so `readGateway` sees a holder.
     const db = new DatabaseCtor(paths(home).db);
     new GatewayLock(db).claim(new Date(), 'in attesa', process.pid);
     db.close();
 
-    const check = runDoctor(home).checks.find((c) => c.name === 'turni sospesi');
+    const check = (await runDoctor(home)).checks.find((c) => c.name === 'turni sospesi');
     expect(check?.level).toBe('ok');
     expect(check?.detail).toContain('li riprende il gateway');
   });
 
-  it('e tace del tutto quando non ce ne sono', () => {
+  it('e tace del tutto quando non ce ne sono', async () => {
     const home = bootHome();
     buildRuntime(home, workspace()).close();
     // No row, no line: a check that always speaks is a check nobody reads.
-    expect(runDoctor(home).checks.find((c) => c.name === 'turni sospesi')).toBeUndefined();
+    expect((await runDoctor(home)).checks.find((c) => c.name === 'turni sospesi')).toBeUndefined();
   });
 });
 
 describe('acceptance: the owner asks what happened', () => {
-  it('`muffin doctor` names the interrupted turn and says what the resume will and will not redo', () => {
+  it('`muffin doctor` names the interrupted turn and says what the resume will and will not redo', async () => {
     const home = bootHome();
     const ws = workspace();
     crashHoldingATurn(home, ws);
 
     // Before anything else boots — the state an owner is actually in when they
     // notice no answer came and open a terminal.
-    const report = runDoctor(home);
+    const report = await runDoctor(home);
     const turns = report.checks.find((c) => c.name === 'turni');
     expect(turns?.level).toBe('warn');
     expect(turns?.detail).toContain('crash-turn');
@@ -367,15 +367,15 @@ describe('acceptance: the owner asks what happened', () => {
     // And once it has been reported at boot, `doctor` still says it: the state
     // is on the row, not in whoever happened to print a line first.
     buildRuntime(home, ws).close();
-    const after = runDoctor(home).checks.find((c) => c.name === 'turni');
+    const after = (await runDoctor(home)).checks.find((c) => c.name === 'turni');
     expect(after?.level).toBe('warn');
     expect(after?.detail).toContain('crash-turn');
   });
 
-  it('says so plainly when nothing is wrong', () => {
+  it('says so plainly when nothing is wrong', async () => {
     const home = bootHome();
     buildRuntime(home, workspace()).close();
-    const turns = runDoctor(home).checks.find((c) => c.name === 'turni');
+    const turns = (await runDoctor(home)).checks.find((c) => c.name === 'turni');
     expect(turns?.level).toBe('ok');
     expect(turns?.detail).toContain('nessuno interrotto');
   });

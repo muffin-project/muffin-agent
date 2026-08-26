@@ -4,7 +4,7 @@ import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
-import { probeSandbox } from '../core/sandbox/probe.js';
+import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { formatSpan, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
@@ -12,10 +12,12 @@ import { runRepl } from './repl.js';
 import {
   cmdMemoryCheck,
   cmdMemoryExtract,
+  cmdMemoryPin,
   cmdMemoryReview,
   cmdMemoryReviewKeep,
   cmdMemorySearch,
   cmdMemoryStats,
+  cmdMemoryUnpin,
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
@@ -33,6 +35,7 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
+import { cmdUpdate } from './update.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -93,6 +96,13 @@ comandi operatore:
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le
                                 migrazioni
+  muffin update [--dry-run] [--yes]
+                                aggiorna da origin/main: release affiancata
+                                (git worktree + npm ci), backup, poi scambio
+                                atomico del launcher — il gateway vivo resta
+                                sul codice vecchio finché non riparte
+  muffin update --rollback [--yes]
+                                torna alla release precedente (flip inverso)
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
@@ -228,6 +238,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdBackup(rest);
     case 'restore':
       return cmdRestore(rest);
+    case 'update':
+      return cmdUpdate(rest);
     case 'rot':
       return cmdRot(rest);
     case 'uninstall':
@@ -391,12 +403,18 @@ async function cmdInit(argv: string[]): Promise<number> {
   }
 
   // "Durante l'installazione deve capire la macchina" (owner, verbatim) —
-  // before any question, not instead of doctor: `probeSandbox` already runs a
-  // real containment, but until now only `muffin doctor` ever read the result,
-  // so a first run learned about a broken sandbox by running a *second*
-  // command. Headless is untouched: nothing here prints or blocks off a TTY.
+  // before any question, not instead of doctor. `SandboxExecutor.verify()`
+  // runs a real init + contained round trip through the SAME door the runtime
+  // uses (`SandboxManager`), not just the narrower probe — until now only
+  // `muffin doctor` ever read even the narrower result, so a first run learned
+  // about a broken sandbox by running a *second* command; a probe-only read
+  // here would also have missed the 26/08/2026 container where the probe was
+  // green and the real invocation still could not mount `/proc`. Headless is
+  // untouched: nothing here prints or blocks off a TTY.
   if (process.stdin.isTTY) {
-    process.stderr.write(describeSandboxProbe(probeSandbox()));
+    const sandboxExecutor = new SandboxExecutor({ denyWrite: [], denyRead: [] });
+    process.stderr.write(describeSandboxProbe(await sandboxExecutor.verify()));
+    await sandboxExecutor.close();
     process.stderr.write(describeSupervisor(process.platform));
   }
 
@@ -673,13 +691,13 @@ async function cmdUninstall(argv: string[]): Promise<number> {
   return 0;
 }
 
-function cmdDoctor(argv: string[]): number {
+async function cmdDoctor(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: { json: { type: 'boolean' }, online: { type: 'boolean' } },
     allowPositionals: false,
   });
-  const report = runDoctor(paths().home, values.online ? { online: true } : {});
+  const report = await runDoctor(paths().home, values.online ? { online: true } : {});
   process.stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : `${formatReport(report)}\n`);
   return report.exitCode;
 }
@@ -761,6 +779,15 @@ async function cmdMemory(argv: string[]): Promise<number> {
   if (sub === 'check') {
     const { values } = parseArgs({ args: rest, options: { json: { type: 'boolean' } } });
     return cmdMemoryCheck(home, values.json === true);
+  }
+
+  if (sub === 'pin' || sub === 'unpin') {
+    const id = Number(rest[0]);
+    if (!Number.isInteger(id) || id <= 0) {
+      process.stderr.write(`usage: muffin memory ${sub} <fact-id>\n`);
+      return 78;
+    }
+    return sub === 'pin' ? cmdMemoryPin(home, id) : cmdMemoryUnpin(home, id);
   }
 
   if (sub === 'search') {
@@ -987,6 +1014,22 @@ function cmdSecret(argv: string[]): number {
   // outside the working directory, 0700/0600, and on the tools' deny-read list.
   const at = writeSecret(name, value, paths().home, persist ? 'persistent' : 'home');
   process.stdout.write(`stored ${name} (0600), ${value.length} chars → ${at}\n`);
+  // Said here, not only by `doctor`, because here is the moment the person is
+  // holding the key: the read chain takes the FIRST location that exists
+  // (`locateSecret`), so writing a second copy can be a write into a file
+  // nothing ever reads — and every symptom of that is somewhere else ("ho
+  // cambiato la chiave e usa ancora quella vecchia"). Observed on the owner's
+  // own install, 2026-08-26: `secret set --persist` landed behind a home copy
+  // written months earlier by `init`, and only `doctor` ever said so.
+  const copies = locateSecretAll(`secret://${name}`, paths().home);
+  const winner = copies[0];
+  if (copies.length > 1 && winner) {
+    process.stderr.write(
+      winner.path === at
+        ? `! esiste anche ${copies[1]?.path}, che da ora non viene più letta — cancellala, così resta una sola chiave da ruotare\n`
+        : `! questa copia non verrà mai usata: ${winner.path} ha la precedenza. Cancella quella che non vuoi (${winner.path}), oppure riscrivi il segreto lì\n`,
+    );
+  }
   return 0;
 }
 

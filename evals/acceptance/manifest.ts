@@ -103,6 +103,23 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'A9',
     'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
   ),
+  // New (slice/e2e-giro-owner): every other row in this block proves one link
+  // of the owner's chain in isolation. Nobody drove the chain itself — clean
+  // machine to a real reply on a real surface, with the platform's own
+  // supervisor holding the gateway up, ending in an `uninstall` that keeps
+  // only what was explicitly `--persist`ed. `muffin gateway install` in
+  // particular had a unit generator with unit tests on its *text* and no
+  // scenario that ever asked the platform's own parser to accept it end to
+  // end. `core/gateway/unit.test.ts` already proves each platform's unit
+  // passes its own parser in isolation (`systemd-analyze verify` / `plutil
+  // -lint`) — this scenario is the one that runs both checks again from
+  // inside a full install/gateway/uninstall journey, so a regression in *how
+  // the journey calls the planner* (not just the planner's own output) goes
+  // red here too.
+  verde(
+    'A10',
+    "e2e owner journey: clean machine to a delivered reply on a real surface — `secret set --persist` warns when a home copy shadows it, `doctor` is honest about exactly which warnings are expected at each step, `gateway install`'s unit passes the platform's own parser (systemd-analyze on Linux, plutil on macOS — never the real launchd label on this machine), a live gateway pairs Telegram and delivers a real turn, a second process recalls it, and `uninstall` leaves only the `--persist`ed secret behind",
+  ),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),

@@ -172,6 +172,31 @@ describe('selective Italian command aliases (ADR-0036)', () => {
     expect(alias.err).toBe(canonical.err);
   });
 
+  it('scrivere una seconda copia di un segreto lo dice subito, e dice quale delle due viene letta', () => {
+    // Il caso vero (install dell'owner, 26/08/2026): `secret set --persist`
+    // finito dietro una copia in home scritta da `init` mesi prima. La catena
+    // di lettura prende la PRIMA che esiste, quindi la scrittura nuova non
+    // veniva mai letta e l'unico a dirlo era `doctor`.
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+
+    const primo = muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-in-home\n');
+    expect(primo.code).toBe(0);
+    expect(primo.err).toBe(''); // una sola copia: niente da dire
+
+    // La copia ombreggiata: scritta, ma `home` ha la precedenza.
+    const ombreggiata = muffin(env, ['secret', 'set', 'provider_api_key', '--persist'], 'sk-persisted\n');
+    expect(ombreggiata.code).toBe(0);
+    expect(ombreggiata.err).toContain('non verrà mai usata');
+    expect(ombreggiata.err).toContain(join(dir, 'secrets', 'provider_api_key'));
+
+    // E il verso opposto: riscrivere quella che vince nomina l'altra come morta.
+    const vincente = muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-in-home-2\n');
+    expect(vincente.code).toBe(0);
+    expect(vincente.err).toContain('non viene più letta');
+    expect(vincente.err).toContain(join(xdg, 'muffin', 'secrets', 'provider_api_key'));
+  });
+
   it('a word that merely resembles an alias is not resolved — the map is exact, not fuzzy', () => {
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['memorie']);

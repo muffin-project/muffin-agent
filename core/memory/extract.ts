@@ -47,6 +47,15 @@ const ExtractedFact = z.object({
   // instead of treating absence as grounds to throw the evidence away.
   matters: z.boolean().default(false),
   charged: z.boolean().default(false),
+  /**
+   * A request, not a grant — `MemoryStore.addFact` is the actual gate
+   * (trustTier 0, origin `said`), because the text this reads can be a group
+   * chat or a forwarded message and "pinned" reaches every future turn
+   * unconditionally. Defaulted false for the same "one missing boolean must
+   * not discard the fact" reason `matters`/`charged` are: absence here is the
+   * ordinary case, not an error.
+   */
+  pinned: z.boolean().default(false),
 });
 
 const ExtractionResponse = z.object({
@@ -114,7 +123,15 @@ REGOLE, in ordine di importanza:
      ricorrente? (di solito no: rispondi sì solo quando è davvero quello)
    Nel dubbio, "false". Sono l'eccezione, non l'etichetta di default.
 
-Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence","matters","charged"}]}`;
+8. "pinned" — SOLO per due cose, e per nient'altro: l'identità stabile
+   dell'owner (il suo nome, non il suo umore di oggi) e una preferenza
+   durevole che l'owner ha dichiarato esplicitamente su come vuoi che tu ti
+   comporti ("chiamami X", "rispondimi sempre in italiano"). NON per interessi,
+   eventi, richieste, opinioni, o qualunque fatto su una persona diversa
+   dall'owner. Nel dubbio, "false" — è un'eccezione rara, non una seconda
+   versione di "matters".
+
+Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence","matters","charged","pinned"}]}`;
 
 export type ExtractionInput = {
   content: string;
