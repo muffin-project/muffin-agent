@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -527,6 +527,28 @@ describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)'
     const { dir, xdg } = scratchHome();
     const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
     expect(r.out).toContain('muffin rot verify | reseal | harden');
+  });
+
+  it('un errore che nessuno ha previsto resta una frase, non uno stack', () => {
+    // Il pavimento, non un sostituto della gestione. Tre review separate hanno
+    // trovato la stessa forma — un errore di filesystem ordinario e in cambio
+    // uno stack trace di Node — e ogni volta la riparazione era un `try/catch`
+    // in quel punto, e ogni volta il percorso nuovo dopo arrivava senza.
+    // Il difetto era che `main` potesse lanciare affatto.
+    //
+    // Il caso qui è vero, non simulato: `MUFFIN_HOME` che punta a un file
+    // esistente invece che a una directory. Nessuno lo aveva previsto, ed è
+    // il punto.
+    const { dir, xdg } = scratchHome();
+    const asFile = join(dir, 'sono-un-file');
+    writeFileSync(asFile, 'non sono una directory\n');
+    const r = muffin({ MUFFIN_HOME: asFile, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-fixture');
+
+    expect(r.code).toBe(70); // EX_SOFTWARE, non un crash senza codice
+    expect(r.err).toContain('muffin:');
+    expect(r.err).not.toContain('    at '); // niente frame di stack
+    // E dice come ottenerlo, per chi lo stack lo vuole davvero.
+    expect(r.err).toContain('MUFFIN_DEBUG=1');
   });
 
   it('un reseal senza permesso di scrivere il sigillo risponde, invece di vomitare uno stack', () => {
