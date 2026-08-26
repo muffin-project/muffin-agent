@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -192,6 +192,7 @@ describe('diagnoseDefaultsDrift — declared unknown (ADR-0008), never a silent 
     writeFileSync(join(h, 'persona.md'), 'v1\n'); // really is an old shipped version
 
     const brokenGit: Git = {
+      isShallow: () => false,
       log: () => ({ ok: false, why: 'git log fallito (simulato)' }),
       show: () => null,
     };
@@ -289,6 +290,87 @@ describe('the installed-file bytes are hashed exactly as git stores them', () =>
     writeFileSync(join(h, 'persona.md'), weird);
     const d = findPersona(diagnoseDefaultsDrift(h, checkout));
     expect(d?.status).toBe('up-to-date');
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+});
+
+/**
+ * I tre modi in cui la diagnosi poteva **buttare giù tutto il rapporto**
+ * invece di costare la propria riga. Trovati dal judge su #142, che li ha
+ * fatti crashare davvero prima che qualcuno li scrivesse.
+ */
+describe('un incidente su un file costa una riga, non il rapporto', () => {
+  it('un file installato illeggibile diventa una riga dichiarata, e gli altri restano diagnosticati', () => {
+    // Prima: `readFileSync` lanciava EACCES fin fuori da `runDoctor`, e ogni
+    // check in coda — budget, database, schema, gateway, sandbox, tracce — non
+    // girava affatto. L'owner riceveva uno stack trace proprio quando la
+    // macchina era già nello stato che gli aveva fatto lanciare `doctor`.
+    const checkout = makeCheckout();
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    writeFileSync(join(h, 'voice.md'), 'v1 voice\n');
+    chmodSync(join(h, 'persona.md'), 0o000);
+    try {
+      const all = diagnoseDefaultsDrift(h, checkout);
+      expect(findPersona(all)?.status).toBe('unknown');
+      expect(findPersona(all)?.detail).toContain('non ho potuto leggerla');
+      // La prova che conta: la diagnosi degli **altri** file è sopravvissuta.
+      expect(all.find((d) => d.path === 'voice.md')?.status).toBe('up-to-date');
+    } finally {
+      chmodSync(join(h, 'persona.md'), 0o600);
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  it('un registro con una voce malformata è ignorato, non fatale', () => {
+    // JSON valido, schema giusto, `files` è un array — ma una voce è `null`.
+    // La guardia vecchia controllava solo l array e lasciava arrivare `null`
+    // fino a `.find()`, tre funzioni più in là, su `null.path`.
+    const h = home();
+    writeFileSync(
+      paths(h).defaultsManifest,
+      `${JSON.stringify({ schemaVersion: 1, installedAt: '2026-08-01T00:00:00Z', files: [null] })}\n`,
+    );
+    expect(readDefaultsRegistry(h)).toBeNull();
+
+    const checkout = makeCheckout();
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    // Non lancia, e degrada alla regola 2 invece di fingere di sapere.
+    expect(findPersona(diagnoseDefaultsDrift(h, checkout))?.status).toBe('up-to-date');
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it('un checkout shallow lo dice, invece di cercare in una fetta di storia e chiamarla storia', () => {
+    // Misurato dal judge: in un clone `--depth 1`, `git log -- <path>` esce 0
+    // e restituisce il solo commit di punta. La regola 2 cercava in una
+    // frazione della storia mentre il messaggio parlava della storia intera.
+    const checkout = makeCheckout();
+    commit(checkout, 'persona.md', 'v2\n', 'persona v2');
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1\n'); // è davvero una vecchia versione spedita
+
+    // Il finto `git` risponde **con successo** e trova la corrispondenza:
+    // senza la guardia il verdetto sarebbe `adoptable`, cioè un `cp` proposto
+    // sulla fede di una ricerca fatta su una fetta di storia. Un finto che
+    // lancia proverebbe solo che il `try/catch` per-file funziona — che è una
+    // riparazione diversa, e mascherava questa.
+    const shallowGit: Git = {
+      isShallow: () => true,
+      log: (cwd, relPath) => {
+        calls.push(relPath);
+        return { ok: true, commits: [{ sha: 'aaaaaaaaaaaa', date: '2026-08-01' }] };
+      },
+      show: () => Buffer.from('v1\n'),
+    };
+    const calls: string[] = [];
+    const d = findPersona(diagnoseDefaultsDrift(h, checkout, shallowGit));
+    expect(d?.status).toBe('unknown');
+    expect(d?.adoptCommand).toBeUndefined();
+    // E non ci prova nemmeno: la storia non viene interrogata affatto.
+    expect(calls).toEqual([]);
     rmSync(checkout, { recursive: true, force: true });
     rmSync(h, { recursive: true, force: true });
   });

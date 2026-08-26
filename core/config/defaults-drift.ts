@@ -68,6 +68,16 @@ export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<DefaultsRegistry>;
     if (parsed.schemaVersion !== REGISTRY_SCHEMA_VERSION || !Array.isArray(parsed.files)) return null;
+    // Each entry, not just the array around them. A file that is valid JSON,
+    // carries the right schema version and holds a `null` in `files` — partial
+    // corruption, an interrupted write, a hand edit — used to pass this check
+    // and throw three functions later on `null.path`, taking the whole report
+    // with it. `null` is this module's established "cannot trust this, ignore
+    // it" answer and it already degrades safely to rule 2.
+    const wellFormed = parsed.files.every(
+      (f) => typeof f === 'object' && f !== null && typeof f.path === 'string' && typeof f.sha256 === 'string',
+    );
+    if (!wellFormed) return null;
     return parsed as DefaultsRegistry;
   } catch {
     return null;
@@ -142,11 +152,28 @@ export type GitLogResult = { ok: true; commits: { sha: string; date: string }[] 
 /** The two git operations this module needs — injectable so a test can break "git itself" without a broken repo. */
 export type Git = {
   log(cwd: string, relPath: string): GitLogResult;
+  /**
+   * True when this checkout carries only part of its own history.
+   *
+   * Measured by the judge on #142: in a `--depth 1` clone, `git log -- <path>`
+   * exits **0** and returns the tip commit alone. Rule 2 then searched a
+   * fraction of the history while the message still said "no shipped version
+   * matches" — a sentence about the whole history, produced from a sliver of
+   * it. The direction is safe (an under-search only ever pushes toward
+   * "modified by the owner, do not touch"), which is exactly why it would
+   * never have been noticed. Declared, not guessed: ADR-0008.
+   */
+  isShallow(cwd: string): boolean;
   /** Raw bytes, `null` if `relPath` did not exist at `rev` (e.g. it was added later, or deleted by then). */
   show(cwd: string, rev: string, relPath: string): Buffer | null;
 };
 
 export const REAL_GIT: Git = {
+  isShallow(cwd) {
+    const r = spawnSync('git', ['rev-parse', '--is-shallow-repository'], { cwd, encoding: 'utf8' });
+    // A git that cannot answer is not a reason to claim depth we cannot see.
+    return r.status !== 0 || r.stdout.trim() !== 'false';
+  },
   log(cwd, relPath) {
     const r = spawnSync('git', ['log', '--format=%H^%ad', '--date=short', '--', relPath], { cwd, encoding: 'utf8' });
     if (r.status !== 0) return { ok: false, why: r.stderr.trim() || `git log fallito (exit ${String(r.status)})` };
@@ -174,6 +201,10 @@ export const REAL_GIT: Git = {
 /** Every commit on this checkout's own HEAD ancestry that ever gave `defaults/<relPath>` this exact content — first match wins, `git log` is newest-first. */
 function findInHistory(checkoutRoot: string, relPath: string, wantHash: string, git: Git): { sha: string; date: string } | null | 'error' {
   const shippedRelPath = `defaults/${relPath}`;
+  // Before searching: a shallow checkout cannot answer this question, and
+  // answering it anyway from the sliver it has is the failure this guard exists
+  // for — same 'error' branch a broken `git log` already takes.
+  if (git.isShallow(checkoutRoot)) return 'error';
   const log = git.log(checkoutRoot, shippedRelPath);
   if (!log.ok) return 'error';
   for (const commit of log.commits) {
@@ -290,5 +321,27 @@ export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null,
       ? listDefaultsTree(join(checkoutRoot, 'defaults'))
       : (registry?.files.map((f) => f.path) ?? []);
 
-  return trackedPaths.map((relPath) => diagnoseOne(home, checkoutRoot, registry, relPath, git));
+  // One file's accident costs one line, never the report.
+  //
+  // `diagnoseOne` reads from disk, and a read can fail for reasons that have
+  // nothing to do with drift — a permission bit, a file that vanished between
+  // the listing and the read. Uncaught, that took `doctor` down with it: every
+  // check queued *after* this block (budget, database, schema, gateway,
+  // sandbox, traces) never ran, and the owner got a stack trace precisely when
+  // the machine was already in the state that made them run `doctor`.
+  //
+  // The degraded status is declared, not guessed (ADR-0008) — the same posture
+  // this module already takes when `git log` cannot answer.
+  return trackedPaths.map((relPath) => {
+    try {
+      return diagnoseOne(home, checkoutRoot, registry, relPath, git);
+    } catch (error) {
+      return {
+        path: relPath,
+        sealed: relPath.startsWith('rot/'),
+        status: 'unknown' as const,
+        detail: `non ho potuto leggerla: ${(error as Error).message}`,
+      };
+    }
+  });
 }
