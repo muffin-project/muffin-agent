@@ -134,7 +134,38 @@ disappears at the end of a session is not continuous.
 
 Presence does not mean constant activity. Silence is a first-class outcome.
 
-## 5. Operating principles
+## 5. An agentic system, not a model in a loop
+
+Muffin is not "a model that chats, plus storage". It is an **agentic system**:
+agent = model + harness, where the model is replaceable compute (§3) and the
+harness is a set of organs whose **relations** carry the design — memory,
+idle-time consolidation, scheduling and presence, surfaces, the policy kernel.
+Systems theory applies: an operation on one organ silently reaches the others,
+so every operation must be named by what it actually touches. A "new
+conversation" is a *context* operation; it must not sever the learning
+pipelines, obligations or scheduled work that live outside any one session.
+
+Two consequences the current state of the art (2026) makes concrete. They are
+dated on purpose: re-verify them against the field before building on them
+again.
+
+- **Identity is pre-loaded; retrieval serves the long tail.** What the agent
+  must never fail to know about its owner is carried in context
+  unconditionally (core memory); similarity retrieval serves the unbounded
+  rest (archival). An agent that asks its owner's name is failing at the
+  system level even when the fact sits in storage. And because
+  always-in-context memory is permanent prompt surface, writing to it is a
+  privileged act: only owner-grade provenance may pin, and deliberate
+  correction must beat pinning.
+- **The killer of long-running agents is context drift, not context
+  exhaustion.** A context slowly filling with stale frames does more damage
+  than a context running out. Compaction is therefore routine — and a wrong
+  summary is silent damage, so compaction is validated against the trajectory
+  it claims to compress, not merely produced. Idle-time consolidation is this
+  system's sleep: the pipeline that turns lived turns into durable memory runs
+  between conversations, not inside them.
+
+## 6. Operating principles
 
 1. **Continuity does not break accidentally.** No rewrite, model upgrade or
    storage change gets to reset canonical state as a convenient recovery path.
@@ -177,7 +208,7 @@ Presence does not mean constant activity. Silence is a first-class outcome.
     centralized. The running agent's identity, memory and work should not depend
     on a Muffin-operated SaaS remaining online.
 
-## 6. Birth, forgetting and lineage
+## 7. Birth, forgetting and lineage
 
 Continuity requires a beginning. It does not require every predecessor to be
 retroactively reinterpreted as native state.
@@ -201,7 +232,7 @@ The distinction is:
 - **deliberate owner-controlled forgetting may exist and must be semantically
   explicit**.
 
-## 7. Known tensions
+## 8. Known tensions
 
 These are structural tensions, not TODOs that disappear after one implementation.
 
@@ -232,7 +263,7 @@ assumed.
 many capabilities without every capability becoming permanent trusted core.
 Extension governance therefore matters as much as extension count.
 
-## 8. What this is not
+## 9. What this is not
 
 It is not a framework looking for users. The primary product is one Muffin per
 owner; a hosted multi-tenant runtime would have a materially different trust and
