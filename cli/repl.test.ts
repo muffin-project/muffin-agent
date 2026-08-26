@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
-import { makeReplCliWrite, runRepl } from './repl.js';
+import { formatProgressLine, makeReplCliWrite, runRepl } from './repl.js';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, type Surface } from '../core/surface/types.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
+import type { TurnEvent } from '../agent/loop.js';
 
 /**
  * The REPL's delivery path, in isolation from the interactive stdin loop.
@@ -214,6 +215,120 @@ describe('the REPL streams the final answer while it forms (B11)', () => {
       expect(written.some((w) => w === 'risposta ')).toBe(false);
       expect(written.join('')).toContain('risposta intera, non a pezzi');
     } finally {
+      await provider.close();
+    }
+  });
+});
+
+describe('formatProgressLine (B13)', () => {
+  it('formats a round event', () => {
+    expect(formatProgressLine({ type: 'round', n: 3 })).toBe('· giro 3');
+  });
+
+  it('formats a model event', () => {
+    expect(
+      formatProgressLine({
+        type: 'model',
+        model: 'gpt-test',
+        ms: 842,
+        inputTokens: 120,
+        outputTokens: 40,
+        cacheReadTokens: 0,
+        stopReason: 'end',
+      }),
+    ).toBe('· modello: 842ms, 120→40 token, stop: end');
+  });
+
+  it('formats a tool_start event', () => {
+    expect(formatProgressLine({ type: 'tool_start', name: 'demo_read', capability: 'demo.read' })).toBe('· demo_read…');
+  });
+
+  it('formats a successful tool_end event', () => {
+    expect(formatProgressLine({ type: 'tool_end', name: 'demo_read', ms: 12, isError: false })).toBe(
+      '· demo_read fatto (12ms)',
+    );
+  });
+
+  it('formats a failed tool_end event', () => {
+    expect(formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true })).toBe(
+      '· demo_boom fallito (3ms)',
+    );
+  });
+
+  it('throws on a variant the switch does not recognise, instead of silently rendering a blank line', () => {
+    const bogus = { type: 'bogus' } as unknown as TurnEvent;
+    expect(() => formatProgressLine(bogus)).toThrow(/unreachable/);
+  });
+});
+
+/**
+ * B13, wiring through the real REPL — same reasoning as the B11 suite above:
+ * this proves `runRepl` → `runTurn` → `TurnInput.onProgress` → stderr, not a
+ * hand-rolled fake of any one layer.
+ */
+describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function homeAgainst(baseUrl: string): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-repl-progress-'));
+    runInit({ home, provider: 'openai-compat', baseUrl, apiKey: 'sk-repl-progress-fake' });
+    return home;
+  }
+
+  function stdinWith(line: string): PassThrough {
+    const stdin = new PassThrough();
+    stdin.write(`${line}\n`);
+    stdin.end();
+    return stdin;
+  }
+
+  it('writes one progress line per event to stderr when stderr is a TTY', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'ecco fatto' }] });
+    const originalIsTTY = process.stderr.isTTY;
+    process.stderr.isTTY = true;
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stdin: stdinWith('ciao') });
+
+      expect(code).toBe(0);
+      const progressLines = err.join('').split('\n').filter((l) => l.startsWith('· '));
+      // Exactly one round, no tool call: `round 1` then the `model` line —
+      // never a `tool_start`/`tool_end` this script never triggered.
+      expect(progressLines).toHaveLength(2);
+      expect(progressLines[0]).toBe('· giro 1');
+      expect(progressLines[1]).toMatch(/^· modello: \d+ms, \d+→\d+ token, stop: end$/);
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
+      await provider.close();
+    }
+  });
+
+  it('writes no progress lines when stderr is not a TTY', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'silenzio' }] });
+    const originalIsTTY = process.stderr.isTTY;
+    process.stderr.isTTY = false;
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stdin: stdinWith('ciao') });
+
+      expect(code).toBe(0);
+      expect(err.join('').split('\n').some((l) => l.startsWith('· '))).toBe(false);
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
       await provider.close();
     }
   });
