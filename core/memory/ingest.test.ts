@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -1068,5 +1068,81 @@ describe('formatConsolidationLines — what a human reads at the end of a round'
 
   it('says nothing extra on a clean round', () => {
     expect(formatConsolidationLines(blank)).toEqual([]);
+  });
+});
+
+describe('lo span del giudice dice quanto è costato', () => {
+  /**
+   * Il difetto: lo span del giudice si chiama `muffin.chat_call` — lo stesso
+   * nome che porta una chiamata contata del loop — ed era l'unico dei due a
+   * non riportare token. Su una vista per step quello si legge come
+   * **gratis**, non come **non registrato**, che è la peggiore delle due
+   * letture: la spesa è sempre stata fatturata (`light-lane.ts` avvolge questo
+   * provider), invisibile era solo dove fosse andata.
+   */
+  class Costoso extends Scripted {
+    override async chat(request?: ChatCall): Promise<ChatResult> {
+      const base = await super.chat(request);
+      return { ...base, usage: { inputTokens: 137, outputTokens: 42, cacheReadTokens: 9, cacheWriteTokens: 0 } };
+    }
+  }
+
+  /** Gli span del giudice scritti sotto questa home, in ordine. */
+  function judgeSpans(home: string): { attributes: Record<string, unknown> }[] {
+    const dir = join(home, 'traces');
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> })
+      .filter((s) => s.name === 'muffin.chat_call' && s.attributes['gen_ai.operation.name'] === 'memory.judge');
+  }
+
+  async function judged(replies: string[]): Promise<{ attributes: Record<string, unknown> }[]> {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-judge-usage-'));
+    const deps = {
+      store,
+      provider: new Costoso(replies),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+    episode(store, 'Marco è il mio commercialista');
+    episode(store, 'ho cambiato commercialista: ora è Lucia');
+    await ingestPending(deps, HOST);
+    return judgeSpans(home);
+  }
+
+  it('porta i token della chiamata, non un posto vuoto', async () => {
+    const spans = await judged([
+      facts(fact('owner', 'accountant', 'Marco')),
+      facts(fact('owner', 'accountant', 'Lucia')),
+      JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: 0.95 }),
+    ]);
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 137,
+      'gen_ai.usage.output_tokens': 42,
+      'muffin.usage.cache_read_tokens': 9,
+      'muffin.memory.verdict': 'supersede',
+    });
+  });
+
+  it('li porta anche quando la risposta era illeggibile — una chiamata non parsabile è costata lo stesso', async () => {
+    const spans = await judged([
+      facts(fact('owner', 'accountant', 'Marco')),
+      facts(fact('owner', 'accountant', 'Lucia')),
+      'questa non è affatto JSON',
+    ]);
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 137,
+      'gen_ai.usage.output_tokens': 42,
+      // Il verdetto di ripiego non cambia il fatto che la chiamata è avvenuta.
+      'muffin.memory.verdict': 'coexist',
+    });
   });
 });
