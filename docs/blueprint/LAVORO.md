@@ -18,20 +18,23 @@ Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
 
 Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
 
-**La corsia della memoria era morta dal 25/08**, dal cambio modello (sonnet-5 →
-`qwen/qwen3.8-27b`): `stop=max_tokens · 1502 token in uscita`, il tetto di 1500
-speso a ragionare senza scrivere un carattere di JSON. Chiuso da #148: `facts`
-16 → **30** dopo #148, #153 e #155 — l'estrattore raccoglie di nuovo. `doctor` era **verde** su due dei tre giri morti (#147)
-e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
-Da #165 il rerank porta il suo costo sullo span `memory.recall`: non restava
-nessuna chiamata al modello fuori dalle tracce.
+**La corsia della memoria era morta dal 25/08**, dal cambio modello a
+`qwen/qwen3.8-27b`: il tetto di 1500 token speso a ragionare senza scrivere un
+carattere di JSON. `facts` 16 → **30** dopo #148/#153/#155. Gli strumenti
+mentivano mentre succedeva: `doctor` verde su due giri morti su tre (#147),
+`vector index in sync` con l'embedder giù (#149), il rerank senza costo nelle
+tracce (#165).
+
+**Il no-op aveva un prezzo, due livelli più in là.** Il profilo dichiarava
+`thinking: "off"` per `*qwen3*` e l'adapter non sapeva portarlo — scritto, non
+nascosto. Da #167 lo porta (`reasoning:{effort:'none'}`) e le tre corsie JSON
+lo chiedono: misurato vivo, **204 → 85** token in uscita. Il handoff diceva che
+la via era *leggere* il reasoning: era la metà che paga.
+`REASONING_HEADROOM` resta per Ollama/vLLM, che il campo non lo capiscono.
 
 **Resta da fare, con le prove già in mano:**
 
-1. L'adapter openai-compat **non legge il reasoning**, quindi quei token si
-   pagano e il testo si perde. È la via vera per togliere `REASONING_HEADROOM`
-   (#148), e costa uno schema al confine — decisione con un prezzo.
-2. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
+1. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
    `doctor` lo dice, ma finché resta giù niente di nuovo viene indicizzato e il
    recall è solo testuale. Stato della macchina, non del codice.
 
