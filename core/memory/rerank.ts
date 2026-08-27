@@ -19,9 +19,27 @@ import type { RecallItem } from './recall.js';
  * without touching recall.
  */
 
+/**
+ * Cosa è successo davvero, non solo cosa è tornato.
+ *
+ * Un rerank che fallisce restituisce l'ordine RRF, che è **una risposta
+ * peggiore, non nessuna risposta** — la scelta giusta, e per questo il
+ * fallimento era indistinguibile dal successo da fuori. `RecallResult.strategies`
+ * promette di «nominare le metà che hanno davvero girato, così un recall
+ * degradato non è mai silenzioso», e per questa metà diceva il falso:
+ * `rerank(id)` finiva nell'elenco anche quando l'ordine veniva da RRF.
+ */
+export type RerankOutcome = {
+  items: RecallItem[];
+  /** Vero solo quando l'ordine viene dal modello. */
+  reordered: boolean;
+  /** Perché no, quando no. Assente quando ha riordinato davvero. */
+  why?: string;
+};
+
 export interface Reranker {
   readonly id: string;
-  rerank(query: string, candidates: RecallItem[], topK: number): Promise<RecallItem[]>;
+  rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome>;
 }
 
 /**
@@ -54,8 +72,9 @@ export class LlmReranker implements Reranker {
     this.id = `llm:${model}`;
   }
 
-  async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RecallItem[]> {
-    if (candidates.length < RERANK_MIN_CANDIDATES) return candidates.slice(0, topK);
+  async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome> {
+    const asIs = (why: string): RerankOutcome => ({ items: candidates.slice(0, topK), reordered: false, why });
+    if (candidates.length < RERANK_MIN_CANDIDATES) return asIs('troppo pochi candidati per pagare una chiamata');
 
     const listing = candidates
       .map((c, i) => `[${i}] (${c.source}) ${c.text.replace(/\s+/g, ' ').slice(0, 300)}`)
@@ -88,21 +107,23 @@ export class LlmReranker implements Reranker {
         stream: false,
       });
       text = result.text;
-    } catch {
+    } catch (error) {
       // A reranker that fails must not take recall down with it: the RRF order
-      // is a worse answer, not no answer.
-      return candidates.slice(0, topK);
+      // is a worse answer, not no answer. Ma peggiore va **detto**: chi legge
+      // `strategies` deve poter distinguere «riordinato dal modello» da
+      // «l'ordine è quello di prima».
+      return asIs(`il modello non ha risposto: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const order = parseOrder(text, candidates.length);
-    if (order.length === 0) return candidates.slice(0, topK);
+    if (order.length === 0) return asIs('risposta del modello non leggibile come un ordine');
 
     const ranked = order.map((i) => candidates[i]!).slice(0, topK);
     // Anything the model dropped still fills the tail: losing a candidate to a
     // parsing hiccup is worse than keeping it in a slightly wrong place.
     const chosen = new Set(order);
     const tail = candidates.filter((_, i) => !chosen.has(i));
-    return [...ranked, ...tail].slice(0, topK);
+    return { items: [...ranked, ...tail].slice(0, topK), reordered: true };
   }
 }
 

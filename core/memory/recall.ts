@@ -660,8 +660,17 @@ export async function recall(
   // items it was already going to return buys nothing.
   let kept: RecallItem[];
   if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {
-    kept = await deps.reranker.rerank(query, fused.slice(0, limit * 5), limit);
-    strategies.push(`rerank(${deps.reranker.id})`);
+    const outcome = await deps.reranker.rerank(query, fused.slice(0, limit * 5), limit);
+    kept = outcome.items;
+    // `strategies` promette di nominare «le metà che hanno davvero girato», e
+    // qui diceva il falso: la riga finiva nell'elenco anche quando il rerank
+    // era caduto sull'ordine RRF. Un rerank fallito **ha girato** — ha anche
+    // speso una chiamata al modello — quindi resta nell'elenco, ma col motivo.
+    strategies.push(
+      outcome.reordered
+        ? `rerank(${deps.reranker.id})`
+        : `rerank(${deps.reranker.id}) non riuscito: ${outcome.why ?? 'motivo non dichiarato'}`,
+    );
   } else {
     kept = fused.slice(0, limit);
   }
