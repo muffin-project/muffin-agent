@@ -1481,7 +1481,7 @@
   },
   "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 212,
+    "line": 275,
     "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
@@ -1521,37 +1521,37 @@
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 370,
+    "line": 387,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 387,
+    "line": 404,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 389,
+    "line": 406,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 390,
+    "line": 407,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 523,
+    "line": 540,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 524,
+    "line": 541,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 538,
+    "line": 555,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -2356,12 +2356,12 @@
   },
   "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 263,
+    "line": 350,
     "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
   "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 268,
+    "line": 355,
     "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
@@ -2371,7 +2371,7 @@
   },
   "extract.ts:67": {
     "path": "core/memory/extract.ts",
-    "line": 77,
+    "line": 109,
     "testo": "function deriveImportance(f: { matters: boolean; charged: boolean }): number {"
   },
   "fs.ts:257": {
@@ -2411,7 +2411,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 410,
+    "line": 427,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {

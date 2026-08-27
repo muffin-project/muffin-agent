@@ -223,3 +223,96 @@ describe('un fallimento porta la prova, non il sintomo', () => {
     expect(p.seen?.maxOutputTokens).toBeGreaterThan(1500);
   });
 });
+
+/**
+ * Una risposta imperfetta non è una risposta persa.
+ *
+ * Il commento sui booleani in `extract.ts` racconta già questa classe: «one
+ * missing boolean discarded all twenty facts beside it». L'aveva chiusa per tre
+ * campi con dei default, ma la forma era della **lista**, non dei booleani —
+ * qualunque campo fuori posto in un candidato faceva fallire l'intera risposta,
+ * e l'episodio non marcato tornava a ogni giro.
+ *
+ * Misurato sulla macchina dell'owner il 27/08, appena il tetto dei token ha
+ * smesso di nascondere tutto il resto: `Invalid option: expected one of
+ * "person"|…` e, due volte su tre, `expected number, received string`.
+ */
+describe('un fatto rotto costa un fatto', () => {
+  it('tiene i candidati buoni accanto a uno illeggibile', async () => {
+    const p = new Scripted(
+      JSON.stringify({
+        facts: [
+          fact('owner', 'works_as', 'freelancer'),
+          { subject: 'x', predicate: 'y' }, // metà campi mancanti
+          fact('owner', 'lives_in', 'Roma'),
+        ],
+      }),
+    );
+    const r = await extractFacts(p, 'm', INPUT);
+    expect(r.facts.map((f) => f.object)).toEqual(['freelancer', 'Roma']);
+    expect(r.malformed).toBe(1);
+  });
+
+  it('dice quale campo, e cosa ci aveva scritto il modello', async () => {
+    // Il primo giro di questa riga si fermava al messaggio di zod, e sulla
+    // macchina dell'owner produceva `expected number, received NaN`: vero e
+    // inutile — `NaN` è ciò che la coercizione ha prodotto, non ciò che il
+    // modello ha detto. Fra allargare la tolleranza e cambiare il prompt si
+    // sceglie guardando il valore.
+    const r = await extractFacts(
+      new Scripted(JSON.stringify({ facts: [fact('owner', 'age', '30', { confidence: 'altissima' })] })),
+      'm',
+      INPUT,
+    );
+    expect(r.malformedWhy?.[0]).toContain('confidence');
+    expect(r.malformedWhy?.[0]).toContain('altissima');
+  });
+
+  it('una confidenza scritta come stringa è formattazione, non significato', async () => {
+    // `"0.9"` invece di `0.9`: il modello senza JSON mode fa così, e prima
+    // costava l'intero episodio.
+    const r = await extractFacts(
+      new Scripted(JSON.stringify({ facts: [fact('owner', 'works_as', 'freelancer', { confidence: '0.9' })] })),
+      'm',
+      INPUT,
+    );
+    expect(r.facts).toHaveLength(1);
+    expect(r.facts[0]?.confidence).toBe(0.9);
+  });
+
+  it("ma non tollera un valore che non è quel numero: `alto` resta fuori", async () => {
+    // `coerce` su una parola dà NaN, e `.min(0)` lo rifiuta comunque. La
+    // tolleranza si allarga solo dove il valore è inequivocabile.
+    const r = await extractFacts(
+      new Scripted(JSON.stringify({ facts: [fact('owner', 'works_as', 'freelancer', { confidence: 'alto' })] })),
+      'm',
+      INPUT,
+    );
+    expect(r.facts).toHaveLength(0);
+    expect(r.malformed).toBe(1);
+  });
+
+  it('una categoria inventata diventa `thing`, non un fatto perso', async () => {
+    const r = await extractFacts(
+      new Scripted(JSON.stringify({ facts: [fact('vitest', 'is', 'test runner', { subjectKind: 'software' })] })),
+      'm',
+      INPUT,
+    );
+    expect(r.facts).toHaveLength(1);
+    expect(r.facts[0]?.subjectKind).toBe('thing');
+  });
+
+  it('se non passa nessun candidato resta un errore, e l episodio torna', async () => {
+    // Il contratto vecchio dove non c'era niente da salvare: cambiarlo sarebbe
+    // una decisione diversa (se ritentare contro un modello deterministico
+    // abbia senso), non un effetto collaterale di questa.
+    const r = await extractFacts(new Scripted(JSON.stringify({ facts: [{ subject: 'x' }] })), 'm', INPUT);
+    expect(r.facts).toHaveLength(0);
+    expect(r.error).toContain('nessun candidato ha superato lo schema');
+  });
+
+  it('un `facts` che non è un array resta fatale: non c è niente da tenere', async () => {
+    const r = await extractFacts(new Scripted(JSON.stringify({ facts: 'nessuno' })), 'm', INPUT);
+    expect(r.error).toContain('schema non valido');
+  });
+});
