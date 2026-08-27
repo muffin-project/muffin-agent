@@ -34,6 +34,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { promptNonce } from '../core/skills/nonce.js';
 import { inspectCapability, makeInspectTool } from './tools/inspect.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
@@ -614,7 +615,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const promptBlocks = buildSystemPromptBlocks(
     home,
     safeMode !== null,
-    skillsPromptSection(skillScan.skills),
+    skillsPromptSection(skillScan.skills, promptNonce(home)),
   );
 
   /**
