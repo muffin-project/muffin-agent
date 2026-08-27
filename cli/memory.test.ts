@@ -13,6 +13,7 @@ import {
   cmdMemorySearch,
   cmdMemoryStats,
   cmdMemoryUnpin,
+  valeUnAltroGiro,
 } from './memory.js';
 
 /**
@@ -437,5 +438,39 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
     expect(text).toContain(`intorno a #${anchor}`);
     expect(text).toContain('un messaggio prima');
     expect(text).toContain('un messaggio dopo');
+  });
+});
+
+/**
+ * La condizione d'uscita del drenaggio a mano.
+ *
+ * Contava solo il progresso dell'**estrazione**, e dopo un cambio di embedder
+ * quello e' zero per costruzione: un wipe dell'indice non lascia episodi
+ * pending. Misurato prima di ripararlo, su 250 episodi: un giro scriveva 200
+ * chunk (il `limit` di `indexBacklog`), il comando usciva li', e 50 sorgenti
+ * restavano fuori dal recall semantico mentre `doctor` diceva «200 chunks, 200
+ * vectors, in sync» — cioe' alla lettera il difetto da cui nasce la slice.
+ */
+describe('drenare l indice e progresso quanto estrarre', () => {
+  const giro = (marked: number, indexed: number, fetched: number) => ({ marked, indexed, fetched });
+
+  it('continua quando l estrazione e ferma ma l indice si sta drenando', () => {
+    // Il caso del dopo-cambio: niente da estrarre, 200 chunk scritti.
+    expect(valeUnAltroGiro(giro(0, 200, 0), 1, 200)).toBe(true);
+  });
+
+  it('si ferma quando ne l estrazione ne l indice hanno prodotto niente', () => {
+    expect(valeUnAltroGiro(giro(0, 0, 0), 1, 200)).toBe(false);
+  });
+
+  it('si ferma su una pagina di estrazione non piena, come prima', () => {
+    // La condizione originale resta intatta quando e' l estrazione a lavorare.
+    expect(valeUnAltroGiro(giro(3, 0, 3), 1, 200)).toBe(false);
+    expect(valeUnAltroGiro(giro(25, 0, 25), 1, 200)).toBe(true);
+  });
+
+  it('il tetto sui giri vale comunque, anche mentre l indice si drena', () => {
+    // Senza, un indice enorme trasformerebbe il comando in una nottata.
+    expect(valeUnAltroGiro(giro(0, 200, 0), 8, 200)).toBe(false);
   });
 });
