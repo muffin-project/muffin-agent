@@ -11,11 +11,12 @@ import { BudgetEngine } from '../../core/budget/budget.js';
 import { createDecide } from '../../core/policy/decide.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import type { CapabilityDecl } from '../../core/policy/types.js';
+import { loadConfig, readSecret } from '../../core/config/config.js';
 import { SessionStore } from '../../core/session/store.js';
 import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
-import { SCENARIOS, type Scenario, type Verdict } from './scenarios.js';
+import { SCENARIOS, crowdTools, type Scenario, type Verdict } from './scenarios.js';
 
 
 /**
@@ -58,7 +59,13 @@ type Outcome = Verdict & {
 
 const decls = new Map<string, CapabilityDecl>(fsCapabilities.map((c) => [c.id, c]));
 
-async function runScenario(scenario: Scenario, model: string, apiKey: string, baseUrl: string): Promise<Outcome> {
+async function runScenario(
+  scenario: Scenario,
+  model: string,
+  apiKey: string,
+  baseUrl: string,
+  sweep: { tools?: number; pad?: number } = {},
+): Promise<Outcome> {
   const home = mkdtempSync(join(tmpdir(), 'muffin-floor-home-'));
   const workDir = mkdtempSync(join(tmpdir(), 'muffin-floor-work-'));
   mkdirSync(join(home, 'rot'), { recursive: true });
@@ -86,7 +93,11 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
   // the three handlers. The copy was here, and it was already one field behind:
   // an eval that runs tools production does not have measures a floor nobody
   // ships.
-  const declared: RegisteredTool[] = [...makeFsTools(scope), ...(scenario.extraTools ?? [])];
+  const declared: RegisteredTool[] = [
+    ...makeFsTools(scope),
+    ...(scenario.extraTools ?? []),
+    ...(sweep.pad ? crowdTools(sweep.pad) : []),
+  ];
   const tools: RegisteredTool[] = declared.map(observe);
 
   const db = new DatabaseCtor(join(home, 'muffin.db'));
@@ -105,7 +116,13 @@ async function runScenario(scenario: Scenario, model: string, apiKey: string, ba
           'HTTP-Referer': 'https://github.com/muffin-ai/muffin',
           'X-Title': 'muffin-floor',
         }),
-        profile: selectProfile(model, loadProfiles(join(import.meta.dirname, '..', '..', 'agent', 'profiles'))),
+        // Il tetto è il parametro sotto misura, quindi qui si sovrascrive
+        // invece di essere subito: il profilo resta quello vero per tutto il
+        // resto (recovery, sampling, thinking), e cambia solo il numero.
+        profile: ((): ReturnType<typeof selectProfile> => {
+          const base = selectProfile(model, loadProfiles(join(import.meta.dirname, '..', '..', 'agent', 'profiles')));
+          return sweep.tools === undefined ? base : { ...base, maxToolsExposed: sweep.tools };
+        })(),
         model,
         tools,
         // The compiled floor, deliberately, not `loadPolicyMatrix(home)`: a
@@ -173,29 +190,60 @@ const { values } = parseArgs({
     'base-url': { type: 'string' },
     only: { type: 'string' },
     reps: { type: 'string' },
+    /** Sovrascrive `maxToolsExposed` del profilo: il numero sotto misura. */
+    tools: { type: 'string' },
+    /** Quanti decoy aggiungere, per avere davvero quella superficie da riempire. */
+    pad: { type: 'string' },
     json: { type: 'boolean' },
   },
 });
 
 const model = values.model ?? 'anthropic/claude-sonnet-5';
 const baseUrl = values['base-url'] ?? 'https://openrouter.ai/api/v1';
-const apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENROUTER_API_KEY'] ?? '';
+/**
+ * La chiave: prima l'ambiente, poi il secret store dell'installazione.
+ *
+ * L'ambiente resta primo perché è come si punta l'eval a un endpoint diverso da
+ * quello configurato. Ma `AGENTS.md` dice che i segreti si leggono da stdin,
+ * mai da argv — e una chiave esportata a mano in una shell finisce nella
+ * history e nella process table. Se l'installazione ne ha già una, questo eval
+ * non ha ragione di chiederla di nuovo: la legge dalla stessa catena del
+ * runtime (`readSecret`), senza che nessuno debba incollarla.
+ */
+const apiKey = ((): string => {
+  const fromEnv = process.env['LLM_API_KEY'] ?? process.env['OPENROUTER_API_KEY'] ?? '';
+  if (fromEnv !== '') return fromEnv;
+  try {
+    return readSecret(loadConfig().provider.apiKeyRef);
+  } catch {
+    return '';
+  }
+})();
 if (apiKey === '') {
-  process.stderr.write('serve LLM_API_KEY (o OPENROUTER_API_KEY) nell\'ambiente\n');
+  process.stderr.write(
+    "serve LLM_API_KEY (o OPENROUTER_API_KEY) nell'ambiente, oppure un'installazione con la chiave a posto\n",
+  );
   process.exit(78);
 }
 
 const only = values.only?.split(',').map((s) => s.trim());
 const selected = only ? SCENARIOS.filter((s) => only.includes(s.id)) : SCENARIOS;
 const reps = Number(values.reps ?? 1);
+const sweep = {
+  ...(values.tools === undefined ? {} : { tools: Number(values.tools) }),
+  ...(values.pad === undefined ? {} : { pad: Number(values.pad) }),
+};
 
-process.stderr.write(`floor · ${model} · ${selected.length} scenari × ${reps} run\n\n`);
+process.stderr.write(
+  `floor · ${model} · ${selected.length} scenari × ${reps} run` +
+    `${sweep.tools === undefined ? '' : ` · tetto ${sweep.tools}`}${sweep.pad === undefined ? '' : ` · +${sweep.pad} decoy`}\n\n`,
+);
 
 const all: Outcome[] = [];
 for (let rep = 1; rep <= reps; rep++) {
   if (reps > 1) process.stderr.write(`— run ${rep}/${reps}\n`);
   for (const scenario of selected) {
-    const outcome = await runScenario(scenario, model, apiKey, baseUrl);
+    const outcome = await runScenario(scenario, model, apiKey, baseUrl, sweep);
     all.push(outcome);
     process.stderr.write(
       `${outcome.pass ? '✓' : '✗'} ${outcome.scenario.padEnd(12)} ${String(outcome.iterations).padStart(2)} passaggi  ` +
