@@ -32,6 +32,29 @@ const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
   'agent/runtime.ts': 'builds the model provider and the search backend — the key is passed straight into the SDK/fetch client that puts it on the wire, never stored in a variable of its own',
   'cli/surface.ts': 'builds TelegramApi/DiscordApi at pairing/setup time, and one existence check (hasSecret) that discards the value',
   'cli/doctor.ts': 'diagnostic: reports backend, path and byte length only — never a character of the value (see doctor.test.ts)',
+  /**
+   * Aggiunto il 27/08/2026, e la decisione è sulla **sonda**, non sul comando.
+   *
+   * `muffin model embed <slug>` esiste per togliere l'unico indovinello che lo
+   * schema di config dichiara di non poter difendere: `embedder.dimensions`
+   * «è cotta nella tabella vettoriale, quindi indovinarla sbagliata significa
+   * un indice che si rifà da solo». Il solo modo di misurarla invece di
+   * chiederla è **chiamare l'embedder** e guardare `vector.length` — e un
+   * embedder `openai-compat` ha bisogno della sua chiave.
+   *
+   * Il valore va dritto in `makeEmbedder`, che lo passa al costruttore che lo
+   * mette sul filo: stessa forma di `agent/runtime.ts`, nessuna struttura
+   * intermedia lo tiene, niente lo stampa, e il comando non lo vede mai —
+   * passa una funzione, non una stringa.
+   *
+   * L'altra chiamata in questo file (`keyOf`, per il catalogo dei modelli) su
+   * OpenRouter **non scatta**: `catalogueNeedsKey` è `false` perché quel
+   * `GET /models` risponde 200 senza `Authorization` (verificato sul vivo il
+   * 27/08). Il campo esiste per il provider che un giorno la pretenderà, e
+   * fino ad allora nessun segreto viene risolto per elencare dei modelli.
+   */
+  'cli/model.ts':
+    "probes the configured embedder to MEASURE its dimension instead of asking the owner to guess it — the key goes straight into makeEmbedder's constructor and onto the wire; the model catalogue path resolves nothing on OpenRouter (catalogueNeedsKey: false)",
   'core/mcp/connect.ts': "resolves a server's `secret://` env refs at spawn time — the value goes into the child's environment (never argv, never the registry on disk) and no intermediate structure holds it",
   /**
    * Aggiunto il 27/08/2026, ed è una decisione sul confine, non una formalità.
