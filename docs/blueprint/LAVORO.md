@@ -14,23 +14,20 @@ installare sulla VPS.**
 l'effetto», il file lo dichiara il tool (`resolveEffectPath`) e viaggia con la
 chiamata (`ToolContext.effectPath`). D2/D3 READY.
 
-**Prossima claim: `slice/undo-riallinea-il-turno`** (D11, l'altra metà): l'undo
-rimette il filesystem e non tocca turno/sessione, quindi la cronologia dice
-ancora «ho scritto» e il modello ci crede.
+**In volo: PR #186** (`slice/undo-riallinea-il-turno`, D11, head `d7d1502`,
+MERGEABLE). CRITICAL, due NON-MERGE già riparati; il **terzo giudizio non è mai
+girato** — è il prossimo passo, non il merge.
 
 **Dopo: il tetto di taint.** Dopo un `fs_read` il turno è a 2 e `fs.write` ha
 soffitto 1: «leggi, calcola, scrivi» resta rifiutato (#179, 0/9). ADR-0044
 dichiarò quel costo per `sys.shell` e liquidò `fs.write` come gratis «perché già
 morto»: non lo è più.
 
-**Linux, misurato il 27/08 in container** (29/31; i 2 rossi sono verdi su
-macOS). (a) `gate-linux.sh` dà un **rosso falso**: `bwrap` non monta `/proc`
-dentro Docker (né con `SYS_ADMIN`, né con `systempaths=unconfined`), e bwrap
-grezzo lì funziona — non è Muffin. (b) Il rimedio di `probe.ts` dice
-«bubblewrap and socat», ma serve **anche ripgrep**. (c) Il gate usa `git
-archive`: senza `.git`, `doctor` dà 9 warning di deriva e A10 va rosso per
-quello. (d) L'installazione globale dal sorgente muore su `tsc: not found`;
-clone + dipendenze + compile + link **funziona**, e non è documentato.
+**Linux, chiuso il 27/08** (#184, #189): il gate ora gira anche `report.ts`
+ed **esce non-zero** (l'ultimo comando era `set -e`, che riesce sempre), vede
+gli scenari fuori manifest (erano 4 invisibili), e installa Muffin da zero
+non-root a ogni corsa — `muffin --version` legge lo sha vero. Ultimo giro:
+30 passati, 1 saltato dichiarato, `GATE_LINUX_EXIT=0`.
 
 **Modulo Telegram, da verificare** (owner, 27/08): la patch del 13° anniversario
 aggiunge **pulsanti nei messaggi** e **documenti inline**
@@ -44,8 +41,8 @@ toccare il connettore: cambia cosa Muffin può offrire lì.
 rosso in 2s con zero step = fatturazione. Con `mergeable` a `null`:
 `git merge-base --is-ancestor origin/dev HEAD`.
 
-**Stato macchina, non codice:** l'embedder è giù (ollama non gira), quindi il
-recall è solo testuale. La cache non prende: 2.8% su 18 chiamate, **0** sul
+**Stato macchina, non codice:** ollama non gira. Da #185 l'embedder è una
+scelta di config (`config.embedder`), quindi non è più un vicolo cieco. La cache non prende: 2.8% su 18 chiamate, **0** sul
 modello vivo (`research/cache-prompt-2026-08-26.md`).
 
 **Dogfood, ne resta una:** `sys.shell` chiede sempre (`decide.ts:245`): allow
