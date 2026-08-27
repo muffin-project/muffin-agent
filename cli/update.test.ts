@@ -636,3 +636,76 @@ describe('update — i passi si vedono mentre succedono', () => {
     expect(() => runUpdate(fakeDeps())).not.toThrow();
   });
 });
+
+/**
+ * Le release si annidavano, e il difetto cresceva di un livello a ogni update.
+ *
+ * `rev-parse --show-toplevel` risponde con il worktree *corrente*, e una
+ * release È un worktree collegato. Quindi dal secondo aggiornamento in poi il
+ * processo gira dentro `.releases/<sha>`, la radice trovata è quella, e la
+ * release nuova nasce dentro la vecchia. Misurato sulla macchina dell'owner
+ * dopo tre update, come percorso vero del launcher:
+ *
+ *     .releases/9a98bbe/.releases/2c35425/.releases/9e1b5af/dist/cli/main.js
+ *
+ * Il test guarda la cosa che conta — dove finisce la seconda release — e non
+ * come ci si arriva.
+ */
+describe('le release non si annidano', () => {
+  it('il secondo update, lanciato da dentro la prima release, resta fratello e non figlio', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir } = seedLauncher(f.installed);
+    const home = dir('muffin-nesting-');
+
+    const primo = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    });
+    expect(primo.code).toBe(0);
+    const [releaseUno] = releaseDirNames(f.installed);
+    expect(releaseUno).toBeDefined();
+    const dentroLaPrima = join(f.installed, '.releases', releaseUno!);
+
+    // Il secondo giro parte da dove il launcher punta adesso: dentro la release.
+    pushNewVersion(f, 'v3');
+    const secondo = runUpdate({
+      moduleDir: dentroLaPrima,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    });
+    expect(secondo.code).toBe(0);
+
+    // Nessun `.releases` dentro una release: e' esattamente la forma che
+    // cresceva di un livello per volta.
+    expect(existsSync(join(dentroLaPrima, '.releases'))).toBe(false);
+    // E le due release stanno una accanto all'altra, dove il pruning e il
+    // rollback sanno guardare.
+    expect(releaseDirNames(f.installed).length).toBe(2);
+  });
+
+  it('e il launcher punta dentro il checkout vero, non dentro una release', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir } = seedLauncher(f.installed);
+    const home = dir('muffin-nesting-');
+    const deps = { home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+
+    runUpdate({ ...deps, moduleDir: f.installed });
+    const dentro = join(f.installed, '.releases', releaseDirNames(f.installed)[0]!);
+    pushNewVersion(f, 'v3');
+    runUpdate({ ...deps, moduleDir: dentro });
+
+    const puntaA = readlinkSync(join(bindir, 'muffin'));
+    // Un solo `.releases` nel percorso: due vorrebbero dire annidato.
+    expect(puntaA.split('.releases').length - 1).toBe(1);
+    expect(puntaA.startsWith(join(f.installed, '.releases'))).toBe(true);
+  });
+});
