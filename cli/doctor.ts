@@ -21,7 +21,7 @@ import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
-import { findCheckoutRoot } from './update.js';
+import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -69,6 +69,8 @@ export type DoctorOptions = {
    * running outside a Git checkout.
    */
   checkoutRoot?: string | null;
+  /** Test-only: sostituisce la lettura vera del commit. `null` esercita il caso «non è un checkout». */
+  build?: BuildStamp | null;
   /**
    * Test-only: sostituisce la sonda vera dell'embedder, così la suite non
    * chiama `localhost:11434` millenovecento volte. Un rifiuto sta per
@@ -85,6 +87,21 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     checks.push({ name, level: 'warn', detail, remedy });
   const fail = (name: string, detail: string, remedy: string) =>
     checks.push({ name, level: 'fail', detail, remedy });
+
+  // Prima riga di tutte, perché è la prima domanda di qualunque diagnosi:
+  // *quale build sto guardando?* Il 27/08 la risposta si otteneva interrogando
+  // i sottocomandi (`muffin trace --help` non aveva `turn`, questa riga non
+  // esisteva) e deducendo l'età da ciò che mancava.
+  const build = options.build === undefined ? describeBuild(dirname(fileURLToPath(import.meta.url))) : options.build;
+  if (build === null) {
+    warn('build', 'nessun checkout Git: non so quale commit stia girando', 'installa da un clone Git, o dillo tu nel riportare un problema');
+  } else if (build.dirty) {
+    // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
+    // un `ok` silenzioso — quel SHA non descrive ciò che sta girando.
+    warn('build', `${build.sha.slice(0, 12)} del ${build.date}, con modifiche non committate sopra`, 'quel commit non descrive ciò che gira: committa o riporta anche il diff');
+  } else {
+    ok('build', `${build.sha.slice(0, 12)} del ${build.date}`);
+  }
 
   if (!existsSync(p.home)) {
     fail('home', `${p.home} does not exist`, 'run `muffin init`');

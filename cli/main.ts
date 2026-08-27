@@ -36,7 +36,9 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
-import { cmdUpdate } from './update.js';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -163,15 +165,22 @@ const COMMAND_ALIASES: Readonly<Record<string, string>> = {
  */
 function readOwnVersion(): string {
   let dir = new URL('./', import.meta.url);
+  let declared = '0.0.0';
   for (let i = 0; i < 6; i++) {
     try {
       const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')) as { version: string };
-      return pkg.version;
+      declared = pkg.version;
+      break;
     } catch {
       dir = new URL('../', dir);
     }
   }
-  return '0.0.0';
+  // `0.0.0` da solo non identifica niente, e questo progetto non si distribuisce
+  // per release numerate: `muffin update` costruisce `.releases/<sha>`, quindi
+  // il commit **è** la versione. Vedi `describeBuild`.
+  const build = describeBuild(dirname(fileURLToPath(import.meta.url)));
+  if (build === null) return `${declared} (build sconosciuta: nessun checkout Git)`;
+  return `${declared} (${build.sha.slice(0, 12)}${build.dirty ? '+modificato' : ''}, ${build.date})`;
 }
 
 /**
