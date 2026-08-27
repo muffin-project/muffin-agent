@@ -84,6 +84,8 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
                                 comparire mentre si forma, o solo a fine
                                 turno (di default: sì su un terminale reale,
                                 mai su una pipe)
+                                [--debug] giri, token, millisecondi e stop
+                                reason invece dei soli passi (a caldo: /debug)
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -241,7 +243,11 @@ async function main(rawArgv: string[]): Promise<number> {
   // is the same whether they ride with a bare `muffin` (`command` ends up
   // `undefined`, not the flag string) or with `muffin repl`.
   const stream = streamOverride(rawArgv);
-  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream');
+  // `--debug` come `--stream`: tolto qui e non parsato per-ramo, così vale sia
+  // per il `muffin` nudo (dove `command` resta `undefined` invece di diventare
+  // la stringa del flag) sia per `muffin repl`.
+  const debug = rawArgv.includes('--debug');
+  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream' && a !== '--debug');
   const [typed, ...rest] = argv;
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
@@ -251,7 +257,7 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      return runRepl(paths().home, stream !== undefined ? { stream } : {});
+      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
     case 'init':
       return cmdInit(rest);
     case 'config':
@@ -295,7 +301,7 @@ async function main(rawArgv: string[]): Promise<number> {
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl(paths().home, stream !== undefined ? { stream } : {});
+      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
     }
     case '--help':
     case '-h':
