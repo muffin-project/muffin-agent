@@ -20,20 +20,21 @@ Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
 **La corsia della memoria era morta dal 25/08**, dal cambio modello (sonnet-5 →
 `qwen/qwen3.8-27b`): `stop=max_tokens · 1502 token in uscita`, il tetto di 1500
 speso a ragionare senza scrivere un carattere di JSON. Chiuso da #148: `facts`
-16 → **20** dopo #148 e #153. `doctor` era **verde** su due dei tre giri morti (#147)
+16 → **30** dopo #148, #153 e #155 — l'estrattore raccoglie di nuovo. `doctor` era **verde** su due dei tre giri morti (#147)
 e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
 
 **Resta da fare, con le prove già in mano:**
 
-1. **Il prompt dell'estrattore** (prossima slice): il modello piccolo scrive
-   `confidence: "high"`. Non è formattazione ma vocabolario, e mappare una
-   parola su un numero metterebbe una confidenza inventata in un archivio di
-   credenze — si cambia la domanda, non lo schema.
-2. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
-   solo-systemd stampato ovunque: su macOS contraddice `doctor`.
-3. `--version` → `0.0.0`; `memory.rerank` senza span; l'adapter openai-compat
+1. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
+   solo-systemd stampato ovunque: su macOS contraddice `doctor`, che vede
+   launchd tenerlo su.
+2. `--version` → `0.0.0`; `memory.rerank` senza span; l'adapter openai-compat
    non legge il reasoning, quindi quei token si pagano e il testo si perde — la
-   via vera per (1) e per il tetto di #148.
+   via vera per il tetto di #148.
+3. Se il lotto di consolidamento lancia (visto: `terminated` da undici, la
+   connessione tagliata a metà risposta), il giro scrive una riga **vuota**:
+   zero episodi, zero fatti. I fatti già scritti e gli episodi già marcati
+   restano, ma il rapporto di quel giro non dice cosa era successo.
 
 **Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
 modello vivo (`research/cache-prompt-2026-08-26.md`). Il prompt vivo è del 9
