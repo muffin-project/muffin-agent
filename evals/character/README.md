@@ -51,7 +51,17 @@ npx tsx evals/character/run.ts --models claude-sonnet-5,claude-haiku-4-5-2025100
 ```
 
 Le trascrizioni finiscono in `evals/character/out/<timestamp>/<modello>/` e
-**non** sono versionate: sono evidenza di una corsa, non del repo.
+**non** sono versionate: sono evidenza di una corsa, non del repo. Accanto a
+ogni `<probe>.judge.json` (i verdetti) c'è un `<probe>.judge.raw.json`: la
+risposta grezza del giudice, con `stopReason` e `usage`. Serve perché un
+verdetto `unparsed` da solo non dice niente — la corsa del 27/08 ha perso 30
+misure su 55 e non ha lasciato con cosa capire perché (era il giudice che
+ragionava dentro il proprio tetto di uscita e tornava `stop=max_tokens` con
+`content` vuoto; vedi `JUDGE_OUTPUT_TOKENS` in `run.ts`).
+
+Un `unparsed` **non** è un `n/a`: `n/a` è un giudizio («questo scambio non dà
+materiale»), `unparsed` è una misura persa. Il report li conta separati, e una
+corsa con misure perse fa uscire il comando con stato diverso da zero.
 
 ## Cosa NON prova
 
