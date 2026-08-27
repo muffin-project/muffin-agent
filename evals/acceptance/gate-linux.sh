@@ -66,8 +66,10 @@ docker run --rm \
     # nuovo, questo va rosso prima di ACCETTAZIONE, non dopo.
     # NB: questa copia usa lo stesso .tar da `git archive` di /app sopra, quindi
     # non porta .git: `muffin --version` qui sotto legge "build sconosciuta"
-    # per costruzione, non per un difetto di install.sh — verificato a mano da
-    # un vero `git clone` non-shallow (v. slice/installazione-provata). Il
+    # per costruzione, non per un difetto di install.sh — verificato a mano
+    # con `git clone --depth 1` (shallow, ha comunque .git) fuori da questo
+    # gate (v. slice/installazione-provata): stesso INSTALL_EXIT=0, e
+    # `muffin --version` legge lo sha vero invece di "build sconosciuta". Il
     # passaggio da archive a clone per /app stesso e un difetto di trasporto
     # gia in lavorazione altrove: non duplicato qui.
     mkdir -p /install-check && tar xf /repo.tar -C /install-check
