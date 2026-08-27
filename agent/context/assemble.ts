@@ -158,6 +158,59 @@ export function todoSection(open: TodoItem[]): string {
 }
 
 /**
+ * Come si presenta al modello qualcosa che `muffin undo` ha rimesso indietro.
+ *
+ * D11 chiede un undo che riallinei «il filesystem **e** il turno», e la seconda
+ * metà è questa: senza, dopo un undo la cronologia dice ancora «ho scritto
+ * nuovo.txt», il giro dopo ci costruisce sopra, e l'idea che il modello ha del
+ * mondo e il mondo divergono in silenzio.
+ *
+ * **La forma è marcare, non riscrivere e non appendere**, e le tre non sono
+ * equivalenti:
+ *
+ *  - *riscrivere* l'esito dentro il record renderebbe mutabile il solo posto
+ *    che dice cosa il tool rispose davvero: fine della provenance, e una
+ *    superficie in cui una riga può cambiare senza che nulla lo dica;
+ *  - *appendere* un fatto nuovo in coda funziona solo se il modello legge fino
+ *    in fondo e collega due punti lontani della finestra — e su una finestra
+ *    tagliata dal davanti (`reinjectedHistory`) la smentita può sopravvivere
+ *    all'affermazione o viceversa, a seconda di dove cade il taglio;
+ *  - *marcare* mette la smentita **nel punto in cui sta l'affermazione**, e
+ *    lascia la riga intatta là dove è scritta. È la forma che questo repo usa
+ *    già per un fatto superato — `facts.superseded_by` + `expired_at`,
+ *    `episodes.superseded_at` (`core/memory/schema.ts`): la riga non si
+ *    cancella e non si riscrive, smette di essere *presentata* come corrente.
+ *
+ * Il testo dice tre cose e nessuna di più: che è stato annullato, che quello
+ * che segue è ciò che fu detto allora, e cosa fare adesso (riguardare, non
+ * ridedurre). Non dice «hai sbagliato»: l'undo è una decisione dell'owner sul
+ * mondo, non un giudizio sul turno.
+ */
+const ANNULLATO = '[ANNULLATO con `muffin undo`';
+
+/** Un messaggio dell'agente i cui effetti sono stati disfatti. */
+export function undoneSaid(text: string): string {
+  return (
+    `${ANNULLATO}] Gli effetti di questo tuo messaggio sono stati rimessi indietro: i file che dice ` +
+    `di aver toccato sono tornati com'erano prima. È ancora ciò che hai detto allora, non ciò che ` +
+    `c'è adesso — non darlo per fatto, e riguarda lo stato vero prima di costruirci sopra.\n${text}`
+  );
+}
+
+/**
+ * L'esito di una tool call che è stata rimessa indietro — la stessa marcatura,
+ * un livello più in basso, per il turno che viene **ripreso** invece che
+ * proseguito: là la bugia non è la prosa dell'agente ma il `tool_result` che
+ * dice «wrote 4 bytes», e arriva al modello dalla trascrizione durevole.
+ */
+export function undoneOutcome(content: string): string {
+  return (
+    `${ANNULLATO}] Questa chiamata è stata disfatta dopo che aveva risposto: quello che segue è la ` +
+    `risposta di allora e non descrive più il disco. Riverifica prima di riusarla.\n${content}`
+  );
+}
+
+/**
  * One block of a system prompt, named and sourced.
  *
  * `name`/`source` exist for exactly one consumer, `muffin prompt show

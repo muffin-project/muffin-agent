@@ -137,12 +137,19 @@ export class UndoJournal {
    *
    * Restituisce cosa ha fatto riga per riga: un undo che dice solo «fatto» non
    * è verificabile da chi lo ha chiesto.
+   *
+   * `undone` è la stessa lista in forma leggibile da una macchina, e non è un
+   * duplicato di comodo: chi deve riallineare il **turno** (D11) ha bisogno dei
+   * `callId` esatti che sono tornati indietro, e prende una prosa italiana solo
+   * se qualcuno la ri-parsifica. Un ripristino parziale segna solo la sua
+   * parte, che è l'unica versione onesta di un undo a metà.
    */
-  restore(turnId: string): { restored: string[]; problems: string[] } | null {
+  restore(turnId: string): { restored: string[]; problems: string[]; undone: Snapshot[] } | null {
     const entry = this.read(turnId);
     if (entry === null) return null;
     const restored: string[] = [];
     const problems: string[] = [];
+    const undone: Snapshot[] = [];
 
     for (const s of [...entry.snapshots].reverse()) {
       try {
@@ -150,6 +157,7 @@ export class UndoJournal {
           // Non c'era niente prima: tornare indietro vuol dire togliere.
           if (existsSync(s.path)) rmSync(s.path);
           restored.push(`${s.path} — rimosso (non esisteva prima del turno)`);
+          undone.push(s);
           continue;
         }
         const copia = join(this.dir(turnId), s.copy);
@@ -160,6 +168,7 @@ export class UndoJournal {
         mkdirSync(dirname(s.path), { recursive: true });
         copyFileSync(copia, s.path);
         restored.push(`${s.path} — ripristinato`);
+        undone.push(s);
       } catch (error) {
         // Un percorso che fallisce non ferma gli altri: un undo parziale e
         // dichiarato è meglio di uno che si arrende al primo ostacolo e lascia
@@ -167,7 +176,7 @@ export class UndoJournal {
         problems.push(`${s.path} — ${(error as Error).message}`);
       }
     }
-    return { restored, problems };
+    return { restored, problems, undone };
   }
 
   /** I turni che hanno qualcosa da disfare, dal più recente. */

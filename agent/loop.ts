@@ -14,7 +14,14 @@ import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
-import { tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
+import {
+  tenantClass,
+  todoSection,
+  undoneOutcome,
+  undoneSaid,
+  visibleTools,
+  type SystemPrompts,
+} from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
 import { historyTaint, reinjectedHistory, type ReinjectedHistory } from './context/history-taint.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
@@ -1079,7 +1086,21 @@ async function drive(
     replyChannel: input.replyChannel ?? null,
   };
 
-  const messages: Message[] = [...record.messages];
+  /**
+   * Le chiamate di **questo** turno che un undo ha già rimesso indietro.
+   *
+   * Serve al ramo `resumed` più sotto: un turno ripreso riparte dalla propria
+   * trascrizione durevole, e lì la bugia non è la prosa dell'agente (quella la
+   * marca `buildContext` per il *giro dopo*) ma il `tool_result` che dice
+   * «wrote 4 bytes» dentro `record.messages`. Un turno interrotto può essere
+   * disfatto e poi ripreso dalla lane, e senza questa lettura riprenderebbe
+   * credendo di aver scritto un file che è tornato com'era.
+   *
+   * Letto una volta qui, non dentro il ciclo. `record.messages` è vuoto su un
+   * turno fresco, quindi la query costa solo dove c'è qualcosa da riallineare.
+   */
+  const undoneHere = record.messages.length === 0 ? new Set<string>() : deps.turns.undoneCalls(record.id);
+  const messages: Message[] = record.messages.map((m) => annullaEsiti(m, undoneHere));
 
   // What this turn is shown, decided from who is speaking and where — never
   // from what they said. Filter first, cap second: `slice` on registration
@@ -1191,11 +1212,23 @@ async function drive(
      * long session can hand this dozens of rows to resolve.
      */
     const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
-    const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
+    const traceIds = spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined);
+    const taintByTrace = deps.turns.taintForIds(traceIds);
     snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
+    /**
+     * Quali di quei turni sono stati disfatti — D11, la metà che riallinea il
+     * turno e non solo il filesystem.
+     *
+     * Sugli **stessi** `traceIds` di `taintForIds` una riga più su, e per la
+     * stessa ragione di forma: una query per l'intera finestra reiniettata, non
+     * una per riga. È il consumatore del mark che `cli/undo.ts` scrive: senza
+     * questa riga il registro di undo tocca il disco e il record del turno, e
+     * il modello continua a leggere «ho scritto nuovo.txt» dalla sessione.
+     */
+    const undoneTurns = deps.turns.undoneTurns(traceIds);
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken));
+    messages.push(...buildContext(input, recalled, open, spoken, undoneTurns));
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -1848,7 +1881,14 @@ async function drive(
         repaired.push({
           type: 'tool_result',
           toolCallId: block.id,
-          content: done.content,
+          // Replay onesto: se un undo ha rimesso indietro proprio questa
+          // chiamata, il risultato registrato **è** quello che il tool disse e
+          // **non è più** ciò che c'è sul disco. Nasconderla direbbe al turno
+          // ripreso che non è mai avvenuta, che è la stessa bugia al contrario;
+          // riportarla nuda le farebbe ricostruire sopra. Stessa marcatura di
+          // `annullaEsiti` sopra, e stessa sorgente (`undone_at`), così le due
+          // non possono divergere su cosa significa «annullato».
+          content: done.undoneAt === null ? done.content : undoneOutcome(done.content),
           ...(done.isError ? { isError: true } : {}),
         });
         continue;
@@ -2594,6 +2634,33 @@ function resourceFor(
 }
 
 /**
+ * La stessa marcatura di `buildContext`, un livello più in basso: dentro la
+ * trascrizione durevole di un turno, sui `tool_result` la cui chiamata è stata
+ * disfatta.
+ *
+ * Presentazione, non mutazione: `record.messages` sul disco resta esattamente
+ * com'era, e questa copia è quella che parte verso il modello. È lo stesso
+ * verso di `markUndone` in `core/turns/store.ts` — la riga non si riscrive,
+ * smette di essere presentata come corrente — applicato al solo posto dove il
+ * turno rilegge se stesso.
+ *
+ * Il messaggio è restituito **identico** quando non c'è niente da marcare, così
+ * il caso normale non paga né una copia né un'allocazione per turno.
+ */
+function annullaEsiti(m: Message, undone: ReadonlySet<string>): Message {
+  if (undone.size === 0) return m;
+  if (!m.content.some((b) => b.type === 'tool_result' && undone.has(b.toolCallId))) return m;
+  return {
+    ...m,
+    content: m.content.map((b) =>
+      b.type === 'tool_result' && undone.has(b.toolCallId)
+        ? { ...b, content: undoneOutcome(b.content) }
+        : b,
+    ),
+  };
+}
+
+/**
  * Context assembly, outermost-stable first: identity, then tool definitions,
  * then recalled memory, then the message. Variable content never precedes
  * stable content, or the cache prefix is invalidated on every turn.
@@ -2621,6 +2688,12 @@ function buildContext(
    * accident. See `agent/context/history-taint.ts`'s `reinjectedHistory`.
    */
   spoken: ReinjectedHistory,
+  /**
+   * Gli id dei turni che `muffin undo` ha disfatto — risolti dal chiamante
+   * sugli stessi `traceId` con cui risolve il taint, per la stessa ragione per
+   * cui `spoken` è un parametro e non una rilettura qui dentro.
+   */
+  undoneTurns: ReadonlySet<string>,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -2645,9 +2718,17 @@ function buildContext(
     });
   }
   for (const m of kept) {
+    // Solo le righe dell'**agente**, non quelle dell'utente dello stesso turno.
+    // È l'agente che afferma di aver fatto qualcosa; la richiesta che gliel'ha
+    // chiesto resta vera parola per parola, e marcarla direbbe al modello che
+    // l'owner ha ritirato la domanda — che è una seconda bugia al posto della
+    // prima. La riga non viene tolta né sostituita: le si mette davanti la
+    // smentita, nel punto in cui sta l'affermazione (`undoneSaid`).
+    const annullato =
+      m.role === 'assistant' && m.traceId !== undefined && undoneTurns.has(m.traceId);
     messages.push({
       role: m.role as 'user' | 'assistant',
-      content: [{ type: 'text' as const, text: m.content }],
+      content: [{ type: 'text' as const, text: annullato ? undoneSaid(m.content) : m.content }],
     });
   }
   /**

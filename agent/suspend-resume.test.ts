@@ -447,3 +447,71 @@ describe('una chiamata in volo quando il processo muore', () => {
     expect(prompt(w.provider.seen[w.provider.seen.length - 1])).toContain('inviato');
   });
 });
+
+/**
+ * D11 dentro il turno stesso: un turno disfatto e poi **ripreso**.
+ *
+ * `buildContext` marca la cronologia di sessione per il *giro dopo*. Questo è
+ * l'altra porta, e ci si arriva davvero: un turno che il processo lascia
+ * `interrupted`, un `muffin undo` che rimette i suoi file, e la lane che lo
+ * riprende. Lì la bugia non è la prosa dell'agente ma il `tool_result` dentro
+ * `record.messages` — «inviato», «wrote 4 bytes» — che riparte verso il modello
+ * esattamente com'era.
+ *
+ * Due strade portano quel testo al modello e vanno chiuse tutte e due, perché
+ * chiuderne una lascerebbe un test verde e il difetto vivo:
+ *
+ *  1. il blocco **già** nella trascrizione durevole (`annullaEsiti`);
+ *  2. il blocco che `reconcile` **rigioca** da `recordedOutcomes` per una
+ *     chiamata rimasta senza risposta al momento del crash.
+ */
+describe('un turno ripreso dopo un undo non rilegge i propri effetti come ancora veri', () => {
+  it('il `tool_result` già in trascrizione arriva marcato, non cancellato', async () => {
+    const w = world([call('send_message', {}, 'm1'), answer('dopo'), answer('ripreso')]);
+    const first = await runTurn(w.deps, start(w));
+    // La trascrizione durevole contiene la risposta del tool, e il crash la
+    // lascia lì: è la forma normale di un turno interrotto *dopo* un batch.
+    w.crash(first.turnId, {});
+    // Un undo ha rimesso indietro proprio quella chiamata.
+    expect(w.turns.markUndone(first.turnId, 'm1')).toBe(true);
+
+    await resumeTurn(w.deps, first.turnId);
+    const ripreso = prompt(w.provider.seen[w.provider.seen.length - 1]);
+    // Quello che il tool rispose c'è ancora — nascondere la chiamata
+    // insegnerebbe al turno che non è mai avvenuta, la stessa bugia al rovescio.
+    expect(ripreso).toContain('inviato');
+    // E c'è la smentita, attaccata a quella risposta.
+    expect(ripreso).toContain('ANNULLATO');
+  });
+
+  it('anche l’esito che il replay rimette a posto arriva marcato', async () => {
+    const w = world([call('send_message', {}, 'm1'), answer('dopo'), answer('ripreso')]);
+    const first = await runTurn(w.deps, start(w));
+    // Il crash cade **prima** dei risultati: `reconcile` deve ricostruire il
+    // blocco da `recordedOutcomes`, che è una seconda sorgente per lo stesso
+    // testo. Se solo `annullaEsiti` leggesse `undone_at`, questa strada
+    // continuerebbe a consegnare «inviato» nudo.
+    w.crash(first.turnId, { messages: beforeTheResults(w.turns.get(first.turnId)!.messages) });
+    expect(w.turns.markUndone(first.turnId, 'm1')).toBe(true);
+
+    await resumeTurn(w.deps, first.turnId);
+    expect(w.sends).toBe(1);
+    const ripreso = prompt(w.provider.seen[w.provider.seen.length - 1]);
+    expect(ripreso).toContain('inviato');
+    expect(ripreso).toContain('ANNULLATO');
+  });
+
+  it('senza undo niente cambia: la marcatura non è un costo fisso sul replay', async () => {
+    // La metà che rende i due test sopra una prova invece di una tautologia:
+    // se ogni ripresa marcasse tutto, «ANNULLATO» comparirebbe comunque e non
+    // proverebbe che qualcuno legge `undone_at`.
+    const w = world([call('send_message', {}, 'm1'), answer('dopo'), answer('ripreso')]);
+    const first = await runTurn(w.deps, start(w));
+    w.crash(first.turnId, {});
+
+    await resumeTurn(w.deps, first.turnId);
+    const ripreso = prompt(w.provider.seen[w.provider.seen.length - 1]);
+    expect(ripreso).toContain('inviato');
+    expect(ripreso).not.toContain('ANNULLATO');
+  });
+});

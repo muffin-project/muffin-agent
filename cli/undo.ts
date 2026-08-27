@@ -1,4 +1,7 @@
+import DatabaseCtor from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import { paths } from '../core/config/config.js';
+import { TurnStore } from '../core/turns/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
 
 /**
@@ -137,6 +140,34 @@ export function cmdUndo(argv: string[], home = paths().home): number {
   for (const r of esito.restored) process.stdout.write(`  ${r}\n`);
   for (const p of esito.problems) process.stderr.write(`  ! ${p}\n`);
 
+  // La seconda metà di D11, e la sola ragione per cui questo comando apre il
+  // database: un undo che rimette il filesystem e lascia il turno dire «ho
+  // scritto nuovo.txt» fa divergere in silenzio l'idea che il modello ha del
+  // mondo e il mondo, e il consumatore di quella divergenza è il giro dopo.
+  //
+  // **Dopo** il restore, mai prima. Le due direzioni di fallimento non sono
+  // simmetriche: segnare per primo e poi non riuscire a ripristinare direbbe
+  // «annullato» di un effetto ancora sul disco, cioè inventerebbe la
+  // riconciliazione; ripristinare per primo e non riuscire a segnare lascia il
+  // difetto che c'era, ma **dichiarato** — e sotto si dichiara.
+  const riallineati = riallinea(home, bersaglio, esito.undone.map((s) => s.callId));
+
+  if (riallineati > 0) {
+    process.stdout.write(
+      `\n${riallineati} ${riallineati === 1 ? 'chiamata segnata come annullata' : 'chiamate segnate come annullate'} nel record del turno: ` +
+        `la cronologia non dice più che quei file sono stati scritti.\n`,
+    );
+  } else if (esito.undone.length > 0) {
+    // Dichiarato, non taciuto. Un turno che non è nel database — un journal
+    // preso a mano, una home senza `muffin.db` — non è un errore dell'undo, ma
+    // chi lo ha chiesto deve sapere che il disco è tornato indietro e la
+    // cronologia no, invece di scoprirlo dal comportamento del giro dopo.
+    process.stdout.write(
+      `\nnessuna riga del turno segnata come annullata: il filesystem è tornato indietro, ` +
+        `la cronologia di quel turno no. Se ci parli sopra, ricordagli che ${bersaglio} è stato disfatto.\n`,
+    );
+  }
+
   if (esito.problems.length === 0) {
     // Turno disfatto: le sue copie sono peso morto, e il ritorno indietro
     // dell'undo vive sotto `annulla-…`, che resta.
@@ -148,4 +179,35 @@ export function cmdUndo(argv: string[], home = paths().home): number {
     `\n${bersaglio} disfatto solo in parte — le copie restano, riprova dopo aver risolto.\n`,
   );
   return 1;
+}
+
+/**
+ * Segna nel record del turno le chiamate che l'undo ha appena rimesso indietro.
+ *
+ * Restituisce quante righe ha davvero segnato, mai quante ci ha provato: il
+ * chiamante deve poter dire «cronologia riallineata» solo quando lo è. Zero è
+ * un esito legittimo e frequente — il turno di rete `annulla-…` che questo
+ * stesso comando scrive non è un turno vero e non ha righe in
+ * `turn_tool_calls`, e un `muffin undo` ripetuto trova le righe già segnate.
+ *
+ * Non lancia. Il filesystem è già tornato indietro quando questa gira: farla
+ * fallire il comando trasformerebbe un undo riuscito-a-metà in un undo che
+ * *sembra* non essere avvenuto, che è la lettura peggiore delle due.
+ */
+function riallinea(home: string, turnId: string, callIds: readonly string[]): number {
+  if (callIds.length === 0) return 0;
+  const file = paths(home).db;
+  if (!existsSync(file)) return 0;
+  let db: DatabaseCtor.Database | undefined;
+  try {
+    db = new DatabaseCtor(file);
+    const turns = new TurnStore(db);
+    let n = 0;
+    for (const callId of callIds) if (turns.markUndone(turnId, callId)) n++;
+    return n;
+  } catch {
+    return 0;
+  } finally {
+    db?.close();
+  }
 }

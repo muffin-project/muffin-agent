@@ -9,7 +9,7 @@ import { cmdUndo } from '../cli/undo.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
 import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
-import type { ChatResult, Provider } from './providers/types.js';
+import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
 
 /**
@@ -30,8 +30,11 @@ import type { Principal } from '../core/policy/types.js';
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
   private i = 0;
+  /** Cosa il modello si è visto arrivare, turno per turno — il contesto assemblato per davvero. */
+  readonly seen: ChatCall[] = [];
   constructor(private readonly script: ChatResult[]) {}
-  async chat(): Promise<ChatResult> {
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.seen.push(call);
     return this.script[this.i++] ?? {
       text: 'fine', toolCalls: [], stopReason: 'end',
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
@@ -576,6 +579,89 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
 
     runtime.close();
   });
+
+  /**
+   * D11, la metà che mancava, provata dove conta: **il giro dopo**.
+   *
+   * Il `describe` qui sopra prova che il disco torna indietro. Non prova che il
+   * modello lo sappia, e per un anno non lo sapeva: dopo un `muffin undo` la
+   * cronologia diceva ancora «ho scritto nota.md», il turno successivo la
+   * rileggeva come storia vera e ci costruiva sopra. Un undo che ripara il
+   * disco e lascia mentire la memoria è peggio di nessun undo.
+   *
+   * Il test guarda **il contesto assemblato per davvero**, cioè i `messages`
+   * che `buildContext` consegna al provider al secondo turno, non uno stato
+   * intermedio. È l'unico punto in cui la domanda «il modello ci crede ancora?»
+   * ha una risposta osservabile.
+   *
+   * La catena che deve reggere è lunga e ogni anello è di un file diverso:
+   * `cli/undo.ts` segna → `turn_tool_calls.undone_at` → `TurnStore.undoneTurns`
+   * → `drive` risolve i `traceId` → `buildContext` marca la riga. Basta che uno
+   * smetta di leggere il precedente e il difetto torna, in silenzio: è la forma
+   * esatta dei difetti che questo file esiste per prendere.
+   */
+  it('dopo un undo, il turno dopo non legge più «ho scritto» come un fatto', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const modello = new Scripted([
+      writeCall('nota.md', 'dopo'),
+      {
+        text: 'Fatto: ho scritto nota.md.',
+        toolCalls: [], stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+    ]);
+    const deps: LoopDeps = { ...runtime.deps, provider: modello };
+    const session = deps.sessions.open('u3');
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'scrivi nota.md',
+    });
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0];
+    expect(turno).toBeDefined();
+    expect(cmdUndo([turno!, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    modello.seen.length = 0;
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'e adesso?',
+    });
+
+    const contesto = modello.seen[0]!.messages;
+    const detto = contesto
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) => m.content)
+      .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text);
+
+    // La riga c'è ancora — non si cancella niente, `AGENTS.md` §I-8 —
+    expect(detto.join('\n')).toContain('Fatto: ho scritto nota.md.');
+    // — e arriva già annullata, con la smentita davanti all'affermazione.
+    expect(detto.join('\n')).toContain('ANNULLATO');
+    // Nessuna riga afferma la scrittura senza portarsi dietro la smentita:
+    // è la formulazione che fallisce anche se qualcuno *aggiungesse* la nota
+    // in coda al contesto lasciando la riga nuda dov'era.
+    for (const t of detto) {
+      if (t.includes('ho scritto nota.md')) expect(t).toContain('ANNULLATO');
+    }
+    // E la riga dell'owner resta la sua: marcare anche quella direbbe che ha
+    // ritirato la richiesta, che è una seconda bugia al posto della prima.
+    const chiesto = contesto
+      .filter((m) => m.role === 'user')
+      .flatMap((m) => m.content)
+      .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    expect(chiesto).toContain('scrivi nota.md');
+    expect(chiesto).not.toContain('ANNULLATO');
+
+    runtime.close();
+  }, 30_000);
 
   it('senza journal il file non viene toccato — il verso giusto in cui degradare', async () => {
     // La metà che rende il test sopra una prova invece di una tautologia: se

@@ -374,6 +374,15 @@ CREATE TABLE IF NOT EXISTS turn_tool_calls (
   content     TEXT,
   is_error    INTEGER,
   tier        INTEGER,
+  -- Quando \`muffin undo\` ha rimesso indietro l'effetto di questa chiamata.
+  --
+  -- Una colonna di ritiro, non una riscrittura di \`content\`: è la stessa forma
+  -- che \`episodes.superseded_at\` e \`facts.expired_at\`/\`superseded_by\` hanno già
+  -- in \`core/memory/schema.ts\` — la riga resta esattamente com'era e smette di
+  -- essere presentata come vera. Riscrivere \`content\` renderebbe mutabile il
+  -- solo posto che dice cosa il tool *rispose davvero*, e un record che si
+  -- riscrive non è più una prova di niente.
+  undone_at   TEXT,
   PRIMARY KEY (turn_id, call_id)
 );
 CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_open ON turn_tool_calls(turn_id, ended_at);
@@ -477,6 +486,8 @@ export class TurnStore {
   private readonly wakeStmt: Database.Statement;
   private readonly suspendedCountStmt: Database.Statement;
   private readonly outcomesStmt: Database.Statement;
+  private readonly undoneStmt: Database.Statement;
+  private readonly undoneCallsStmt: Database.Statement;
   private readonly undeliverableCountStmt: Database.Statement;
 
   constructor(
@@ -489,6 +500,10 @@ export class TurnStore {
     // Additive, for a database written before `claim_token` existed — see
     // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
     ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
+    // Additivo, per un database scritto prima che `undo` toccasse il turno —
+    // stessa ragione e stesso meccanismo di `claim_token` qui sopra, e di
+    // `episodes.superseded_at` in `core/memory/store.ts`.
+    ensureColumn(db, 'turn_tool_calls', 'undone_at', 'undone_at TEXT');
     // `@status` and a nullable `@pid`, where both used to be the literal
     // `'running'` and this process: a connector that creates the row and
     // returns (B2) writes a turn nobody is executing yet, and a row claimed by
@@ -673,8 +688,21 @@ export class TurnStore {
     );
     /** Recorded tool outcomes, for a resume that must replay instead of re-calling. */
     this.outcomesStmt = db.prepare(
-      `SELECT call_id AS callId, content, is_error AS isError, tier
+      `SELECT call_id AS callId, content, is_error AS isError, tier, undone_at AS undoneAt
        FROM turn_tool_calls WHERE turn_id = ? AND ended_at IS NOT NULL`,
+    );
+    // Segna, non riscrive. `ended_at IS NOT NULL` perché un effetto che non ha
+    // mai riportato un esito non è ciò che l'undo ha rimesso indietro, e
+    // `undone_at IS NULL` perché il primo annullamento è quello vero: un
+    // secondo `muffin undo` sullo stesso turno non deve spostare la data in
+    // avanti. Stessa clausola di `supersede` in `core/memory/store.ts`
+    // (`WHERE ... AND expired_at IS NULL`), e per la stessa ragione.
+    this.undoneStmt = db.prepare(
+      `UPDATE turn_tool_calls SET undone_at = @now
+       WHERE turn_id = @turnId AND call_id = @callId AND ended_at IS NOT NULL AND undone_at IS NULL`,
+    );
+    this.undoneCallsStmt = db.prepare(
+      `SELECT call_id AS callId FROM turn_tool_calls WHERE turn_id = ? AND undone_at IS NOT NULL`,
     );
     /** Turns whose answer has nowhere to go (D2) — read by `health`. */
     this.undeliverableCountStmt = db.prepare(`SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`);
@@ -845,19 +873,92 @@ export class TurnStore {
    * re-running — Temporal's property in our own words: "When a Workflow calls
    * an Activity … During replay, that result is reused, not recomputed."
    */
-  recordedOutcomes(turnId: string): Map<string, { content: string; isError: boolean; tier: TrustTier | null }> {
+  recordedOutcomes(
+    turnId: string,
+  ): Map<string, { content: string; isError: boolean; tier: TrustTier | null; undoneAt: string | null }> {
     const rows = this.outcomesStmt.all(turnId) as {
       callId: string;
       content: string | null;
       isError: number | null;
       tier: number | null;
+      undoneAt: string | null;
     }[];
     return new Map(
       rows.map((r) => [
         r.callId,
-        { content: r.content ?? '', isError: r.isError === 1, tier: (r.tier as TrustTier | null) ?? null },
+        {
+          content: r.content ?? '',
+          isError: r.isError === 1,
+          tier: (r.tier as TrustTier | null) ?? null,
+          // Riportato, mai filtrato via: un replay che *nasconde* la chiamata
+          // annullata insegnerebbe al turno ripreso che non è mai avvenuta,
+          // che è la seconda metà della stessa bugia. Chi replaya la presenta
+          // annullata (`agent/loop.ts`, `annullato`).
+          undoneAt: r.undoneAt,
+        },
       ]),
     );
+  }
+
+  /**
+   * «Questa chiamata è stata rimessa indietro.»
+   *
+   * Il lato scrittura della riconciliazione che D11 chiede: `muffin undo`
+   * rimette il file **e** segna la riga del turno, così la cronologia smette di
+   * dire «ho scritto» per una scrittura che sul disco non c'è più.
+   *
+   * Segna e basta — `content`, `tier` e `is_error` restano quelli che il tool
+   * rispose davvero. È la forma che questo repo usa già per un fatto superato
+   * (`facts.superseded_by` + `expired_at`, `episodes.superseded_at`): la riga
+   * non si riscrive e non si cancella, smette di essere *presentata* come
+   * corrente. Le due alternative erano riscrivere `content` — e allora il solo
+   * posto che dice cosa il tool rispose diventa mutabile, cioè una superficie
+   * d'attacco e la fine della provenance — oppure appendere un fatto nuovo che
+   * contraddice il vecchio, che funziona solo se il modello legge fino in
+   * fondo. Marcare mette la smentita **nel punto in cui sta l'affermazione**.
+   *
+   * Restituisce se ha segnato qualcosa: un `(turn_id, call_id)` che questa
+   * tabella non conosce — un journal di undo il cui turno non è mai stato un
+   * turno vero, per esempio il `annulla-…` che `cli/undo.ts` scrive come rete —
+   * cambia zero righe, e il chiamante deve poterlo distinguere da un mark
+   * riuscito invece di annunciare una riconciliazione che non è avvenuta.
+   */
+  markUndone(turnId: string, callId: string, at: Date = this.clock()): boolean {
+    return this.undoneStmt.run({ turnId, callId, now: at.toISOString() }).changes === 1;
+  }
+
+  /**
+   * Le chiamate di questo turno che un undo ha già rimesso indietro.
+   *
+   * Una query per turno, non una per riga, per la stessa ragione di
+   * `taintForIds`: chi la chiama sta assemblando un contesto, non iterando.
+   */
+  undoneCalls(turnId: string): Set<string> {
+    return new Set((this.undoneCallsStmt.all(turnId) as { callId: string }[]).map((r) => r.callId));
+  }
+
+  /**
+   * Quali di questi turni hanno almeno una chiamata annullata.
+   *
+   * Il lato lettura per la cronologia di **sessione**: una riga di sessione
+   * porta il suo `traceId`, che è l'id del turno (`NewTurn.id`, «one identity,
+   * so 'why' is a join»), e `agent/context/history-taint.ts` fa già esattamente
+   * questo join per il tier. Una query per l'intera finestra reiniettata,
+   * modellata su `taintForIds` riga per riga — inclusa la ragione per cui non è
+   * uno statement preparato nel costruttore: il numero di placeholder dipende
+   * dal chiamante.
+   */
+  undoneTurns(ids: readonly string[]): Set<string> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT turn_id AS turnId FROM turn_tool_calls
+         WHERE undone_at IS NOT NULL AND turn_id IN (${placeholders})`,
+      )
+      .all(...unique) as { turnId: string }[];
+    return new Set(rows.map((r) => r.turnId));
   }
 
   get(id: string): TurnRecord | null {
