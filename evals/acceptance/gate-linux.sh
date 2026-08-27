@@ -91,7 +91,14 @@ docker run --rm \
     $AS npx tsx -e "import(\"./core/sandbox/probe.js\").then((m)=>console.log(JSON.stringify(m.probeSandbox())))"
     echo "=== ACCETTAZIONE (non-root) ==="
     set +e
-    $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot
+    $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=/tmp/gate-home/accettazione.json
     echo "ACCEPT_EXIT=$?"
+    # Il secondo gate, quello che il workflow tratta come autoritativo su
+    # M5-BIS. Finche non c-era, questo script provava la suite su Linux e non
+    # provava mai il report che ne decide il significato — cioe proprio dove i
+    # due divergono: su Linux b-job-script si salta, e classificare quel salto
+    # come dichiarato invece che come rosso e codice che gira solo qui.
+    $AS env MUFFIN_ACCEPT_RESULTS=/tmp/gate-home/accettazione.json npx tsx evals/acceptance/report.ts
+    echo "REPORT_EXIT=$?"
     set -e
   '
