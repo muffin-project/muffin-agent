@@ -600,3 +600,75 @@ describe('muffin --version dice quale build è', () => {
     expect(r.out).toContain(sha.slice(0, 12));
   });
 });
+
+/**
+ * Le domande di #117 esistono solo su un terminale, e un terminale non si
+ * finge: `process.stdin.isTTY` è la condizione, quindi ogni test che passa da
+ * una pipe prova il ramo headless — cioè l'altro.
+ *
+ * Da qui in giù il binario vero gira dietro un pty vero (`script`), che è
+ * l'unico modo di vedere il ramo che l'owner incontra davvero.
+ */
+const SCRIPT_C_E = process.platform === 'linux';
+
+/** Un argomento, al sicuro dentro `sh -c` — serve solo sul ramo util-linux. */
+function shq(a: string): string {
+  return `'${a.split("'").join(`'\\''`)}'`;
+}
+
+function haScript(): boolean {
+  return spawnSync('script', ['--version'], { encoding: 'utf8' }).status !== null;
+}
+
+/**
+ * Il binario, dietro un pty. Le due `script` non hanno la stessa riga di
+ * comando: BSD (macOS) prende il comando come argv dopo il file, util-linux
+ * (Linux, la produzione) vuole `-c "una stringa"`. Divergono e vanno scritte
+ * entrambe, non scelte.
+ */
+function muffinTty(env: Record<string, string>, args: string[]): { code: number; out: string } {
+  const argv = ['node', '--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args];
+  const comando = SCRIPT_C_E
+    ? `script -qec ${shq(argv.map(shq).join(' '))} /dev/null`
+    : `script -q /dev/null ${argv.map(shq).join(' ')}`;
+  // `< /dev/null` non è cosmetico: dentro un worker di vitest lo stdin che
+  // `spawnSync` fornisce è un socket, e `script` (BSD) ci chiama sopra
+  // `tcgetattr` e muore prima di aprire il pty. Serve un descrittore vero, e
+  // fa anche da EOF immediato — che è precisamente il Ctrl+D sotto esame.
+  const r = spawnSync('sh', ['-c', `${comando} < /dev/null`], {
+    env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 60_000,
+  });
+  // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
+  // CR rende le asserzioni leggibili quanto quelle del ramo headless.
+  const pulito = `${r.stdout ?? ''}${r.stderr ?? ''}`
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\r/g, '\n');
+  return { code: r.status ?? -1, out: pulito };
+}
+
+describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
+  it('chiede la chiave — la domanda esiste solo qui', () => {
+    // Il ramo headless di sopra non la stampa mai. Se `cmdInit` smettesse di
+    // chiedere, nessuno di quei test se ne accorgerebbe.
+    const { dir, xdg } = scratchHome();
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+    expect(r.out).toContain('Chiave API');
+  });
+
+  it('Ctrl+D alla prima domanda finisce come il ramo headless, non come un crash', () => {
+    // Prima: uscita 13 e `Detected unsettled top-level await`, con NIENTE
+    // scritto — nemmeno le directory. `rl.question` non chiama il callback su
+    // EOF, e la promise non si decideva.
+    const { dir, xdg } = scratchHome();
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+
+    expect(r.out).not.toContain('unsettled top-level await');
+    expect(r.code).not.toBe(13);
+    // Init incompleto è 1, e dice cosa manca e come riprendere: è esattamente
+    // ciò che fa una pipe senza chiave, che è il punto — Ctrl+D a una domanda
+    // che dice «invio per saltare» non può fare peggio di Invio.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('api key');
+    expect(existsSync(join(dir, 'config.json'))).toBe(true);
+  });
+});
