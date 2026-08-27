@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -137,5 +137,53 @@ describe('runInit — the defaults registry it hands `muffin doctor` (core/confi
     // registry now records THAT content, not the hand-written one.
     expect(personaHash).toBe(sha256(readFileSync(paths(dir).persona)));
     expect(readFileSync(paths(dir).persona, 'utf8')).not.toContain('scritta a mano');
+  });
+});
+
+/**
+ * Il nome della chiave viene dal catalogo dei provider, e la migrazione sta
+ * tutta nell'ordine in cui si cerca.
+ *
+ * `provider_api_key` non dice quale provider, e con due provider in albero la
+ * stessa installazione avrebbe due chiavi e un nome solo per descriverle. Ma un
+ * rename secco spegne ogni installazione esistente: `config.provider.apiKeyRef`
+ * punta al nome vecchio, e nessuno lo riscrive. Quindi si scrive il nome nuovo
+ * e si legge il vecchio finché esiste.
+ */
+describe('il nome della chiave dice di chi è', () => {
+  it('un install nuovo su OpenRouter registra `openrouter_api_key`', () => {
+    const dir = scratchDir('muffin-init-nome-nuovo-');
+    runInit({ home: dir, apiKey: 'sk-or-nuova', provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' });
+
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    expect(config.provider.apiKeyRef).toBe('secret://openrouter_api_key');
+    expect(readFileSync(join(dir, 'secrets', 'openrouter_api_key'), 'utf8').trim()).toBe('sk-or-nuova');
+  });
+
+  /**
+   * Il caso che il rename romperebbe: la chiave c'è già, col nome vecchio.
+   * `init` deve **puntarci**, non scrivere un riferimento a un file che non
+   * esiste — che è esattamente come si spegne un'installazione funzionante.
+   */
+  it("e su un'installazione che ha già la chiave col nome vecchio, il riferimento resta quello", () => {
+    const dir = scratchDir('muffin-init-nome-vecchio-');
+    runInit({ home: dir, apiKey: 'sk-vecchia' }); // provider di default: nome generico
+    expect(readFileSync(join(dir, 'secrets', 'provider_api_key'), 'utf8').trim()).toBe('sk-vecchia');
+
+    // Secondo giro, stavolta dichiarando OpenRouter, e senza ripassare la chiave.
+    runInit({ home: dir, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', force: true });
+
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    expect(config.provider.apiKeyRef).toBe('secret://provider_api_key');
+    // E non ha fabbricato una seconda copia col nome nuovo.
+    expect(existsSync(join(dir, 'secrets', 'openrouter_api_key'))).toBe(false);
+  });
+
+  it('fuori dal catalogo il nome generico resta quello giusto', () => {
+    const dir = scratchDir('muffin-init-nome-locale-');
+    runInit({ home: dir, apiKey: 'sk-locale', provider: 'openai-compat', baseUrl: 'http://localhost:11434/v1' });
+
+    const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
+    expect(config.provider.apiKeyRef).toBe('secret://provider_api_key');
   });
 });
