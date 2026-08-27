@@ -26,6 +26,19 @@ export function promptNonce(home: string): string {
   // utente» non è un'ipotesi. Prima di questa riga i nonce vivevano solo in
   // memoria, per chiamata: metterne uno su disco è la cosa nuova, e va messa
   // con i permessi giusti. Judge di `slice/skill-di-serie`.
-  writeFileSync(file, `${nuovo}\n`, { encoding: 'utf8', mode: 0o600 });
-  return nuovo;
+  try {
+    // `wx`: fallisce se il file esiste già invece di troncarlo. Due processi
+    // che bootano insieme su una home nuova passavano entrambi `existsSync`,
+    // generavano due nonce e si sovrascrivevano a vicenda — nessuno dei due
+    // sbagliato, ma il perdente teneva in memoria un nonce che il disco non
+    // aveva più, e il prefisso della cache si frammentava proprio fra i
+    // processi che dovevano condividerlo. Segnalato dal judge della slice.
+    writeFileSync(file, `${nuovo}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    return nuovo;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // Qualcun altro è arrivato primo: il suo vince, e questo processo lo adotta.
+    const vincitore = readFileSync(file, 'utf8').trim();
+    return /^[0-9a-f]{12,}$/.test(vincitore) ? vincitore : nuovo;
+  }
 }
