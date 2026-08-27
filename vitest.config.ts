@@ -2,6 +2,10 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Una run che scrive nella home dell owner fallisce, invece di lasciare
+    // il file lì. Vedi `core/config/home-guard.ts` per le due volte in cui è
+    // successo davvero.
+    globalSetup: ['./vitest.home-guard.ts'],
     // Agent worktrees live under .claude/worktrees with full checkouts of this
     // repo: without the exclusion every suite runs twice and a stranger's
     // in-progress branch fails or passes as if it were ours.
