@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Embedder } from './embed.js';
 import { sweepDuplicates } from './maintenance.js';
 import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
+import { RERANK_MIN_CANDIDATES, type Reranker } from './rerank.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
 
@@ -1055,5 +1056,43 @@ describe('recall — the pinned core (slice/memoria-appuntata)', () => {
     expect(factIds).toEqual([...ids].reverse().slice(0, 12));
     expect(result.pinnedOverflow).toBe(2);
     expect(renderForPrompt(result)).toContain('altri 2 fatti appuntati');
+  });
+});
+
+/**
+ * `strategies` promette di nominare «le metà che hanno davvero girato, così un
+ * recall degradato non è mai silenzioso». Per il rerank diceva il falso: la
+ * riga finiva nell'elenco anche quando l'ordine veniva da RRF, perché un
+ * fallimento restituiva gli stessi candidati e nient'altro.
+ */
+describe('strategies non dice di aver riordinato quando non ha riordinato', () => {
+  const reranker = (reordered: boolean): Reranker => ({
+    id: 'finto',
+    rerank: async (_q, candidates, topK) => ({
+      items: candidates.slice(0, topK),
+      reordered,
+      ...(reordered ? {} : { why: 'il modello non ha risposto: rete giù' }),
+    }),
+  });
+
+  /** Abbastanza episodi da superare `RERANK_MIN_CANDIDATES`, tutti sulla stessa parola. */
+  function popolata(): { store: MemoryStore } {
+    const { store } = harness(false);
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) episode(store, `commercialista numero ${i}`);
+    return { store };
+  }
+
+  it('riordinato: la riga è quella secca di prima', async () => {
+    const { store } = popolata();
+    const r = await recall({ store, reranker: reranker(true) }, HOST, 'commercialista');
+    expect(r.strategies).toContain('rerank(finto)');
+  });
+
+  it('non riordinato: la riga porta il motivo, e non finge', async () => {
+    const { store } = popolata();
+    const r = await recall({ store, reranker: reranker(false) }, HOST, 'commercialista');
+    expect(r.strategies).not.toContain('rerank(finto)');
+    expect(r.strategies.some((s) => s.startsWith('rerank(finto) non riuscito'))).toBe(true);
+    expect(r.strategies.some((s) => s.includes('rete giù'))).toBe(true);
   });
 });
