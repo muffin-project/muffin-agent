@@ -56,6 +56,29 @@ docker run --rm \
     fi
     echo "NODE=$(node --version)  UNAME=$(uname -sm)"
     mkdir -p /app && tar xf /repo.tar -C /app
+
+    # install.sh e il percorso supportato per un owner che clona su una VPS —
+    # mai provato in container prima del 27/08/2026. `npm i -g .` da sorgente
+    # muore li con `tsc: not found` (npm -g non installa le devDependencies),
+    # ma install.sh gira `npm install` locale, che le installa. Copia a parte
+    # e non-root, cosi la prova non riusa la /app gia compilata sopra e misura
+    # davvero una compilazione da zero: se `prepare`/`compile` si rompono di
+    # nuovo, questo va rosso prima di ACCETTAZIONE, non dopo.
+    # NB: questa copia usa lo stesso .tar da `git archive` di /app sopra, quindi
+    # non porta .git: `muffin --version` qui sotto legge "build sconosciuta"
+    # per costruzione, non per un difetto di install.sh — verificato a mano da
+    # un vero `git clone` non-shallow (v. slice/installazione-provata). Il
+    # passaggio da archive a clone per /app stesso e un difetto di trasporto
+    # gia in lavorazione altrove: non duplicato qui.
+    mkdir -p /install-check && tar xf /repo.tar -C /install-check
+    IHOME=/tmp/install-home
+    mkdir -p "$IHOME"
+    chown -R nobody /install-check "$IHOME"
+    IAS="runuser -u nobody -- env HOME=$IHOME"
+    echo "=== INSTALL.SH (non-root, da zero) ==="
+    $IAS bash /install-check/install.sh < /dev/null
+    $IAS env PATH="$IHOME/.local/bin:/usr/local/bin:/usr/bin:/bin" muffin --version
+
     npm ci --no-audit --no-fund >/dev/null
     # Non-root, come in CI: il probe del sandbox RIFIUTA di rispondere da root
     # (root aggira la restrizione userns, quindi il verde sarebbe falso), e
@@ -71,6 +94,15 @@ docker run --rm \
     echo "=== ACCETTAZIONE (non-root) ==="
     set +e
     $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot
-    echo "ACCEPT_EXIT=$?"
-    set -e
+    rc=$?
+    echo "ACCEPT_EXIT=$rc"
+    # L'ultimo comando eseguito qui e quello il cui exit status diventa quello
+    # di questo `bash -c`, quindi di `docker run`, quindi di questo script
+    # (`set -e` in testa al file): un `set -e` come ultima riga e sempre
+    # successo (riabilitare unopzione non fallisce mai), quindi mascherava
+    # ACCEPT_EXIT=1 dietro uno script che usciva 0 — verificato iniettando
+    # un `false` al posto di vitest: lo script tornava 0 con ACCEPT_EXIT=1
+    # nel log. `exit "$rc"` e lultimo comando adesso, cosi chi consuma questo
+    # script ($? dopo la chiamata, non il testo del log) vede il rosso vero.
+    exit "$rc"
   '
