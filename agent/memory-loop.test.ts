@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import type { Embedder } from '../core/memory/embed.js';
 import { MemoryStore } from '../core/memory/store.js';
 import type { RecallDeps } from '../core/memory/recall.js';
+import { RERANK_MIN_CANDIDATES, type Reranker } from '../core/memory/rerank.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -88,7 +89,7 @@ const decls: CapabilityDecl[] = [
   { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
 ];
 
-function harness(script: ChatResult[]) {
+function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-mem-loop-'));
   const db = new DatabaseCtor(':memory:');
   const store = new MemoryStore(db);
@@ -98,7 +99,7 @@ function harness(script: ChatResult[]) {
   // under test would simply never run. Nothing is indexed by default, so every
   // test that does not call `vectors.index(...)` behaves exactly as before.
   const vectors = new VectorIndex(db, new FakeEmbedder());
-  const recallDeps: RecallDeps = { store, vectors };
+  const recallDeps: RecallDeps = { store, vectors, ...(over.reranker === undefined ? {} : { reranker: over.reranker }) };
   const writes: string[] = [];
   const provider = new Scripted(script);
 
@@ -141,7 +142,7 @@ function harness(script: ChatResult[]) {
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
     memory: { store, recall: recallDeps },
   };
-  return { deps, store, vectors, provider, writes, sessions: deps.sessions };
+  return { deps, store, vectors, provider, writes, home, sessions: deps.sessions };
 }
 
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
@@ -389,6 +390,49 @@ describe('memory wired into the loop', () => {
       const shown = h.provider.seen.join('\n');
       expect(shown).not.toContain('Marco');
       expect(shown).not.toContain('Lucia');
+    });
+  });
+});
+
+/**
+ * La cucitura: il costo del reranker sale davvero sullo span del recall.
+ *
+ * `recall()` lo restituisce col risultato — non ha un tracer, e dargliene uno
+ * sarebbe plumbing attraverso quattro file per un numero. Ma restituirlo e non
+ * attaccarlo è lo stesso guasto di non calcolarlo: era l'ultima chiamata al
+ * modello invisibile, e sarebbe rimasta invisibile.
+ */
+describe('lo span del recall porta il costo del reranker', () => {
+  it("i token della chiamata finiscono sullo span che la contiene", async () => {
+    const usato = { inputTokens: 812, outputTokens: 19, cacheReadTokens: 5 };
+    const h = harness([answer('ok')], {
+      reranker: {
+        id: 'finto',
+        rerank: async (_q, candidates, topK) => ({ items: candidates.slice(0, topK), reordered: true, usage: usato }),
+      },
+    });
+    // Sopra `RERANK_MIN_CANDIDATES`, altrimenti `recall` non chiama affatto.
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
+        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        createdAt: '2026-08-04T11:00:00Z',
+      });
+    }
+    await runTurn(h.deps, turn(h, 'commercialista'));
+
+    const spans = readdirSync(join(h.home, 'traces'))
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(h.home, 'traces', f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { attributes: Record<string, unknown> })
+      .filter((x) => x.attributes['gen_ai.operation.name'] === 'memory.recall');
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 812,
+      'gen_ai.usage.output_tokens': 19,
+      'muffin.usage.cache_read_tokens': 5,
     });
   });
 });

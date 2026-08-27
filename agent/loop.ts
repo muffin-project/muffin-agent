@@ -1094,6 +1094,18 @@ async function drive(
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),
           [ATTR.taint]: inherited,
+          // Il reranker chiama il modello dentro questo span, e fino a qui non
+          // compariva da nessuna parte: un recall lento si leggeva come un
+          // recall lento, mai come «dentro c'è un giro di modello». Sale col
+          // risultato invece che da un tracer perché `recall()` non ne ha uno,
+          // e darglielo sarebbe plumbing attraverso quattro file per un numero.
+          ...(result.rerankUsage === undefined
+            ? {}
+            : {
+                [ATTR.usageInputTokens]: result.rerankUsage.inputTokens,
+                [ATTR.usageOutputTokens]: result.rerankUsage.outputTokens,
+                [ATTR.cacheReadTokens]: result.rerankUsage.cacheReadTokens,
+              }),
         });
         const rendered = renderForPrompt(result);
         if (rendered !== '') recalled.push({ type: 'text', text: rendered });

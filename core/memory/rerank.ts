@@ -35,6 +35,19 @@ export type RerankOutcome = {
   reordered: boolean;
   /** Perché no, quando no. Assente quando ha riordinato davvero. */
   why?: string;
+  /**
+   * Cosa è costata la chiamata, quando è stata fatta.
+   *
+   * Torna col risultato invece di finire in uno span perché `recall()` non ha
+   * un tracer e dargliene uno sarebbe plumbing attraverso quattro file per un
+   * numero. Chi chiama `recall` uno span ce l'ha già — `agent/loop.ts` apre
+   * `muffin.tool_call`/`memory.recall` attorno — e sa dove metterlo.
+   *
+   * Presente anche quando `reordered` è falso: una chiamata che è fallita è
+   * stata pagata lo stesso, ed è esattamente il caso in cui non vederla
+   * inganna. Assente solo quando la chiamata non è avvenuta affatto.
+   */
+  usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 };
 
 export interface Reranker {
@@ -73,7 +86,12 @@ export class LlmReranker implements Reranker {
   }
 
   async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome> {
-    const asIs = (why: string): RerankOutcome => ({ items: candidates.slice(0, topK), reordered: false, why });
+    const asIs = (why: string, usage?: RerankOutcome['usage']): RerankOutcome => ({
+      items: candidates.slice(0, topK),
+      reordered: false,
+      why,
+      ...(usage === undefined ? {} : { usage }),
+    });
     if (candidates.length < RERANK_MIN_CANDIDATES) return asIs('troppo pochi candidati per pagare una chiamata');
 
     const listing = candidates
@@ -81,6 +99,7 @@ export class LlmReranker implements Reranker {
       .join('\n');
 
     let text: string | null = null;
+    let usage: RerankOutcome['usage'];
     try {
       const result = await this.provider.chat({
         model: this.model,
@@ -107,6 +126,11 @@ export class LlmReranker implements Reranker {
         stream: false,
       });
       text = result.text;
+      usage = {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+      };
     } catch (error) {
       // A reranker that fails must not take recall down with it: the RRF order
       // is a worse answer, not no answer. Ma peggiore va **detto**: chi legge
@@ -116,14 +140,14 @@ export class LlmReranker implements Reranker {
     }
 
     const order = parseOrder(text, candidates.length);
-    if (order.length === 0) return asIs('risposta del modello non leggibile come un ordine');
+    if (order.length === 0) return asIs('risposta del modello non leggibile come un ordine', usage);
 
     const ranked = order.map((i) => candidates[i]!).slice(0, topK);
     // Anything the model dropped still fills the tail: losing a candidate to a
     // parsing hiccup is worse than keeping it in a slightly wrong place.
     const chosen = new Set(order);
     const tail = candidates.filter((_, i) => !chosen.has(i));
-    return { items: [...ranked, ...tail].slice(0, topK), reordered: true };
+    return { items: [...ranked, ...tail].slice(0, topK), reordered: true, ...(usage === undefined ? {} : { usage }) };
   }
 }
 
