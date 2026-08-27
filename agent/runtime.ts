@@ -369,7 +369,21 @@ export function buildRuntime(
     // primo commento di `core/memory/embed.ts` lo dice da sempre, e finora non
     // si poteva fare). Su una VPS senza Ollama, un `new OllamaEmbedder()` fisso
     // significa che niente viene indicizzato e il recall resta solo testuale.
-    vectors = new VectorIndex(db, makeEmbedder(config.embedder, (ref) => readSecret(ref, home)));
+    vectors = new VectorIndex(
+      db,
+      makeEmbedder(
+        config.embedder,
+        (ref) => readSecret(ref, home),
+        // Entrare in modalità degradata è un evento, non uno stato da scoprire
+        // leggendo `doctor` di propria iniziativa: passa dallo stesso writer
+        // del consolidamento, quindi nel REPL rispetta la riga di stato invece
+        // di incollarcisi dentro.
+        (motivo) =>
+          (opts.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
+            `embedder: ${motivo.message} — passo al fallback, e ci resto fino al riavvio`,
+          ),
+      ),
+    );
   } catch {
     vectors = undefined;
   }
