@@ -1086,52 +1086,52 @@
   },
   "cli/repl.ts:100": {
     "path": "cli/repl.ts",
-    "line": 310,
+    "line": 340,
     "testo": "export async function runRepl("
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 328,
+    "line": 358,
     "testo": "* Where the readline interface reads from. Injectable for the same reason"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 396,
+    "line": 438,
     "testo": "// M5-BIS B14: a file the model produces can now reach the owner as a real"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 408,
+    "line": 450,
     "testo": "* possible (`--no-stream`), and the capability object has no room to carry"
   },
   "cli/repl.ts:174": {
     "path": "cli/repl.ts",
-    "line": 428,
+    "line": 470,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 516,
+    "line": 558,
     "testo": "* `gatewayStandDown` arbitrates each tick — which is also what lets this"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 553,
+    "line": 595,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 555,
+    "line": 597,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 556,
+    "line": 598,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 573,
+    "line": 615,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
