@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
+import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { readGateway } from '../core/gateway/lock.js';
@@ -9,7 +10,7 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
-import { paths } from '../core/config/config.js';
+import { paths, saveConfig } from '../core/config/config.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
@@ -24,7 +25,44 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
 /spend   quanto hai speso questo mese e oggi
+/think   ragionamento: on | off | reset (senza argomenti lo mostra)
 /exit    esci (o Ctrl+D)`;
+
+/**
+ * `/think` — la manopola del ragionamento, girata da qui e non solo a mano.
+ *
+ * Esiste perché la scelta è **misurabile e reversibile in una riga**: su un
+ * modello a reasoning ibrido il ragionamento cambia sia la qualità sia il conto,
+ * l'effetto è model-specific (il profilo lo dice: ha già fatto regredire l'uso
+ * dei tool) e l'unico modo di saperlo è provare due turni identici a manopola
+ * girata. Chiedere all'owner di editare un JSON e riavviare fra i due turni è
+ * il motivo per cui quella prova non la fa nessuno.
+ *
+ * Scrive `config.json`, che ADR-0036 mette esplicitamente fra le cose che
+ * Muffin può cambiare da sé — i tetti stanno nel sigillo apposta perché tutto
+ * il resto qui sotto sia negoziabile. Quindi la scelta **dura**: vale anche per
+ * il gateway al prossimo avvio, non solo per questa sessione.
+ *
+ * `reset` toglie la riga invece di scriverci `adaptive`, e non è la stessa cosa:
+ * senza override torna a valere il profilo del modello, che è dove sta la
+ * conoscenza su quel modello e che un `muffin update` ha il diritto di
+ * cambiare sotto i piedi. Un `adaptive` scritto a mano inchioderebbe
+ * l'installazione a una risposta giusta oggi per il modello di oggi.
+ */
+export function thinkingCommand(
+  arg: string,
+  current: 'adaptive' | 'off' | 'unset',
+  override: 'adaptive' | 'off' | 'unset' | undefined,
+  profileName: string,
+): { line: string; set?: 'adaptive' | 'off' | 'unset' | null } {
+  const stato = (t: string, da: string): string => `ragionamento: ${t === 'off' ? 'off' : 'on'} (${da})`;
+  const da = override === undefined ? `profilo ${profileName}` : 'config.json';
+  if (arg === '') return { line: stato(current, da) };
+  if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
+  if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
+  if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
+  return { line: `/think on | off | reset — «${arg}» non è nessuno dei tre` };
+}
 
 /**
  * How the CLI surface writes inside a REPL, and the one thing it has to do that
@@ -396,6 +434,28 @@ export async function runRepl(
         }
         if (line === '/session') {
           process.stderr.write(`${session.id}\n`);
+          continue;
+        }
+        if (line === '/think' || line.startsWith('/think ')) {
+          const arg = line.slice('/think'.length).trim();
+          const out = thinkingCommand(
+            arg,
+            runtime.deps.profile.thinking,
+            runtime.config.thinking,
+            runtime.deps.profile.name,
+          );
+          if (out.set !== undefined) {
+            const { thinking: _dropped, ...senza } = runtime.config;
+            const next = out.set === null ? senza : { ...runtime.config, thinking: out.set };
+            saveConfig(next, home);
+            runtime.config = next;
+            // La corsia principale ha un `Profile` tutto suo (`withThinking`
+            // copia sempre), quindi girare la manopola qui non tocca la corsia
+            // della memoria — che il ragionamento se lo spegne da sé comunque.
+            runtime.deps.profile.thinking =
+              out.set ?? selectProfile(runtime.config.models.main, loadProfiles()).thinking;
+          }
+          process.stderr.write(`${out.line}\n`);
           continue;
         }
         if (line === '/spend') {

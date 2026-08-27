@@ -55,7 +55,13 @@ describe('shipped profiles', () => {
   it('consumer-local: the full cascade, in the declared order', () => {
     const consumer = profiles.find((p) => p.name === 'consumer-local');
     expect(consumer?.recovery).toEqual(['nudge', 'reinjectTools', 'retryOnce', 'strictJson']);
-    expect(consumer?.thinking).toBe('off');
+    // `adaptive` dal 27/08, per decisione dell'owner, e il cambio è vero: da
+    // #167 l'adapter openai-compat manda davvero `reasoning:{effort:none}` su
+    // OpenRouter, quindi `off` su una famiglia a reasoning ibrido spegneva il
+    // ragionamento sul turno di conversazione invece di non fare niente.
+    // `adaptive` qui non mette **nessun** campo sul filo (l'adapter onora solo
+    // `off`), che è anche ciò che lo rende sicuro su Ollama e vLLM.
+    expect(consumer?.thinking).toBe('adaptive');
     // Small local models wander without it, and every server they run on takes it.
     expect(consumer?.sampling).toBe('deterministic');
   });

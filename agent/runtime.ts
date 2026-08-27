@@ -17,7 +17,7 @@ import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks }
 import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import { UndoJournal } from '../core/undo/journal.js';
 import type { Provider } from './providers/types.js';
-import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
@@ -313,7 +313,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   const profileProblems: string[] = [];
   const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
-  const profile = selectProfile(config.models.main, profiles);
+  // L'override dell'owner (`config.json` §thinking) sulla sola corsia di
+  // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
+  // corsie della memoria chiedono `off` da sé.
+  const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
 
   const recordSpend = (entry: SpendEntry): number => {
     const usd = costUsd(entry.model, entry, config.provider.baseUrl);
