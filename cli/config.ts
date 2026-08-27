@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { relative } from 'node:path';
 import { ConfigError } from '../core/config/config.js';
+import { styleFor } from './ui.js';
 import { listConfigKnobs, type ConfigKnob } from '../core/config/inventory.js';
 
 /**
@@ -30,7 +31,12 @@ export function cmdConfig(home: string, argv: string[]): number {
     return 78;
   }
 
-  process.stdout.write(values.json ? `${JSON.stringify(knobs, null, 2)}\n` : `${formatConfigKnobs(knobs, home)}\n`);
+  if (values.json) {
+    process.stdout.write(`${JSON.stringify(knobs, null, 2)}\n`);
+  } else {
+    const style = styleFor(process.stdout);
+    process.stdout.write(`${style.header('muffin config', home)}\n${formatConfigKnobs(knobs, home)}\n`);
+  }
   return 0;
 }
 
