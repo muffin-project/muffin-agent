@@ -110,8 +110,15 @@ export class OpenAICompatEmbedder implements Embedder {
         // OpenAI è il parametro che *accorcia davvero* l'embedding
         // (`text-embedding-3-*`). Senza, chiedere 512 significa ricevere 1536 e
         // scoprirlo all'insert in vec0 — cioè configurare una dimensione non
-        // nativa era garantito sbagliato. I server compatibili che non lo
-        // conoscono ignorano il campo, e il controllo qui sotto li prende.
+        // nativa era garantito sbagliato.
+        //
+        // Mandato **sempre**, e la generalità di questa scelta non è verificata:
+        // `dimensions` è posteriore a `text-embedding-ada-002`, e un endpoint
+        // che non lo conosce può rifiutare la richiesta invece di ignorare il
+        // campo. Se succede è un `HTTP 400` rumoroso — un guasto che si vede al
+        // primo giro, non un danno silenzioso — e il controllo qui sotto prende
+        // comunque i server che lo ignorano. Resta da decidere se legarlo al
+        // modello.
         body: JSON.stringify({ model: this.model, input: texts, dimensions: this.dimensions }),
         signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });

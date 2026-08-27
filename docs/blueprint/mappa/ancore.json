@@ -811,17 +811,17 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 230,
+    "line": 231,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 330,
+    "line": 331,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 57,
+    "line": 58,
     "testo": "supervisorProbes?: Partial<SupervisorProbes>;"
   },
   "cli/gateway.ts:27": {
@@ -1056,7 +1056,7 @@
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 258,
+    "line": 288,
     "testo": "total.skippedEmpty += report.skippedEmpty;"
   },
   "cli/memory.ts:28": {
@@ -1066,7 +1066,7 @@
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 328,
+    "line": 356,
     "testo": "* `verbose` reveals the judge's raw response on a row it could not read"
   },
   "cli/observe.ts:67": {
@@ -1786,12 +1786,12 @@
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
-    "line": 203,
+    "line": 258,
     "testo": "async index("
   },
   "core/memory/vectors.ts:151": {
     "path": "core/memory/vectors.ts",
-    "line": 248,
+    "line": 303,
     "testo": "async search("
   },
   "core/memory/vectors.ts:18": {
@@ -1801,7 +1801,7 @@
   },
   "core/memory/vectors.ts:212": {
     "path": "core/memory/vectors.ts",
-    "line": 309,
+    "line": 364,
     "testo": "indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {"
   },
   "core/net/egress.ts:41": {
@@ -2956,12 +2956,12 @@
   },
   "vectors.ts:43": {
     "path": "core/memory/vectors.ts",
-    "line": 43,
+    "line": 98,
     "testo": "// new version and a re-index — never a silent mix of incompatible vectors."
   },
   "vectors.ts:67": {
     "path": "core/memory/vectors.ts",
-    "line": 163,
+    "line": 218,
     "testo": "private migrateUnpartitioned(): void {"
   },
   "verify.ts:120": {
