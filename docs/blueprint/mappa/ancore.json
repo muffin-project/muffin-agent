@@ -811,57 +811,57 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 231,
+    "line": 232,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 331,
+    "line": 332,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 58,
+    "line": 59,
     "testo": "supervisorProbes?: Partial<SupervisorProbes>;"
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 30,
+    "line": 32,
     "testo": "import type { SurfaceRegistry } from '../core/surface/registry.js';"
   },
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 442,
+    "line": 444,
     "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 443,
+    "line": 445,
     "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 528,
+    "line": 530,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 439,
+    "line": 375,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 557,
+    "line": 559,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 572,
+    "line": 574,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
-    "line": 81,
+    "line": 83,
     "testo": "*"
   },
   "cli/init.ts:101": {
