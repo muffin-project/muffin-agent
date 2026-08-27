@@ -115,3 +115,40 @@ export function providerFor(provider: { kind: string; baseUrl?: string | undefin
   }
   return null;
 }
+
+/**
+ * I provider di ricerca web da cui si sceglie.
+ *
+ * Stessa forma, stessa ragione e stesso numero di voci di `PROVIDERS` sopra:
+ * l'astrazione esisteva già a valle — `agent/tools/search.ts` ha
+ * un'interfaccia `SearchBackend` con `id` e `endpoint`, e `tavilyBackend` ne è
+ * **una** implementazione — ma a monte era cablata in due punti: lo schema di
+ * config diceva `z.literal('tavily')` e `agent/runtime.ts` chiamava
+ * `tavilyBackend` senza guardare cosa ci fosse scritto. Un'interfaccia con un
+ * solo chiamante possibile non è un'astrazione, è una funzione con più passaggi.
+ *
+ * `secretName` è una convenzione, non un vincolo: `muffin search <id>` la usa
+ * per proporre un nome al segreto, e `config.search.apiKeyRef` resta libero per
+ * chi ne ha già uno con un altro nome.
+ */
+export type SearchProviderId = 'tavily';
+
+export type SearchProviderEntry = {
+  id: SearchProviderId;
+  label: string;
+  keysUrl: string;
+  /** Il nome che `muffin search` propone per il segreto, quando l'owner non ne ha già uno. */
+  secretName: string;
+};
+
+export const SEARCH_PROVIDERS: Readonly<Record<SearchProviderId, SearchProviderEntry>> = {
+  tavily: {
+    id: 'tavily',
+    label: 'Tavily',
+    keysUrl: 'https://app.tavily.com/home',
+    secretName: 'tavily_api_key',
+  },
+};
+
+/** Gli id validi, letti dal catalogo: lo schema di config non ne tiene una seconda copia. */
+export const SEARCH_PROVIDER_IDS = Object.keys(SEARCH_PROVIDERS) as [SearchProviderId, ...SearchProviderId[]];

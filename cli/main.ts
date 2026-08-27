@@ -42,6 +42,7 @@ import { fileURLToPath } from 'node:url';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
 import { cmdModel } from './model.js';
+import { cmdSearch } from './search-setup.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
   loadConfig,
@@ -91,6 +92,9 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
                                 embed. Senza argomenti mostra i tre e cosa
                                 costano; --list [filtro] sfoglia il catalogo
                                 del provider. A caldo: /model
+  muffin search [<motore>|off]  accendi la ricerca web scegliendo il motore
+                                (la chiave in pipe, mai in argv); senza
+                                argomenti dice com'e' messa
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -269,6 +273,20 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdConfig(paths().home, rest);
     case 'model':
       return cmdModel(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`) });
+    case 'search':
+      // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
+      // questa pigrizia, `muffin search` da solo si bloccherebbe su un
+      // terminale in attesa di una chiave che nessuno sta per dare.
+      return cmdSearch(paths().home, rest, {
+        out: (l) => process.stdout.write(`${l}\n`),
+        readKey: () => {
+          try {
+            return readAllStdin();
+          } catch {
+            return '';
+          }
+        },
+      });
     case 'doctor':
       return cmdDoctor(rest);
     case 'backup':

@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
+import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -69,7 +70,13 @@ export const ConfigSchema = z.object({
    */
   search: z
     .object({
-      provider: z.literal('tavily'),
+      /**
+       * Quale motore. `z.enum` costruito dal catalogo
+       * (`core/config/providers.ts`) e non un letterale scritto qui: due
+       * elenchi degli stessi id sono due elenchi che il giorno del secondo
+       * provider si scoprono diversi.
+       */
+      provider: z.enum(SEARCH_PROVIDER_IDS),
       /** `secret://name`, like the model key. Never the key itself. */
       apiKeyRef: z.string().min(1),
       maxResults: z.number().int().min(1).max(20).optional(),
