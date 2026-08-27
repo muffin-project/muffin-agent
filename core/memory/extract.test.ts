@@ -214,10 +214,11 @@ describe('un fallimento porta la prova, non il sintomo', () => {
     expect(r.error).toContain('Certo! Ecco i fatti');
   });
 
-  it('il tetto lascia spazio al reasoning che il profilo chiede spento e l adapter non spegne', async () => {
-    // Senza questo margine il tetto è 1500 e su un modello che ragiona la
-    // corsia è morta: nessun test la teneva, quindi poteva tornare indietro
-    // restando verde.
+  it('il tetto lascia spazio al reasoning sui server che non sanno spegnerlo', async () => {
+    // Da 27/08 la corsia chiede `thinking: 'off'` e su OpenRouter viene
+    // ascoltata. Su Ollama e vLLM no — un campo ignoto lì è un 400 — e senza
+    // questo margine il tetto torna 1500 e su un modello che ragiona la corsia
+    // è morta: nessun test la teneva, quindi poteva tornare indietro verde.
     const p = new Silent('max_tokens', 10);
     await extractFacts(p, 'm', INPUT);
     expect(p.seen?.maxOutputTokens).toBeGreaterThan(1500);

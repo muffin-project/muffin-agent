@@ -39,9 +39,17 @@ import {
  *    tokens that are not being billed now. That is a decision with a price, so
  *    it is not smuggled into a correctness fix.
  *
- * `ChatCall.thinking` is therefore a declared no-op here (ADR-0008: degrade
- * declaredly, never silently) — the profile can say `adaptive` for
- * `anthropic/claude-sonnet-5` and this adapter cannot honour it.
+ * Reading reasoning back is still not done, for the reasons above. **Asking for
+ * none of it now is** (2026-08-27, behind `reasoningEffort`), and it is the
+ * opposite trade: no schema at the boundary, no tokens billed — it removes the
+ * ones already being billed. The production install moved to
+ * `qwen/qwen3.8-27b` on 25/08, a model that reasons by DEFAULT, and the
+ * profile has declared `"thinking": "off"` for `*qwen3*` the whole time. The
+ * no-op was costing 1502 output tokens per extraction for an empty answer.
+ *
+ * So `ChatCall.thinking` is honoured here for `'off'` and only there:
+ * `'adaptive'` sends nothing, because "whatever the model does by default" is
+ * what sending nothing already means.
  *
  * Prompt-cache breakpoints it DOES carry now, behind `explicitCache`, and the
  * history of that flag is the reason it exists. This file used to say
@@ -90,19 +98,45 @@ export function wantsExplicitCache(baseURL?: string): boolean {
   }
 }
 
+/**
+ * Whether this endpoint understands a request to stop reasoning.
+ *
+ * Same shape as `wantsExplicitCache` and for the same reason: the dialect is a
+ * property of the endpoint, not of the caller. OpenRouter's chat-completion
+ * schema carries `reasoning.effort`, and `"none"` is in its enum (their API
+ * reference, verified 2026-08-27); Ollama, llama.cpp and vLLM know no such
+ * field, and a strict parser 400s on one it does not know.
+ *
+ * Hostname, not substring, and the trailing dot folded — the argument is
+ * `wantsExplicitCache`'s, unchanged: `openrouter.ai.evil.tld` must not flip
+ * request shape.
+ */
+export function speaksReasoningEffort(baseURL?: string): boolean {
+  try {
+    if (!baseURL) return false;
+    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
+    return /(^|\.)openrouter\.ai$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export class OpenAICompatProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   private readonly client: OpenAI;
   /** Public because the wiring is the part of this feature that must be provable. */
   readonly explicitCache: boolean;
+  /** Public for the same reason: the wiring is the part that must be provable. */
+  readonly reasoningEffort: boolean;
 
   constructor(
     apiKey: string,
     baseURL?: string,
     private readonly headers: Record<string, string> = {},
-    opts: { explicitCache?: boolean; fetch?: typeof globalThis.fetch } = {},
+    opts: { explicitCache?: boolean; reasoningEffort?: boolean; fetch?: typeof globalThis.fetch } = {},
   ) {
     this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
+    this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
     this.client = new OpenAI({
       apiKey,
       ...(baseURL ? { baseURL } : {}),
@@ -254,6 +288,19 @@ export class OpenAICompatProvider implements Provider {
       // — `temperature` is not in claude-sonnet-5's supported_parameters
       // there — but "the gateway forgives us" is not a contract.)
       ...(call.temperature !== undefined ? { temperature: call.temperature } : {}),
+      // `thinking: 'off'` stops being a declared no-op here — but only where the
+      // endpoint speaks the field. The measured cost of the no-op was not the
+      // lost text: it was 1502 output tokens spent reasoning, per extraction,
+      // for an empty `content` (see `REASONING_HEADROOM`). Asking for none is
+      // therefore the cheap direction, not the expensive one.
+      //
+      // Not in the OpenAI SDK's types (v7.4.0 has no `reasoning` on the request),
+      // so it goes through the same cast `cache_control` uses below. Only 'off'
+      // is sent: 'adaptive' means "whatever the model does by default", which is
+      // exactly what sending nothing already means.
+      ...(this.reasoningEffort && call.thinking === 'off'
+        ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>)
+        : {}),
       messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
       ...(call.tools && call.tools.length > 0
         ? {

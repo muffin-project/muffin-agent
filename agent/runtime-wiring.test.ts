@@ -456,3 +456,32 @@ describe('provider caching is wired by endpoint', () => {
     expect(providerOf('https://openrouter.ai.evil.tld/v1').explicitCache).toBe(false);
   });
 });
+
+describe('the request to stop reasoning is wired by endpoint too', () => {
+  /**
+   * Stessa giunzione, stessa ragione: `reasoningEffort` di default off
+   * significa che un runtime che dimentica di passarlo costruisce un provider
+   * che paga il reasoning che il profilo dichiara spento — 204 token contro 85
+   * sullo stesso prompt, misurato sull'installazione viva il 27/08.
+   */
+  const providerOf = (baseUrl?: string) => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-reasonwire-'));
+    runInit({ home, apiKey: 'sk-never-called', ...(baseUrl ? { baseUrl, provider: 'openai-compat' as const } : {}) });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-reasonwire-ws-')));
+    const provider = runtime.deps.provider as { reasoningEffort?: boolean };
+    runtime.close();
+    return provider;
+  };
+
+  it('chiede a OpenRouter di non ragionare, perché lì il campo esiste', () => {
+    expect(providerOf('https://openrouter.ai/api/v1').reasoningEffort).toBe(true);
+  });
+
+  it('tace su ogni altro endpoint, dove un campo ignoto è un 400', () => {
+    expect(providerOf('http://localhost:11434/v1').reasoningEffort).toBe(false);
+  });
+
+  it('un hostname che contiene solo il nome non cambia la forma della richiesta', () => {
+    expect(providerOf('https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(false);
+  });
+});
