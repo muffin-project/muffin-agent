@@ -9,6 +9,8 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { loadConfig, paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
+import { describeSupervision } from '../core/gateway/notify.js';
+import { LAUNCHD_LABEL } from '../core/gateway/unit.js';
 import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
@@ -138,6 +140,7 @@ function muffin(
   args: string[],
   stdin = '',
   extraEnv: Record<string, string> = {},
+  timeout = 60_000,
 ): { code: number; out: string; err: string } {
   const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
     // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
@@ -147,7 +150,7 @@ function muffin(
     env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1', ...extraEnv },
     input: stdin,
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout,
   });
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
@@ -936,4 +939,29 @@ describe('muffin gateway install — quale interprete finisce nella unit', () =>
     expect(r.out).not.toContain(dirname(realpathSync(process.execPath)));
     rmSync(stable, { recursive: true, force: true });
   });
+});
+
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `describeSupervision` era provata da sola e la riga di avvio continuava a
+ * derivare tutto da `NOTIFY_SOCKET`: rimettendo quel ternario, la suite restava
+ * verde. La funzione giusta scollegata è lo stesso guasto della funzione
+ * sbagliata — la stessa lezione di #151, nello stesso file.
+ */
+describe('muffin gateway run — la riga di supervisione', () => {
+  it('stampa esattamente ciò che `describeSupervision` dice per questo ambiente', () => {
+    // Confrontata con la funzione e non con una stringa: così vale su Linux e
+    // su macOS senza che il test sappia dove sta girando, e la mutazione muore
+    // comunque — il vecchio ternario produce parole diverse su entrambe.
+    const dir = home();
+    const env = { XPC_SERVICE_NAME: LAUNCHD_LABEL };
+    // Il banner esce prima di `serve()`, quindi cinque secondi bastano; poi il
+    // gateway viene ucciso dal timeout, che è l'unico modo di fermare un
+    // processo che di mestiere non finisce.
+    const r = muffin(dir, ['gateway', 'run'], '', env, 5_000);
+
+    expect(r.err).toContain(`supervisione: ${describeSupervision({ ...process.env, ...env }, process.platform)}`);
+  }, 30_000);
 });
