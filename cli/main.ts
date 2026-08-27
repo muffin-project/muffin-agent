@@ -70,6 +70,7 @@ import {
   localModelChoices,
   looksLikeTelegramToken,
   OPENROUTER_MODEL_FAMILIES,
+  DEFAULT_LOCAL_RUNTIME_URL,
   probeLocalRuntime,
   type ModelChoiceReason,
 } from './onboarding.js';
@@ -591,7 +592,13 @@ async function cmdInit(argv: string[]): Promise<number> {
   // something to offer, so there is never a question with one real answer.
   let localRuntime: { baseUrl: string; models: readonly string[] } | undefined;
   if (process.stdin.isTTY && !providerFlag && values['base-url'] === undefined && !apiKey && !stored) {
-    const probe = await probeLocalRuntime();
+    // L'endpoint sondato e' sovrascrivibile, e non e' una comodita': senza,
+    // *cosa* questo ramo esercita dipende da se chi lo esegue ha ollama acceso.
+    // E' precisamente cosi' che il blocco su Ctrl+D e' rimasto invisibile —
+    // con ollama spento la domanda sul runtime non esiste, e la seconda
+    // domanda diventa la prima. Serve anche a chi tiene un runtime su una
+    // porta diversa da quella indovinata.
+    const probe = await probeLocalRuntime(process.env['MUFFIN_LOCAL_RUNTIME_URL'] ?? DEFAULT_LOCAL_RUNTIME_URL);
     if (probe.available) localRuntime = await askLocalOrApi(probe);
   }
 
