@@ -13,6 +13,8 @@ import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
+import { styleFor } from './ui.js';
+import { costUsd } from '../core/budget/pricing.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
@@ -97,9 +99,9 @@ export const TOOL_PHRASES: Readonly<Record<string, string>> = TOOL_PHRASE;
 export function statusFor(event: TurnEvent): string | null {
   switch (event.type) {
     case 'round':
-      return 'penso…';
+      return '  penso…';
     case 'tool_start':
-      return `${toolPhrase(event.name)}…`;
+      return `  ${toolPhrase(event.name)}…`;
     default:
       return null;
   }
@@ -247,10 +249,38 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     case 'tool_start':
       return null;
     case 'tool_end':
-      return `${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
+      // Rientrato di due, come l'attesa che sostituisce: il lavoro che ha
+      // prodotto la risposta sta sotto la domanda, non accanto ad essa
+      // (`cli/STYLES.md` §«La forma di un turno»).
+      return `  ${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
     default:
       return assertNever(event);
   }
+}
+
+/**
+ * La riga che chiude il turno, e gli da' una fine visibile.
+ *
+ * Senza, due turni di fila sono un blocco solo — che e' la meta' della
+ * lamentela «manco si capisce da dove parte un comando», applicata al REPL
+ * invece che alla shell. Che porti anche il costo e' quasi un effetto
+ * collaterale, ma e' il numero che prima si vedeva solo con `--debug` o con
+ * `/spend`, cioe' mai.
+ *
+ * Pura e con l'orologio come parametro: si prova senza far girare un turno.
+ */
+export function closingLine(
+  usage: { inputTokens: number; outputTokens: number },
+  ms: number,
+  usd: number | null,
+): string {
+  const secondi = `${(ms / 1000).toFixed(1)}s`;
+  const token = `${usage.inputTokens}→${usage.outputTokens} token`;
+  // Un costo che arrotonda a zero si scrive `<$0.0001` e non `$0.0000`: il
+  // secondo dice «gratis», che e' falso e per un tetto di spesa e' la bugia
+  // che conta.
+  const costo = usd === null ? null : usd < 0.0001 ? '<$0.0001' : `$${usd.toFixed(4)}`;
+  return `  ${[secondi, token, costo].filter((x): x is string => x !== null).join(' · ')}`;
 }
 
 /**
@@ -367,6 +397,18 @@ export async function runRepl(
    * ciclo non sarebbe raggiungibile da nessuno dei due.
    */
   const status = makeStatusLine((text) => process.stderr.write(text), progressEnabled);
+
+  /**
+   * Lo stile di questa sessione e il prompt che ne deriva.
+   *
+   * Il `›` prende il colore perche' e' l'unico pezzo di cornice che sta a
+   * colonna zero insieme alla risposta: distinguerlo e' cio' che rende
+   * evidente dove finisce quello che hai scritto tu e comincia quello che ha
+   * scritto lui. Su una pipa torna `› ` nudo, e readline riceve gli stessi byte
+   * di prima (`cli/STYLES.md`).
+   */
+  const style = styleFor(process.stderr);
+  const promptText = style.enabled ? `${style.accent('›')} ` : '› ';
 
   let runtime: Runtime;
   try {
@@ -580,7 +622,7 @@ export async function runRepl(
 
   try {
     for (;;) {
-      const line = (await rl.question('› ')).trim();
+      const line = (await rl.question(promptText)).trim();
       if (line === '') continue;
 
       if (line.startsWith('/')) {
@@ -654,6 +696,7 @@ export async function runRepl(
         continue;
       }
 
+      const iniziatoAlle = Date.now();
       controller = new AbortController();
       try {
         /**
@@ -715,6 +758,14 @@ export async function runRepl(
         // la risposta.
         status.clear();
         process.stdout.write(streamedAnyText ? '\n\n' : `\n${result.text}\n\n`);
+        // Su stderr, come tutto cio' che e' cornice: `muffin > risposte.txt`
+        // raccoglie le risposte e lascia questa a schermo.
+        if (progressEnabled) {
+          const usd = costUsd(runtime.config.models.main, result.usage, runtime.config.provider.baseUrl);
+          process.stderr.write(
+            `${style.dim(closingLine(result.usage, Date.now() - iniziatoAlle, usd))}\n\n`,
+          );
+        }
         if (result.stopped === 'suspended') {
           /**
            * A suspended turn prints nothing above (its text is empty), so
