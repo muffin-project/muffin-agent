@@ -320,6 +320,11 @@ function toContentBlock(block: ContentBlock): Anthropic.ContentBlockParam {
         text: block.text,
         ...(block.cache === 'stable' ? { cache_control: { type: 'ephemeral' as const } } : {}),
       };
+    // `{type:'image', source:{type:'base64', media_type, data}}` — docs Vision,
+    // lette il 28/08/2026. La sorgente `url` esiste e non si usa: vedi
+    // `ImageBlock` in providers/types.ts per il perche'.
+    case 'image':
+      return { type: 'image', source: { type: 'base64', media_type: block.mediaType, data: block.data } };
     case 'tool_use':
       return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
     case 'tool_result':

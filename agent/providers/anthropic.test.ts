@@ -471,3 +471,53 @@ describe('anthropic adapter · usage normalization at the boundary (P35)', () =>
     expect(costUsd(done.result.model, done.result.usage)).toBeCloseTo(EXPECTED_USD, 6);
   });
 });
+
+/**
+ * Un'immagine, nella forma che l'API Messages vuole.
+ *
+ * `{type:'image', source:{type:'base64', media_type, data}}` — docs Vision,
+ * lette il 28/08/2026, che elencano tre sorgenti: `base64`, `url` e `file_id`.
+ * Noi mandiamo **solo** la prima, e non e' una semplificazione: `url` farebbe
+ * scaricare l'immagine al provider — un'uscita di rete che il kernel non vede
+ * e non puo' negare — e obbligherebbe un'immagine privata a essere
+ * pubblicamente raggiungibile per poter essere letta.
+ *
+ * Il `data` viaggia **nudo**, senza prefisso `data:`: e' questo lato del filo a
+ * volerlo cosi', e per quello `ImageBlock` tiene la forma nuda e fa avvolgere
+ * l'altro adattatore.
+ */
+describe("anthropic adapter · un'immagine sul filo", () => {
+  it('manda un blocco image con sorgente base64 e il media type dichiarato', async () => {
+    const h = harness();
+    await h.provider.chat({
+      ...CALL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', mediaType: 'image/webp', data: 'QUJD' },
+            { type: 'text', text: 'cosa vedi?' },
+          ],
+        },
+      ],
+    });
+
+    const blocchi = (h.sent[0] as { messages: { content: Record<string, unknown>[] }[] }).messages[0]!.content;
+    expect(blocchi[0]).toEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/webp', data: 'QUJD' },
+    });
+    // E il testo dopo, come raccomandano le docs.
+    expect(blocchi[1]).toMatchObject({ type: 'text', text: 'cosa vedi?' });
+  });
+
+  /** Nessun `url` e nessun `file_id`: l'unica sorgente che usiamo e' base64. */
+  it('e non usa mai la sorgente url', async () => {
+    const h = harness();
+    await h.provider.chat({
+      ...CALL,
+      messages: [{ role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'QQ==' }] }],
+    });
+    expect(JSON.stringify(h.sent[0])).not.toContain('"type":"url"');
+  });
+});
