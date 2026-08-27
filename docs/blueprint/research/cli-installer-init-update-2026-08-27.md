@@ -109,7 +109,7 @@ percorso di update abbia una **verifica di forma** dopo il flip.
 worktree *corrente*; una release è un worktree collegato. Dettagli nel commit.
 Vale qui come esempio della §2: nessuna verifica di forma dopo il flip.
 
-### 3.2 `muffin init` rifiuta il comando, non la sorgente
+### 3.2 `muffin init` rifiuta il comando, non la sorgente — **chiuso il 27/08 (#201)**
 
 `cli/main.ts` esce **78** quando `MUFFIN_API_KEY` è nell'ambiente. La guardia è
 giusta e la decisione è dell'owner (18/08): l'environment è un vettore generico e
@@ -127,7 +127,7 @@ ha già una chiave, dirlo e proseguire — «ce l'hai già, togli la variabile e
 se è stata esposta» — invece di uscire. Fail-closed sulla sorgente, non
 fail-closed sul comando.
 
-### 3.3 `provider_api_key` non nomina il provider
+### 3.3 `provider_api_key` non nomina il provider — **chiuso il 27/08 (#207)**
 
 Il nome non dice quale provider, e con un catalogo di provider in albero
 (`core/config/providers.ts`, 27/08) diventa attivamente sbagliato il giorno che
@@ -148,16 +148,23 @@ già il meccanismo che `cmdSecret` usa per le copie in ombra.
 1. **Verifica di forma dopo il flip di `update`.** Il difetto di §3.1 è durato
    tre aggiornamenti perché niente guardava. Un passo che dopo lo scambio
    controlla che il launcher punti dentro `<checkout>/.releases/<sha>/` e non più
-   in fondo, e arrossa se no.
-2. **Spostare la guardia di `init`** dalla porta del comando alla sorgente
-   (§3.2). Piccolo, e toglie un rifiuto che non serviva a niente.
-3. **Il rename della chiave con la migrazione** (§3.3), non prima di aver deciso
-   il punto 4 — perché è lo stesso meccanismo.
+   in fondo, e arrossa se no. — **aperto.**
+2. ~~Spostare la guardia di `init` dalla porta del comando alla sorgente~~ —
+   **fatto** (#201): con una chiave già registrata `init` prosegue, avverte, e
+   non guarda la variabile.
+3. ~~Il rename della chiave con la migrazione~~ — **fatto** (#207): il nome
+   viene dal catalogo, si cerca sotto entrambi nell'ordine, e il riferimento
+   scritto in config è quello del nome davvero trovato.
 4. **Decidere riga per riga quali manopole meritano un verbo** (§1). Non
    `muffin configure`: il criterio di ADR-0036 applicato alla tabella, con le
-   caselle vuote riempite o dichiarate volutamente vuote.
+   caselle vuote riempite o dichiarate volutamente vuote. — **parziale**: hanno
+   preso un verbo `model` (main/light/embed), `search`, `think`/`debug` a caldo,
+   e `adopt` (#205) per i file di `defaults/`, che era un rimedio stampato e
+   mai eseguito. Restano senza: il fallback dell'embedder, `provider.baseUrl`,
+   `traces.retentionDays`.
 5. **Riprendere questa passata** dove il `429` l'ha interrotta: `hermes_cli`
-   oltre `auth.py`, l'`install.sh` di Codex, e come Letta fa il primo avvio.
+   oltre `auth.py`, l'`install.sh` di Codex, e come Letta fa il primo avvio. —
+   **aperto.**
 
 ## Fonti
 
