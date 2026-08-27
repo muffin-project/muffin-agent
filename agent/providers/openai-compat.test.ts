@@ -327,3 +327,60 @@ describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", ()
     expect((bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
   });
 });
+
+/**
+ * Un'immagine, nella forma che questo lato del filo vuole.
+ *
+ * `image_url` con un data URL — OpenRouter documenta entrambe le sorgenti
+ * (`https://…` e `data:image/jpeg;base64,…`), letto il 28/08/2026. Noi mandiamo
+ * solo la seconda, e non è una semplificazione: la prima farebbe scaricare
+ * l'immagine **al provider**, che è un'uscita di rete che il kernel non vede e
+ * non può negare, e obbligherebbe un'immagine privata a essere pubblicamente
+ * raggiungibile.
+ *
+ * Il modo in cui questo si rompe non è un 400. Se un'immagine finisse in
+ * `flatten`, diventerebbe stringa vuota e sparirebbe: il modello risponderebbe
+ * lo stesso, su un'immagine che non ha mai visto. Questi test contano le
+ * **parti**, che è l'unica cosa che distingue i due casi.
+ */
+describe("openai-compat · un'immagine non può sparire in silenzio", () => {
+  const IMG = { type: 'image' as const, mediaType: 'image/png' as const, data: 'AAAB' };
+
+  it("manda l'immagine come parte image_url con un data URL", async () => {
+    const h = harness(false);
+    await h.provider.chat({
+      ...CALL,
+      messages: [{ role: 'user', content: [IMG, { type: 'text', text: 'cosa vedi?' }] }],
+    });
+
+    const user = (h.bodies[0] as Body).messages[1]!;
+    expect(Array.isArray(user.content)).toBe(true);
+    const parti = user.content as { type: string; image_url?: { url: string }; text?: string }[];
+    expect(parti[0]).toMatchObject({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAB' } });
+  });
+
+  /**
+   * L'immagine **prima** del testo: entrambe le API lo raccomandano, e non
+   * costa niente.
+   */
+  it("e il testo viene dopo l'immagine, non prima", async () => {
+    const h = harness(false);
+    await h.provider.chat({
+      ...CALL,
+      messages: [{ role: 'user', content: [IMG, { type: 'text', text: 'cosa vedi?' }] }],
+    });
+    const parti = (h.bodies[0] as Body).messages[1]!.content as { type: string }[];
+    expect(parti.map((p) => p.type)).toEqual(['image_url', 'text']);
+  });
+
+  /**
+   * Senza immagini la forma resta **la stringa**, non un array di parti con una
+   * sola voce: Ollama, llama.cpp e vLLM ricevono byte identici a prima, che è
+   * la stessa garanzia che la cache esplicita ha dovuto dare.
+   */
+  it('e senza immagini un messaggio resta la stringa di sempre', async () => {
+    const h = harness(false);
+    await h.provider.chat(CALL);
+    expect((h.bodies[0] as Body).messages[1]!.content).toBe('ciao');
+  });
+});
