@@ -55,7 +55,56 @@ export type ProviderEntry = {
    * che non dice niente sul perché.
    */
   catalogueNeedsKey: boolean;
+  /**
+   * Il nome sotto cui si registra la chiave di questo provider.
+   *
+   * Stessa convenzione di `SEARCH_PROVIDERS[id].secretName`, e per la stessa
+   * ragione: `config.provider.apiKeyRef` resta libero per chi ne ha già uno con
+   * un altro nome, e questo è solo ciò che `init` propone quando deve
+   * sceglierne uno da zero.
+   */
+  secretName: string;
 };
+
+/**
+ * Il nome che ogni `init` ha scritto fino al 27/08/2026.
+ *
+ * **Si legge per sempre, non si scrive più.** Non nomina il provider, e con un
+ * catalogo in albero diventa attivamente sbagliato il giorno che i provider
+ * sono due: la stessa installazione avrebbe due chiavi e un nome solo per
+ * descriverle.
+ *
+ * Non è un rename secco e non può esserlo: `config.provider.apiKeyRef` punta a
+ * questo nome su ogni installazione già fatta, e cambiarlo senza leggere il
+ * vecchio spegne l'installazione al primo `update`. La forma è quella che
+ * `cmdSecret` usa già per le copie in ombra — si scrive il nome nuovo, si legge
+ * il vecchio finché esiste, e `doctor` dice che c'è una copia da cancellare.
+ */
+export const LEGACY_API_KEY_NAME = 'provider_api_key';
+
+/**
+ * Come si chiama la chiave di questo provider, se dovessimo sceglierlo adesso.
+ *
+ * Fuori dal catalogo (un Ollama locale, un vLLM, l'API nativa di Anthropic) non
+ * c'è un nome migliore da dare, e il generico resta quello giusto: è
+ * letteralmente ciò che descrive.
+ */
+export function apiKeyNameFor(provider: { kind: string; baseUrl?: string | undefined }): string {
+  return providerFor(provider)?.secretName ?? LEGACY_API_KEY_NAME;
+}
+
+/**
+ * I nomi sotto cui cercare una chiave già registrata, **nell'ordine in cui
+ * vanno provati**: prima quello del provider, poi il generico.
+ *
+ * L'ordine è la migrazione. Un'installazione vecchia trova solo il secondo e
+ * continua a funzionare senza toccare niente; una nuova trova il primo; una che
+ * ha entrambi usa quello nuovo, ed è `doctor` a dire che l'altro è di troppo.
+ */
+export function apiKeyCandidates(provider: { kind: string; baseUrl?: string | undefined }): string[] {
+  const proprio = apiKeyNameFor(provider);
+  return proprio === LEGACY_API_KEY_NAME ? [LEGACY_API_KEY_NAME] : [proprio, LEGACY_API_KEY_NAME];
+}
 
 export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
   openrouter: {
@@ -66,8 +115,22 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     keysUrl: 'https://openrouter.ai/keys',
     modelsPath: '/models',
     catalogueNeedsKey: false,
+    secretName: 'openrouter_api_key',
   },
 };
+
+/**
+ * Ogni nome sotto cui una chiave di provider può essere stata registrata.
+ *
+ * Per chi deve cercarne una **senza sapere ancora quale provider sia** — la
+ * guardia su `MUFFIN_API_KEY` in `cli/main.ts` gira prima che esista un
+ * `config.json`, e `muffin uninstall` deve nominare ogni copia persistente che
+ * sopravvive alla cancellazione, non solo quella del provider corrente.
+ */
+export const ALL_API_KEY_NAMES: readonly string[] = [
+  ...Object.values(PROVIDERS).map((p) => p.secretName),
+  LEGACY_API_KEY_NAME,
+];
 
 /**
  * L'hostname di un URL, minuscolo, o `null` se non è un URL.

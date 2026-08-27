@@ -24,6 +24,7 @@ import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
+import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 
 /**
@@ -329,6 +330,23 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   } catch (error) {
     const e = error as ConfigError;
     fail('api key', e.message, e.remedy ?? 'set the key');
+  }
+  // Una copia sotto un **altro nome**, che è il caso che il rename di
+  // `provider_api_key` -> `<provider>_api_key` crea e che il controllo qui
+  // sopra non può vedere: quello guarda i backend di *un* riferimento, questo
+  // guarda i nomi. Una chiave dimenticata sotto un nome che nessuno legge più
+  // è comunque una credenziale valida da qualche parte sul disco, ed è quella
+  // che alla rotazione successiva resta indietro.
+  const altriNomi = ALL_API_KEY_NAMES.filter((n) => `secret://${n}` !== config.provider.apiKeyRef).flatMap((n) =>
+    locateSecretAll(`secret://${n}`, home).map((l) => ({ nome: n, path: l.path })),
+  );
+  if (altriNomi.length > 0) {
+    warn(
+      'api key (nomi)',
+      `esiste una chiave anche col nome ${altriNomi.map((a) => `\`${a.nome}\` (${a.path})`).join(', ')} — ` +
+        `questa installazione legge ${config.provider.apiKeyRef} e quella non la usa mai`,
+      'cancella la copia che non serve più: una chiave valida che nessuno legge è una che alla rotazione resta indietro',
+    );
   }
   if (options.online) {
     warn('api reachability', 'online check not implemented in M0', 'omit --online');
