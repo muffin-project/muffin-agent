@@ -148,7 +148,25 @@ export type Runtime = {
   close(): void;
 };
 
-export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime {
+export function buildRuntime(
+  home = paths().home,
+  cwd = process.cwd(),
+  opts: {
+    /**
+     * Dove finiscono le righe che il consolidamento scrive **mentre** qualcosa
+     * d'altro sta usando il terminale.
+     *
+     * Iniettabile e non cablata su `process.stderr` per un difetto misurato: il
+     * REPL ha una riga di stato che si riscrive in place, e questo log —
+     * costruito qui, dove di quella riga non si sa niente — le si incollava
+     * dentro invece di sostituirla (`⠋ penso…consolidamento: …`). Chi possiede
+     * il terminale è il chiamante, quindi è il chiamante a dire come ci si
+     * scrive. Il default resta il comportamento di sempre, per il gateway e per
+     * chiunque non abbia un terminale da proteggere.
+     */
+    log?: (line: string) => void;
+  } = {},
+): Runtime {
   const p = paths(home);
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
@@ -351,7 +369,21 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // primo commento di `core/memory/embed.ts` lo dice da sempre, e finora non
     // si poteva fare). Su una VPS senza Ollama, un `new OllamaEmbedder()` fisso
     // significa che niente viene indicizzato e il recall resta solo testuale.
-    vectors = new VectorIndex(db, makeEmbedder(config.embedder, (ref) => readSecret(ref, home)));
+    vectors = new VectorIndex(
+      db,
+      makeEmbedder(
+        config.embedder,
+        (ref) => readSecret(ref, home),
+        // Entrare in modalità degradata è un evento, non uno stato da scoprire
+        // leggendo `doctor` di propria iniziativa: passa dallo stesso writer
+        // del consolidamento, quindi nel REPL rispetta la riga di stato invece
+        // di incollarcisi dentro.
+        (motivo) =>
+          (opts.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
+            `embedder: ${motivo.message} — passo al fallback, e ci resto fino al riavvio`,
+          ),
+      ),
+    );
   } catch {
     vectors = undefined;
   }
@@ -473,10 +505,21 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // three lines down already degrades to a boot line; this one did not.
     let backend;
     try {
-      backend = tavilyBackend({
+      const opzioni = {
         apiKey: readSecret(config.search.apiKeyRef, home),
         ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
-      });
+      };
+      // Uno `switch` esaustivo e non un `tavilyBackend` incondizionato: con un
+      // solo caso il codice generato è lo stesso, ma aggiungere un id al
+      // catalogo diventa un **errore di compilazione qui** invece di un motore
+      // scelto in config e ignorato a runtime.
+      switch (config.search.provider) {
+        case 'tavily':
+          backend = tavilyBackend(opzioni);
+          break;
+        default:
+          throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
+      }
     } catch (error) {
       searchNotes.push(
         `! web_search spento: ${error instanceof Error ? error.message : String(error)}`,
@@ -610,7 +653,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // rows the batch just wrote — so there is no install for which switching it
     // off would be the right default.
     sweep: (at) => sweepDuplicates(memoryStore, CONSOLIDATION_TENANT, at),
-    log: (line) => process.stderr.write(`${line}\n`),
+    log: opts.log ?? ((line) => process.stderr.write(`${line}\n`)),
   });
 
   // One prompt per tenant class, assembled here and never per turn: the class

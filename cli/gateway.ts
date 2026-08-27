@@ -12,6 +12,8 @@ import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
+import { CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
+import { describeBuild } from './update.js';
 import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
@@ -614,6 +616,8 @@ export async function cmdGatewayRun(
   onAssembled?.({ turnLane, lock });
 
   let stopSurfaces: (() => void) | null = null;
+  let controlSocket: ControlServer | undefined;
+  const avviatoAlle = new Date().toISOString();
   const envTickMs = tickMsFromEnv(process.env['MUFFIN_GATEWAY_TICK_MS']);
   const gateway = new Gateway({
     ...(envTickMs === undefined ? {} : { tickMs: envTickMs }),
@@ -624,6 +628,10 @@ export async function cmdGatewayRun(
     turnLane,
     jobs: runtime.jobs,
     close: () => {
+      // Il socket per primo: da qui in poi nessuno deve poterci parlare, e il
+      // file rimosto dalla chiusura pulita e' meta' del contratto — quello che
+      // resta e' sempre e solo il socket di un morto (`control-socket.ts`).
+      void controlSocket?.close();
       // Surfaces first, then the runtime: the connector must stop polling
       // before the database under it goes away (the REPL's order, same reason).
       stopSurfaces?.();
@@ -645,6 +653,41 @@ export async function cmdGatewayRun(
     process.stderr.write(
       `! safe mode: root of trust diverged (${runtime.safeMode.reason}) — capability sopra il rischio basso negate\n`,
     );
+  }
+
+  /**
+   * Il socket di controllo, aperto **dopo** il claim e prima delle surface.
+   *
+   * Dopo il claim perche' un secondo gateway che ha gia' perso non deve
+   * nemmeno provare a servirlo; prima delle surface perche' da qui in avanti
+   * ogni fallimento di boot passa da `close()`, che e' dove il socket viene
+   * tolto.
+   *
+   * Un errore qui **non ferma il gateway**: v1 e' sola osservazione, e un
+   * canale diagnostico che impedisce l'avvio del processo che deve
+   * diagnosticare e' la coda che scodinzola il cane.
+   */
+  try {
+    controlSocket = await serveControlSocket(home, (verb) => {
+      if (verb === 'identify') {
+        return {
+          protocol: CONTROL_PROTOCOL,
+          pid: process.pid,
+          home,
+          codeSha: describeBuild(dirname(fileURLToPath(import.meta.url)))?.sha ?? null,
+          startedAt: avviatoAlle,
+        };
+      }
+      if (verb === 'status') {
+        // Risposto dal processo stesso, race-free: e' la differenza fra questo
+        // e leggere una riga che puo' essere sopravvissuta a chi l'ha scritta.
+        const info = readGateway(runtime.db);
+        return { pid: process.pid, since: info?.since ?? avviatoAlle, status: info?.status ?? 'unknown' };
+      }
+      return null;
+    });
+  } catch (error) {
+    process.stderr.write(`socket di controllo non aperto: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 
   const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);
