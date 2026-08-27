@@ -54,7 +54,35 @@ export type Message = { role: Role; content: ContentBlock[] };
 export type ToolSpec = {
   name: string;
   description: string;
-  /** JSON Schema. Validated before the kernel ever sees the arguments. */
+  /**
+   * JSON Schema — **what the model is told**, and nothing more.
+   *
+   * The sentence here used to read "validated before the kernel ever sees the
+   * arguments". Both halves were false. Nothing in this repo validates against
+   * this object: it is serialized into the request (`openai-compat.ts`,
+   * `anthropic.ts`) and never read back. And the kernel *does* see the raw
+   * arguments — `resourceFor` in `agent/loop.ts` reads
+   * `args[decl.policyArgs[i]]` to build the decision's resource, before any
+   * handler runs.
+   *
+   * What actually holds is two separate things:
+   *
+   *  - the kernel is defensive about what it reads. `resourceFor` accepts a
+   *    value only when `typeof value === 'string'`, and a declared-but-absent
+   *    resource becomes `{kind:'none'}` — which for a url capability is a
+   *    refusal. Garbage from the model produces a no, never a yes;
+   *  - each handler validates its own arguments with its own zod schema
+   *    (`httpArgs`, `shellArgs`, `todoArgs`, …). That is the real gate.
+   *
+   * So this field is advertising and the zod schema is enforcement, they are
+   * two copies of one intent, and nothing keeps them in agreement. A tool can
+   * declare `required: ['url']` here and validate nothing there —
+   * `agent/tools/schema-conformance.test.ts` is what makes that fail.
+   *
+   * The old sentence was worse than absent: it told the next reader that
+   * validation was already handled somewhere, which is exactly how a handler
+   * ships without any.
+   */
   inputSchema: Record<string, unknown>;
 };
 
