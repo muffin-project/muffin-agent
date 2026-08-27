@@ -1,3 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Il charset serve **prima** del testo, e serve qui e non nel browser:
+     il file si apre da `file://`, dove non c-e un header HTTP che lo dica.
+     Senza, il browser indovina dalla locale, di solito windows-1252, e ogni
+     accento di questa pagina — che e scritta in italiano — diventa mojibake.
+     I byte sono sempre stati UTF-8 corretti: mancava la dichiarazione. -->
 <title>Muffin, dentro</title>
 <style>
   /* ---------------------------------------------------------------------
