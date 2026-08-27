@@ -133,3 +133,43 @@ describe('il rerank dice se ha davvero riordinato', () => {
     expect(out.why).toContain('troppo pochi');
   });
 });
+
+/**
+ * Una chiamata che è stata pagata si vede.
+ *
+ * Era l'ultima chiamata al modello che non compariva da nessuna parte: un turno
+ * mostrava un recall lento e nessuno poteva vedere che dentro c'era un giro di
+ * modello. Esce col risultato invece che da uno span perché `recall()` non ha
+ * un tracer, e darglielo sarebbe plumbing attraverso quattro file per un numero.
+ */
+describe('il rerank dice quanto è costato', () => {
+  class Costoso extends Scripted {
+    override async chat(request: ChatCall): Promise<ChatResult> {
+      const base = await super.chat(request);
+      return { ...base, usage: { inputTokens: 812, outputTokens: 19, cacheReadTokens: 5, cacheWriteTokens: 0 } };
+    }
+  }
+
+  it('porta i token quando ha riordinato', async () => {
+    const out = await new LlmReranker(new Costoso('{"order":[14,3,7]}'), 'light').rerank('q', items(20), 3);
+    expect(out.usage).toEqual({ inputTokens: 812, outputTokens: 19, cacheReadTokens: 5 });
+  });
+
+  it("li porta anche quando la risposta era illeggibile — è il caso in cui non vederli inganna", async () => {
+    const out = await new LlmReranker(new Costoso('non è JSON'), 'light').rerank('q', items(20), 3);
+    expect(out.reordered).toBe(false);
+    expect(out.usage?.inputTokens).toBe(812);
+  });
+
+  it('nessun uso quando la chiamata non è mai avvenuta', async () => {
+    // Troppo pochi candidati: non è stato speso niente, e dire zero sarebbe
+    // diverso da dire niente.
+    const out = await new LlmReranker(new Costoso('{"order":[2,1,0]}'), 'light').rerank('q', items(5), 3);
+    expect(out.usage).toBeUndefined();
+  });
+
+  it('se il modello lancia non si inventa un costo', async () => {
+    const out = await new LlmReranker(new Scripted(new Error('rete giù')), 'light').rerank('q', items(20), 3);
+    expect(out.usage).toBeUndefined();
+  });
+});
