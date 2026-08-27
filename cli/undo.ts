@@ -15,7 +15,8 @@ const USAGE = `uso:
   muffin undo                    i turni che si possono disfare, dal più recente
   muffin undo <turno> --yes      rimette i file com'erano prima di quel turno
   muffin undo --last --yes       lo stesso, sul turno più recente
-  muffin undo --dimentica <turno>  butta via le copie di quel turno`;
+  muffin undo --dimentica <turno> --yes
+                                 butta via le copie di quel turno`;
 
 /** Il turno sotto cui finisce lo stato *attuale* prima che l'undo lo sovrascriva. */
 export function undoOfId(turnId: string): string {
@@ -38,8 +39,21 @@ export function cmdUndo(argv: string[], home = paths().home): number {
       process.stderr.write(`${USAGE}\n`);
       return 2;
     }
-    if (journal.read(turno) === null) {
+    const entry = journal.read(turno);
+    if (entry === null) {
       process.stderr.write(`nessun turno "${turno}" nel registro di undo.\n`);
+      return 1;
+    }
+    if (!argv.includes('--yes')) {
+      // Lo stesso cancello del restore, e per una ragione più forte: il restore
+      // sovrascrive dei file che si possono ancora recuperare da qui, mentre
+      // questo butta **l'unica** copia. Era l'unica azione distruttiva del file
+      // senza conferma — trovata dal judge, non da me.
+      process.stdout.write(
+        `dimenticare ${turno} butta le copie di:\n` +
+          [...new Set(entry.snapshots.map((s) => s.path))].map((f) => `    ${f}\n`).join('') +
+          `\ndopo, quel turno non si può più disfare. aggiungi --yes per procedere.\n`,
+      );
       return 1;
     }
     journal.forget(turno);

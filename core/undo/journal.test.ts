@@ -91,6 +91,20 @@ describe('UndoJournal', () => {
     }
   });
 
+  it('rifiuta di fotografare qualcosa che esiste e non è un file', () => {
+    // `copy: null` significa «non c'era niente prima», e un undo lo legge come
+    // «togli». Una directory registrata così sarebbe un manifest che mente su
+    // cosa c'era; la regola del file dice che allora l'effetto non deve
+    // avvenire, non che si annota un dato falso e si spera. Judge della slice.
+    const { root, work } = scratch();
+    const j = new UndoJournal(root);
+    const dir = join(work, 'una-directory');
+    mkdirSync(dir, { recursive: true });
+    expect(() => j.take('t1', { callId: 'c', capability: 'fs.write', path: dir })).toThrow(
+      /non è un file regolare/,
+    );
+  });
+
   it('reports a missing copy as a problem instead of claiming the file was restored', () => {
     const { root, work } = scratch();
     const j = new UndoJournal(root);

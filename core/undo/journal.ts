@@ -88,7 +88,15 @@ export class UndoJournal {
     const indice = esistente?.snapshots.length ?? 0;
 
     let copy: string | null = null;
-    if (existsSync(call.path) && statSync(call.path).isFile()) {
+    if (existsSync(call.path)) {
+      if (!statSync(call.path).isFile()) {
+        // Esiste e non è un file regolare — una directory, un socket, un
+        // device. `copy: null` qui vorrebbe dire «non c'era niente», e un undo
+        // successivo proverebbe a **rimuoverlo**. Non è fotografabile, quindi
+        // per la regola di questo file non è nemmeno eseguibile: chi chiama
+        // legge il lancio come «non eseguire». Trovato dal judge della slice.
+        throw new Error(`${call.path} esiste e non è un file regolare: non posso fotografarlo`);
+      }
       copy = copyNameFor(call.callId, indice);
       copyFileSync(call.path, join(dir, copy));
     }

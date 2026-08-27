@@ -80,9 +80,18 @@ describe('muffin undo', () => {
     expect(readFileSync(file, 'utf8')).toBe('dopo');
   });
 
-  it('dimentica un turno solo su richiesta', () => {
-    const { home, journal } = homeConTurno();
-    expect(cmdUndo(['--dimentica', 't1'], home)).toBe(0);
+  it('dimentica un turno solo con --yes, e senza mostra cosa butterebbe', () => {
+    // Era l'unica azione distruttiva del file senza cancello, e il test
+    // precedente lo sanciva come voluto. Il judge della slice l'ha nominata:
+    // il restore sovrascrive dei file che da qui si recuperano ancora, questo
+    // butta **l'unica** copia — quindi merita il cancello più del restore, non
+    // meno.
+    const { home, journal, file } = homeConTurno();
+    expect(cmdUndo(['--dimentica', 't1'], home)).toBe(1);
+    expect(journal.turns()).toEqual(['t1']);
+    expect(out.join('')).toContain(file);
+
+    expect(cmdUndo(['--dimentica', 't1', '--yes'], home)).toBe(0);
     expect(journal.turns()).toEqual([]);
   });
 
