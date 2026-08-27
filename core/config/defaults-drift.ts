@@ -154,6 +154,45 @@ export function recordCopied(home: string, entries: { path: string; content: Buf
 }
 
 /**
+ * Spazzatura del sistema operativo o dell'editor che si trova **dentro**
+ * `defaults/` senza essere un default.
+ *
+ * Misurato sul checkout dell'owner il 27/08: un `.DS_Store` da 6148 byte in
+ * `defaults/`, non tracciato da Git, creato dal Finder mesi prima. Non è
+ * innocuo per due ragioni distinte, e le porte da chiudere sono due.
+ *
+ * 1. **`muffin doctor` lo diagnostica come un default mancante** e stampa
+ *    `default .DS_Store … non esiste` con il rimedio «`muffin init` lo
+ *    ricrea». È una riga che non vuol dire niente, permanente, in mezzo a
+ *    quelle che contano — cioè esattamente il modo in cui si smette di
+ *    leggere `doctor`.
+ * 2. **`installTree` (cli/init.ts) lo copierebbe.** Il walk copia tutto ciò
+ *    che trova, e uno dei tre alberi che copia è `defaults/rot/`, che è
+ *    l'albero **sigillato**. Un `.DS_Store` finito lì dentro viene sigillato
+ *    da `seal()` insieme al resto (`listRotFiles` cammina su tutto tranne il
+ *    manifest), e il Finder lo riscrive appena qualcuno apre quella cartella:
+ *    l'hash diverge e l'installazione va in safe mode per un file che nessuno
+ *    legge.
+ *
+ * **Il sigillo non viene toccato.** `listRotFiles` continua a camminare su
+ * tutto: esentare un nome di file *dentro* il confine di sicurezza sarebbe un
+ * buco con un nome noto. Un `.DS_Store` già dentro un sigillo esistente va
+ * tolto e risigillato, non perdonato. Qui si chiude la porta da cui entra.
+ *
+ * Elenco esplicito e non un'euristica sui punti iniziali: `defaults/` ha tutto
+ * il diritto di spedire un file che comincia per punto, e una regola larga che
+ * ne salta uno vero fallirebbe in silenzio — nella direzione peggiore, perché
+ * un default che non arriva non lo nota nessuno.
+ */
+const SPAZZATURA = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '.localized']);
+
+/** `false` per la spazzatura descritta sopra, in qualunque punto dell'albero stia. */
+export function isShippedDefault(relPath: string): boolean {
+  const nome = relPath.split('/').pop() ?? relPath;
+  return !SPAZZATURA.has(nome) && !nome.endsWith('~') && !nome.endsWith('.swp');
+}
+
+/**
  * One thing to diagnose. Either a file we found, or a place we could not
  * look — never a place that silently is not there.
  */
@@ -199,7 +238,7 @@ function listDefaultsTree(defaultsDir: string): TreeEntry[] {
       const rel = prefix ? `${prefix}/${entry}` : entry;
       try {
         if (statSync(full).isDirectory()) walk(full, rel);
-        else out.push({ path: rel, failure: null });
+        else if (isShippedDefault(rel)) out.push({ path: rel, failure: null });
       } catch (error) {
         out.push({ path: rel, failure: `non ho potuto guardarla: ${(error as Error).message}` });
       }
