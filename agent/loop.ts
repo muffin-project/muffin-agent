@@ -25,6 +25,7 @@ import {
   type ChatCall,
   type ChatResult,
   type ContentBlock,
+  type ImageBlock,
   type Message,
   type Provider,
   type StreamEvent,
@@ -260,6 +261,28 @@ export type ToolOutcome = {
    * the compiler asks it where its bytes came from.
    */
   tier: TrustTier;
+  /**
+   * Questo fallimento vale la pena riprovarlo?
+   *
+   * Solo il tool lo sa. Un 429, un 503, una connessione caduta a metà sono
+   * transitori; «file non trovato», «schema non valido», «host non in
+   * allowlist» non lo saranno mai, e riprovarli è tempo speso a ottenere lo
+   * stesso errore tre volte.
+   *
+   * **Opzionale, dove `tier` è obbligatorio, e la differenza non è pigrizia.**
+   * `tier` è obbligatorio perché ogni tool *ha* una provenienza: non
+   * rispondere significa mentire su una cosa che si sa. La riprovabilità
+   * invece per la maggior parte dei fallimenti **non esiste**: un errore di
+   * validazione non è né transitorio né permanente-per-caso, è permanente per
+   * costruzione, e obbligare ogni tool a scrivere `retryable: false` su ogni
+   * ramo di errore produrrebbe rumore, non informazione. L'assenza qui ha un
+   * significato vero — «non ho motivo di credere che riprovare cambi
+   * qualcosa» — che l'assenza di `tier` non aveva.
+   *
+   * Da sola non basta: `runTool` riprova solo se **anche** la capability
+   * dichiara `rerunnable`, perché un effetto già partito non si ripete.
+   */
+  retryable?: boolean;
 };
 
 export type RegisteredTool = {
@@ -442,6 +465,22 @@ export type LoopDeps = {
   now?: () => Date;
 };
 
+/**
+ * Il contenuto del primo messaggio utente: le immagini e poi il testo.
+ *
+ * L'ordine non è estetico. Le docs Vision di Anthropic lo dicono esplicitamente
+ * («Claude works best when images come before text»), e non costa niente farlo
+ * anche sull'altro adattatore.
+ *
+ * Una sola funzione perché i due punti che costruiscono questo messaggio —
+ * `enqueueTurn` e `runTurn` — devono costruirlo **identico**: erano già due
+ * copie della stessa riga, e una riga duplicata che cresce è una riga che
+ * diverge.
+ */
+function primoMessaggio(input: TurnInput): ContentBlock[] {
+  return [...(input.images ?? []), { type: 'text', text: input.text }];
+}
+
 export type TurnInput = {
   principal: Principal;
   tenant: TenantId;
@@ -463,6 +502,21 @@ export type TurnInput = {
    * (M5-BIS B16).
    */
   contentTaint?: TrustTier;
+  /**
+   * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
+   *
+   * Entrano nel **primo messaggio utente**, prima del testo: entrambe le API lo
+   * raccomandano nello stesso modo, e a costo zero.
+   *
+   * Finiscono nel record del turno come tutto il resto, e quindi sul disco.
+   * Non è gratis — una foto di telefono sono qualche centinaio di KB, in base64
+   * un terzo in più — ed è comunque la forma giusta: un turno ripreso dopo un
+   * crash deve poter rivedere l'immagine su cui stava ragionando, e una
+   * *referenza* a un file del vault non lo garantisce (il file può non esserci
+   * più). Il tetto per immagine sta in `MAX_IMAGE_BYTES`, controllato prima di
+   * leggere i byte.
+   */
+  images?: ImageBlock[];
   signal?: AbortSignal;
   /**
    * Mint the row under this identity instead of a fresh random one.
@@ -575,6 +629,15 @@ export type TurnEvent =
       stopReason: string;
     }
   | { type: 'tool_start'; name: string; capability: string }
+  /**
+   * Un tentativo transitorio è andato male e se ne fa un altro.
+   *
+   * Esiste perché un retry silenzioso è indistinguibile da uno stallo: chi
+   * guarda vede lo spinner fermo per il doppio del tempo e non sa se stia
+   * succedendo qualcosa. `attempt` è il numero del tentativo che sta per
+   * partire (2 = il primo ritentativo).
+   */
+  | { type: 'tool_retry'; name: string; attempt: number; inMs: number; why: string }
   | { type: 'tool_end'; name: string; ms: number; isError: boolean };
 
 export type TurnResult = {
@@ -676,7 +739,7 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     surface: input.surface,
     sessionId: input.session.id,
     model: deps.model,
-    messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
+    messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -749,7 +812,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
     model: deps.model,
-    messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
+    messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -1000,6 +1063,15 @@ async function drive(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: lastUserText(record.messages),
+    // Riprese **dal record**, esattamente come il testo qui sopra, e per la
+    // stessa ragione: `drive` non riceve il `TurnInput` originale — lo
+    // ricostruisce — quindi tutto cio' che il modello deve vedere deve essere
+    // passato dal record. Metterle solo nel `TurnInput` di `runTurn` le faceva
+    // sparire fra le due funzioni, senza errori: il modello rispondeva «non
+    // vedo nessuna immagine» a una domanda su una foto arrivata davvero
+    // (misurato contro il modello vero il 28/08/2026). Passare dal record e'
+    // anche cio' che fa sopravvivere l'immagine a una ripresa dopo un crash.
+    ...(userImages(record.messages).length > 0 ? { images: userImages(record.messages) } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
@@ -2098,6 +2170,19 @@ function remoteParent(traceId: string): SpanHandle {
 }
 
 /** The words the turn was started with — the last thing the owner said. */
+/**
+ * Le immagini che l'owner ha mandato in questo turno, dal record.
+ *
+ * Tutte quelle nei messaggi utente e non solo l'ultimo: il testo prende
+ * l'ultimo perche' una ripresa vuole *la domanda corrente*, mentre
+ * un'immagine mandata due giri fa e' ancora la cosa di cui si sta parlando.
+ */
+function userImages(messages: Message[]): ImageBlock[] {
+  return messages
+    .filter((m) => m.role === 'user')
+    .flatMap((m) => m.content.filter((b): b is ImageBlock => b.type === 'image'));
+}
+
 function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
@@ -2146,6 +2231,73 @@ function summarizeCallArgs(args: unknown): string | undefined {
   if (parts.length === 0) return undefined;
   const joined = parts.join(' · ');
   return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
+}
+
+/**
+ * Quante volte si riprova, oltre al primo tentativo.
+ *
+ * Due, come `MAX_TRANSPORT_RETRIES`, e per la stessa ragione: tre tentativi
+ * coprono il guasto transitorio vero (un 429 che passa, una connessione che
+ * cade una volta) senza trasformare un servizio giu' in un turno che non
+ * finisce piu'. Un tetto piu' alto sposta il costo su chi aspetta.
+ */
+const MAX_TOOL_RETRIES = 2;
+
+/** Attesa prima del tentativo `n` (n=2 e' il primo ritentativo): 400ms, poi 1200ms. */
+function attesaPrima(tentativo: number): number {
+  return 400 * 3 ** (tentativo - 2);
+}
+
+/**
+ * Il tool, riprovato quando il fallimento e' transitorio **e** ripeterlo e'
+ * sicuro.
+ *
+ * Due condizioni, ed entrambe servono davvero:
+ *
+ * 1. `outcome.retryable === true` — il tool ha dichiarato che *questo*
+ *    fallimento e' transitorio. Senza, si riprova un «file non trovato» tre
+ *    volte per ottenere tre volte lo stesso errore.
+ * 2. la capability dichiara **`rerunnable`** — rieseguire non raddoppia un
+ *    effetto. E' la stessa dichiarazione che il ripristino dopo un crash gia'
+ *    usa per decidere se una chiamata «forse fatta» si puo' rifare, e la
+ *    domanda e' identica: quel campo esiste esattamente per questo.
+ *
+ * **Un `throw` non si riprova mai.** Un'eccezione non dichiara niente sulla
+ * propria transitorieta', e riprovarla vorrebbe dire indovinare — nella
+ * direzione in cui un handler morto a meta' di un effetto lo rifa'. Chi sa
+ * distinguere un guasto di rete da un errore di programmazione e' il tool, e lo
+ * dice tornando un outcome, non lanciando.
+ *
+ * L'Effect WAL non cambia: l'intento e' gia' scritto per questa `call.id`, e
+ * dice «forse fatta». `rerunnable` e' precisamente cio' che rende quel «forse»
+ * innocuo, quindi i tentativi vivono dentro un intento solo.
+ *
+ * L'attesa passa da `sleep(ms, signal)`, la stessa del retry di trasporto: un
+ * ritentativo che ignora l'abort e' un Ctrl-C che sembra rotto.
+ */
+async function eseguiConRitentativi(
+  tool: RegisteredTool,
+  args: unknown,
+  ctx: ToolContext,
+  rerunnable: boolean,
+  nome: string,
+  onProgress: ((event: TurnEvent) => void) | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ToolOutcome> {
+  let outcome = await tool.handler(args, ctx);
+  for (let tentativo = 2; tentativo <= MAX_TOOL_RETRIES + 1; tentativo += 1) {
+    if (outcome.isError !== true || outcome.retryable !== true || !rerunnable) return outcome;
+    // Un turno abbandonato non guadagna niente da un altro tentativo.
+    if (signal?.aborted === true) return outcome;
+    const inMs = attesaPrima(tentativo);
+    // Annunciato **prima** dell'attesa: un retry dichiarato quando e' gia'
+    // finito non serve a chi sta guardando lo spinner fermo, ed e' per quello
+    // che l'evento esiste.
+    onProgress?.({ type: 'tool_retry', name: nome, attempt: tentativo, inMs, why: outcome.content });
+    await sleep(inMs, signal);
+    outcome = await tool.handler(args, ctx);
+  }
+  return outcome;
 }
 
 async function runTool(
@@ -2413,9 +2565,14 @@ async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
-    const outcome = await tool.handler(
+    const outcome = await eseguiConRitentativi(
+      tool,
       args,
       risolto === undefined ? ctx : { ...ctx, effectPath: risolto },
+      decl?.rerunnable === true,
+      call.name,
+      input.onProgress,
+      input.signal,
     );
     // Unconditional. The `!== undefined` guard that used to stand here was the
     // whole defect: it turned "this tool said nothing about provenance" into
@@ -2675,6 +2832,20 @@ function buildContext(
     content: [
       ...recalled,
       ...(plan === '' ? [] : [{ type: 'text' as const, text: plan }]),
+      // Le immagini stanno **qui**, non nel record.
+      //
+      // `drive` svuota `messages` e lo ricostruisce da questa funzione a ogni
+      // giro: cio' che sta nel record e' cio' che e' successo, cio' che sta qui
+      // e' cio' che il modello vede. Metterle solo nel record — che e' quello
+      // che avevo fatto — le faceva sparire in silenzio, e il modello
+      // rispondeva «non vedo nessuna immagine» a una domanda su una foto che
+      // era arrivata davvero. Misurato contro il modello vero il 28/08/2026.
+      //
+      // Subito prima del testo, dopo il ricordato e il piano: le docs di
+      // entrambi i provider raccomandano immagine-poi-testo, e questa e'
+      // l'unica posizione che lo rispetta senza separare la domanda dal suo
+      // contesto.
+      ...(input.images ?? []),
       { type: 'text', text: input.text },
     ],
   });

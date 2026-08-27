@@ -326,3 +326,102 @@ describe('a PDF sent to the bot', () => {
     }
   });
 });
+
+/**
+ * Una foto mandata al bot, sulla stessa rotta vera del PDF.
+ *
+ * B10 diceva: «immagini bloccate: scaricate ma mai indicizzate
+ * (`core/vault/vault.ts` le salta) e nessun content-block immagine verso il
+ * provider». La prima metà non è un difetto e non va riparata — un'immagine
+ * **non si indicizza come testo**, si mostra. Il difetto era che finiva lì: il
+ * modello riceveva `[ricevuto … ma non indicizzato: non è testo né PDF né
+ * DOCX]` su una foto perfettamente visibile.
+ *
+ * Il PNG è generato qui e non è un fixture opaco: sono i quattro byte di
+ * intestazione che `loadImage` deve riconoscere, e il test controlla che il
+ * **tipo lo decidano i byte** mandando l'immagine con estensione `.pdf`, che è
+ * il caso vero — su Telegram il nome del file lo sceglie il mittente.
+ */
+const PNG_1x1 = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a4944415478' +
+    '9c6300010000050001' +
+    '0d0a2db40000000049454e44ae426082',
+  'hex',
+);
+
+const withPhoto = (id: number, name: string): Update =>
+  ({
+    update_id: id,
+    message: {
+      message_id: id,
+      date: 0,
+      chat: { id: OWNER, type: 'private' },
+      from: { id: OWNER, is_bot: false, first_name: 'o' },
+      caption: 'che cos è questa?',
+      document: { file_id: `f${id}`, file_unique_id: `u${id}`, file_name: name, file_size: PNG_1x1.length },
+    },
+  }) as unknown as Update;
+
+/** I blocchi immagine che il provider ha davvero ricevuto in questa chiamata. */
+const immagini = (call: ChatCall) => call.messages.flatMap((m) => m.content).filter((b) => b.type === 'image');
+
+describe('una foto mandata al bot', () => {
+  it('arriva al modello come immagine, non come «non indicizzato»', async () => {
+    const h = harness(PNG_1x1);
+    try {
+      await deliver(h, [withPhoto(20, 'foto.png')]);
+      expect(h.seen).toHaveLength(1);
+
+      const viste = immagini(h.seen[0]!);
+      expect(viste).toHaveLength(1);
+      expect(viste[0]).toMatchObject({ type: 'image', mediaType: 'image/png' });
+      // E i byte sono quelli del file, non un placeholder.
+      expect(Buffer.from((viste[0] as { data: string }).data, 'base64').equals(PNG_1x1)).toBe(true);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it("e la riga di arrivo lo dice, invece di scusarsi per non averla indicizzata", async () => {
+    const h = harness(PNG_1x1);
+    try {
+      await deliver(h, [withPhoto(21, 'foto.png')]);
+      const text = transcript(h.seen[0]!);
+      expect(text).toContain('immagine ricevuta');
+      expect(text).not.toContain('non indicizzato');
+      // La didascalia resta un messaggio: il file non si è mangiato ciò che è
+      // stato detto insieme a lui.
+      expect(text).toContain('che cos è questa?');
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  /**
+   * **Il tipo lo dicono i byte.** Il nome del file arriva dal mittente, quindi
+   * non decide niente: un PNG chiamato `.pdf` resta un PNG.
+   */
+  it("un'estensione che mente non la nasconde al modello", async () => {
+    const h = harness(PNG_1x1);
+    try {
+      await deliver(h, [withPhoto(22, 'travestita.pdf')]);
+      const viste = immagini(h.seen[0]!);
+      expect(viste).toHaveLength(1);
+      expect(viste[0]).toMatchObject({ mediaType: 'image/png' });
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  /** E un PDF resta un documento: la strada nuova non ruba quella vecchia. */
+  it('un PDF continua ad arrivare come documento, non come immagine', async () => {
+    const h = harness(CONTRATTO);
+    try {
+      await deliver(h, [withDocument(23, 'contratto.pdf')]);
+      expect(immagini(h.seen[0]!)).toHaveLength(0);
+      expect(transcript(h.seen[0]!)).toContain('acquisito per intero');
+    } finally {
+      h.runtime.close();
+    }
+  });
+});

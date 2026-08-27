@@ -43,8 +43,42 @@ export type ThinkingBlock =
   | { type: 'thinking'; thinking: string; signature: string }
   | { type: 'redacted_thinking'; data: string };
 
+/**
+ * I formati che entrambi i provider accettano.
+ *
+ * Anthropic li elenca per nome — JPEG, PNG, GIF, WebP — e dice che le
+ * animazioni non sono supportate: di una GIF si guarda il primo fotogramma
+ * (docs Vision, letta il 28/08/2026). Il lato openai-compat li accetta dentro
+ * un data URL, quindi l'insieme comune e' questo.
+ *
+ * Un'unione chiusa e non `string`: il media type finisce **sul filo**, e un
+ * valore inventato diventa un 400 dal provider invece di un errore qui.
+ */
+export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+/**
+ * Un'immagine dentro un messaggio.
+ *
+ * **Solo base64, mai un URL**, ed e' una scelta di sicurezza prima che di
+ * formato. Entrambe le API accettano anche una sorgente `url`, ma quella fa
+ * scaricare l'immagine **al provider**: sarebbe un'uscita di rete che il
+ * kernel non vede e non puo' negare (`core/policy/decide.ts` gira su cio' che
+ * fa Muffin, non su cio' che fa qualcun altro per conto suo), e un'immagine
+ * privata dovrebbe essere pubblicamente raggiungibile per poter essere letta.
+ * I byte di un'immagine arrivata su Telegram stanno gia' sul disco: mandarli
+ * e' l'unica forma che non chiede a nessun altro di andarseli a prendere.
+ *
+ * `data` e' base64 **nudo**, senza il prefisso `data:`: e' cio' che vuole
+ * Anthropic, mentre il lato openai-compat lo avvolge. Tenere la forma nuda e
+ * avvolgere in un adattatore solo e' meglio del contrario — spacchettare un
+ * data URL vuol dire parsarlo, e un parser in piu' e' un modo in piu' di
+ * sbagliare.
+ */
+export type ImageBlock = { type: 'image'; mediaType: ImageMediaType; data: string };
+
 export type ContentBlock =
   | { type: 'text'; text: string; cache?: 'stable' }
+  | ImageBlock
   | { type: 'tool_result'; toolCallId: string; content: string; isError?: boolean }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ThinkingBlock;

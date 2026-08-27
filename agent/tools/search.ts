@@ -191,7 +191,17 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
         // accident — the loop treated "unstated" and "clean" as one value. Now
         // it is the answer to a question the type asks, which is the difference
         // between a decision and a gap that happens to be harmless here.
-        return { content: `ricerca fallita (${backend.id}): ${detail}`, isError: true, tier: 0 };
+        // Riprovabile: qui dentro finisce tutto cio' che va storto **parlando
+        // col motore** — rete, timeout, un 429 del provider — e nessuna di
+        // queste cose dice qualcosa sulla query. La query e' gia' stata
+        // validata sopra, e quel ramo (`invalid arguments`) resta non
+        // riprovabile perche' rifarlo darebbe lo stesso errore.
+        return {
+          content: `ricerca fallita (${backend.id}): ${detail}`,
+          isError: true,
+          retryable: true,
+          tier: 0,
+        };
       }
 
       if (hits.length === 0) {

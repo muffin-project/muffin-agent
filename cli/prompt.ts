@@ -1,6 +1,33 @@
 import { createInterface } from 'node:readline';
 
 /**
+ * Gli input su cui un EOF è già arrivato.
+ *
+ * **Un EOF è un fatto che vale una volta sola per il processo, non per la
+ * domanda.** Quando l'owner preme Ctrl+D, readline lo consuma, risolve
+ * `undefined` e chiude la propria interfaccia — ma lo stdin sottostante non
+ * risulta finito: misurato il 28/08/2026 sotto un pty vero, subito dopo il
+ * primo prompt `process.stdin.readableEnded` è **false** e `destroyed` è
+ * **false**. In modalità raw readline sintetizza l'EOF dal carattere `^D`, e
+ * il tty non emette mai `end`. Quindi la *seconda* domanda apre una nuova
+ * interfaccia su uno stream da cui non arriverà mai più né un dato né un
+ * `close`: la promise non si decide, e il comando resta appeso per sempre.
+ *
+ * Non è teorico. `muffin init` su un terminale vero, con un runtime locale
+ * acceso, fa due domande: «uso il runtime locale?» e poi la chiave. Con ollama
+ * in esecuzione, un Ctrl+D alla prima faceva restare `init` appeso a tempo
+ * indefinito — peggio di qualunque percorso headless, che esce e dice cosa
+ * manca. Senza ollama la seconda domanda era la prima, e il difetto non si
+ * vedeva: la macchina dell'owner l'ha reso visibile accendendo ollama.
+ *
+ * Ricordarlo qui è più onesto che interrogare lo stream, perché lo stream non
+ * lo sa. Una `WeakSet` e non un booleano globale così due input diversi (un
+ * test che ne inietta uno finto, e il vero `process.stdin`) restano due fatti
+ * distinti.
+ */
+const finiti = new WeakSet<NodeJS.ReadStream>();
+
+/**
  * Read a secret from the terminal without echoing it. Resolves to undefined
  * when the input is not a TTY, so a headless caller falls back to a flag or env
  * var instead of blocking a pipe forever (see cli/init.ts docstring).
@@ -31,8 +58,9 @@ export function promptSecret(
   input: NodeJS.ReadStream = process.stdin,
   output: NodeJS.WriteStream = process.stdout,
 ): Promise<string | undefined> {
-  if (!input.isTTY) return Promise.resolve(undefined);
+  if (!input.isTTY || finiti.has(input)) return Promise.resolve(undefined);
   return new Promise((resolve) => {
+    let risposto = false;
     const rl = createInterface({ input, output, terminal: true });
     const internal = rl as unknown as { _writeToOutput?: (s: string) => void };
     const echo = internal._writeToOutput?.bind(rl);
@@ -47,6 +75,9 @@ export function promptSecret(
     rl.on('close', () => {
       // `question` risolve e poi chiude, quindi questo scatta anche sul
       // percorso normale — dove non fa niente, perché la promise è già decisa.
+      // Ma `risposto` distingue i due casi, ed è la distinzione che conta: solo
+      // una chiusura **senza risposta** è un EOF, e solo un EOF va ricordato.
+      if (!risposto) finiti.add(input);
       output.write('\n');
       resolve(undefined);
     });
@@ -55,6 +86,7 @@ export function promptSecret(
       // l'ascoltatore qui sopra risolverebbe `undefined` per primo — cioè ogni
       // risposta diventerebbe "non ha risposto". Costa una riga di ordine e
       // vale una chiave incollata e buttata via in silenzio.
+      risposto = true;
       const trimmed = answer.trim();
       resolve(trimmed === '' ? undefined : trimmed);
       rl.close();
@@ -73,12 +105,18 @@ export function promptLine(
   input: NodeJS.ReadStream = process.stdin,
   output: NodeJS.WriteStream = process.stdout,
 ): Promise<string | undefined> {
-  if (!input.isTTY) return Promise.resolve(undefined);
+  if (!input.isTTY || finiti.has(input)) return Promise.resolve(undefined);
   return new Promise((resolve) => {
+    let risposto = false;
     const rl = createInterface({ input, output });
-    rl.on('close', () => resolve(undefined));
+    rl.on('close', () => {
+      // Stessa distinzione di `promptSecret`: chiusura senza risposta = EOF.
+      if (!risposto) finiti.add(input);
+      resolve(undefined);
+    });
     rl.question(question, (answer) => {
       // Stesso ordine, stessa ragione di `promptSecret`.
+      risposto = true;
       resolve(answer.trim());
       rl.close();
     });
