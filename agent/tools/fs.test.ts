@@ -430,3 +430,61 @@ describe('gli argomenti dei tool fs sono pretesi, non convertiti', () => {
     expect(() => byName(scope, 'fs_read').handler({}, toolContext())).toThrow(/path/i);
   });
 });
+
+/**
+ * La copia e la scrittura devono parlare dello **stesso** file.
+ *
+ * Il ramo `draft` del loop fotografa il file prima di eseguire, e il percorso
+ * lo dichiara il tool (`resolveEffectPath`). Finché l'handler risolveva
+ * `args.path` da capo per conto suo, quelle erano **due** risoluzioni della
+ * stessa cosa con in mezzo un commit SQLite e un `await` — libere di essere in
+ * disaccordo proprio nell'istante in cui il disaccordo costa: fotografia di un
+ * inode, scrittura su un altro, e un `muffin undo` che rimette il contenuto
+ * sbagliato sul file sbagliato. Trovato dal judge della slice, ed è
+ * letteralmente ciò che il docstring di `resolveEffectPath` diceva di evitare.
+ */
+describe('draft: la copia e la scrittura sono lo stesso file', () => {
+  const byName = (scope: FsScope, name: string) =>
+    makeFsTools(scope).find((t) => t.spec.name === name)!;
+
+  it('`fs_write` scrive dove il journal ha fotografato, non dove porta il suo argomento', async () => {
+    // Il pin strutturale: si dà all'handler un `effectPath` che punta ALTROVE
+    // rispetto ad `args.path`. In produzione i due coincidono sempre — e questo
+    // test è il solo modo di dimostrare che coincidono *per costruzione*
+    // invece che per fortuna, perché una seconda risoluzione qui darebbe la
+    // risposta di `args.path` e il test andrebbe rosso.
+    const { scope, root } = scoped();
+    const fotografato = join(root, 'fotografato.md');
+    writeFileSync(fotografato, 'prima', 'utf8');
+    writeFileSync(join(root, 'altro.md'), 'da non toccare', 'utf8');
+
+    await byName(scope, 'fs_write').handler(
+      { path: 'altro.md', content: 'dopo' },
+      { ...toolContext(), effectPath: fotografato },
+    );
+
+    expect(readFileSync(fotografato, 'utf8')).toBe('dopo');
+    expect(readFileSync(join(root, 'altro.md'), 'utf8')).toBe('da non toccare');
+  });
+
+  it('senza `effectPath` risolve da sé, come per ogni altro verdetto', async () => {
+    // L'altra metà: il parametro è un riuso, non una nuova dipendenza. Un tool
+    // chiamato fuori dal ramo `draft` non ha nessuno che abbia fotografato, e
+    // deve continuare a funzionare.
+    const { scope, root } = scoped();
+    await byName(scope, 'fs_write').handler({ path: 'nuovo.md', content: 'x' }, toolContext());
+    expect(readFileSync(join(root, 'nuovo.md'), 'utf8')).toBe('x');
+  });
+
+  it('`resolveEffectPath` di `fs_write` risolve nello scope, non rispetto al processo', async () => {
+    // La ragione per cui il campo esiste: il modello passa `nota.md`, e il file
+    // vero è `<scope>/nota.md`. Fotografare l'argomento grezzo copierebbe un
+    // file relativo alla cwd del processo — un undo che tocca il file sbagliato.
+    const { scope, root } = scoped();
+    const tool = byName(scope, 'fs_write');
+    expect(tool.resolveEffectPath).toBeDefined();
+    expect(tool.resolveEffectPath!({ path: 'nota.md', content: 'x' })).toBe(
+      realpathSync(join(root, 'nota.md')),
+    );
+  });
+});

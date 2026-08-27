@@ -78,6 +78,24 @@ export type ToolContext = {
    */
   taint: () => TrustTier;
   /**
+   * **Il file già risolto** che questa chiamata sta per toccare, quando il
+   * kernel ha giudicato `draft` e il registro di undo ne ha appena preso la
+   * copia. Assente per ogni altro verdetto.
+   *
+   * Esiste perché il judge di questa slice ha trovato il difetto che il
+   * docstring di `resolveEffectPath` diceva di voler evitare: risolvevo il
+   * percorso una volta per la fotografia e l'handler lo risolveva **di nuovo**
+   * dal suo argomento grezzo, con in mezzo un commit SQLite e un `await`. Due
+   * risoluzioni della stessa cosa sono libere di essere in disaccordo, e il
+   * momento in cui contano è esattamente il momento in cui qualcuno sostituisce
+   * il file: la copia sarebbe dell'inode A e la scrittura andrebbe sull'inode B,
+   * quindi un `muffin undo` rimetterebbe il contenuto di A sopra B.
+   *
+   * Una sola risoluzione, e poi una sola `open` con `O_NOFOLLOW` su quel
+   * percorso. Non chiude la finestra per magia — la rende una finestra sola.
+   */
+  effectPath?: string;
+  /**
    * Arm the runtime's suspension barrier.
    *
    * **Armed, never immediate**, and that is the contract: the loop honours it
@@ -2189,6 +2207,13 @@ async function runTool(
   // was waiting for the other, so an empty allowlist permitted every public
   // host — verified against the assembled runtime before this line existed.
   const resource = resourceFor(deps.capabilities?.get(capability), args);
+  /**
+   * Il percorso risolto una volta sola dal ramo `draft`, per l'handler.
+   * `undefined` per ogni altro verdetto: nessun altro ha preso una copia, e
+   * un handler che leggesse un percorso qui senza che una copia esista starebbe
+   * eseguendo un `draft` travestito da `allow`.
+   */
+  let risolto: string | undefined;
 
   const decisionSpan = deps.tracer.start(
     'muffin.policy_decision',
@@ -2277,11 +2302,10 @@ async function runTool(
         // chiamata che non è mai avvenuta, che è la bugia che il WAL esiste
         // per non dire. Una copia presa e poi un intento fallito lascia invece
         // una copia inutilizzata: rumore, non falsità.
-        deps.undo.take(ctx.turnId, {
-          callId: call.id,
-          capability,
-          path: tool.resolveEffectPath(args),
-        });
+        // Una sola risoluzione, e il suo risultato viaggia con la chiamata:
+        // l'handler la riusa invece di rifarla (vedi `ToolContext.effectPath`).
+        risolto = tool.resolveEffectPath(args);
+        deps.undo.take(ctx.turnId, { callId: call.id, capability, path: risolto });
       } catch (error) {
         span.end({ status: 'error', error: 'draft_snapshot_failed' });
         emitToolEnd(true);
@@ -2389,7 +2413,10 @@ async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
-    const outcome = await tool.handler(args, ctx);
+    const outcome = await tool.handler(
+      args,
+      risolto === undefined ? ctx : { ...ctx, effectPath: risolto },
+    );
     // Unconditional. The `!== undefined` guard that used to stand here was the
     // whole defect: it turned "this tool said nothing about provenance" into
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool

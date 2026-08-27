@@ -665,6 +665,45 @@ describe('agent loop', () => {
       expect(detto).toContain('senza copia non si torna indietro');
     });
 
+    it('consegna all\'handler lo stesso percorso che ha fotografato', async () => {
+      // La cucitura, e l'unica cosa che la tiene: il loop risolve il percorso
+      // UNA volta per la copia, e l'handler deve riusare quello invece di
+      // ricalcolarlo. Senza questo test la mutazione «il loop non passa il
+      // percorso» sopravvive — l'handler ricadrebbe sulla propria risoluzione
+      // e su un filesystem tranquillo darebbe la stessa risposta, cioè un
+      // verde che non prova niente. Il giorno in cui le due risposte
+      // divergono è esattamente il giorno in cui l'undo tocca il file
+      // sbagliato.
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-draft-'));
+      const target = join(dir, 'nota.md');
+      writeFileSync(target, 'prima', 'utf8');
+      const journal = new UndoJournal(join(dir, 'undo'));
+      const visto: (string | undefined)[] = [];
+      const { deps: d, store } = deps([callTool('demo_draft', { path: target }), answer('ok')], {
+        decide: kernelDraft(),
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        undo: journal,
+        tools: [
+          {
+            capability: 'demo.draft',
+            spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+            throwTier: 0,
+            resolveEffectPath: () => target,
+            handler: (_args, ctx) => {
+              visto.push(ctx.effectPath);
+              return { content: 'scritto', tier: 0 as const };
+            },
+          },
+        ],
+      });
+      await runTurn(d, input(store));
+
+      expect(visto).toEqual([target]);
+      // E il journal ha fotografato quello stesso file, non un altro.
+      const turno = journal.turns()[0]!;
+      expect(journal.read(turno)?.snapshots.map((s) => s.path)).toEqual([target]);
+    });
+
     it('non esegue un tool che non dice quale file toccherà', async () => {
       // `resourceKind: 'path'` dice al kernel *quale argomento* è il percorso;
       // non dice quale file finirà sul disco, perché il tool lo risolve contro
