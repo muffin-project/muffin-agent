@@ -1,12 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { EmbedderUnavailable, type Embedder } from './embed.js';
-import { formatConsolidationLines, ingestPending, type IngestReport } from './ingest.js';
+import { formatConsolidationLines, IngestFailed, ingestPending, type IngestReport } from './ingest.js';
 import { SUPERSEDE_THRESHOLD } from './judge.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
@@ -1263,5 +1263,59 @@ describe('un episodio marcato dice anche cosa ha perso per strada', () => {
     expect(line).toContain('1 candidati fuori schema');
     // E l'episodio è marcato: due fatti sono passati, quindi non deve tornare.
     expect((await ingestPending(deps, HOST)).episodes).toBe(0);
+  });
+});
+
+/**
+ * Il lato produttore della stessa cucitura.
+ *
+ * `consolidator.test.ts` prova che una riga di giro porta il parziale — ma lo
+ * fa costruendo `IngestFailed` a mano nel finto. Con solo quel test,
+ * `ingestPending` può smettere di produrlo e la suite resta verde: la mutazione
+ * «rilancia l'errore nudo» è sopravvissuta al primo giro, ed è esattamente il
+ * difetto che questa slice ripara, girato dall'altra parte.
+ */
+describe('un lotto che muore a metà lancia quello che aveva già fatto', () => {
+  class Esplode extends Scripted {
+    constructor(
+      replies: string[],
+      private readonly boomAt: number,
+    ) {
+      super(replies);
+    }
+    private seen = 0;
+    override async chat(request: ChatCall): Promise<ChatResult> {
+      this.seen += 1;
+      if (this.seen === this.boomAt) throw new Error('terminated');
+      return super.chat(request);
+    }
+  }
+
+  it('porta gli episodi e i fatti già passati, e conserva la causa', async () => {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-boom-'));
+    episode(store, 'faccio il freelance');
+    episode(store, 'e vivo a Roma');
+    const deps = {
+      store,
+      provider: new Esplode([facts(fact('owner', 'works_as', 'freelancer'))], 2),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+
+    await expect(ingestPending(deps, HOST)).rejects.toThrow(IngestFailed);
+    try {
+      await ingestPending(deps, HOST);
+    } catch (error) {
+      const failed = error as IngestFailed;
+      // Il primo episodio è passato davvero: il fatto è scritto e l'episodio
+      // marcato, quindi il parziale non può essere una riga di zeri.
+      expect(failed.partial.factsAdded).toBeGreaterThanOrEqual(1);
+      expect(failed.partial.episodes).toBeGreaterThanOrEqual(1);
+      // E l'errore vero resta raggiungibile, non sostituito.
+      expect((failed.cause as Error).message).toBe('terminated');
+    }
+    rmSync(home, { recursive: true, force: true });
   });
 });
