@@ -4,6 +4,7 @@ import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
 import { styleFor } from './ui.js';
+import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { cmdUndo } from './undo.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -544,14 +545,17 @@ async function cmdInit(argv: string[]): Promise<number> {
      * L'avvertimento resta forte e resta primo, perche' una variabile
      * d'ambiente con dentro una chiave e' comunque una chiave da ruotare.
      */
-    const gia = locateSecret('secret://provider_api_key', values.local === undefined ? paths().home : home);
+    // Ogni nome, non uno: questa riga gira prima che esista un `config.json`,
+    // quindi non c'e' ancora un provider da cui dedurre come si chiami la chiave.
+    const dove = values.local === undefined ? paths().home : home;
+    const gia = ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, dove)).find((l) => l !== null) ?? null;
     process.stderr.write(
       `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
         `  Togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
     );
     if (gia === null) {
       process.stderr.write(
-        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set ${LEGACY_API_KEY_NAME} --persist\n` +
           `  Oppure passala a init:  echo -n "$KEY" | muffin init\n`,
       );
       return 78;
@@ -571,7 +575,9 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stderr.write(`non riesco a leggere stdin: ${error instanceof Error ? error.message : String(error)}\n`);
     return 78;
   }
-  const stored = apiKey ? null : locateSecret('secret://provider_api_key', home);
+  const stored = apiKey
+    ? null
+    : (ALL_API_KEY_NAMES.map((n) => locateSecret(`secret://${n}`, home)).find((l) => l !== null) ?? null);
   if (stored) {
     process.stderr.write(`✓ chiave già presente (${stored.backend}): ${stored.path}\n`);
   }
@@ -775,7 +781,13 @@ async function cmdUninstall(argv: string[]): Promise<number> {
   // Every backend, not the first one that answers: a home copy shadows the
   // persistent one in the read chain, and the whole point of this line is the
   // copy that the wipe does *not* reach.
-  const persistent = locateSecretAll('secret://provider_api_key', home).find((l) => l.backend === 'persistent');
+  // Ogni nome, e ogni backend. Una copia persistente che sopravvive alla
+  // cancellazione va nominata anche se sta sotto un nome che questa
+  // installazione non usava piu': e' esattamente la credenziale che
+  // resterebbe li senza che nessuno se lo ricordi.
+  const persistent = ALL_API_KEY_NAMES.flatMap((n) => locateSecretAll(`secret://${n}`, home)).find(
+    (l) => l.backend === 'persistent',
+  );
   rmSync(home, { recursive: true, force: true });
   process.stderr.write(`Rimosso ${home}.\n`);
   // The message used to say "config, keys, memory" and that is now half true:

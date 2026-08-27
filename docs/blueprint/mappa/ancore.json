@@ -811,17 +811,17 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 233,
+    "line": 234,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 333,
+    "line": 351,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 60,
+    "line": 61,
     "testo": "supervisorProbes?: Partial<SupervisorProbes>;"
   },
   "cli/gateway.ts:27": {
@@ -864,34 +864,34 @@
     "line": 83,
     "testo": "*"
   },
-  "cli/init.ts:101": {
-    "path": "cli/init.ts",
-    "line": 181,
-    "testo": "apiKeyRef: 'secret://provider_api_key',"
-  },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
-    "line": 184,
+    "line": 206,
     "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 226,
+    "line": 248,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 227,
+    "line": 249,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
+  },
+  "cli/init.ts:163": {
+    "path": "cli/init.ts",
+    "line": 163,
+    "testo": "const nomeChiave = apiKeyNameFor(provider);"
   },
   "cli/init.ts:46": {
     "path": "cli/init.ts",
-    "line": 103,
+    "line": 104,
     "testo": "export function runInit(options: InitOptions = {}): InitStep[] {"
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
-    "line": 179,
+    "line": 201,
     "testo": "kind: options.provider ?? 'anthropic',"
   },
   "cli/jobs.ts:63": {
@@ -901,132 +901,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 175,
+    "line": 176,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:121": {
     "path": "cli/main.ts",
-    "line": 147,
+    "line": 148,
     "testo": "muffin rot verify | reseal | harden"
   },
   "cli/main.ts:134": {
     "path": "cli/main.ts",
-    "line": 164,
+    "line": 165,
     "testo": "muffin trace tail [-n N] [--errors] | grep PATTERN"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 241,
+    "line": 242,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 243,
+    "line": 244,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 245,
+    "line": 246,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 247,
+    "line": 248,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 178,
+    "line": 179,
     "testo": "*/"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 253,
+    "line": 254,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 257,
+    "line": 258,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 259,
+    "line": 260,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 261,
+    "line": 262,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 267,
+    "line": 268,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 269,
+    "line": 270,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 271,
+    "line": 272,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 273,
+    "line": 274,
     "testo": "case 'run':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 277,
+    "line": 278,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 315,
+    "line": 316,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 319,
+    "line": 320,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 435,
+    "line": 436,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 454,
+    "line": 455,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 622,
+    "line": 628,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 668,
+    "line": 674,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 678,
+    "line": 684,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 709,
+    "line": 715,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 921,
+    "line": 933,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {

@@ -7,6 +7,7 @@ import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
 import { recordCopied } from '../core/config/defaults-drift.js';
+import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
@@ -153,8 +154,20 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // prompt — and its validation (e.g. rejecting a pasted Telegram token). Reading
   // the env here too would silently resurrect a key cmdInit deliberately dropped.
   const apiKey = options.apiKey;
+  // Il nome viene dal catalogo — `openrouter_api_key`, non `provider_api_key` —
+  // e sotto quel nome si **scrive**. Cercare, invece, si fa sotto entrambi:
+  // `apiKeyCandidates` mette prima il nome del provider e poi il generico, e
+  // quell'ordine è tutta la migrazione. Un'installazione già fatta trova solo
+  // il secondo e continua a funzionare senza che nessuno tocchi niente.
+  const provider = { kind: options.provider ?? 'anthropic', ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}) };
+  const nomeChiave = apiKeyNameFor(provider);
+  // Il riferimento scritto in config è quello del nome **davvero trovato**, non
+  // il nome nuovo per principio: scrivere `secret://openrouter_api_key` su
+  // un'installazione che ha la chiave sotto il vecchio nome la spegnerebbe, ed
+  // è esattamente il rename secco che questa forma esiste per non fare.
+  let riferimento = `secret://${nomeChiave}`;
   if (apiKey) {
-    const at = writeSecret('provider_api_key', apiKey, home, options.secretBackend ?? 'home');
+    const at = writeSecret(nomeChiave, apiKey, home, options.secretBackend ?? 'home');
     step('api key', `stored 0600 in ${at}`);
   } else {
     // The dev loop `muffin uninstall --yes && muffin init` wipes `home` and then
@@ -164,9 +177,18 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     // replacement, and it is found by *asking the chain*, never by copying the
     // key into the home that is about to be wiped again: a second copy is how the
     // budget cap ended up in two files.
-    const found = locateSecret('secret://provider_api_key', home);
-    if (found) {
-      step('api key', `già presente (${found.backend}): ${found.path}`);
+    const candidati = apiKeyCandidates(provider);
+    const trovato = candidati
+      .map((nome) => ({ nome, dove: locateSecret(`secret://${nome}`, home) }))
+      .find((c) => c.dove !== null);
+    if (trovato) {
+      riferimento = `secret://${trovato.nome}`;
+      const eredita = trovato.nome === LEGACY_API_KEY_NAME && nomeChiave !== LEGACY_API_KEY_NAME;
+      step(
+        'api key',
+        `già presente (${trovato.dove?.backend ?? '?'}): ${trovato.dove?.path ?? '?'}` +
+          (eredita ? ` — col nome vecchio \`${LEGACY_API_KEY_NAME}\`, che resta valido` : ''),
+      );
     } else {
       step('api key', 'missing — echo -n "$KEY" | muffin init, oppure lanciala in un terminale e incollala al prompt', false);
     }
@@ -178,7 +200,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
     provider: {
       kind: options.provider ?? 'anthropic',
       ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
-      apiKeyRef: 'secret://provider_api_key',
+      apiKeyRef: riferimento,
     },
     models: defaultModels(options),
     rot: { mode: options.hardened ? 'hardened' : 'single-user' },
