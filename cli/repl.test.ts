@@ -4,7 +4,18 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
-import { formatProgressLine, makeReplCliWrite, runRepl, thinkingCommand } from './repl.js';
+import {
+  debugCommand,
+  formatProgressLine,
+  makeReplCliWrite,
+  makeStatusLine,
+  runRepl,
+  statusFor,
+  thinkingCommand,
+  toolPhrase,
+  TOOL_PHRASES,
+} from './repl.js';
+import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, type Surface } from '../core/surface/types.js';
@@ -220,9 +231,9 @@ describe('the REPL streams the final answer while it forms (B11)', () => {
   });
 });
 
-describe('formatProgressLine (B13)', () => {
+describe('formatProgressLine (B13) — in debug, i numeri restano quelli di sempre', () => {
   it('formats a round event', () => {
-    expect(formatProgressLine({ type: 'round', n: 3 })).toBe('· giro 3');
+    expect(formatProgressLine({ type: 'round', n: 3 }, 'debug')).toBe('· giro 3');
   });
 
   it('formats a model event', () => {
@@ -235,29 +246,30 @@ describe('formatProgressLine (B13)', () => {
         outputTokens: 40,
         cacheReadTokens: 0,
         stopReason: 'end',
-      }),
+      }, 'debug'),
     ).toBe('· modello: 842ms, 120→40 token, stop: end');
   });
 
   it('formats a tool_start event', () => {
-    expect(formatProgressLine({ type: 'tool_start', name: 'demo_read', capability: 'demo.read' })).toBe('· demo_read…');
+    expect(formatProgressLine({ type: 'tool_start', name: 'demo_read', capability: 'demo.read' }, 'debug')).toBe('· demo_read…');
   });
 
   it('formats a successful tool_end event', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'demo_read', ms: 12, isError: false })).toBe(
+    expect(formatProgressLine({ type: 'tool_end', name: 'demo_read', ms: 12, isError: false }, 'debug')).toBe(
       '· demo_read fatto (12ms)',
     );
   });
 
   it('formats a failed tool_end event', () => {
-    expect(formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true })).toBe(
+    expect(formatProgressLine({ type: 'tool_end', name: 'demo_boom', ms: 3, isError: true }, 'debug')).toBe(
       '· demo_boom fallito (3ms)',
     );
   });
 
   it('throws on a variant the switch does not recognise, instead of silently rendering a blank line', () => {
     const bogus = { type: 'bogus' } as unknown as TurnEvent;
-    expect(() => formatProgressLine(bogus)).toThrow(/unreachable/);
+    expect(() => formatProgressLine(bogus, 'debug')).toThrow(/unreachable/);
+    expect(() => formatProgressLine(bogus, 'normale')).toThrow(/unreachable/);
   });
 });
 
@@ -282,7 +294,43 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
     return stdin;
   }
 
-  it('writes one progress line per event to stderr when stderr is a TTY', async () => {
+  it('con --debug scrive una riga per evento su stderr, quando stderr è un TTY', async () => {
+    const provider = await startFakeProvider({ main: [{ text: 'ecco fatto' }] });
+    const originalIsTTY = process.stderr.isTTY;
+    process.stderr.isTTY = true;
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+
+      // `debug: true` è ciò che `muffin --debug` passa: questo prova il flag
+      // fino a stderr, non solo il formattatore.
+      const code = await runRepl(home, { stdin: stdinWith('ciao'), debug: true });
+
+      expect(code).toBe(0);
+      const progressLines = err.join('').split('\n').filter((l) => l.startsWith('· '));
+      // Exactly one round, no tool call: `round 1` then the `model` line —
+      // never a `tool_start`/`tool_end` this script never triggered.
+      expect(progressLines).toHaveLength(2);
+      expect(progressLines[0]).toBe('· giro 1');
+      expect(progressLines[1]).toMatch(/^· modello: \d+ms, \d+→\d+ token, stop: end$/);
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
+      await provider.close();
+    }
+  });
+
+  /**
+   * Il default, che è il caso di tutti: niente giri e niente token addosso a
+   * una conversazione. Quello che resta è il passo finito — qui nessuno,
+   * perché lo script non chiama tool — e la riga di stato, che vive e sparisce
+   * e per costruzione non è nello scrollback.
+   */
+  it('senza --debug non scrive né il giro né i token', async () => {
     const provider = await startFakeProvider({ main: [{ text: 'ecco fatto' }] });
     const originalIsTTY = process.stderr.isTTY;
     process.stderr.isTTY = true;
@@ -298,12 +346,11 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
       const code = await runRepl(home, { stdin: stdinWith('ciao') });
 
       expect(code).toBe(0);
-      const progressLines = err.join('').split('\n').filter((l) => l.startsWith('· '));
-      // Exactly one round, no tool call: `round 1` then the `model` line —
-      // never a `tool_start`/`tool_end` this script never triggered.
-      expect(progressLines).toHaveLength(2);
-      expect(progressLines[0]).toBe('· giro 1');
-      expect(progressLines[1]).toMatch(/^· modello: \d+ms, \d+→\d+ token, stop: end$/);
+      const scritto = err.join('');
+      expect(scritto).not.toContain('giro 1');
+      expect(scritto).not.toContain('token, stop:');
+      // E l'attesa c'è stata: la riga di stato l'ha detta, e poi l'ha tolta.
+      expect(scritto).toContain('penso…');
     } finally {
       process.stderr.isTTY = originalIsTTY;
       await provider.close();
@@ -375,5 +422,160 @@ describe('/think', () => {
     const out = thinkingCommand('forse', 'adaptive', undefined, 'consumer-local');
     expect(out.set).toBeUndefined();
     expect(out.line).toContain('on | off | reset');
+  });
+});
+
+/**
+ * Il default del terminale racconta **cosa** sta succedendo; i numeri stanno
+ * dietro `--debug`.
+ *
+ * Prima esisteva una modalità sola, e un owner che chiedeva «come stai?»
+ * leggeva `· modello: 2269ms, 5487→2 token, stop: end` — la strumentazione di
+ * chi ha scritto il loop, stampata addosso a una conversazione.
+ */
+describe('formatProgressLine — modalità normale', () => {
+  it('il giro e la chiamata al modello non lasciano niente nello scrollback', () => {
+    expect(formatProgressLine({ type: 'round', n: 3 }, 'normale')).toBeNull();
+    expect(
+      formatProgressLine(
+        {
+          type: 'model',
+          model: 'gpt-test',
+          ms: 842,
+          inputTokens: 120,
+          outputTokens: 40,
+          cacheReadTokens: 0,
+          stopReason: 'end',
+        },
+        'normale',
+      ),
+    ).toBeNull();
+  });
+
+  it("l'inizio di un tool nemmeno: quello è la riga di stato, e dirlo due volte è dirlo due volte", () => {
+    expect(formatProgressLine({ type: 'tool_start', name: 'memory_search', capability: 'memory.read' }, 'normale')).toBeNull();
+  });
+
+  it('un passo finito resta, in italiano e senza millisecondi', () => {
+    expect(formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false }, 'normale')).toBe(
+      '✓ cerco in memoria',
+    );
+  });
+
+  it('e un passo fallito si distingue dal segno, non dalla parola', () => {
+    expect(formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale')).toBe(
+      '✗ scrivo un file',
+    );
+  });
+});
+
+describe('statusFor — solo chi apre un attesa', () => {
+  it('il giro è «penso», perché è esattamente quello che sta succedendo', () => {
+    expect(statusFor({ type: 'round', n: 1 })).toBe('penso…');
+  });
+
+  it('un tool che parte dice cosa sta facendo, non come si chiama la funzione', () => {
+    expect(statusFor({ type: 'tool_start', name: 'web_search', capability: 'web.search' })).toBe('cerco sul web…');
+  });
+
+  it('chi chiude non apre: model e tool_end non scrivono nessuna attesa', () => {
+    expect(statusFor({ type: 'tool_end', name: 'web_search', ms: 1, isError: false })).toBeNull();
+  });
+
+  it('un tool che questa build non conosce (MCP) porta il suo nome, non un errore', () => {
+    expect(toolPhrase('qualcosa_di_mcp')).toBe('qualcosa_di_mcp');
+  });
+});
+
+/**
+ * La mappa a mano ha un prezzo — invecchia quando arriva un tool nuovo — e
+ * questo test è il prezzo pagato qui invece che da un lettore che in
+ * produzione si trova `send_file…` in mezzo a frasi italiane.
+ */
+describe('ogni tool registrato ha una frase', () => {
+  it('nessun nome scoperto resta senza frase, e nessuna frase resta senza tool', () => {
+    const dir = new URL('../agent/tools/', import.meta.url).pathname;
+    const scoperti = new Set<string>();
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.ts') || file.includes('.test.')) continue;
+      for (const m of readFileSync(`${dir}${file}`, 'utf8').matchAll(/^\s*name: '([a-z_]+)',$/gm)) {
+        scoperti.add(m[1]!);
+      }
+    }
+    expect(scoperti.size).toBeGreaterThan(10);
+    expect([...scoperti].filter((n) => !(n in TOOL_PHRASES)).sort()).toEqual([]);
+    expect(Object.keys(TOOL_PHRASES).filter((n) => !scoperti.has(n)).sort()).toEqual([]);
+  });
+});
+
+describe('makeStatusLine', () => {
+  it('su un TTY riscrive in place e sparisce quando le si dice di sparire', () => {
+    const out: string[] = [];
+    const s = makeStatusLine((t) => void out.push(t), true);
+    s.show('penso…');
+    s.clear();
+    s.stop();
+    expect(out[0]).toContain('penso…');
+    expect(out[0]!.startsWith('\r\u001b[2K')).toBe(true);
+    expect(out.at(-1)).toBe('\r\u001b[2K');
+  });
+
+  /**
+   * `clear()` si chiama prima di ogni riga che va nello scrollback, e chi
+   * stampa non sa se un'attesa è in corso. A schermo pulito deve quindi non
+   * scrivere niente: altrimenti in `--debug` — dove la riga di stato non
+   * compare mai — ogni riga si porterebbe davanti una sequenza di escape, e
+   * smetterebbe di cominciare con quello con cui dice di cominciare.
+   */
+  it('a schermo pulito non scrive niente: cancellare il nulla non è una cancellazione', () => {
+    const out: string[] = [];
+    const s = makeStatusLine((t) => void out.push(t), true);
+    s.clear();
+    s.clear();
+    expect(out).toEqual([]);
+  });
+
+  /**
+   * Senza TTY niente spinner e niente sequenze di cancellazione: `\r\x1b[2K`
+   * dentro un file è spazzatura, e uno spinner dentro una pipe è spazzatura
+   * che si ripete. È la stessa scelta che `streamEnabled` fa per il testo.
+   */
+  it('senza TTY diventa una riga normale, e non si ripete uguale', () => {
+    const out: string[] = [];
+    const s = makeStatusLine((t) => void out.push(t), false);
+    s.show('penso…');
+    s.show('penso…');
+    s.clear();
+    s.show('penso…');
+    expect(out).toEqual(['· penso…\n', '· penso…\n']);
+    expect(out.join('')).not.toContain('\u001b');
+  });
+});
+
+/**
+ * `/debug` e `muffin --debug` sono la stessa manopola, e dietro c'è una
+ * funzione sola: due implementazioni della stessa cosa sono la cucitura che
+ * `docs/JUDGE.md` descrive — corrette separatamente, capaci di non essere
+ * d'accordo il giorno che una delle due cambia.
+ */
+describe('/debug', () => {
+  it('da solo inverte, perché gli stati sono due e da un interruttore non si vuole altro', () => {
+    expect(debugCommand('', 'normale').set).toBe('debug');
+    expect(debugCommand('', 'debug').set).toBe('normale');
+  });
+
+  it('`on` e `off` sono espliciti e idempotenti', () => {
+    expect(debugCommand('on', 'debug').set).toBe('debug');
+    expect(debugCommand('off', 'normale').set).toBe('normale');
+  });
+
+  it('e dice cosa comparirà, non solo che è acceso', () => {
+    expect(debugCommand('on', 'normale').line).toContain('token');
+  });
+
+  it('un argomento che non è nessuno dei due non cambia niente, e nomina anche la forma nuda', () => {
+    const out = debugCommand('forse', 'normale');
+    expect(out.set).toBeUndefined();
+    expect(out.line).toContain('/debug da solo');
   });
 });
