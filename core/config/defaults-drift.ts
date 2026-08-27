@@ -112,11 +112,18 @@ function readRegistryPartitioned(home: string): { registry: DefaultsRegistry; un
 }
 
 /**
- * Records what `muffin init` just actually wrote to disk — called only from
- * `cli/init.ts`, and only with the files it just copied (never the ones it
- * found already present and left alone: those may already carry the owner's
- * edits, and stamping them now would relabel that edit as "shipped, never
- * touched" forever). Merges into whatever the registry already had, so a
+ * Records what just actually got written to disk, and only with the files
+ * that run copied (never the ones found already present and left alone: those
+ * may already carry the owner's edits, and stamping them now would relabel
+ * that edit as "shipped, never touched" forever).
+ *
+ * **Chi copia registra.** Due chiamanti, ed è la stessa regola: `cli/init.ts`
+ * alla prima installazione, `cli/adopt.ts` quando adotta una versione nuova.
+ * `muffin rot reseal` NON copia e infatti non registra — timbrare dopo una
+ * modifica a mano riclassificherebbe quella modifica come "spedita, mai
+ * toccata", che è esattamente il falso positivo che questo registro esiste per
+ * impedire. Un `cp` incollato a mano ha lo stesso difetto: copia senza
+ * registrare, e al giro dopo il file risulta `owner-modified` per sempre. Merges into whatever the registry already had, so a
  * resumed `init` (one file copied this run, its siblings copied by an
  * earlier, interrupted run) does not lose the earlier entries.
  *
@@ -226,11 +233,19 @@ function undiagnosable(relPath: string, reason: string): DefaultDrift {
   };
 }
 
-function installedPathOf(home: string, relPath: string): string {
+/**
+ * Dove sta il file installato, e dove sta quello spedito.
+ *
+ * Esportate perché `cli/adopt.ts` deve *copiare* esattamente i due percorsi che
+ * `adoptCommand` nomina, e riparsare quella stringa (`cp <src> <dst>`, spezzata
+ * sugli spazi) si romperebbe sul primo home con uno spazio nel nome. Due
+ * funzioni condivise dicono la stessa cosa senza poterla dire diversamente.
+ */
+export function installedPathOf(home: string, relPath: string): string {
   return join(home, ...relPath.split('/'));
 }
 
-function shippedPathOf(checkoutRoot: string, relPath: string): string {
+export function shippedPathOf(checkoutRoot: string, relPath: string): string {
   return join(checkoutRoot, 'defaults', ...relPath.split('/'));
 }
 
