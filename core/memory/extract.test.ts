@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
-import { extractFacts, looksInjected } from './extract.js';
+import { extractFacts, looksInjected, PROMPT_EXAMPLE, SYSTEM } from './extract.js';
 
 /**
  * P25 (audit-2026-08-16 #23): `ExtractedFact` had no constraint on
@@ -314,5 +314,45 @@ describe('un fatto rotto costa un fatto', () => {
   it('un `facts` che non è un array resta fatale: non c è niente da tenere', async () => {
     const r = await extractFacts(new Scripted(JSON.stringify({ facts: 'nessuno' })), 'm', INPUT);
     expect(r.error).toContain('schema non valido');
+  });
+});
+
+/**
+ * Il prompt deve dire ciò che lo schema pretende.
+ *
+ * Misurato sulla macchina dell'owner il 27/08: il modello rispondeva
+ * `confidence: "high"` e il fatto veniva scartato. Non era disobbedienza — il
+ * prompt non diceva **da nessuna parte** che `confidence` fosse un numero, e
+ * l'unico posto in cui la nominava usava una parola: «il fatto ha confidence
+ * bassa». Il modello stava seguendo l'unico esempio che gli era stato dato.
+ */
+describe('il prompt dice ciò che lo schema pretende', () => {
+  it("l'esempio mostrato al modello supera lo schema che deve illustrare", async () => {
+    // Il difetto peggiore della famiglia sarebbe un esempio che diverge dallo
+    // schema: il modello obbedisce all'esempio, la validazione obbedisce allo
+    // schema, e nessuno dei due sbaglia. Qui l'esempio è un oggetto vero, e
+    // questo test è ciò che tiene i suoi valori.
+    const r = await extractFacts(new Scripted(JSON.stringify({ facts: [PROMPT_EXAMPLE] })), 'm', INPUT);
+    expect(r.malformed).toBeUndefined();
+    expect(r.facts).toHaveLength(1);
+    expect(r.facts[0]?.object).toBe('Cagliari');
+  });
+
+  it('e il testo che il modello vede contiene proprio quell esempio', () => {
+    // Serializzato, non riscritto a mano accanto: una seconda copia nel prompt
+    // sarebbe libera di divergere di nuovo.
+    expect(SYSTEM).toContain(JSON.stringify({ facts: [PROMPT_EXAMPLE] }));
+  });
+
+  it('dice che confidence è un numero, e non lascia una parola come unico esempio', () => {
+    expect(SYSTEM).toContain('UN NUMERO fra 0 e 1');
+    // La riga che invitava la parola: «il fatto ha confidence bassa».
+    expect(SYSTEM).not.toContain('confidence bassa');
+  });
+
+  it('nomina la soglia sotto cui il codice scarta comunque', () => {
+    // 0.4 è un filtro che il codice applica in silenzio. Dirlo al modello
+    // smette di far pagare token per fatti che verranno buttati.
+    expect(SYSTEM).toContain('0.4');
   });
 });
