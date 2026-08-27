@@ -1,7 +1,9 @@
 import DatabaseCtor from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import { afterEach, describe, expect, it } from 'vitest';
 import { VectorIndex } from './vectors.js';
-import type { Embedder } from './embed.js';
+import { MEMORY_SCHEMA } from './schema.js';
+import { makeEmbedder, toVectorBlob, type Embedder } from './embed.js';
 
 /**
  * Cambiare embedder cambia la dimensione dei vettori, e la dimensione è
@@ -27,9 +29,30 @@ const finto = (id: string, dimensions: number): Embedder => ({
   embed: async (texts) => texts.map(() => new Float32Array(dimensions).fill(0.1)),
 });
 
+/** Un embedder che punta in una direzione sua: due modelli così non si somigliano. */
+const versoStorto = (id: string, dimensions: number, asse: number): Embedder => ({
+  id,
+  dimensions,
+  embed: async (texts) =>
+    texts.map(() => Float32Array.from(Array.from({ length: dimensions }, (_v, j) => (j === asse ? 1 : 0)))),
+});
+
 const ddlDi = (db: DatabaseCtor.Database): string =>
   ((db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'`).get() as { sql: string }).sql ?? '')
     .replace(/\s+/g, ' ');
+
+const conta = (db: DatabaseCtor.Database, tabella: string): number =>
+  (db.prepare(`SELECT count(*) AS n FROM ${tabella}`).get() as { n: number }).n;
+
+/** Una memoria con episodi veri, che è l'unico stato in cui il backlog ha qualcosa da dire. */
+const conEpisodi = (db: DatabaseCtor.Database, quanti: number): void => {
+  db.exec(MEMORY_SCHEMA);
+  const ins = db.prepare(
+    `INSERT INTO episodes (tenant_id, connector, thread_key, role, kind, content, trust_tier, created_at, extraction_v)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  );
+  for (let i = 0; i < quanti; i += 1) ins.run('host', 'cli', 't1', 'user', 'message', `frase ${i}`, 0, '2026-08-27', 0);
+};
 
 describe('la tabella vettoriale segue l\'embedder', () => {
   let db: DatabaseCtor.Database | undefined;
@@ -48,35 +71,136 @@ describe('la tabella vettoriale segue l\'embedder', () => {
     expect(ddlDi(db)).toContain('float[16]');
   });
 
-  it('non si rifà quando la dimensione è la stessa, anche cambiando modello', async () => {
-    // Due modelli diversi con la stessa dimensione non giustificano di buttare
-    // l'indice: `pendingFor` filtra già su `embedding_v`, quindi i vecchi
-    // restano inerti e i nuovi si accumulano accanto. Rifare la tabella qui
-    // costerebbe una reindicizzazione senza comprare niente.
+  it('cambiare solo `dimensions`, a id invariato, non spegne il recall per sempre', async () => {
+    // Il guasto che questa manopola introduceva, e che nessun test a DB vuoto
+    // può vedere. `OllamaEmbedder.id` è `ollama:${model}`: **la dimensione non
+    // entra nell'id**. Correggere `dimensions` in config.json — o portare
+    // `text-embedding-3-small` da 1536 a 512, che è l'uso canonico della
+    // manopola — lascia l'id identico. Il DROP portava via i vettori, e
+    // `indexBacklog`, che filtra proprio su `embedding_v`, non vedeva più
+    // niente da rifare.
     //
-    // La prova è un **vettore vero che sopravvive**, non il conteggio delle
-    // tabelle in `sqlite_master`: un DROP seguito da CREATE lascia quel
-    // conteggio identico, quindi la versione che lo guardava non uccideva la
-    // mutazione «rifai sempre» — misurato, sopravviveva a 4 test su 4.
+    // Misurato prima di ripararlo, con questo stesso setup: `chunks 1 ·
+    // chunks_vec 1` prima, `chunks 1 · chunks_vec 0` dopo il costruttore,
+    // backlog `[]`, `index()` scrive 0, `chunks_vec` finale 0. Recall
+    // semantico spento in permanenza, e nessun comando nel prodotto che
+    // ripulisca le righe orfane.
     db = new DatabaseCtor(':memory:');
-    const vecchio = new VectorIndex(db, finto('a', 8));
-    await vecchio.index('host', [{ kind: 'episode', sourceId: 1, text: 'una frase' }], '2026-08-27');
-    const prima = (db.prepare(`SELECT count(*) AS n FROM chunks_vec`).get() as { n: number }).n;
-    expect(prima).toBe(1);
+    conEpisodi(db, 1);
 
-    new VectorIndex(db, finto('b', 8));
-    const dopo = (db.prepare(`SELECT count(*) AS n FROM chunks_vec`).get() as { n: number }).n;
-    expect(ddlDi(db)).toContain('float[8]');
-    expect(dopo).toBe(prima);
+    const prima = makeEmbedder({ kind: 'ollama' }, () => 'sk-never-called');
+    const dopo = makeEmbedder({ kind: 'ollama', dimensions: 768 }, () => 'sk-never-called');
+    expect(dopo.id).toBe(prima.id); // l'id non porta la dimensione: è tutto il problema
+    expect(dopo.dimensions).not.toBe(prima.dimensions);
+
+    const vecchio = new VectorIndex(db, finto(prima.id, prima.dimensions));
+    await vecchio.index('host', vecchio.indexBacklog('host'), '2026-08-27');
+    expect(conta(db, 'chunks')).toBe(1);
+    expect(conta(db, 'chunks_vec')).toBe(1);
+
+    const nuovo = new VectorIndex(db, finto(dopo.id, dopo.dimensions));
+    const backlog = nuovo.indexBacklog('host');
+    expect(backlog).toHaveLength(1); // il backlog torna a vedere del lavoro
+    await nuovo.index('host', backlog, '2026-08-27');
+
+    expect(conta(db, 'chunks')).toBe(conta(db, 'chunks_vec'));
+    expect(conta(db, 'chunks_vec')).toBe(1);
+    expect(nuovo.indexBacklog('host')).toEqual([]);
+  });
+
+  it('e non lascia righe orfane, che è ciò che teneva `doctor` rosso per sempre', async () => {
+    // La migrazione pubblicizzata dalla slice: ollama 1024 → openai-compat
+    // 1536. Il rebuild riusciva e il recall funzionava, ma le righe `chunks`
+    // del vecchio embedder restavano sul disco senza vettore. Misurato prima di
+    // ripararlo: `chunks=3 vec=3` prima, `chunks=3 vec=0` dopo il costruttore,
+    // `chunks=6 vec=3` dopo il drenaggio — e `doctor` che diceva «6 chunks but
+    // 3 vectors: the index is out of sync», in permanenza, su
+    // un'installazione sana, con il rimedio «run `muffin memory extract`» su un
+    // backlog vuoto. Ogni cambio successivo aggiungeva uno strato.
+    db = new DatabaseCtor(':memory:');
+    conEpisodi(db, 3);
+
+    const vecchio = new VectorIndex(db, finto('ollama:qwen3-embedding:0.6b', 1024));
+    await vecchio.index('host', vecchio.indexBacklog('host'), '2026-08-27');
+    expect(conta(db, 'chunks')).toBe(3);
+
+    const nuovo = new VectorIndex(db, finto('openai-compat:text-embedding-3-small', 1536));
+    await nuovo.index('host', nuovo.indexBacklog('host'), '2026-08-27');
+
+    expect(conta(db, 'chunks')).toBe(3);
+    expect(conta(db, 'chunks_vec')).toBe(3);
+    expect(nuovo.indexBacklog('host')).toEqual([]);
+  });
+
+  it('a dimensione uguale butta comunque i vettori dell\'altro modello', async () => {
+    // Qui stava scritto che due modelli alla stessa dimensione non
+    // giustificavano di buttare l'indice, perché i vecchi «restano inerti».
+    // Non restano inerti: `search()` non filtra su `embedding_v`, quindi
+    // occupano il budget `k` e tornano con distanze calcolate contro il vettore
+    // di query di un altro modello. Misurato con questi due embedder a 4
+    // dimensioni, prima di ripararlo: 2 hit, quella del modello vecchio con
+    // `distance 1.414` — un numero che non vuole dire niente.
+    //
+    // La reindicizzazione non è un costo nuovo: il backlog rifaceva comunque
+    // ogni chunk, perché l'id era cambiato. Ciò che cambia è che le righe
+    // vecchie se ne vanno invece di accumularsi accanto.
+    db = new DatabaseCtor(':memory:');
+    conEpisodi(db, 1);
+
+    const a = new VectorIndex(db, versoStorto('ollama:modello-a', 4, 0));
+    await a.index('host', a.indexBacklog('host'), '2026-08-27');
+
+    const b = new VectorIndex(db, versoStorto('ollama:modello-b', 4, 1));
+    await b.index('host', b.indexBacklog('host'), '2026-08-27');
+
+    expect(ddlDi(db)).toContain('float[4]'); // la tabella non aveva motivo di cambiare
+    const hits = await b.search('host', 'frase 0');
+    expect(hits).toHaveLength(1);
+    expect(conta(db, 'chunks')).toBe(1);
+    expect(
+      db.prepare(`SELECT DISTINCT embedding_v AS v FROM chunks`).all() as { v: string }[],
+    ).toEqual([{ v: 'ollama:modello-b' }]);
   });
 
   it('dopo il cambio, indicizzare funziona invece di morire sulla dimensione', async () => {
-    // La metà che rende il test sopra una prova e non un controllo sul DDL: è
+    // La metà che rende i test sopra una prova e non un controllo sul DDL: è
     // l'inserimento che falliva, ed è l'inserimento che deve riuscire.
     db = new DatabaseCtor(':memory:');
     new VectorIndex(db, finto('a', 8));
     const nuovo = new VectorIndex(db, finto('b', 16));
     const quanti = await nuovo.index('host', [{ kind: 'episode', sourceId: 1, text: 'una frase' }], '2026-08-27');
     expect(quanti).toBe(1);
+  });
+
+  it('un DB legacy non partizionato sopravvive al cambio di dimensione', async () => {
+    // Le due migrazioni si pestavano i piedi: quella non partizionata gira per
+    // prima e reinseriva i vettori vecchi in una tabella creata con la
+    // dimensione **nuova**. Misurato prima di ripararlo, con un embedder a 16
+    // su un DB legacy a 8: `Dimension mismatch … Expected 16 … received 8`,
+    // rollback, costruttore che lancia — e `agent/runtime.ts:352` lo inghiotte,
+    // quindi `vectors = undefined` a ogni boot, per sempre, con `doctor` verde.
+    db = new DatabaseCtor(':memory:');
+    conEpisodi(db, 1);
+    sqliteVec.load(db);
+    db.exec(`
+      CREATE TABLE chunks (
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, source_kind TEXT NOT NULL,
+        source_id INTEGER NOT NULL, text TEXT NOT NULL, embedding_v TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[8]);
+    `);
+    db.prepare(
+      `INSERT INTO chunks (id, tenant_id, source_kind, source_id, text, embedding_v, created_at)
+       VALUES (1,'host','episode',1,'frase 0','ollama:vecchio','2026-08-27')`,
+    ).run();
+    db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(
+      BigInt(1),
+      toVectorBlob(new Float32Array(8).fill(0.1)),
+    );
+
+    const nuovo = new VectorIndex(db, finto('ollama:nuovo', 16));
+    expect(ddlDi(db)).toContain('float[16]');
+    await nuovo.index('host', nuovo.indexBacklog('host'), '2026-08-27');
+    expect(conta(db, 'chunks')).toBe(conta(db, 'chunks_vec'));
+    expect(conta(db, 'chunks_vec')).toBe(1);
   });
 });

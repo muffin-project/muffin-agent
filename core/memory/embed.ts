@@ -106,7 +106,13 @@ export class OpenAICompatEmbedder implements Embedder {
       response = await fetch(`${this.baseUrl}/embeddings`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({ model: this.model, input: texts }),
+        // `dimensions` nel corpo, non solo nella nostra config: sull'API di
+        // OpenAI è il parametro che *accorcia davvero* l'embedding
+        // (`text-embedding-3-*`). Senza, chiedere 512 significa ricevere 1536 e
+        // scoprirlo all'insert in vec0 — cioè configurare una dimensione non
+        // nativa era garantito sbagliato. I server compatibili che non lo
+        // conoscono ignorano il campo, e il controllo qui sotto li prende.
+        body: JSON.stringify({ model: this.model, input: texts, dimensions: this.dimensions }),
         signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });
     } catch (error) {
@@ -115,6 +121,15 @@ export class OpenAICompatEmbedder implements Embedder {
     if (!response.ok) throw new EmbedderUnavailable(this.id, `HTTP ${response.status}`);
     const body = (await response.json()) as { data?: { embedding: number[] }[] };
     if (!body.data) throw new EmbedderUnavailable(this.id, 'risposta senza data');
+    // Lo stesso controllo che fa `OllamaEmbedder`, e per lo stesso motivo:
+    // qui la dimensione è **cotta nella tabella vettoriale**, quindi una
+    // risposta della lunghezza sbagliata non è un dettaglio da lasciar passare
+    // a vec0, che la riporterebbe senza nominare l'embedder.
+    for (const d of body.data) {
+      if (d.embedding.length !== this.dimensions) {
+        throw new EmbedderUnavailable(this.id, `dimensione ${d.embedding.length}, attesa ${this.dimensions}`);
+      }
+    }
     return body.data.map((d) => Float32Array.from(d.embedding));
   }
 }

@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -982,6 +983,76 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     expect(c?.detail).not.toContain('qwen3-embedding');
     rmSync(dir, { recursive: true, force: true });
   }, 15_000);
+
+  it('nomina la config rotta invece di ricadere su Ollama', async () => {
+    // Il `catch {}` che stava qui buttava via l'errore di `makeEmbedder` e
+    // lasciava `configurato = undefined` — e `undefined` faceva cadere la sonda
+    // sul default Ollama. Su una macchina con Ollama **vivo** la sonda
+    // rispondeva e la riga tornava verde.
+    //
+    // Misurato prima di ripararlo, con questo stesso server finto su
+    // `OLLAMA_URL` e questa stessa config: «LIVELLO: ok | DETTAGLIO: 1 chunks,
+    // 1 vectors, in sync | RIMEDIO: undefined», mentre `agent/runtime.ts:352`
+    // inghiottiva lo stesso errore e girava con `vectors === undefined`. Cioè
+    // esattamente lo stato da cui nasce questo blocco, ricreato dalla manopola
+    // nuova per un campo dimenticato in config.json.
+    //
+    // Niente `embedderProbe`: l'override è il pezzo che questo test deve NON
+    // usare, perché la prova sta proprio nel non interrogare Ollama.
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ embedding: Array.from({ length: 1024 }, () => 0.1) }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    vi.stubEnv('OLLAMA_URL', `http://127.0.0.1:${port}`);
+
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    // `dimensions` dimenticata: `makeEmbedder` lancia, e il suo messaggio la
+    // nomina. Questo è l'unico posto che lo legge.
+    config.embedder = { kind: 'openai-compat', model: 'text-embedding-3-small', apiKeyRef: 'secret://emb' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', {});
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('dimensions');
+    expect(c?.detail).not.toContain('in sync');
+    expect(c?.remedy).toContain('config.embedder');
+
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('con `openai-compat` non manda l owner ad avviare ollama', async () => {
+    // Il rimedio seguiva l'abitudine e non la config: «avvia ollama … oppure
+    // OLLAMA_URL» a chi ha configurato un endpoint remoto manda a riparare la
+    // cosa sbagliata — e la seconda metà era pure inerte, perché `makeEmbedder`
+    // lascia vincere `config.embedder.baseUrl` su `OLLAMA_URL`.
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = {
+      kind: 'openai-compat',
+      model: 'text-embedding-3-small',
+      dimensions: 4,
+      apiKeyRef: 'secret://emb',
+      baseUrl: 'http://127.0.0.1:1/v1',
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('emb', 'sk-never-called', dir);
+
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).not.toContain('ollama');
+    expect(c?.remedy).toContain('config.embedder');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
 
   it('non resta appesa a un embedder che accetta la connessione e non risponde', async () => {
     // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:

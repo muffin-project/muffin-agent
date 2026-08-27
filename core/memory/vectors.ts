@@ -41,6 +41,8 @@ export class VectorIndex {
     db.exec(CHUNKS_SCHEMA);
     // The dimension is baked into the table, so a change of embedder means a
     // new version and a re-index — never a silent mix of incompatible vectors.
+    // Chi mantiene vera quella frase è `soloLEmbedderCorrente()` qui sotto: da
+    // solo, questo DDL la manteneva a metà.
     //
     // `tenant_id` is a **partition key**, which is the whole point: it moves the
     // tenant filter inside the index. Before this the search took k nearest
@@ -55,43 +57,89 @@ export class VectorIndex {
        )`,
     );
     this.migrateUnpartitioned();
-    this.rifaiSeLaDimensioneCambia();
+    this.soloLEmbedderCorrente();
   }
 
-  /**
-   * La tabella vec0 nasce con la dimensione **cotta dentro il DDL**, e la crea
-   * un `CREATE VIRTUAL TABLE IF NOT EXISTS`: cambiare embedder non la cambiava,
-   * la saltava. Il commento sopra prometteva «mai una mescolanza silenziosa di
-   * vettori incompatibili» — ed era vero solo a metà: niente mescolanza, ma
-   * nemmeno la nuova versione. Il codice credeva 1536, il disco restava 1024, e
-   * il primo `index()` moriva con un errore di dimensione di sqlite-vec che non
-   * nomina né l'embedder vecchio né quello nuovo.
-   *
-   * Misurato prima di ripararlo: costruito l'indice con un embedder a 8
-   * dimensioni e poi con uno a 16, il DDL sul disco restava `float[8]`.
-   *
-   * I vettori vecchi si buttano di proposito, e qui è giusto dove nella
-   * migrazione qui sopra sarebbe stato sbagliato: là la forma cambiava e i
-   * numeri restavano validi, qui i numeri stessi vengono da un altro modello e
-   * non significano più niente. `pendingFor` li rifà, perché filtra su
-   * `embedding_v` — che porta l'id dell'embedder corrente.
-   */
-  private rifaiSeLaDimensioneCambia(): void {
+  /** La dimensione che il DDL sul disco dichiara, o `undefined` se la tabella non c'è. */
+  private dimensioneSulDisco(): number | undefined {
     const ddl = this.db
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'`)
       .get() as { sql: string | null } | undefined;
     const trovata = /embedding\s+float\[(\d+)\]/i.exec(ddl?.sql ?? '');
-    if (trovata === undefined || trovata === null) return;
-    if (Number(trovata[1]) === this.dimensions) return;
+    return trovata === null ? undefined : Number(trovata[1]);
+  }
 
+  /**
+   * L'indice tiene i vettori di **un solo** embedder: quello di adesso.
+   *
+   * Girare la manopola in config.json può cambiare due cose, e finora ne era
+   * gestita una sola.
+   *
+   * **La dimensione.** La tabella vec0 nasce con la dimensione cotta dentro il
+   * DDL, e la crea un `CREATE VIRTUAL TABLE IF NOT EXISTS`: cambiare embedder
+   * non la cambiava, la saltava. Il codice credeva 1536, il disco restava 1024,
+   * e il primo `index()` moriva con un errore di sqlite-vec che non nomina né
+   * l'embedder vecchio né quello nuovo. Misurato prima di ripararlo: costruito
+   * l'indice con un embedder a 8 dimensioni e poi con uno a 16, il DDL sul
+   * disco restava `float[8]`.
+   *
+   * **L'id.** `indexBacklog` e `alreadyIndexed` filtrano su `embedding_v`,
+   * cioè sull'id dell'embedder — e l'id **non porta la dimensione**:
+   * `ollama:${model}`. Qui stava scritto che il backlog «li rifà, perché filtra
+   * su `embedding_v`», ed era la premessa esattamente rovesciata: filtrare su
+   * `embedding_v` è ciò che *impedisce* il rifacimento quando l'id non cambia.
+   * Basta correggere `dimensions` a mano in config.json — o portare
+   * `text-embedding-3-small` da 1536 a 512, che dell'id non cambia una lettera
+   * — e il DROP porta via i vettori mentre il backlog, che vede l'id di sempre,
+   * non ha più niente da rifare. Misurato prima di ripararlo, su un episodio
+   * solo: `chunks 1 · chunks_vec 1` prima, `chunks 1 · chunks_vec 0` subito
+   * dopo il costruttore, backlog `[]`, `index()` scrive 0, `chunks_vec` resta
+   * 0. Recall semantico spento per sempre, in silenzio, con una riga di config
+   * — e `doctor` rosso in permanenza («6 chunks but 3 vectors») con un rimedio
+   * che drena un backlog vuoto.
+   *
+   * Da qui il `DELETE FROM chunks` nella stessa transazione del DROP: dopo il
+   * DROP **ogni** riga di `chunks` è orfana, qualunque sia il suo
+   * `embedding_v`. È legale perché `chunks` è derivata — episodi e fatti
+   * restano, e `indexBacklog` la ricostruisce da quelli. Buttarla è proprio il
+   * modo in cui il backlog torna a vedere del lavoro da fare.
+   *
+   * Il ramo a dimensione uguale è la stessa regola con meno rumore. Non è vero
+   * che i vettori di un altro modello «restano inerti»: `search()` non filtra
+   * su `embedding_v`, quindi occupano il budget `k` e tornano con distanze
+   * calcolate contro il vettore di query di un modello diverso. Misurato con
+   * due modelli a 4 dimensioni: 2 hit, quella del modello vecchio con
+   * `distance 1.414`, un numero che non vuole dire niente.
+   */
+  private soloLEmbedderCorrente(): void {
+    const suDisco = this.dimensioneSulDisco();
+    if (suDisco === undefined) return;
+
+    if (suDisco !== this.dimensions) {
+      this.db.transaction(() => {
+        this.db.exec(`DROP TABLE chunks_vec`);
+        this.db.exec(
+          `CREATE VIRTUAL TABLE chunks_vec USING vec0(
+             tenant_id TEXT PARTITION KEY,
+             embedding float[${this.dimensions}]
+           )`,
+        );
+        this.db.exec(`DELETE FROM chunks`);
+      })();
+      return;
+    }
+
+    // Stessa dimensione, altro modello: la tabella va bene, le righe no. Le
+    // righe vec0 si tolgono una per una perché il rowid è la chiave e vec0 non
+    // sa fare una DELETE con sottoquery.
+    const dropVector = this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
     this.db.transaction(() => {
-      this.db.exec(`DROP TABLE chunks_vec`);
-      this.db.exec(
-        `CREATE VIRTUAL TABLE chunks_vec USING vec0(
-           tenant_id TEXT PARTITION KEY,
-           embedding float[${this.dimensions}]
-         )`,
-      );
+      const vecchie = this.db.prepare(`SELECT id FROM chunks WHERE embedding_v <> ?`).all(this.embedder.id) as {
+        id: number;
+      }[];
+      if (vecchie.length === 0) return;
+      for (const row of vecchie) dropVector.run(BigInt(row.id));
+      this.db.prepare(`DELETE FROM chunks WHERE embedding_v <> ?`).run(this.embedder.id);
     })();
   }
 
@@ -101,10 +149,21 @@ export class VectorIndex {
    * The vectors are read back out and re-inserted rather than recomputed: this
    * table is derived, but "derived" is not a licence to make the owner pay for
    * an embedding run to fix a schema decision of ours. Migrations preserve data.
+   *
+   * La tabella nuova nasce con la dimensione che era **sul disco**, non con
+   * quella dell'embedder di adesso: reinserire vettori a 8 dimensioni in una
+   * tabella `float[16]` fa fallire l'insert. Misurato prima di ripararlo, su un
+   * DB legacy con un embedder a 16 dimensioni: `Dimension mismatch … Expected
+   * 16 … received 8`, rollback, costruttore che lancia — e
+   * `agent/runtime.ts:352` lo inghiotte, quindi `vectors = undefined` a ogni
+   * boot, per sempre, con `doctor` verde. Il cambio di dimensione non si perde:
+   * lo raccoglie `soloLEmbedderCorrente()`, che gira subito dopo ed è il posto
+   * dove buttare è la cosa giusta.
    */
   private migrateUnpartitioned(): void {
     const columns = this.db.prepare(`PRAGMA table_info(chunks_vec)`).all() as { name: string }[];
     if (columns.some((c) => c.name === 'tenant_id')) return;
+    const dimensioneVecchia = this.dimensioneSulDisco() ?? this.dimensions;
 
     const rows = this.db.prepare(`SELECT rowid, embedding FROM chunks_vec`).all() as {
       rowid: number;
@@ -124,7 +183,7 @@ export class VectorIndex {
       this.db.exec(
         `CREATE VIRTUAL TABLE chunks_vec USING vec0(
            tenant_id TEXT PARTITION KEY,
-           embedding float[${this.dimensions}]
+           embedding float[${dimensioneVecchia}]
          )`,
       );
       const insert = this.db.prepare(
