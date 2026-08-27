@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -92,5 +92,22 @@ describe('le skill di serie', () => {
     const sezione = skillsPromptSection(discoverSkills(home).skills);
     expect(sezione).toContain('[skills-marker rimosso]');
     expect(sezione).not.toContain('skills_deadbeefcafe>>>');
+  });
+});
+
+describe('il nonce quando due processi bootano insieme', () => {
+  it('il secondo adotta quello del primo invece di sovrascriverlo', () => {
+    // Check-then-write: entrambi vedevano il file assente, entrambi
+    // generavano, entrambi scrivevano. Il perdente teneva in memoria un nonce
+    // che il disco non aveva più — non una falla, ma il prefisso della cache
+    // si frammentava proprio fra i processi che dovevano condividerlo.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-nonce-gara-'));
+    runInit({ home, apiKey: 'sk-non-reale' });
+    rmSync(paths(home).promptNonce, { force: true });
+
+    const primo = promptNonce(home);
+    const secondo = promptNonce(home);
+    expect(secondo).toBe(primo);
+    expect(readFileSync(paths(home).promptNonce, 'utf8').trim()).toBe(primo);
   });
 });
