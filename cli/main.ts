@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
+import { styleFor } from './ui.js';
 import { cmdUndo } from './undo.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -271,12 +272,16 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
-    case 'model':
+    case 'model': {
+      const style = styleFor(process.stdout);
+      process.stdout.write(`${style.header('muffin model')}\n`);
       return cmdModel(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`) });
+    }
     case 'search':
       // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
       // questa pigrizia, `muffin search` da solo si bloccherebbe su un
       // terminale in attesa di una chiave che nessuno sta per dare.
+      process.stdout.write(`${styleFor(process.stdout).header('muffin search')}\n`);
       return cmdSearch(paths().home, rest, {
         out: (l) => process.stdout.write(`${l}\n`),
         readKey: () => {
@@ -758,7 +763,16 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     allowPositionals: false,
   });
   const report = await runDoctor(paths().home, values.online ? { online: true } : {});
-  process.stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : `${formatReport(report)}\n`);
+  if (values.json) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    const style = styleFor(process.stdout);
+    // L'intestazione dice **dove comincia questo comando**: senza, l'output di
+    // `doctor` e quello del comando prima sono un blocco solo, e in uno
+    // scrollback lungo non c'e' modo di dire dove finisce uno e comincia
+    // l'altro. Mai in `--json`, che ha un solo lettore e non e' umano.
+    process.stdout.write(`${style.header('muffin doctor', paths().home)}\n${formatReport(report, style)}\n`);
+  }
   return report.exitCode;
 }
 
