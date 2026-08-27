@@ -55,6 +55,44 @@ export class VectorIndex {
        )`,
     );
     this.migrateUnpartitioned();
+    this.rifaiSeLaDimensioneCambia();
+  }
+
+  /**
+   * La tabella vec0 nasce con la dimensione **cotta dentro il DDL**, e la crea
+   * un `CREATE VIRTUAL TABLE IF NOT EXISTS`: cambiare embedder non la cambiava,
+   * la saltava. Il commento sopra prometteva «mai una mescolanza silenziosa di
+   * vettori incompatibili» — ed era vero solo a metà: niente mescolanza, ma
+   * nemmeno la nuova versione. Il codice credeva 1536, il disco restava 1024, e
+   * il primo `index()` moriva con un errore di dimensione di sqlite-vec che non
+   * nomina né l'embedder vecchio né quello nuovo.
+   *
+   * Misurato prima di ripararlo: costruito l'indice con un embedder a 8
+   * dimensioni e poi con uno a 16, il DDL sul disco restava `float[8]`.
+   *
+   * I vettori vecchi si buttano di proposito, e qui è giusto dove nella
+   * migrazione qui sopra sarebbe stato sbagliato: là la forma cambiava e i
+   * numeri restavano validi, qui i numeri stessi vengono da un altro modello e
+   * non significano più niente. `pendingFor` li rifà, perché filtra su
+   * `embedding_v` — che porta l'id dell'embedder corrente.
+   */
+  private rifaiSeLaDimensioneCambia(): void {
+    const ddl = this.db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'`)
+      .get() as { sql: string | null } | undefined;
+    const trovata = /embedding\s+float\[(\d+)\]/i.exec(ddl?.sql ?? '');
+    if (trovata === undefined || trovata === null) return;
+    if (Number(trovata[1]) === this.dimensions) return;
+
+    this.db.transaction(() => {
+      this.db.exec(`DROP TABLE chunks_vec`);
+      this.db.exec(
+        `CREATE VIRTUAL TABLE chunks_vec USING vec0(
+           tenant_id TEXT PARTITION KEY,
+           embedding float[${this.dimensions}]
+         )`,
+      );
+    })();
   }
 
   /**

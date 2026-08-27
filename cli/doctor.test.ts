@@ -958,6 +958,31 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('interroga l embedder della config, non Ollama per definizione', async () => {
+    // La cucitura, misurata: sostituire `makeEmbedder(config.embedder, …)` con
+    // `undefined` in `cli/doctor.ts` lasciava **48 test verdi**. Cioè `doctor`
+    // poteva interrogare Ollama su una macchina configurata per un altro
+    // embedder — dire «giù» su una macchina sana e «su» su una rotta, che è
+    // esattamente il `doctor` verde con la memoria spenta da cui nasce questo
+    // blocco.
+    //
+    // Niente `embedderProbe` qui: l override è il pezzo che questo test deve
+    // NON usare. La porta 1 rifiuta sempre e senza rete, e il messaggio porta
+    // l id dell embedder — che è il nome del modello configurato, e non quello
+    // di default.
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = { kind: 'ollama', model: 'un-modello-inventato', dimensions: 7, baseUrl: 'http://127.0.0.1:1' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', {});
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('un-modello-inventato');
+    expect(c?.detail).not.toContain('qwen3-embedding');
+    rmSync(dir, { recursive: true, force: true });
+  }, 15_000);
+
   it('non resta appesa a un embedder che accetta la connessione e non risponde', async () => {
     // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:
     // `doctor` è ciò che si lancia quando la macchina è già strana.

@@ -55,6 +55,39 @@ export const ConfigSchema = z.object({
       maxResults: z.number().int().min(1).max(20).optional(),
     })
     .optional(),
+  /**
+   * Quale embedder indicizza la memoria. Assente = Ollama locale coi suoi
+   * default, che è il comportamento di sempre: nessuna migrazione, nessun
+   * cambio per chi non tocca niente.
+   *
+   * Esiste perché `core/memory/embed.ts` dichiara da sempre, nel suo primo
+   * commento, che l'interfaccia c'è «perché sia una scelta di configurazione e
+   * non architetturale» — e la scelta non si poteva fare: `buildRuntime`
+   * costruiva `new OllamaEmbedder()` e basta, e `OpenAICompatEmbedder` era
+   * codice che nessuno istanziava. Su una VPS senza Ollama installato questo
+   * significa che niente viene indicizzato e il recall resta solo testuale,
+   * senza che nulla di rotto lo dica.
+   *
+   * Il locale resta il default per la ragione scritta lì: un agente che legge
+   * tutto quello che scrivi è l'ultimo posto da cui mandare ogni frase a terzi
+   * per indicizzarla. Ma restare local-first non è la stessa cosa che essere
+   * local-only.
+   */
+  embedder: z
+    .object({
+      kind: z.enum(['ollama', 'openai-compat']),
+      model: z.string().min(1).optional(),
+      /**
+       * Obbligatoria per `openai-compat`: la dimensione è cotta nel DDL della
+       * tabella vettoriale, quindi indovinarla sbagliata significa un indice
+       * che si rifà da solo al primo boot dopo aver scoperto l'errore.
+       */
+      dimensions: z.number().int().positive().optional(),
+      baseUrl: z.string().url().optional(),
+      /** `secret://name`, come la chiave del modello. Mai la chiave. */
+      apiKeyRef: z.string().min(1).optional(),
+    })
+    .optional(),
   // No `budget` here, deliberately. The caps are a rail, so they live inside the
   // seal (`rot/budgets.json`, read by `core/rot/budgets.ts`) and this file — which
   // the agent is meant to be able to change while talking (ADR-0036) — must not

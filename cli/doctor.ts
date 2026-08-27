@@ -16,7 +16,7 @@ import { readGateway } from '../core/gateway/lock.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
-import { OllamaEmbedder } from '../core/memory/embed.js';
+import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embed.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -404,7 +404,18 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         // 127.0.0.1 che rifiuta subito quando è chiusa. Il tetto serve per il
         // caso opposto — un server che accetta la connessione e non risponde —
         // perché `doctor` è ciò che si lancia quando la macchina è già strana.
-        const embedderError = await probeEmbedder(options.embedderProbe);
+        // L'embedder configurato, costruito qui e non assunto: se la config
+        // dice `openai-compat` e `doctor` interroga Ollama, dice «giù» su una
+        // macchina sana e «su» su una rotta.
+        let configurato: Embedder | undefined;
+        try {
+          configurato = config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+        } catch {
+          // Una config di embedder incompleta non deve far cadere `doctor`: è
+          // proprio il momento in cui serve. Il ramo sotto la segnala.
+          configurato = undefined;
+        }
+        const embedderError = await probeEmbedder(options.embedderProbe, configurato);
         if (embedderError === null) {
           ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
         } else {
@@ -871,8 +882,15 @@ const EMBEDDER_PROBE_MS = 1_500;
  * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
  * stessa che ha tenuto ferma la corsia della memoria per due giorni.
  */
-async function probeEmbedder(override?: () => Promise<void>): Promise<string | null> {
-  const run = override ?? (async (): Promise<void> => void (await new OllamaEmbedder().embed(['probe'])));
+async function probeEmbedder(
+  override?: () => Promise<void>,
+  embedder?: Embedder,
+): Promise<string | null> {
+  // L'embedder **configurato**, non Ollama per definizione: se `doctor`
+  // interroga un embedder diverso da quello che il runtime usa, misura una cosa
+  // e ne riporta un'altra — ed è così che un `doctor` verde convive con una
+  // memoria che non si indicizza.
+  const run = override ?? (async (): Promise<void> => void (await (embedder ?? new OllamaEmbedder()).embed(['probe'])));
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
