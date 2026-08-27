@@ -84,3 +84,50 @@ describe('un input che finisce è una risposta', () => {
     await expect(pending).resolves.toBe('sk-or-v1-typed');
   });
 });
+
+/**
+ * **Un EOF vale una volta sola per il processo, non per la domanda** — e la
+ * metà che non si vede è che una *risposta* non deve valere come EOF.
+ *
+ * `muffin init` con un runtime locale acceso fa due domande. La prima
+ * consumava il Ctrl+D e la seconda restava appesa per sempre, perché in raw
+ * mode readline sintetizza l'EOF dal carattere `^D` e il tty non emette mai
+ * `end`: `readableEnded` resta `false` e lo stream non sa di essere finito.
+ * Chi deve ricordarlo è questo modulo.
+ *
+ * Ricordare *troppo* è il difetto gemello, e costa quanto l'altro: se una
+ * chiusura normale — quella che segue una risposta data — venisse scambiata
+ * per un EOF, rispondere «n» alla prima domanda vorrebbe dire non sentirsi
+ * chiedere la chiave. Le due direzioni si provano separatamente perché sono
+ * due bug diversi con la stessa riga.
+ */
+describe('un EOF vale per il processo, una risposta no', () => {
+  it('dopo un Ctrl+D, la domanda dopo non si pone nemmeno', async () => {
+    const { input, output } = fakeTty();
+    const primo = promptLine('primo? ', input, output);
+    input.end(); // Ctrl+D
+    await expect(primo).resolves.toBeUndefined();
+    // Senza memoria dell'EOF questa promise non si deciderebbe mai: il test
+    // fallirebbe per timeout, che è esattamente come si comportava `init`.
+    await expect(promptLine('secondo? ', input, output)).resolves.toBeUndefined();
+  });
+
+  it('e lo stesso vale attraverso i due prompt diversi, perché lo stdin è uno solo', async () => {
+    const { input, output } = fakeTty();
+    const primo = promptLine('runtime locale? [Y/n] ', input, output);
+    input.end();
+    await expect(primo).resolves.toBeUndefined();
+    await expect(promptSecret('chiave: ', input, output)).resolves.toBeUndefined();
+  });
+
+  it('ma una risposta data non chiude niente: la domanda dopo si pone eccome', async () => {
+    const { input, output } = fakeTty();
+    const primo = promptLine('runtime locale? [Y/n] ', input, output);
+    input.write('n\n');
+    await expect(primo).resolves.toBe('n');
+
+    const secondo = promptSecret('chiave: ', input, output);
+    input.write('sk-or-v1-poi\n');
+    await expect(secondo).resolves.toBe('sk-or-v1-poi');
+  });
+});
