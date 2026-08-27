@@ -44,7 +44,7 @@ import { annunciaSalto } from './non-provabile.js';
  *
  * Estratta dalla registrazione perché il nome è l'unica cosa che `report.ts`
  * guarda: cerca l'esito di una riga per suffisso del titolo di manifest
- * (`chiaveEsito`). Le due parti divergevano proprio qui — il salto si
+ * (`chiaviEsito`). Le due parti divergevano proprio qui — il salto si
  * intitolava con la **riga** (`"A1 [non provabile qui: …]"`) mentre la ricerca
  * usava il **titolo** (`"A1 continuity: …"`) — quindi `verdictFor` usciva con
  * `nessuno-scenario` prima ancora di arrivare al ramo del salto: la riga si
