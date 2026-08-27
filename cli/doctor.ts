@@ -16,7 +16,8 @@ import { readGateway } from '../core/gateway/lock.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
-import { OllamaEmbedder } from '../core/memory/embed.js';
+import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embed.js';
+import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
@@ -357,7 +358,53 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     // this repository and none of them was ever *consulted* — which is the same
     // failure they were written to prevent, one layer out.
     const chunks = countOrNull(db, 'chunks');
-    if (chunks === null) {
+
+    // **Prima** dei conteggi, non dentro il ramo dei conteggi coerenti.
+    //
+    // Il calcolo stava sotto `chunks > 0`, quindi su un'installazione fresca —
+    // `chunks` esistente e vuota — il ramo `chunks === 0` scattava per primo e
+    // la config non veniva mai costruita. Misurato, con `config.embedder`
+    // `openai-compat` a cui manca `dimensions`: `warn | empty: recall is
+    // full-text only | run \`muffin memory extract\``. La stessa home con **un**
+    // chunk: `fail | mancano dimensions in config.json | correggi
+    // config.embedder`.
+    //
+    // Ed è proprio l'installazione che questa slice dice di servire: VPS senza
+    // Ollama, `makeEmbedder` lancia, `agent/runtime.ts:352` inghiotte,
+    // `vectors = undefined`, quindi `chunks` resta 0 **per sempre** — e
+    // `doctor` dava la colpa a «empty» prescrivendo `muffin memory extract`,
+    // che ripassa da `makeEmbedder`, rilancia e non indicizza niente. Ciclo
+    // permanente, causa sbagliata, rimedio inerte.
+    //
+    // Una config non costruibile è la causa di tutti i rami sotto, quindi si
+    // dice per prima e li sostituisce: nessun rimedio più in basso può
+    // funzionare finché quella riga di config.json è com'è.
+    let configurato: Embedder | undefined;
+    let configRotta: string | undefined;
+    try {
+      configurato = config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+    } catch (error) {
+      // Una config di embedder incompleta non deve far cadere `doctor`: è
+      // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
+      // `catch {}` che lasciava `configurato = undefined`, e `undefined`
+      // faceva cadere la sonda sul default Ollama. Su una macchina con Ollama
+      // vivo la sonda rispondeva e `doctor` diceva «1 chunks, 1 vectors, in
+      // sync» — verde — mentre `agent/runtime.ts:352` inghiottiva lo stesso
+      // errore e girava con `vectors === undefined`.
+      //
+      // Il messaggio di `makeEmbedder` esiste apposta per nominare i campi che
+      // mancano: qui è l'unico posto che lo legge.
+      configRotta = error instanceof Error ? error.message : String(error);
+    }
+
+    if (configRotta !== undefined) {
+      fail(
+        'vector index',
+        `${chunks === null ? 'nessuna tabella chunks' : `${chunks} chunks`}, e config.embedder non è ` +
+          `costruibile (${configRotta}): niente viene indicizzato e il recall è solo testuale`,
+        'correggi config.embedder',
+      );
+    } else if (chunks === null) {
       warn(
         'vector index',
         'no chunks table yet: recall is full-text only until something is indexed',
@@ -399,21 +446,45 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         // verde, «55 chunks, 55 vectors, in sync». Tutto vero e tutto
         // fuorviante: la metà semantica del recall era spenta da due giorni.
         //
-        // Locale e a tempo, non dietro `--online`: quel flag copre la
-        // raggiungibilità di un servizio esterno, questa è una porta su
-        // 127.0.0.1 che rifiuta subito quando è chiusa. Il tetto serve per il
-        // caso opposto — un server che accetta la connessione e non risponde —
+        // A tempo e non dietro `--online`. Sul default — Ollama — è una porta
+        // su 127.0.0.1 che rifiuta subito quando è chiusa, e il tetto serve per
+        // il caso opposto: un server che accetta la connessione e non risponde,
         // perché `doctor` è ciò che si lancia quando la macchina è già strana.
-        const embedderError = await probeEmbedder(options.embedderProbe);
-        if (embedderError === null) {
-          ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
-        } else {
+        // Con `openai-compat` in config non è più una porta locale: la sonda
+        // diventa una chiamata autenticata a terzi, un embedding della parola
+        // «probe» e nulla della memoria dell'owner. È la config a deciderlo, e
+        // resta da decidere se meriti il flag.
+        //
+        // L'embedder configurato, costruito qui e non assunto: se la config
+        // dice `openai-compat` e `doctor` interroga Ollama, dice «giù» su una
+        // macchina sana e «su» su una rotta.
+        const embedderError = await probeEmbedder(options.embedderProbe, configurato);
+        // Contare `chunks` contro `chunks_vec` non è chiedere se il recall vede
+        // tutto: dice solo che ciò che è **già** indicizzato è coerente. Dopo un
+        // cambio di embedder il backlog si drena a scaglioni di `limit = 200`,
+        // quindi «200 chunks, 200 vectors, in sync» convive benissimo con 50
+        // episodi che il recall semantico non vede — misurato, su 250 episodi.
+        const pendenti = quantiNonIndicizzatiSafe(db, configurato);
+        if (embedderError !== null) {
+          // Il rimedio segue la config, non l'abitudine. Dire «avvia ollama»
+          // a chi ha configurato `openai-compat` manda a riparare la cosa
+          // sbagliata, e la seconda metà era pure inerte: `makeEmbedder`
+          // lascia vincere `config.embedder.baseUrl` su `OLLAMA_URL`.
           warn(
             'vector index',
             `${chunks} chunks, ${vectors} vectors coerenti, ma l'embedder non risponde (${embedderError}): ` +
               'niente di nuovo viene indicizzato e il recall è solo testuale',
-            'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL',
+            rimedioEmbedder(config),
           );
+        } else if (pendenti > 0) {
+          warn(
+            'vector index',
+            `${chunks} chunks, ${vectors} vectors coerenti, ma ${pendenti} sorgenti non hanno ancora ` +
+              "un vettore per l'embedder di adesso: il recall semantico non le vede",
+            'run `muffin memory extract` to drain the backlog',
+          );
+        } else {
+          ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
         }
       }
     }
@@ -860,6 +931,38 @@ function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
   }
 }
 
+/**
+ * Il rimedio giusto per l'embedder che questa installazione ha scelto.
+ *
+ * «avvia ollama … oppure `OLLAMA_URL`» a chi ha configurato `openai-compat`
+ * manda a riparare la cosa sbagliata, e la seconda metà è pure inerte:
+ * `makeEmbedder` lascia vincere `config.embedder.baseUrl` su `OLLAMA_URL`.
+ */
+function rimedioEmbedder(config: { embedder?: { kind?: string } | undefined } | null): string {
+  return config?.embedder?.kind === 'openai-compat'
+    ? "controlla l'endpoint e la chiave in config.embedder (baseUrl, apiKeyRef)"
+    : 'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL';
+}
+
+/**
+ * Il backlog, senza mai costruire un `VectorIndex`.
+ *
+ * Costruirne uno esegue il costruttore, e il costruttore può fare DROP+DELETE
+ * quando la dimensione o l'id sono cambiati: un check di salute non deve poter
+ * cancellare l'indice che sta misurando. Da qui la funzione libera in
+ * `core/memory/vectors.ts` invece del metodo.
+ *
+ * Un DB senza le tabelle della memoria non è un guasto da riportare qui — lo
+ * dicono già i rami sopra — quindi vale zero invece di far cadere `doctor`.
+ */
+function quantiNonIndicizzatiSafe(db: DatabaseCtor.Database, embedder: Embedder | undefined): number {
+  try {
+    return quantiNonIndicizzati(db, (embedder ?? new OllamaEmbedder()).id);
+  } catch {
+    return 0;
+  }
+}
+
 /** Quanto si aspetta un embedder che ha accettato la connessione e non risponde. */
 const EMBEDDER_PROBE_MS = 1_500;
 
@@ -871,8 +974,15 @@ const EMBEDDER_PROBE_MS = 1_500;
  * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
  * stessa che ha tenuto ferma la corsia della memoria per due giorni.
  */
-async function probeEmbedder(override?: () => Promise<void>): Promise<string | null> {
-  const run = override ?? (async (): Promise<void> => void (await new OllamaEmbedder().embed(['probe'])));
+async function probeEmbedder(
+  override?: () => Promise<void>,
+  embedder?: Embedder,
+): Promise<string | null> {
+  // L'embedder **configurato**, non Ollama per definizione: se `doctor`
+  // interroga un embedder diverso da quello che il runtime usa, misura una cosa
+  // e ne riporta un'altra — ed è così che un `doctor` verde convive con una
+  // memoria che non si indicizza.
+  const run = override ?? (async (): Promise<void> => void (await (embedder ?? new OllamaEmbedder()).embed(['probe'])));
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([

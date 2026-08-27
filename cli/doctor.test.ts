@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,7 @@ import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
 import { VectorIndex } from '../core/memory/vectors.js';
+import { MEMORY_SCHEMA } from '../core/memory/schema.js';
 import type { Embedder } from '../core/memory/embed.js';
 
 /**
@@ -957,6 +959,176 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     expect(c?.remedy).toContain('ollama');
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('interroga l embedder della config, non Ollama per definizione', async () => {
+    // La cucitura, misurata: sostituire `makeEmbedder(config.embedder, …)` con
+    // `undefined` in `cli/doctor.ts` lasciava **48 test verdi**. Cioè `doctor`
+    // poteva interrogare Ollama su una macchina configurata per un altro
+    // embedder — dire «giù» su una macchina sana e «su» su una rotta, che è
+    // esattamente il `doctor` verde con la memoria spenta da cui nasce questo
+    // blocco.
+    //
+    // Niente `embedderProbe` qui: l override è il pezzo che questo test deve
+    // NON usare. La porta 1 rifiuta sempre e senza rete, e il messaggio porta
+    // l id dell embedder — che è il nome del modello configurato, e non quello
+    // di default.
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = { kind: 'ollama', model: 'un-modello-inventato', dimensions: 7, baseUrl: 'http://127.0.0.1:1' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', {});
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('un-modello-inventato');
+    expect(c?.detail).not.toContain('qwen3-embedding');
+    rmSync(dir, { recursive: true, force: true });
+  }, 15_000);
+
+  it('nomina la config rotta invece di ricadere su Ollama', async () => {
+    // Il `catch {}` che stava qui buttava via l'errore di `makeEmbedder` e
+    // lasciava `configurato = undefined` — e `undefined` faceva cadere la sonda
+    // sul default Ollama. Su una macchina con Ollama **vivo** la sonda
+    // rispondeva e la riga tornava verde.
+    //
+    // Misurato prima di ripararlo, con questo stesso server finto su
+    // `OLLAMA_URL` e questa stessa config: «LIVELLO: ok | DETTAGLIO: 1 chunks,
+    // 1 vectors, in sync | RIMEDIO: undefined», mentre `agent/runtime.ts:352`
+    // inghiottiva lo stesso errore e girava con `vectors === undefined`. Cioè
+    // esattamente lo stato da cui nasce questo blocco, ricreato dalla manopola
+    // nuova per un campo dimenticato in config.json.
+    //
+    // Niente `embedderProbe`: l'override è il pezzo che questo test deve NON
+    // usare, perché la prova sta proprio nel non interrogare Ollama.
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ embedding: Array.from({ length: 1024 }, () => 0.1) }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    vi.stubEnv('OLLAMA_URL', `http://127.0.0.1:${port}`);
+
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    // `dimensions` dimenticata: `makeEmbedder` lancia, e il suo messaggio la
+    // nomina. Questo è l'unico posto che lo legge.
+    config.embedder = { kind: 'openai-compat', model: 'text-embedding-3-small', apiKeyRef: 'secret://emb' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', {});
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('dimensions');
+    expect(c?.detail).not.toContain('in sync');
+    expect(c?.remedy).toContain('config.embedder');
+
+    await new Promise<void>((r) => server.close(() => r()));
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('nomina la config rotta anche a indice VUOTO — l installazione fresca', async () => {
+    // Il calcolo della config stava dentro il ramo `chunks > 0`, quindi su
+    // un'installazione appena fatta il ramo `chunks === 0` scattava per primo e
+    // la config non veniva mai costruita.
+    //
+    // Misurato prima di ripararlo, su questa stessa home: `warn | empty: recall
+    // is full-text only | run muffin memory extract`. La stessa home con **un**
+    // chunk indicizzato, config identica: `fail | mancano dimensions`.
+    //
+    // Ed è l'installazione che la slice dice di servire: VPS senza Ollama,
+    // `makeEmbedder` lancia, `agent/runtime.ts:352` inghiotte, `vectors =
+    // undefined`, quindi `chunks` resta 0 per sempre — e il rimedio prescritto,
+    // `muffin memory extract`, ripassa da `makeEmbedder` e non indicizza
+    // niente. Ciclo permanente, causa sbagliata, rimedio inerte.
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    // La tabella c'è ed è vuota: lo stato di un'installazione fresca, non
+    // quello di un DB senza memoria.
+    new VectorIndex(db, new Finto());
+    expect((db.prepare(`SELECT count(*) AS n FROM chunks`).get() as { n: number }).n).toBe(0);
+    db.close();
+
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = { kind: 'openai-compat', model: 'text-embedding-3-small', apiKeyRef: 'secret://emb' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('fail');
+    expect(c?.detail).toContain('dimensions');
+    expect(c?.remedy).toContain('config.embedder');
+    // Il rimedio che non poteva funzionare non deve più comparire.
+    expect(c?.remedy).not.toContain('memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('non dice «in sync» mentre delle sorgenti aspettano ancora un vettore', async () => {
+    // Contare `chunks` contro `chunks_vec` dice solo che ciò che è già
+    // indicizzato è coerente. Dopo un cambio di embedder il backlog si drena a
+    // scaglioni (`indexBacklog` ha `limit = 200`), quindi i due numeri tornano
+    // mentre una parte del corpus è fuori dal recall semantico.
+    //
+    // Misurato prima di ripararlo, in piccolo per non pagare 250 giri: 3
+    // episodi, uno solo indicizzato — `ok: "1 chunks, 1 vectors, in sync"`, con
+    // 2 episodi che il recall non vede. È alla lettera il «55 chunks, 55
+    // vectors, in sync: vero e fuorviante» da cui nasce questa slice.
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    db.exec(MEMORY_SCHEMA);
+    const ins = db.prepare(
+      `INSERT INTO episodes (tenant_id, connector, thread_key, role, kind, content, trust_tier, created_at, extraction_v)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+    );
+    for (const t of ['uno', 'due', 'tre']) ins.run('host', 'cli', 't1', 'user', 'message', t, 0, '2026-08-27', 0);
+    // La **stessa** identità che la config nomina qui sotto, o i tre episodi
+    // risulterebbero pendenti per il motivo sbagliato — un id diverso — invece
+    // che per il drenaggio a metà, che è il caso in prova.
+    const index = new VectorIndex(db, { id: 'ollama:test', dimensions: 4, embed: new Finto().embed });
+    // Uno solo dei tre: i conteggi tornano, il corpus no.
+    await index.index('host', [{ kind: 'episode', sourceId: 1, text: 'uno' }], '2026-08-27T00:00:00Z');
+    db.close();
+
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = { kind: 'ollama', model: 'test', dimensions: 4 };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).not.toContain('in sync');
+    expect(c?.detail).toContain('2 sorgenti');
+    expect(c?.remedy).toContain('memory extract');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('con `openai-compat` non manda l owner ad avviare ollama', async () => {
+    // Il rimedio seguiva l'abitudine e non la config: «avvia ollama … oppure
+    // OLLAMA_URL» a chi ha configurato un endpoint remoto manda a riparare la
+    // cosa sbagliata — e la seconda metà era pure inerte, perché `makeEmbedder`
+    // lascia vincere `config.embedder.baseUrl` su `OLLAMA_URL`.
+    const dir = await conIndice();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = {
+      kind: 'openai-compat',
+      model: 'text-embedding-3-small',
+      dimensions: 4,
+      apiKeyRef: 'secret://emb',
+      baseUrl: 'http://127.0.0.1:1/v1',
+    };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('emb', 'sk-never-called', dir);
+
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    expect(c?.remedy).not.toContain('ollama');
+    expect(c?.remedy).toContain('config.embedder');
+    rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
 
   it('non resta appesa a un embedder che accetta la connessione e non risponde', async () => {
     // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:
