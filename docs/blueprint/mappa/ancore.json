@@ -36,17 +36,17 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1262,
+    "line": 1274,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1329,
+    "line": 1341,
     "testo": "// model at all."
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 1923,
+    "line": 1935,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
@@ -56,37 +56,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 2148,
+    "line": 2160,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2166,
+    "line": 2178,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:1790": {
     "path": "agent/loop.ts",
-    "line": 2186,
+    "line": 2198,
     "testo": "case 'draft':"
   },
   "agent/loop.ts:1887": {
     "path": "agent/loop.ts",
-    "line": 2187,
+    "line": 2199,
     "testo": "// `draft` means \"do it, but reversibly, and tell the owner\". There is no"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 2309,
+    "line": 2321,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 2354,
+    "line": 2366,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2110": {
     "path": "agent/loop.ts",
-    "line": 2451,
+    "line": 2463,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:271": {
@@ -296,12 +296,12 @@
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1118,
+    "line": 1130,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1160,
+    "line": 1172,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -1606,77 +1606,77 @@
   },
   "core/memory/recall.ts:279": {
     "path": "core/memory/recall.ts",
-    "line": 288,
+    "line": 298,
     "testo": "const K = 60;"
   },
   "core/memory/recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 314,
+    "line": 324,
     "testo": "* discarded."
   },
   "core/memory/recall.ts:369": {
     "path": "core/memory/recall.ts",
-    "line": 393,
+    "line": 403,
     "testo": "// Least important, and among equals the oldest. The `<`-only reduce that was"
   },
   "core/memory/recall.ts:396": {
     "path": "core/memory/recall.ts",
-    "line": 418,
+    "line": 428,
     "testo": "tenantId: string,"
   },
   "core/memory/recall.ts:428": {
     "path": "core/memory/recall.ts",
-    "line": 463,
+    "line": 473,
     "testo": "if (textHits.length > 0) strategies.push('fts');"
   },
   "core/memory/recall.ts:432": {
     "path": "core/memory/recall.ts",
-    "line": 467,
+    "line": 477,
     "testo": "options.surface ? `superficie=${options.surface}` : '',"
   },
   "core/memory/recall.ts:435": {
     "path": "core/memory/recall.ts",
-    "line": 470,
+    "line": 480,
     "testo": "]"
   },
   "core/memory/recall.ts:441": {
     "path": "core/memory/recall.ts",
-    "line": 476,
+    "line": 486,
     "testo": "fuse(`episode:${hit.id}`, {"
   },
   "core/memory/recall.ts:527": {
     "path": "core/memory/recall.ts",
-    "line": 562,
+    "line": 572,
     "testo": "if (options.surface !== undefined && connector !== options.surface) return;"
   },
   "core/memory/recall.ts:586": {
     "path": "core/memory/recall.ts",
-    "line": 621,
+    "line": 631,
     "testo": "...(nearest"
   },
   "core/memory/recall.ts:593": {
     "path": "core/memory/recall.ts",
-    "line": 628,
+    "line": 638,
     "testo": ": {}),"
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 709,
+    "line": 721,
     "testo": "const key = `episode:${near.id}`;"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 797,
+    "line": 815,
     "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
     "path": "core/memory/rerank.ts",
-    "line": 66,
+    "line": 79,
     "testo": "export class LlmReranker implements Reranker {"
   },
   "core/memory/rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 84,
+    "line": 103,
     "testo": "try {"
   },
   "core/memory/schema.ts:151": {
@@ -2426,7 +2426,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 1994,
+    "line": 2006,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2686,52 +2686,52 @@
   },
   "recall.ts:290": {
     "path": "core/memory/recall.ts",
-    "line": 302,
+    "line": 312,
     "testo": "* model-typed. Fixed at the primitive instead of at each boundary so a third"
   },
   "recall.ts:293": {
     "path": "core/memory/recall.ts",
-    "line": 305,
+    "line": 315,
     "testo": "const MAX_NEIGHBOURS = 5;"
   },
   "recall.ts:302": {
     "path": "core/memory/recall.ts",
-    "line": 314,
+    "line": 324,
     "testo": "* discarded."
   },
   "recall.ts:375": {
     "path": "core/memory/recall.ts",
-    "line": 399,
+    "line": 409,
     "testo": "(min, f) =>"
   },
   "recall.ts:503": {
     "path": "core/memory/recall.ts",
-    "line": 538,
+    "line": 548,
     "testo": "validFrom: fact.validFrom,"
   },
   "recall.ts:588": {
     "path": "core/memory/recall.ts",
-    "line": 623,
+    "line": 633,
     "testo": "nearest: {"
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 699,
+    "line": 711,
     "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 719,
+    "line": 731,
     "testo": "score: 0,"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 820,
+    "line": 838,
     "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 839,
+    "line": 857,
     "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
@@ -2751,7 +2751,7 @@
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 84,
+    "line": 103,
     "testo": "try {"
   },
   "runtime.ts:284": {
