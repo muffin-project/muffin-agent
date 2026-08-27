@@ -1,7 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { platform, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { probeSandbox, tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT } from './probe.js';
+import {
+  probeSandbox,
+  tmpdirBreaksSandboxSockets,
+  SANDBOX_BINARIES,
+  SANDBOX_BINARIES_REMEDY,
+  SANDBOX_TMPDIR_OVERHEAD,
+  TMPDIR_SUN_PATH_LIMIT,
+} from './probe.js';
 
 /**
  * The probe had no test at all until 2026-08-15 — the module whose entire
@@ -485,5 +492,42 @@ describe('tmpdirBreaksSandboxSockets — the #213 check', () => {
     // The real boundary: dir + SANDBOX_TMPDIR_OVERHEAD (35) against 108.
     expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD))).toBe(false);
     expect(tmpdirBreaksSandboxSockets('linux', 'x'.repeat(TMPDIR_SUN_PATH_LIMIT - SANDBOX_TMPDIR_OVERHEAD + 1))).toBe(true);
+  });
+});
+
+describe('il rimedio nomina tutto ciò che serve', () => {
+  // Un rimedio che elenca due binari su tre non è più corto: è sbagliato.
+  // L'owner lo esegue alla lettera, riprova, e resta fermo — con un errore
+  // diverso, che è il modo più veloce di far sembrare rotto ciò che manca.
+  it('elenca bubblewrap, socat e ripgrep, e come averli', () => {
+    for (const nome of ['bubblewrap', 'socat', 'ripgrep']) {
+      expect(SANDBOX_BINARIES_REMEDY).toContain(nome);
+    }
+    expect(SANDBOX_BINARIES_REMEDY).toMatch(/apt-get|dnf|brew/);
+    // Non basta che i tre nomi compaiano da qualche parte nella stringa: un
+    // testo che dichiara «due binari» e poi elenca comunque i tre comandi
+    // apt-get passerebbe i controlli sopra. La dichiarazione del conteggio va
+    // verificata a sé, ed è quella che la mutazione «torna a nominare solo due
+    // binari» cambia davvero.
+    // «tre», in lettere. La mutazione che riporta questo a «due binari» deve
+    // fallire qui, non sulla presenza dei nomi — che restano tutti nel testo
+    // dei comandi anche quando il conteggio dichiarato mente.
+    expect(SANDBOX_BINARIES_REMEDY).toMatch(/\btre\b/);
+    expect(SANDBOX_BINARIES_REMEDY).not.toMatch(/\bdue binari\b/);
+    // E ogni comando dato deve nominare i tre insieme, non solo l'unione dei
+    // frammenti sparsi nel testo.
+    for (const riga of SANDBOX_BINARIES_REMEDY.split(';')) {
+      if (/install|apt-get|dnf|brew/.test(riga)) {
+        expect(riga).toContain('bubblewrap');
+        expect(riga).toContain('socat');
+        expect(riga).toContain('ripgrep');
+      }
+    }
+  });
+
+  it('e `SANDBOX_BINARIES` elenca gli stessi tre, coi nomi dei comandi', () => {
+    // Due liste che possono divergere sarebbero il difetto di partenza con un
+    // altro nome: questa è quella che un preflight interroga.
+    expect([...SANDBOX_BINARIES]).toEqual(['bwrap', 'socat', 'rg']);
   });
 });

@@ -26,11 +26,32 @@ OUT="${2:?uso: gate-linux.sh <repo> <outdir>}"
 IMAGE="${MUFFIN_GATE_IMAGE:-node:22-bookworm}"
 mkdir -p "$OUT"
 
-# `git archive` e non un bind mount: node_modules di macOS contiene binding
+# Un clone shallow e non un bind mount: node_modules di macOS contiene binding
 # nativi darwin (better-sqlite3) che su Linux non caricano, e la copia
 # dell'albero intero sarebbe lenta. Cosi il container vede solo cio che e
 # tracciato, e si costruisce le sue dipendenze.
-git -C "$REPO" archive HEAD -o "$OUT/repo.tar"
+#
+# Clone e non `git archive`, dal 27/08: `git archive` non porta `.git`, e senza
+# checkout Git `muffin --version` dice "build sconosciuta" e `doctor` sputa un
+# warning di deriva per OGNI file di default (nove, sull'albero attuale). Lo
+# scenario A10 dichiara quali warning si aspetta a ogni passo del giro, quindi
+# andava rosso — per un artefatto del trasporto, non per Linux. Il percorso
+# vero di installazione parte da un clone (`install.sh`: "Run from a clone of
+# this repo"), quindi e da un clone che va provato.
+RAMO=$(git -C "$REPO" rev-parse --abbrev-ref HEAD)
+rm -rf "$OUT/src"
+if [ "$RAMO" = "HEAD" ]; then
+  git clone --depth 1 "file://$(cd "$REPO" && pwd)" "$OUT/src" -q
+  git -C "$OUT/src" fetch --depth 1 origin "$(git -C "$REPO" rev-parse HEAD)" -q
+  git -C "$OUT/src" checkout -q FETCH_HEAD
+else
+  git clone --depth 1 --branch "$RAMO" "file://$(cd "$REPO" && pwd)" "$OUT/src" -q
+fi
+# `COPYFILE_DISABLE=1`: bsdtar su macOS infila un `._<nome>` accanto a ogni file
+# per gli attributi estesi, e dentro il container vitest li raccoglie come test
+# (`._a-lifecycle.accept.ts`) e fallisce a caricarli. `git archive` non aveva
+# questo problema; il clone lo ha introdotto, e questa riga lo chiude.
+COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
 
 # Le due opzioni di sicurezza sono l'equivalente container del profilo AppArmor
 # che il workflow installa su ubuntu-latest: il seccomp di default di Docker
