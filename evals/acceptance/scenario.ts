@@ -1,5 +1,6 @@
 import { it } from 'vitest';
 import { entry, promoteMarker, type Expectation } from './manifest.js';
+import { annunciaSalto } from './non-provabile.js';
 
 /**
  * Registers an M5-BIS row's acceptance scenario as a real vitest test, using
@@ -21,8 +22,34 @@ import { entry, promoteMarker, type Expectation } from './manifest.js';
  * against the manifest's own `expectFailure`, inside a plain `it` — see
  * `guardAttesoRosso` for the three outcomes.
  */
-export function scenario(row: string, fn: () => Promise<void>, timeout?: number): void {
+/**
+ * `nonProvabileQui` è per l'unico caso onesto in cui uno scenario non deve né
+ * passare né fallire: quando **l'host** non è attrezzato per esercitare la cosa
+ * che lo scenario prova. Non è un interruttore di comodo — la funzione deve
+ * interrogare il prerequisito *fuori* da Muffin (vedi `hostContiene`, che
+ * chiede a bwrap direttamente), così un difetto di Muffin resta rosso e solo un
+ * limite della macchina diventa un salto.
+ *
+ * Il motivo è misurato: dentro Docker `bwrap` non può montare `/proc`, quindi
+ * il job script non parte e lo scenario andava rosso con un messaggio che si
+ * legge come «il sandbox di Muffin è rotto su Linux». Non lo era. Un rosso
+ * falso costa quanto un verde falso, e insegna a ignorare quel rosso.
+ *
+ * Il salto **si stampa**: una capability non esercitata che non lascia traccia
+ * nell'output è indistinguibile da una provata.
+ */
+export function scenario(
+  row: string,
+  fn: () => Promise<void>,
+  timeout?: number,
+  nonProvabileQui?: () => string | null,
+): void {
   const meta = entry(row);
+  const motivo = nonProvabileQui?.() ?? null;
+  if (motivo !== null) {
+    it.skip(annunciaSalto(row, motivo, (s) => process.stderr.write(s)), fn, timeout);
+    return;
+  }
   if (meta.expectation.kind === 'verde') {
     it(meta.title, fn, timeout);
     return;

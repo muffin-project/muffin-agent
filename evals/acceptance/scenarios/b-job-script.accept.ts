@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { itConSandbox } from '../sandbox-host.js';
 import { install, until } from '../harness.js';
 
 /**
@@ -28,7 +29,13 @@ import { install, until } from '../harness.js';
  */
 
 describe('acceptance · un job script gira senza modello', () => {
-  it(
+  // `itConSandbox` e non `it`: questo scenario fa girare un job script, e un
+  // job script gira nel sandbox. Dentro Docker `bwrap` non può montare `/proc`,
+  // quindi qui andava rosso con un messaggio che si legge come «il sandbox di
+  // Muffin è rotto su Linux» — e non lo è: bwrap grezzo lì funziona. La
+  // domanda ora la fa bwrap, non Muffin, quindi un difetto di Muffin resta
+  // rosso e solo un limite della macchina diventa un salto dichiarato.
+  itConSandbox(
     'esegue, consegna, e non chiama mai il modello — e tace quando non ha niente da dire',
     async () => {
       const inst = await install({
