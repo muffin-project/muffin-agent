@@ -25,10 +25,14 @@ e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
 
 **Resta da fare, con le prove già in mano:**
 
-1. `memory.rerank` senza span; l'adapter openai-compat non legge il reasoning,
-   quindi quei token si pagano e il testo si perde — la via vera per il tetto
-   di #148.
-2. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
+1. `memory.rerank` **senza span**: da #161 il suo esito è dichiarato in
+   `strategies`, il suo costo no — è l'ultima chiamata al modello che non
+   compare nelle tracce. `RecallDeps` non ha un tracer: è plumbing, non una
+   riga.
+2. L'adapter openai-compat **non legge il reasoning**, quindi quei token si
+   pagano e il testo si perde. È la via vera per togliere `REASONING_HEADROOM`
+   (#148), e costa uno schema al confine — decisione con un prezzo.
+3. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
    `doctor` lo dice, ma finché resta giù niente di nuovo viene indicizzato e il
    recall è solo testuale. Stato della macchina, non del codice.
 
