@@ -3,15 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  JUDGE_OUTPUT_TOKENS,
   buildJudgePrompt,
+  judgeCall,
   parseCli,
   parseJudgeOutput,
   renderReport,
   renderTokenReport,
   runEval,
+  summarizeVerdicts,
   type ModelTarget,
+  type ReportRow,
   type RunConfig,
 } from './run.js';
+import { REASONING_HEADROOM, type ChatCall, type ChatResult, type Provider } from '../../agent/providers/types.js';
+import { startFakeProvider } from '../acceptance/provider.js';
 import { PROBES } from './probes.js';
 
 const OUT_DIRS: string[] = [];
@@ -117,6 +123,113 @@ describe('buildJudgePrompt — mai il system prompt di Muffin', () => {
     expect(system).toMatch(/non hai il prompt di sistema/i);
     expect(user).toContain('owner: ciao');
     for (const property of probe.properties) expect(user).toContain(property);
+  });
+});
+
+/**
+ * La quarta corsia che chiede JSON e non legge prosa — le prime tre stanno in
+ * `core/memory/corsie-senza-reasoning.test.ts`, e questa era rimasta indietro.
+ *
+ * Misura sull'installazione dell'owner del 27/08, `qwen/qwen3.8-27b` giudice di
+ * sé stesso sulla trascrizione di `memory-relevant`, 6 giri per variante: col
+ * tetto secco di 1024 e nessun `thinking`, uscita 652–1024 token e
+ * `stop=max_tokens` in 3 giri su 6 (due con `content` vuoto, uno troncato a metà
+ * JSON); con `thinking: 'off'` e il margine, uscita 147–294 token e zero giri
+ * persi.
+ */
+describe('il giudice non paga un reasoning che nessuno legge', () => {
+  it('la ChatCall del giudice chiede di non ragionare e si lascia il margine', () => {
+    const call = judgeCall('j1', { system: 's', user: 'u' });
+    expect(call.thinking).toBe('off');
+    // Il margine, non solo lo spegnimento: `thinking: 'off'` viaggia solo dove
+    // l'endpoint capisce il campo (openrouter.ai), e un giudice dietro Ollama o
+    // un giudice Anthropic resta senza. Vedi `REASONING_HEADROOM`.
+    expect(call.maxOutputTokens).toBe(JUDGE_OUTPUT_TOKENS);
+    expect(call.maxOutputTokens).toBeGreaterThanOrEqual(1024 + REASONING_HEADROOM);
+  });
+
+  it('la corsa vera passa proprio quella ChatCall al giudice, e conserva la sua risposta grezza', async () => {
+    class GiudiceRegistra implements Provider {
+      readonly kind = 'openai-compat' as const;
+      readonly seen: ChatCall[] = [];
+      async chat(request: ChatCall): Promise<ChatResult> {
+        this.seen.push(request);
+        return {
+          text: '{"judgements":[{"property":"natural","verdict":"pass","evidence":"ok"}]}',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: { inputTokens: 3, outputTokens: 4, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'j1',
+        };
+      }
+    }
+    const giudice = new GiudiceRegistra();
+    const fake = await startFakeProvider({ main: [{ text: 'Ehi.' }] });
+    process.env.MUFFIN_CHARACTER_EVAL_FAKE_KEY = 'sk-character-eval-fake';
+    const outDir = scratchOutDir();
+    try {
+      await runEval(
+        {
+          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY' }],
+          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_EVAL_FAKE_KEY' },
+          dryRun: false,
+          probeIds: ['casual-hey'],
+          outDir,
+        },
+        { judgeProvider: giudice },
+      );
+    } finally {
+      await fake.close();
+      delete process.env.MUFFIN_CHARACTER_EVAL_FAKE_KEY;
+    }
+    expect(giudice.seen).toHaveLength(1);
+    expect(giudice.seen[0]?.thinking).toBe('off');
+    expect(giudice.seen[0]?.maxOutputTokens).toBe(JUDGE_OUTPUT_TOKENS);
+
+    // La prova del proprio fallimento non si butta: la risposta grezza sta
+    // accanto al verdetto, con lo `stopReason` che è il campo con cui la causa
+    // dei 30 `unparsed` del 27/08 si è lasciata nominare.
+    const runDir = join(outDir, readdirSync(outDir)[0]!, 'm1');
+    const grezzo = JSON.parse(readFileSync(join(runDir, 'casual-hey.judge.raw.json'), 'utf8')) as {
+      raw: string;
+      stopReason: string;
+      usage: { outputTokens: number };
+    };
+    expect(grezzo.raw).toContain('judgements');
+    expect(grezzo.stopReason).toBe('end');
+    expect(grezzo.usage.outputTokens).toBe(4);
+  }, 60_000);
+});
+
+describe('una misura persa non è un giudizio', () => {
+  const rows = (verdicts: readonly ReportRow['verdict'][]): ReportRow[] =>
+    verdicts.map((verdict, i) => ({ model: 'm1', probe: `p${i}`, property: 'natural' as const, verdict, evidence: '' }));
+
+  it('conta `unparsed` a parte da `n/a`, e solo `unparsed` fa fallire la corsa', () => {
+    const solo_na = summarizeVerdicts(rows(['pass', 'n/a', 'n/a']));
+    expect(solo_na.byModel.get('m1')).toMatchObject({ pass: 1, fail: 0, na: 2, unparsed: 0, total: 3 });
+    expect(solo_na.failed).toBe(false);
+
+    const con_perse = summarizeVerdicts(rows(['pass', 'n/a', 'unparsed']));
+    expect(con_perse.byModel.get('m1')).toMatchObject({ pass: 1, na: 1, unparsed: 1, total: 3 });
+    expect(con_perse.unparsed).toBe(1);
+    expect(con_perse.failed).toBe(true);
+  });
+
+  it('il report grida le misure perse invece di sommarle agli n/a', () => {
+    const models: ModelTarget[] = [{ label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' }];
+    const judge: ModelTarget = { label: 'j1', provider: 'anthropic', model: 'j1', apiKeyEnv: 'X' };
+    const report = renderReport(rows(['pass', 'n/a', 'unparsed']), models, judge);
+    // La forma che la sintesi del 27/08 aveva e che leggeva come un successo.
+    expect(report).not.toContain('n/a o non-parsato');
+    expect(report).toContain('CORSA NON RIUSCITA');
+    expect(report).toContain('2/3 misure giudicate');
+    expect(report).toContain('1 misure perse su 3');
+    expect(report).toContain('1 misure PERSE');
+
+    const pulito = renderReport(rows(['pass', 'n/a']), models, judge);
+    expect(pulito).not.toContain('CORSA NON RIUSCITA');
+    expect(pulito).toContain('Nessuna misura persa');
   });
 });
 
