@@ -1,5 +1,5 @@
 import { it } from 'vitest';
-import { entry, promoteMarker, type Expectation } from './manifest.js';
+import { entry, promoteMarker, type Expectation, type ScenarioEntry } from './manifest.js';
 import { annunciaSalto } from './non-provabile.js';
 
 /**
@@ -38,6 +38,29 @@ import { annunciaSalto } from './non-provabile.js';
  * Il salto **si stampa**: una capability non esercitata che non lascia traccia
  * nell'output è indistinguibile da una provata.
  */
+/**
+ * Come si chiama il test che `scenario()` registra quando l'host non è
+ * attrezzato — e **con quale etichetta**.
+ *
+ * Estratta dalla registrazione perché il nome è l'unica cosa che `report.ts`
+ * guarda: cerca l'esito di una riga per suffisso del titolo di manifest
+ * (`chiaveEsito`). Le due parti divergevano proprio qui — il salto si
+ * intitolava con la **riga** (`"A1 [non provabile qui: …]"`) mentre la ricerca
+ * usava il **titolo** (`"A1 continuity: …"`) — quindi `verdictFor` usciva con
+ * `nessuno-scenario` prima ancora di arrivare al ramo del salto: la riga si
+ * leggeva scoperta, e lo stesso test si contava una seconda volta come «fuori
+ * inventario». `meta.title` e non `row`, e `scenario.test.ts` fa il giro
+ * completo attraverso `chiaveEsito` perché le due non possano più separarsi in
+ * silenzio.
+ */
+export function titoloDelSalto(meta: ScenarioEntry, motivo: string, scrivi: (s: string) => void): string {
+  return annunciaSalto(meta.title, motivo, scrivi);
+}
+
+/**
+ * Registers an M5-BIS row's acceptance scenario as a real vitest test — see the
+ * two comments above for `verde`/`atteso-rosso` and for `nonProvabileQui`.
+ */
 export function scenario(
   row: string,
   fn: () => Promise<void>,
@@ -47,7 +70,7 @@ export function scenario(
   const meta = entry(row);
   const motivo = nonProvabileQui?.() ?? null;
   if (motivo !== null) {
-    it.skip(annunciaSalto(row, motivo, (s) => process.stderr.write(s)), fn, timeout);
+    it.skip(titoloDelSalto(meta, motivo, (s) => process.stderr.write(s)), fn, timeout);
     return;
   }
   if (meta.expectation.kind === 'verde') {

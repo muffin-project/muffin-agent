@@ -82,8 +82,21 @@ function parseInventory(): InventoryRow[] {
  * titolo del test saltato. Una sola forma, scritta in un posto e letta in un
  * altro: se le due divergono il salto torna a leggersi come un rosso, quindi la
  * forma è pinnata da un test che le confronta.
+ *
+ * `(.+)\]$` e non `([^\]]+)\]`: `annunciaSalto` appende il motivo in coda al
+ * titolo, quindi la parentesi che chiude è l'ultimo carattere del nome — e un
+ * motivo che contenga a sua volta un `]` (il messaggio di bwrap, per dire, o un
+ * `argv[0]`) veniva troncato lì e il verdetto stampava mezza ragione.
  */
-const MOTIVO_NEL_TITOLO = /\[non provabile qui: ([^\]]+)\]/;
+const MOTIVO_NEL_TITOLO = /\[non provabile qui: (.+)\]$/;
+
+/** Il nome, senza il motivo che `annunciaSalto` gli ha appeso — la forma con cui `chiaveEsito` confronta un salto dichiarato. */
+function senzaMotivo(full: string): string {
+  return full.replace(MOTIVO_NEL_TITOLO, '').trimEnd();
+}
+
+/** Il marcatore con cui `outcomesOf` nomina un file che non si è caricato: non è un test, ma è un rosso, e deve avere un nome. */
+const FILE_NON_CARICATO = '[file non caricato]';
 
 const NOT_PROVABLE_HERE: Record<string, string> = {
   C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
@@ -109,7 +122,15 @@ export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
 export type TestOutcome = { status: VitestStatus; failureMessages: string[] };
 
 export type VitestJsonResult = {
+  /** Presente nel JSON di vitest 2.1.9; qui serve solo come controprova del conteggio per-file di `outcomesOf`. */
+  numFailedTestSuites?: number;
   testResults: Array<{
+    /** Il percorso del file. `undefined` solo in JSON sintetici: il reporter vero lo scrive sempre. */
+    name?: string;
+    /** L'esito del **file**, non delle sue assertion: `failed` con zero assertion significa «non si è caricato». */
+    status?: VitestStatus;
+    /** Il messaggio dell'errore di caricamento, quando il file non è arrivato a registrare nemmeno un test. */
+    message?: string;
     assertionResults: Array<{ fullName: string; status: VitestStatus; failureMessages?: string[] }>;
   }>;
 };
@@ -160,15 +181,64 @@ function runAcceptanceSuite(): Map<string, TestOutcome> {
   return outcomesOf(json);
 }
 
-/** Every assertion of vitest's JSON reporter, keyed by its `fullName` the way `verdictFor`'s suffix match expects. */
+/**
+ * Every assertion of vitest's JSON reporter, keyed by its `fullName` the way `verdictFor`'s suffix match expects.
+ *
+ * Più un esito sintetico per ogni **file che non si è caricato**. Misurato su
+ * vitest 2.1.9 con un file che lancia all'import: `numTotalTests 0`,
+ * `numFailedTests 0`, e in `testResults` una voce `{ status: "failed",
+ * assertionResults: [], message: "import-time boom" }`. Cioè: zero assertion,
+ * quindi finché questa funzione leggeva solo `assertionResults` il rosso non
+ * esisteva — il conteggio scendeva in silenzio e il report diceva OK.
+ *
+ * Non è ipotetico: è proprio il guasto di questa slice, i file `._<nome>.accept.ts`
+ * che bsdtar infilava nel tar e che vitest raccoglieva e falliva a caricare.
+ * Nessuna riga del manifest li rivendica, quindi finiscono in «fuori inventario
+ * rosso» e fanno fallire il report come qualsiasi altro rosso.
+ */
 export function outcomesOf(json: VitestJsonResult): Map<string, TestOutcome> {
   const byTitle = new Map<string, TestOutcome>();
   for (const file of json.testResults) {
     for (const a of file.assertionResults) {
       byTitle.set(a.fullName.trim(), { status: a.status, failureMessages: a.failureMessages ?? [] });
     }
+    if (file.status === 'failed' && file.assertionResults.length === 0) {
+      // Il marcatore va in testa e non in coda: la riga di `summarize` tronca a
+      // 110 caratteri, e un percorso assoluto lungo mangerebbe proprio il pezzo
+      // che spiega perché quel nome è lì.
+      byTitle.set(`${FILE_NON_CARICATO} ${(file.name ?? '(file senza nome nel reporter JSON)').trim()}`, {
+        status: 'failed',
+        failureMessages: [file.message ?? '(nessun messaggio di caricamento nel reporter JSON)'],
+      });
+    }
   }
   return byTitle;
+}
+
+/**
+ * Il nome completo con cui vitest ha registrato lo scenario `title`, o
+ * `undefined` se non l'ha registrato affatto.
+ *
+ * Tre forme, in quest'ordine — e l'ordine è il punto:
+ *
+ *  1. `title` esatto. Prima esisteva solo il passo 2, un `find` che prende la
+ *     **prima** voce in ordine di inserimento: con `"altro test che finisce con
+ *     B1 x"` registrato prima di `"B1 x"`, il verdetto della riga veniva
+ *     dall'esito sbagliato.
+ *  2. suffisso: vitest unisce il describe e il titolo dell'`it` con uno spazio,
+ *     quindi il `fullName` di uno scenario è `"<describe> <title>"`.
+ *  3. salto dichiarato: `annunciaSalto` appende ` [non provabile qui: <motivo>]`,
+ *     quindi il `fullName` non finisce più con `title`. Senza questo passo il
+ *     ramo `non-provabile-qui` di `verdictFor` era irraggiungibile dalla
+ *     produzione — `verdictFor` usciva prima con `nessuno-scenario` — e lo
+ *     stesso test si contava due volte: una come riga scoperta, una come «fuori
+ *     inventario».
+ */
+export function chiaveEsito(title: string, results: Map<string, TestOutcome>): string | undefined {
+  if (results.has(title)) return title;
+  for (const full of results.keys()) if (full.endsWith(title)) return full;
+  for (const full of results.keys()) if (senzaMotivo(full).endsWith(title)) return full;
+  return undefined;
 }
 
 export type RowVerdict =
@@ -200,23 +270,20 @@ export function verdictFor(
   if (scenario.expectation.kind === 'provata-dal-meccanismo') {
     return { kind: 'provata-dal-meccanismo', reason: scenario.expectation.reason };
   }
-  // vitest's fullName joins the describe block and the it title with a space —
-  // a suffix match is what survives that without hard-coding the describe text
-  // here too.
-  const outcome = [...results.entries()].find(([full]) => full.endsWith(scenario.title))?.[1];
-  if (outcome === undefined) {
+  // Una sola ricerca, `chiaveEsito`, invece di due `find` con criteri diversi:
+  // erano due, e il secondo cercava una forma che il primo aveva già escluso.
+  const chiave = chiaveEsito(scenario.title, results);
+  if (chiave === undefined) {
     return { kind: 'nessuno-scenario' }; // registered in the manifest, but vitest never ran it
   }
-  const { status, failureMessages } = outcome;
+  const { status, failureMessages } = results.get(chiave)!;
   // Saltato **dichiarando** perché: `scenario(..., nonProvabileQui)` mette il
   // motivo nel titolo del test, e questo è il posto dove quel motivo diventa un
   // verdetto contato invece di un `rosso-inatteso` con scritto «stato vitest:
   // skipped». Derivato dalla corsa, non da `NOT_PROVABLE_HERE` — quella tabella
   // si scrive a mano e vale solo per le righe *senza* scenario, quindi non può
   // dire niente su una macchina che oggi non può provare ciò che ieri provava.
-  const dichiarato = MOTIVO_NEL_TITOLO.exec(
-    [...results.entries()].find(([full]) => full.endsWith(scenario.title) || full.includes(scenario.title))?.[0] ?? '',
-  );
+  const dichiarato = MOTIVO_NEL_TITOLO.exec(chiave);
   if (status === 'skipped' && dichiarato?.[1]) {
     return { kind: 'non-provabile-qui', reason: dichiarato[1] };
   }
@@ -375,10 +442,26 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
    * Non li promuovo a righe di Gate: non lo sono. Li dichiaro, e un loro
    * fallimento fa fallire il report come qualsiasi altro rosso.
    */
-  const rivendicati = new Set(manifest.map((s) => s.title));
+  /**
+   * Rivendicato = la chiave esatta che `verdictFor` ha guardato per quella
+   * riga, non «un nome che contiene il titolo».
+   *
+   * `nome.includes(t)` sussumeva `nome.endsWith(t)` — la condizione era solo
+   * `includes` — e scartava in silenzio un esito **rosso** fuori inventario il
+   * cui nome citasse un titolo di manifest come sottostringa: con manifest
+   * `"A1 il giro"` e un extra rosso `"fuori inventario che parla di A1 il giro
+   * e poi rompe"`, `failed` restava `false`. Passando per `chiaveEsito` la
+   * deduplica e il verdetto guardano per costruzione lo stesso esito, quindi
+   * non possono più divergere: né doppio conteggio, né rosso ingoiato.
+   */
+  const chiaviRivendicate = new Set<string>();
+  for (const s of manifest) {
+    const chiave = chiaveEsito(s.title, results);
+    if (chiave !== undefined) chiaviRivendicate.add(chiave);
+  }
   const orfaniDiScenario: { nome: string; stato: string }[] = [];
   for (const [nome, esito] of results) {
-    if ([...rivendicati].some((t) => nome.endsWith(t) || nome.includes(t))) continue;
+    if (chiaviRivendicate.has(nome)) continue;
     orfaniDiScenario.push({ nome, stato: esito.status });
   }
   let orfaniRossi = 0;

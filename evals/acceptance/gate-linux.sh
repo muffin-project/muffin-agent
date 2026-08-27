@@ -58,6 +58,7 @@ COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
 # blocca unshare(CLONE_NEWUSER), quindi bwrap non crea il namespace e il probe
 # — correttamente — rifiuta di dire che il sandbox contiene. Su una VPS Linux
 # vera non servono queste due: serve il profilo AppArmor per bwrap.
+set +e
 docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
@@ -90,15 +91,41 @@ docker run --rm \
     echo "=== PROBE SANDBOX (non-root) ==="
     $AS npx tsx -e "import(\"./core/sandbox/probe.js\").then((m)=>console.log(JSON.stringify(m.probeSandbox())))"
     echo "=== ACCETTAZIONE (non-root) ==="
+    # Il secondo comando e il secondo gate, quello che il workflow tratta come
+    # autoritativo su M5-BIS. Finche non c-era, questo script provava la suite
+    # su Linux e non provava mai il report che ne decide il significato — cioe
+    # proprio dove i due divergono: su Linux b-job-script si salta, e
+    # classificare quel salto come dichiarato invece che come rosso e codice che
+    # gira solo qui.
+    #
+    # I due exit non si stampano soltanto: decidono. Prima questo blocco finiva
+    # con `set -e`, che esce 0 — quindi il container usciva 0 con la suite
+    # rossa, `docker run` usciva 0, e questo script, nonostante `set -euo
+    # pipefail`, diceva verde. Il workflow non tollera nessuno dei due step
+    # (.github/workflows/accettazione.yml), quindi i due divergevano esattamente
+    # nella proprieta che conta, e chi lanciasse questo da un hook o da un loop
+    # leggeva «gate Linux verde». `gate-linux.test.ts` estrae il blocco qui
+    # sotto e lo esegue con esiti iniettati: se torna a ingoiare un rosso, muore.
+    # >>> BLOCCO PROVATO DA gate-linux.test.ts
     set +e
     $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=/tmp/gate-home/accettazione.json
-    echo "ACCEPT_EXIT=$?"
-    # Il secondo gate, quello che il workflow tratta come autoritativo su
-    # M5-BIS. Finche non c-era, questo script provava la suite su Linux e non
-    # provava mai il report che ne decide il significato — cioe proprio dove i
-    # due divergono: su Linux b-job-script si salta, e classificare quel salto
-    # come dichiarato invece che come rosso e codice che gira solo qui.
+    ACCEPT_EXIT=$?
     $AS env MUFFIN_ACCEPT_RESULTS=/tmp/gate-home/accettazione.json npx tsx evals/acceptance/report.ts
-    echo "REPORT_EXIT=$?"
+    REPORT_EXIT=$?
     set -e
+    echo "ACCEPT_EXIT=$ACCEPT_EXIT  REPORT_EXIT=$REPORT_EXIT"
+    if [ "$ACCEPT_EXIT" -ne 0 ] || [ "$REPORT_EXIT" -ne 0 ]; then exit 1; fi
+    # <<< BLOCCO PROVATO DA gate-linux.test.ts
   '
+GATE_EXIT=$?
+set -e
+
+# Esplicito e non implicito: `set -e` avrebbe gia fatto uscire lo script su un
+# `docker run` non-zero, ma senza dire nulla. Un gate che non dice se e verde o
+# rosso si legge come un comando qualsiasi, e questo non lo e.
+if [ "$GATE_EXIT" -ne 0 ]; then
+  echo "GATE LINUX ROSSO (exit $GATE_EXIT) — vedi ACCEPT_EXIT/REPORT_EXIT qui sopra" >&2
+else
+  echo "GATE LINUX VERDE"
+fi
+exit "$GATE_EXIT"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { promoteMarker } from './manifest.js';
-import { outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
+import { chiaveEsito, outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
 import type { ScenarioEntry } from './manifest.js';
 
 /**
@@ -244,5 +244,181 @@ describe('summarize — ciò che vitest ha eseguito e nessuna riga rivendica', (
 
     expect(summary.failed).toBe(false);
     expect(summary.lines.join('\n')).not.toMatch(/fuori inventario/);
+  });
+});
+
+/**
+ * Un rosso da **errore di caricamento**: la stessa classe di guasto del blocco
+ * qui sopra, spostata dal caso «assertion rossa» al caso «file che non si
+ * carica». Non è ipotetica — è proprio il guasto di questa slice, i
+ * `._<nome>.accept.ts` che bsdtar infilava nel tar e che vitest raccoglieva e
+ * falliva a caricare: il conteggio scendeva da 4 a 3 e il report diceva OK.
+ *
+ * La forma del JSON è misurata su vitest 2.1.9, non ricordata: un file che
+ * lancia all'import produce `numTotalTests 0`, `numFailedTests 0`,
+ * `numFailedTestSuites 1`, e in `testResults` una voce `{ status: "failed",
+ * assertionResults: [], message: "import-time boom" }`.
+ */
+describe('outcomesOf — un file che non si è caricato', () => {
+  const nonCaricato = () => ({
+    testResults: [
+      {
+        name: '/app/evals/acceptance/scenarios/._a-lifecycle.accept.ts',
+        status: 'failed' as const,
+        message: 'Error: import-time boom\n  at …',
+        assertionResults: [],
+      },
+      {
+        name: '/app/evals/acceptance/scenarios/a-lifecycle.accept.ts',
+        status: 'passed' as const,
+        assertionResults: [{ fullName: 'X1 scenario finto', status: 'passed' as const }],
+      },
+    ],
+  });
+
+  it('lo fa esistere come esito rosso, con il messaggio di caricamento', () => {
+    const out = outcomesOf(nonCaricato());
+    const chiave = [...out.keys()].find((k) => k.includes('._a-lifecycle'));
+    expect(chiave).toBeDefined();
+    expect(out.get(chiave!)).toEqual({ status: 'failed', failureMessages: ['Error: import-time boom\n  at …'] });
+  });
+
+  it('lo nomina prima del percorso, così il troncamento a 110 caratteri non se lo mangia', () => {
+    const chiave = [...outcomesOf(nonCaricato()).keys()].find((k) => k.includes('._a-lifecycle'))!;
+    expect(chiave.startsWith('[file non caricato] ')).toBe(true);
+  });
+
+  it('non inventa un esito per un file rosso che ha davvero corso', () => {
+    const out = outcomesOf({
+      testResults: [
+        {
+          name: '/app/x.accept.ts',
+          status: 'failed',
+          message: 'un test è rosso',
+          assertionResults: [{ fullName: 'X1 scenario finto', status: 'failed', failureMessages: ['boom'] }],
+        },
+      ],
+    });
+    expect(out.size).toBe(1);
+    expect(out.has('X1 scenario finto')).toBe(true);
+  });
+
+  it('fa fallire il report, nominato, invece di far scendere il conteggio in silenzio', () => {
+    const scenario = verdeScenario('X1');
+    const summary = summarize([ready('X1')], [scenario], outcomesOf(nonCaricato()));
+
+    expect(summary.counts.verde).toBe(1);
+    expect(summary.counts.fuoriInventarioRossi).toBe(1);
+    expect(summary.failed).toBe(true);
+    expect(summary.lines.join('\n')).toMatch(/FUORI INVENTARIO ROSSO — \[file non caricato\].*_a-lifecycle/);
+  });
+});
+
+/**
+ * `chiaveEsito` è l'unica ricerca: il verdetto di una riga e la deduplica di
+ * «fuori inventario» guardano per costruzione lo stesso esito, quindi non
+ * possono divergere. Ognuno di questi test uccide una mutazione che il giudice
+ * di questa slice ha misurato e che nessun test uccideva.
+ */
+describe('chiaveEsito — quale esito appartiene a quale riga', () => {
+  it('preferisce la chiave esatta a una voce inserita prima che finisce con lo stesso titolo', () => {
+    const results = new Map<string, TestOutcome>([
+      ['altro test che finisce con X1 scenario finto', { status: 'failed', failureMessages: ['boom'] }],
+      ['X1 scenario finto', { status: 'passed', failureMessages: [] }],
+    ]);
+    expect(chiaveEsito('X1 scenario finto', results)).toBe('X1 scenario finto');
+
+    const scenario = verdeScenario('X1');
+    const summary = summarize([ready('X1')], [scenario], results);
+    expect(summary.counts.verde).toBe(1);
+    expect(summary.counts.unexpectedRed).toBe(0);
+  });
+
+  it('trova lo scenario per suffisso, che è come vitest unisce describe e it', () => {
+    const results = new Map<string, TestOutcome>([
+      ['acceptance · il giro > X1 scenario finto', { status: 'passed', failureMessages: [] }],
+    ]);
+    expect(chiaveEsito('X1 scenario finto', results)).toBe('acceptance · il giro > X1 scenario finto');
+  });
+
+  it('trova lo scenario anche quando `annunciaSalto` gli ha appeso il motivo', () => {
+    const results = new Map<string, TestOutcome>([
+      [
+        'acceptance · il giro > X1 scenario finto [non provabile qui: bwrap non monta /proc]',
+        { status: 'skipped', failureMessages: [] },
+      ],
+    ]);
+    expect(chiaveEsito('X1 scenario finto', results)).toBe(
+      'acceptance · il giro > X1 scenario finto [non provabile qui: bwrap non monta /proc]',
+    );
+  });
+
+  it('non trova niente quando vitest non ha registrato lo scenario', () => {
+    expect(chiaveEsito('X1 scenario finto', new Map())).toBeUndefined();
+  });
+});
+
+/**
+ * Il salto dichiarato di una riga di manifest, dall'etichetta che `scenario.ts`
+ * scrive fino al verdetto contato.
+ *
+ * Il ramo era irraggiungibile dalla produzione: `scenario()` intitolava il test
+ * saltato con la **riga** (`"B12 [non provabile qui: …]"`) e `report.ts` lo
+ * cercava per suffisso del **titolo di manifest**, quindi usciva prima con
+ * `nessuno-scenario` — e lo stesso test si contava due volte, una come riga
+ * scoperta e una come «fuori inventario».
+ */
+describe('summarize — un salto dichiarato su una riga del manifest', () => {
+  const scenario = verdeScenario('X1');
+  const saltato = (): Map<string, TestOutcome> =>
+    new Map([
+      [
+        `acceptance · il giro > ${scenario.title} [non provabile qui: bwrap non contiene su questo host]`,
+        { status: 'skipped' as const, failureMessages: [] },
+      ],
+    ]);
+
+  it('lo conta come «non provabile qui», con il motivo che l\'host ha dato', () => {
+    const summary = summarize([ready('X1')], [scenario], saltato());
+    expect(summary.counts.nonProvabile).toBe(1);
+    expect(summary.counts.nessunoScenario).toBe(0);
+    expect(summary.lines.join('\n')).toContain('bwrap non contiene su questo host');
+    expect(summary.failed).toBe(false);
+  });
+
+  it('non lo conta anche come fuori inventario', () => {
+    expect(summarize([ready('X1')], [scenario], saltato()).counts.fuoriInventario).toBe(0);
+  });
+
+  it('non tronca un motivo che contiene a sua volta una parentesi quadra', () => {
+    const results = new Map<string, TestOutcome>([
+      [
+        `${scenario.title} [non provabile qui: bwrap: execvp argv[0]: No such file]`,
+        { status: 'skipped', failureMessages: [] },
+      ],
+    ]);
+    // Sul **verdetto**, non sulla riga stampata: con il motivo troncato lo
+    // scenario non si ritrova affatto e finisce fra i «fuori inventario», che
+    // ne stampano comunque il nome per intero — cioè la riga passerebbe anche
+    // con il difetto addosso.
+    const summary = summarize([ready('X1')], [scenario], results);
+    expect(summary.counts.nonProvabile).toBe(1);
+    expect(summary.lines.join('\n')).toContain('bwrap: execvp argv[0]: No such file');
+  });
+});
+
+describe('summarize — la deduplica non può ingoiare un rosso', () => {
+  it('un rosso fuori inventario che cita un titolo di manifest resta un rosso', () => {
+    // `nome.includes(t)` sussumeva `nome.endsWith(t)`: la condizione era solo
+    // `includes`, e questo esito spariva in silenzio.
+    const scenario = verdeScenario('X1');
+    const results = new Map<string, TestOutcome>([
+      [scenario.title, { status: 'passed', failureMessages: [] }],
+      [`fuori inventario che parla di ${scenario.title} e poi rompe`, { status: 'failed', failureMessages: ['boom'] }],
+    ]);
+    const summary = summarize([ready('X1')], [scenario], results);
+
+    expect(summary.counts.fuoriInventarioRossi).toBe(1);
+    expect(summary.failed).toBe(true);
   });
 });
