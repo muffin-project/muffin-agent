@@ -254,3 +254,9 @@
 {"id":"progresso-telegram","chiuso":"PR #143 integrata dopo ADJUST riparato e judge fresco MERGE","quando":"2026-08-26T17:16:51.411Z"}
 {"id":"judge-143","chiuso":"ADJUST: race in progress.ts, riparata","quando":"2026-08-26T17:16:51.457Z"}
 {"id":"judge-143b","chiuso":"MERGE; due follow-up sostanziali in slice separata","quando":"2026-08-26T17:16:51.503Z"}
+{"id":"judge-122-giro1","chiuso":"PR #122 mergiata; verdetto consegnato","quando":"2026-08-27T01:11:25.740Z"}
+{"id":"e2e-giro-owner","chiuso":"scenario in HEAD: evals/acceptance/scenarios/e2e-giro-owner.accept.ts","quando":"2026-08-27T01:11:25.785Z"}
+{"id":"probe-vs-esecutore","chiuso":"PR #129 mergiata (5c6c9e8), judge MERGE","quando":"2026-08-27T01:11:25.829Z"}
+{"id":"deriva-doctor","chiuso":"PR #142 mergiata (024ba19) dopo tre judge","quando":"2026-08-27T01:11:25.874Z"}
+{"id":"judge-142b","chiuso":"verdetto ADJUST consegnato e riparato","quando":"2026-08-27T01:11:25.917Z"}
+{"id":"judge-142c","chiuso":"verdetto ADJUST consegnato; passata strutturale fatta, #142 mergiata","quando":"2026-08-27T01:11:25.962Z"}
