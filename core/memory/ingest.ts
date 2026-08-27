@@ -363,6 +363,23 @@ export async function ingestPending(
 
       report.rejected += extraction.rejected;
 
+      // Una perdita parziale che nessuno vede è una perdita silenziosa. Da
+      // quando i candidati si validano uno per uno, un episodio può essere
+      // marcato come fatto **avendo scartato** qualche fatto per strada: senza
+      // questa riga il rapporto direbbe «3 fatti» e non «3 fatti su 5».
+      if (extraction.malformed !== undefined && extraction.malformed > 0) {
+        const detail =
+          `episodio ${episode.id}: ${extraction.malformed} candidati fuori schema, tenuti gli altri` +
+          (extraction.malformedWhy === undefined ? '' : ` — ${extraction.malformedWhy.join(' · ')}`);
+        report.errors.push(detail);
+        deps.store.recordReview({
+          tenantId,
+          kind: 'error',
+          detail,
+          createdAt: now().toISOString(),
+        });
+      }
+
       for (const fact of extraction.facts) {
         const subjectId = deps.store.upsertEntity(
           tenantId,

@@ -28,10 +28,27 @@ const ExtractedFact = z.object({
   /** Free vocabulary, canonicalised below. Governance is by periodic audit, not by a closed enum. */
   predicate: z.string().min(1).max(60),
   object: z.string().min(1).max(400),
-  subjectKind: z.enum(['person', 'place', 'organization', 'project', 'concept', 'event', 'thing']),
+  // `.catch('thing')` per la stessa ragione per cui i tre booleani qui sotto
+  // hanno un default, e con lo stesso precedente misurato: un modello che
+  // inventa una categoria («tool», «software», «skill» — visti il 27/08 sulla
+  // macchina dell'owner) faceva fallire l'intero fatto, e con lui tutti gli
+  // altri della stessa risposta. `thing` non è una supposizione: è il secchio
+  // generico che questo enum ha già, e la scelta è fra un fatto con la
+  // categoria meno precisa e nessun fatto affatto.
+  subjectKind: z
+    .enum(['person', 'place', 'organization', 'project', 'concept', 'event', 'thing'])
+    .catch('thing'),
   /** ISO date, only when the text states it. Null is the honest default. */
   validFrom: z.string().nullable(),
-  confidence: z.number().min(0).max(1),
+  // `coerce` e non `number` secco: un modello senza JSON mode risponde
+  // `"0.9"` invece di `0.9`, e quella è una differenza di **formattazione**,
+  // non di significato. Misurato sulla macchina dell'owner il 27/08:
+  // `expected number, received string`, due episodi su tre.
+  //
+  // Non è una tolleranza generica: `coerce` su `"alto"` produce `NaN`, e
+  // `.min(0)` lo rifiuta comunque. Si allarga solo per i valori che sono
+  // inequivocabilmente quel numero.
+  confidence: z.coerce.number().min(0).max(1),
   /**
    * Importance arrives as two yes/no answers and is derived below, never as a
    * rating the model picks off a scale. The reason is measured: ordinal LLM
@@ -59,8 +76,23 @@ const ExtractedFact = z.object({
   pinned: z.boolean().default(false),
 });
 
+/**
+ * L'involucro si valida tutto; i fatti dentro **uno per uno**.
+ *
+ * Il commento sui booleani qui sopra racconta già questa classe di difetto —
+ * «one missing boolean discarded all twenty facts beside it» — e la chiude per
+ * tre campi. Ma la forma era della lista, non dei booleani: qualunque campo
+ * fuori posto in **un** candidato faceva fallire `safeParse` sull'intera
+ * risposta, e l'episodio non veniva marcato, quindi tornava a ogni giro. Un
+ * guasto locale che cancella più stato di quanto giustifichi, per la terza
+ * volta nello stesso file.
+ *
+ * Quindi qui i candidati sono `unknown`: il tetto di venti e la forma
+ * dell'involucro restano regole dure — se `facts` non è un array non c'è
+ * niente da salvare — e ogni candidato risponde di sé.
+ */
 const ExtractionResponse = z.object({
-  facts: z.array(ExtractedFact).max(20),
+  facts: z.array(z.unknown()).max(20),
 });
 
 type ExtractedFact = z.infer<typeof ExtractedFact> & { importance: number };
@@ -155,6 +187,18 @@ export type ExtractionResult = {
   /** Set when the model returned something unusable, so the caller can decide. */
   error?: string;
   /**
+   * Candidati che non hanno superato lo schema, contati e **non fatali**.
+   *
+   * Separato da `rejected`, che significa una cosa diversa e più precisa: un
+   * candidato valido che una regola ha scartato di proposito (confidenza sotto
+   * la soglia, o P25). Qui invece il modello ha risposto qualcosa che non è un
+   * fatto. Fonderli avrebbe reso «tre scartati» ambiguo proprio nel momento in
+   * cui serve sapere quale dei due sta succedendo.
+   */
+  malformed?: number;
+  /** Fino a tre motivi, col campo e non solo col tipo, per chi deve capire perché. */
+  malformedWhy?: string[];
+  /**
    * What the call cost, on **every** exit including the three failures.
    *
    * Same reason the judge got its own (#141): the spend is billed either way
@@ -198,6 +242,25 @@ function whyUnusable(result: {
     parts.push(`${result.thinking.length} blocchi di reasoning: il testo è finito lì`);
   }
   return `nessuna risposta dal modello (${parts.join(' · ')})`;
+}
+
+/**
+ * Il valore che il modello aveva davvero messo lì, reso leggibile e corto.
+ *
+ * Stringa vuota quando il percorso non porta da nessuna parte: un campo
+ * mancante è già detto dal messaggio di zod, e ripeterlo con `(era undefined)`
+ * aggiunge rumore invece che informazione.
+ */
+function describeValue(candidate: unknown, path: readonly PropertyKey[]): string {
+  let cursor: unknown = candidate;
+  for (const key of path) {
+    if (typeof cursor !== 'object' || cursor === null) return '';
+    cursor = (cursor as Record<PropertyKey, unknown>)[key];
+  }
+  if (cursor === undefined) return '';
+  const shown = typeof cursor === 'string' ? cursor : JSON.stringify(cursor);
+  if (shown === undefined) return '';
+  return ` (era ${shown.length > 40 ? `${shown.slice(0, 40)}…` : shown})`;
 }
 
 export async function extractFacts(
@@ -259,7 +322,31 @@ export async function extractFacts(
 
   const facts: ExtractedFact[] = [];
   let rejected = 0;
-  for (const raw of validated.data.facts) {
+  let malformed = 0;
+  const malformedWhy: string[] = [];
+  for (const candidate of validated.data.facts) {
+    const one = ExtractedFact.safeParse(candidate);
+    if (!one.success) {
+      malformed += 1;
+      // Il campo e il valore, non solo «expected number»: senza il path la
+      // riga dice che qualcosa non andava e non dice cosa, che è la forma di
+      // errore che ha tenuto ferma questa corsia per due giorni (#148).
+      const issue = one.error.issues[0];
+      if (malformedWhy.length < 3 && issue !== undefined) {
+        // Anche **cosa** aveva scritto il modello, non solo cosa ci si
+        // aspettava. Il primo giro di questa riga si fermava al messaggio di
+        // zod e sulla macchina dell'owner produceva `expected number, received
+        // NaN`: vero, e inutile — `NaN` è ciò che la coercizione ha prodotto,
+        // non ciò che il modello ha detto. Chi legge deve poter decidere se
+        // allargare la tolleranza o cambiare il prompt, e le due cose si
+        // scelgono guardando il valore.
+        malformedWhy.push(
+          `${issue.path.join('.') || '(radice)'}: ${issue.message}${describeValue(candidate, issue.path)}`,
+        );
+      }
+      continue;
+    }
+    const raw = one.data;
     const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };
     // Two independent reasons a schema-valid candidate never becomes a belief:
     // the extractor was not sure (confidence below the floor), or rule 1
@@ -271,7 +358,27 @@ export async function extractFacts(
     }
     facts.push(f);
   }
-  return { facts, rejected, usage };
+  // Niente è passato, e il modello aveva risposto qualcosa: è lo stesso stato
+  // di prima — nessun fatto utilizzabile — quindi resta `error`, l'episodio non
+  // viene marcato e torna al prossimo giro. Cambiare *anche* questo sarebbe una
+  // decisione diversa (se ritentare contro un modello deterministico abbia
+  // senso), e non si contrabbanda dentro una correzione sul raggio di scoppio.
+  if (facts.length === 0 && malformed > 0 && rejected === 0) {
+    return {
+      facts: [],
+      rejected: 0,
+      usage,
+      malformed,
+      malformedWhy,
+      error: `nessun candidato ha superato lo schema (${malformed}): ${malformedWhy.join(' · ')}`,
+    };
+  }
+  return {
+    facts,
+    rejected,
+    usage,
+    ...(malformed === 0 ? {} : { malformed, malformedWhy }),
+  };
 }
 
 /**
