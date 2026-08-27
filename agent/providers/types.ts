@@ -107,9 +107,17 @@ type ThinkingMode = 'adaptive' | 'off';
  * uno che ragiona sostituisce «paghi 1502 token per NIENTE, a ogni giro, per
  * sempre» con «paghi e ottieni un fatto, e l'episodio smette di tornare».
  *
- * Va via il giorno in cui l'adapter porta davvero il comando — che è una
- * decisione con un prezzo (schema al confine, token di reasoning fatturati), e
- * quindi una slice sua, non un contrabbando dentro una correzione.
+ * **Non va più via, e ora si sa per chi resta.** Da 27/08 l'adapter chiede
+ * davvero di non ragionare (`reasoning: {effort:'none'}`) e le tre corsie
+ * glielo chiedono — misurato sull'installazione viva, 204 token in uscita
+ * contro 85 sullo stesso prompt. Ma lo chiede **solo dove l'endpoint capisce
+ * il campo**: su Ollama, llama.cpp e vLLM — cioè proprio i server del profilo
+ * `consumer-local` — un campo ignoto è un 400, quindi lì `off` è ancora un
+ * no-op dichiarato e questo margine è l'unica cosa che tiene viva la corsia.
+ *
+ * Il prezzo di tenerlo è zero: `max_tokens` è un limite, non una richiesta.
+ * Il prezzo di toglierlo sarebbe il 25/08 di nuovo, sulla prima macchina che
+ * gira un modello che ragiona dietro un server che non sa spegnerlo.
  */
 export const REASONING_HEADROOM = 6_000;
 

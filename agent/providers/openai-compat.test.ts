@@ -32,7 +32,7 @@ const A_COMPLETION = {
 };
 
 /** A provider whose network is a recorder: returns the body it would have sent. */
-function harness(explicitCache: boolean) {
+function harness(explicitCache: boolean, reasoningEffort = false) {
   const bodies: unknown[] = [];
   const fetchFake = async (_url: unknown, init?: { body?: string }): Promise<Response> => {
     bodies.push(JSON.parse(init?.body ?? '{}'));
@@ -43,6 +43,7 @@ function harness(explicitCache: boolean) {
   };
   const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
     explicitCache,
+    reasoningEffort,
     fetch: fetchFake as never,
   });
   return { provider, bodies };
@@ -267,5 +268,62 @@ describe('openai-compat · chatStream (B11)', () => {
     const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.test/v1', {}, { fetch: fetchFake as never });
     await collect(provider.chatStream(CALL));
     expect((bodies[0] as { stream_options?: { include_usage?: boolean } }).stream_options).toEqual({ include_usage: true });
+  });
+});
+
+/**
+ * Chiedere di NON ragionare.
+ *
+ * Misurato sull'installazione viva il 27/08, stesso prompt, `qwen/qwen3.8-27b`:
+ * senza il campo **204** token in uscita, con `reasoning: {effort:'none'}`
+ * **85**. Non è il testo del reasoning che si perdeva a costare — è il
+ * reasoning stesso, fatturato per una risposta che il profilo aveva già
+ * dichiarato di non volere.
+ */
+describe("thinking:'off' smette di essere un no-op, dove l'endpoint capisce", () => {
+  it("manda reasoning.effort 'none' quando la corsia chiede di non ragionare", async () => {
+    const h = harness(false, true);
+    await h.provider.chat({ ...CALL, thinking: 'off' });
+    expect((h.bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
+  });
+
+  it("non manda niente per 'adaptive': è già ciò che significa non mandare niente", async () => {
+    const h = harness(false, true);
+    await h.provider.chat({ ...CALL, thinking: 'adaptive' });
+    expect(h.bodies[0]).not.toHaveProperty('reasoning');
+  });
+
+  it('tace del tutto dove il campo non è capito, perché lì un campo ignoto è un 400', async () => {
+    // Ollama, llama.cpp e vLLM sono metà dell'ecosistema di questo adapter, e
+    // sono esattamente i server del profilo `consumer-local`. Il tetto di
+    // `REASONING_HEADROOM` resta per loro: lì `off` è ancora un no-op.
+    const h = harness(false, false);
+    await h.provider.chat({ ...CALL, thinking: 'off' });
+    expect(h.bodies[0]).not.toHaveProperty('reasoning');
+  });
+
+  it("il default viene dall'endpoint, non da chi costruisce il provider", () => {
+    // L'argomento è quello di `wantsExplicitCache`, e la storia pure: due
+    // harness di eval avevano dimenticato il flag e pagato pieno in silenzio.
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai/api/v1').reasoningEffort).toBe(true);
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai./api/v1').reasoningEffort).toBe(true);
+    expect(new OpenAICompatProvider('k', 'http://localhost:11434/v1').reasoningEffort).toBe(false);
+    expect(new OpenAICompatProvider('k', 'https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(false);
+    expect(new OpenAICompatProvider('k').reasoningEffort).toBe(false);
+  });
+
+  it('vale sullo stream come sulla chiamata secca — ed è lo stream che il turno usa', async () => {
+    // Il turno dell'owner è streamato (`agent/loop.ts`), ed è l'unico posto che
+    // legge `profile.thinking`: se il corpo dei due percorsi divergesse, la
+    // corsia dove il campo conta di più sarebbe quella scoperta.
+    const bodies: unknown[] = [];
+    const provider = new OpenAICompatProvider('sk-test', 'https://openrouter.ai/api/v1', {}, {
+      fetch: (async (_u: unknown, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}'));
+        return streamedResponse(FULL_STREAM_CHUNKS);
+      }) as never,
+    });
+    await collect(provider.chatStream({ ...CALL, thinking: 'off', stream: true }));
+    expect((bodies[0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'none' });
   });
 });
