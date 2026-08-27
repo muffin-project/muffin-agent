@@ -25,6 +25,34 @@ import { annunciaSalto } from './non-provabile.js';
  * riesce e Muffin no, quello è un difetto di Muffin e lo scenario deve restare
  * rosso — che è esattamente la distinzione che oggi non esisteva.
  */
+/**
+ * Gli argomenti che `SandboxManager` costruisce davvero, riletti dalla fonte:
+ * `@anthropic-ai/sandbox-runtime/dist/sandbox/linux-sandbox-utils.js`
+ * (`--new-session --die-with-parent` in testa, poi `--dev /dev`,
+ * `--unshare-net`, `--unshare-pid`, e — perché Muffin non chiede mai
+ * `enableWeakerNestedSandbox` — `--unshare-user --cap-drop ALL --proc /proc`).
+ *
+ * Prima qui c'era `--unshare-all`, che è **più stretto** di ciò che la
+ * produzione fa: unshare anche IPC, UTS e cgroup. Un probe più stretto del
+ * runtime sbaglia nel verso che costa di più — dichiara «non provabile qui» su
+ * un host dove Muffin funzionerebbe, e la suite resta verde senza aver
+ * esercitato niente. Cioè il verde falso che questo file esiste per non
+ * costruire. Il probe deve chiedere *quello* che serve: né meno (verrebbe un
+ * rosso falso di nuovo), né più.
+ */
+export const BWRAP_COME_IN_PRODUZIONE = [
+  '--ro-bind', '/', '/',
+  '--dev', '/dev',
+  '--unshare-net',
+  '--unshare-pid',
+  '--unshare-user',
+  '--cap-drop', 'ALL',
+  '--proc', '/proc',
+  '--new-session',
+  '--die-with-parent',
+  '/bin/true',
+];
+
 export type EsitoHost = { ok: true } | { ok: false; perche: string };
 
 /**
@@ -49,18 +77,7 @@ export function hostContiene(
     return { ok: false, perche: `piattaforma ${piattaforma}: nessun meccanismo di contenimento noto` };
   }
   try {
-    // Le stesse tre cose che servono a `SandboxManager`, chieste a bwrap nudo:
-    // un namespace utente non privilegiato, un `/proc` montato dentro, e un
-    // comando che esce zero. `--proc` è quello che fallisce dentro Docker, ed è
-    // il motivo per cui sta in questo probe e non in un flag più generico.
-    esegui('bwrap', [
-      '--ro-bind', '/', '/',
-      '--proc', '/proc',
-      '--dev', '/dev',
-      '--unshare-all',
-      '--die-with-parent',
-      '/bin/true',
-    ]);
+    esegui('bwrap', BWRAP_COME_IN_PRODUZIONE);
     return { ok: true };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
