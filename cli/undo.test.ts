@@ -166,8 +166,13 @@ describe('muffin undo riallinea anche il turno', () => {
       const esiti = new TurnStore(db).recordedOutcomes('t1');
       expect(esiti.get('toolu_1')?.content).toBe('wrote 4 bytes to nota.md');
       expect(esiti.get('toolu_1')?.undoneAt).not.toBeNull();
-      expect(new TurnStore(db).undoneTurns(['t1'])).toEqual(new Set(['t1']));
+      // Un undo totale: nessuna chiamata sopravvissuta, e chi assembla il
+      // contesto può dirlo senza riserve.
+      const esteso = new TurnStore(db).undoneTurns(['t1']).get('t1');
+      expect(esteso?.undone.map((c) => c.callId)).toEqual(['toolu_1']);
+      expect(esteso?.survived).toEqual([]);
       expect(out.join('')).toContain('annullata');
+      expect(out.join('')).not.toContain('non è tornato');
     } finally {
       db.close();
     }
@@ -211,6 +216,25 @@ describe('muffin undo riallinea anche il turno', () => {
       expect(readFileSync(uno, 'utf8')).toBe('prima');
       expect(readFileSync(due, 'utf8')).toBe('dopo');
       expect(new TurnStore(db).undoneCalls('t1')).toEqual(new Set(['toolu_1']));
+      // E la granularità **sopravvive** alla lettura che assembla il contesto.
+      // Era qui che si perdeva: `undoneTurns` collassava a «t1 è disfatto», e
+      // il giro dopo leggeva «i file che dice di aver toccato sono tornati
+      // com'erano prima» con `due.md` ancora pieno di `dopo`. Il seguito di
+      // questo caso — cosa legge davvero il turno successivo — sta in
+      // `agent/runtime-wiring.test.ts`, «un undo riuscito a metà arriva al
+      // turno dopo come metà, non come tutto».
+      const esteso = new TurnStore(db).undoneTurns(['t1']).get('t1');
+      expect(esteso?.undone.map((c) => c.callId)).toEqual(['toolu_1']);
+      expect(esteso?.survived.map((c) => c.callId)).toEqual(['toolu_2']);
+      // L'esito registrato arriva com'era, non riscritto: è con le parole del
+      // tool che la marcatura dirà *quale* percorso è tornato indietro, senza
+      // parafrasarlo e senza parsarlo.
+      expect(esteso?.undone[0]?.content).toBe(
+        new TurnStore(db).recordedOutcomes('t1').get('toolu_1')?.content,
+      );
+      expect(esteso?.undone[0]?.content).not.toBeNull();
+      // E il comando lo dichiara invece di lasciarlo dedurre dai `!`.
+      expect(out.join('')).toContain('non è tornato');
     } finally {
       db.close();
     }

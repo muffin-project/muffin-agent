@@ -55,6 +55,25 @@ export type RecallItem = {
   /** Present on episodes: which connector it was learned on. */
   surface?: string;
   /**
+   * Present on episodes: who produced the bytes.
+   *
+   * Already folded into `source` as a word for a human («Muffin», «tu»); here
+   * as a value, because one consumer has to *branch* on it rather than print
+   * it. Marking a recalled line as undone is legitimate for the agent's own
+   * claim and a lie for the owner's request — the same distinction
+   * `buildContext` makes with `m.role === 'assistant'`, and it needs the same
+   * field to make it.
+   */
+  role?: EpisodeRole;
+  /**
+   * Present on episodes born inside a turn: which turn.
+   *
+   * The join `muffin undo` needs. `turn_tool_calls.undone_at` says a turn was
+   * put back; without this column the sentence that turn wrote is
+   * indistinguishable, in memory, from one nobody ever undid.
+   */
+  turnId?: string;
+  /**
    * Set on an item that is here as *context* for another one, never as a
    * result of its own. Neighbours are attached after the cut and never enter
    * the fusion: they did not match the query and must not displace something
@@ -298,7 +317,7 @@ export type RecallResult = {
 const K = 60;
 
 /** The durable episode role. Trust and speaker are deliberately separate axes. */
-type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
+export type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
 
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
@@ -448,12 +467,30 @@ export async function recall(
   // neighbourhood all converge here, so one cached lookup per unique episode
   // is the single seam that decides who actually said the text. Missing role
   // fails closed as unattributed; tier 0 alone can never manufacture "tu".
-  const episodeRoles = new Map<number, EpisodeRole | null>();
-  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string => {
-    if (!episodeRoles.has(id)) {
-      episodeRoles.set(id, deps.store.episodeById(tenantId, id)?.role ?? null);
-    }
-    return describeEpisodeSource(episodeRoles.get(id) ?? null, tier, at, surface);
+  const episodeRoles = new Map<number, { role: EpisodeRole | null; turnId: string | null }>();
+  const durable = (id: number): { role: EpisodeRole | null; turnId: string | null } => {
+    const cached = episodeRoles.get(id);
+    if (cached !== undefined) return cached;
+    const row = deps.store.episodeById(tenantId, id);
+    const fresh = { role: row?.role ?? null, turnId: row?.turnId ?? null };
+    episodeRoles.set(id, fresh);
+    return fresh;
+  };
+  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string =>
+    describeEpisodeSource(durable(id).role, tier, at, surface);
+  /**
+   * Chi ha prodotto la riga e in quale turno, sull'item invece che solo nella
+   * stringa di provenienza.
+   *
+   * `source` è già una frase per un umano; questi due sono per un consumatore
+   * che deve **decidere** — oggi uno solo: chi assembla il contesto marca i
+   * ricordi dell'agente che vengono da un turno che `muffin undo` ha disfatto
+   * (`agent/context/assemble.ts` §`annullaRicordi`). Deriva dalla stessa
+   * lettura cachata di `episodeSource`, così la riga letta è una sola.
+   */
+  const episodeOrigin = (id: number): { role?: EpisodeRole; turnId?: string } => {
+    const { role, turnId } = durable(id);
+    return { ...(role === null ? {} : { role }), ...(turnId === null ? {} : { turnId }) };
   };
 
   const fuse = (key: string, item: RecallItem, rank: number): void => {
@@ -491,6 +528,7 @@ export async function recall(
       source: episodeSource(hit.id, hit.trustTier, hit.createdAt, hit.connector),
       score: 0,
       surface: hit.connector,
+      ...episodeOrigin(hit.id),
       // Retired evidence comes back only when the past was asked for, and it
       // arrives marked. An episode that was withdrawn or a vault note that has
       // since been edited is still true of *then*, and false of now; handing it
@@ -580,6 +618,7 @@ export async function recall(
           source: episodeSource(hit.sourceId, provenance.trustTier, provenance.createdAt, connector),
           score: 0,
           surface: connector,
+          ...episodeOrigin(hit.sourceId),
           ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
       });
@@ -731,6 +770,7 @@ export async function recall(
           score: 0,
           surface: near.connector,
           neighbourOf: anchor.id,
+          ...episodeOrigin(near.id),
           ...(near.supersededAt === null ? {} : { expired: true }),
         });
       }

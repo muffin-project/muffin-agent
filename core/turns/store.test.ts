@@ -435,7 +435,50 @@ describe('una chiamata rimessa indietro dall’undo', () => {
     expect(row?.content).toBe('wrote 4 bytes');
     expect(row?.undoneAt).toBe('2026-08-27T10:00:00.000Z');
     expect(s.undoneCalls('turn-1')).toEqual(new Set(['c1']));
-    expect(s.undoneTurns(['turn-1', 'turn-2'])).toEqual(new Set(['turn-1']));
+    const esteso = s.undoneTurns(['turn-1', 'turn-2']);
+    // Solo i turni che hanno davvero almeno una chiamata segnata: un turno
+    // senza mark non è «annullato in parte», non è annullato.
+    expect([...esteso.keys()]).toEqual(['turn-1']);
+    expect(esteso.get('turn-1')?.undone.map((c) => c.callId)).toEqual(['c1']);
+    // Nessun superstite: qui l'undo è stato totale, e chi assembla il contesto
+    // deve poterlo dire senza riserve. È la metà che tiene onesta la marcatura
+    // parziale — un'etichetta che compare sempre smette di essere letta.
+    expect(esteso.get('turn-1')?.survived).toEqual([]);
+    // L'esito viaggia com'era registrato: la marcatura parziale dirà *quale*
+    // chiamata è tornata indietro con le parole del tool, non con una parafrasi.
+    expect(esteso.get('turn-1')?.undone[0]?.content).toBe('wrote 4 bytes');
+    expect(esteso.get('turn-1')?.undone[0]?.capability).toBe('fs.write');
+  });
+
+  it('un turno disfatto a metà porta con sé anche cosa è sopravvissuto', () => {
+    // La granularità che `markUndone`/`undoneCalls` tengono corretta per
+    // `callId` si perdeva **qui**, e il modello leggeva «i file che dice di
+    // aver toccato sono tornati com'erano prima» con l'altro file ancora
+    // scritto. Il denominatore è la parte che serve a chi assembla il contesto.
+    const s = conCall(store());
+    s.startToolCall('turn-1', {
+      callId: 'c2', tool: 'fs_write', capability: 'fs.write', rerunnable: true, args: {},
+    });
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes to uno.md', isError: false, tier: 0 });
+    s.endToolCall('turn-1', 'c2', { content: 'wrote 4 bytes to due.md', isError: false, tier: 0 });
+    expect(s.markUndone('turn-1', 'c1')).toBe(true);
+
+    const esteso = s.undoneTurns(['turn-1']).get('turn-1');
+    expect(esteso?.undone.map((c) => c.callId)).toEqual(['c1']);
+    expect(esteso?.survived.map((c) => c.callId)).toEqual(['c2']);
+  });
+
+  it('una chiamata mai conclusa non conta fra i superstiti', () => {
+    // Una chiamata senza risposta non ha lasciato niente da rimettere
+    // indietro: contarla farebbe leggere come «parziale» un undo completo, e
+    // «solo una parte» detto sempre è un'etichetta che nessuno legge più.
+    const s = conCall(store());
+    s.startToolCall('turn-1', {
+      callId: 'c2', tool: 'fs_write', capability: 'fs.write', rerunnable: true, args: {},
+    });
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes', isError: false, tier: 0 });
+    expect(s.markUndone('turn-1', 'c1')).toBe(true);
+    expect(s.undoneTurns(['turn-1']).get('turn-1')?.survived).toEqual([]);
   });
 
   it('non si segna una chiamata che non ha mai risposto', () => {

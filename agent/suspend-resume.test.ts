@@ -501,6 +501,53 @@ describe('un turno ripreso dopo un undo non rilegge i propri effetti come ancora
     expect(ripreso).toContain('ANNULLATO');
   });
 
+  /**
+   * La **prosa** dell'agente dentro lo stesso turno, che era la terza copia.
+   *
+   * Marcare i soli `tool_result` chiudeva una strada e ne lasciava aperta
+   * un'altra dentro la stessa `ChatCall`: un turno di più giri dice «Ho mandato
+   * il messaggio. Ora ne mando un altro.» in un blocco `text`, e quel blocco
+   * viveva in un messaggio che **non contiene** la chiamata disfatta — il testo
+   * accompagna la `tool_use` successiva — quindi nessun filtro per `toolCallId`
+   * poteva raggiungerlo.
+   *
+   * C'è un secondo motivo per cui la marcatura sta su un blocco `text`:
+   * `compactToolResults` spende il budget dal più recente e svuota per primo il
+   * `tool_result` più vecchio, che è proprio quello marcato. Un contesto stretto
+   * poteva quindi consegnare l'affermazione **senza** la smentita. Un blocco
+   * `text` la compattazione non lo riscrive mai.
+   */
+  it('anche la prosa dell’agente arriva marcata, non solo gli esiti', async () => {
+    const conTesto = (name: string, id: string, text: string): ChatResult => ({
+      text,
+      toolCalls: [{ id, name, args: {} }],
+      stopReason: 'tool_use',
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      model: 'test',
+    });
+    const w = world([
+      call('send_message', {}, 'm1'),
+      conTesto('send_message', 'm2', 'Ho mandato il messaggio. Ora ne mando un altro.'),
+      answer('dopo'),
+      answer('ripreso'),
+    ]);
+    const first = await runTurn(w.deps, start(w));
+    w.crash(first.turnId, {});
+    // Solo la **prima** chiamata è stata rimessa indietro.
+    expect(w.turns.markUndone(first.turnId, 'm1')).toBe(true);
+
+    await resumeTurn(w.deps, first.turnId);
+    // Per **blocco**, non per riga: la smentita sta davanti all'affermazione
+    // dentro lo stesso blocco, che è tutto il punto della forma «marcare».
+    const blocchi = (w.provider.seen[w.provider.seen.length - 1]?.messages ?? [])
+      .flatMap((m) => m.content)
+      .map((b) => (b.type === 'text' ? b.text : b.type === 'tool_result' ? b.content : ''));
+    const dice = blocchi.filter((b) => b.includes('Ho mandato il messaggio'));
+    // La frase c'è ancora — non si cancella niente — e adesso non arriva sola.
+    expect(dice.length).toBeGreaterThan(0);
+    for (const b of dice) expect(b).toContain('ANNULLATO');
+  });
+
   it('senza undo niente cambia: la marcatura non è un costo fisso sul replay', async () => {
     // La metà che rende i due test sopra una prova invece di una tautologia:
     // se ogni ripresa marcasse tutto, «ANNULLATO» comparirebbe comunque e non

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -599,7 +599,42 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
    * → `drive` risolve i `traceId` → `buildContext` marca la riga. Basta che uno
    * smetta di leggere il precedente e il difetto torna, in silenzio: è la forma
    * esatta dei difetti che questo file esiste per prendere.
+   *
+   * **Su quale collezione itera l'asserzione.** La prima versione di questo
+   * test filtrava i messaggi a `role === 'assistant'` e ci girava sopra. Il
+   * blocco `MEMORIA` è un messaggio `user`: quel ciclo, strutturalmente, non
+   * poteva vedere il caso rotto, ed era verde mentre nella **stessa**
+   * `ChatCall` viaggiava una copia nuda della stessa frase due blocchi più in
+   * basso. La seconda metà era la domanda: `'e adesso?'` non fa match FTS su
+   * niente, quindi il blocco `MEMORIA` usciva vuoto e una parola nella domanda
+   * dell'owner separava verde da rosso. Da qui: la domanda **nomina il file**,
+   * e l'asserzione gira sul contesto intero, tutti i ruoli.
    */
+  /** Ogni blocco di testo che parte verso il modello, col ruolo che lo porta. */
+  const tutti = (call: ChatCall): { role: string; text: string }[] =>
+    call.messages.flatMap((m) =>
+      m.content
+        .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+        .map((b) => ({ role: m.role, text: b.text })),
+    );
+
+  /**
+   * L'invariante, su tutto il contesto: la frase può esserci — non si cancella
+   * niente, `AGENTS.md` §I-8 — ma mai senza la smentita attaccata.
+   */
+  const nessunaCopiaNuda = (call: ChatCall): void => {
+    const blocchi = tutti(call);
+    // La rete che impedisce a questo test di passare per assenza: se il recall
+    // non pescasse niente e la cronologia fosse vuota, il ciclo sotto girerebbe
+    // a vuoto e il test sarebbe verde senza aver osservato niente.
+    expect(blocchi.filter((b) => b.text.includes('ho scritto nota.md')).length).toBeGreaterThan(0);
+    for (const b of blocchi) {
+      if (b.text.includes('ho scritto nota.md')) expect(b.text).toContain('ANNULLATO');
+    }
+  };
+
+  const DETTO = 'Fatto: ho scritto nota.md con il contenuto nuovo.';
+
   it('dopo un undo, il turno dopo non legge più «ho scritto» come un fatto', async () => {
     const home = homeAllowing('ok.example.com');
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
@@ -608,8 +643,24 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
     const runtime = buildRuntime(home, workspace);
     const modello = new Scripted([
       writeCall('nota.md', 'dopo'),
+      // Una rilettura **dopo** la scrittura, e non è decorazione: è la metà che
+      // impedisce alla marcatura parziale di diventare l'etichetta di sempre.
+      // `fs.read` è `reversible: 'yes'`, cioè non ha lasciato niente da
+      // rimettere indietro, quindi il turno resta un undo **totale** anche se
+      // una delle sue due chiamate concluse non è segnata.
+      //
+      // Dopo e non prima perché il kernel ha ragione: leggere alza il taint del
+      // turno e una `fs.write` a taint alzato viene rifiutata
+      // (`core/policy/read-then-write.test.ts`). L'ordine qui è l'unico che
+      // esercita davvero entrambe le chiamate.
       {
-        text: 'Fatto: ho scritto nota.md.',
+        text: null,
+        toolCalls: [{ id: 'r1', name: 'fs_read', args: { path: 'nota.md' } }],
+        stopReason: 'tool_use',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+      {
+        text: DETTO,
         toolCalls: [], stopReason: 'end',
         usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
       },
@@ -628,37 +679,141 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
     expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
 
     modello.seen.length = 0;
+    // La domanda nomina il file: è la differenza fra un recall che pesca la
+    // frase e uno che non pesca niente, cioè fra un test che osserva il difetto
+    // e uno che passa perché non c'era niente da guardare.
     await runTurn(deps, {
-      principal: owner, tenant: 'host', surface: 'cli', session, text: 'e adesso?',
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'nota.md, e adesso?',
     });
 
-    const contesto = modello.seen[0]!.messages;
-    const detto = contesto
-      .filter((m) => m.role === 'assistant')
-      .flatMap((m) => m.content)
-      .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text);
+    const contesto = modello.seen[0]!;
+    const blocchi = tutti(contesto);
+    // La riga della cronologia arriva marcata…
+    const storia = blocchi.find((b) => b.role === 'assistant' && b.text.includes(DETTO));
+    expect(storia).toBeDefined();
+    // …e con la frase **categorica**, perché qui l'undo è stato totale: la sola
+    // chiamata sopravvissuta è la lettura, che non aveva niente da rimettere a
+    // posto. È la metà che impedisce a «solo una parte» di diventare
+    // l'etichetta di ogni turno, cioè un'etichetta che nessuno legge più.
+    expect(storia!.text).toContain("i file che dice di aver toccato sono tornati com'erano prima");
+    expect(storia!.text).not.toContain('solo una parte');
+    // …e il recall ha davvero pescato la stessa frase, dentro il blocco MEMORIA:
+    // senza questa riga il test tornerebbe a poter passare per silenzio.
+    const memoria = blocchi.find((b) => b.text.includes('MEMORIA'));
+    expect(memoria?.text).toContain(DETTO);
+    // Nessuna copia nuda, in nessun ruolo. È l'asserzione che la versione
+    // filtrata a `assistant` non poteva fallire.
+    nessunaCopiaNuda(contesto);
 
-    // La riga c'è ancora — non si cancella niente, `AGENTS.md` §I-8 —
-    expect(detto.join('\n')).toContain('Fatto: ho scritto nota.md.');
-    // — e arriva già annullata, con la smentita davanti all'affermazione.
-    expect(detto.join('\n')).toContain('ANNULLATO');
-    // Nessuna riga afferma la scrittura senza portarsi dietro la smentita:
-    // è la formulazione che fallisce anche se qualcuno *aggiungesse* la nota
-    // in coda al contesto lasciando la riga nuda dov'era.
-    for (const t of detto) {
-      if (t.includes('ho scritto nota.md')) expect(t).toContain('ANNULLATO');
-    }
     // E la riga dell'owner resta la sua: marcare anche quella direbbe che ha
     // ritirato la richiesta, che è una seconda bugia al posto della prima.
-    const chiesto = contesto
-      .filter((m) => m.role === 'user')
-      .flatMap((m) => m.content)
-      .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
-    expect(chiesto).toContain('scrivi nota.md');
-    expect(chiesto).not.toContain('ANNULLATO');
+    // Puntata sul messaggio reiniettato, non su «tutto ciò che è `user`»: il
+    // blocco MEMORIA è `user` e adesso porta la marcatura, giustamente.
+    const richiesta = blocchi.find((b) => b.role === 'user' && b.text.trim() === 'scrivi nota.md');
+    expect(richiesta).toBeDefined();
+    expect(richiesta!.text).not.toContain('ANNULLATO');
+    // Lo stesso dentro il blocco MEMORIA: la riga `[tu via cli]` non è marcata.
+    for (const riga of memoria!.text.split('\n')) {
+      if (riga.includes('scrivi nota.md') && !riga.includes(DETTO)) {
+        expect(riga).not.toContain('ANNULLATO');
+      }
+    }
+
+    /**
+     * E in una sessione **nuova**, dove la cronologia non c'è affatto.
+     *
+     * È il caso che rende la marcatura della memoria necessaria e non un
+     * di più: qui il recall è l'**unica** strada per cui quella frase raggiunge
+     * il modello. Misurato prima della riparazione: «ho scritto nota.md»
+     * presente, «ANNULLATO» assente.
+     */
+    modello.seen.length = 0;
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u3-bis'), text: 'nota.md, e adesso?',
+    });
+    const nuova = modello.seen[0]!;
+    expect(tutti(nuova).some((b) => b.role === 'assistant')).toBe(false);
+    nessunaCopiaNuda(nuova);
+
+    runtime.close();
+  }, 30_000);
+
+  /**
+   * L'undo riuscito **a metà**, fino a cosa legge il turno dopo.
+   *
+   * `cli/undo.test.ts` prova già che il mark è granulare per `callId` quando
+   * una copia sparisce dal journal: `uno.md` torna indietro, `due.md` resta
+   * scritto, e solo la prima chiamata viene segnata. Quel test si ferma a
+   * `undoneCalls`, un anello prima del punto in cui la granularità si perdeva:
+   * `undoneTurns` collassava a «questo turno è disfatto» e il modello leggeva
+   * «i file che dice di aver toccato sono tornati com'erano prima» — categorico
+   * e plurale, con `due.md` ancora pieno di `dopo`.
+   *
+   * È un peggioramento, non un residuo: prima della riconciliazione il modello
+   * sentiva «ho scritto entrambi», falso su uno; dopo sentiva «entrambi sono
+   * tornati indietro», falso sull'altro e nel verso che invita a ricostruire su
+   * uno stato che non c'è.
+   */
+  it('un undo riuscito a metà arriva al turno dopo come metà, non come tutto', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'uno.md'), 'prima', 'utf8');
+    writeFileSync(join(workspace, 'due.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const modello = new Scripted([
+      {
+        text: null,
+        toolCalls: [
+          { id: 'w1', name: 'fs_write', args: { path: 'uno.md', content: 'dopo' } },
+          { id: 'w2', name: 'fs_write', args: { path: 'due.md', content: 'dopo' } },
+        ],
+        stopReason: 'tool_use',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+      {
+        text: 'Fatto: ho scritto uno.md e due.md.',
+        toolCalls: [], stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+    ]);
+    const deps: LoopDeps = { ...runtime.deps, provider: modello };
+    const session = deps.sessions.open('u4');
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'scrivi uno.md e due.md',
+    });
+    expect(readFileSync(join(workspace, 'uno.md'), 'utf8')).toBe('dopo');
+    expect(readFileSync(join(workspace, 'due.md'), 'utf8')).toBe('dopo');
+
+    // La copia di `due.md` sparisce: quel percorso non può tornare indietro.
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0]!;
+    const manifest = JSON.parse(
+      readFileSync(join(paths(home).undo, turno, 'manifest.json'), 'utf8'),
+    ) as { snapshots: { copy: string; path: string }[] };
+    const perDue = manifest.snapshots.find((s) => s.path.endsWith('due.md'))!;
+    rmSync(join(paths(home).undo, turno, perDue.copy));
+
+    // Esce 1: l'undo è avvenuto solo in parte, e lo dichiara.
+    expect(cmdUndo([turno, '--yes'], home)).toBe(1);
+    expect(readFileSync(join(workspace, 'uno.md'), 'utf8')).toBe('prima');
+    expect(readFileSync(join(workspace, 'due.md'), 'utf8')).toBe('dopo');
+
+    modello.seen.length = 0;
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'uno.md e due.md, a che punto siamo?',
+    });
+    const blocchi = tutti(modello.seen[0]!);
+    const marcato = blocchi.find((b) => b.role === 'assistant' && b.text.includes('ho scritto uno.md'));
+    expect(marcato).toBeDefined();
+    // Marcato, sì — ma non con la frase categorica, che qui è **falsa**:
+    // `due.md` contiene ancora `dopo`.
+    expect(marcato!.text).toContain('ANNULLATO');
+    expect(marcato!.text).not.toContain("i file che dice di aver toccato sono tornati com'erano prima");
+    expect(marcato!.text).toContain('solo una parte');
+    // E dice quale parte, con le parole del tool invece che con una parafrasi.
+    expect(marcato!.text).toContain('uno.md');
 
     runtime.close();
   }, 30_000);

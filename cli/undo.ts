@@ -153,9 +153,17 @@ export function cmdUndo(argv: string[], home = paths().home): number {
   const riallineati = riallinea(home, bersaglio, esito.undone.map((s) => s.callId));
 
   if (riallineati > 0) {
+    // «quei file», non «i file del turno»: su un ripristino parziale una parte
+    // è ancora sul disco, e la frase larga direbbe di quella parte esattamente
+    // la bugia che questo comando esiste per togliere. La riga che segue nomina
+    // quante sono rimaste, invece di lasciarlo dedurre dai `!` più sopra.
     process.stdout.write(
       `\n${riallineati} ${riallineati === 1 ? 'chiamata segnata come annullata' : 'chiamate segnate come annullate'} nel record del turno: ` +
-        `la cronologia non dice più che quei file sono stati scritti.\n`,
+        `la cronologia non dice più che quei file sono stati scritti.\n` +
+        (esito.problems.length === 0
+          ? ''
+          : `${esito.problems.length} ${esito.problems.length === 1 ? 'percorso non è tornato' : 'percorsi non sono tornati'} indietro e ` +
+            `${esito.problems.length === 1 ? 'resta' : 'restano'} come ${esito.problems.length === 1 ? 'era' : 'erano'} dopo il turno.\n`),
     );
   } else if (esito.undone.length > 0) {
     // Dichiarato, non taciuto. Un turno che non è nel database — un journal

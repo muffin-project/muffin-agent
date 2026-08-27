@@ -7,7 +7,14 @@ import type { SessionMessage, SessionRef, SessionStore } from '../core/session/s
 import { tierOf } from '../core/surface/types.js';
 import type { UndoJournal } from '../core/undo/journal.js';
 import { SCRIPT_MODEL } from '../core/turns/store.js';
-import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
+import type {
+  TurnCounters,
+  TurnOutcome,
+  TurnRecord,
+  TurnStopped,
+  TurnStore,
+  TurnUndoExtent,
+} from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
@@ -15,11 +22,14 @@ import { ATTR } from '../core/tracing/types.js';
 import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import {
+  annullaRicordi,
   tenantClass,
   todoSection,
+  undoneMidTurn,
   undoneOutcome,
   undoneSaid,
   visibleTools,
+  type Annullamento,
   type SystemPrompts,
 } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
@@ -1141,6 +1151,11 @@ async function drive(
         // content nobody at tier 0 actually said.
         trustTier: record.taint,
         createdAt: now().toISOString(),
+        // La riga dell'owner porta il turno come la risposta dell'agente: è
+        // provenienza, e serve a chi legge la memoria per sapere da dove viene.
+        // Chi marca guarda il **ruolo**, non la presenza del turno
+        // (`annullaRicordi`, `role: 'agent'`): un undo non ritira la domanda.
+        turnId: turn.traceId,
       });
     }
 
@@ -1149,6 +1164,16 @@ async function drive(
     // remember-then-act path: a fact a stranger planted months ago raises the
     // taint of this turn exactly as if they had just spoken.
     const recalled: ContentBlock[] = [];
+    /**
+     * Il risultato del recall, tenuto da parte invece che reso subito.
+     *
+     * Renderlo qui dentro era il difetto: il blocco `MEMORIA` usciva prima che
+     * qualcuno avesse chiesto al database quali turni fossero stati disfatti, e
+     * quindi ripresentava nuda la stessa frase che, due blocchi più in basso,
+     * la cronologia di sessione consegnava marcata. La marcatura ha bisogno del
+     * `undoneTurns` che si risolve più sotto, quindi la resa aspetta quello.
+     */
+    let ricordato: Awaited<ReturnType<typeof recall>> | undefined;
     if (deps.memory) {
       const recallSpan = deps.tracer.start('muffin.tool_call', { [ATTR.operationName]: 'memory.recall' }, turn);
       try {
@@ -1177,8 +1202,7 @@ async function drive(
                 [ATTR.cacheReadTokens]: result.rerankUsage.cacheReadTokens,
               }),
         });
-        const rendered = renderForPrompt(result);
-        if (rendered !== '') recalled.push({ type: 'text', text: rendered });
+        ricordato = result;
         recallSpan.end();
       } catch (error) {
         // Recall is an improvement, not a precondition: a turn without memory is
@@ -1224,11 +1248,31 @@ async function drive(
      * una per riga. È il consumatore del mark che `cli/undo.ts` scrive: senza
      * questa riga il registro di undo tocca il disco e il record del turno, e
      * il modello continua a leggere «ho scritto nuovo.txt» dalla sessione.
+     *
+     * **Più i turni da cui viene ciò che il recall ha ripescato**, che è la
+     * correzione misurata dal judge di #186: la cronologia di sessione è una
+     * copia dell'affermazione, la memoria è la seconda, e marcarne una sola
+     * consegnava al modello — nella *stessa* `ChatCall*, due blocchi più in
+     * basso — «Fatto: ho scritto nota.md» senza smentita. In una sessione nuova
+     * quella era l'**unica** copia. Un solo `IN (...)` per entrambe le liste:
+     * una query, non due.
      */
-    const undoneTurns = deps.turns.undoneTurns(traceIds);
+    const daRicordi = (ricordato?.items ?? [])
+      .map((i) => i.turnId)
+      .filter((id): id is string => id !== undefined);
+    const undoneTurns = deps.turns.undoneTurns([...traceIds, ...daRicordi]);
+    const annullati = classificaAnnullamenti(undoneTurns, deps.capabilities);
+
+    // Reso adesso, non dentro il `try` del recall: la marcatura ha bisogno di
+    // `undoneTurns`, e il blocco `MEMORIA` deve uscire già marcato invece di
+    // essere l'unica copia nuda dell'affermazione nel contesto.
+    if (ricordato !== undefined) {
+      const rendered = renderForPrompt(annullaRicordi(ricordato, new Set(undoneTurns.keys())));
+      if (rendered !== '') recalled.push({ type: 'text', text: rendered });
+    }
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken, undoneTurns));
+    messages.push(...buildContext(input, recalled, open, spoken, annullati));
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -1596,6 +1640,16 @@ async function drive(
              */
             trustTier: snapshot.currentTaint(),
             createdAt: now().toISOString(),
+            /**
+             * Il turno che ha detto questa frase — la giunzione che mancava.
+             *
+             * Senza questa riga `muffin undo` marcava la cronologia di sessione
+             * e lasciava intatta la **stessa frase** in memoria: FTS non filtra
+             * per ruolo, quindi il giro dopo la ripescava e il blocco `MEMORIA`
+             * la consegnava nuda, con la provenienza `[Muffin via cli]`, sotto
+             * la riga marcata. Marcarne una su due è marcarne zero.
+             */
+            turnId: turn.traceId,
           });
         }
         return finish(turn, 'answered', text, iterations, usage);
@@ -2649,6 +2703,33 @@ function resourceFor(
  */
 function annullaEsiti(m: Message, undone: ReadonlySet<string>): Message {
   if (undone.size === 0) return m;
+  // La prosa dell'agente, non solo i `tool_result`.
+  //
+  // Marcare i soli `tool_result` lasciava intatta la seconda copia
+  // dell'affermazione dentro la stessa `ChatCall`: «Ho scritto nota.md. Ora
+  // leggo i log.» sta in un blocco `text`, in un messaggio che **non contiene**
+  // la `tool_call` disfatta (quel testo accompagna la chiamata *successiva*),
+  // quindi nessun filtro per `toolCallId` poteva raggiungerlo.
+  //
+  // Il criterio è il turno, non la singola chiamata, e va nel verso sicuro: se
+  // qualcosa di questo turno è stato rimesso indietro, la prosa di questo turno
+  // non è più una descrizione affidabile di cosa c'è sul disco. Marcarne una in
+  // più costa una riga di avviso; marcarne una in meno lascia il modello
+  // ricostruire su uno stato che non esiste.
+  //
+  // C'è un secondo effetto, ed è quello che chiude la finestra che
+  // `compactToolResults` apriva: la compattazione spende il budget dal più
+  // recente, quindi il `tool_result` marcato — il più vecchio — è il primo a
+  // essere svuotato, e con lui spariva la marcatura mentre l'affermazione
+  // restava. `compactToolResults` non riscrive mai un blocco `text`, quindi
+  // questa marcatura sopravvive a quel taglio per costruzione.
+  if (m.role === 'assistant') {
+    if (!m.content.some((b) => b.type === 'text')) return m;
+    return {
+      ...m,
+      content: m.content.map((b) => (b.type === 'text' ? { ...b, text: undoneMidTurn(b.text) } : b)),
+    };
+  }
   if (!m.content.some((b) => b.type === 'tool_result' && undone.has(b.toolCallId))) return m;
   return {
     ...m,
@@ -2658,6 +2739,46 @@ function annullaEsiti(m: Message, undone: ReadonlySet<string>): Message {
         : b,
     ),
   };
+}
+
+/**
+ * Da «queste chiamate sono tornate indietro, queste no» a «cosa dire al
+ * modello»: totale o parziale.
+ *
+ * La domanda che decide non è quante chiamate siano sopravvissute ma quante ne
+ * siano sopravvissute **con un effetto**. Un turno che legge un file e poi ne
+ * scrive un altro ha due chiamate concluse e una sola da rimettere indietro:
+ * contare la `fs.read` fra i superstiti farebbe leggere come «parziale» un
+ * undo che ha disfatto tutto ciò che c'era da disfare, e un'etichetta che
+ * compare sempre smette di essere letta — la stessa regola che questo repo
+ * applica già a `dedotto` in `core/memory/recall.ts`.
+ *
+ * `reversible: 'yes'` è esattamente «non ha lasciato niente da rimettere a
+ * posto» (`core/policy/types.ts`), quindi è il filtro. Una capability che il
+ * runtime non conosce — o un runtime senza dichiarazioni affatto — conta come
+ * superstite con effetto: senza sapere cosa ha fatto, la frase prudente è
+ * «solo una parte», mai «tutto è tornato indietro».
+ */
+function classificaAnnullamenti(
+  esteso: ReadonlyMap<string, TurnUndoExtent>,
+  capabilities: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined,
+): Map<string, Annullamento> {
+  const out = new Map<string, Annullamento>();
+  for (const [turnId, { undone, survived }] of esteso) {
+    const conEffetto = survived.filter(
+      (c) => capabilities?.get(c.capability as CapabilityId)?.reversible !== 'yes',
+    );
+    out.set(
+      turnId,
+      conEffetto.length === 0
+        ? { esteso: 'tutte' }
+        : {
+            esteso: 'alcune',
+            tornati: undone.map((c) => c.content).filter((c): c is string => c !== null),
+          },
+    );
+  }
+  return out;
 }
 
 /**
@@ -2689,11 +2810,17 @@ function buildContext(
    */
   spoken: ReinjectedHistory,
   /**
-   * Gli id dei turni che `muffin undo` ha disfatto — risolti dal chiamante
-   * sugli stessi `traceId` con cui risolve il taint, per la stessa ragione per
-   * cui `spoken` è un parametro e non una rilettura qui dentro.
+   * I turni che `muffin undo` ha disfatto, **e quanto** ne ha disfatto —
+   * risolti dal chiamante sugli stessi `traceId` con cui risolve il taint, per
+   * la stessa ragione per cui `spoken` è un parametro e non una rilettura qui
+   * dentro.
+   *
+   * Una mappa e non un insieme: la distinzione fra un undo totale e uno
+   * riuscito a metà arriva già decisa, perché deciderla richiede sapere quali
+   * capability lasciano un effetto — cosa che il chiamante ha
+   * (`deps.capabilities`) e questa funzione non deve mettersi ad avere.
    */
-  undoneTurns: ReadonlySet<string>,
+  annullati: ReadonlyMap<string, Annullamento>,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -2725,10 +2852,12 @@ function buildContext(
     // prima. La riga non viene tolta né sostituita: le si mette davanti la
     // smentita, nel punto in cui sta l'affermazione (`undoneSaid`).
     const annullato =
-      m.role === 'assistant' && m.traceId !== undefined && undoneTurns.has(m.traceId);
+      m.role === 'assistant' && m.traceId !== undefined ? annullati.get(m.traceId) : undefined;
     messages.push({
       role: m.role as 'user' | 'assistant',
-      content: [{ type: 'text' as const, text: annullato ? undoneSaid(m.content) : m.content }],
+      content: [
+        { type: 'text' as const, text: annullato ? undoneSaid(m.content, annullato) : m.content },
+      ],
     });
   }
   /**

@@ -32,6 +32,16 @@ export type EpisodeInput = {
   vaultPath?: string;
   mediaMeta?: Record<string, unknown>;
   createdAt: string;
+  /**
+   * Il turno che ha prodotto questa riga, quando c'è stato un turno.
+   *
+   * Assente è il caso normale — un import, il consolidatore, una nota del
+   * vault non nascono da un turno — e la colonna è nullable per questo. Il
+   * consumatore è uno solo: dopo `muffin undo`, il recall deve poter dire che
+   * *questa* frase viene da un turno disfatto, invece di ripresentarla nuda al
+   * giro dopo (`agent/context/assemble.ts` §`annullaRicordi`).
+   */
+  turnId?: string | null;
 };
 
 export type Episode = EpisodeInput & { id: number; extractionV: number };
@@ -184,6 +194,12 @@ export class MemoryStore {
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
     ensureColumn(db, 'episodes', 'superseded_at', 'superseded_at TEXT');
+    // La giunzione turno→episodio che D11 chiede: nullable, additiva, e senza
+    // `CHECK` apposta. Un `CHECK` su una colonna aggiunta da `ALTER TABLE` non
+    // si può togliere senza ricostruire la tabella; qui non ce n'è niente da
+    // vincolare, perché l'assenza di un turno è il caso normale (import,
+    // consolidatore, note del vault).
+    ensureColumn(db, 'episodes', 'turn_id', 'turn_id TEXT');
     // Both carry a non-null default so the existing rows migrate in place: an
     // ALTER that adds NOT NULL without one is rejected outright. `said` is the
     // honest backfill rather than a convenient one — extraction has never been
@@ -223,15 +239,16 @@ export class MemoryStore {
   addEpisode(input: EpisodeInput): number {
     const stmt = this.db.prepare(
       `INSERT INTO episodes (tenant_id, connector, thread_key, actor_id, role, kind, content,
-                             vault_path, media_meta, trust_tier, created_at, extraction_v)
+                             vault_path, media_meta, trust_tier, created_at, extraction_v, turn_id)
        VALUES (@tenantId, @connector, @threadKey, @actorId, @role, @kind, @content,
-               @vaultPath, @mediaMeta, @trustTier, @createdAt, 0)`,
+               @vaultPath, @mediaMeta, @trustTier, @createdAt, 0, @turnId)`,
     );
     const info = stmt.run({
       ...input,
       actorId: input.actorId ?? null,
       vaultPath: input.vaultPath ?? null,
       mediaMeta: input.mediaMeta ? JSON.stringify(input.mediaMeta) : null,
+      turnId: input.turnId ?? null,
     });
     return Number(info.lastInsertRowid);
   }
@@ -1071,7 +1088,7 @@ export class MemoryStore {
       .prepare(
         `SELECT id, tenant_id AS tenantId, connector, thread_key AS threadKey, actor_id AS actorId,
                 role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
-                created_at AS createdAt, extraction_v AS extractionV
+                created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId
          FROM episodes WHERE tenant_id = ? AND id = ?`,
       )
       .get(tenantId, id) as (Episode & { actorId: number | null; vaultPath: string | null }) | undefined;

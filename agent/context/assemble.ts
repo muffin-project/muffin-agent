@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../../core/config/config.js';
+import type { RecallItem } from '../../core/memory/recall.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
 
@@ -186,14 +187,79 @@ export function todoSection(open: TodoItem[]): string {
  * ridedurre). Non dice «hai sbagliato»: l'undo è una decisione dell'owner sul
  * mondo, non un giudizio sul turno.
  */
-const ANNULLATO = '[ANNULLATO con `muffin undo`';
+const ANNULLATO = 'ANNULLATO con `muffin undo`';
+
+/**
+ * Quanto di un turno l'undo ha davvero rimesso indietro.
+ *
+ * Esiste perché `muffin undo` **può riuscire a metà** e lo dice già: una copia
+ * mancante nel journal fa fallire quel percorso, il comando esce 1, e
+ * `turn_tool_calls.undone_at` finisce segnato su una chiamata su due. Fino a
+ * qui quella granularità c'era (`markUndone`/`undoneCalls` la tengono per
+ * `callId`) e si perdeva un anello prima del modello: il turno risultava
+ * «disfatto» e il testo categorico diceva che *i file* erano tornati com'erano
+ * — con l'altro file ancora scritto sul disco.
+ *
+ * È la direzione peggiore in cui sbagliare. Prima della riconciliazione il
+ * modello sentiva «ho scritto entrambi», falso su uno; un collasso qui gli fa
+ * sentire «entrambi sono tornati indietro», falso sull'altro **e** nel verso
+ * che lo invita a ricostruire su uno stato che non c'è.
+ */
+export type Annullamento =
+  | { readonly esteso: 'tutte' }
+  /**
+   * Solo una parte. `tornati` sono gli esiti registrati delle chiamate che
+   * sono davvero tornate indietro — le parole del tool, non una parafrasi:
+   * `turn_tool_calls.content` dice già «wrote 4 bytes to uno.md», e ridurlo a
+   * un percorso vorrebbe dire parsare la risposta di un tool per indovinare
+   * quale campo è un file.
+   */
+  | { readonly esteso: 'alcune'; readonly tornati: readonly string[] };
+
+/** Quante delle parole del tool entrano nella marcatura di un undo parziale. */
+const TORNATI_MOSTRATI = 5;
+const TORNATO_MAX = 120;
 
 /** Un messaggio dell'agente i cui effetti sono stati disfatti. */
-export function undoneSaid(text: string): string {
+export function undoneSaid(text: string, quanto: Annullamento = { esteso: 'tutte' }): string {
+  if (quanto.esteso === 'tutte') {
+    return (
+      `[${ANNULLATO}] Gli effetti di questo tuo messaggio sono stati rimessi indietro: i file che dice ` +
+      `di aver toccato sono tornati com'erano prima. È ancora ciò che hai detto allora, non ciò che ` +
+      `c'è adesso — non darlo per fatto, e riguarda lo stato vero prima di costruirci sopra.\n${text}`
+    );
+  }
+  const elenco = quanto.tornati
+    .slice(0, TORNATI_MOSTRATI)
+    .map((t) => `«${t.replace(/\s+/g, ' ').slice(0, TORNATO_MAX)}»`)
+    .join('; ');
   return (
-    `${ANNULLATO}] Gli effetti di questo tuo messaggio sono stati rimessi indietro: i file che dice ` +
-    `di aver toccato sono tornati com'erano prima. È ancora ciò che hai detto allora, non ciò che ` +
-    `c'è adesso — non darlo per fatto, e riguarda lo stato vero prima di costruirci sopra.\n${text}`
+    `[${ANNULLATO}] Di questo tuo messaggio è stata rimessa indietro **solo una parte**` +
+    `${elenco === '' ? '' : `: ${elenco}`}. Il resto di quello che dice di aver fatto è ancora dov'era ` +
+    `— non darlo né per fatto né per disfatto, guarda lo stato vero prima di costruirci sopra.\n${text}`
+  );
+}
+
+/**
+ * La prosa dell'agente **dentro** un turno di cui qualcosa è stato disfatto.
+ *
+ * `undoneOutcome` marca il `tool_result`, che è dove sta scritto «wrote 4
+ * bytes». Non è l'unica copia dell'affermazione dentro la stessa `ChatCall`:
+ * un turno di più giri dice «Ho scritto nota.md. Ora leggo i log.» in un
+ * blocco `text`, e quel blocco non lo tocca nessuno — né la marcatura, che
+ * guarda solo i `tool_result`, né `compactToolResults`, che svuota solo quelli.
+ * Il che è anche il verso buono di questa marcatura: sopravvive alla
+ * compattazione proprio perché vive su un blocco che la compattazione non
+ * riscrive mai.
+ *
+ * Una riga sola, non il paragrafo di `undoneSaid`: qui gli esiti disfatti sono
+ * già marcati uno per uno poche righe più in là, e questa deve solo impedire
+ * che la prosa li contraddica.
+ */
+export function undoneMidTurn(text: string): string {
+  return (
+    `[${ANNULLATO}] Parte di ciò che questo turno dice di aver fatto è stata rimessa indietro dopo ` +
+    `— guarda gli esiti segnati qui sotto, non questa frase.\n${text}`
   );
 }
 
@@ -205,9 +271,51 @@ export function undoneSaid(text: string): string {
  */
 export function undoneOutcome(content: string): string {
   return (
-    `${ANNULLATO}] Questa chiamata è stata disfatta dopo che aveva risposto: quello che segue è la ` +
+    `[${ANNULLATO}] Questa chiamata è stata disfatta dopo che aveva risposto: quello che segue è la ` +
     `risposta di allora e non descrive più il disco. Riverifica prima di riusarla.\n${content}`
   );
+}
+
+/**
+ * La stessa marcatura sulla **terza** copia dell'affermazione: quella che il
+ * recall ripesca dalla memoria.
+ *
+ * Marcare la cronologia di sessione e non la memoria è marcarne una su due, e
+ * la misura che l'ha mostrato è brutale: nello stesso secondo turno, due
+ * blocchi sotto la riga marcata, il blocco `MEMORIA` riportava la stessa frase
+ * nuda con la provenienza `[Muffin via cli]` — e in una sessione **nuova**
+ * arrivava solo quella nuda. L'episodio dell'agente è indicizzato in FTS come
+ * qualunque altro (`core/memory/store.ts` §`searchEpisodes` non filtra per
+ * ruolo), quindi basta che il giro dopo nomini il file.
+ *
+ * Marca, non toglie: escludere dal recall gli episodi dei turni disfatti
+ * sarebbe stata l'altra strada, e perde il fatto — dopo un undo il modello
+ * deve poter sapere che ci aveva provato e che è stato rimesso indietro, non
+ * trovarsi un buco. Stessa forma di `undoneSaid`, un livello più in là.
+ *
+ * La marca va nella parentesi di provenienza, che è dove questo renderer mette
+ * già le qualificazioni («dedotto — non detto», «intorno», la finestra
+ * temporale), e quindi **precede** il testo: la smentita sta nel punto in cui
+ * sta l'affermazione, non in coda al blocco.
+ *
+ * Solo `role: 'agent'`, mai la riga dell'owner: la richiesta che ha causato il
+ * turno resta vera parola per parola, e marcarla direbbe che l'owner l'ha
+ * ritirata — la stessa decisione, e la stessa ragione, di `buildContext` con
+ * `m.role === 'assistant'`.
+ */
+export function annullaRicordi<T extends { readonly items: readonly RecallItem[] }>(
+  result: T,
+  undoneTurns: ReadonlySet<string>,
+): T {
+  if (undoneTurns.size === 0) return result;
+  let toccato = false;
+  const items = result.items.map((item) => {
+    if (item.kind !== 'episode' || item.role !== 'agent') return item;
+    if (item.turnId === undefined || !undoneTurns.has(item.turnId)) return item;
+    toccato = true;
+    return { ...item, source: `${item.source} · ${ANNULLATO}: l'effetto è stato rimesso indietro` };
+  });
+  return toccato ? { ...result, items } : result;
 }
 
 /**

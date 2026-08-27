@@ -249,6 +249,30 @@ export type UncertainCall = {
   startedAt: string;
 };
 
+/** Una chiamata conclusa di un turno che `muffin undo` ha toccato. */
+export type TurnUndoCall = {
+  readonly callId: string;
+  /** Serve al chiamante per sapere se questa chiamata aveva un effetto da rimettere indietro. */
+  readonly capability: string;
+  /** L'esito registrato, esattamente com'era: mai riscritto, mai una parafrasi. */
+  readonly content: string | null;
+};
+
+/**
+ * Quanto di un turno l'undo ha rimesso indietro, per `callId`.
+ *
+ * Le due liste sono la stessa domanda dalle due parti, e tenerle separate è il
+ * punto: un undo che riesce a metà ha entrambe non vuote, ed è il caso in cui
+ * dire «disfatto» al modello è **falso** sul file rimasto scritto. Un
+ * `Set<string>` di turni non poteva esprimerlo.
+ */
+export type TurnUndoExtent = {
+  /** Le chiamate segnate `undone_at`: quelle davvero tornate indietro. */
+  readonly undone: readonly TurnUndoCall[];
+  /** Le chiamate concluse che l'undo non ha toccato. */
+  readonly survived: readonly TurnUndoCall[];
+};
+
 /**
  * A turn that finished and whose answer cannot be shown to have arrived.
  *
@@ -938,7 +962,7 @@ export class TurnStore {
   }
 
   /**
-   * Quali di questi turni hanno almeno una chiamata annullata.
+   * Quali di questi turni hanno almeno una chiamata annullata — **e quali no**.
    *
    * Il lato lettura per la cronologia di **sessione**: una riga di sessione
    * porta il suo `traceId`, che è l'id del turno (`NewTurn.id`, «one identity,
@@ -947,18 +971,52 @@ export class TurnStore {
    * modellata su `taintForIds` riga per riga — inclusa la ragione per cui non è
    * uno statement preparato nel costruttore: il numero di placeholder dipende
    * dal chiamante.
+   *
+   * Restituisce le **righe**, non un insieme di id, e questa è la correzione
+   * che il judge di #186 ha misurato. Un `Set<string>` collassava la
+   * granularità per-`callId` che `markUndone`/`undoneCalls` tengono corretta:
+   * un undo riuscito a metà — una copia sparita dal journal, il comando esce 1
+   * e segna una chiamata su due — arrivava al modello come un undo totale, e
+   * la frase «i file che dice di aver toccato sono tornati com'erano prima»
+   * era **falsa** sul file rimasto scritto. Chi assembla il contesto ha bisogno
+   * del denominatore, non solo del fatto che qualcosa sia stato disfatto.
+   *
+   * Solo le chiamate **concluse** (`ended_at IS NOT NULL`): una chiamata che
+   * non ha mai risposto non ha lasciato niente da rimettere indietro, e
+   * contarla fra i superstiti direbbe «parziale» di un undo completo.
    */
-  undoneTurns(ids: readonly string[]): Set<string> {
+  undoneTurns(ids: readonly string[]): Map<string, TurnUndoExtent> {
     const unique = [...new Set(ids)];
-    if (unique.length === 0) return new Set();
+    if (unique.length === 0) return new Map();
     const placeholders = unique.map(() => '?').join(',');
     const rows = this.db
       .prepare(
-        `SELECT DISTINCT turn_id AS turnId FROM turn_tool_calls
-         WHERE undone_at IS NOT NULL AND turn_id IN (${placeholders})`,
+        `SELECT turn_id AS turnId, call_id AS callId, capability, content, undone_at AS undoneAt
+         FROM turn_tool_calls
+         WHERE ended_at IS NOT NULL AND turn_id IN (${placeholders})`,
       )
-      .all(...unique) as { turnId: string }[];
-    return new Set(rows.map((r) => r.turnId));
+      .all(...unique) as {
+      turnId: string;
+      callId: string;
+      capability: string;
+      content: string | null;
+      undoneAt: string | null;
+    }[];
+    const per = new Map<string, { undone: TurnUndoCall[]; survived: TurnUndoCall[] }>();
+    for (const r of rows) {
+      let entry = per.get(r.turnId);
+      if (entry === undefined) {
+        entry = { undone: [], survived: [] };
+        per.set(r.turnId, entry);
+      }
+      const call: TurnUndoCall = { callId: r.callId, capability: r.capability, content: r.content };
+      (r.undoneAt === null ? entry.survived : entry.undone).push(call);
+    }
+    // Un turno senza nemmeno una chiamata annullata non è «annullato in parte»:
+    // non è annullato, e non deve comparire qui. Il chiamante distingue «assente
+    // dalla mappa» da «presente con dei superstiti», che sono due frasi diverse.
+    for (const [turnId, entry] of per) if (entry.undone.length === 0) per.delete(turnId);
+    return per;
   }
 
   get(id: string): TurnRecord | null {

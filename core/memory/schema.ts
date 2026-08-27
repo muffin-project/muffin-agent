@@ -42,7 +42,21 @@ CREATE TABLE IF NOT EXISTS episodes (
   -- vault can be edited and a message can be withdrawn, and the old text should
   -- stop coming back in recall while remaining on record. This is that line: it
   -- retires an episode without pretending it never existed.
-  superseded_at TEXT
+  superseded_at TEXT,
+  -- Il turno che ha prodotto questa riga, quando c'è stato un turno.
+  --
+  -- Nullable e senza foreign key, perché le due tabelle stanno in due database
+  -- (muffin.db ha \`turns\`; la memoria è la stessa connessione oggi ma il
+  -- confine è dichiarato) e perché la maggior parte delle scritture di memoria
+  -- non viene da un turno: un import, il consolidatore, una nota del vault.
+  --
+  -- Esiste per una sola giunzione, ed è quella che mancava a D11: dopo
+  -- \`muffin undo\` il record del turno smetteva di dire «ho scritto», ma
+  -- l'episodio dell'agente — la **stessa frase**, indicizzata in FTS e pescata
+  -- dal recall del giro dopo — continuava ad arrivare al modello nudo, due
+  -- blocchi più in basso nella stessa \`ChatCall\`. Marcare la cronologia di
+  -- sessione e lasciare la memoria nuda è marcare una copia su due.
+  turn_id       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_tenant_time ON episodes(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_episodes_pending ON episodes(extraction_v, tenant_id);

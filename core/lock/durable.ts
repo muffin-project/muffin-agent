@@ -190,7 +190,25 @@ export function heldBy(
  */
 export function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  if (columns.some((c) => c.name === column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  } catch (error) {
+    // `PRAGMA` e `ALTER` sono due istruzioni, non una: due connessioni che
+    // aprono lo stesso file nello stesso momento leggono entrambe «manca», e la
+    // seconda `ALTER` fallisce con `duplicate column name`. Non è nuovo — ogni
+    // colonna aggiunta qui ha sempre avuto questa finestra — ma è diventato
+    // raggiungibile per davvero quando `muffin undo` ha cominciato ad aprire
+    // una seconda connessione mentre il gateway gira.
+    //
+    // La distinzione che conta: l'esito che si voleva **è già quello vero** —
+    // la colonna c'è. In `cli/undo.ts` l'eccezione era già assorbita e il
+    // comando degradava bene; in un costruttore di store no, e un `throw` da lì
+    // uccide il processo che stava solo aprendo il database. Ogni altro errore
+    // resta un errore: si riconosce il caso, non si ingoia la classe.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/duplicate column name/i.test(message)) throw error;
+  }
 }
 
 export type DurableLockSpec = {
