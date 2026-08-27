@@ -89,9 +89,22 @@ export function fence(label: string, body: string, note?: string, nonce_?: strin
  * essere *creduto* — ma questa funzione non dipende più da lui.
  */
 export function stripSentinels(body: string, label: string): string {
-  return body
-    // Apertura: due o più `<` anche separati da spazi, poi una parola-etichetta.
-    .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]*/g, `[${label.toLowerCase()}-marker rimosso]`)
-    // Chiusura: una parola-etichetta, poi due o più `>` anche separati da spazi.
-    .replace(/[A-Za-z][\w-]*\s*>(?:\s*>)+/g, `[${label.toLowerCase()}-marker rimosso]`);
+  const rimosso = `[${label.toLowerCase()}-marker rimosso]`;
+  const suo = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (
+    body
+      // **Qualunque** etichetta, ma solo nella forma vera di un marcatore:
+      // `nome_<esadecimale>`. Il primo tentativo era `[A-Za-z][\w-]*` senza
+      // l'esadecimale, e misurandolo su contenuto vero mangiava
+      // `std::vector<std::vector<int>>` e `if (a >> 2)` — cioè distruggeva
+      // proprio «studia questo documento di codice», una delle due skill che
+      // questa slice spedisce. Un recinto da chiudere per davvero porta sempre
+      // il nonce, quindi chiedere l'esadecimale non lascia passare l'attacco e
+      // lascia in pace il codice.
+      .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]*_[0-9a-f]{6,}/g, rimosso)
+      .replace(/[A-Za-z][\w-]*_[0-9a-f]{6,}\s*>(?:\s*>)+/g, rimosso)
+      // E il **proprio** marcatore anche senza nonce: un corpo che prova a
+      // chiudere questo recinto perde il tentativo pure quando tira a indovinare.
+      .replace(new RegExp(`<(?:\\s*<)+\\s*${suo}\\w*|${suo}\\w*\\s*>(?:\\s*>)+`, 'gi'), rimosso)
+  );
 }
