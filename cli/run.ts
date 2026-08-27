@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { runTurn, type TurnResult } from '../agent/loop.js';
+import { loadImage } from '../agent/images.js';
 import { paths } from '../core/config/config.js';
 
 /**
@@ -18,6 +19,8 @@ export type RunOptions = {
   sessionId?: string;
   timeoutSeconds?: number;
   home?: string;
+  /** Percorsi di immagini da mostrare al modello insieme all'obiettivo. */
+  images?: string[];
 };
 
 /** 0 answered · 1 error · 3 needs approval · 4 budget · 5 iteration cap · 6 suspended */
@@ -55,6 +58,22 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
     options.sessionId ?? `run-${new Date().toISOString().slice(0, 10)}-${randomBytes(3).toString('hex')}`,
   );
 
+  // Le immagini si caricano **prima** di aprire qualunque cosa verso il
+  // provider: un percorso sbagliato deve costare un messaggio, non un turno
+  // avviato a metà. Un fallimento qui ferma il comando invece di proseguire
+  // silenziosamente senza l'immagine — chiedere «cosa vedi in questa foto» e
+  // ricevere una risposta su nessuna foto è il fallimento peggiore dei due.
+  const images = [];
+  for (const percorso of options.images ?? []) {
+    const caricata = loadImage(percorso);
+    if (!caricata.ok) {
+      process.stderr.write(`immagine non usabile (${percorso}): ${caricata.why}\n`);
+      runtime.close();
+      return 1;
+    }
+    images.push(caricata.block);
+  }
+
   const controller = new AbortController();
   const timeout = options.timeoutSeconds
     ? setTimeout(() => controller.abort(), options.timeoutSeconds * 1000)
@@ -68,6 +87,7 @@ export async function runHeadless(options: RunOptions): Promise<RunExit> {
       surface: 'cli',
       session,
       text: options.goal,
+      ...(images.length > 0 ? { images } : {}),
       signal: controller.signal,
     });
   } catch (error) {

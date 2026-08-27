@@ -389,6 +389,15 @@ function toChatResult(response: {
   };
 }
 
+/**
+ * Il testo di un blocco, vuoto per tutto il resto.
+ *
+ * **Non e' la via delle immagini.** `toChatMessages` le raccoglie a parte e le
+ * manda come parti `image_url`; se un'immagine arrivasse qui verrebbe
+ * appiattita in stringa vuota e sparirebbe senza un errore — il modello
+ * risponderebbe lo stesso, su qualcosa che non ha visto. Il test
+ * `openai-compat` che conta le parti esiste per tenere chiusa questa strada.
+ */
 function flatten(block: ContentBlock): string {
   return block.type === 'text' ? block.text : '';
 }
@@ -406,6 +415,7 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
   const text = message.content.filter((b) => b.type === 'text').map(flatten).join('\n');
   const toolUses = message.content.filter((b) => b.type === 'tool_use');
   const toolResults = message.content.filter((b) => b.type === 'tool_result');
+  const immagini = message.content.filter((b) => b.type === 'image');
 
   if (message.role === 'assistant') {
     out.push({
@@ -421,6 +431,26 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
           }
         : {}),
     });
+  } else if (immagini.length > 0) {
+    // Con un'immagine il contenuto deve diventare un **array di parti**: la
+    // forma a stringa non ha uno slot per un'immagine, e mandare la stringa
+    // perderebbe l'immagine in silenzio — che e' peggio di un 400, perche' il
+    // modello risponderebbe comunque, su un'immagine che non ha mai visto.
+    //
+    // Il testo va **dopo**, non prima: Anthropic lo raccomanda esplicitamente
+    // («Claude works best when images come before text») e non costa niente
+    // farlo anche qui.
+    const parti: OpenAI.Chat.ChatCompletionContentPart[] = [
+      ...immagini.map((b) => ({
+        type: 'image_url' as const,
+        // Il data URL e' la forma che vuole questo lato del filo; `ImageBlock`
+        // tiene il base64 nudo perche' e' quella che vuole Anthropic, e
+        // avvolgere qui costa una riga mentre spacchettare costerebbe un parser.
+        image_url: { url: `data:${b.mediaType};base64,${b.data}` },
+      })),
+      ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
+    ];
+    out.push({ role: 'user', content: parti });
   } else if (text.length > 0) {
     out.push({ role: 'user', content: text });
   }
