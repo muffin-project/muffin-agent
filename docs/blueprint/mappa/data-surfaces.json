@@ -406,8 +406,8 @@
       },
       {
         "key": "provider.apiKeyRef",
-        "default": "secret://provider_api_key",
-        "where": "cli/init.ts:101"
+        "default": "secret://<provider>_api_key dal catalogo (openrouter_api_key); secret://provider_api_key fuori catalogo, o quando una chiave e' gia' registrata con quel nome",
+        "where": "cli/init.ts:163,185,203; core/config/providers.ts (apiKeyNameFor, apiKeyCandidates, LEGACY_API_KEY_NAME)"
       },
       {
         "key": "models.main",

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { paths } from './config.js';
 import { listConfigKnobs, type ConfigKnob } from './inventory.js';
+import { PROVIDERS } from './providers.js';
 
 /**
  * `muffin config`'s data layer: every knob, its value, where it lives, whether
@@ -96,7 +97,11 @@ describe('every knob the mandate names as a minimum shows up', () => {
     const knobs = listConfigKnobs(dir);
     const resolved = find(knobs, 'provider.apiKeyRef.resolved');
     expect(resolved?.value).toContain('home');
-    expect(resolved?.source).toBe(join(paths(dir).secrets, 'provider_api_key'));
+    // Il nome viene dal catalogo, non da una costante ripetuta qui: la fixture
+    // sopra dichiara OpenRouter, quindi la chiave si chiama come dice
+    // `PROVIDERS.openrouter.secretName`. Rileggerlo da lì e' cio' che fa
+    // fallire questo test se il catalogo e `init` smettono di essere d'accordo.
+    expect(resolved?.source).toBe(join(paths(dir).secrets, PROVIDERS.openrouter.secretName));
     expect(resolved?.sealed).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
