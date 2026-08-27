@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
+import { UndoJournal } from '../core/undo/journal.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import type { AttributeValue, SpanHandle, SpanName, Tracer } from '../core/tracing/types.js';
 import { runTurn, type LoopDeps, type RegisteredTool, type TurnDelta, type TurnEvent } from './loop.js';
@@ -574,6 +575,118 @@ describe('agent loop', () => {
     });
     await runTurn(d, input(store));
     expect(ran).toEqual([]);
+  });
+
+  describe('draft: la copia prima dell\'effetto', () => {
+    // Il ramo `draft` esiste perché il kernel distingue «fallo» da «fallo in
+    // modo che si possa disfare». Per un anno la distinzione non aveva
+    // implementazione e il loop rifiutava: `fs_write` era offerto al modello e
+    // non scriveva mai (M5-BIS D2/D3/D11). Questi test tengono ferma la forma
+    // che la sostituisce, e la sua unica frase: **un checkpoint che non si può
+    // prendere è un effetto che non deve avvenire.**
+    const undoable: CapabilityDecl[] = [
+      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+    ];
+    const kernelDraft = () =>
+      createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        budgetExhausted: () => false,
+        hardened: false,
+      });
+
+    function scrittore(
+      ran: string[],
+      target: string,
+      resolveEffectPath?: (args: Record<string, unknown>) => string,
+    ): RegisteredTool {
+      return {
+        capability: 'demo.draft',
+        spec: { name: 'demo_draft', description: 'd', inputSchema: { type: 'object', properties: {} } },
+        throwTier: 0,
+        ...(resolveEffectPath ? { resolveEffectPath } : {}),
+        handler: () => {
+          ran.push('demo_draft');
+          writeFileSync(target, 'dopo', 'utf8');
+          return { content: 'scritto', tier: 0 as const };
+        },
+      };
+    }
+
+    it('esegue, e la copia di prima è sul disco', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-draft-'));
+      const target = join(dir, 'nota.md');
+      writeFileSync(target, 'prima', 'utf8');
+      const journal = new UndoJournal(join(dir, 'undo'));
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_draft', { path: target }), answer('ok')], {
+        decide: kernelDraft(),
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        undo: journal,
+        tools: [scrittore(ran, target, () => target)],
+      });
+      await runTurn(d, input(store));
+
+      expect(ran).toEqual(['demo_draft']);
+      expect(readFileSync(target, 'utf8')).toBe('dopo');
+      // E il turno si disfà davvero: la copia non è un file lasciato lì per
+      // dire che il meccanismo esiste.
+      const turno = journal.turns()[0]!;
+      journal.restore(turno);
+      expect(readFileSync(target, 'utf8')).toBe('prima');
+    });
+
+    it('non esegue se la copia non si può prendere', async () => {
+      // La cucitura vera. Se questo test passasse anche col `take` che lancia,
+      // `draft` sarebbe tornato a essere `allow` con più commenti.
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-draft-'));
+      const target = join(dir, 'nota.md');
+      writeFileSync(target, 'prima', 'utf8');
+      const rotto = {
+        take: () => {
+          throw new Error('disco pieno');
+        },
+      } as unknown as UndoJournal;
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_draft', { path: target }), answer('ok')], {
+        decide: kernelDraft(),
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        undo: rotto,
+        tools: [scrittore(ran, target, () => target)],
+      });
+      await runTurn(d, input(store));
+
+      expect(ran).toEqual([]);
+      expect(readFileSync(target, 'utf8')).toBe('prima');
+      // E il modello riceve il motivo, non un rifiuto muto: «riprova» non è la
+      // mossa giusta quando il disco è pieno, e solo il testo lo dice.
+      const detto = JSON.stringify((d.provider as ScriptedProvider).seen);
+      expect(detto).toContain('disco pieno');
+      expect(detto).toContain('senza copia non si torna indietro');
+    });
+
+    it('non esegue un tool che non dice quale file toccherà', async () => {
+      // `resourceKind: 'path'` dice al kernel *quale argomento* è il percorso;
+      // non dice quale file finirà sul disco, perché il tool lo risolve contro
+      // uno scope che il loop non conosce. Fotografare l'argomento grezzo
+      // copierebbe un file relativo alla cwd del processo.
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-draft-'));
+      const target = join(dir, 'nota.md');
+      writeFileSync(target, 'prima', 'utf8');
+      const journal = new UndoJournal(join(dir, 'undo'));
+      const ran: string[] = [];
+      const { deps: d, store } = deps([callTool('demo_draft', { path: target }), answer('ok')], {
+        decide: kernelDraft(),
+        capabilities: new Map(undoable.map((c) => [c.id, c])),
+        undo: journal,
+        tools: [scrittore(ran, target)],
+      });
+      await runTurn(d, input(store));
+
+      expect(ran).toEqual([]);
+      expect(readFileSync(target, 'utf8')).toBe('prima');
+      expect(journal.turns()).toEqual([]);
+    });
   });
 
   it('refuses a policy verdict it does not recognise, instead of falling through to execution', async () => {
