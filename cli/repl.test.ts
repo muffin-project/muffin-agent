@@ -9,6 +9,7 @@ import {
   formatProgressLine,
   makeReplCliWrite,
   runRepl,
+  closingLine,
   statusFor,
   thinkingCommand,
   toolPhrase,
@@ -457,24 +458,24 @@ describe('formatProgressLine — modalità normale', () => {
 
   it('un passo finito resta, in italiano e senza millisecondi', () => {
     expect(formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false }, 'normale')).toBe(
-      '✓ cerco in memoria',
+      '  ✓ cerco in memoria',
     );
   });
 
   it('e un passo fallito si distingue dal segno, non dalla parola', () => {
     expect(formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale')).toBe(
-      '✗ scrivo un file',
+      '  ✗ scrivo un file',
     );
   });
 });
 
 describe('statusFor — solo chi apre un attesa', () => {
   it('il giro è «penso», perché è esattamente quello che sta succedendo', () => {
-    expect(statusFor({ type: 'round', n: 1 })).toBe('penso…');
+    expect(statusFor({ type: 'round', n: 1 })).toBe('  penso…');
   });
 
   it('un tool che parte dice cosa sta facendo, non come si chiama la funzione', () => {
-    expect(statusFor({ type: 'tool_start', name: 'web_search', capability: 'web.search' })).toBe('cerco sul web…');
+    expect(statusFor({ type: 'tool_start', name: 'web_search', capability: 'web.search' })).toBe('  cerco sul web…');
   });
 
   it('chi chiude non apre: model e tool_end non scrivono nessuna attesa', () => {
@@ -532,5 +533,37 @@ describe('/debug', () => {
     const out = debugCommand('forse', 'normale');
     expect(out.set).toBeUndefined();
     expect(out.line).toContain('/debug da solo');
+  });
+});
+
+/**
+ * Un turno deve avere una **fine visibile**: senza, due turni di fila sono un
+ * blocco solo — la stessa lamentela dell'owner sull'output dei comandi,
+ * applicata al REPL invece che alla shell.
+ */
+describe('closingLine', () => {
+  it('secondi, token e costo, rientrati come il resto della cornice', () => {
+    const l = closingLine({ inputTokens: 5487, outputTokens: 2 }, 4712, 0.0023);
+    expect(l).toBe('  4.7s · 5487→2 token · $0.0023');
+  });
+
+  /**
+   * Un costo che arrotonda a zero si scrive `<$0.0001`, mai `$0.0000`: il
+   * secondo dice «gratis», che è falso — e per un tetto di spesa è la bugia che
+   * conta, perché è quella che ti fa smettere di guardare.
+   */
+  it('un costo minuscolo non diventa mai zero', () => {
+    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, 0.00004)).toContain('<$0.0001');
+    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, 0.00004)).not.toContain('$0.0000');
+  });
+
+  /**
+   * `costUsd` risponde `null` per un modello locale, e `null` non è zero: si
+   * tace sul costo invece di dichiararne uno.
+   */
+  it('su un modello locale la voce del costo sparisce, invece di dire zero', () => {
+    const l = closingLine({ inputTokens: 10, outputTokens: 1 }, 800, null);
+    expect(l).not.toContain('$');
+    expect(l).toContain('token');
   });
 });

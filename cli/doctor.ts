@@ -13,6 +13,7 @@ import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { PLAIN, type Style } from './ui.js';
 import { askGateway } from '../core/gateway/control-socket.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
@@ -863,11 +864,23 @@ function report(checks: Check[]): DoctorReport {
   return { checks, exitCode: worst === 'fail' ? 2 : worst === 'warn' ? 1 : 0 };
 }
 
-export function formatReport(report: DoctorReport): string {
+export function formatReport(report: DoctorReport, style: Style = PLAIN): string {
   const glyph: Record<CheckLevel, string> = { ok: '✓', warn: '!', fail: '✗' };
+  const vesti: Record<CheckLevel, (s: string) => string> = {
+    ok: style.ok,
+    warn: style.warn,
+    fail: style.fail,
+  };
   const lines = report.checks.map((c) => {
-    const head = `${glyph[c.level]} ${c.name.padEnd(18)} ${c.detail}`;
-    return c.remedy ? `${head}\n  → ${c.remedy}` : head;
+    // Il segno prende il colore, **il nome prende il grassetto, il dettaglio
+    // resta nudo**: colorare anche il dettaglio farebbe venti righe verdi in cui
+    // trovare l'unica gialla e' di nuovo un lavoro dell'occhio. Quello che deve
+    // saltare fuori e' la colonna dei segni.
+    const head = `${vesti[c.level](glyph[c.level])} ${style.bold(c.name.padEnd(18))} ${c.detail}`;
+    // Il rimedio e' smorzato di proposito: e' la riga che leggi **dopo** aver
+    // deciso che quella sopra ti riguarda, e a piena intensita' raddoppia il
+    // rumore in un report dove la maggioranza dei check e' verde.
+    return c.remedy ? `${head}\n${style.dim(`  → ${c.remedy}`)}` : head;
   });
   return lines.join('\n');
 }
