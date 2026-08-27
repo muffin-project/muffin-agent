@@ -260,6 +260,28 @@ export type ToolOutcome = {
    * the compiler asks it where its bytes came from.
    */
   tier: TrustTier;
+  /**
+   * Questo fallimento vale la pena riprovarlo?
+   *
+   * Solo il tool lo sa. Un 429, un 503, una connessione caduta a metà sono
+   * transitori; «file non trovato», «schema non valido», «host non in
+   * allowlist» non lo saranno mai, e riprovarli è tempo speso a ottenere lo
+   * stesso errore tre volte.
+   *
+   * **Opzionale, dove `tier` è obbligatorio, e la differenza non è pigrizia.**
+   * `tier` è obbligatorio perché ogni tool *ha* una provenienza: non
+   * rispondere significa mentire su una cosa che si sa. La riprovabilità
+   * invece per la maggior parte dei fallimenti **non esiste**: un errore di
+   * validazione non è né transitorio né permanente-per-caso, è permanente per
+   * costruzione, e obbligare ogni tool a scrivere `retryable: false` su ogni
+   * ramo di errore produrrebbe rumore, non informazione. L'assenza qui ha un
+   * significato vero — «non ho motivo di credere che riprovare cambi
+   * qualcosa» — che l'assenza di `tier` non aveva.
+   *
+   * Da sola non basta: `runTool` riprova solo se **anche** la capability
+   * dichiara `rerunnable`, perché un effetto già partito non si ripete.
+   */
+  retryable?: boolean;
 };
 
 export type RegisteredTool = {
@@ -575,6 +597,15 @@ export type TurnEvent =
       stopReason: string;
     }
   | { type: 'tool_start'; name: string; capability: string }
+  /**
+   * Un tentativo transitorio è andato male e se ne fa un altro.
+   *
+   * Esiste perché un retry silenzioso è indistinguibile da uno stallo: chi
+   * guarda vede lo spinner fermo per il doppio del tempo e non sa se stia
+   * succedendo qualcosa. `attempt` è il numero del tentativo che sta per
+   * partire (2 = il primo ritentativo).
+   */
+  | { type: 'tool_retry'; name: string; attempt: number; inMs: number; why: string }
   | { type: 'tool_end'; name: string; ms: number; isError: boolean };
 
 export type TurnResult = {
@@ -2148,6 +2179,73 @@ function summarizeCallArgs(args: unknown): string | undefined {
   return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
 }
 
+/**
+ * Quante volte si riprova, oltre al primo tentativo.
+ *
+ * Due, come `MAX_TRANSPORT_RETRIES`, e per la stessa ragione: tre tentativi
+ * coprono il guasto transitorio vero (un 429 che passa, una connessione che
+ * cade una volta) senza trasformare un servizio giu' in un turno che non
+ * finisce piu'. Un tetto piu' alto sposta il costo su chi aspetta.
+ */
+const MAX_TOOL_RETRIES = 2;
+
+/** Attesa prima del tentativo `n` (n=2 e' il primo ritentativo): 400ms, poi 1200ms. */
+function attesaPrima(tentativo: number): number {
+  return 400 * 3 ** (tentativo - 2);
+}
+
+/**
+ * Il tool, riprovato quando il fallimento e' transitorio **e** ripeterlo e'
+ * sicuro.
+ *
+ * Due condizioni, ed entrambe servono davvero:
+ *
+ * 1. `outcome.retryable === true` — il tool ha dichiarato che *questo*
+ *    fallimento e' transitorio. Senza, si riprova un «file non trovato» tre
+ *    volte per ottenere tre volte lo stesso errore.
+ * 2. la capability dichiara **`rerunnable`** — rieseguire non raddoppia un
+ *    effetto. E' la stessa dichiarazione che il ripristino dopo un crash gia'
+ *    usa per decidere se una chiamata «forse fatta» si puo' rifare, e la
+ *    domanda e' identica: quel campo esiste esattamente per questo.
+ *
+ * **Un `throw` non si riprova mai.** Un'eccezione non dichiara niente sulla
+ * propria transitorieta', e riprovarla vorrebbe dire indovinare — nella
+ * direzione in cui un handler morto a meta' di un effetto lo rifa'. Chi sa
+ * distinguere un guasto di rete da un errore di programmazione e' il tool, e lo
+ * dice tornando un outcome, non lanciando.
+ *
+ * L'Effect WAL non cambia: l'intento e' gia' scritto per questa `call.id`, e
+ * dice «forse fatta». `rerunnable` e' precisamente cio' che rende quel «forse»
+ * innocuo, quindi i tentativi vivono dentro un intento solo.
+ *
+ * L'attesa passa da `sleep(ms, signal)`, la stessa del retry di trasporto: un
+ * ritentativo che ignora l'abort e' un Ctrl-C che sembra rotto.
+ */
+async function eseguiConRitentativi(
+  tool: RegisteredTool,
+  args: unknown,
+  ctx: ToolContext,
+  rerunnable: boolean,
+  nome: string,
+  onProgress: ((event: TurnEvent) => void) | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ToolOutcome> {
+  let outcome = await tool.handler(args, ctx);
+  for (let tentativo = 2; tentativo <= MAX_TOOL_RETRIES + 1; tentativo += 1) {
+    if (outcome.isError !== true || outcome.retryable !== true || !rerunnable) return outcome;
+    // Un turno abbandonato non guadagna niente da un altro tentativo.
+    if (signal?.aborted === true) return outcome;
+    const inMs = attesaPrima(tentativo);
+    // Annunciato **prima** dell'attesa: un retry dichiarato quando e' gia'
+    // finito non serve a chi sta guardando lo spinner fermo, ed e' per quello
+    // che l'evento esiste.
+    onProgress?.({ type: 'tool_retry', name: nome, attempt: tentativo, inMs, why: outcome.content });
+    await sleep(inMs, signal);
+    outcome = await tool.handler(args, ctx);
+  }
+  return outcome;
+}
+
 async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -2413,9 +2511,14 @@ async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
-    const outcome = await tool.handler(
+    const outcome = await eseguiConRitentativi(
+      tool,
       args,
       risolto === undefined ? ctx : { ...ctx, effectPath: risolto },
+      decl?.rerunnable === true,
+      call.name,
+      input.onProgress,
+      input.signal,
     );
     // Unconditional. The `!== undefined` guard that used to stand here was the
     // whole defect: it turned "this tool said nothing about provenance" into

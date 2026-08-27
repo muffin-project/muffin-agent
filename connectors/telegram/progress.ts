@@ -280,6 +280,10 @@ function activityFor(event: TurnEvent): string {
       return event.stopReason === 'tool_use' ? 'ho deciso i prossimi passi' : 'sto scrivendo la risposta';
     case 'tool_start':
       return `sto usando ${event.name}`;
+    case 'tool_retry':
+      // Stessa ragione della riga nel REPL: senza, la barra resta ferma per il
+      // doppio del tempo e non dice perche'.
+      return `${event.name} non ha risposto, riprovo (${event.attempt}/3)`;
     case 'tool_end':
       // Same wording `cli/repl.ts`'s `formatProgressLine` already uses for this
       // event — one owner reading both surfaces should not learn two words for
