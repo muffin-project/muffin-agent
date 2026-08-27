@@ -515,13 +515,39 @@ async function cmdInit(argv: string[]): Promise<number> {
   // o approvazioni. Fail closed, e il messaggio nomina **solo la variabile**:
   // mai il valore, mai la lunghezza, mai un prefisso.
   if (process.env['MUFFIN_API_KEY'] !== undefined) {
+    /**
+     * Si rifiuta **la sorgente**, non il comando.
+     *
+     * La distinzione e' stata misurata sull'installazione dell'owner il
+     * 27/08: la chiave era gia' registrata e valida — `doctor` diceva `✓ api
+     * key secret://provider_api_key (persistent), 73 chars` — la variabile
+     * d'ambiente era un residuo che non c'entrava con l'operazione richiesta, e
+     * `init` si e' rifiutato di fare **qualunque cosa**, uscendo 78.
+     *
+     * Fail-closed sulla sorgente resta intero: quel valore non viene letto ne'
+     * qui ne' altrove, ed e' l'unica cosa che la decisione dell'owner del 18/08
+     * chiedeva. Rifiutare anche il comando non aggiungeva nessuna garanzia —
+     * aggiungeva un'installazione che non si puo' riparare finche' qualcuno non
+     * si ricorda di una variabile esportata mesi prima.
+     *
+     * L'avvertimento resta forte e resta primo, perche' una variabile
+     * d'ambiente con dentro una chiave e' comunque una chiave da ruotare.
+     */
+    const gia = locateSecret('secret://provider_api_key', values.local === undefined ? paths().home : home);
     process.stderr.write(
       `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
-        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
-        `  Oppure passala a init:  echo -n "$KEY" | muffin init\n` +
-        `  Poi togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
+        `  Togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
     );
-    return 78;
+    if (gia === null) {
+      process.stderr.write(
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+          `  Oppure passala a init:  echo -n "$KEY" | muffin init\n`,
+      );
+      return 78;
+    }
+    // Una chiave registrata c'e' gia': il comando non ha bisogno di quella
+    // variabile per fare il suo lavoro, e fermarsi qui non protegge niente.
+    process.stderr.write(`  (una chiave registrata c'e' gia' in ${gia.path} — proseguo senza guardare la variabile)\n`);
   }
   // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
   // `secret set` usa da sempre.
