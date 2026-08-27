@@ -26,7 +26,7 @@
   },
   "agent/loop.test.ts:527": {
     "path": "agent/loop.test.ts",
-    "line": 527,
+    "line": 540,
     "testo": "// And a no is a no: the tool does not run, and the model is told not to push."
   },
   "agent/loop.ts:102": {
