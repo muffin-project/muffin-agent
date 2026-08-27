@@ -1232,3 +1232,36 @@ describe("l'estrazione ha il suo span, come il giudice", () => {
     for (const r of provider.requests) expect(r.maxOutputTokens).toBeGreaterThan(1500);
   });
 });
+
+/**
+ * Una perdita parziale che nessuno vede è una perdita silenziosa.
+ *
+ * Da quando i candidati si validano uno per uno (`extract.ts`), un episodio può
+ * essere marcato come fatto **avendo scartato** qualche fatto per strada. È il
+ * miglioramento che si porta dietro il proprio rischio: prima l'episodio
+ * tornava per sempre e almeno si vedeva; adesso passa, e se la riga non lo dice
+ * la differenza fra «tre fatti» e «tre fatti su cinque» non esiste da nessuna
+ * parte.
+ */
+describe('un episodio marcato dice anche cosa ha perso per strada', () => {
+  it('registra i candidati fuori schema, col campo, e tiene gli altri', async () => {
+    const { store, deps } = harness([
+      JSON.stringify({
+        facts: [
+          fact('owner', 'works_as', 'freelancer'),
+          { subject: 'x', predicate: 'y' },
+          fact('owner', 'lives_in', 'Roma'),
+        ],
+      }),
+    ]);
+    episode(store, 'faccio il freelance a Roma');
+    const report: IngestReport = await ingestPending(deps, HOST);
+
+    expect(report.factsAdded).toBe(2);
+    const line = report.errors.find((e) => e.includes('fuori schema'));
+    expect(line).toBeDefined();
+    expect(line).toContain('1 candidati fuori schema');
+    // E l'episodio è marcato: due fatti sono passati, quindi non deve tornare.
+    expect((await ingestPending(deps, HOST)).episodes).toBe(0);
+  });
+});
