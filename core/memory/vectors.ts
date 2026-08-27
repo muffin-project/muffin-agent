@@ -29,6 +29,61 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_tenant ON chunks(tenant_id, source_kind);
 `;
 
+/**
+ * Le due metà del backlog: episodi vivi e fatti non scaduti che non hanno
+ * ancora un vettore **per l'embedder di adesso**.
+ *
+ * Una funzione e non due query copiate, perché i suoi due lettori devono per
+ * forza rispondere alla stessa domanda: `indexBacklog` la usa per decidere cosa
+ * embeddare, `quantiNonIndicizzati` per decidere se `doctor` può dire «in
+ * sync». Il giorno in cui divergono, `doctor` torna verde su una memoria a
+ * metà — che è il difetto da cui nasce l'intera slice.
+ *
+ * Il tenant si interpola invece di legarsi: la clausola deve **sparire** dalla
+ * query globale, non diventare un `:tenant IS NULL OR …` che cambia il piano
+ * anche sul percorso caldo.
+ */
+function sqlBacklog(perTenant: boolean): string {
+  const e = perTenant ? 'e.tenant_id = :tenant AND ' : '';
+  const f = perTenant ? 'f.tenant_id = :tenant AND ' : '';
+  return `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
+           FROM episodes e
+          WHERE ${e}e.content IS NOT NULL AND trim(e.content) <> ''
+            AND e.superseded_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
+                               AND c.source_id = e.id AND c.embedding_v = :ev)
+         UNION ALL
+         SELECT 'fact' AS kind, f.id AS sourceId,
+                s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
+           FROM facts f
+           JOIN entities s ON s.id = f.subject_id
+           LEFT JOIN entities o ON o.id = f.object_id
+          WHERE ${f}f.expired_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
+                               AND c.source_id = f.id AND c.embedding_v = :ev)`;
+}
+
+/**
+ * Quante sorgenti, in tutti i tenant, aspettano ancora un vettore.
+ *
+ * Esiste per `doctor`, e sta **fuori** dalla classe di proposito: costruire un
+ * `VectorIndex` esegue il costruttore, e il costruttore può fare DROP+DELETE.
+ * Un check di salute non deve poter cancellare l'indice che sta misurando.
+ *
+ * Serve perché contare `chunks` contro `chunks_vec` non è la stessa domanda.
+ * Misurato: 250 episodi, cambio di `dimensions`, un giro di backlog ne scrive
+ * 200 (`limit = 200`) — e `doctor` diceva «200 chunks, 200 vectors, in sync»
+ * con **50 episodi** che il recall semantico non vedeva. Cioè, alla lettera, il
+ * «55 chunks, 55 vectors, in sync: vero e fuorviante» da cui nasce la slice,
+ * riprodotto dalla manopola nuova come stato normale del dopo-cambio.
+ */
+export function quantiNonIndicizzati(db: Database.Database, embedderId: string): number {
+  const row = db.prepare(`SELECT count(*) AS n FROM (${sqlBacklog(false)})`).get({ ev: embedderId });
+  return (row as { n: number }).n;
+}
+
 export class VectorIndex {
   private readonly dimensions: number;
 
@@ -307,28 +362,11 @@ export class VectorIndex {
   }
 
   indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
-    return this.db
-      .prepare(
-        `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
-           FROM episodes e
-          WHERE e.tenant_id = :tenant AND e.content IS NOT NULL AND trim(e.content) <> ''
-            AND e.superseded_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM chunks c
-                             WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
-                               AND c.source_id = e.id AND c.embedding_v = :ev)
-         UNION ALL
-         SELECT 'fact' AS kind, f.id AS sourceId,
-                s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
-           FROM facts f
-           JOIN entities s ON s.id = f.subject_id
-           LEFT JOIN entities o ON o.id = f.object_id
-          WHERE f.tenant_id = :tenant AND f.expired_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM chunks c
-                             WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
-                               AND c.source_id = f.id AND c.embedding_v = :ev)
-         LIMIT :limit`,
-      )
-      .all({ tenant: tenantId, ev: this.embedder.id, limit }) as {
+    return this.db.prepare(`${sqlBacklog(true)} LIMIT :limit`).all({
+      tenant: tenantId,
+      ev: this.embedder.id,
+      limit,
+    }) as {
       kind: ChunkSource;
       sourceId: number;
       text: string;
