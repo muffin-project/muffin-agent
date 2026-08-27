@@ -70,15 +70,21 @@ describe('acceptance · D · capability e sicurezza', () => {
   scenario(
     'D2',
     async () => {
+      // La domanda della riga è «modifica file reali **in sicurezza**?», e per
+      // un anno questo scenario ha provato la metà sbagliata: asseriva che il
+      // file NON atterrasse. Era vero — `draft` non aveva implementazione e
+      // `fs_write` non scriveva a nessun taint — ma un rifiuto totale non è
+      // sicurezza, è assenza della capability. Le due metà della domanda vera
+      // sono: il file c'è, e si può tornare indietro.
       const inst = await install({
         main: [
-          { tool: { name: 'fs_write', args: { path: 'nuovo.txt', content: 'contenuto che non dovrebbe mai atterrare' } } },
-          { text: 'capito, non posso scrivere il file adesso' },
+          { tool: { name: 'fs_write', args: { path: 'nuovo.txt', content: 'ciao' } } },
+          { text: 'fatto, ho scritto nuovo.txt' },
         ],
       });
       try {
         const r = await inst.muffin(['run', '--timeout', '20', 'scrivi "ciao" in nuovo.txt']);
-        if (r.code !== 0) throw new Error(`il turno non completa (dovrebbe: il rifiuto è un tool result, non un crash): exit ${r.code}\n${r.err}`);
+        if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
 
         const call = inst.provider.main()[0];
         if (!call) throw new Error('il modello non è mai stato chiamato');
@@ -86,17 +92,22 @@ describe('acceptance · D · capability e sicurezza', () => {
           throw new Error(`fs_write non era nemmeno nella lista tool offerta al modello: ${call.tools.join(', ')}`);
         }
 
-        // The file must not exist — a refusal that quietly wrote anyway would
-        // be worse than the loud one this asserts.
-        if (existsSync(join(inst.workspace, 'nuovo.txt'))) {
-          throw new Error('nuovo.txt esiste sul disco nonostante il rifiuto atteso');
+        const file = join(inst.workspace, 'nuovo.txt');
+        if (!existsSync(file)) throw new Error('nuovo.txt non esiste: fs_write non ha scritto');
+        if (readFileSync(file, 'utf8') !== 'ciao') {
+          throw new Error(`nuovo.txt ha il contenuto sbagliato: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
         }
 
-        // The turn's own reply has to say so, not swallow the refusal into a
-        // generic "fatto".
-        if (!r.out.includes('non posso scrivere')) {
-          throw new Error(`la risposta finale non riflette il rifiuto onesto: ${JSON.stringify(r.out)}`);
+        // E la seconda metà, senza la quale la prima è solo una scrittura: la
+        // copia esiste e `muffin undo` la usa. Il file non c'era prima del
+        // turno, quindi tornare indietro vuol dire toglierlo.
+        const lista = await inst.muffin(['undo']);
+        if (!lista.out.includes('nuovo.txt')) {
+          throw new Error(`il registro di undo non conosce nuovo.txt: ${JSON.stringify(lista.out)}`);
         }
+        const disfa = await inst.muffin(['undo', '--last', '--yes']);
+        if (disfa.code !== 0) throw new Error(`muffin undo esce ${disfa.code}: ${disfa.err}`);
+        if (existsSync(file)) throw new Error('nuovo.txt esiste ancora dopo muffin undo');
       } finally {
         await inst.cleanup();
       }
@@ -107,19 +118,41 @@ describe('acceptance · D · capability e sicurezza', () => {
   scenario(
     'D3',
     async () => {
-      const inst = await install({ main: [{ text: 'mai chiamato' }] });
+      // La modifica, non la creazione: D2 copre il file che non c'era, dove
+      // disfare vuol dire togliere. Qui il file c'era, e disfare vuol dire
+      // rimettere i byte di prima — il caso in cui una copia mancante o presa
+      // dal file sbagliato non si vede finché non si chiede indietro.
+      const inst = await install({
+        main: [
+          { tool: { name: 'fs_write', args: { path: 'nota.md', content: 'dopo' } } },
+          { text: 'fatto' },
+        ],
+      });
       try {
-        // No scenario needs to first produce a modification: there is nothing
-        // to undo *because nothing can be modified yet* (D2), so the desired
-        // property to assert is the plainest possible reading of "posso
-        // recuperare una modifica" — a command that does it exists at all.
-        const undo = await inst.muffin(['undo']);
-        if (undo.code === 78 && /comando sconosciuto/.test(undo.err)) {
-          throw new Error(`\`muffin undo\` non esiste ancora — nessun registro da cui recuperare una modifica`);
+        const file = join(inst.workspace, 'nota.md');
+        writeFileSync(file, 'prima', 'utf8');
+
+        const r = await inst.muffin(['run', '--timeout', '20', 'riscrivi nota.md']);
+        if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
+        if (readFileSync(file, 'utf8') !== 'dopo') {
+          throw new Error(`fs_write non ha scritto: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
         }
-        // If it stops being an unknown command, something now handles it —
-        // whatever that turns out to look like, this scenario's job was only
-        // to notice the day it does.
+
+        // Senza --yes non tocca niente: l'undo sovrascrive, e sovrascrivere
+        // senza conferma è il difetto da cui l'undo esiste per proteggere.
+        const prova = await inst.muffin(['undo', '--last']);
+        if (readFileSync(file, 'utf8') !== 'dopo') {
+          throw new Error('`muffin undo` senza --yes ha toccato il file');
+        }
+        if (!prova.out.includes('--yes')) {
+          throw new Error(`la prova a vuoto non dice come procedere: ${JSON.stringify(prova.out)}`);
+        }
+
+        const disfa = await inst.muffin(['undo', '--last', '--yes']);
+        if (disfa.code !== 0) throw new Error(`muffin undo esce ${disfa.code}: ${disfa.err}`);
+        if (readFileSync(file, 'utf8') !== 'prima') {
+          throw new Error(`il file non è tornato com'era: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
+        }
       } finally {
         await inst.cleanup();
       }

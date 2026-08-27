@@ -15,6 +15,7 @@ import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
 import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import { UndoJournal } from '../core/undo/journal.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -725,6 +726,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // The declarations, so the loop derives the policy resource from
       // resourceKind/policyArgs instead of guessing at argument names.
       capabilities,
+      // Il registro di undo: senza questa riga `fs_write` è offerto al modello e
+      // non scrive mai, perché il kernel giudica `draft` e `draft` senza copia
+      // rifiuta (M5-BIS D2/D3/D11). Il difetto era esattamente qui — un verdetto
+      // del kernel senza implementazione a valle — quindi la cucitura ha un test
+      // suo in `runtime.test.ts`, non solo il ramo nel loop.
+      undo: new UndoJournal(p.undo),
       tracer,
       sessions: new SessionStore(home),
       // On the same connection as everything else, for ADR-0022's reason: one

@@ -178,6 +178,15 @@ export const paths = (home = muffinHome()) => ({
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),
   secrets: join(home, 'secrets'),
+  /**
+   * Le copie prese prima di una mutazione, una directory per turno.
+   *
+   * Decisione owner del 16/08 (M5-BIS §1, via B): il journal vive nel
+   * filesystem sotto `~/.muffin/`, non in una tabella. Costa una migrazione in
+   * meno su un database che sta gia accumulando dati veri, e la forma e
+   * ispezionabile con `ls` il giorno che qualcosa va storto.
+   */
+  undo: join(home, 'undo'),
 });
 
 /**
