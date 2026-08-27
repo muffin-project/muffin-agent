@@ -194,6 +194,28 @@ function globMatch(pattern: string, value: string): boolean {
 }
 
 /** The effective ceiling: the profile can lower it, never raise it. */
+/**
+ * Il profilo del modello, con la scelta dell'installazione sopra.
+ *
+ * Una funzione e non un `??` sparso: i posti che scelgono un profilo sono più
+ * di uno (`agent/runtime.ts` ne sceglie due, main e light) e solo **uno** deve
+ * ricevere l'override — la corsia di conversazione. Scritto qui, accanto a
+ * `selectProfile`, perché la domanda «quale profilo vale davvero» ha una
+ * risposta sola e questo file è dove sta.
+ *
+ * Copia **sempre**, anche quando non c'è niente da sovrascrivere, e questa è la
+ * riga che conta: `loadProfiles` restituisce un oggetto per profilo, e su questa
+ * installazione main e light matchano lo stesso glob (`*qwen3*`), quindi sono
+ * lo **stesso** oggetto. Restituire l'originale quando l'override è assente
+ * darebbe alla corsia principale un profilo condiviso, e la mutazione di
+ * `/think` spegnerebbe il reasoning anche alla corsia della memoria — per
+ * riferimento, in silenzio, solo quando i due modelli sono della stessa
+ * famiglia. Un ramo che sbaglia solo a volte è peggio di uno che sbaglia sempre.
+ */
+export function withThinking(profile: Profile, override?: Profile['thinking']): Profile {
+  return override === undefined ? { ...profile } : { ...profile, thinking: override };
+}
+
 export function iterationCap(profile: Profile): number {
   return Math.min(profile.maxToolCallsPerTurn, MAX_ITERATIONS_HARD_CAP);
 }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
+import { cmdUndo } from './undo.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
@@ -83,6 +84,8 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
                                 comparire mentre si forma, o solo a fine
                                 turno (di default: sì su un terminale reale,
                                 mai su una pipe)
+                                [--debug] giri, token, millisecondi e stop
+                                reason invece dei soli passi (a caldo: /debug)
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -96,6 +99,11 @@ comandi operatore:
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
+  muffin undo [<turno>|--last] [--yes]
+                                i file che Muffin ha scritto tornano com'erano
+                                prima di quel turno; senza --yes stampa cosa
+                                farebbe. Lo stato attuale viene messo da parte,
+                                quindi l'undo si disfà a sua volta.
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le
                                 migrazioni
@@ -156,6 +164,7 @@ const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   memoria: 'memory',
   lavori: 'jobs',
   segreto: 'secret',
+  annulla: 'undo',
 };
 
 /**
@@ -234,7 +243,11 @@ async function main(rawArgv: string[]): Promise<number> {
   // is the same whether they ride with a bare `muffin` (`command` ends up
   // `undefined`, not the flag string) or with `muffin repl`.
   const stream = streamOverride(rawArgv);
-  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream');
+  // `--debug` come `--stream`: tolto qui e non parsato per-ramo, così vale sia
+  // per il `muffin` nudo (dove `command` resta `undefined` invece di diventare
+  // la stringa del flag) sia per `muffin repl`.
+  const debug = rawArgv.includes('--debug');
+  const argv = rawArgv.filter((a) => a !== '--no-stream' && a !== '--stream' && a !== '--debug');
   const [typed, ...rest] = argv;
   // Resolved once, here, so every branch below — including the error path —
   // only ever sees canonical command names. `typed` itself is undefined for a
@@ -244,7 +257,7 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'run':
       return cmdRun(rest);
     case 'repl':
-      return runRepl(paths().home, stream !== undefined ? { stream } : {});
+      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
     case 'init':
       return cmdInit(rest);
     case 'config':
@@ -281,12 +294,14 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdSecret(rest);
     case 'trace':
       return cmdTrace(rest);
+    case 'undo':
+      return cmdUndo(rest);
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
       // stack trace the user cannot act on.
       if (!existsSync(paths().config)) return firstRun();
-      return runRepl(paths().home, stream !== undefined ? { stream } : {});
+      return runRepl(paths().home, { ...(stream !== undefined ? { stream } : {}), ...(debug ? { debug } : {}) });
     }
     case '--help':
     case '-h':

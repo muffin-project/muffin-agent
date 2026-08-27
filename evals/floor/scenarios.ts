@@ -49,6 +49,31 @@ function padding(lines: number, tag: string): string {
   ).join('\n');
 }
 
+/**
+ * Decoy generati, per riempire una superficie fino a una misura data.
+ *
+ * Serve a una domanda che i sei scenari non pongono: **dove** si rompe la
+ * scelta del tool. `maxToolsExposed` è passato da 10 a 14 il 27/08 su
+ * decisione dell'owner, e nessuno dei due numeri ha mai avuto una misura
+ * dietro — 10 era «the floor the harness is designed against», cioè un
+ * obiettivo di disegno, non un punto misurato di degrado.
+ *
+ * I nomi sono plausibili di proposito: dei `tool_01…tool_20` sarebbero
+ * scartabili a occhio, e misurerebbero la capacità di ignorare rumore ovvio
+ * invece della scelta fra alternative credibili — che è il caso vero.
+ */
+export function crowdTools(n: number): RegisteredTool[] {
+  const nomi = [
+    'note_append', 'clipboard_read', 'screen_capture', 'battery_status',
+    'wifi_list', 'volume_set', 'brightness_set', 'locale_get',
+    'disk_free', 'uptime_read', 'font_list', 'printer_status',
+    'bluetooth_list', 'camera_list', 'mic_level', 'idle_time',
+    'window_list', 'app_list', 'dns_lookup', 'route_table',
+  ];
+  if (n > nomi.length) throw new Error(`padding massimo ${nomi.length}, chiesti ${n}`);
+  return decoyTools(nomi.slice(0, n));
+}
+
 /** Tools that exist only to crowd the surface, and must not be called. */
 function decoyTools(names: string[]): RegisteredTool[] {
   return names.map((name) => ({

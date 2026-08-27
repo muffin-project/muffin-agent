@@ -267,7 +267,7 @@
       {
         "n": 6,
         "stage": "livello 1 nel system prompt",
-        "file": "core/skills/skills.ts:124-132, agent/runtime.ts:497",
+        "file": "core/skills/skills.ts:143-158, agent/runtime.ts:614",
         "what": "skillsPromptSection produce '## Skill disponibili' con una riga 'nome — descrizione' per skill, piu' l'istruzione di leggerla con skill_read; e' l'unico contenuto sempre in context (~100 token/skill)."
       },
       {
@@ -289,9 +289,9 @@
         "what": "Ritorna {content, tier:1} — non fenced, perche' sono istruzioni owner-installate/auditate — e questo alza il taint del turno come farebbe un fatto detto dall'owner."
       }
     ],
-    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:345-346,488; core/skills/skills.ts:59-117). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:124-132, agganciato in agent/runtime.ts:534) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:33-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:70-113). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:114-121).",
+    "whatHappensWhenOneRuns": "All'avvio, discoverSkills scansiona ~/.muffin/skills/*/SKILL.md, valida il frontmatter (YAML + zod) e scarta ogni skill che non combacia, riportando il motivo nelle bootLines stampate a schermo (agent/runtime.ts:439-440; core/skills/skills.ts:60-131). Le skill valide entrano nel system prompt solo come una riga 'nome — descrizione' sotto '## Skill disponibili' (core/skills/skills.ts:143-158, agganciato in agent/runtime.ts:614; il nonce del recinto e' per-installazione, core/skills/nonce.ts, o il prompt cambierebbe a ogni processo) — e' tutto cio' che il modello vede finche' non decide di attivarne una. Quando la usa, il modello chiama il tool skill_read con il nome (agent/tools/skill.ts:33-45); l'handler risolve il percorso dentro la directory della skill, blocca ogni fuga via symlink con un doppio realpath, e legge SKILL.md o un file bundle esplicitamente richiesto fino a 512KB (skill.ts:70-113). Il contenuto torna nel turno con tier:1, non fenced — a differenza di un risultato MCP che e' tier 3 e fenced — perche' sono istruzioni owner-audited, e questo alza comunque il taint del turno esattamente come un fatto owner-detto, il che e' cio' che impedisce a un turno che ha appena letto una skill di sbloccare sys.shell in hardened mode senza chiedere (skill.ts:114-121).",
     "taint": "tier 1, non fenced (owner-installed/owner-audited) — a differenza dei risultati MCP che sono tier 3 e fenced di default. file: agent/tools/skill.ts:114-121.",
-    "installed": []
+    "installed": ["collega-telegram", "studia-un-documento"]
   },
   "mcp": {
     "attach": {

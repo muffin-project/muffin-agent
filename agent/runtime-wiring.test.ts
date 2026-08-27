@@ -1,9 +1,12 @@
+import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths, secretDir } from '../core/config/config.js';
+import { UndoJournal } from '../core/undo/journal.js';
+import { cmdUndo } from '../cli/undo.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
 import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
@@ -521,4 +524,115 @@ describe('sys_inspect legge le fonti vere, non le sue', () => {
       runtime.close();
     }
   }, 30_000);
+});
+
+describe('un turno vero scrive un file vero, e si disfa', () => {
+  /**
+   * La riga D2 di M5-BIS, provata dove poteva nascondersi.
+   *
+   * `fs_write` è `medium` + `undoable`, quindi il kernel risponde `draft`, e
+   * `draft` senza registro di undo rifiuta. Finché `buildRuntime` non passa il
+   * journal, **`fs_write` è offerto al modello e non scrive mai** — e ogni test
+   * unitario del repo resta verde, perché il rifiuto è ordinato e dichiarato.
+   * È la stessa forma dei due `describe` qui sopra: una riga di cablaggio la
+   * cui assenza è un'interruzione totale che nessuno nota.
+   *
+   * Per questo il test non finisce alla scrittura. Un journal che salva copie
+   * che nessuno rimette a posto è il difetto di partenza con un altro nome, e
+   * l'unico modo di vederlo è chiedere indietro il file.
+   */
+  const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
+
+  const writeCall = (path: string, content: string): ChatResult => ({
+    text: null,
+    toolCalls: [{ id: 'w1', name: 'fs_write', args: { path, content } }],
+    stopReason: 'tool_use',
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    model: 't',
+  });
+
+  it('scrive davvero, e `muffin undo` rimette il file com\'era', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const deps: LoopDeps = {
+      ...runtime.deps,
+      provider: new Scripted([writeCall('nota.md', 'dopo')]),
+    };
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u1'), text: 'scrivi nota.md',
+    });
+
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    // E il registro sa cosa c'era prima. `--yes` perché l'undo sovrascrive.
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0];
+    expect(turno).toBeDefined();
+    expect(cmdUndo([turno!, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    runtime.close();
+  });
+
+  it('senza journal il file non viene toccato — il verso giusto in cui degradare', async () => {
+    // La metà che rende il test sopra una prova invece di una tautologia: se
+    // togliere il journal lasciasse la scrittura avvenire, il ramo `draft`
+    // sarebbe `allow` con più righe di commento.
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const { undo: _tolto, ...senzaJournal } = runtime.deps;
+    const deps: LoopDeps = { ...senzaJournal, provider: new Scripted([writeCall('nota.md', 'dopo')]) };
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u2'), text: 'scrivi nota.md',
+    });
+
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+    runtime.close();
+  });
+});
+
+/**
+ * L'embedder configurato arriva alla tabella vettoriale.
+ *
+ * La cucitura, e la lezione che si ripete: `makeEmbedder` era coperto da cinque
+ * test suoi, `VectorIndex` da quattro, e sostituire `config.embedder` con
+ * `undefined` in `runtime.ts` lasciava **356 test verdi**. Cioè la manopola
+ * poteva essere morta in produzione — su una VPS senza Ollama, esattamente il
+ * caso per cui esiste — e nessuna suite se ne accorgeva.
+ *
+ * La prova non è che `makeEmbedder` viene chiamato: è che la **dimensione
+ * scelta nella config finisce cotta nel DDL della tabella su disco**, che è il
+ * punto dove la scelta smette di essere una preferenza e diventa un fatto
+ * durevole.
+ */
+describe('l\'embedder della config raggiunge la tabella vettoriale', () => {
+  it('la dimensione scelta finisce nel DDL di chunks_vec, non quella di default', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-embedder-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const configPath = paths(home).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    // `ollama` e non `openai-compat` di proposito: prova la stessa cucitura
+    // senza far passare nessun segreto per un test.
+    config.embedder = { kind: 'ollama', model: 'un-modello-inventato', dimensions: 7 };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-embedder-ws-')));
+
+    const db = new DatabaseCtor(paths(home).db, { readonly: true });
+    try {
+      const ddl = (db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'`).get() as { sql: string }).sql;
+      expect(ddl).toContain('float[7]');
+      expect(ddl).not.toContain('float[1024]');
+    } finally {
+      db.close();
+    }
+  });
 });

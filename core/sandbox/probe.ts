@@ -246,6 +246,20 @@ const ALLOW_ARGV = ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent',
  * above: the probe module is the source of truth on how a bwrap failure reads,
  * not a README or a second hand-rolled check.
  */
+/**
+ * I binari che il sandbox pretende, tutti e tre, con il comando per averli.
+ *
+ * Un rimedio che ne nomina due su tre non è un rimedio più corto: è un rimedio
+ * che non funziona, e che manda l'owner a cercare la differenza fra «li ho
+ * installati» e «non parte lo stesso».
+ */
+export const SANDBOX_BINARIES = ['bwrap', 'socat', 'rg'] as const;
+
+export const SANDBOX_BINARIES_REMEDY =
+  'il sandbox ha bisogno di tre binari: bubblewrap, socat e ripgrep. ' +
+  'Debian/Ubuntu: `sudo apt-get install bubblewrap socat ripgrep`; ' +
+  'Fedora: `sudo dnf install bubblewrap socat ripgrep`; macOS: `brew install bubblewrap socat ripgrep`';
+
 export const APPARMOR_REMEDY =
   'unprivileged user namespaces are restricted (Ubuntu 24.04+ default). ' +
   'Add an AppArmor profile for bwrap granting `userns` and reload it with apparmor_parser -r; ' +
@@ -334,7 +348,14 @@ function probeBubblewrap(): SandboxProbe {
         mechanism: 'bubblewrap',
         reason: 'binary_missing',
         detail,
-        remedy: 'install bubblewrap and socat',
+        // **Tre**, non due. `SandboxManager` — il percorso che il runtime usa
+        // davvero, non questo probe più stretto — pretende anche `ripgrep`, e
+        // senza rifiuta con `contain_failed` invece che con `binary_missing`:
+        // l'owner che segue questo rimedio alla lettera installa i due
+        // nominati, riprova, e resta fermo con un errore diverso. Misurato in
+        // container il 27/08: con solo bubblewrap+socat, `verify()` risponde
+        // «Sandbox dependencies not available: ripgrep (rg) not found».
+        remedy: SANDBOX_BINARIES_REMEDY,
       };
     }
     if (isUsernsDenied(detail)) {
