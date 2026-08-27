@@ -213,6 +213,22 @@ export function formatConsolidationLines(report: IngestReport): string[] {
   return [...judgeLines, ...report.errors];
 }
 
+/**
+ * Un lotto che è morto a metà, con quello che aveva già fatto.
+ *
+ * L'errore vero resta `cause`: chi non ha bisogno del parziale continua a
+ * vedere un `Error` col suo messaggio, e nessun chiamante esistente cambia
+ * comportamento.
+ */
+export class IngestFailed extends Error {
+  readonly partial: IngestReport;
+  constructor(cause: unknown, partial: IngestReport) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'IngestFailed';
+    this.partial = partial;
+  }
+}
+
 export async function ingestPending(
   deps: IngestDeps,
   tenantId: string,
@@ -444,7 +460,20 @@ export async function ingestPending(
     return report;
   } catch (error) {
     span.end({ error });
-    throw error;
+    // Con quello che era già stato fatto, non solo con il messaggio.
+    //
+    // `ingestPending` marca ogni episodio subito dopo i suoi fatti, quindi
+    // quando lancia a metà lotto il lavoro fatto fino a lì **è già su disco**:
+    // fatti scritti, episodi marcati. Il chiamante che scrive il rapporto del
+    // giro non aveva modo di saperlo e scriveva una riga di zeri — misurato il
+    // 27/08, un `terminated` da undici dopo tre minuti: 25 → 29 fatti veri, e
+    // `consolidation_runs` che diceva zero episodi e zero fatti.
+    //
+    // `consolidator.ts` scrive già la regola giusta, due righe sotto il punto
+    // che la violava: «a sweep that threw must not turn a run that wrote facts
+    // into an `error` row, because the facts are there and the row is what the
+    // owner reads to know it». Valeva per lo sweep e non per il lotto.
+    throw new IngestFailed(error, report);
   } finally {
     claim.release();
   }

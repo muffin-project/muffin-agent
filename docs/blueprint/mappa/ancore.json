@@ -1271,12 +1271,12 @@
   },
   "consolidator.ts:519": {
     "path": "core/memory/consolidator.ts",
-    "line": 519,
+    "line": 550,
     "testo": "if (tenant !== CONSOLIDATION_TENANT) return;"
   },
   "consolidator.ts:637": {
     "path": "core/memory/consolidator.ts",
-    "line": 637,
+    "line": 668,
     "testo": "private async execute(trigger: ConsolidationTrigger, limit: number): Promise<ConsolidationResult> {"
   },
   "consolidator.ts:87": {
@@ -1451,27 +1451,27 @@
   },
   "core/memory/consolidator.ts:516": {
     "path": "core/memory/consolidator.ts",
-    "line": 516,
+    "line": 547,
     "testo": "notify(tenant: TenantId): void {"
   },
   "core/memory/consolidator.ts:576": {
     "path": "core/memory/consolidator.ts",
-    "line": 576,
+    "line": 607,
     "testo": "// The trailing edge must never be the reason a process stays alive: a"
   },
   "core/memory/consolidator.ts:678": {
     "path": "core/memory/consolidator.ts",
-    "line": 678,
+    "line": 727,
     "testo": "// The sweep, gated on the batch having added a fact — and the gate is an"
   },
   "core/memory/consolidator.ts:686": {
     "path": "core/memory/consolidator.ts",
-    "line": 686,
+    "line": 735,
     "testo": "let merged = 0;"
   },
   "core/memory/consolidator.ts:702": {
     "path": "core/memory/consolidator.ts",
-    "line": 702,
+    "line": 751,
     "testo": "const run: ConsolidationRun = {"
   },
   "core/memory/consolidator.ts:87": {
@@ -1506,52 +1506,52 @@
   },
   "core/memory/ingest.ts:235": {
     "path": "core/memory/ingest.ts",
-    "line": 270,
+    "line": 286,
     "testo": "// would read as \"stuck\" on exactly the page that was working."
   },
   "core/memory/ingest.ts:237": {
     "path": "core/memory/ingest.ts",
-    "line": 272,
+    "line": 288,
     "testo": "deps.store.markExtracted(tenantId, [id], EXTRACTION_VERSION);"
   },
   "core/memory/ingest.ts:272": {
     "path": "core/memory/ingest.ts",
-    "line": 307,
+    "line": 323,
     "testo": "if (episode.kind === 'document') {"
   },
   "core/memory/ingest.ts:304": {
     "path": "core/memory/ingest.ts",
-    "line": 387,
+    "line": 403,
     "testo": "fact.subjectKind,"
   },
   "core/memory/ingest.ts:321": {
     "path": "core/memory/ingest.ts",
-    "line": 404,
+    "line": 420,
     "testo": "// What remains: a crash between the last write inside this episode's"
   },
   "core/memory/ingest.ts:323": {
     "path": "core/memory/ingest.ts",
-    "line": 406,
+    "line": 422,
     "testo": "// never the ones before it, which is what the old end-of-batch marker"
   },
   "core/memory/ingest.ts:324": {
     "path": "core/memory/ingest.ts",
-    "line": 407,
+    "line": 423,
     "testo": "// risked (up to `limit` episodes, replayed together). Replaying means"
   },
   "core/memory/ingest.ts:448": {
     "path": "core/memory/ingest.ts",
-    "line": 540,
+    "line": 569,
     "testo": "// fact that actually was current, because the code never reached the"
   },
   "core/memory/ingest.ts:449": {
     "path": "core/memory/ingest.ts",
-    "line": 541,
+    "line": 570,
     "testo": "// comparison that would have noticed. Matching only `candidate` keeps the"
   },
   "core/memory/ingest.ts:463": {
     "path": "core/memory/ingest.ts",
-    "line": 555,
+    "line": 584,
     "testo": ");"
   },
   "core/memory/invariants.test.ts:117": {
@@ -2411,7 +2411,7 @@
   },
   "ingest.ts:362": {
     "path": "core/memory/ingest.ts",
-    "line": 427,
+    "line": 443,
     "testo": "} catch (error) {"
   },
   "ingest.ts:39": {
