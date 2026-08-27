@@ -183,7 +183,50 @@ export function describeBuild(moduleDir: string, gitRunner: GitRunner = git): Bu
   return { sha, date, dirty: status.status !== 0 || status.stdout.trim() !== '' };
 }
 
+/**
+ * Il checkout che possiede `.releases/` — che è il **worktree principale**, non
+ * quello da cui questo processo sta girando.
+ *
+ * `rev-parse --show-toplevel` risponde con il worktree *corrente*, e una release
+ * È un worktree collegato (`git worktree add`). Quindi dopo il primo update il
+ * processo in esecuzione vive dentro `.releases/<sha>`, `--show-toplevel` da lì
+ * risponde con quella directory, e la release successiva viene creata **dentro**
+ * la precedente. Misurato sulla macchina dell'owner il 27/08 dopo tre update:
+ *
+ *     .releases/9a98bbe/.releases/2c35425/.releases/9e1b5af/dist/cli/main.js
+ *
+ * cioè il percorso a cui puntava davvero il launcher. Non è cosmetico e non si
+ * ferma da solo:
+ *
+ *  - il percorso cresce di un livello a ogni aggiornamento, per sempre;
+ *  - `pruneOldReleases` guarda nel `.releases` della radice che ha trovato,
+ *    quindi pota i fratelli dentro l'ultimo nido e **non** i gusci esterni: il
+ *    disco cresce e nessuno lo rivendica;
+ *  - `--rollback` legge il `current` del nido corrente, quindi si può tornare
+ *    indietro di un passo solo, e i passi precedenti diventano irraggiungibili;
+ *  - `doctor` costruisce i suoi rimedi da questa radice, ed è così che è uscito
+ *    un `cp .releases/…/.releases/…/.releases/…/defaults/voice.md` — la riga che
+ *    ha reso il difetto visibile.
+ *
+ * `git worktree list --porcelain` mette il worktree principale **per primo**, ed
+ * è documentato che lo faccia: è la domanda giusta da fare, invece di dedurre da
+ * dove si sta girando. Il fallback su `--show-toplevel` resta per il caso in cui
+ * `worktree list` non risponda — su un checkout normale le due risposte
+ * coincidono, quindi il fallback non cambia niente per chi non ha mai aggiornato.
+ */
 export function findCheckoutRoot(moduleDir: string, gitRunner: GitRunner = git): string | null {
+  const wt = gitRunner(['worktree', 'list', '--porcelain'], moduleDir);
+  if (wt.status === 0) {
+    const prima = wt.stdout.split('\n').find((l) => l.startsWith('worktree '));
+    const principale = prima?.slice('worktree '.length).trim();
+    if (principale !== undefined && principale !== '') {
+      try {
+        return realpathSync(principale);
+      } catch {
+        return principale;
+      }
+    }
+  }
   const r = gitRunner(['rev-parse', '--show-toplevel'], moduleDir);
   if (r.status !== 0) return null;
   const top = r.stdout.trim();
