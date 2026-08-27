@@ -1066,12 +1066,13 @@ describe('recall — the pinned core (slice/memoria-appuntata)', () => {
  * fallimento restituiva gli stessi candidati e nient'altro.
  */
 describe('strategies non dice di aver riordinato quando non ha riordinato', () => {
-  const reranker = (reordered: boolean): Reranker => ({
+  const reranker = (reordered: boolean, usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number }): Reranker => ({
     id: 'finto',
     rerank: async (_q, candidates, topK) => ({
       items: candidates.slice(0, topK),
       reordered,
       ...(reordered ? {} : { why: 'il modello non ha risposto: rete giù' }),
+      ...(usage === undefined ? {} : { usage }),
     }),
   });
 
@@ -1094,5 +1095,40 @@ describe('strategies non dice di aver riordinato quando non ha riordinato', () =
     expect(r.strategies).not.toContain('rerank(finto)');
     expect(r.strategies.some((s) => s.startsWith('rerank(finto) non riuscito'))).toBe(true);
     expect(r.strategies.some((s) => s.includes('rete giù'))).toBe(true);
+  });
+});
+
+/**
+ * Il costo del rerank esce col risultato, perché `recall()` non ha un tracer e
+ * chi la chiama ce l'ha già.
+ */
+describe('recall porta fuori quanto è costato il rerank', () => {
+  const usato = { inputTokens: 812, outputTokens: 19, cacheReadTokens: 5 };
+
+  const reranker = (reordered: boolean, usage?: typeof usato): Reranker => ({
+    id: 'finto',
+    rerank: async (_q, candidates, topK) => ({
+      items: candidates.slice(0, topK),
+      reordered,
+      ...(usage === undefined ? {} : { usage }),
+    }),
+  });
+
+  function popolata(): { store: MemoryStore } {
+    const { store } = harness(false);
+    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) episode(store, `commercialista numero ${i}`);
+    return { store };
+  }
+
+  it('lo riporta quando la chiamata è avvenuta', async () => {
+    const { store } = popolata();
+    const r = await recall({ store, reranker: reranker(true, usato) }, HOST, 'commercialista');
+    expect(r.rerankUsage).toEqual(usato);
+  });
+
+  it('non inventa un costo quando la chiamata non è avvenuta', async () => {
+    const { store } = popolata();
+    const r = await recall({ store, reranker: reranker(false) }, HOST, 'commercialista');
+    expect(r.rerankUsage).toBeUndefined();
   });
 });

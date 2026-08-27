@@ -282,6 +282,16 @@ export type RecallResult = {
    * exists to avoid, and this is the same guarantee for the pinned core.
    */
   pinnedOverflow: number;
+  /**
+   * Cosa è costata la chiamata del reranker, quando c'è stata.
+   *
+   * Esce col risultato perché `recall()` non ha un tracer: chi chiama ce l'ha
+   * già (`agent/loop.ts` apre lo span `memory.recall` attorno) e sa dove
+   * metterlo. Era l'ultima chiamata al modello che non compariva da nessuna
+   * parte — un turno mostrava un recall lento e nessuno poteva vedere che
+   * dentro c'era un giro di modello.
+   */
+  rerankUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 };
 
 /** RRF constant. 60 is the value from the original paper and the field default. */
@@ -659,6 +669,7 @@ export async function recall(
   // Rerank over a wider slice than we will keep: reordering the same eight
   // items it was already going to return buys nothing.
   let kept: RecallItem[];
+  let rerankUsage: RecallResult['rerankUsage'];
   if (deps.reranker && fused.length >= RERANK_MIN_CANDIDATES) {
     const outcome = await deps.reranker.rerank(query, fused.slice(0, limit * 5), limit);
     kept = outcome.items;
@@ -671,6 +682,7 @@ export async function recall(
         ? `rerank(${deps.reranker.id})`
         : `rerank(${deps.reranker.id}) non riuscito: ${outcome.why ?? 'motivo non dichiarato'}`,
     );
+    rerankUsage = outcome.usage;
   } else {
     kept = fused.slice(0, limit);
   }
@@ -778,7 +790,13 @@ export async function recall(
   // never has to compete for this cut in practice — `PINNED_BUDGET` (12) is
   // far under `MAX_CONTEXT_ITEMS` (40).
   if (kept.length > MAX_CONTEXT_ITEMS) strategies.push(`tetto(${MAX_CONTEXT_ITEMS})`);
-  return { items: kept.slice(0, MAX_CONTEXT_ITEMS), strategies, gaps, pinnedOverflow };
+  return {
+    items: kept.slice(0, MAX_CONTEXT_ITEMS),
+    strategies,
+    gaps,
+    pinnedOverflow,
+    ...(rerankUsage === undefined ? {} : { rerankUsage }),
+  };
 }
 
 /** One fact as a line: subject, predicate, object. Written once, read by four callers. */
