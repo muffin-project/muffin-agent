@@ -638,7 +638,10 @@ async function offerGateway(): Promise<void> {
     return;
   }
   if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
-    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install\n`);
+    // `--start` nominato qui e non eseguito sopra: è la stessa distinzione
+    // della riga sotto, vista dall'altro lato. Chi dice no adesso deve poter
+    // sapere che esiste un comando solo, non quattro da copiare.
+    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install --start\n`);
     return;
   }
   // `--write` and not the enable: writing the file is what the owner just
