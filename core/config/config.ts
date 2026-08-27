@@ -43,6 +43,26 @@ export const ConfigSchema = z.object({
   }),
   models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
   /**
+   * Il ragionamento sul turno di conversazione, quando l'owner non vuole quello
+   * che il profilo del suo modello dichiara.
+   *
+   * Assente significa «quello che dice il profilo», mai un valore implicito:
+   * `agent/profiles/*.json` resta il posto dove sta la conoscenza *sul modello*
+   * (Fable 5 va in 400 se glielo spegni, un qwen3 ragiona di default), e questo
+   * campo è la conoscenza *sull'installazione* — una manopola dell'owner, che
+   * ADR-0036 mette esplicitamente fra le cose che Muffin stesso può scrivere.
+   * Le due cose sono separate perché un `muffin update` che porta un profilo
+   * nuovo non deve cancellare una scelta dell'owner, e una scelta dell'owner
+   * non deve viaggiare dentro un file di profilo che vale per tutti.
+   *
+   * Vale **solo per la corsia principale**. Le corsie della memoria
+   * (estrazione, giudice, reranker) chiedono `off` da sé e non leggono né
+   * questo campo né il profilo: lì il ragionamento non è un extra, è un costo
+   * puro che ha già mangiato il tetto dei token una volta
+   * (`core/memory/corsie-senza-reasoning.test.ts`).
+   */
+  thinking: z.enum(['adaptive', 'off', 'unset']).optional(),
+  /**
    * Absent means no web search, and the tool is simply not registered — the
    * same posture as the shell without a working sandbox. A capability that
    * costs the owner money per call does not get switched on by a default.

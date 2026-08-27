@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
-import { formatProgressLine, makeReplCliWrite, runRepl } from './repl.js';
+import { formatProgressLine, makeReplCliWrite, runRepl, thinkingCommand } from './repl.js';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, type Surface } from '../core/surface/types.js';
@@ -331,5 +331,49 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
       process.stderr.isTTY = originalIsTTY;
       await provider.close();
     }
+  });
+});
+
+/**
+ * `/think` è la manopola che rende la scelta misurabile: due turni identici a
+ * ragionamento acceso e spento, senza editare un JSON e riavviare in mezzo —
+ * che è il motivo per cui quella prova non la faceva nessuno.
+ */
+describe('/think', () => {
+  it('senza argomenti dice lo stato e da dove viene, senza cambiare niente', () => {
+    const out = thinkingCommand('', 'adaptive', undefined, 'consumer-local');
+    expect(out.line).toContain('on');
+    expect(out.line).toContain('profilo consumer-local');
+    expect(out.set).toBeUndefined();
+  });
+
+  it("nomina config.json quando è l'override a decidere, non il profilo", () => {
+    expect(thinkingCommand('', 'off', 'off', 'consumer-local').line).toContain('config.json');
+  });
+
+  it('`on` e `off` scrivono, e lo dicono che dura oltre questa sessione', () => {
+    const on = thinkingCommand('on', 'off', 'off', 'consumer-local');
+    expect(on.set).toBe('adaptive');
+    expect(on.line).toContain('prossimi avvii');
+    expect(thinkingCommand('off', 'adaptive', undefined, 'consumer-local').set).toBe('off');
+  });
+
+  /**
+   * `reset` toglie la riga, e `null` è come si dice «toglila» a un chiamante che
+   * distingue `undefined` (non fare niente) da `null` (cancella). Scrivere
+   * `adaptive` a mano non sarebbe la stessa cosa: inchioderebbe l'installazione
+   * a una risposta giusta per il modello di oggi, e un `muffin update` che
+   * porta un profilo nuovo non potrebbe più correggerla.
+   */
+  it('`reset` cancella l override invece di scriverci il valore di adesso', () => {
+    const out = thinkingCommand('reset', 'adaptive', 'adaptive', 'consumer-local');
+    expect(out.set).toBeNull();
+    expect(out.line).toContain('consumer-local');
+  });
+
+  it('un argomento che non è nessuno dei tre non scrive niente, e li nomina', () => {
+    const out = thinkingCommand('forse', 'adaptive', undefined, 'consumer-local');
+    expect(out.set).toBeUndefined();
+    expect(out.line).toContain('on | off | reset');
   });
 });
