@@ -420,6 +420,44 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
   });
 
   /**
+   * La guardia rifiuta **la sorgente**, non il comando.
+   *
+   * Misurato sull'installazione dell'owner il 27/08: la chiave era già
+   * registrata e valida, la variabile d'ambiente era un residuo che non
+   * c'entrava con l'operazione richiesta, e `init` si è rifiutato di fare
+   * qualunque cosa uscendo 78. Fail-closed sulla sorgente resta intero — quel
+   * valore non viene letto — ma rifiutare anche il comando non aggiungeva
+   * nessuna garanzia: aggiungeva un'installazione che non si può riparare
+   * finché qualcuno non si ricorda di una variabile esportata mesi prima.
+   */
+  it('ma con una chiave già registrata prosegue, invece di rifiutare il comando', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-env-ok-'));
+    const xdg = mkdtempSync(join(tmpdir(), 'muffin-env-ok-xdg-'));
+    const KEY = 'sk-ant-api03-mai-nell-environment';
+    try {
+      const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+      // Registrata come si deve: da stdin, mai da argv.
+      expect(muffin(env, ['secret', 'set', 'provider_api_key'], 'sk-or-registrata-bene').code).toBe(0);
+
+      const r = muffin({ ...env, MUFFIN_API_KEY: KEY }, ['init']);
+      expect(r.code).not.toBe(78);
+      // L'avvertimento resta, ed è ancora il primo: una variabile con dentro
+      // una chiave è comunque una chiave da ruotare.
+      expect(r.err).toContain('MUFFIN_API_KEY');
+      expect(r.err).toMatch(/ruota/);
+      expect(r.err).toContain('proseguo senza guardare la variabile');
+      // E la variabile non è stata letta: né il valore né un suo pezzo escono.
+      expect(r.err).not.toContain(KEY);
+      expect(r.err).not.toContain(KEY.slice(0, 8));
+      expect(existsSync(join(dir, 'config.json'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+
+  /**
    * Il difetto che questo test impedisce: `muffin init --api-key sk-…` metteva
    * una chiave di classe 1 in `argv`, cioè nella shell history e nel `ps` di
    * chiunque sulla macchina — e un segreto è un segreto anche **prima** di
