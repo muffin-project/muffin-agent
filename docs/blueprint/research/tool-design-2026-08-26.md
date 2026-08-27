@@ -84,10 +84,25 @@ inesistente riceve la lista degli **esposti**, non l'inventario intero.
 
 ## Cosa NON adottare, e perché
 
-Tool Search, Programmatic Tool Calling e le deferred tool definitions servono
-quando le definizioni superano i ~10K token (Claude Code marca `defer_loading`
-oltre quella soglia). Con 14 tool e un tetto di 10/24 esposti per profilo non
-abbiamo quel problema: adottarli ora è over-engineering, ed è beta.
+Programmatic Tool Calling e le deferred tool definitions servono quando le
+definizioni superano i ~10K token (Claude Code marca `defer_loading` oltre
+quella soglia). Non siamo vicini a quella soglia, e su quell'asse la
+valutazione regge.
+
+**La Tool Search era scartata per la ragione sbagliata, e il giorno dopo.**
+Questo paragrafo diceva «con 14 tool e un tetto di 10/24 esposti per profilo
+non abbiamo quel problema». Ma il tetto **non è** un budget di token: è quanti
+tool un modello piccolo riesce a scegliere fra, e il 27/08 ha cominciato a
+tagliare — `sys_inspect` (E7) è finito oltre la linea sull'installazione
+dell'owner. Una soluzione valutata contro il vincolo sbagliato viene scartata
+per un motivo che resta vero mentre smette di essere quello che conta.
+
+La Tool Search dissolve il compromesso invece di spostarlo: il modello vede
+pochi nomi e cerca quello che gli serve, quindi il numero di tool smette di
+competere per lo stesso spazio. Il tetto alzato a 14 (owner, 27/08) è
+l'anestetico: sblocca oggi e non toglie il vincolo, perché ogni tool nuovo
+ripropone la stessa domanda. Resta da valutare **contro il tetto**, non contro
+i token — e con una misura, che nessuno dei due numeri ha mai avuto.
 
 ## Cosa è stato controllato e non ci riguarda
 
