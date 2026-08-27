@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -17,6 +17,8 @@ import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/cons
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
   planUnit,
+  resolveInterpreterDir,
+  type InterpreterProbes,
   resolveLauncher,
   EXIT_PERMANENT,
   LAUNCHD_LABEL,
@@ -107,6 +109,26 @@ function describe(info: GatewayInfo): string {
   const beat = Math.round((Date.now() - info.lastBeat.getTime()) / 1000);
   return `attivo · pid ${info.pid} · dal ${since} · ${info.status} · ultimo battito ${beat}s fa`;
 }
+
+/**
+ * The real answers behind `resolveInterpreterDir`. Kept here, next to the one
+ * caller, for the reason the planner states: the caller probes, the planner
+ * stays pure.
+ *
+ * Every probe degrades to "no" rather than throwing: this runs during
+ * `gateway install`, and a PATH entry that cannot be read is a reason to skip
+ * that entry, never a reason to fail the install.
+ */
+const REAL_INTERPRETER_PROBES: InterpreterProbes = {
+  pathEntries: () => (process.env['PATH'] ?? '').split(delimiter).filter((d) => d !== ''),
+  realpath: (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return null;
+    }
+  },
+};
 
 export function cmdGatewayStatus(home: string): number {
   const info = inspect(home);
@@ -203,8 +225,9 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
     // did, once, before this line existed.
     homeDir: homedir(),
     // Where this install's Node lives. Without it launchd/systemd hand the
-    // launcher a PATH that has no `node` in it at all.
-    interpreterDir: dirname(process.execPath),
+    // launcher a PATH that has no `node` in it at all — and with the *wrong*
+    // one it hands it a path that expires (see `resolveInterpreterDir`).
+    interpreterDir: resolveInterpreterDir(process.execPath, REAL_INTERPRETER_PROBES),
     ...(process.env['XDG_CONFIG_HOME'] ? { configHome: process.env['XDG_CONFIG_HOME'] } : {}),
   });
 
