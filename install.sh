@@ -47,6 +47,38 @@ command -v node >/dev/null 2>&1 || die "Node.js not found — install Node >= 22
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
 [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null || die "Node >= 22 required (found $(node -v))."
 
+# 1-bis. preflight the sandbox binaries. NOT fatal: Muffin boots without them,
+#    and `doctor` says so. But it degrades to asking for confirmation on every
+#    single command, which is the difference between an agent that does things
+#    on the VPS and one that only chats — and discovering that AFTER setup,
+#    from a diagnostic, is the wrong moment to learn it. Three binaries, not
+#    two: `SandboxManager` needs ripgrep as well, and the remedy that named
+#    only bubblewrap and socat sent people round in circles.
+missing=''
+for bin in bwrap socat rg; do
+  command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
+done
+if [ -n "$missing" ]; then
+  say ""
+  say "note: the sandbox needs three binaries and these are missing:$missing"
+  case "$(uname -s)" in
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        say "      sudo apt-get install bubblewrap socat ripgrep"
+      elif command -v dnf >/dev/null 2>&1; then
+        say "      sudo dnf install bubblewrap socat ripgrep"
+      else
+        say "      install: bubblewrap socat ripgrep (your distro's package manager)"
+      fi
+      say "      On Ubuntu 24.04+ bwrap also needs an AppArmor profile granting userns."
+      ;;
+    Darwin) say "      brew install bubblewrap socat ripgrep" ;;
+    *) say "      install: bubblewrap socat ripgrep" ;;
+  esac
+  say "      Without them every command Muffin runs will ask you first."
+  say ""
+fi
+
 # 2. build the bin — code plus the non-TS assets init/profiles read at runtime.
 #    `npm install` runs the `prepare` script, which compiles; the explicit
 #    compile is a belt-and-suspenders in case prepare was disabled.
