@@ -1257,3 +1257,37 @@ registered the `close` listener and left `rl.close()` ahead of the `resolve`, so
 every answer became "did not answer" — a pasted API key dropped in silence. The
 unit tests with a fake stream stayed green; the pty run caught it. A verification
 that only exercises the shape you imagined will confirm the shape you imagined.
+
+## A schema you send is not a schema you enforce
+
+Every tool carried two descriptions of its own arguments: a JSON Schema in
+`inputSchema`, serialized into the request so the model reads it, and a zod
+schema inside the handler, which is what actually refuses anything. Two copies
+of one intent, and nothing held them together — a tool could advertise
+`required: ['path', 'content']` and validate neither.
+
+One did. Three filesystem tools cast instead of parsing, and `fs_write` wrote
+`String(a.content ?? '')`, so a call that omitted a **required** field became a
+write of the empty string: `fs_write({path: 'note.md'})` truncated the file and
+answered "written". The tests were all green, because every test of that tool
+passed it the arguments it expects.
+
+**The comment was doing damage on its own.** `inputSchema`'s docstring said
+"validated before the kernel ever sees the arguments", which was false twice
+over — nothing reads that field back, and the kernel reads the raw arguments to
+build its decision resource. A sentence like that does not merely fail to help:
+it tells the next person that validation is handled somewhere else, which is
+precisely how a handler ships with none. Deleting it would have been an
+improvement; what it needed was to be replaced with what is actually true, which
+turned out to be two different mechanisms wearing one claim.
+
+**The check that finds this is behavioural, not structural.** Comparing the two
+schemas field by field would have been a third copy with its own drift. Asking
+every tool one question instead — *if you declare an argument required, do you
+actually require it?* — needs no shared vocabulary between the two schemas and
+names the offender directly.
+
+And such a check needs to prove it looked. The first version could be neutered
+into skipping every tool and stayed green; it now counts what it examined and
+names the tools the defect came from. That is the second time in two days a
+guard's own no-op was the surviving mutation.
