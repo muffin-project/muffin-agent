@@ -5,6 +5,18 @@ Porta Muffin al **DAY-1 READY** definito dal mandato Gate, usando
 `docs/blueprint/gate1/PERCORSO-CRITICO.md` come ordine. Non fare manutenzione
 generica: scegli una claim reale e chiudila secondo `docs/ORCHESTRATION.md`.
 
+**Ogni giro nomina la riga di Gate che fa avanzare.** Se non la sai nominare,
+quel giro non è lavoro sul goal: è manutenzione che entra perché sta dentro un
+tick, ed è il modo in cui il loop smette di andare da qualche parte pur restando
+occupato.
+
+**Il loop si ferma da solo.** Quando l'unico lavoro rimasto è dell'owner — un
+segreto che solo lui ha, un pagamento, un demone giù sulla sua macchina, una PR
+che solo lui mergia — fermati, dillo in una riga e chiudi il loop invece di
+ticchettare su ciò che resta. Idem quando il criterio finale di §7 è
+soddisfatto. Un loop che continua dopo essere arrivato non prova di essere
+arrivato: nasconde che non lo è.
+
 ## 1. Startup: osserva prima, leggi il minimo
 
 Il contesto è una risorsa. `AGENTS.md`, `CLAUDE.md` e `docs/README.md` sono mappe;

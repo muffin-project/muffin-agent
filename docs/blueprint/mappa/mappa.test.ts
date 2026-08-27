@@ -85,3 +85,35 @@ describe('la mappa dell architettura', () => {
     expect(Object.keys(anchors).sort()).toEqual(refs);
   });
 });
+
+/**
+ * Gli accenti si rompono nel browser, non nel file.
+ *
+ * Segnalato dall'owner il 27/08: la mappa aveva «gli accenti rotti». I byte
+ * erano UTF-8 corretti — `file` diceva «Unicode text, UTF-8 text» e non c'era
+ * un solo `Ã¨` nel file. Mancava la **dichiarazione**: nessun `<meta charset>`,
+ * e la pagina si apre da `file://`, dove non esiste un header HTTP che possa
+ * dirlo al posto suo. Il browser allora indovina dalla locale — di solito
+ * windows-1252 — e ogni `è` di una pagina scritta in italiano diventa `Ã¨`.
+ *
+ * Il test guarda il documento **generato**, non il template: è il file che
+ * qualcuno apre davvero, ed è quello che una riscrittura del generatore
+ * potrebbe smettere di produrre senza che nessuno se ne accorga finché non lo
+ * riapre.
+ */
+describe('la mappa dichiara come va letta', () => {
+  it('apre con doctype e charset, prima di qualsiasi testo accentato', () => {
+    const html = readFileSync(join(MAPPA, 'mappa.html'), 'utf8');
+    const testa = html.slice(0, 200);
+    expect(testa.toLowerCase()).toContain('<!doctype html>');
+    expect(testa).toMatch(/<meta\s+charset=["']utf-8["']\s*\/?>/i);
+
+    // La dichiarazione deve precedere il primo accento: un charset annunciato
+    // dopo il testo che serve a decodificare arriva quando il browser ha già
+    // scelto.
+    const primoAccento = html.search(/[àèéìòùÀÈÉÌÒÙ]/);
+    const dichiarazione = html.toLowerCase().indexOf('charset');
+    expect(dichiarazione).toBeGreaterThanOrEqual(0);
+    expect(dichiarazione).toBeLessThan(primoAccento);
+  });
+});

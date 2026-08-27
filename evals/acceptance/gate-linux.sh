@@ -26,17 +26,39 @@ OUT="${2:?uso: gate-linux.sh <repo> <outdir>}"
 IMAGE="${MUFFIN_GATE_IMAGE:-node:22-bookworm}"
 mkdir -p "$OUT"
 
-# `git archive` e non un bind mount: node_modules di macOS contiene binding
+# Un clone shallow e non un bind mount: node_modules di macOS contiene binding
 # nativi darwin (better-sqlite3) che su Linux non caricano, e la copia
 # dell'albero intero sarebbe lenta. Cosi il container vede solo cio che e
 # tracciato, e si costruisce le sue dipendenze.
-git -C "$REPO" archive HEAD -o "$OUT/repo.tar"
+#
+# Clone e non `git archive`, dal 27/08: `git archive` non porta `.git`, e senza
+# checkout Git `muffin --version` dice "build sconosciuta" e `doctor` sputa un
+# warning di deriva per OGNI file di default (nove, sull'albero attuale). Lo
+# scenario A10 dichiara quali warning si aspetta a ogni passo del giro, quindi
+# andava rosso — per un artefatto del trasporto, non per Linux. Il percorso
+# vero di installazione parte da un clone (`install.sh`: "Run from a clone of
+# this repo"), quindi e da un clone che va provato.
+RAMO=$(git -C "$REPO" rev-parse --abbrev-ref HEAD)
+rm -rf "$OUT/src"
+if [ "$RAMO" = "HEAD" ]; then
+  git clone --depth 1 "file://$(cd "$REPO" && pwd)" "$OUT/src" -q
+  git -C "$OUT/src" fetch --depth 1 origin "$(git -C "$REPO" rev-parse HEAD)" -q
+  git -C "$OUT/src" checkout -q FETCH_HEAD
+else
+  git clone --depth 1 --branch "$RAMO" "file://$(cd "$REPO" && pwd)" "$OUT/src" -q
+fi
+# `COPYFILE_DISABLE=1`: bsdtar su macOS infila un `._<nome>` accanto a ogni file
+# per gli attributi estesi, e dentro il container vitest li raccoglie come test
+# (`._a-lifecycle.accept.ts`) e fallisce a caricarli. `git archive` non aveva
+# questo problema; il clone lo ha introdotto, e questa riga lo chiude.
+COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
 
 # Le due opzioni di sicurezza sono l'equivalente container del profilo AppArmor
 # che il workflow installa su ubuntu-latest: il seccomp di default di Docker
 # blocca unshare(CLONE_NEWUSER), quindi bwrap non crea il namespace e il probe
 # — correttamente — rifiuta di dire che il sandbox contiene. Su una VPS Linux
 # vera non servono queste due: serve il profilo AppArmor per bwrap.
+set +e
 docker run --rm \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
@@ -64,14 +86,10 @@ docker run --rm \
     # e non-root, cosi la prova non riusa la /app gia compilata sopra e misura
     # davvero una compilazione da zero: se `prepare`/`compile` si rompono di
     # nuovo, questo va rosso prima di ACCETTAZIONE, non dopo.
-    # NB: questa copia usa lo stesso .tar da `git archive` di /app sopra, quindi
-    # non porta .git: `muffin --version` qui sotto legge "build sconosciuta"
-    # per costruzione, non per un difetto di install.sh — verificato a mano
-    # con `git clone --depth 1` (shallow, ha comunque .git) fuori da questo
-    # gate (v. slice/installazione-provata): stesso INSTALL_EXIT=0, e
-    # `muffin --version` legge lo sha vero invece di "build sconosciuta". Il
-    # passaggio da archive a clone per /app stesso e un difetto di trasporto
-    # gia in lavorazione altrove: non duplicato qui.
+    # NB: questa copia usa lo stesso .tar di /app sopra, e dal 27/08 quel tar
+    # viene da `git clone --depth 1` (non piu `git archive`, v. sopra) — porta
+    # .git. `muffin --version` qui sotto legge quindi lo sha vero, non "build
+    # sconosciuta": verificato girando questo stesso gate fuso (v. PR).
     mkdir -p /install-check && tar xf /repo.tar -C /install-check
     IHOME=/tmp/install-home
     mkdir -p "$IHOME"
@@ -94,17 +112,41 @@ docker run --rm \
     echo "=== PROBE SANDBOX (non-root) ==="
     $AS npx tsx -e "import(\"./core/sandbox/probe.js\").then((m)=>console.log(JSON.stringify(m.probeSandbox())))"
     echo "=== ACCETTAZIONE (non-root) ==="
+    # Il secondo comando e il secondo gate, quello che il workflow tratta come
+    # autoritativo su M5-BIS. Finche non c-era, questo script provava la suite
+    # su Linux e non provava mai il report che ne decide il significato — cioe
+    # proprio dove i due divergono: su Linux b-job-script si salta, e
+    # classificare quel salto come dichiarato invece che come rosso e codice che
+    # gira solo qui.
+    #
+    # I due exit non si stampano soltanto: decidono. Prima questo blocco finiva
+    # con `set -e`, che esce 0 — quindi il container usciva 0 con la suite
+    # rossa, `docker run` usciva 0, e questo script, nonostante `set -euo
+    # pipefail`, diceva verde. Il workflow non tollera nessuno dei due step
+    # (.github/workflows/accettazione.yml), quindi i due divergevano esattamente
+    # nella proprieta che conta, e chi lanciasse questo da un hook o da un loop
+    # leggeva «gate Linux verde». `gate-linux.test.ts` estrae il blocco qui
+    # sotto e lo esegue con esiti iniettati: se torna a ingoiare un rosso, muore.
+    # >>> BLOCCO PROVATO DA gate-linux.test.ts
     set +e
-    $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot
-    rc=$?
-    echo "ACCEPT_EXIT=$rc"
-    # L'ultimo comando eseguito qui e quello il cui exit status diventa quello
-    # di questo `bash -c`, quindi di `docker run`, quindi di questo script
-    # (`set -e` in testa al file): un `set -e` come ultima riga e sempre
-    # successo (riabilitare unopzione non fallisce mai), quindi mascherava
-    # ACCEPT_EXIT=1 dietro uno script che usciva 0 — verificato iniettando
-    # un `false` al posto di vitest: lo script tornava 0 con ACCEPT_EXIT=1
-    # nel log. `exit "$rc"` e lultimo comando adesso, cosi chi consuma questo
-    # script ($? dopo la chiamata, non il testo del log) vede il rosso vero.
-    exit "$rc"
+    $AS npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=/tmp/gate-home/accettazione.json
+    ACCEPT_EXIT=$?
+    $AS env MUFFIN_ACCEPT_RESULTS=/tmp/gate-home/accettazione.json npx tsx evals/acceptance/report.ts
+    REPORT_EXIT=$?
+    set -e
+    echo "ACCEPT_EXIT=$ACCEPT_EXIT  REPORT_EXIT=$REPORT_EXIT"
+    if [ "$ACCEPT_EXIT" -ne 0 ] || [ "$REPORT_EXIT" -ne 0 ]; then exit 1; fi
+    # <<< BLOCCO PROVATO DA gate-linux.test.ts
   '
+GATE_EXIT=$?
+set -e
+
+# Esplicito e non implicito: `set -e` avrebbe gia fatto uscire lo script su un
+# `docker run` non-zero, ma senza dire nulla. Un gate che non dice se e verde o
+# rosso si legge come un comando qualsiasi, e questo non lo e.
+if [ "$GATE_EXIT" -ne 0 ]; then
+  echo "GATE LINUX ROSSO (exit $GATE_EXIT) — vedi ACCEPT_EXIT/REPORT_EXIT qui sopra" >&2
+else
+  echo "GATE LINUX VERDE"
+fi
+exit "$GATE_EXIT"
