@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { discoverSkills, skillsPromptSection } from './skills.js';
+import { promptNonce } from './nonce.js';
+import { paths } from '../config/config.js';
 
 /**
  * Le skill che un'installazione nuova ha già.
@@ -50,14 +52,30 @@ describe('le skill di serie', () => {
     }
   });
 
-  it('finiscono nella sezione del prompt, dentro il recinto', () => {
-    const sezione = skillsPromptSection(scan.skills);
+  it('finiscono nella sezione del prompt, dentro il recinto, col nonce vero', () => {
+    // **Col nonce di produzione**, non col fallback. La prima versione di
+    // questo test chiamava `skillsPromptSection(scan.skills)` senza nonce,
+    // cioè il ramo casuale — e poi asseriva che due render differissero, che è
+    // vero per quel ramo e **falso** per ciò che spediamo. Provava il contrario
+    // di quello che gira. Judge della slice.
+    const sezione = skillsPromptSection(scan.skills, promptNonce(home));
     expect(sezione).not.toBe('');
     for (const s of scan.skills) expect(sezione).toContain(s.name);
-    // Il recinto c'è e ha un nonce: la stessa sezione due volte non ha lo
-    // stesso marcatore, quindi non è indovinabile da chi scrive una skill.
-    expect(sezione).toMatch(/<<<skills_[0-9a-f]{12}/);
-    expect(sezione).not.toBe(skillsPromptSection(scan.skills));
+    expect(sezione).toMatch(new RegExp(`<<<skills_${promptNonce(home)}`));
+    // Stabile su questa installazione — è il punto, ed è ciò che permette al
+    // prefisso del prompt di restare cacheabile fra processi.
+    expect(skillsPromptSection(scan.skills, promptNonce(home))).toBe(sezione);
+  });
+
+  it('il nonce è per-installazione, non del repository, e il suo file è 0600', () => {
+    // Le due metà del compromesso. Stabile qui dentro (sopra), e diverso
+    // altrove — se fosse una costante di repository lo saprebbero tutti.
+    const altra = mkdtempSync(join(tmpdir(), 'muffin-skill-serie-'));
+    runInit({ home: altra, apiKey: 'sk-non-reale' });
+    expect(promptNonce(altra)).not.toBe(promptNonce(home));
+    // E non leggibile dagli altri utenti della macchina: prima di questo file
+    // i nonce esistevano solo in memoria.
+    expect(statSync(paths(home).promptNonce).mode & 0o077).toBe(0);
   });
 
   it('una skill installata a mano che prova a chiudere il recinto non ci riesce', () => {

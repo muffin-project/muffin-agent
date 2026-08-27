@@ -69,11 +69,29 @@ export function fence(label: string, body: string, note?: string, nonce_?: strin
 }
 
 /**
- * Removes anything that looks like a fence marker for this label, whatever
- * nonce it carries. A body that tries to close the fence loses the attempt
- * rather than the fence losing its meaning.
+ * Toglie **qualunque** cosa abbia la forma di un marcatore di recinto, di
+ * qualunque etichetta, con qualunque nonce.
+ *
+ * Prima toglieva solo i marcatori della **propria** etichetta, e questo lasciava
+ * aperto il canale che conta: `fence('web', …)` non toccava un
+ * `<<<skills_<nonce>` nascosto dentro il contenuto web, quindi bastava
+ * conoscere il nonce di un *altro* recinto per farne comparire uno finto dentro
+ * il proprio. Con il nonce delle skill diventato per-installazione, «conoscerlo
+ * una volta» smetteva di essere un'ipotesi remota: un modello indotto a
+ * ripetere le proprie istruzioni lo consegna, e da lì vale per sempre. Trovato
+ * dal judge di `slice/skill-di-serie`, e verificato eseguendo il regex.
+ *
+ * E tollera lo spazio: `«< <skills_x»` e `«skills_x > >»` passavano intatti,
+ * perché `<{2,}` pretende caratteri consecutivi. Anche questo verificato
+ * eseguendolo, non leggendolo.
+ *
+ * Il nonce resta la metà portante — un marcatore va comunque indovinato per
+ * essere *creduto* — ma questa funzione non dipende più da lui.
  */
 export function stripSentinels(body: string, label: string): string {
-  const marker = new RegExp(`<{2,}\\s*${label}\\w*|${label}\\w*\\s*>{2,}`, 'gi');
-  return body.replace(marker, `[${label.toLowerCase()}-marker rimosso]`);
+  return body
+    // Apertura: due o più `<` anche separati da spazi, poi una parola-etichetta.
+    .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]*/g, `[${label.toLowerCase()}-marker rimosso]`)
+    // Chiusura: una parola-etichetta, poi due o più `>` anche separati da spazi.
+    .replace(/[A-Za-z][\w-]*\s*>(?:\s*>)+/g, `[${label.toLowerCase()}-marker rimosso]`);
 }
