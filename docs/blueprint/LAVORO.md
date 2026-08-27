@@ -29,14 +29,15 @@ agosto. `doctor` era **verde** su due dei tre giri morti (#147) e diceva
 1. **Schema intollerante** (prossima slice): il modello piccolo risponde
    `expected number, received string` e `subjectKind` fuori enum — episodi che
    ora arrivano fino allo schema e muoiono lì.
-2. **La unit launchd inchioda un path Cellar** (da `dirname(process.execPath)`):
-   Homebrew lo ruota a ogni upgrade e il gateway non parte — 9 `env: node: No
-   such file or directory` in `gateway.err`.
-3. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
+2. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
    solo-systemd stampato ovunque: su macOS contraddice `doctor`.
-4. `--version` → `0.0.0`; `memory.rerank` senza span (l'estrazione ce l'ha da
+3. `--version` → `0.0.0`; `memory.rerank` senza span (l'estrazione ce l'ha da
    #148); l'adapter openai-compat non legge il reasoning, quindi quei token si
    pagano e il testo si perde — la via vera per (1) e per il tetto.
+
+Chiuso da #151: la unit inchiodava la directory Cellar di Homebrew, che
+l'upgrade cancella (`dirname(process.execPath)` risolve i symlink). Ora prende
+la prima directory del PATH il cui `node` porta allo stesso interprete.
 
 **Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
 modello vivo (`research/cache-prompt-2026-08-26.md`). Il prompt vivo è del 9
