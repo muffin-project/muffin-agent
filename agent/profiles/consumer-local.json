@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "name": "consumer-local",
   "match": ["*gemma*", "*qwen3*", "*gpt-oss*", "*mistral-small*", "*glm-*"],
-  "maxToolsExposed": 10,
+  "maxToolsExposed": 14,
   "maxToolCallsPerTurn": 15,
   "thinking": "off",
   "sampling": "deterministic",
   "recovery": ["nudge", "reinjectTools", "retryOnce", "strictJson"],
-  "notes": "The floor the harness is designed against: 10 tools, 15 sequential calls. Thinking off — its effect is model-specific and has regressed tool use before. These reach us through the openai-compat adapter, which carries neither knob: 'off' is a declared no-op there (ADR-0008), and it is written down so the day one of them arrives over the Anthropic adapter the intent is already stated. temperature 0 stays: a small model wanders without it."
+  "notes": "10 tool era la soglia contro cui l'harness era disegnato, e il 27/08 ha cominciato a tagliare: con `sys_inspect` i registrati sono tredici, e i tre oltre il tetto (`wait`, `todo`, `sys_inspect`) erano invisibili al modello. Alzato a 14 su decisione dell'owner. **È un numero senza misura dietro**, esattamente come lo era 10: nessuno ha mai provato dove questi modelli degradano davvero nella scelta del tool. La risposta strutturale non è un numero più grande ma la tool search — vedi `research/tool-design-2026-08-26.md`, che la scartava valutandola contro il budget di token invece che contro questo tetto. 15 call sequenziali restano. Thinking off — il suo effetto è model-specific e ha già fatto regredire l'uso dei tool; da #167 l'adapter openai-compat lo porta davvero su OpenRouter (`reasoning:{effort:none}`), quindi qui non è più un no-op dichiarato. temperature 0 resta: un modello piccolo vaga senza."
 }
