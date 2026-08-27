@@ -44,9 +44,19 @@ export type Fence = {
  * `label` names the kind of content for the model's benefit; `note` is the one
  * line telling it what the content is *for*. Both end up inside the fence
  * header, where the attacker cannot reach them.
+ *
+ * `nonce_` esiste per un solo chiamante, e per una ragione misurata: il recinto
+ * delle skill sta nel **system prompt**, non nel turno. Un nonce nuovo a ogni
+ * chiamata rende quel prompt diverso a ogni processo — e ogni `muffin run` è un
+ * processo — quindi il prefisso non è mai lo stesso due volte e la cache del
+ * provider non prende mai. Misurato: due boot della stessa home producevano due
+ * SHA diversi, e il test che fissa i byte del prompt owner non poteva più essere
+ * ri-fissato per costruzione. Chi passa un nonce si prende la responsabilità di
+ * farlo stabile *e* non indovinabile da fuori; `stripSentinels` resta comunque
+ * la difesa che non dipende dal nonce.
  */
-export function fence(label: string, body: string, note?: string): Fence {
-  const nonce = randomBytes(NONCE_BYTES).toString('hex');
+export function fence(label: string, body: string, note?: string, nonce_?: string): Fence {
+  const nonce = nonce_ ?? randomBytes(NONCE_BYTES).toString('hex');
   const open = `${label}_${nonce}`;
   return {
     nonce,
@@ -59,11 +69,42 @@ export function fence(label: string, body: string, note?: string): Fence {
 }
 
 /**
- * Removes anything that looks like a fence marker for this label, whatever
- * nonce it carries. A body that tries to close the fence loses the attempt
- * rather than the fence losing its meaning.
+ * Toglie **qualunque** cosa abbia la forma di un marcatore di recinto, di
+ * qualunque etichetta, con qualunque nonce.
+ *
+ * Prima toglieva solo i marcatori della **propria** etichetta, e questo lasciava
+ * aperto il canale che conta: `fence('web', …)` non toccava un
+ * `<<<skills_<nonce>` nascosto dentro il contenuto web, quindi bastava
+ * conoscere il nonce di un *altro* recinto per farne comparire uno finto dentro
+ * il proprio. Con il nonce delle skill diventato per-installazione, «conoscerlo
+ * una volta» smetteva di essere un'ipotesi remota: un modello indotto a
+ * ripetere le proprie istruzioni lo consegna, e da lì vale per sempre. Trovato
+ * dal judge di `slice/skill-di-serie`, e verificato eseguendo il regex.
+ *
+ * E tollera lo spazio: `«< <skills_x»` e `«skills_x > >»` passavano intatti,
+ * perché `<{2,}` pretende caratteri consecutivi. Anche questo verificato
+ * eseguendolo, non leggendolo.
+ *
+ * Il nonce resta la metà portante — un marcatore va comunque indovinato per
+ * essere *creduto* — ma questa funzione non dipende più da lui.
  */
 export function stripSentinels(body: string, label: string): string {
-  const marker = new RegExp(`<{2,}\\s*${label}\\w*|${label}\\w*\\s*>{2,}`, 'gi');
-  return body.replace(marker, `[${label.toLowerCase()}-marker rimosso]`);
+  const rimosso = `[${label.toLowerCase()}-marker rimosso]`;
+  const suo = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (
+    body
+      // **Qualunque** etichetta, ma solo nella forma vera di un marcatore:
+      // `nome_<esadecimale>`. Il primo tentativo era `[A-Za-z][\w-]*` senza
+      // l'esadecimale, e misurandolo su contenuto vero mangiava
+      // `std::vector<std::vector<int>>` e `if (a >> 2)` — cioè distruggeva
+      // proprio «studia questo documento di codice», una delle due skill che
+      // questa slice spedisce. Un recinto da chiudere per davvero porta sempre
+      // il nonce, quindi chiedere l'esadecimale non lascia passare l'attacco e
+      // lascia in pace il codice.
+      .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]*_[0-9a-f]{6,}/g, rimosso)
+      .replace(/[A-Za-z][\w-]*_[0-9a-f]{6,}\s*>(?:\s*>)+/g, rimosso)
+      // E il **proprio** marcatore anche senza nonce: un corpo che prova a
+      // chiudere questo recinto perde il tentativo pure quando tira a indovinare.
+      .replace(new RegExp(`<(?:\\s*<)+\\s*${suo}\\w*|${suo}\\w*\\s*>(?:\\s*>)+`, 'gi'), rimosso)
+  );
 }

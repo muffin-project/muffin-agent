@@ -401,117 +401,112 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 138,
+    "line": 139,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 161,
+    "line": 162,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 250,
+    "line": 251,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 299,
+    "line": 300,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 301,
+    "line": 302,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 320,
+    "line": 321,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 340,
+    "line": 341,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 342,
+    "line": 343,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 351,
+    "line": 352,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 356,
+    "line": 357,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 368,
+    "line": 369,
     "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 374,
+    "line": 375,
     "testo": "// telling them to create one."
-  },
-  "agent/runtime.ts:345": {
-    "path": "agent/runtime.ts",
-    "line": 386,
-    "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 387,
+    "line": 388,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 392,
+    "line": 393,
     "testo": "...makeFsTools(scope),"
+  },
+  "agent/runtime.ts:439": {
+    "path": "agent/runtime.ts",
+    "line": 439,
+    "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 530,
+    "line": 531,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 537,
+    "line": 538,
     "testo": "// built-ins get the same treatment."
-  },
-  "agent/runtime.ts:497": {
-    "path": "agent/runtime.ts",
-    "line": 540,
-    "testo": "// Declared only when the tool exists. A capability the kernel knows about"
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 568,
+    "line": 569,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 576,
+    "line": 577,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
-  "agent/runtime.ts:534": {
+  "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 577,
-    "testo": "* process is running them — the gateway hosts the remote surfaces, a REPL"
+    "line": 614,
+    "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 642,
+    "line": 643,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 750,
+    "line": 751,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -871,22 +866,22 @@
   },
   "cli/init.ts:101": {
     "path": "cli/init.ts",
-    "line": 169,
+    "line": 181,
     "testo": "apiKeyRef: 'secret://provider_api_key',"
   },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
-    "line": 172,
+    "line": 184,
     "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 214,
+    "line": 226,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 215,
+    "line": 227,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:46": {
@@ -896,7 +891,7 @@
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
-    "line": 167,
+    "line": 179,
     "testo": "kind: options.provider ?? 'anthropic',"
   },
   "cli/jobs.ts:63": {
@@ -1331,7 +1326,7 @@
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
-    "line": 203,
+    "line": 213,
     "testo": "`dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +"
   },
   "core/config/config.ts:39": {
@@ -1709,10 +1704,10 @@
     "line": 40,
     "testo": "extraction_v  INTEGER NOT NULL DEFAULT 0,"
   },
-  "core/memory/spotlight.ts:48": {
+  "core/memory/spotlight.ts:58": {
     "path": "core/memory/spotlight.ts",
-    "line": 48,
-    "testo": "export function fence(label: string, body: string, note?: string): Fence {"
+    "line": 58,
+    "testo": "export function fence(label: string, body: string, note?: string, nonce_?: string): Fence {"
   },
   "core/memory/store.test.ts:124": {
     "path": "core/memory/store.test.ts",
@@ -2049,10 +2044,10 @@
     "line": 68,
     "testo": "append(session: SessionRef, message: SessionMessage): void {"
   },
-  "core/skills/skills.ts:124": {
+  "core/skills/skills.ts:143": {
     "path": "core/skills/skills.ts",
-    "line": 134,
-    "testo": "export function skillsPromptSection(skills: SkillInfo[]): string {"
+    "line": 143,
+    "testo": "export function skillsPromptSection(skills: SkillInfo[], nonce?: string): string {"
   },
   "core/skills/skills.ts:18": {
     "path": "core/skills/skills.ts",
@@ -2064,7 +2059,7 @@
     "line": 53,
     "testo": ""
   },
-  "core/skills/skills.ts:59": {
+  "core/skills/skills.ts:60": {
     "path": "core/skills/skills.ts",
     "line": 60,
     "testo": "export function discoverSkills(home: string): SkillScan {"
@@ -2761,42 +2756,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 325,
+    "line": 326,
     "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 390,
+    "line": 391,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 386,
+    "line": 387,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 506,
+    "line": 507,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 530,
+    "line": 531,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 568,
+    "line": 569,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 574,
+    "line": 575,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 124,
+    "line": 125,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {
