@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { paths } from '../core/config/config.js';
@@ -185,5 +186,35 @@ describe('il nome della chiave dice di chi è', () => {
 
     const config = JSON.parse(readFileSync(paths(dir).config, 'utf8')) as { provider: { apiKeyRef: string } };
     expect(config.provider.apiKeyRef).toBe('secret://provider_api_key');
+  });
+});
+
+/**
+ * La porta pericolosa: `installTree` copia tutto ciò che trova, e uno dei tre
+ * alberi che copia è `defaults/rot/` — l'albero **sigillato**.
+ *
+ * Un `.DS_Store` finito lì dentro viene sigillato da `seal()` insieme al resto
+ * (`listRotFiles` cammina su tutto tranne il manifest), e il Finder lo riscrive
+ * appena qualcuno apre quella cartella: l'hash diverge e l'installazione va in
+ * safe mode per un file che nessuno legge. Sul checkout dell'owner un
+ * `.DS_Store` da 6148 byte stava in `defaults/` dal 16 agosto.
+ *
+ * Il file di prova viene piantato nel checkout vero, perché è l'unico posto da
+ * cui `installTree` legge — e tolto in `finally`, perché lasciarlo lì
+ * riprodurrebbe il difetto invece di provarlo.
+ */
+describe('init non installa la spazzatura del sistema operativo', () => {
+  it('un .DS_Store in defaults/rot/ non entra nel sigillo', () => {
+    const junk = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot', '.DS_Store');
+    const dir = scratchDir('muffin-init-junk-');
+    writeFileSync(junk, 'binaria del Finder\n');
+    try {
+      runInit({ home: dir, apiKey: 'sk-test' });
+      expect(existsSync(join(dir, 'rot', '.DS_Store'))).toBe(false);
+      // E i file veri del sigillo ci sono comunque.
+      expect(existsSync(join(dir, 'rot', 'policy.json'))).toBe(true);
+    } finally {
+      rmSync(junk, { force: true });
+    }
   });
 });
