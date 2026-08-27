@@ -23,17 +23,15 @@ Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
 speso a ragionare senza scrivere un carattere di JSON. Chiuso da #148: `facts`
 16 → **30** dopo #148, #153 e #155 — l'estrattore raccoglie di nuovo. `doctor` era **verde** su due dei tre giri morti (#147)
 e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
+Da #165 il rerank porta il suo costo sullo span `memory.recall`: non restava
+nessuna chiamata al modello fuori dalle tracce.
 
 **Resta da fare, con le prove già in mano:**
 
-1. `memory.rerank` **senza span**: da #161 il suo esito è dichiarato in
-   `strategies`, il suo costo no — è l'ultima chiamata al modello che non
-   compare nelle tracce. `RecallDeps` non ha un tracer: è plumbing, non una
-   riga.
-2. L'adapter openai-compat **non legge il reasoning**, quindi quei token si
+1. L'adapter openai-compat **non legge il reasoning**, quindi quei token si
    pagano e il testo si perde. È la via vera per togliere `REASONING_HEADROOM`
    (#148), e costa uno schema al confine — decisione con un prezzo.
-3. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
+2. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
    `doctor` lo dice, ma finché resta giù niente di nuovo viene indicizzato e il
    recall è solo testuale. Stato della macchina, non del codice.
 
