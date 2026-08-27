@@ -78,6 +78,29 @@ docker run --rm \
     fi
     echo "NODE=$(node --version)  UNAME=$(uname -sm)"
     mkdir -p /app && tar xf /repo.tar -C /app
+
+    # install.sh e il percorso supportato per un owner che clona su una VPS —
+    # mai provato in container prima del 27/08/2026. `npm i -g .` da sorgente
+    # muore li con `tsc: not found` (npm -g non installa le devDependencies),
+    # ma install.sh gira `npm install` locale, che le installa. Copia a parte
+    # e non-root, cosi la prova non riusa la /app gia compilata sopra e misura
+    # davvero una compilazione da zero: se `prepare`/`compile` si rompono di
+    # nuovo, questo va rosso prima di ACCETTAZIONE, non dopo.
+    # NB: questa copia usa lo stesso .tar di /app sopra, e dal 27/08 quel tar
+    # viene da `git clone --depth 1` (non piu `git archive`, v. sopra) — porta
+    # .git. `muffin --version` qui sotto legge quindi lo sha vero, non "build
+    # sconosciuta": verificato girando questo stesso gate fuso (v. PR).
+    mkdir -p /install-check && tar xf /repo.tar -C /install-check
+    IHOME=/tmp/install-home
+    mkdir -p "$IHOME"
+    chown -R nobody /install-check "$IHOME"
+    IAS="runuser -u nobody -- env HOME=$IHOME"
+    echo "=== INSTALL.SH (non-root, da zero) ==="
+    # >>> BLOCCO INSTALL PROVATO DA gate-linux.test.ts
+    $IAS bash /install-check/install.sh < /dev/null
+    $IAS env PATH="$IHOME/.local/bin:/usr/local/bin:/usr/bin:/bin" muffin --version
+    # <<< BLOCCO INSTALL PROVATO DA gate-linux.test.ts
+
     npm ci --no-audit --no-fund >/dev/null
     # Non-root, come in CI: il probe del sandbox RIFIUTA di rispondere da root
     # (root aggira la restrizione userns, quindi il verde sarebbe falso), e
