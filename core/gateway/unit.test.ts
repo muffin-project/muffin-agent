@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
-import { EXIT_PERMANENT, planUnit, resolveLauncher, WATCHDOG_SEC,
+import { EXIT_PERMANENT, planUnit, resolveLauncher, SERVICE_NAME, WATCHDOG_SEC,
   resolveInterpreterDir,
   type InterpreterProbes,
 } from './unit.js';
@@ -565,5 +565,51 @@ describe("l'interprete della unit non deve scadere", () => {
       expect(plan.text).toContain('/opt/homebrew/bin');
       expect(plan.text).not.toContain('Cellar');
     }
+  });
+});
+
+/**
+ * La lista stampata e quella eseguita non sono la stessa cosa.
+ *
+ * `commands` è prosa per un terminale: contiene una riga di commento, un
+ * `$(id -u)` che espande la shell, un `"$USER"` e un `# perché` in coda proprio
+ * sul passo che la gente salta. Eseguirla verbatim è il modo in cui una lista
+ * da leggere diventa in silenzio un programma sbagliato — e i due campi nascono
+ * accanto perché non possano divergere.
+ */
+describe('activation — la forma eseguibile, accanto a quella da leggere', () => {
+  const base = { home: '/home/o/.muffin', exec: ['/home/o/.local/bin/muffin', 'gateway', 'run'], homeDir: '/home/o' };
+
+  it('senza sapere chi installa non indovina: la lista resta da leggere', () => {
+    // `gui/$(id -u)` va benissimo stampato. Qui no: sbagliare uid vuol dire
+    // registrare l'agent di qualcun altro.
+    expect(planUnit({ ...base, platform: 'linux' }).activation).toEqual([]);
+    expect(planUnit({ ...base, platform: 'darwin' }).activation).toEqual([]);
+  });
+
+  it('systemd: rilegge, abilita, e non lascia indietro il linger', () => {
+    const plan = planUnit({ ...base, platform: 'linux', identity: { user: 'owner', uid: 1000 } });
+    expect(plan.activation.map((s) => s.argv)).toEqual([
+      ['systemctl', '--user', 'daemon-reload'],
+      ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
+      // Il passo che si salta, e il cui sintomo — «si ferma da solo ogni
+      // tanto» — è il più difficile da ricollegare alla causa (ADR-0035).
+      ['loginctl', 'enable-linger', 'owner'],
+    ]);
+    // Nessuno dei tre porta metacaratteri: se ne comparisse uno vorrebbe dire
+    // che qualcuno ha copiato una riga dalla lista stampata.
+    for (const s of plan.activation) for (const a of s.argv) expect(a).not.toMatch(/[$#"]/);
+  });
+
+  it("launchd: solo il bootstrap — `print` è per gli occhi e `bootout` spegnerebbe", () => {
+    const plan = planUnit({ ...base, platform: 'darwin', homeDir: '/Users/o', identity: { user: 'o', uid: 501 } });
+    expect(plan.activation).toHaveLength(1);
+    expect(plan.activation[0]?.argv.slice(0, 3)).toEqual(['launchctl', 'bootstrap', 'gui/501']);
+    expect(plan.activation[0]?.argv[3]).toBe(plan.path);
+  });
+
+  it('ogni passo dice perché esiste, perché viene stampato prima di partire', () => {
+    const plan = planUnit({ ...base, platform: 'linux', identity: { user: 'owner', uid: 1000 } });
+    for (const s of plan.activation) expect(s.why.length).toBeGreaterThan(10);
   });
 });

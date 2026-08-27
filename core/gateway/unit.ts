@@ -82,8 +82,25 @@ export type UnitPlan = {
   /** Where the file belongs on this platform. */
   path: string;
   text: string;
-  /** What the owner runs to make it live. Never run for them. */
+  /**
+   * What the owner reads to make it live — prose, for a terminal.
+   *
+   * Not a program: the list carries a comment line, a shell substitution
+   * (`$(id -u)`), a variable (`"$USER"`) and a trailing `# perché` on the
+   * step people skip. Executing it verbatim is how a display list quietly
+   * becomes the wrong thing. `activation` is the executable form, and the two
+   * are generated side by side so they cannot drift apart.
+   */
   commands: string[];
+  /**
+   * The same activation, as argv — what `--start` actually runs.
+   *
+   * Empty when the caller did not say **who** is installing (`identity`): the
+   * printed form can afford `$(id -u)` because a shell expands it, and this
+   * one cannot afford to guess. `--start` then refuses and says so, rather
+   * than bootstrapping some other uid's agent.
+   */
+  activation: { argv: string[]; why: string }[];
   /** What they need to know before trusting it. */
   warnings: string[];
 };
@@ -96,6 +113,15 @@ export type UnitOptions = {
   exec: string[];
   configHome?: string;
   homeDir?: string;
+  /**
+   * Chi sta installando, per la forma eseguibile dell'attivazione.
+   *
+   * `launchctl bootstrap gui/<uid>` e `loginctl enable-linger <user>` nominano
+   * un utente: nella lista stampata lo fa la shell, qui deve farlo il chiamante.
+   * Il planner resta puro, e senza questo campo `activation` è vuota invece di
+   * contenere un indovinello.
+   */
+  identity?: { user: string; uid: number } | undefined;
   /**
    * The directory of the Node interpreter this install is running under —
    * `dirname(process.execPath)`. The caller probes, the planner stays pure.
@@ -212,6 +238,7 @@ function systemdPlan({
   homeDir,
   systemdNotify = true,
   interpreterDir,
+  identity,
 }: UnitOptions): UnitPlan {
   const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
   const path = join(dir, `${SERVICE_NAME}.service`);
@@ -303,6 +330,27 @@ WantedBy=default.target
       // "il gateway si ferma da solo ogni tanto" (ADR-0035).
       `loginctl enable-linger "$USER"   # senza questo la unit utente muore al logout`,
     ],
+    // Senza `mkdir` e senza `gateway install --write`: quei due passi `--start`
+    // li ha già fatti quando arriva qui. Restano i tre che trasformano un file
+    // in un servizio, nell'ordine in cui la lista sopra li nomina.
+    activation:
+      identity === undefined
+        ? []
+        : [
+            { argv: ['systemctl', '--user', 'daemon-reload'], why: 'perché systemd rilegga la unit appena scritta' },
+            {
+              argv: ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
+              why: "abilita all'avvio e la fa partire adesso",
+            },
+            {
+              // Il passo che si salta, e il suo sintomo è il più difficile da
+              // ricollegare alla causa: "il gateway si ferma da solo ogni
+              // tanto" (ADR-0035). In una lista da copiare è l'ultima riga e
+              // ha un commento in coda; qui non è saltabile.
+              argv: ['loginctl', 'enable-linger', identity.user],
+              why: 'senza, la unit utente muore al logout',
+            },
+          ],
     warnings: systemdNotify
       ? []
       : [
@@ -312,7 +360,7 @@ WantedBy=default.target
   };
 }
 
-function launchdPlan({ home, exec, homeDir, interpreterDir }: UnitOptions): UnitPlan {
+function launchdPlan({ home, exec, homeDir, interpreterDir, identity }: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const args = exec.map((a) => `      <string>${xml(a)}</string>`).join('\n');
   const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -370,6 +418,18 @@ ${args}
       `launchctl print gui/$(id -u)/${LAUNCHD_LABEL}`,
       `# per fermarlo: launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}`,
     ],
+    // `print` non c'è: è una verifica per gli occhi, non un passo. E il
+    // `bootout` è un commento nella lista stampata proprio perché non va
+    // eseguito ora — eseguirlo qui spegnerebbe ciò che si sta accendendo.
+    activation:
+      identity === undefined
+        ? []
+        : [
+            {
+              argv: ['launchctl', 'bootstrap', `gui/${identity.uid}`, path],
+              why: 'registra il LaunchAgent e lo avvia',
+            },
+          ],
     warnings: [
       // The divergence, recorded rather than merely suffered.
       `launchd non ha un equivalente di RestartPreventExitStatus: né un fallimento permanente (uscita ${EXIT_PERMANENT}: config o secret mancanti, root of trust che rifiuta) né uno stop chiesto (uscita ${EXIT_STOPPED}) lo tengono giù — KeepAlive lo riporta su, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')}.`,
