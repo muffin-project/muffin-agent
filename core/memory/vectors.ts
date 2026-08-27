@@ -29,6 +29,61 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_tenant ON chunks(tenant_id, source_kind);
 `;
 
+/**
+ * Le due metà del backlog: episodi vivi e fatti non scaduti che non hanno
+ * ancora un vettore **per l'embedder di adesso**.
+ *
+ * Una funzione e non due query copiate, perché i suoi due lettori devono per
+ * forza rispondere alla stessa domanda: `indexBacklog` la usa per decidere cosa
+ * embeddare, `quantiNonIndicizzati` per decidere se `doctor` può dire «in
+ * sync». Il giorno in cui divergono, `doctor` torna verde su una memoria a
+ * metà — che è il difetto da cui nasce l'intera slice.
+ *
+ * Il tenant si interpola invece di legarsi: la clausola deve **sparire** dalla
+ * query globale, non diventare un `:tenant IS NULL OR …` che cambia il piano
+ * anche sul percorso caldo.
+ */
+function sqlBacklog(perTenant: boolean): string {
+  const e = perTenant ? 'e.tenant_id = :tenant AND ' : '';
+  const f = perTenant ? 'f.tenant_id = :tenant AND ' : '';
+  return `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
+           FROM episodes e
+          WHERE ${e}e.content IS NOT NULL AND trim(e.content) <> ''
+            AND e.superseded_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
+                               AND c.source_id = e.id AND c.embedding_v = :ev)
+         UNION ALL
+         SELECT 'fact' AS kind, f.id AS sourceId,
+                s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
+           FROM facts f
+           JOIN entities s ON s.id = f.subject_id
+           LEFT JOIN entities o ON o.id = f.object_id
+          WHERE ${f}f.expired_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM chunks c
+                             WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
+                               AND c.source_id = f.id AND c.embedding_v = :ev)`;
+}
+
+/**
+ * Quante sorgenti, in tutti i tenant, aspettano ancora un vettore.
+ *
+ * Esiste per `doctor`, e sta **fuori** dalla classe di proposito: costruire un
+ * `VectorIndex` esegue il costruttore, e il costruttore può fare DROP+DELETE.
+ * Un check di salute non deve poter cancellare l'indice che sta misurando.
+ *
+ * Serve perché contare `chunks` contro `chunks_vec` non è la stessa domanda.
+ * Misurato: 250 episodi, cambio di `dimensions`, un giro di backlog ne scrive
+ * 200 (`limit = 200`) — e `doctor` diceva «200 chunks, 200 vectors, in sync»
+ * con **50 episodi** che il recall semantico non vedeva. Cioè, alla lettera, il
+ * «55 chunks, 55 vectors, in sync: vero e fuorviante» da cui nasce la slice,
+ * riprodotto dalla manopola nuova come stato normale del dopo-cambio.
+ */
+export function quantiNonIndicizzati(db: Database.Database, embedderId: string): number {
+  const row = db.prepare(`SELECT count(*) AS n FROM (${sqlBacklog(false)})`).get({ ev: embedderId });
+  return (row as { n: number }).n;
+}
+
 export class VectorIndex {
   private readonly dimensions: number;
 
@@ -41,6 +96,8 @@ export class VectorIndex {
     db.exec(CHUNKS_SCHEMA);
     // The dimension is baked into the table, so a change of embedder means a
     // new version and a re-index — never a silent mix of incompatible vectors.
+    // Chi mantiene vera quella frase è `soloLEmbedderCorrente()` qui sotto: da
+    // solo, questo DDL la manteneva a metà.
     //
     // `tenant_id` is a **partition key**, which is the whole point: it moves the
     // tenant filter inside the index. Before this the search took k nearest
@@ -55,6 +112,90 @@ export class VectorIndex {
        )`,
     );
     this.migrateUnpartitioned();
+    this.soloLEmbedderCorrente();
+  }
+
+  /** La dimensione che il DDL sul disco dichiara, o `undefined` se la tabella non c'è. */
+  private dimensioneSulDisco(): number | undefined {
+    const ddl = this.db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'`)
+      .get() as { sql: string | null } | undefined;
+    const trovata = /embedding\s+float\[(\d+)\]/i.exec(ddl?.sql ?? '');
+    return trovata === null ? undefined : Number(trovata[1]);
+  }
+
+  /**
+   * L'indice tiene i vettori di **un solo** embedder: quello di adesso.
+   *
+   * Girare la manopola in config.json può cambiare due cose, e finora ne era
+   * gestita una sola.
+   *
+   * **La dimensione.** La tabella vec0 nasce con la dimensione cotta dentro il
+   * DDL, e la crea un `CREATE VIRTUAL TABLE IF NOT EXISTS`: cambiare embedder
+   * non la cambiava, la saltava. Il codice credeva 1536, il disco restava 1024,
+   * e il primo `index()` moriva con un errore di sqlite-vec che non nomina né
+   * l'embedder vecchio né quello nuovo. Misurato prima di ripararlo: costruito
+   * l'indice con un embedder a 8 dimensioni e poi con uno a 16, il DDL sul
+   * disco restava `float[8]`.
+   *
+   * **L'id.** `indexBacklog` e `alreadyIndexed` filtrano su `embedding_v`,
+   * cioè sull'id dell'embedder — e l'id **non porta la dimensione**:
+   * `ollama:${model}`. Qui stava scritto che il backlog «li rifà, perché filtra
+   * su `embedding_v`», ed era la premessa esattamente rovesciata: filtrare su
+   * `embedding_v` è ciò che *impedisce* il rifacimento quando l'id non cambia.
+   * Basta correggere `dimensions` a mano in config.json — o portare
+   * `text-embedding-3-small` da 1536 a 512, che dell'id non cambia una lettera
+   * — e il DROP porta via i vettori mentre il backlog, che vede l'id di sempre,
+   * non ha più niente da rifare. Misurato prima di ripararlo, su un episodio
+   * solo: `chunks 1 · chunks_vec 1` prima, `chunks 1 · chunks_vec 0` subito
+   * dopo il costruttore, backlog `[]`, `index()` scrive 0, `chunks_vec` resta
+   * 0. Recall semantico spento per sempre, in silenzio, con una riga di config
+   * — e `doctor` rosso in permanenza («6 chunks but 3 vectors») con un rimedio
+   * che drena un backlog vuoto.
+   *
+   * Da qui il `DELETE FROM chunks` nella stessa transazione del DROP: dopo il
+   * DROP **ogni** riga di `chunks` è orfana, qualunque sia il suo
+   * `embedding_v`. È legale perché `chunks` è derivata — episodi e fatti
+   * restano, e `indexBacklog` la ricostruisce da quelli. Buttarla è proprio il
+   * modo in cui il backlog torna a vedere del lavoro da fare.
+   *
+   * Il ramo a dimensione uguale è la stessa regola con meno rumore. Non è vero
+   * che i vettori di un altro modello «restano inerti»: `search()` non filtra
+   * su `embedding_v`, quindi occupano il budget `k` e tornano con distanze
+   * calcolate contro il vettore di query di un modello diverso. Misurato con
+   * due modelli a 4 dimensioni: 2 hit, quella del modello vecchio con
+   * `distance 1.414`, un numero che non vuole dire niente.
+   */
+  private soloLEmbedderCorrente(): void {
+    const suDisco = this.dimensioneSulDisco();
+    if (suDisco === undefined) return;
+
+    if (suDisco !== this.dimensions) {
+      this.db.transaction(() => {
+        this.db.exec(`DROP TABLE chunks_vec`);
+        this.db.exec(
+          `CREATE VIRTUAL TABLE chunks_vec USING vec0(
+             tenant_id TEXT PARTITION KEY,
+             embedding float[${this.dimensions}]
+           )`,
+        );
+        this.db.exec(`DELETE FROM chunks`);
+      })();
+      return;
+    }
+
+    // Stessa dimensione, altro modello: la tabella va bene, le righe no. Le
+    // righe vec0 si tolgono una per una perché il rowid è la chiave e vec0 non
+    // sa fare una DELETE con sottoquery.
+    const dropVector = this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
+    this.db.transaction(() => {
+      const vecchie = this.db.prepare(`SELECT id FROM chunks WHERE embedding_v <> ?`).all(this.embedder.id) as {
+        id: number;
+      }[];
+      if (vecchie.length === 0) return;
+      for (const row of vecchie) dropVector.run(BigInt(row.id));
+      this.db.prepare(`DELETE FROM chunks WHERE embedding_v <> ?`).run(this.embedder.id);
+    })();
   }
 
   /**
@@ -63,10 +204,21 @@ export class VectorIndex {
    * The vectors are read back out and re-inserted rather than recomputed: this
    * table is derived, but "derived" is not a licence to make the owner pay for
    * an embedding run to fix a schema decision of ours. Migrations preserve data.
+   *
+   * La tabella nuova nasce con la dimensione che era **sul disco**, non con
+   * quella dell'embedder di adesso: reinserire vettori a 8 dimensioni in una
+   * tabella `float[16]` fa fallire l'insert. Misurato prima di ripararlo, su un
+   * DB legacy con un embedder a 16 dimensioni: `Dimension mismatch … Expected
+   * 16 … received 8`, rollback, costruttore che lancia — e
+   * `agent/runtime.ts:352` lo inghiotte, quindi `vectors = undefined` a ogni
+   * boot, per sempre, con `doctor` verde. Il cambio di dimensione non si perde:
+   * lo raccoglie `soloLEmbedderCorrente()`, che gira subito dopo ed è il posto
+   * dove buttare è la cosa giusta.
    */
   private migrateUnpartitioned(): void {
     const columns = this.db.prepare(`PRAGMA table_info(chunks_vec)`).all() as { name: string }[];
     if (columns.some((c) => c.name === 'tenant_id')) return;
+    const dimensioneVecchia = this.dimensioneSulDisco() ?? this.dimensions;
 
     const rows = this.db.prepare(`SELECT rowid, embedding FROM chunks_vec`).all() as {
       rowid: number;
@@ -86,7 +238,7 @@ export class VectorIndex {
       this.db.exec(
         `CREATE VIRTUAL TABLE chunks_vec USING vec0(
            tenant_id TEXT PARTITION KEY,
-           embedding float[${this.dimensions}]
+           embedding float[${dimensioneVecchia}]
          )`,
       );
       const insert = this.db.prepare(
@@ -210,28 +362,11 @@ export class VectorIndex {
   }
 
   indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
-    return this.db
-      .prepare(
-        `SELECT 'episode' AS kind, e.id AS sourceId, e.content AS text
-           FROM episodes e
-          WHERE e.tenant_id = :tenant AND e.content IS NOT NULL AND trim(e.content) <> ''
-            AND e.superseded_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM chunks c
-                             WHERE c.tenant_id = e.tenant_id AND c.source_kind = 'episode'
-                               AND c.source_id = e.id AND c.embedding_v = :ev)
-         UNION ALL
-         SELECT 'fact' AS kind, f.id AS sourceId,
-                s.name || ' ' || f.predicate || ' ' || COALESCE(f.object_value, o.name, '') AS text
-           FROM facts f
-           JOIN entities s ON s.id = f.subject_id
-           LEFT JOIN entities o ON o.id = f.object_id
-          WHERE f.tenant_id = :tenant AND f.expired_at IS NULL
-            AND NOT EXISTS (SELECT 1 FROM chunks c
-                             WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
-                               AND c.source_id = f.id AND c.embedding_v = :ev)
-         LIMIT :limit`,
-      )
-      .all({ tenant: tenantId, ev: this.embedder.id, limit }) as {
+    return this.db.prepare(`${sqlBacklog(true)} LIMIT :limit`).all({
+      tenant: tenantId,
+      ev: this.embedder.id,
+      limit,
+    }) as {
       kind: ChunkSource;
       sourceId: number;
       text: string;
