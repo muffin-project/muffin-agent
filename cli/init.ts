@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { SCHEMA as BUDGET_SCHEMA } from '../core/budget/budget.js';
 import { stampFresh } from '../core/db/migrate.js';
 import { seal } from '../core/rot/verify.js';
-import { recordCopied } from '../core/config/defaults-drift.js';
+import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
 import { LEGACY_API_KEY_NAME, apiKeyCandidates, apiKeyNameFor } from '../core/config/providers.js';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -283,7 +283,10 @@ function installTree(sub: string, destDir: string, force: boolean): { relPath: s
       const dst = join(to, entry);
       const relPath = prefix ? `${prefix}/${entry}` : entry;
       if (statSync(src).isDirectory()) walk(src, dst, relPath);
-      else if (force || !existsSync(dst)) {
+      // La stessa regola che usa la diagnosi, dalla stessa funzione: due copie
+      // deriverebbero, e la copia che conta di piu' e' questa — uno dei tre
+      // alberi che questo walk copia e' `defaults/rot/`, che e' sigillato.
+      else if (isShippedDefault(relPath) && (force || !existsSync(dst))) {
         copyFileSync(src, dst);
         copied.push({ relPath, dst });
       }
