@@ -19,6 +19,13 @@ export function promptNonce(home: string): string {
     // un nonce nuovo, e questo non è un segreto la cui rotazione costi qualcosa.
   }
   const nuovo = randomBytes(6).toString('hex');
-  writeFileSync(file, `${nuovo}\n`, 'utf8');
+  // 0600 come i segreti, e non perché apra qualcosa: perché **è** il recinto
+  // delle skill per tutta la vita di questa installazione. `~/.muffin` è 0755
+  // con umask 022, quindi senza `mode` questo file nascerebbe leggibile da
+  // qualunque altro utente della macchina — e su una VPS «qualunque altro
+  // utente» non è un'ipotesi. Prima di questa riga i nonce vivevano solo in
+  // memoria, per chiamata: metterne uno su disco è la cosa nuova, e va messa
+  // con i permessi giusti. Judge di `slice/skill-di-serie`.
+  writeFileSync(file, `${nuovo}\n`, { encoding: 'utf8', mode: 0o600 });
   return nuovo;
 }
