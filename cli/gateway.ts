@@ -11,7 +11,7 @@ import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
-import { createNotifier } from '../core/gateway/notify.js';
+import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
@@ -578,7 +578,7 @@ export async function cmdGatewayRun(
       // watched.
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
-      `supervisione: ${notify.supervised ? 'sd_notify attivo' : 'nessun supervisore (NOTIFY_SOCKET assente)'}\n`,
+      `supervisione: ${describeSupervision(process.env, process.platform)}\n`,
   );
 
   return gateway.serve();
