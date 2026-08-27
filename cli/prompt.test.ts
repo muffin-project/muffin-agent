@@ -44,3 +44,43 @@ describe('terminal prompts read the typed line', () => {
     await expect(pending).resolves.toBe('y');
   });
 });
+
+/**
+ * Ctrl+D è una risposta, non una promessa che non si chiude.
+ *
+ * `rl.question` non chiama mai il suo callback su EOF: readline emette `close`
+ * e basta. Una promise che si decide solo lì non si decide affatto, e Node
+ * stampa `Detected unsettled top-level await` e esce 13 — misurato su
+ * `muffin init` sotto un pty vero il 27/08/2026, alla primissima domanda del
+ * primissimo comando, il cui testo dice che Invio la salta.
+ *
+ * La guardia `isTTY` copriva «nessun terminale» e si leggeva come se coprisse
+ * anche questo. È la stessa forma due volte: un input che finisce non è un
+ * input che non c'era.
+ */
+describe('un input che finisce è una risposta', () => {
+  it('promptSecret non resta appeso quando il terminale chiude', async () => {
+    const { input, output } = fakeTty();
+    const pending = promptSecret('key: ', input, output);
+    input.end();
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('promptLine non resta appeso quando il terminale chiude', async () => {
+    const { input, output } = fakeTty();
+    const pending = promptLine('setup? [Y/n] ', input, output);
+    input.end();
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('una risposta seguita dalla chiusura resta la risposta', async () => {
+    // L'ordine dentro il callback è load-bearing: `rl.close()` emette `close`,
+    // e se l'ascoltatore risolvesse per primo ogni risposta diventerebbe
+    // «non ha risposto» — una chiave incollata e buttata via in silenzio.
+    const { input, output } = fakeTty();
+    const pending = promptSecret('key: ', input, output);
+    input.write('sk-or-v1-typed\n');
+    input.end();
+    await expect(pending).resolves.toBe('sk-or-v1-typed');
+  });
+});
