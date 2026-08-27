@@ -1201,3 +1201,30 @@ needs a schema at the boundary and keeps paying. The cheap half was in the same
 sentence, unlooked-at: **stop asking for it**. When a capability is missing in
 both directions, the one that removes cost is not automatically the one the
 note is written about, and the note is what the next person reads.
+
+## A scar comment is a defense only where the defense reaches
+
+`planUnit` took its destination as an argument, and the comment above that
+argument said why: a test had once written a real service unit into someone's
+`~/Library`, and the file had outlived the run. The sentence was accurate, the
+argument was real, and the hazard was fixed — in the planner.
+
+It happened again the day someone tested the layer above. `cmdGatewayInstall`
+called `homedir()` directly, so the moment a test drove the CLI in-process
+instead of through a child process with a rewritten `HOME`, a
+`muffin-gateway.service` appeared in the real `~/.config` with a
+`WorkingDirectory` pointing at a temp directory that no longer existed. The
+defense covered the pure function; the impure caller was where the value came
+from.
+
+**A defense at one layer is a defense at one layer.** The question a scar
+comment should force is not "is this fixed here" but "who else computes this
+value, and can they be made to take it as an argument too". Until the answer is
+nobody, the comment is a description of a hazard that is still live, next to
+the one place it isn't.
+
+There is a smaller point next to it. The only reason the recurrence was noticed
+at all is that the in-process test *failed loudly* — it hit the "refuses to
+clobber an edited unit" branch and returned 2, because a previous run had left
+a file behind. A defense that produces a confusing failure is still doing more
+than one that produces none.
