@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
-import { EXIT_PERMANENT, planUnit, resolveLauncher, WATCHDOG_SEC } from './unit.js';
+import { EXIT_PERMANENT, planUnit, resolveLauncher, WATCHDOG_SEC,
+  resolveInterpreterDir,
+  type InterpreterProbes,
+} from './unit.js';
 
 /**
  * The unit, and the scar it is shaped around.
@@ -467,5 +470,100 @@ describe('la unit deve dire dove sta node', () => {
     const plan = planUnit({ ...base, interpreterDir: undefined, platform: 'darwin' });
     expect(plan.text).not.toContain('<key>PATH</key>');
     expect(plan.text).toContain('<key>MUFFIN_HOME</key>');
+  });
+});
+
+/**
+ * Il path dell'interprete non deve scadere.
+ *
+ * `dirname(process.execPath)` è la risposta ovvia ed è quella che scade: Node
+ * risolve `execPath` attraverso i symlink, quindi sulla macchina dell'owner è
+ * `/opt/homebrew/Cellar/node@22/22.22.2_2/bin` — una directory con dentro una
+ * versione **e una revisione**, che Homebrew cancella al prossimo upgrade.
+ *
+ * È esattamente il guasto per cui `interpreterDir` esiste (`env: node: No such
+ * file or directory`, exit 127, ogni dieci secondi): la riparazione aveva
+ * sostituito «nessun node sul PATH» con «un path con una data di scadenza», e
+ * `gateway.err` su quella macchina porta tutti e due gli episodi.
+ */
+describe("l'interprete della unit non deve scadere", () => {
+  const HOMEBREW_REAL = '/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node';
+
+  /** `resolves`: dove porta ogni percorso. Assente = non risolve (non esiste). */
+  const probes = (spec: { path: string[]; resolves?: Record<string, string> }): InterpreterProbes => ({
+    pathEntries: () => spec.path,
+    realpath: (p) => (spec.resolves ?? {})[p] ?? null,
+  });
+
+  it('preferisce il link stabile di Homebrew alla directory Cellar che verrà cancellata', () => {
+    const dir = resolveInterpreterDir(
+      HOMEBREW_REAL,
+      probes({
+        path: ['/opt/homebrew/bin', '/usr/bin', '/bin'],
+        resolves: { '/opt/homebrew/bin/node': HOMEBREW_REAL },
+      }),
+    );
+    expect(dir).toBe('/opt/homebrew/bin');
+  });
+
+  it('su una distro dove `node` è un file vero non cambia niente', () => {
+    // Nessun link da preferire: `/usr/bin` è già stabile di suo, e inventare
+    // un altro percorso sarebbe una supposizione, non una riparazione.
+    const dir = resolveInterpreterDir('/usr/bin/node', probes({ path: ['/usr/local/bin', '/usr/bin', '/bin'] }));
+    expect(dir).toBe('/usr/bin');
+  });
+
+  it('ignora un link che porta a un altro interprete', () => {
+    // Sarebbe il guasto peggiore dei due: la unit partirebbe sotto un Node su
+    // cui questa installazione non è mai stata provata, e partirebbe zitta.
+    const dir = resolveInterpreterDir(
+      HOMEBREW_REAL,
+      probes({
+        path: ['/usr/local/bin', '/opt/homebrew/bin'],
+        resolves: { '/usr/local/bin/node': '/opt/homebrew/Cellar/node@20/20.1.0/bin/node' },
+      }),
+    );
+    expect(dir).toBe('/opt/homebrew/Cellar/node@22/22.22.2_2/bin');
+  });
+
+  it('vale anche quando è la **directory** a essere linkata, non il file', () => {
+    // Il caso che la prima stesura sbagliava: dove `/usr/local/bin` è una
+    // directory-symlink, il `node` dentro è un file ordinario. Chiedere che il
+    // file fosse un symlink rifiutava proprio il percorso stabile da trovare.
+    const dir = resolveInterpreterDir(
+      HOMEBREW_REAL,
+      probes({ path: ['/usr/local/bin'], resolves: { '/usr/local/bin/node': HOMEBREW_REAL } }),
+    );
+    expect(dir).toBe('/usr/local/bin');
+  });
+
+  it('una directory del PATH senza node non conta', () => {
+    const dir = resolveInterpreterDir(HOMEBREW_REAL, probes({ path: ['/opt/homebrew/bin'] }));
+    expect(dir).toBe('/opt/homebrew/Cellar/node@22/22.22.2_2/bin');
+  });
+
+  it('con un PATH vuoto resta la directory dell interprete, come prima', () => {
+    expect(resolveInterpreterDir(HOMEBREW_REAL, probes({ path: [] }))).toBe(
+      '/opt/homebrew/Cellar/node@22/22.22.2_2/bin',
+    );
+  });
+
+  it('la directory stabile finisce davvero nel PATH della unit, su entrambe le piattaforme', () => {
+    // La cucitura: risolvere bene e poi non scriverlo sarebbe lo stesso guasto.
+    const stable = resolveInterpreterDir(
+      HOMEBREW_REAL,
+      probes({ path: ['/opt/homebrew/bin'], resolves: { '/opt/homebrew/bin/node': HOMEBREW_REAL } }),
+    );
+    for (const platform of ['linux', 'darwin'] as const) {
+      const plan = planUnit({
+        platform,
+        home: '/tmp/muffin-home',
+        exec: ['/tmp/muffin-home/bin/muffin', 'gateway', 'run'],
+        homeDir: '/tmp/fakehome',
+        interpreterDir: stable,
+      });
+      expect(plan.text).toContain('/opt/homebrew/bin');
+      expect(plan.text).not.toContain('Cellar');
+    }
   });
 });
