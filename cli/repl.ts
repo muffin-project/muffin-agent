@@ -221,6 +221,12 @@ export function makeReplCliWrite(
  * running a turn (or faking a TTY) at all, the same reason `makeReplCliWrite`
  * above is its own function rather than inlined where it is used.
  */
+/**
+ * Solo per la riga «(2/3)»: il numero di tentativi totali che `agent/loop.ts`
+ * fa. Non e' una manopola — e' l'eco di una costante che vive li'.
+ */
+const MAX_TOOL_RETRIES_MOSTRATI = 3;
+
 export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): string | null {
   if (verbosity === 'debug') {
     switch (event.type) {
@@ -230,6 +236,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
         return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
       case 'tool_start':
         return `· ${event.name}…`;
+      case 'tool_retry':
+        return `· ${event.name} tentativo ${event.attempt} fra ${event.inMs}ms — ${event.why}`;
       case 'tool_end':
         return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
       default:
@@ -248,6 +256,12 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     // detta due volte.
     case 'tool_start':
       return null;
+    // Il retry invece si dice, anche fuori da `--debug`: senza, chi guarda vede
+    // lo spinner fermo per il doppio del tempo e non sa se stia succedendo
+    // qualcosa. È l'unica riga che compare *prima* che un tool finisca, e
+    // compare solo quando c'è una ragione.
+    case 'tool_retry':
+      return `  ↻ ${toolPhrase(event.name)} — riprovo (${event.attempt}/${MAX_TOOL_RETRIES_MOSTRATI})`;
     case 'tool_end':
       // Rientrato di due, come l'attesa che sostituisce: il lavoro che ha
       // prodotto la risposta sta sotto la domanda, non accanto ad essa
