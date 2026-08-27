@@ -25,16 +25,17 @@ e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
 
 **Resta da fare, con le prove già in mano:**
 
-1. **`supervisione: nessun supervisore`** (`cli/gateway.ts:558`) è un controllo
-   solo-systemd stampato ovunque: su macOS contraddice `doctor`, che vede
-   launchd tenerlo su.
-2. `--version` → `0.0.0`; `memory.rerank` senza span; l'adapter openai-compat
-   non legge il reasoning, quindi quei token si pagano e il testo si perde — la
-   via vera per il tetto di #148.
-3. Se il lotto di consolidamento lancia (visto: `terminated` da undici, la
+1. Se il lotto di consolidamento lancia (visto: `terminated` da undici, la
    connessione tagliata a metà risposta), il giro scrive una riga **vuota**:
    zero episodi, zero fatti. I fatti già scritti e gli episodi già marcati
    restano, ma il rapporto di quel giro non dice cosa era successo.
+2. `--version` → `0.0.0`, quindi `update` non ha niente da confrontare;
+   `memory.rerank` senza span; l'adapter openai-compat non legge il reasoning,
+   quindi quei token si pagano e il testo si perde — la via vera per il tetto
+   di #148.
+3. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
+   `doctor` lo dice, ma finché resta giù niente di nuovo viene indicizzato e il
+   recall è solo testuale. Stato della macchina, non del codice.
 
 **Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
 modello vivo (`research/cache-prompt-2026-08-26.md`). Il prompt vivo è del 9
