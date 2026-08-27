@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, offerGatewayRestart, runUpdate } from './update.js';
+import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -515,5 +515,62 @@ describe('cmdUpdate — argument parsing', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * Quale build sto guardando.
+ *
+ * `package.json` dice `0.0.0` e non è sbagliato: è vuoto. Questo progetto non
+ * si distribuisce per release numerate — `muffin update` costruisce
+ * `.releases/<sha>` — quindi la cosa che identifica una build è il suo commit.
+ *
+ * Misurato il 27/08: per capire quale build fosse installata sulla macchina
+ * dell'owner ho dovuto interrogare i sottocomandi (`muffin trace --help` senza
+ * `turn`, `doctor` senza la riga `defaults`) e dedurre da lì che fosse
+ * anteriore a #133 e #142. Una domanda a cui il binario dovrebbe rispondere.
+ */
+describe('describeBuild', () => {
+  const runner =
+    (map: Record<string, { status: number; stdout: string }>) =>
+    (args: string[]): { status: number; stdout: string; stderr: string } => {
+      const key = args.join(' ');
+      const r = map[key] ?? { status: 1, stdout: '' };
+      return { ...r, stderr: '' };
+    };
+
+  it('porta il commit e la sua data', () => {
+    const b = describeBuild('/qualunque', runner({
+      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+      'status --porcelain': { status: 0, stdout: '' },
+    }));
+    expect(b).toEqual({ sha: 'abc123def4567890', date: '2026-08-27', dirty: false });
+  });
+
+  it('un checkout modificato non è quel commit, e lo dice', () => {
+    const b = describeBuild('/qualunque', runner({
+      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+      'status --porcelain': { status: 0, stdout: ' M cli/main.ts\n' },
+    }));
+    expect(b?.dirty).toBe(true);
+  });
+
+  it('uno `status` che fallisce non rende la build pulita', () => {
+    // Nel dubbio si dichiara toccata: l'errore che costa è il contrario.
+    const b = describeBuild('/qualunque', runner({
+      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+    }));
+    expect(b?.dirty).toBe(true);
+  });
+
+  it('fuori da un checkout Git dice `null`, non un SHA inventato', () => {
+    expect(describeBuild('/qualunque', runner({}))).toBeNull();
+  });
+
+  it('una risposta senza data non è mezza valida', () => {
+    const b = describeBuild('/qualunque', runner({
+      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890\n' },
+    }));
+    expect(b).toBeNull();
   });
 });

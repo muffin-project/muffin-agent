@@ -580,3 +580,23 @@ describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)'
     }
   });
 });
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `describeBuild` era provata da sola e `--version` poteva continuare a
+ * stampare `0.0.0` secco: la suite restava verde. Terza volta in tre giorni che
+ * la stessa mutazione sopravvive (#151, #157), quindi la stessa risposta —
+ * il binario vero.
+ */
+describe('muffin --version dice quale build è', () => {
+  it('porta il commit, non solo un numero che non identifica niente', () => {
+    const r = muffin({}, ['--version']);
+    expect(r.code).toBe(0);
+    // Il SHA di questo checkout, letto qui e non assunto: il test vale
+    // ovunque giri, e la mutazione che toglie la build muore comunque.
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd(), encoding: 'utf8' }).stdout.trim();
+    expect(sha).not.toBe('');
+    expect(r.out).toContain(sha.slice(0, 12));
+  });
+});

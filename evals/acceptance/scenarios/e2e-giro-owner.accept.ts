@@ -187,6 +187,15 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // fatto dell'ospite, non del prodotto. Ammesso, mai in silenzio: la
           // riga viene stampata sotto, con la ragione che doctor ha dato.
           'sandbox',
+          // Riguarda il **checkout** che sta girando, non l'installazione sotto
+          // esame: `ok` da un albero pulito, `warn` da uno con modifiche non
+          // committate sopra — cioè da qualunque macchina di sviluppo mentre si
+          // scrive la slice che lo aggiunge. Stessa ragione di `supervisore`
+          // qui sopra: entrambi gli esiti sono legittimi e nessuno dei due è
+          // affare di questo giro. Rifiutarlo renderebbe A10 rossa a seconda di
+          // `git status`, che è un test il cui risultato è una proprietà
+          // dell'albero di chi lo lancia.
+          'build',
         ];
         for (const line of warnLines) {
           if (!expectedWarnNames.some((name) => line.startsWith(`! ${name}`))) {

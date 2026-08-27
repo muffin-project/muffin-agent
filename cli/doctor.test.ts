@@ -968,3 +968,35 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     rmSync(dir, { recursive: true, force: true });
   }, 10_000);
 });
+
+/**
+ * La prima domanda di qualunque diagnosi: quale build sto guardando.
+ */
+describe('doctor dice quale commit sta girando', () => {
+  it('pulito: il commit e la data, e basta', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: false } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('abc123def456');
+    expect(c?.detail).toContain('2026-08-27');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('modificato: avvisa, perché quel SHA non descrive ciò che gira', async () => {
+    // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
+    // un `ok` silenzioso, che direbbe una cosa precisa e falsa.
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: true } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non committate');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fuori da un checkout: lo dichiara invece di inventare', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: null });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non so quale commit');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

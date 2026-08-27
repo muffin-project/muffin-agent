@@ -29,8 +29,7 @@ e diceva `vector index in sync` con l'embedder giù da due giorni (#149).
    connessione tagliata a metà risposta), il giro scrive una riga **vuota**:
    zero episodi, zero fatti. I fatti già scritti e gli episodi già marcati
    restano, ma il rapporto di quel giro non dice cosa era successo.
-2. `--version` → `0.0.0`, quindi `update` non ha niente da confrontare;
-   `memory.rerank` senza span; l'adapter openai-compat non legge il reasoning,
+2. `memory.rerank` senza span; l'adapter openai-compat non legge il reasoning,
    quindi quei token si pagano e il testo si perde — la via vera per il tetto
    di #148.
 3. **L'embedder è giù** sulla macchina dell'owner (ollama non gira): da #149
