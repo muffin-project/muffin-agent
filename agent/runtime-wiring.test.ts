@@ -456,3 +456,69 @@ describe('provider caching is wired by endpoint', () => {
     expect(providerOf('https://openrouter.ai.evil.tld/v1').explicitCache).toBe(false);
   });
 });
+
+describe('the request to stop reasoning is wired by endpoint too', () => {
+  /**
+   * Stessa giunzione, stessa ragione: `reasoningEffort` di default off
+   * significa che un runtime che dimentica di passarlo costruisce un provider
+   * che paga il reasoning che il profilo dichiara spento — 204 token contro 85
+   * sullo stesso prompt, misurato sull'installazione viva il 27/08.
+   */
+  const providerOf = (baseUrl?: string) => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-reasonwire-'));
+    runInit({ home, apiKey: 'sk-never-called', ...(baseUrl ? { baseUrl, provider: 'openai-compat' as const } : {}) });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-reasonwire-ws-')));
+    const provider = runtime.deps.provider as { reasoningEffort?: boolean };
+    runtime.close();
+    return provider;
+  };
+
+  it('chiede a OpenRouter di non ragionare, perché lì il campo esiste', () => {
+    expect(providerOf('https://openrouter.ai/api/v1').reasoningEffort).toBe(true);
+  });
+
+  it('tace su ogni altro endpoint, dove un campo ignoto è un 400', () => {
+    expect(providerOf('http://localhost:11434/v1').reasoningEffort).toBe(false);
+  });
+
+  it('un hostname che contiene solo il nome non cambia la forma della richiesta', () => {
+    expect(providerOf('https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(false);
+  });
+});
+
+describe('sys_inspect legge le fonti vere, non le sue', () => {
+  /**
+   * La cucitura, e qui è doppia: il tool deve essere costruito da
+   * `buildRuntime` con le fonti che solo lui conosce, **e** i due import
+   * dinamici (`cli/doctor.js`, `cli/update.js`) devono risolvere davvero. Un
+   * import dinamico rotto non lo vede il compilatore e non lo vede nessun test
+   * che passi fonti finte: fallisce la prima volta che l'owner chiede a Muffin
+   * come funziona, e non prima.
+   */
+  it('costruito dal runtime, nomina il modello che la config dice davvero', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-inspect-wire-'));
+    runInit({ home, apiKey: 'sk-or-v1-never-called' });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-inspect-ws-')));
+    try {
+      const tool = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
+      expect(tool, 'sys_inspect deve essere registrato da buildRuntime').toBeTruthy();
+
+      const out = await tool!.handler({}, {
+        tenant: 'host',
+        principal: { kind: 'owner', connector: 'cli', externalId: 'test' },
+        turnId: 't', sessionId: 's', taint: () => 0, suspend: () => {}, replyChannel: null,
+      } as ToolContext);
+
+      // Il modello vero di questa home, non una costante.
+      expect(out.content).toContain(runtime.config.models.main);
+      // `runDoctor` ha girato davvero: la sezione dei check non è vuota.
+      expect(out.content).toContain('# Salute, misurata adesso');
+      expect(out.content).toMatch(/[✓!✗] /);
+      // `describeBuild` ha girato davvero: o uno SHA o la frase dichiarata.
+      expect(out.content).toMatch(/build: ([0-9a-f]{12}|sconosciuta)/);
+      expect(out.tier).toBe(0);
+    } finally {
+      runtime.close();
+    }
+  }, 30_000);
+});

@@ -59,6 +59,14 @@ const REGISTERED = [
   // the wrong trade on the profile least able to run a multi-turn plan.
   'wait',
   'todo',
+  // Ultimo, e per ora è il prezzo che paga: su `consumer-local` (tetto 10) i
+  // dodici registrati sono già oltre, quindi `sys_inspect` non arriva al
+  // modello su quel profilo. Registrarlo più in alto costerebbe `http_get` —
+  // il web — che questo file vieta esplicitamente. La scelta fra
+  // propriocezione e uno dei dieci è una decisione prodotto, non un ordine di
+  // `push`: fino a che non è presa, il taglio è **dichiarato** in
+  // `bootLines` invece di essere invisibile (ADR-0008).
+  'sys_inspect',
 ];
 
 describe('quali tool vede davvero un turno', () => {
@@ -93,9 +101,10 @@ describe('quali tool vede davvero un turno', () => {
 
     // The cap really bites on this profile — otherwise the rest proves nothing.
     expect(cut.length).toBeGreaterThan(0);
-    // And everything it takes is one of the two primitives. Before the
-    // reordering this set was `['skill_read', 'http_get']`.
-    expect(cut.every((n) => n === 'wait' || n === 'todo')).toBe(true);
+    // And everything it takes is one of the two primitives, or `sys_inspect`
+    // — which is registered last precisely so that it is what the cap takes
+    // first. Before the reordering this set was `['skill_read', 'http_get']`.
+    expect(cut.every((n) => n === 'wait' || n === 'todo' || n === 'sys_inspect')).toBe(true);
 
     // Said positively too, because a subset assertion passes on an empty world.
     for (const kept of ['fs_read', 'memory_search', 'document_read', 'skill_read', 'http_get']) {

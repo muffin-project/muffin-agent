@@ -1128,3 +1128,166 @@ came from a delegation in a *partial* state — a `chiudi` row with no `registra
 row, left by a session compacted mid-flight — which is precisely the state the
 tool exists to survive. A recovery tool that dies on incomplete input is a
 recovery tool that works only when nothing went wrong.
+
+## A local fault that erases more than itself, quietly, is one defect wearing three faces **(this build)**
+
+Three consecutive independent reviews of the same module found the same defect
+in three different places, and each round fixed only the place it was found.
+
+- Round 1: one unreadable **file** threw out of the whole report — and out of
+  `doctor` itself, so every check queued behind it never ran.
+- Round 2: one malformed **registry entry** nulled the whole registry, pushing
+  every *other* file off an exact recorded hash and down onto a history search
+  that carries a known false positive. The repair for round 1 introduced it.
+- Round 3: one unreadable **subdirectory** erased the siblings already found
+  beside it. Six files became one; the five that vanished were readable, and
+  the one that survived looked like a complete report of a small tree.
+
+Same shape every time: **a local accident deleting more state than the accident
+justifies, and deleting it silently**. Silence is the half that does the damage.
+A report that crashes gets investigated. A report that is quietly short gets
+believed — and it is *most* believed by the person who ran the tool precisely
+because they suspected something, which is when the tool was built to speak.
+
+Two things generalize.
+
+**The reviews were converging on the module and diverging on the class.** Each
+verdict named a site; each repair closed that site; the next review found the
+next one. Site-by-site repair on a defect that has a shape is not convergence,
+it is enumeration — and the enumeration is only over the places somebody has
+looked so far. The signal that this is happening is not the count of rounds. It
+is that the *third* finding could be described in the same sentence as the
+first without changing a word.
+
+**The fix for a shape is a place, not a patch.** One function that a caught
+failure has to pass through, which is structurally incapable of producing more
+than one entry and incapable of producing an undeclared one. It does not make
+the failures rarer; it makes their blast radius a property of the type rather
+than of whoever wrote that particular `catch`. Then the containment nets go
+where the fault is — inside the subtree, inside the entry — and the level above
+stops being the thing that turns a small fault into a large one.
+
+There is a corollary about writers. Reading past an entry you do not understand
+is prudence; **rewriting the file without it is not the same act**. It happens
+on an ordinary run, needs no corruption of its own, leaves no trace and does
+not come back — while whatever wrote that entry is precisely what someone would
+want to look at later. A reader that ignores what it cannot parse is careful; a
+writer that drops it is destroying the evidence of the thing being diagnosed.
+
+## A declared no-op is honest about the mechanism and silent about the price
+
+ADR-0008 says: degrade declaredly, never silently. The adapter did. Its own
+docstring said `ChatCall.thinking` was a no-op, gave the reason, and named what
+turning it on would cost. The profile said `"thinking": "off"` for `*qwen3*`,
+and its notes said the adapter could not honour it. Nothing was hidden and
+nobody was misled.
+
+It still cost 1502 output tokens per extraction, every cycle, for an empty
+answer — because the declaration was written when the install ran a model whose
+reasoning was **opt-in**, and the install later moved to one that reasons by
+**default**. The sentence "nothing is being dropped today" stayed true in its
+own terms and stopped describing the machine. A no-op's declaration ages against
+a config file it never mentions.
+
+**Two things follow.** The first is that a declared no-op needs a measurement,
+not just a reason: not "this knob does nothing here" but "this knob does nothing
+here and here is what that costs on the model we actually run". A price nobody
+measured is a price nobody notices changing.
+
+The second is about which direction gets investigated. The handoff had recorded
+the follow-up as *the adapter cannot read the reasoning back, so those tokens
+are paid and the text is lost* — true, and the expensive half: reading it back
+needs a schema at the boundary and keeps paying. The cheap half was in the same
+sentence, unlooked-at: **stop asking for it**. When a capability is missing in
+both directions, the one that removes cost is not automatically the one the
+note is written about, and the note is what the next person reads.
+
+## A scar comment is a defense only where the defense reaches
+
+`planUnit` took its destination as an argument, and the comment above that
+argument said why: a test had once written a real service unit into someone's
+`~/Library`, and the file had outlived the run. The sentence was accurate, the
+argument was real, and the hazard was fixed — in the planner.
+
+It happened again the day someone tested the layer above. `cmdGatewayInstall`
+called `homedir()` directly, so the moment a test drove the CLI in-process
+instead of through a child process with a rewritten `HOME`, a
+`muffin-gateway.service` appeared in the real `~/.config` with a
+`WorkingDirectory` pointing at a temp directory that no longer existed. The
+defense covered the pure function; the impure caller was where the value came
+from.
+
+**A defense at one layer is a defense at one layer.** The question a scar
+comment should force is not "is this fixed here" but "who else computes this
+value, and can they be made to take it as an argument too". Until the answer is
+nobody, the comment is a description of a hazard that is still live, next to
+the one place it isn't.
+
+There is a smaller point next to it. The only reason the recurrence was noticed
+at all is that the in-process test *failed loudly* — it hit the "refuses to
+clobber an edited unit" branch and returned 2, because a previous run had left
+a file behind. A defense that produces a confusing failure is still doing more
+than one that produces none.
+
+## The branch no test can reach is where the crash lives
+
+A guard that reads `process.stdin.isTTY` splits the program in two, and only
+one half is reachable from a test that pipes its input. Every test of `muffin
+init` piped, so every test proved the headless branch — thoroughly, and for a
+long time. The interactive branch, the one an owner actually meets, had never
+run outside a human's hands.
+
+It took a real pty to see that Ctrl+D at the first prompt exited 13 with
+`Detected unsettled top-level await` and nothing written to disk. `rl.question`
+does not call its callback on EOF; readline emits `close` instead, and a promise
+that resolves only inside that callback never settles. The `isTTY` guard covered
+"no terminal at all" and read as though it covered this too — **an input that
+ends is not an input that was never there.**
+
+Two things generalize.
+
+**A test that cannot reach a branch is not weak coverage of it; it is none.**
+The tell is a condition on the environment rather than on the data — `isTTY`,
+`platform`, `process.env.CI`. Coverage numbers do not show it, because the lines
+are executed, by the other branch. The fix is to make the environment reachable
+(a pty, a forced platform) or injectable, and then to say which one was done.
+
+**The harness is where the second bug hides.** The first attempt at the fix
+registered the `close` listener and left `rl.close()` ahead of the `resolve`, so
+every answer became "did not answer" — a pasted API key dropped in silence. The
+unit tests with a fake stream stayed green; the pty run caught it. A verification
+that only exercises the shape you imagined will confirm the shape you imagined.
+
+## A schema you send is not a schema you enforce
+
+Every tool carried two descriptions of its own arguments: a JSON Schema in
+`inputSchema`, serialized into the request so the model reads it, and a zod
+schema inside the handler, which is what actually refuses anything. Two copies
+of one intent, and nothing held them together — a tool could advertise
+`required: ['path', 'content']` and validate neither.
+
+One did. Three filesystem tools cast instead of parsing, and `fs_write` wrote
+`String(a.content ?? '')`, so a call that omitted a **required** field became a
+write of the empty string: `fs_write({path: 'note.md'})` truncated the file and
+answered "written". The tests were all green, because every test of that tool
+passed it the arguments it expects.
+
+**The comment was doing damage on its own.** `inputSchema`'s docstring said
+"validated before the kernel ever sees the arguments", which was false twice
+over — nothing reads that field back, and the kernel reads the raw arguments to
+build its decision resource. A sentence like that does not merely fail to help:
+it tells the next person that validation is handled somewhere else, which is
+precisely how a handler ships with none. Deleting it would have been an
+improvement; what it needed was to be replaced with what is actually true, which
+turned out to be two different mechanisms wearing one claim.
+
+**The check that finds this is behavioural, not structural.** Comparing the two
+schemas field by field would have been a third copy with its own drift. Asking
+every tool one question instead — *if you declare an argument required, do you
+actually require it?* — needs no shared vocabulary between the two schemas and
+names the offender directly.
+
+And such a check needs to prove it looked. The first version could be neutered
+into skipping every tool and stayed green; it now counts what it examined and
+names the tools the defect came from. That is the second time in two days a
+guard's own no-op was the surviving mutation.

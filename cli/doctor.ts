@@ -1,6 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as sqliteVec from 'sqlite-vec';
 import { tmpdirBreaksSandboxSockets, SANDBOX_TMPDIR_OVERHEAD, TMPDIR_SUN_PATH_LIMIT, type SandboxProbe } from '../core/sandbox/probe.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -14,9 +16,12 @@ import { readGateway } from '../core/gateway/lock.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
+import { OllamaEmbedder } from '../core/memory/embed.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
+import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
+import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -57,6 +62,21 @@ export type DoctorOptions = {
    * mocks `node:os` to exercise bubblewrap from macOS.
    */
   platform?: NodeJS.Platform;
+  /**
+   * Test-only: overrides the real `findCheckoutRoot` (`cli/update.ts`)
+   * resolution the defaults-drift check below runs — `null` exercises the
+   * declared-unknown path (rule 3) without needing a process actually
+   * running outside a Git checkout.
+   */
+  checkoutRoot?: string | null;
+  /** Test-only: sostituisce la lettura vera del commit. `null` esercita il caso «non è un checkout». */
+  build?: BuildStamp | null;
+  /**
+   * Test-only: sostituisce la sonda vera dell'embedder, così la suite non
+   * chiama `localhost:11434` millenovecento volte. Un rifiuto sta per
+   * «l'embedder non risponde», con il messaggio che l'owner leggerà.
+   */
+  embedderProbe?: () => Promise<void>;
 };
 
 export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -67,6 +87,21 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     checks.push({ name, level: 'warn', detail, remedy });
   const fail = (name: string, detail: string, remedy: string) =>
     checks.push({ name, level: 'fail', detail, remedy });
+
+  // Prima riga di tutte, perché è la prima domanda di qualunque diagnosi:
+  // *quale build sto guardando?* Il 27/08 la risposta si otteneva interrogando
+  // i sottocomandi (`muffin trace --help` non aveva `turn`, questa riga non
+  // esisteva) e deducendo l'età da ciò che mancava.
+  const build = options.build === undefined ? describeBuild(dirname(fileURLToPath(import.meta.url))) : options.build;
+  if (build === null) {
+    warn('build', 'nessun checkout Git: non so quale commit stia girando', 'installa da un clone Git, o dillo tu nel riportare un problema');
+  } else if (build.dirty) {
+    // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
+    // un `ok` silenzioso — quel SHA non descrive ciò che sta girando.
+    warn('build', `${build.sha.slice(0, 12)} del ${build.date}, con modifiche non committate sopra`, 'quel commit non descrive ciò che gira: committa o riporta anche il diff');
+  } else {
+    ok('build', `${build.sha.slice(0, 12)} del ${build.date}`);
+  }
 
   if (!existsSync(p.home)) {
     fail('home', `${p.home} does not exist`, 'run `muffin init`');
@@ -195,8 +230,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
-      'single-user: tampering is detected, not prevented — a process running as this user can undo the read-only bits',
-      'prevention needs the RoT owned by another OS user; `--hardened` alone only records a claim',
+      'single-user: le manomissioni sono rilevate, non impedite — un processo che gira come questo utente può ' +
+        'disfare i bit read-only da solo. Conseguenza che si sente ogni giorno: senza prevenzione vera, ogni ' +
+        'capability ad alto rischio (`sys.shell` in testa) ti chiede sempre conferma, mai un allow silenzioso',
+      '`muffin rot harden` stampa i comandi per rendere vera la prevenzione su questa macchina, e cosa cambia una volta fatto',
     );
   } else {
     const hardening = hardeningHolds(home);
@@ -214,6 +251,29 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         'il kernel sta già trattando questa installazione come single-user; per la prevenzione vera il RoT deve appartenere a un altro utente OS, altrimenti metti `rot.mode` a "single-user" e togli la pretesa',
       );
     }
+  }
+
+  // What `muffin init` copied from `defaults/` and never touches again — not
+  // because `muffin update` should overwrite it (`defaults/` exists to be
+  // edited by the owner, agent/context/assemble.ts), but because nothing
+  // before this told the owner their copy had fallen behind. Measured on the
+  // owner's own machine (docs/blueprint/research/deriva-defaults-2026-08-26.md):
+  // persona.md, voice.md and rot/identity.md sat at their `init`-day content
+  // for weeks — the assembled prompt was half the size HEAD ships — and
+  // nothing anywhere said so. See defaultsDriftCheck below for the two
+  // opposite verdicts this can reach and why they must never be confused.
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const checkoutRoot = options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
+  const drift = diagnoseDefaultsDrift(home, checkoutRoot);
+  if (drift.length === 0) {
+    warn(
+      'defaults',
+      "nessun registro d'installazione (installazione precedente a questa funzione) e nessun checkout Git leggibile — " +
+        'non so dire se persona.md, voice.md o i default dentro rot/ sono stati aggiornati dall\'owner o sono rimasti al giorno di `init`',
+      'esegui da un checkout Git di questo repository per un confronto affidabile',
+    );
+  } else {
+    for (const d of drift) defaultsDriftCheck(ok, warn, d);
   }
 
   // The caps that bind, and which file they came from. Same shape of invisible
@@ -326,7 +386,35 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       } else if (chunks === 0) {
         warn('vector index', 'empty: recall is full-text only', 'run `muffin memory extract`');
       } else {
-        ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+        // Contare non è chiedere. I due numeri dicono che ciò che è **già**
+        // indicizzato è coerente; non dicono niente su ciò che verrà, e
+        // `agent/runtime.ts` lo scrive esplicitamente accanto al punto in cui
+        // costruisce l'embedder: «an embedder that is not running turns
+        // semantic recall into keyword search, and the difference has to be
+        // visible in `doctor`». Non lo era.
+        //
+        // Misurato sull'installazione dell'owner il 27/08: ollama giù,
+        // `memory_review` con tre righe che lo dicevano dal 25, il gateway che
+        // stampava «il recall resta testuale» a ogni giro — e questa riga
+        // verde, «55 chunks, 55 vectors, in sync». Tutto vero e tutto
+        // fuorviante: la metà semantica del recall era spenta da due giorni.
+        //
+        // Locale e a tempo, non dietro `--online`: quel flag copre la
+        // raggiungibilità di un servizio esterno, questa è una porta su
+        // 127.0.0.1 che rifiuta subito quando è chiusa. Il tetto serve per il
+        // caso opposto — un server che accetta la connessione e non risponde —
+        // perché `doctor` è ciò che si lancia quando la macchina è già strana.
+        const embedderError = await probeEmbedder(options.embedderProbe);
+        if (embedderError === null) {
+          ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+        } else {
+          warn(
+            'vector index',
+            `${chunks} chunks, ${vectors} vectors coerenti, ma l'embedder non risponde (${embedderError}): ` +
+              'niente di nuovo viene indicizzato e il recall è solo testuale',
+            'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL',
+          );
+        }
       }
     }
     // Has the memory lane ever run? Third of the same shape, and the one that
@@ -360,8 +448,20 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
       // episode that succeeded and then tripped the sweep would otherwise land
       // here reading as total failure — a warn over a batch that worked.
+      //
+      // **La soglia è la maggioranza, non la totalità**, e la differenza è
+      // stata misurata sull'installazione dell'owner il 27/08: gli ultimi tre
+      // giri erano 3 errori su 3 episodi, 10 su 11 e 13 su 14, tutti con zero
+      // fatti — la corsia era morta dal cambio di modello del 25/08. Il primo
+      // avvisava; gli altri due leggevano `ok` **verdi**, perché un solo
+      // episodio che non ha lanciato bastava a far fallire `errors >= episodes`
+      // per uno. Il commento sopra dice «una *minoranza* di errori è una corsia
+      // che si sta curando»: 13 su 14 non è una minoranza, quindi era la
+      // soglia a essere sbagliata, non la forma. E `facts === 0` continua a
+      // fare il lavoro che il caso dello sweep chiede — un giro che ha
+      // prodotto un fatto non arriva qui comunque.
       const nothingGotThrough =
-        last.episodes > 0 && last.errors >= last.episodes && last.facts === 0;
+        last.episodes > 0 && last.facts === 0 && last.errors * 2 > last.episodes;
 
       // `ConsolidationOutcome` is a closed union of four (`ran | budget | busy
       // | error`); a `switch` with an exhaustive `default` is what makes a
@@ -681,6 +781,60 @@ export function formatReport(report: DoctorReport): string {
 }
 
 /**
+ * One `DefaultDrift` (core/config/defaults-drift.ts) turned into one line.
+ *
+ * `'up-to-date'` and `'owner-modified'` are both `ok`: there is nothing to
+ * do, in the second case *because* it is the owner's and must not be
+ * touched — "dillo e basta", the research doc's own words. Only
+ * `'adoptable'` and `'unknown'` carry a remedy — the first a real command,
+ * the second an honest "I cannot tell" (ADR-0008: declared, never guessed).
+ *
+ * `'adoptable'` under `rot/` gets the safe-mode consequence stated BEFORE
+ * the command, never silently: copying into a sealed path makes
+ * `verify()`'s hash check diverge (`core/rot/verify.ts`), which drops the
+ * install into safe mode until `muffin rot reseal` — an act of the owner's
+ * own authority, so this only ever names it, never runs it (same posture as
+ * `core/rot/harden.ts`'s printed plan).
+ */
+function defaultsDriftCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy: string) => void,
+  d: DefaultDrift,
+): void {
+  const name = `default ${d.path}`;
+  switch (d.status) {
+    case 'up-to-date':
+    case 'owner-modified':
+      ok(name, d.detail);
+      return;
+    case 'missing':
+      warn(name, d.detail, "`muffin init` lo ricrea — oppure, se l'hai tolto di proposito, ignora questa riga");
+      return;
+    case 'unknown':
+      warn(
+        name,
+        d.detail,
+        `confronta a mano con defaults/${d.path} nel repository, oppure ignora se preferisci gestirlo tu`,
+      );
+      return;
+    case 'adoptable': {
+      const cmd = d.adoptCommand ?? '(comando non disponibile)';
+      const remedy = d.sealed
+        ? `questo file è dentro il sigillo (rot/): adottarlo fa divergere l'hash sigillato e manda l'installazione in ` +
+          `safe mode — conseguenza da decidere tu, mai automatica. Se la vuoi: ${cmd} — quindi \`muffin rot reseal\` ` +
+          "(atto della tua autorità: solo lui fa uscire l'installazione dalla safe mode)"
+        : cmd;
+      warn(name, d.detail, remedy);
+      return;
+    }
+    default: {
+      const _exhaustive: never = d.status;
+      throw new Error(`defaults drift: stato non gestito (${String(_exhaustive)})`);
+    }
+  }
+}
+
+/**
  * The `ok('sandbox', …)` line, honest about which mechanism actually held.
  *
  * A green "sandbox: contained" reads as parity between platforms, and it is
@@ -703,5 +857,38 @@ function countOrNull(db: DatabaseCtor.Database, table: string): number | null {
     return (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
   } catch {
     return null;
+  }
+}
+
+/** Quanto si aspetta un embedder che ha accettato la connessione e non risponde. */
+const EMBEDDER_PROBE_MS = 1_500;
+
+/**
+ * `null` quando l'embedder ha risposto; il motivo, in parole, quando no.
+ *
+ * Una sola stringa da mettere in una riga, non un booleano: «connessione
+ * rifiutata» e «non ha risposto entro un secondo e mezzo» mandano l'owner in
+ * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
+ * stessa che ha tenuto ferma la corsia della memoria per due giorni.
+ */
+async function probeEmbedder(override?: () => Promise<void>): Promise<string | null> {
+  const run = override ?? (async (): Promise<void> => void (await new OllamaEmbedder().embed(['probe'])));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`nessuna risposta entro ${EMBEDDER_PROBE_MS}ms`)), EMBEDDER_PROBE_MS);
+        // Il tetto non deve tenere in vita il processo quando la sonda ha già
+        // risposto: senza questo, ogni `muffin doctor` riuscito resterebbe
+        // appeso al proprio timer.
+        timer.unref();
+      }),
+    ]);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

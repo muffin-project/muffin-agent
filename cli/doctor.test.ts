@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,8 @@ import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
+import { VectorIndex } from '../core/memory/vectors.js';
+import type { Embedder } from '../core/memory/embed.js';
 
 /**
  * Doctor exists to say which of two indistinguishable states you are in.
@@ -43,6 +46,9 @@ afterEach(() => vi.unstubAllEnvs());
 const check = async (dir: string, name: string): Promise<Check | undefined> =>
   (await runDoctor(dir)).checks.find((c) => c.name === name);
 
+const checkWith = async (dir: string, name: string, options: Parameters<typeof runDoctor>[1]): Promise<Check | undefined> =>
+  (await runDoctor(dir, options)).checks.find((c) => c.name === name);
+
 describe('doctor names the source of the permission matrix', () => {
   it('says the sealed file when the sealed file spoke', async () => {
     const dir = home();
@@ -59,6 +65,23 @@ describe('doctor names the source of the permission matrix', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('fallback');
     expect(c?.remedy).toBeTruthy();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('doctor names the everyday consequence of single-user, and the remedy for it', () => {
+  it('names sys.shell asking every time, and points at `muffin rot harden`', async () => {
+    // `runInit` without `--hardened` seals `single-user` (cli/init.ts) — the
+    // mode every fresh install actually has. Before this slice the line named
+    // the mechanism (detection, not prevention) but not what the owner feels
+    // from it: every high-risk capability asking, always, with no command
+    // that gets them out of it.
+    const dir = home();
+    const c = await check(dir, 'root of trust mode');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('single-user');
+    expect(c?.detail).toContain('sys.shell');
+    expect(c?.remedy).toContain('muffin rot harden');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -541,6 +564,22 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('un episodio che non lancia non salva un giro andato a vuoto — 13 errori su 14, zero fatti', async () => {
+    // Lo stato vero dell'installazione dell'owner il 27/08, letto da
+    // `consolidation_runs`: dopo il cambio di modello del 25/08 i tre giri sono
+    // stati 3/3, 10/11 e 13/14 errori, sempre con zero fatti. Il primo avvisava,
+    // gli altri due erano **verdi** — bastava un episodio che non avesse
+    // lanciato perché `errors >= episodes` fallisse per uno, e la corsia morta
+    // si leggeva come una settimana tranquilla. Che è esattamente l'unica
+    // confusione che questo check esiste per togliere.
+    const dir = home();
+    seedRun(dir, 'ran', 13, { episodes: 14, facts: 0 });
+    const c = await check(dir, 'consolidamento');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('13 errori su 14 episodi');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('stays green when the sweep threw but the batch worked', async () => {
     // `errors >= episodes` alone is not the condition. The maintenance sweep
     // pushes its own failure into `report.errors`, so a one-episode run that
@@ -765,5 +804,199 @@ describe('la riga sandbox di doctor viene dalla porta vera, non dal probe econom
       spia.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-defaults-2026-08-26', () => {
+  /**
+   * The property the task brief names as the one that matters most: a file
+   * the owner edited must never come back proposing to overwrite it. Real
+   * repository, real checkout resolution (`findCheckoutRoot`, `cli/update.ts`)
+   * — the deep case-by-case logic already has its own thorough coverage in
+   * `core/config/defaults-drift.test.ts`; what these tests hold onto is the
+   * *wiring*: that `runDoctor` calls it, at all, and turns the verdict into
+   * the right level.
+   */
+
+  it('a fresh install reports every tracked default as up-to-date, ok — never a warn A10 does not expect', async () => {
+    const dir = home();
+    const r = await runDoctor(dir);
+    const defaultsChecks = r.checks.filter((c) => c.name.startsWith('default '));
+    // At minimum the files the research doc measured — a fresh `muffin init`
+    // just copied them from this very checkout, so every one must read as
+    // up-to-date, not merely "present".
+    for (const relPath of ['persona.md', 'voice.md', 'rot/identity.md', 'rot/policy.json', 'rot/egress.json', 'rot/budgets.json']) {
+      const c = defaultsChecks.find((x) => x.name === `default ${relPath}`);
+      expect(c, `missing check for ${relPath}`).toBeTruthy();
+      expect(c?.level, `${relPath}: ${c?.detail}`).toBe('ok');
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an owner edit reads as ok — "è suo", never a proposal to overwrite it', async () => {
+    const dir = home();
+    writeFileSync(paths(dir).persona, "testo scritto a mano dall'owner, non spedito da nessun commit\n");
+    const c = await check(dir, 'default persona.md');
+    expect(c?.level).toBe('ok');
+    expect(c?.remedy).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('with no checkout resolvable and no registry, degrades to one declared line instead of staying silently green', async () => {
+    const dir = home();
+    // Wipe the registry `muffin init` just wrote, so this exercises the
+    // "neither source available" branch rather than the registry-only one.
+    rmSync(paths(dir).defaultsManifest, { force: true });
+    const r = await runDoctor(dir, { checkoutRoot: null });
+    const c = r.checks.find((x) => x.name === 'defaults');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('checkout Git leggibile');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('adopting a sealed rot/ file states the safe-mode consequence before the command, and names `rot reseal`', async () => {
+    // A synthetic checkout, independent of this repository's own history, so
+    // the "installed content matches an old shipped commit" fact is
+    // constructed rather than borrowed from real history.
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-doctor-drift-checkout-')));
+    const sh = (cmd: string, args: string[]): void => {
+      const r = spawnSync(cmd, args, { cwd: checkout, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    sh('git', ['init', '-q']);
+    sh('git', ['config', 'user.email', 't@t']);
+    sh('git', ['config', 'user.name', 't']);
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v1']);
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v2 identity — HEAD ora dice questo\n');
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v2']);
+
+    const dir = home();
+    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n'); // stuck at the v1 commit, never touched since
+    // `home()` already ran a real `muffin init` against THIS repository, so
+    // the registry it wrote (rule 1) names the real, shipped identity.md —
+    // not the synthetic v1/v2 fabricated above. Dropping it forces this test
+    // through rule 2 (Git history) against the synthetic checkout instead,
+    // which is the fallback this test actually means to exercise.
+    rmSync(paths(dir).defaultsManifest, { force: true });
+
+    try {
+      const c = await checkWith(dir, 'default rot/identity.md', { checkoutRoot: checkout });
+      expect(c?.level).toBe('warn');
+      expect(c?.remedy).toBeTruthy();
+      const safeModeAt = c!.remedy!.indexOf('safe mode');
+      const cpAt = c!.remedy!.indexOf('cp ');
+      const resealAt = c!.remedy!.indexOf('rot reseal');
+      expect(safeModeAt).toBeGreaterThan(-1);
+      expect(cpAt).toBeGreaterThan(-1);
+      expect(resealAt).toBeGreaterThan(-1);
+      // The consequence is said BEFORE the command — the owner decides first.
+      expect(safeModeAt).toBeLessThan(cpAt);
+      expect(cpAt).toBeLessThan(resealAt);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
+});
+
+
+/**
+ * Contare non è chiedere.
+ *
+ * I due numeri della riga `vector index` dicono che ciò che è **già**
+ * indicizzato è coerente. Non dicono niente su ciò che verrà. Sull'installazione
+ * dell'owner, il 27/08: ollama giù dal 25, tre righe in `memory_review` che lo
+ * dicevano, il gateway che stampava «il recall resta testuale» a ogni giro — e
+ * questa riga verde, «55 chunks, 55 vectors, in sync». Tutto vero, tutto
+ * fuorviante. `agent/runtime.ts` lo scrive accanto al punto in cui costruisce
+ * l'embedder: la differenza «deve essere visibile in `doctor`». Non lo era.
+ */
+describe("l'indice coerente non dice che l'embedder risponda", () => {
+  class Finto implements Embedder {
+    readonly id = 'finto:test';
+    readonly dimensions = 4;
+    async embed(texts: string[]): Promise<Float32Array[]> {
+      return texts.map((_, i) => Float32Array.from([1, 0, 0, i]));
+    }
+  }
+
+  /** Una home con l'indice pieno e coerente — l'unico stato in cui la riga era verde. */
+  async function conIndice(): Promise<string> {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const index = new VectorIndex(db, new Finto());
+    await index.index('host', [{ kind: 'episode', sourceId: 1, text: 'un frammento qualsiasi' }], '2026-08-27T00:00:00Z');
+    db.close();
+    return dir;
+  }
+
+  it('resta verde quando la sonda risponde', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', { embedderProbe: async () => {} });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('in sync');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('avvisa quando i numeri tornano ma l embedder non risponde, e dice perché', async () => {
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', {
+      embedderProbe: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    expect(c?.level).toBe('warn');
+    // I due numeri restano: non sono sbagliati, sono insufficienti.
+    expect(c?.detail).toContain('coerenti');
+    expect(c?.detail).toContain('fetch failed');
+    expect(c?.detail).toContain('solo testuale');
+    expect(c?.remedy).toContain('ollama');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('non resta appesa a un embedder che accetta la connessione e non risponde', async () => {
+    // Il caso opposto alla porta chiusa, e il motivo per cui il tetto esiste:
+    // `doctor` è ciò che si lancia quando la macchina è già strana.
+    const dir = await conIndice();
+    const c = await checkWith(dir, 'vector index', { embedderProbe: () => new Promise<void>(() => {}) });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('nessuna risposta entro');
+    rmSync(dir, { recursive: true, force: true });
+  }, 10_000);
+});
+
+/**
+ * La prima domanda di qualunque diagnosi: quale build sto guardando.
+ */
+describe('doctor dice quale commit sta girando', () => {
+  it('pulito: il commit e la data, e basta', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: false } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('abc123def456');
+    expect(c?.detail).toContain('2026-08-27');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('modificato: avvisa, perché quel SHA non descrive ciò che gira', async () => {
+    // Non un `fail`: su una macchina di sviluppo è lo stato normale. Ma neanche
+    // un `ok` silenzioso, che direbbe una cosa precisa e falsa.
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: { sha: 'abc123def4567890', date: '2026-08-27', dirty: true } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non committate');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('fuori da un checkout: lo dichiara invece di inventare', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'build', { build: null });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non so quale commit');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

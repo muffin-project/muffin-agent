@@ -240,3 +240,23 @@
 {"id":"a93f6cd1bb321006d","chiuso":"PR #129 (draft): forma B — self-test reale via SandboxManager in ensureInit, verify() per doctor/init, ragione nuova contain_failed; +45ms su doctor; ha anche trovato e chiuso un timer non ripulito che teneva vivo il processo 25s. Conflitto mappa risolto da me, suite 1871 + accettazione 30/30. Ora judge CRITICAL","quando":"2026-08-26T12:53:13.079Z"}
 {"id":"judge-129-giro1","slug":"judge-probe-porta-vera","cosa":"judge CRITICAL su PR #129 head 48bfa3d: 'available significa ho eseguito qualcosa di contenuto per la stessa strada del runtime'; fail-closed, nessuna duplicazione degli argv di srt, gamba macOS intatta, costo dichiarato, timer ripulito; ~55 tool","quando":"2026-08-26T12:53:13.125Z"}
 {"id":"judge-129-giro1","chiuso":"MERGE, zero bloccanti; 3 follow-up applicati da me in 390be7e con mutazioni sulle reti nuove","quando":"2026-08-26T13:14:28.888Z"}
+{"id":"canale-progresso","slug":"canale-progresso","cosa":"B11+: canale di progresso separato da onDelta — il turno dice cosa sta facendo mentre lo fa (sonnet, CRITICAL)","quando":"2026-08-26T14:13:39.700Z"}
+{"id":"rot-harden","slug":"rot-harden","cosa":"il perché di ogni ASK su sys.shell, e i comandi per uscirne: doctor esplicito + muffin rot harden che STAMPA (sonnet)","quando":"2026-08-26T14:22:28.833Z"}
+{"id":"judge-136","slug":"judge-136","cosa":"judge CRITICAL su PR #136 head d7f8fb5: il canale di progresso raggiunge davvero il turno, e non ritratta mai","quando":"2026-08-26T14:51:32.501Z"}
+{"id":"canale-progresso","chiuso":"PR #136 integrata dopo judge MERGE; follow-up copertura rami in #139","quando":"2026-08-26T15:15:51.277Z"}
+{"id":"judge-136","chiuso":"verdetto MERGE, nessun bloccante; 4 follow-up, 2 applicati in #139, Telegram resta la prossima slice","quando":"2026-08-26T15:15:51.327Z"}
+{"id":"rot-harden","chiuso":"PR #138 integrata dopo judge MERGE; follow-up EACCES sul reseal in una slice a parte","quando":"2026-08-26T15:26:20.421Z"}
+{"id":"progresso-telegram","slug":"progresso-telegram","cosa":"il progresso arriva su Telegram con draft+edit, non una riga per evento (sonnet, CRITICAL)","quando":"2026-08-26T15:26:37.451Z"}
+{"id":"deriva-doctor","slug":"deriva-doctor","cosa":"doctor vede i file di init rimasti indietro, distinguendo 'vecchia versione spedita' da 'modificato dall owner' (sonnet)","quando":"2026-08-26T15:26:37.497Z"}
+{"id":"judge-142b","slug":"judge-142b","cosa":"judge fresco su #142 head a6ba7d4 dopo ADJUST: le riparazioni reggono e non hanno spostato la classificazione","quando":"2026-08-26T16:48:38.671Z"}
+{"id":"judge-143b","slug":"judge-143b","cosa":"judge fresco su #143 head 91c5430 dopo ADJUST: la serializzazione regge e stop non lascia orfani","quando":"2026-08-26T16:49:37.911Z"}
+{"id":"judge-142c","slug":"judge-142c","cosa":"terzo judge su #142 head eac55e1: il filtro non ha aperto altro","quando":"2026-08-26T17:11:48.667Z"}
+{"id":"progresso-telegram","chiuso":"PR #143 integrata dopo ADJUST riparato e judge fresco MERGE","quando":"2026-08-26T17:16:51.411Z"}
+{"id":"judge-143","chiuso":"ADJUST: race in progress.ts, riparata","quando":"2026-08-26T17:16:51.457Z"}
+{"id":"judge-143b","chiuso":"MERGE; due follow-up sostanziali in slice separata","quando":"2026-08-26T17:16:51.503Z"}
+{"id":"judge-122-giro1","chiuso":"PR #122 mergiata; verdetto consegnato","quando":"2026-08-27T01:11:25.740Z"}
+{"id":"e2e-giro-owner","chiuso":"scenario in HEAD: evals/acceptance/scenarios/e2e-giro-owner.accept.ts","quando":"2026-08-27T01:11:25.785Z"}
+{"id":"probe-vs-esecutore","chiuso":"PR #129 mergiata (5c6c9e8), judge MERGE","quando":"2026-08-27T01:11:25.829Z"}
+{"id":"deriva-doctor","chiuso":"PR #142 mergiata (024ba19) dopo tre judge","quando":"2026-08-27T01:11:25.874Z"}
+{"id":"judge-142b","chiuso":"verdetto ADJUST consegnato e riparato","quando":"2026-08-27T01:11:25.917Z"}
+{"id":"judge-142c","chiuso":"verdetto ADJUST consegnato; passata strutturale fatta, #142 mergiata","quando":"2026-08-27T01:11:25.962Z"}

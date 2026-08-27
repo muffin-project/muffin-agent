@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 import type { RegisteredTool } from '../loop.js';
+import { z } from 'zod';
 
 /**
  * The three filesystem primitives of M1.
@@ -483,6 +484,31 @@ export function fsWrite(scope: FsScope, path: string, content: string): string {
  * to be declared at every copy, and the copies drift on the first thing that is
  * not `content`. Provenance is exactly that kind of thing.
  */
+/**
+ * Gli argomenti, pretesi invece che convertiti.
+ *
+ * Questi tre handler facevano `String((args as {path: string}).path)`, e la
+ * conversione era il difetto: `String(undefined)` è `'undefined'`, cioè un
+ * nome di file valido. `fs_write` andava oltre e faceva
+ * `String(a.content ?? '')`, che trasforma un argomento **obbligatorio e
+ * mancante** in una stringa vuota — quindi `fs_write({path: 'note.md'})`
+ * troncava `note.md` a zero byte e rispondeva «scritto», con lo schema
+ * dichiarato che diceva `required: ['path', 'content']`.
+ *
+ * Non è ipotetico: questo modello emette JSON malformato abbastanza spesso da
+ * aver ucciso l'estrazione per due giorni (#153). Una tool call a cui manca un
+ * campo è la stessa classe.
+ *
+ * `content` resta obbligatorio e non prende default: un file vuoto voluto si
+ * chiede con `content: ""`, che passa. Ogni altro tool di questa cartella già
+ * faceva così (`httpArgs`, `shellArgs`, `todoArgs`, …); questi tre erano gli
+ * unici senza, ed è per questo che `agent/tools/schema-conformance.test.ts`
+ * chiede la stessa cosa a tutti invece di fidarsi del prossimo che ne aggiunge
+ * uno.
+ */
+const pathArgs = z.object({ path: z.string().min(1) });
+const writeArgs = z.object({ path: z.string().min(1), content: z.string() });
+
 export function makeFsTools(scope: FsScope): RegisteredTool[] {
   return [
     {
@@ -495,7 +521,7 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // throws with them, it returns them, which is the success path above.
       throwTier: 0,
       handler: (args) => ({
-        content: fsRead(scope, String((args as { path: string }).path)),
+        content: fsRead(scope, pathArgs.parse(args).path),
         tier: DISK_TIER,
       }),
     },
@@ -523,7 +549,7 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // entry's name can trigger ever leaves through a throw.
       throwTier: 0,
       handler: (args) => ({
-        content: fsList(scope, String((args as { path: string }).path)),
+        content: fsList(scope, pathArgs.parse(args).path),
         tier: DISK_TIER,
       }),
     },
@@ -537,8 +563,8 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // built the same way as the two tools above.
       throwTier: 0,
       handler: (args) => {
-        const a = args as { path: string; content: string };
-        return { content: fsWrite(scope, String(a.path), String(a.content ?? '')), tier: 0 };
+        const a = writeArgs.parse(args);
+        return { content: fsWrite(scope, a.path, a.content), tier: 0 };
       },
     },
   ];

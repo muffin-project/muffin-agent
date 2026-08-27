@@ -44,12 +44,13 @@
       "cmd": "muffin rot",
       "sub": [
         "verify",
-        "reseal"
+        "reseal",
+        "harden"
       ],
-      "file": "cli/main.ts:169-170,407-439",
-      "what": "Verifica o risigilla l'integrita' del root of trust.",
+      "file": "cli/main.ts:121-124,712-755 -> core/rot/harden.ts:106,153",
+      "what": "Verifica o risigilla l'integrita' del root of trust; `harden` spiega e propone, non esegue mai.",
       "wired": true,
-      "note": ""
+      "note": "`harden` non tocca il filesystem: stampa i comandi per portare rot/ sotto un altro utente OS su questa macchina (piattaforma e percorsi reali), Linux prima e poi macOS, e cosa cambia dopo (sys.shell diventa allow silenzioso, `rot reseal` chiede privilegi). cli/doctor.ts:195-201 cita questo comando come rimedio quando la modalita' e' single-user."
     },
     {
       "cmd": "muffin uninstall",
@@ -159,12 +160,13 @@
       "cmd": "muffin trace",
       "sub": [
         "tail",
-        "grep"
+        "grep",
+        "turn"
       ],
-      "file": "cli/main.ts:189-190,626-666",
-      "what": "Legge le proprie tracce JSONL: coda o ricerca per pattern.",
+      "file": "cli/main.ts:134-137,1039-1096",
+      "what": "Legge le proprie tracce JSONL: coda, ricerca per pattern, o un turno passo per passo (durata e token di ogni step).",
       "wired": true,
-      "note": ""
+      "note": "`turn` prende l'id che il turno stampa — dodici caratteri dei trentadue — perche' l'id stampato e quello accettato devono essere lo stesso id."
     },
     {
       "cmd": "muffin --help / -h",

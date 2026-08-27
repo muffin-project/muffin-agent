@@ -1,3 +1,4 @@
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
 import { fence } from './spotlight.js';
 import type { RecallItem } from './recall.js';
@@ -18,9 +19,40 @@ import type { RecallItem } from './recall.js';
  * without touching recall.
  */
 
+/**
+ * Cosa è successo davvero, non solo cosa è tornato.
+ *
+ * Un rerank che fallisce restituisce l'ordine RRF, che è **una risposta
+ * peggiore, non nessuna risposta** — la scelta giusta, e per questo il
+ * fallimento era indistinguibile dal successo da fuori. `RecallResult.strategies`
+ * promette di «nominare le metà che hanno davvero girato, così un recall
+ * degradato non è mai silenzioso», e per questa metà diceva il falso:
+ * `rerank(id)` finiva nell'elenco anche quando l'ordine veniva da RRF.
+ */
+export type RerankOutcome = {
+  items: RecallItem[];
+  /** Vero solo quando l'ordine viene dal modello. */
+  reordered: boolean;
+  /** Perché no, quando no. Assente quando ha riordinato davvero. */
+  why?: string;
+  /**
+   * Cosa è costata la chiamata, quando è stata fatta.
+   *
+   * Torna col risultato invece di finire in uno span perché `recall()` non ha
+   * un tracer e dargliene uno sarebbe plumbing attraverso quattro file per un
+   * numero. Chi chiama `recall` uno span ce l'ha già — `agent/loop.ts` apre
+   * `muffin.tool_call`/`memory.recall` attorno — e sa dove metterlo.
+   *
+   * Presente anche quando `reordered` è falso: una chiamata che è fallita è
+   * stata pagata lo stesso, ed è esattamente il caso in cui non vederla
+   * inganna. Assente solo quando la chiamata non è avvenuta affatto.
+   */
+  usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+};
+
 export interface Reranker {
   readonly id: string;
-  rerank(query: string, candidates: RecallItem[], topK: number): Promise<RecallItem[]>;
+  rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome>;
 }
 
 /**
@@ -53,14 +85,21 @@ export class LlmReranker implements Reranker {
     this.id = `llm:${model}`;
   }
 
-  async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RecallItem[]> {
-    if (candidates.length < RERANK_MIN_CANDIDATES) return candidates.slice(0, topK);
+  async rerank(query: string, candidates: RecallItem[], topK: number): Promise<RerankOutcome> {
+    const asIs = (why: string, usage?: RerankOutcome['usage']): RerankOutcome => ({
+      items: candidates.slice(0, topK),
+      reordered: false,
+      why,
+      ...(usage === undefined ? {} : { usage }),
+    });
+    if (candidates.length < RERANK_MIN_CANDIDATES) return asIs('troppo pochi candidati per pagare una chiamata');
 
     const listing = candidates
       .map((c, i) => `[${i}] (${c.source}) ${c.text.replace(/\s+/g, ' ').slice(0, 300)}`)
       .join('\n');
 
     let text: string | null = null;
+    let usage: RerankOutcome['usage'];
     try {
       const result = await this.provider.chat({
         model: this.model,
@@ -80,26 +119,40 @@ export class LlmReranker implements Reranker {
             ],
           },
         ],
-        maxOutputTokens: 200,
+        // Il più piccolo dei tre e quindi il primo a morire: 200 token non
+        // bastano nemmeno a iniziare a ragionare. Vedi `REASONING_HEADROOM`.
+        maxOutputTokens: 200 + REASONING_HEADROOM,
+        // Queste tre corsie chiedono JSON e non leggono prosa: il ragionamento qui
+        // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
+        // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
+        // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
+        thinking: 'off' as const,
         temperature: 0,
         stream: false,
       });
       text = result.text;
-    } catch {
+      usage = {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+      };
+    } catch (error) {
       // A reranker that fails must not take recall down with it: the RRF order
-      // is a worse answer, not no answer.
-      return candidates.slice(0, topK);
+      // is a worse answer, not no answer. Ma peggiore va **detto**: chi legge
+      // `strategies` deve poter distinguere «riordinato dal modello» da
+      // «l'ordine è quello di prima».
+      return asIs(`il modello non ha risposto: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const order = parseOrder(text, candidates.length);
-    if (order.length === 0) return candidates.slice(0, topK);
+    if (order.length === 0) return asIs('risposta del modello non leggibile come un ordine', usage);
 
     const ranked = order.map((i) => candidates[i]!).slice(0, topK);
     // Anything the model dropped still fills the tail: losing a candidate to a
     // parsing hiccup is worse than keeping it in a slightly wrong place.
     const chosen = new Set(order);
     const tail = candidates.filter((_, i) => !chosen.has(i));
-    return [...ranked, ...tail].slice(0, topK);
+    return { items: [...ranked, ...tail].slice(0, topK), reordered: true, ...(usage === undefined ? {} : { usage }) };
   }
 }
 

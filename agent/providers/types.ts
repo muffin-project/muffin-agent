@@ -54,7 +54,35 @@ export type Message = { role: Role; content: ContentBlock[] };
 export type ToolSpec = {
   name: string;
   description: string;
-  /** JSON Schema. Validated before the kernel ever sees the arguments. */
+  /**
+   * JSON Schema — **what the model is told**, and nothing more.
+   *
+   * The sentence here used to read "validated before the kernel ever sees the
+   * arguments". Both halves were false. Nothing in this repo validates against
+   * this object: it is serialized into the request (`openai-compat.ts`,
+   * `anthropic.ts`) and never read back. And the kernel *does* see the raw
+   * arguments — `resourceFor` in `agent/loop.ts` reads
+   * `args[decl.policyArgs[i]]` to build the decision's resource, before any
+   * handler runs.
+   *
+   * What actually holds is two separate things:
+   *
+   *  - the kernel is defensive about what it reads. `resourceFor` accepts a
+   *    value only when `typeof value === 'string'`, and a declared-but-absent
+   *    resource becomes `{kind:'none'}` — which for a url capability is a
+   *    refusal. Garbage from the model produces a no, never a yes;
+   *  - each handler validates its own arguments with its own zod schema
+   *    (`httpArgs`, `shellArgs`, `todoArgs`, …). That is the real gate.
+   *
+   * So this field is advertising and the zod schema is enforcement, they are
+   * two copies of one intent, and nothing keeps them in agreement. A tool can
+   * declare `required: ['url']` here and validate nothing there —
+   * `agent/tools/schema-conformance.test.ts` is what makes that fail.
+   *
+   * The old sentence was worse than absent: it told the next reader that
+   * validation was already handled somewhere, which is exactly how a handler
+   * ships without any.
+   */
   inputSchema: Record<string, unknown>;
 };
 
@@ -86,6 +114,40 @@ export type ToolSpec = {
  * place Haiku 4.5 runs — never consults a profile at all.
  */
 type ThinkingMode = 'adaptive' | 'off';
+
+/**
+ * Spazio per il reasoning che chiediamo spento e non riusciamo a spegnere.
+ *
+ * `agent/profiles/consumer-local.json` dichiara `"thinking": "off"` proprio per
+ * `*qwen3*`, e le sue stesse note dicono che l'adapter openai-compat non porta
+ * quel comando: è un no-op **dichiarato** (ADR-0008), non nascosto. Quello che
+ * non era stato tracciato è il prezzo, due livelli più in là.
+ *
+ * Misurato sull'installazione dell'owner il 27/08 con `qwen/qwen3.8-27b`:
+ * l'estrazione con tetto 1500 tornava `stop=max_tokens` dopo **1502 token in
+ * uscita** e `content` vuoto — il modello spendeva l'intero budget a ragionare
+ * e non arrivava a scrivere un carattere di JSON. Stesso episodio, stesso
+ * modello, tetto 8000: **un fatto estratto**. La risposta grezza del giudice
+ * nel registro è `[vuota]` per la stessa ragione, con un tetto di 500.
+ *
+ * Alzare un tetto non è chiedere più token: `max_tokens` è un limite, non una
+ * richiesta, quindi per un modello che non ragiona questo non costa niente. Per
+ * uno che ragiona sostituisce «paghi 1502 token per NIENTE, a ogni giro, per
+ * sempre» con «paghi e ottieni un fatto, e l'episodio smette di tornare».
+ *
+ * **Non va più via, e ora si sa per chi resta.** Da 27/08 l'adapter chiede
+ * davvero di non ragionare (`reasoning: {effort:'none'}`) e le tre corsie
+ * glielo chiedono — misurato sull'installazione viva, 204 token in uscita
+ * contro 85 sullo stesso prompt. Ma lo chiede **solo dove l'endpoint capisce
+ * il campo**: su Ollama, llama.cpp e vLLM — cioè proprio i server del profilo
+ * `consumer-local` — un campo ignoto è un 400, quindi lì `off` è ancora un
+ * no-op dichiarato e questo margine è l'unica cosa che tiene viva la corsia.
+ *
+ * Il prezzo di tenerlo è zero: `max_tokens` è un limite, non una richiesta.
+ * Il prezzo di toglierlo sarebbe il 25/08 di nuovo, sulla prima macchina che
+ * gira un modello che ragiona dietro un server che non sa spegnerlo.
+ */
+export const REASONING_HEADROOM = 6_000;
 
 export type ChatCall = {
   model: string;

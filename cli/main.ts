@@ -6,7 +6,8 @@ import { formatReport, runDoctor } from './doctor.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
-import { formatSpan, readSpans } from './trace.js';
+import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
+import { formatSpan, formatTurn, readSpans } from './trace.js';
 import { runHeadless } from './run.js';
 import { runRepl } from './repl.js';
 import {
@@ -35,7 +36,9 @@ import {
 } from './gateway.js';
 import { cmdObserve } from './observe.js';
 import { cmdBackup, cmdRestore } from './backup.js';
-import { cmdUpdate } from './update.js';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
@@ -117,7 +120,10 @@ comandi operatore:
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
                                 \`init\` lo ritrova senza re-incollarlo
-  muffin rot verify | reseal
+  muffin rot verify | reseal | harden
+                                \`harden\` non esegue nulla: stampa i comandi
+                                per rendere vera la modalità hardened su
+                                questa macchina, e cosa cambia una volta fatto
   muffin uninstall [--yes]      rimuove ~/.muffin (config, chiavi, memoria). Una
                                 chiave scritta con --persist vive fuori: resta,
                                 e il comando lo dice.
@@ -132,8 +138,12 @@ ispezione:
   muffin observe [--send]       cosa è rimasto in silenzio, e cosa farebbe il
                                 cancello di proattività. Manda solo con --send.
   muffin trace tail [-n N] [--errors] | grep PATTERN
+  muffin trace turn <id>        il turno passo per passo: cosa ha fatto, quanto
+                                ci ha messo, quanti token — l'id è quello che il
+                                turno stampa alla fine ("trace c22cb4445952")
 
-Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 78 configurazione non valida
+Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 70 errore imprevisto
+           77 permesso negato · 78 configurazione non valida
 `;
 
 /**
@@ -155,15 +165,22 @@ const COMMAND_ALIASES: Readonly<Record<string, string>> = {
  */
 function readOwnVersion(): string {
   let dir = new URL('./', import.meta.url);
+  let declared = '0.0.0';
   for (let i = 0; i < 6; i++) {
     try {
       const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')) as { version: string };
-      return pkg.version;
+      declared = pkg.version;
+      break;
     } catch {
       dir = new URL('../', dir);
     }
   }
-  return '0.0.0';
+  // `0.0.0` da solo non identifica niente, e questo progetto non si distribuisce
+  // per release numerate: `muffin update` costruisce `.releases/<sha>`, quindi
+  // il commit **è** la versione. Vedi `describeBuild`.
+  const build = describeBuild(dirname(fileURLToPath(import.meta.url)));
+  if (build === null) return `${declared} (build sconosciuta: nessun checkout Git)`;
+  return `${declared} (${build.sha.slice(0, 12)}${build.dirty ? '+modificato' : ''}, ${build.date})`;
 }
 
 /**
@@ -621,7 +638,10 @@ async function offerGateway(): Promise<void> {
     return;
   }
   if (answer !== '' && !/^(y(es)?|s(i|ì)?)$/i.test(answer)) {
-    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install\n`);
+    // `--start` nominato qui e non eseguito sopra: è la stessa distinzione
+    // della riga sotto, vista dall'altro lato. Chi dice no adesso deve poter
+    // sapere che esiste un comando solo, non quattro da copiare.
+    process.stderr.write(`Va bene. Quando vuoi:\n  muffin gateway install --start\n`);
     return;
   }
   // `--write` and not the enable: writing the file is what the owner just
@@ -727,12 +747,47 @@ function cmdRot(argv: string[]): number {
   }
 
   if (sub === 'reseal') {
-    const manifest = seal(paths().home, '1', new Date());
-    process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
-    return 0;
+    // The one failure this command was built to produce, and the only one it
+    // used to answer with a Node stack trace.
+    //
+    // `muffin rot harden` tells the owner, correctly, that after hardening
+    // "`muffin rot reseal` ti servirà un privilegio che oggi non ti serve"
+    // (`core/rot/harden.ts`). Following that advice and forgetting `sudo` is
+    // therefore the expected mistake, not an exotic one — and `main()` has no
+    // top-level catch, so the reward for doing what we asked was a raw
+    // `Error: EACCES` with a stack. Named by the judge on PR #138.
+    try {
+      const manifest = seal(paths().home, '1', new Date());
+      process.stdout.write(`resealed ${manifest.files.length} files — the change is now yours and declared\n`);
+      return 0;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        process.stderr.write(
+          `non posso riscrivere il sigillo in ${paths().home}/rot: permesso negato.\n` +
+            'Se hai reso vera la modalità hardened, il RoT non è più tuo ed è voluto: ' +
+            'rifai questo comando con il privilegio che serve (es. `sudo`).\n',
+        );
+        return 77; // EX_NOPERM
+      }
+      process.stderr.write(`reseal fallito: ${(error as Error).message}\n`);
+      return 74; // EX_IOERR
+    }
   }
 
-  process.stderr.write(`usage: muffin rot verify | reseal\n`);
+  if (sub === 'harden') {
+    // Explains and proposes, never executes — see core/rot/harden.ts. Every
+    // line of the plan goes to stdout ("stdout carries the answer", this
+    // file's own header above), the same as `muffin doctor`: this command's
+    // whole job is the printed report, not a side comment on some other
+    // action.
+    const plan = buildHardenPlan(paths().home, mode);
+    process.stdout.write(formatHardenPlan(plan));
+    if (!plan.owner.known) return 2;
+    return plan.done ? 0 : 1;
+  }
+
+  process.stderr.write(`usage: muffin rot verify | reseal | harden\n`);
   return 78;
 }
 
@@ -1035,8 +1090,10 @@ function cmdSecret(argv: string[]): number {
 
 function cmdTrace(argv: string[]): number {
   const [sub, ...rest] = argv;
-  if (sub !== 'tail' && sub !== 'grep') {
-    process.stderr.write(`usage: muffin trace tail [-n N] [--errors] | muffin trace grep PATTERN\n`);
+  if (sub !== 'tail' && sub !== 'grep' && sub !== 'turn') {
+    process.stderr.write(
+      `usage: muffin trace tail [-n N] [--errors] | muffin trace grep PATTERN | muffin trace turn <id>\n`,
+    );
     return 78;
   }
   const { values, positionals } = parseArgs({
@@ -1045,7 +1102,6 @@ function cmdTrace(argv: string[]): number {
       n: { type: 'string', short: 'n' },
       errors: { type: 'boolean' },
       json: { type: 'boolean' },
-      trace: { type: 'string' },
     },
     allowPositionals: true,
   });
@@ -1055,22 +1111,34 @@ function cmdTrace(argv: string[]): number {
     process.stderr.write(`usage: muffin trace grep PATTERN\n`);
     return 78;
   }
+  // `turn` takes the id a finished turn prints — twelve characters of the
+  // thirty-two, matched as a prefix in `readSpans`. It replaces an undocumented
+  // `--trace` flag that took the *whole* id and so could never be fed the one
+  // the product hands you.
+  const turnId = sub === 'turn' ? positionals[0] : undefined;
+  if (sub === 'turn' && !turnId) {
+    process.stderr.write(`usage: muffin trace turn <id>   (l'id che il turno stampa: "trace c22cb4445952")\n`);
+    return 78;
+  }
 
   const spans = readSpans(paths().home, {
-    limit: Number(values.n ?? 40),
+    // A turn is asked for whole: its own steps, not the last N of them.
+    limit: turnId ? 10_000 : Number(values.n ?? 40),
     ...(pattern ? { pattern } : {}),
-    ...(values.trace ? { traceId: values.trace } : {}),
+    ...(turnId ? { traceId: turnId } : {}),
     ...(values.errors ? { errorsOnly: true } : {}),
   });
 
   if (spans.length === 0) {
-    process.stderr.write(`no spans matched\n`);
+    process.stderr.write(turnId ? `nessuno span per il turno ${turnId}\n` : `no spans matched\n`);
     return 1;
   }
   process.stdout.write(
     values.json
       ? `${spans.map((s) => JSON.stringify(s)).join('\n')}\n`
-      : `${spans.map(formatSpan).join('\n')}\n`,
+      : turnId
+        ? formatTurn(spans)
+        : `${spans.map(formatSpan).join('\n')}\n`,
   );
   return 0;
 }
@@ -1098,4 +1166,31 @@ async function cmdRun(argv: string[]): Promise<number> {
   });
 }
 
-process.exitCode = await main(process.argv.slice(2));
+/**
+ * The last line of defence, and the reason it is here rather than at the third
+ * call site that needed it.
+ *
+ * Three separate reviews found the same shape: a command hits an ordinary
+ * filesystem error — `EACCES` resealing a root of trust that hardening has
+ * correctly made read-only, `EACCES` reading a defaults file — and the owner's
+ * reward is a raw Node stack trace. Each time the repair was a `try/catch` at
+ * that one call site, and each time the next new path arrived without it.
+ * Catching per-site treats the symptom; the defect is that `main` could throw
+ * at all.
+ *
+ * So: any error that reaches here becomes a sentence and an exit code. This is
+ * a floor, not a substitute for handling — a command that knows *why* the error
+ * happened still says so itself (see `cmdRot`'s reseal branch, which explains
+ * that a denied write is the hardening working), and a per-item failure that
+ * should only degrade one line of a report still has to be caught where that
+ * line is built. What this guarantees is only that the worst case is readable.
+ */
+try {
+  process.exitCode = await main(process.argv.slice(2));
+} catch (error) {
+  const err = error as NodeJS.ErrnoException;
+  process.stderr.write(`muffin: ${err.message ?? String(error)}\n`);
+  if (process.env.MUFFIN_DEBUG === '1' && err.stack) process.stderr.write(`${err.stack}\n`);
+  else process.stderr.write('(per la traccia completa: MUFFIN_DEBUG=1)\n');
+  process.exitCode = err.code === 'EACCES' || err.code === 'EPERM' ? 77 : 70; // EX_NOPERM / EX_SOFTWARE
+}

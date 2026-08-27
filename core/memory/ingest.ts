@@ -213,6 +213,22 @@ export function formatConsolidationLines(report: IngestReport): string[] {
   return [...judgeLines, ...report.errors];
 }
 
+/**
+ * Un lotto che è morto a metà, con quello che aveva già fatto.
+ *
+ * L'errore vero resta `cause`: chi non ha bisogno del parziale continua a
+ * vedere un `Error` col suo messaggio, e nessun chiamante esistente cambia
+ * comportamento.
+ */
+export class IngestFailed extends Error {
+  readonly partial: IngestReport;
+  constructor(cause: unknown, partial: IngestReport) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'IngestFailed';
+    this.partial = partial;
+  }
+}
+
 export async function ingestPending(
   deps: IngestDeps,
   tenantId: string,
@@ -312,11 +328,40 @@ export async function ingestPending(
 
       report.episodes += 1;
 
-      const extraction = await extractFacts(deps.provider, deps.model, {
-        content: episode.content,
-        speakerName: episode.role === 'user' ? 'owner' : episode.role,
-        trustTier: episode.trustTier,
+      // The step that costs the most and was the only one nobody could see.
+      //
+      // Measured on the owner's install on 27/08: one idle round spent 129
+      // seconds against the model across fourteen episodes and produced zero
+      // facts — and the trace file for that day held `memory.recall` and
+      // `memory.ingest` spans and not one for the calls that burned the time.
+      // The judge got this same span in #141 for the same reason; extraction is
+      // the larger half and was still missing.
+      const extractSpan = deps.tracer.start(
+        'muffin.chat_call',
+        { [ATTR.operationName]: 'memory.extract', [ATTR.requestModel]: deps.model },
+        span,
+      );
+      let extraction: Awaited<ReturnType<typeof extractFacts>>;
+      try {
+        extraction = await extractFacts(deps.provider, deps.model, {
+          content: episode.content,
+          speakerName: episode.role === 'user' ? 'owner' : episode.role,
+          trustTier: episode.trustTier,
+        });
+      } catch (error) {
+        extractSpan.end({ error });
+        throw error;
+      }
+      extractSpan.setAttributes({
+        [ATTR.usageInputTokens]: extraction.usage.inputTokens,
+        [ATTR.usageOutputTokens]: extraction.usage.outputTokens,
+        [ATTR.cacheReadTokens]: extraction.usage.cacheReadTokens,
+        'muffin.memory.facts': extraction.facts.length,
       });
+      // A model that answers something unusable is not an exception — the
+      // function returns normally with `error` set — so without this the span
+      // would close green on the exact rounds that produced nothing.
+      extractSpan.end(extraction.error === undefined ? undefined : { error: new Error(extraction.error) });
 
       if (extraction.error) {
         const detail = `episodio ${episode.id}: ${extraction.error}`;
@@ -333,6 +378,23 @@ export async function ingestPending(
       }
 
       report.rejected += extraction.rejected;
+
+      // Una perdita parziale che nessuno vede è una perdita silenziosa. Da
+      // quando i candidati si validano uno per uno, un episodio può essere
+      // marcato come fatto **avendo scartato** qualche fatto per strada: senza
+      // questa riga il rapporto direbbe «3 fatti» e non «3 fatti su 5».
+      if (extraction.malformed !== undefined && extraction.malformed > 0) {
+        const detail =
+          `episodio ${episode.id}: ${extraction.malformed} candidati fuori schema, tenuti gli altri` +
+          (extraction.malformedWhy === undefined ? '' : ` — ${extraction.malformedWhy.join(' · ')}`);
+        report.errors.push(detail);
+        deps.store.recordReview({
+          tenantId,
+          kind: 'error',
+          detail,
+          createdAt: now().toISOString(),
+        });
+      }
 
       for (const fact of extraction.facts) {
         const subjectId = deps.store.upsertEntity(
@@ -398,7 +460,20 @@ export async function ingestPending(
     return report;
   } catch (error) {
     span.end({ error });
-    throw error;
+    // Con quello che era già stato fatto, non solo con il messaggio.
+    //
+    // `ingestPending` marca ogni episodio subito dopo i suoi fatti, quindi
+    // quando lancia a metà lotto il lavoro fatto fino a lì **è già su disco**:
+    // fatti scritti, episodi marcati. Il chiamante che scrive il rapporto del
+    // giro non aveva modo di saperlo e scriveva una riga di zeri — misurato il
+    // 27/08, un `terminated` da undici dopo tre minuti: 25 → 29 fatti veri, e
+    // `consolidation_runs` che diceva zero episodi e zero fatti.
+    //
+    // `consolidator.ts` scrive già la regola giusta, due righe sotto il punto
+    // che la violava: «a sweep that threw must not turn a run that wrote facts
+    // into an `error` row, because the facts are there and the row is what the
+    // owner reads to know it». Valeva per lo sweep e non per il lotto.
+    throw new IngestFailed(error, report);
   } finally {
     claim.release();
   }
@@ -518,7 +593,19 @@ async function reconcile(
         incoming: episode.content ?? undefined,
       },
     });
-    judgeSpan.setAttributes({ 'muffin.memory.verdict': verdict.verdict, 'muffin.memory.judge_confidence': verdict.confidence });
+    judgeSpan.setAttributes({
+      'muffin.memory.verdict': verdict.verdict,
+      'muffin.memory.judge_confidence': verdict.confidence,
+      // The same three attribute names the loop's own `muffin.chat_call` sets,
+      // because this span carries that same name and a reader cannot be
+      // expected to know which of the two produced it. Without them a judged
+      // step showed a duration and a model and no tokens, which on a per-step
+      // view reads as *free* rather than as *unrecorded* — the spend was
+      // always billed (`agent/providers/light-lane.ts`), only invisible.
+      [ATTR.usageInputTokens]: verdict.usage.inputTokens,
+      [ATTR.usageOutputTokens]: verdict.usage.outputTokens,
+      [ATTR.cacheReadTokens]: verdict.usage.cacheReadTokens,
+    });
     judgeSpan.end();
   } catch (error) {
     judgeSpan.end({ error });
