@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { TenantId } from '../policy/types.js';
-import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, type IngestReport } from './ingest.js';
+import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, IngestFailed, type IngestReport } from './ingest.js';
 
 /**
  * What makes consolidation start by itself.
@@ -398,6 +398,37 @@ export function readConsolidation(
   }
 }
 
+/**
+ * Rapporto → riga del giro. **Un posto solo.**
+ *
+ * Il ramo che riesce e quello che fallisce scrivono la stessa riga da dati
+ * diversi, e finché erano due copie una delle due poteva restare indietro —
+ * cosa che era già successa: quella d'errore era ferma a zeri mentre il lotto
+ * aveva scritto fatti veri.
+ */
+function rowFrom(
+  blank: Omit<ConsolidationRun, 'outcome' | 'ms'>,
+  report: IngestReport,
+  outcome: ConsolidationRun['outcome'],
+  ms: number,
+): ConsolidationRun {
+  return {
+    ...blank,
+    outcome,
+    episodes: report.episodes,
+    facts: report.factsAdded,
+    superseded: report.superseded,
+    indexed: report.indexed,
+    review: report.needsReview.length,
+    // Entrambi i conteggi: un giudice non raggiungibile è un problema di questo
+    // giro esattamente quanto una voce di `errors`, e `nothingGotThrough` in
+    // `cli/doctor.ts` confronta questo numero con `episodes` per distinguere
+    // una corsia che si sta curando da una ferma — le serve il totale, non metà.
+    errors: report.errors.length + report.judgeUnavailable.length,
+    ms,
+  };
+}
+
 function hydrate(row: Row): ConsolidationRun {
   return {
     ranAt: new Date(row.ran_at),
@@ -669,7 +700,25 @@ export class Consolidator {
       report = await this.deps.ingest(limit);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const run = { ...blank, outcome: 'error' as const, errors: 1, ms: Date.now() - started };
+      // Con quello che il lotto aveva già fatto prima di morire, non con degli
+      // zeri: gli episodi sono marcati e i fatti sono scritti, e la riga è ciò
+      // che l'owner legge per sapere cosa è successo. Misurato il 27/08 —
+      // `terminated` da undici dopo tre minuti, 25 → 29 fatti veri, e questa
+      // riga che diceva zero e zero.
+      //
+      // È la stessa regola già scritta venti righe sotto per lo sweep, e la
+      // stessa mappatura del ramo che riesce: `rowFrom`, un posto solo, perché
+      // due copie della stessa conversione sono due copie che divergono.
+      const partial = error instanceof IngestFailed ? error.partial : null;
+      const run: ConsolidationRun =
+        partial === null
+          ? { ...blank, outcome: 'error' as const, errors: 1, ms: Date.now() - started }
+          : {
+              ...rowFrom(blank, partial, 'error', Date.now() - started),
+              // +1: l'eccezione stessa è un problema di questo giro, e non
+              // compare in `report.errors` — nessuno ce l'ha messa.
+              errors: partial.errors.length + partial.judgeUnavailable.length + 1,
+            };
       this.write(run);
       this.deps.log?.(`consolidamento: fallito — ${message}`);
       return { run, report: null };
@@ -700,20 +749,7 @@ export class Consolidator {
     // from a real failure because they mean opposite things: `busy` is the
     // guarantee working, `error` is it not.
     const run: ConsolidationRun = {
-      ...blank,
-      outcome: report.busy ? 'busy' : 'ran',
-      episodes: report.episodes,
-      facts: report.factsAdded,
-      superseded: report.superseded,
-      indexed: report.indexed,
-      review: report.needsReview.length,
-      // Both counts: a judge failure is exactly as much "a problem this
-      // round" as any entry in `errors`, and `nothingGotThrough` in
-      // `cli/doctor.ts` compares this against `episodes` to tell a lane that
-      // is healing itself from one that is stuck — it needs the total, not
-      // half of it.
-      errors: report.errors.length + report.judgeUnavailable.length,
-      ms: Date.now() - started,
+      ...rowFrom(blank, report, report.busy ? 'busy' : 'ran', Date.now() - started),
       merged,
     };
     this.write(run);

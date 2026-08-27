@@ -7,7 +7,7 @@ import {
   CONSOLIDATION_IDLE_MS,
   readConsolidation,
 } from './consolidator.js';
-import type { IngestReport } from './ingest.js';
+import { IngestFailed, type IngestReport } from './ingest.js';
 
 /**
  * The trigger's own behaviour, with the batch replaced by a counter.
@@ -595,5 +595,79 @@ describe('stop', () => {
     // And no later turn can re-arm it either.
     h.consolidator.notify('host');
     expect(h.consolidator.isArmed()).toBe(false);
+  });
+});
+
+/**
+ * Un giro morto a metà dice cosa aveva fatto.
+ *
+ * `consolidator.ts` scrive già la regola giusta, venti righe sotto il punto che
+ * la violava: «a sweep that threw must not turn a run that wrote facts into an
+ * `error` row, because the facts are there and the row is what the owner reads
+ * to know it». Valeva per lo sweep e non per il lotto.
+ *
+ * Misurato sulla macchina dell'owner il 27/08: un `terminated` da undici dopo
+ * tre minuti di drenaggio. `facts` era passato davvero da 25 a 29 — gli episodi
+ * sono marcati subito dopo i propri fatti, quindi il lavoro era su disco — e
+ * `consolidation_runs` scriveva zero episodi e zero fatti.
+ */
+describe('un lotto che muore a metà non azzera il proprio giro', () => {
+  function boom(partial: IngestReport | null) {
+    const db = new DatabaseCtor(':memory:');
+    const lines: string[] = [];
+    const consolidator = new Consolidator({
+      db,
+      ingest: async () => {
+        const cause = new Error('terminated');
+        throw partial === null ? cause : new IngestFailed(cause, partial);
+      },
+      budgetExhausted: () => false,
+      log: (line) => lines.push(line),
+    });
+    return { db, lines, consolidator };
+  }
+
+  it('la riga porta gli episodi e i fatti che erano già passati', async () => {
+    const { consolidator, db } = boom(empty({ episodes: 9, factsAdded: 4, indexed: 3, superseded: 1 }));
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS + 1);
+    await consolidator.settled();
+    const row = readConsolidation(db)?.last;
+    expect(row?.outcome).toBe('error');
+    expect(row?.episodes).toBe(9);
+    expect(row?.facts).toBe(4);
+    expect(row?.indexed).toBe(3);
+    expect(row?.superseded).toBe(1);
+  });
+
+  it("conta l'eccezione stessa come un problema del giro, oltre a quelli già raccolti", async () => {
+    // Nessuno l'ha messa in `report.errors`: è successa dopo, ed è il motivo
+    // per cui il giro è finito lì.
+    const { consolidator, db } = boom(empty({ episodes: 3, factsAdded: 1, errors: ['una cosa'] }));
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS + 1);
+    await consolidator.settled();
+    expect(readConsolidation(db)?.last.errors).toBe(2);
+  });
+
+  it('un errore che non porta niente resta la riga di zeri di prima', async () => {
+    // Il contratto vecchio dove non c'è un parziale da scrivere: qualunque
+    // altro chiamante che lanci un `Error` normale non cambia comportamento.
+    const { consolidator, db } = boom(null);
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS + 1);
+    await consolidator.settled();
+    const row = readConsolidation(db)?.last;
+    expect(row?.outcome).toBe('error');
+    expect(row?.episodes).toBe(0);
+    expect(row?.errors).toBe(1);
+  });
+
+  it("l'errore vero resta leggibile: il messaggio arriva sul log", async () => {
+    const { consolidator, lines } = boom(empty({ episodes: 2, factsAdded: 1 }));
+    consolidator.notify('host');
+    await vi.advanceTimersByTimeAsync(CONSOLIDATION_IDLE_MS + 1);
+    await consolidator.settled();
+    expect(lines.some((l) => l.includes('terminated'))).toBe(true);
   });
 });

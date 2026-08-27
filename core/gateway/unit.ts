@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
 
 /**
@@ -82,8 +82,25 @@ export type UnitPlan = {
   /** Where the file belongs on this platform. */
   path: string;
   text: string;
-  /** What the owner runs to make it live. Never run for them. */
+  /**
+   * What the owner reads to make it live — prose, for a terminal.
+   *
+   * Not a program: the list carries a comment line, a shell substitution
+   * (`$(id -u)`), a variable (`"$USER"`) and a trailing `# perché` on the
+   * step people skip. Executing it verbatim is how a display list quietly
+   * becomes the wrong thing. `activation` is the executable form, and the two
+   * are generated side by side so they cannot drift apart.
+   */
   commands: string[];
+  /**
+   * The same activation, as argv — what `--start` actually runs.
+   *
+   * Empty when the caller did not say **who** is installing (`identity`): the
+   * printed form can afford `$(id -u)` because a shell expands it, and this
+   * one cannot afford to guess. `--start` then refuses and says so, rather
+   * than bootstrapping some other uid's agent.
+   */
+  activation: { argv: string[]; why: string }[];
   /** What they need to know before trusting it. */
   warnings: string[];
 };
@@ -96,6 +113,15 @@ export type UnitOptions = {
   exec: string[];
   configHome?: string;
   homeDir?: string;
+  /**
+   * Chi sta installando, per la forma eseguibile dell'attivazione.
+   *
+   * `launchctl bootstrap gui/<uid>` e `loginctl enable-linger <user>` nominano
+   * un utente: nella lista stampata lo fa la shell, qui deve farlo il chiamante.
+   * Il planner resta puro, e senza questo campo `activation` è vuota invece di
+   * contenere un indovinello.
+   */
+  identity?: { user: string; uid: number } | undefined;
   /**
    * The directory of the Node interpreter this install is running under —
    * `dirname(process.execPath)`. The caller probes, the planner stays pure.
@@ -131,6 +157,67 @@ export type UnitOptions = {
   systemdNotify?: boolean;
 };
 
+/**
+ * What the caller has to be able to answer to find a stable interpreter
+ * directory. Injected so the test can build a Homebrew, a distro and an nvm
+ * machine without being on one.
+ */
+export type InterpreterProbes = {
+  /** The directories on the PATH this install was launched with. */
+  pathEntries: () => string[];
+  /** What the path resolves to, or `null` when it does not resolve. */
+  realpath: (path: string) => string | null;
+};
+
+/**
+ * The directory to put on the unit's PATH so `#!/usr/bin/env node` finds an
+ * interpreter — **next month too**.
+ *
+ * `dirname(process.execPath)` is the obvious answer and it is the one that
+ * expires. Node resolves `execPath` through symlinks, so on the owner's
+ * machine it is `/opt/homebrew/Cellar/node@22/22.22.2_2/bin` — a directory
+ * whose name carries a version *and a revision*, and which Homebrew deletes on
+ * the next `brew upgrade`. The unit then points at a path that no longer
+ * exists, `env node` exits 127, and launchd retries every ten seconds forever.
+ *
+ * That is the exact failure this option was added to fix (see `interpreterDir`
+ * above, found during the RETURN install): the repair replaced "no node on the
+ * PATH" with "a node path with an expiry date", and `gateway.err` on that same
+ * machine carries both episodes.
+ *
+ * The discriminant is not a list of package managers: it is **another way to
+ * reach this same interpreter**. The first PATH directory whose `node`
+ * resolves to exactly `execPath` wins; otherwise nothing changes and the
+ * interpreter's own directory is used, as before.
+ *
+ * A directory other than the interpreter's own can only resolve there through
+ * a link — on the file, or on the directory holding it — and a link is the
+ * package manager's own indirection point, its standing promise to keep
+ * pointing at a working interpreter. The versioned directory it points *at* is
+ * the artefact, and the artefact is what gets removed.
+ *
+ * The first draft of this also demanded that `node` itself be a symlink. That
+ * check was worse than redundant: where `/usr/local/bin` is a symlinked
+ * *directory*, `node` inside it is an ordinary file, and the check rejected
+ * exactly the stable path it was meant to find.
+ *
+ * This makes it a strict improvement where a stable link exists (Homebrew,
+ * MacPorts, a distro that links into `/usr/local/bin`) and a no-op where none
+ * does (nvm, a hand-built Node) — never a guess.
+ */
+export function resolveInterpreterDir(execPath: string, probes: InterpreterProbes): string {
+  const own = dirname(execPath);
+  for (const dir of probes.pathEntries()) {
+    if (dir === '' || dir === own) continue;
+    // Equality with `execPath`, not merely "a node is here". A link to a
+    // *different* interpreter would run the unit under a Node this install was
+    // never tested on, and it would do it silently.
+    if (probes.realpath(join(dir, 'node')) !== execPath) continue;
+    return dir;
+  }
+  return own;
+}
+
 /** The system directories a service still needs, after the interpreter's own. */
 const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 
@@ -151,6 +238,7 @@ function systemdPlan({
   homeDir,
   systemdNotify = true,
   interpreterDir,
+  identity,
 }: UnitOptions): UnitPlan {
   const dir = join(configHome ?? join(homeDir ?? homedir(), '.config'), 'systemd', 'user');
   const path = join(dir, `${SERVICE_NAME}.service`);
@@ -242,6 +330,27 @@ WantedBy=default.target
       // "il gateway si ferma da solo ogni tanto" (ADR-0035).
       `loginctl enable-linger "$USER"   # senza questo la unit utente muore al logout`,
     ],
+    // Senza `mkdir` e senza `gateway install --write`: quei due passi `--start`
+    // li ha già fatti quando arriva qui. Restano i tre che trasformano un file
+    // in un servizio, nell'ordine in cui la lista sopra li nomina.
+    activation:
+      identity === undefined
+        ? []
+        : [
+            { argv: ['systemctl', '--user', 'daemon-reload'], why: 'perché systemd rilegga la unit appena scritta' },
+            {
+              argv: ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
+              why: "abilita all'avvio e la fa partire adesso",
+            },
+            {
+              // Il passo che si salta, e il suo sintomo è il più difficile da
+              // ricollegare alla causa: "il gateway si ferma da solo ogni
+              // tanto" (ADR-0035). In una lista da copiare è l'ultima riga e
+              // ha un commento in coda; qui non è saltabile.
+              argv: ['loginctl', 'enable-linger', identity.user],
+              why: 'senza, la unit utente muore al logout',
+            },
+          ],
     warnings: systemdNotify
       ? []
       : [
@@ -251,7 +360,7 @@ WantedBy=default.target
   };
 }
 
-function launchdPlan({ home, exec, homeDir, interpreterDir }: UnitOptions): UnitPlan {
+function launchdPlan({ home, exec, homeDir, interpreterDir, identity }: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const args = exec.map((a) => `      <string>${xml(a)}</string>`).join('\n');
   const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -309,6 +418,18 @@ ${args}
       `launchctl print gui/$(id -u)/${LAUNCHD_LABEL}`,
       `# per fermarlo: launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}`,
     ],
+    // `print` non c'è: è una verifica per gli occhi, non un passo. E il
+    // `bootout` è un commento nella lista stampata proprio perché non va
+    // eseguito ora — eseguirlo qui spegnerebbe ciò che si sta accendendo.
+    activation:
+      identity === undefined
+        ? []
+        : [
+            {
+              argv: ['launchctl', 'bootstrap', `gui/${identity.uid}`, path],
+              why: 'registra il LaunchAgent e lo avvia',
+            },
+          ],
     warnings: [
       // The divergence, recorded rather than merely suffered.
       `launchd non ha un equivalente di RestartPreventExitStatus: né un fallimento permanente (uscita ${EXIT_PERMANENT}: config o secret mancanti, root of trust che rifiuta) né uno stop chiesto (uscita ${EXIT_STOPPED}) lo tengono giù — KeepAlive lo riporta su, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')}.`,

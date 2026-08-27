@@ -49,6 +49,20 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * `main` is deliberately the channel this reads from — `dev` stays where
  * development happens; the two are not the same question `muffin update`
  * exists to answer.
+ *
+ * ## The one update this command cannot perform
+ *
+ * Its own arrival. An installation older than this file answers `comando
+ * sconosciuto: update`, because the command ships *in the version being
+ * updated to* — measured on the owner's own machine, 26/08/2026, which was
+ * installed the day before. That first hop is manual and looks exactly like
+ * what this command automates, minus the release directory: stop the
+ * supervised gateway (`launchctl bootout` / `systemctl --user stop`, because
+ * `npm ci` deletes `node_modules` under a live process), fast-forward the
+ * checkout to `origin/main`, `npm ci && npm run compile`, bring the gateway
+ * back. From then on the launcher points at a checkout this command
+ * recognises (`currentOrBootstrap` below reads exactly that state as the
+ * bootstrap marker), and every later update is one command.
  */
 
 export type UpdateStep = { name: string; done: boolean; detail: string };
@@ -116,6 +130,41 @@ export function fetchFailureRemedy(stderr: string): string {
  * a different directory on purpose. `null` means "not a git checkout at all",
  * which is an honest stop, not a guess at one.
  */
+/** Quale commit è questa build, e se qualcuno l'ha toccata dopo. */
+export type BuildStamp = { sha: string; date: string; dirty: boolean };
+
+/**
+ * L'identità di una build, che qui è un commit e non un numero di versione.
+ *
+ * `package.json` dice `0.0.0` e non è sbagliato: è vuoto. Questo progetto non
+ * si distribuisce per release numerate — `muffin update` costruisce
+ * `.releases/<sha>` e scambia il launcher, quindi **la cosa che identifica una
+ * build è il suo commit**, ed è già quello che l'aggiornamento maneggia.
+ *
+ * Misurato il 27/08: per capire quale build fosse installata sulla macchina
+ * dell'owner ho dovuto interrogare i sottocomandi — `muffin trace --help` non
+ * aveva `turn`, `doctor` non aveva la riga `defaults` — e dedurre da lì che
+ * fosse anteriore a #133 e #142. Una domanda a cui il binario dovrebbe
+ * rispondere da solo.
+ *
+ * `dirty` non è un dettaglio: un checkout modificato **non è** quel commit, e
+ * dire il suo SHA senza dirlo è la stessa classe di bugia di tutto il resto di
+ * questa settimana — precisa, verificabile e falsa.
+ *
+ * `null` quando non c'è un checkout Git (un'installazione da tarball): non
+ * sappiamo, e si dice.
+ */
+export function describeBuild(moduleDir: string, gitRunner: GitRunner = git): BuildStamp | null {
+  const head = gitRunner(['log', '-1', '--format=%H %cs'], moduleDir);
+  if (head.status !== 0) return null;
+  const [sha, date] = head.stdout.trim().split(' ');
+  if (sha === undefined || date === undefined || sha.length < 7) return null;
+  const status = gitRunner(['status', '--porcelain'], moduleDir);
+  // Uno `status` che fallisce non rende la build pulita: nel dubbio si dichiara
+  // toccata, perché l'errore che costa è il contrario.
+  return { sha, date, dirty: status.status !== 0 || status.stdout.trim() !== '' };
+}
+
 export function findCheckoutRoot(moduleDir: string, gitRunner: GitRunner = git): string | null {
   const r = gitRunner(['rev-parse', '--show-toplevel'], moduleDir);
   if (r.status !== 0) return null;

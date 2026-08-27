@@ -1,14 +1,16 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { loadConfig, paths } from '../core/config/config.js';
 import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
+import { describeSupervision } from '../core/gateway/notify.js';
+import { LAUNCHD_LABEL } from '../core/gateway/unit.js';
 import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
@@ -16,6 +18,7 @@ import type { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
+import { cmdGatewayInstall, EXIT_NOT_ACTIVATED } from './gateway.js';
 import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
@@ -133,16 +136,22 @@ function jobRow(dir: string, id: string): { last_run_at: string | null; next_fir
   }
 }
 
-function muffin(dir: string, args: string[], stdin = ''): { code: number; out: string; err: string } {
+function muffin(
+  dir: string,
+  args: string[],
+  stdin = '',
+  extraEnv: Record<string, string> = {},
+  timeout = 60_000,
+): { code: number; out: string; err: string } {
   const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
     // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
     // --write` can never put a real service unit in the owner's `~/Library` or
     // `~/.config`. It did exactly that once, and the file outlived the run
     // because the cleanup was after a failing assertion.
-    env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1' },
+    env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1', ...extraEnv },
     input: stdin,
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout,
   });
   return { code: result.status ?? -1, out: result.stdout ?? '', err: result.stderr ?? '' };
 }
@@ -902,5 +911,187 @@ describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed u
 
   it('parses a real override', () => {
     expect(tickMsFromEnv('250')).toBe(250);
+  });
+});
+
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `resolveInterpreterDir` era provata da sola e `gateway install` continuava a
+ * passare `dirname(process.execPath)`: rimettendo quella riga com'era, tutta la
+ * suite restava verde. La funzione giusta scollegata è lo stesso guasto della
+ * funzione sbagliata, e sul binario vero è l'unico posto dove si vede.
+ */
+describe('muffin gateway install — quale interprete finisce nella unit', () => {
+  it('sceglie la directory stabile del PATH, non quella versionata dell interprete', () => {
+    // Una directory con dentro un link al Node che sta girando: è la forma di
+    // `/opt/homebrew/bin` sulla macchina dell'owner, costruita a mano così il
+    // test vale anche dove quella forma non esiste.
+    const dir = home();
+    const stable = mkdtempSync(join(tmpdir(), 'muffin-bin-stabile-'));
+    symlinkSync(process.execPath, join(stable, 'node'));
+
+    const r = muffin(dir, ['gateway', 'install'], '', { PATH: `${stable}${delimiter}${process.env['PATH'] ?? ''}` });
+
+    expect(r.out).toContain(stable);
+    // E non quella versionata: averle tutte e due significherebbe non aver
+    // scelto, che è il caso in cui l'upgrade rompe comunque.
+    expect(r.out).not.toContain(dirname(realpathSync(process.execPath)));
+    rmSync(stable, { recursive: true, force: true });
+  });
+});
+
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `describeSupervision` era provata da sola e la riga di avvio continuava a
+ * derivare tutto da `NOTIFY_SOCKET`: rimettendo quel ternario, la suite restava
+ * verde. La funzione giusta scollegata è lo stesso guasto della funzione
+ * sbagliata — la stessa lezione di #151, nello stesso file.
+ */
+describe('muffin gateway run — la riga di supervisione', () => {
+  it('stampa esattamente ciò che `describeSupervision` dice per questo ambiente', () => {
+    // Confrontata con la funzione e non con una stringa: così vale su Linux e
+    // su macOS senza che il test sappia dove sta girando, e la mutazione muore
+    // comunque — il vecchio ternario produce parole diverse su entrambe.
+    const dir = home();
+    const env = { XPC_SERVICE_NAME: LAUNCHD_LABEL };
+    // Il banner esce prima di `serve()`, quindi cinque secondi bastano; poi il
+    // gateway viene ucciso dal timeout, che è l'unico modo di fermare un
+    // processo che di mestiere non finisce.
+    const r = muffin(dir, ['gateway', 'run'], '', env, 5_000);
+
+    expect(r.err).toContain(`supervisione: ${describeSupervision({ ...process.env, ...env }, process.platform)}`);
+  }, 30_000);
+});
+
+/**
+ * `--start`: dal file al servizio, e il passo che nessuno ricorda dentro.
+ *
+ * Fino a qui `install` finiva stampando quattro righe da copiare. Una di quelle
+ * — `loginctl enable-linger` — se salta non rompe niente subito: il gateway
+ * muore al logout, settimane dopo, e si presenta come «si ferma da solo ogni
+ * tanto» (ADR-0035). È il difetto peggiore da diagnosticare della lista, ed è
+ * l'ultima riga con un commento in coda.
+ *
+ * Quello che `init` offre resta `--write` e basta: scrivere un file in casa
+ * propria è una cosa, accendere un servizio un'altra, e quella decisione è
+ * scritta in `cli/main.ts`. `--start` è l'owner che la prende, digitandola.
+ */
+describe('muffin gateway install --start', () => {
+  const zitto = () => {
+    const righe: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((c) => { righe.push(String(c)); return true; });
+    const spyOut = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    return { righe, ripristina: () => { spy.mockRestore(); spyOut.mockRestore(); } };
+  };
+
+  it('esegue la sequenza systemd nell ordine, linger compreso', () => {
+    const dir = home();
+    const visti: string[][] = [];
+    const s = zitto();
+    try {
+      const code = cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        configHome: join(dir, '.config'),
+        identity: { user: 'owner', uid: 1000 },
+        run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+      });
+      // 0 oppure 1: sotto tsx il launcher non è il symlink installato e
+      // `currentLauncher()` lo dice — è vero, ed è un avvertimento, non un
+      // fallimento dell'attivazione. Quello che non deve essere è 3.
+      expect(code).not.toBe(EXIT_NOT_ACTIVATED);
+    } finally { s.ripristina(); }
+    expect(visti).toEqual([
+      ['systemctl', '--user', 'daemon-reload'],
+      ['systemctl', '--user', 'enable', '--now', 'muffin-gateway.service'],
+      ['loginctl', 'enable-linger', 'owner'],
+    ]);
+    expect(s.righe.join('')).toContain('è un servizio adesso');
+  });
+
+it('stampa il passo prima di eseguirlo, non dopo', () => {
+    // `systemctl --user` su una macchina senza bus di sessione non fallisce:
+    // aspetta. Se la riga si stampasse dopo, l'owner guarderebbe un cursore
+    // fermo senza sapere su quale dei tre comandi. Un runner che lancia è il
+    // modo di chiedere «eri già passato dalla stampa?» senza appendere il test.
+    const dir = home();
+    const s = zitto();
+    try {
+      expect(() =>
+        cmdGatewayInstall(dir, ['--start'], {
+          platform: 'linux',
+          homeDir: dir,
+          configHome: join(dir, '.config'),
+          identity: { user: 'owner', uid: 1000 },
+          run: () => { throw new Error('come se non tornasse mai'); },
+        }),
+      ).toThrow('come se non tornasse mai');
+    } finally { s.ripristina(); }
+    expect(s.righe.join('')).toContain('systemctl --user daemon-reload');
+  });
+
+  it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', () => {
+    const dir = home();
+    const visti: string[][] = [];
+    const s = zitto();
+    let code: number;
+    try {
+      code = cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        configHome: join(dir, '.config'),
+        identity: { user: 'owner', uid: 1000 },
+        run: (argv) => { visti.push(argv); return { status: 1, stderr: 'Failed to connect to bus' }; },
+      });
+    } finally { s.ripristina(); }
+    expect(visti).toHaveLength(1);
+    expect(code).toBe(EXIT_NOT_ACTIVATED);
+    const detto = s.righe.join('');
+    // Il comando che si è fermato, il suo errore vero, e i passi rimasti: senza
+    // i tre insieme «uscita 3» è un numero che non dice cosa fare adesso.
+    expect(detto).toContain('systemctl --user daemon-reload');
+    expect(detto).toContain('Failed to connect to bus');
+    expect(detto).toContain('la unit è scritta in');
+    expect(detto).toContain('loginctl enable-linger');
+  });
+
+  it('scrive la unit anche senza --write, perché non si accende un file che non c è', () => {
+    const dir = home();
+    const s = zitto();
+    try {
+      cmdGatewayInstall(dir, ['--start'], {
+        platform: 'linux',
+        homeDir: dir,
+        configHome: join(dir, '.config'),
+        identity: { user: 'owner', uid: 1000 },
+        run: () => ({ status: 0, stderr: '' }),
+      });
+    } finally { s.ripristina(); }
+    expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(true);
+  });
+
+  it('col binario vero, e senza il supervisore sul PATH, dice cosa manca ed esce 3', () => {
+    // La cucitura per intero, non a pezzi: il flag parsato da `main.ts`, il
+    // piano, la scrittura, il runner REALE e il codice d'uscita. Il PATH ha
+    // solo `node` — quindi `systemctl`/`launchctl` non esistono davvero e
+    // niente viene acceso su questa macchina, che è il punto: un test che
+    // riuscisse qui registrerebbe un servizio vero a chi lo esegue.
+    const dir = home();
+    const soloNode = mkdtempSync(join(tmpdir(), 'muffin-solo-node-'));
+    homes.push(soloNode);
+    symlinkSync(process.execPath, join(soloNode, 'node'));
+
+    const r = muffin(dir, ['gateway', 'install', '--start'], '', { PATH: soloNode });
+
+    expect(r.code).toBe(EXIT_NOT_ACTIVATED);
+    expect(r.err).toContain('si è fermato qui');
+    const unit = process.platform === 'darwin'
+      ? join(dir, 'Library', 'LaunchAgents', 'ai.muffin.gateway.plist')
+      : join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service');
+    expect(existsSync(unit)).toBe(true);
   });
 });

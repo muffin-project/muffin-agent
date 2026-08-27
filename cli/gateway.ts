@@ -1,7 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
+import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
@@ -11,12 +12,14 @@ import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
-import { createNotifier } from '../core/gateway/notify.js';
+import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
   planUnit,
+  resolveInterpreterDir,
+  type InterpreterProbes,
   resolveLauncher,
   EXIT_PERMANENT,
   LAUNCHD_LABEL,
@@ -56,6 +59,9 @@ export const GATEWAY_USAGE = `usage:
   muffin gateway stop           drena i turni in volo e lo ferma
   muffin gateway install        genera la unit del supervisore (stdout)
                                 [--write] scrivila al suo posto [--force]
+                                [--start] e poi accendila davvero (implica
+                                --write); esce 3 se il file c'è e il
+                                servizio no
   muffin gateway run            il processo stesso — lo lancia il supervisore,
                                 non tu (vedi \`muffin gateway install\`)
 `;
@@ -107,6 +113,26 @@ function describe(info: GatewayInfo): string {
   const beat = Math.round((Date.now() - info.lastBeat.getTime()) / 1000);
   return `attivo · pid ${info.pid} · dal ${since} · ${info.status} · ultimo battito ${beat}s fa`;
 }
+
+/**
+ * The real answers behind `resolveInterpreterDir`. Kept here, next to the one
+ * caller, for the reason the planner states: the caller probes, the planner
+ * stays pure.
+ *
+ * Every probe degrades to "no" rather than throwing: this runs during
+ * `gateway install`, and a PATH entry that cannot be read is a reason to skip
+ * that entry, never a reason to fail the install.
+ */
+const REAL_INTERPRETER_PROBES: InterpreterProbes = {
+  pathEntries: () => (process.env['PATH'] ?? '').split(delimiter).filter((d) => d !== ''),
+  realpath: (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return null;
+    }
+  },
+};
 
 export function cmdGatewayStatus(home: string): number {
   const info = inspect(home);
@@ -177,22 +203,71 @@ export async function cmdGatewayStop(home: string): Promise<number> {
   return 1;
 }
 
-export function cmdGatewayInstall(home: string, argv: string[]): number {
-  let values: { write?: boolean; force?: boolean };
+/**
+ * Come `--start` esegue un passo di attivazione.
+ *
+ * Iniettabile perché la cosa che fa è accendere un servizio sulla macchina di
+ * chi lo chiama: un test che la esegue davvero scrive un LaunchAgent vero nel
+ * `~/Library` di qualcuno — è già successo una volta a questo file, e la nota
+ * su `homeDir` più sotto è la cicatrice.
+ */
+export type StepRunner = (argv: string[]) => { status: number | null; stderr: string };
+
+const REAL_RUNNER: StepRunner = (argv) => {
+  const [cmd, ...rest] = argv;
+  const r = spawnSync(cmd ?? '', rest, { encoding: 'utf8' });
+  // `spawnSync` non lancia quando il binario non c'è: mette l'errore in `error`
+  // e `status` a null. Un `systemctl` assente dentro un container è esattamente
+  // questo caso, e senza questa riga si legge come un successo silenzioso.
+  if (r.error) return { status: null, stderr: r.error.message };
+  return { status: r.status, stderr: r.stderr ?? '' };
+};
+
+/** Esce 3 quando la unit è al suo posto e il servizio no: né rifiuto (2) né avvertenza (1). */
+export const EXIT_NOT_ACTIVATED = 3;
+
+export function cmdGatewayInstall(
+  home: string,
+  argv: string[],
+  deps: {
+    run?: StepRunner;
+    identity?: { user: string; uid: number };
+    platform?: NodeJS.Platform;
+    /**
+     * Dove finisce la unit. Il commento su `homeDir` qui sotto racconta la
+     * cicatrice: un test scrisse un LaunchAgent vero nel `~/Library` di
+     * qualcuno. Finora l'unico modo di evitarlo era passare da un processo
+     * figlio con `HOME` riscritto — il che rendeva il percorso in-process
+     * impossibile da provare senza rischiare la macchina che lo prova.
+     */
+    homeDir?: string;
+    configHome?: string;
+  } = {},
+): number {
+  let values: { write?: boolean; force?: boolean; start?: boolean };
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { write: { type: 'boolean' }, force: { type: 'boolean' } },
+      options: { write: { type: 'boolean' }, force: { type: 'boolean' }, start: { type: 'boolean' } },
       allowPositionals: false,
     }));
   } catch {
     process.stderr.write(GATEWAY_USAGE);
     return 78;
   }
+  // Non si accende un file che non c'è: `--start` implica `--write`, e il
+  // rifiuto di sovrascrivere (uscita 2) vale identico — accendere una unit
+  // diversa da quella che l'owner ha in mano sarebbe peggio, non meglio.
+  const write = values.write === true || values.start === true;
 
   const launcher = currentLauncher();
   const plan = planUnit({
-    platform: process.platform,
+    // Sovrascrivibile per la stessa ragione per cui esiste `gate-linux.sh`: lo
+    // sviluppo si fa su macOS e la produzione è Linux, quindi la sequenza
+    // systemd — la sola con più di un passo, e perciò la sola dove l'ordine e
+    // il fermarsi al primo errore si possano osservare — non sarebbe provabile
+    // dalla macchina che la scrive.
+    platform: deps.platform ?? process.platform,
     home,
     exec: launcher.argv,
     systemdNotify: hasSystemdNotify(),
@@ -201,14 +276,29 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
     // the destination be an argument is what lets a test target a temp home
     // instead of writing a real service into the owner's `~/Library` — which it
     // did, once, before this line existed.
-    homeDir: homedir(),
+    //
+    // E di nuovo il 27/08, perché la difesa era a metà: il *planner* prendeva
+    // la destinazione come argomento, questa funzione la leggeva da
+    // `homedir()`. Bastava provare il percorso in-process (l'unico modo di
+    // vedere la sequenza systemd da un Mac) e un `muffin-gateway.service`
+    // compariva nella `~/.config` vera, con `WorkingDirectory` su una home
+    // temporanea. Ora la destinazione è un argomento anche qui.
+    homeDir: deps.homeDir ?? homedir(),
     // Where this install's Node lives. Without it launchd/systemd hand the
-    // launcher a PATH that has no `node` in it at all.
-    interpreterDir: dirname(process.execPath),
-    ...(process.env['XDG_CONFIG_HOME'] ? { configHome: process.env['XDG_CONFIG_HOME'] } : {}),
+    // launcher a PATH that has no `node` in it at all — and with the *wrong*
+    // one it hands it a path that expires (see `resolveInterpreterDir`).
+    interpreterDir: resolveInterpreterDir(process.execPath, REAL_INTERPRETER_PROBES),
+    // Solo se serve: senza `--start` la lista stampata resta quella con
+    // `$(id -u)`, che è giusta per una shell e non richiede di sapere chi sia.
+    ...(values.start === true ? { identity: deps.identity ?? { user: userInfo().username, uid: userInfo().uid } } : {}),
+    ...(deps.configHome !== undefined
+      ? { configHome: deps.configHome }
+      : process.env['XDG_CONFIG_HOME']
+        ? { configHome: process.env['XDG_CONFIG_HOME'] }
+        : {}),
   });
 
-  if (values.write) {
+  if (write) {
     if (existsSync(plan.path) && !values.force) {
       const existing = readFileSync(plan.path, 'utf8');
       if (existing !== plan.text) {
@@ -233,6 +323,41 @@ export function cmdGatewayInstall(home: string, argv: string[]): number {
     process.stdout.write(plan.text);
     process.stderr.write(`\n→ questa unit va in ${plan.path}\n`);
     process.stderr.write(`  \`muffin gateway install --write\` la scrive lì per te\n`);
+  }
+
+  if (values.start === true) {
+    if (plan.activation.length === 0) {
+      process.stderr.write(`\nnon so con quale utente attivarla, quindi non la attivo.\n`);
+      for (const c of plan.commands) process.stderr.write(`  ${c}\n`);
+      return EXIT_NOT_ACTIVATED;
+    }
+    const run = deps.run ?? REAL_RUNNER;
+    process.stderr.write(`\nl'accendo:\n`);
+    for (const step of plan.activation) {
+      // Stampato PRIMA di eseguirlo, non dopo: se il passo si pianta (systemctl
+      // che attende un bus che non c'è) l'owner vede su cosa, non un cursore.
+      process.stderr.write(`  ${step.argv.join(' ')}   # ${step.why}\n`);
+      const r = run(step.argv);
+      if (r.status !== 0) {
+        // Ci si ferma al primo: `enable --now` dopo un `daemon-reload` fallito
+        // abiliterebbe una unit che systemd non ha riletto, e il risultato
+        // sarebbe un servizio che c'è e non è quello scritto.
+        process.stderr.write(`\n! si è fermato qui: ${step.argv.join(' ')}\n`);
+        const detail = r.stderr.trim();
+        if (detail !== '') process.stderr.write(`  ${detail.split('\n').join('\n  ')}\n`);
+        process.stderr.write(`\nla unit è scritta in ${plan.path}; il servizio no. I passi rimasti:\n`);
+        for (const c of plan.commands) process.stderr.write(`  ${c}\n`);
+        for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
+        return EXIT_NOT_ACTIVATED;
+      }
+    }
+    process.stderr.write(`\nil gateway è un servizio adesso — \`muffin gateway status\` lo vede.\n`);
+    for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
+    if (launcher.warning) {
+      process.stderr.write(`\n! ${launcher.warning}\n`);
+      return 1;
+    }
+    return 0;
   }
 
   process.stderr.write(`\npoi, per attivarla:\n`);
@@ -555,7 +680,7 @@ export async function cmdGatewayRun(
       // watched.
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
-      `supervisione: ${notify.supervised ? 'sd_notify attivo' : 'nessun supervisore (NOTIFY_SOCKET assente)'}\n`,
+      `supervisione: ${describeSupervision(process.env, process.platform)}\n`,
   );
 
   return gateway.serve();

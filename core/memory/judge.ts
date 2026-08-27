@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { fence } from './spotlight.js';
+import { REASONING_HEADROOM } from '../../agent/providers/types.js';
 import type { Provider } from '../../agent/providers/types.js';
 import type { Fact } from './store.js';
 
@@ -222,6 +223,20 @@ export type JudgeOutcome = {
    * unexplained sentence for both.
    */
   failure?: { reason: JudgeFailureReason; rawResponse: string };
+  /**
+   * What the call cost, so the span can say it.
+   *
+   * The judge's span is named `muffin.chat_call` — the same name the loop's
+   * metered calls carry — and it was the only one of the two that reported no
+   * tokens. On a per-step view that reads as *free*, not as *unrecorded*,
+   * which is the worse of the two misreadings: the spend itself was always
+   * billed (`agent/providers/light-lane.ts` wraps this provider), so the gap
+   * was never money, only the ability to see where it went.
+   *
+   * Present on every outcome including the three failures, because a call
+   * that could not be parsed still cost what it cost.
+   */
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 };
 
 export async function judgeContradiction(
@@ -253,19 +268,37 @@ export async function judgeContradiction(
         ],
       },
     ],
-    maxOutputTokens: 500,
+    // Un verdetto è corto e resta corto; è il ragionamento davanti a essere
+    // incomprimibile da qui. Con 500 secchi la risposta grezza nel registro è
+    // `[vuota]` — vedi `REASONING_HEADROOM`.
+    maxOutputTokens: 500 + REASONING_HEADROOM,
+    // Queste tre corsie chiedono JSON e non leggono prosa: il ragionamento qui
+    // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
+    // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
+    // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
+    thinking: 'off' as const,
     temperature: 0,
     stream: false,
   });
 
   // One outcome shape for all three ways the answer could not be read, so a
   // caller sees exactly one thing change between them: `failure.reason`.
+  // Read once, attached to every way out: a call that could not be parsed
+  // still cost what it cost, and an outcome that omits it would make the
+  // failures look cheaper than the successes.
+  const usage = {
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadTokens,
+  };
+
   const unavailable = (reason: JudgeFailureReason, rawResponse: string): JudgeOutcome => ({
     verdict: 'coexist',
     reasoning: 'giudice non disponibile: tengo entrambi',
     confidence: 0,
     downgraded: true,
     failure: { reason, rawResponse: sanitizeRawResponse(rawResponse) },
+    usage,
   });
 
   if (!result.text) return unavailable({ kind: 'empty' }, '');
@@ -292,6 +325,7 @@ export async function judgeContradiction(
       reasoning: `${v.reasoning} [confidenza ${v.confidence.toFixed(2)} sotto la soglia ${SUPERSEDE_THRESHOLD}: non ritiro nulla]`,
       confidence: v.confidence,
       downgraded: true,
+      usage,
     };
   }
 
@@ -301,6 +335,7 @@ export async function judgeContradiction(
     confidence: v.confidence,
     ...(v.oldValidTo ? { oldValidTo: v.oldValidTo } : {}),
     downgraded: false,
+    usage,
   };
 }
 

@@ -1,12 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { EmbedderUnavailable, type Embedder } from './embed.js';
-import { formatConsolidationLines, ingestPending, type IngestReport } from './ingest.js';
+import { formatConsolidationLines, IngestFailed, ingestPending, type IngestReport } from './ingest.js';
 import { SUPERSEDE_THRESHOLD } from './judge.js';
 import { MemoryStore } from './store.js';
 import { VectorIndex } from './vectors.js';
@@ -1068,5 +1068,254 @@ describe('formatConsolidationLines — what a human reads at the end of a round'
 
   it('says nothing extra on a clean round', () => {
     expect(formatConsolidationLines(blank)).toEqual([]);
+  });
+});
+
+describe('lo span del giudice dice quanto è costato', () => {
+  /**
+   * Il difetto: lo span del giudice si chiama `muffin.chat_call` — lo stesso
+   * nome che porta una chiamata contata del loop — ed era l'unico dei due a
+   * non riportare token. Su una vista per step quello si legge come
+   * **gratis**, non come **non registrato**, che è la peggiore delle due
+   * letture: la spesa è sempre stata fatturata (`light-lane.ts` avvolge questo
+   * provider), invisibile era solo dove fosse andata.
+   */
+  class Costoso extends Scripted {
+    override async chat(request?: ChatCall): Promise<ChatResult> {
+      const base = await super.chat(request);
+      return { ...base, usage: { inputTokens: 137, outputTokens: 42, cacheReadTokens: 9, cacheWriteTokens: 0 } };
+    }
+  }
+
+  /** Gli span del giudice scritti sotto questa home, in ordine. */
+  function judgeSpans(home: string): { attributes: Record<string, unknown> }[] {
+    const dir = join(home, 'traces');
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> })
+      .filter((s) => s.name === 'muffin.chat_call' && s.attributes['gen_ai.operation.name'] === 'memory.judge');
+  }
+
+  async function judged(replies: string[]): Promise<{ attributes: Record<string, unknown> }[]> {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-judge-usage-'));
+    const deps = {
+      store,
+      provider: new Costoso(replies),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+    episode(store, 'Marco è il mio commercialista');
+    episode(store, 'ho cambiato commercialista: ora è Lucia');
+    await ingestPending(deps, HOST);
+    return judgeSpans(home);
+  }
+
+  it('porta i token della chiamata, non un posto vuoto', async () => {
+    const spans = await judged([
+      facts(fact('owner', 'accountant', 'Marco')),
+      facts(fact('owner', 'accountant', 'Lucia')),
+      JSON.stringify({ reasoning: 'cambio dichiarato', verdict: 'supersede', confidence: 0.95 }),
+    ]);
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 137,
+      'gen_ai.usage.output_tokens': 42,
+      'muffin.usage.cache_read_tokens': 9,
+      'muffin.memory.verdict': 'supersede',
+    });
+  });
+
+  it('li porta anche quando la risposta era illeggibile — una chiamata non parsabile è costata lo stesso', async () => {
+    const spans = await judged([
+      facts(fact('owner', 'accountant', 'Marco')),
+      facts(fact('owner', 'accountant', 'Lucia')),
+      'questa non è affatto JSON',
+    ]);
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 137,
+      'gen_ai.usage.output_tokens': 42,
+      // Il verdetto di ripiego non cambia il fatto che la chiamata è avvenuta.
+      'muffin.memory.verdict': 'coexist',
+    });
+  });
+});
+
+
+/**
+ * Il passo che costa di più era il solo che non si vedeva.
+ *
+ * Misurato sull'installazione dell'owner il 27/08: un giro idle ha speso 129
+ * secondi contro il modello su quattordici episodi e ha prodotto zero fatti —
+ * e il file di tracce di quel giorno conteneva span `memory.recall` e
+ * `memory.ingest` e nemmeno uno per le chiamate che avevano bruciato il tempo.
+ * Il giudice aveva già ricevuto questo span in #141; l'estrazione è la metà
+ * più grande ed era ancora scoperta.
+ */
+describe("l'estrazione ha il suo span, come il giudice", () => {
+  class Contato extends Scripted {
+    readonly requests: ChatCall[] = [];
+    override async chat(request: ChatCall): Promise<ChatResult> {
+      this.requests.push(request);
+      const base = await super.chat(request);
+      return { ...base, usage: { inputTokens: 611, outputTokens: 73, cacheReadTokens: 4, cacheWriteTokens: 0 } };
+    }
+  }
+
+  type Span = { name: string; attributes: Record<string, unknown>; status?: string };
+
+  async function ingest(replies: string[], contenuti: string[]): Promise<{ spans: Span[]; provider: Contato }> {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-extract-span-'));
+    const provider = new Contato(replies);
+    for (const c of contenuti) episode(store, c);
+    await ingestPending(
+      {
+        store,
+        provider,
+        model: 'test-light',
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        now: () => new Date('2026-08-04T12:00:00Z'),
+      },
+      HOST,
+    );
+    const spans = readdirSync(join(home, 'traces'))
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(home, 'traces', f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as Span)
+      .filter((s) => s.attributes['gen_ai.operation.name'] === 'memory.extract');
+    return { spans, provider };
+  }
+
+  it('porta i token di una estrazione riuscita', async () => {
+    const { spans } = await ingest([facts(fact('owner', 'works_as', 'freelancer'))], ['faccio il freelance']);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'gen_ai.usage.input_tokens': 611,
+      'gen_ai.usage.output_tokens': 73,
+      'muffin.usage.cache_read_tokens': 4,
+      'muffin.memory.facts': 1,
+    });
+  });
+
+  it('lo span si chiude in errore quando il modello risponde qualcosa di inservibile', async () => {
+    // `extractFacts` non lancia: torna normalmente con `error` valorizzato.
+    // Senza il ramo esplicito lo span si chiudeva verde proprio sui giri che
+    // non producevano niente.
+    const { spans } = await ingest(['questo non è JSON'], ['qualcosa']);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.status).not.toBe('ok');
+  });
+
+  it('chiede al modello un tetto che lascia spazio al reasoning, su entrambe le chiamate della corsia', async () => {
+    // Senza margine sono 1500 per l'estrazione e 500 per il giudice: su un
+    // modello che ragiona la prima torna `stop=max_tokens` a 1502 token in
+    // uscita e la risposta grezza del secondo nel registro è `[vuota]`.
+    // Nessun test teneva questi due numeri, quindi potevano tornare indietro
+    // restando verdi.
+    const { provider } = await ingest(
+      [
+        facts(fact('owner', 'accountant', 'Marco')),
+        facts(fact('owner', 'accountant', 'Lucia')),
+        JSON.stringify({ reasoning: 'cambio', verdict: 'supersede', confidence: 0.95 }),
+      ],
+      ['Marco è il mio commercialista', 'ora è Lucia'],
+    );
+    expect(provider.requests.length).toBeGreaterThanOrEqual(3);
+    for (const r of provider.requests) expect(r.maxOutputTokens).toBeGreaterThan(1500);
+  });
+});
+
+/**
+ * Una perdita parziale che nessuno vede è una perdita silenziosa.
+ *
+ * Da quando i candidati si validano uno per uno (`extract.ts`), un episodio può
+ * essere marcato come fatto **avendo scartato** qualche fatto per strada. È il
+ * miglioramento che si porta dietro il proprio rischio: prima l'episodio
+ * tornava per sempre e almeno si vedeva; adesso passa, e se la riga non lo dice
+ * la differenza fra «tre fatti» e «tre fatti su cinque» non esiste da nessuna
+ * parte.
+ */
+describe('un episodio marcato dice anche cosa ha perso per strada', () => {
+  it('registra i candidati fuori schema, col campo, e tiene gli altri', async () => {
+    const { store, deps } = harness([
+      JSON.stringify({
+        facts: [
+          fact('owner', 'works_as', 'freelancer'),
+          { subject: 'x', predicate: 'y' },
+          fact('owner', 'lives_in', 'Roma'),
+        ],
+      }),
+    ]);
+    episode(store, 'faccio il freelance a Roma');
+    const report: IngestReport = await ingestPending(deps, HOST);
+
+    expect(report.factsAdded).toBe(2);
+    const line = report.errors.find((e) => e.includes('fuori schema'));
+    expect(line).toBeDefined();
+    expect(line).toContain('1 candidati fuori schema');
+    // E l'episodio è marcato: due fatti sono passati, quindi non deve tornare.
+    expect((await ingestPending(deps, HOST)).episodes).toBe(0);
+  });
+});
+
+/**
+ * Il lato produttore della stessa cucitura.
+ *
+ * `consolidator.test.ts` prova che una riga di giro porta il parziale — ma lo
+ * fa costruendo `IngestFailed` a mano nel finto. Con solo quel test,
+ * `ingestPending` può smettere di produrlo e la suite resta verde: la mutazione
+ * «rilancia l'errore nudo» è sopravvissuta al primo giro, ed è esattamente il
+ * difetto che questa slice ripara, girato dall'altra parte.
+ */
+describe('un lotto che muore a metà lancia quello che aveva già fatto', () => {
+  class Esplode extends Scripted {
+    constructor(
+      replies: string[],
+      private readonly boomAt: number,
+    ) {
+      super(replies);
+    }
+    private seen = 0;
+    override async chat(request: ChatCall): Promise<ChatResult> {
+      this.seen += 1;
+      if (this.seen === this.boomAt) throw new Error('terminated');
+      return super.chat(request);
+    }
+  }
+
+  it('porta gli episodi e i fatti già passati, e conserva la causa', async () => {
+    const store = new MemoryStore(new DatabaseCtor(':memory:'));
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ingest-boom-'));
+    episode(store, 'faccio il freelance');
+    episode(store, 'e vivo a Roma');
+    const deps = {
+      store,
+      provider: new Esplode([facts(fact('owner', 'works_as', 'freelancer'))], 2),
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-04T12:00:00Z'),
+    };
+
+    await expect(ingestPending(deps, HOST)).rejects.toThrow(IngestFailed);
+    try {
+      await ingestPending(deps, HOST);
+    } catch (error) {
+      const failed = error as IngestFailed;
+      // Il primo episodio è passato davvero: il fatto è scritto e l'episodio
+      // marcato, quindi il parziale non può essere una riga di zeri.
+      expect(failed.partial.factsAdded).toBeGreaterThanOrEqual(1);
+      expect(failed.partial.episodes).toBeGreaterThanOrEqual(1);
+      // E l'errore vero resta raggiungibile, non sostituito.
+      expect((failed.cause as Error).message).toBe('terminated');
+    }
+    rmSync(home, { recursive: true, force: true });
   });
 });

@@ -33,6 +33,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { inspectCapability, makeInspectTool } from './tools/inspect.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { TurnStore, describeInterrupted } from '../core/turns/store.js';
@@ -527,6 +528,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       httpCapability,
       ...processCapabilities,
       skillCapability,
+      inspectCapability,
       // Declared next to the tools above, in the same commit: a tool whose
       // capability the kernel has never heard of is refused `no_capability` on
       // its first call, and a capability with no tool is dead weight. The pair
@@ -614,6 +616,67 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     skillsPromptSection(skillScan.skills),
   );
 
+  /**
+   * Registrato qui e non con gli altri tool più sopra: le sue fonti — la mappa
+   * delle capability, i blocchi del prompt, il safe mode — esistono solo a
+   * questo punto di `buildRuntime`. Metterlo prima significherebbe passargli
+   * dei getter pigri su variabili non ancora assegnate, cioè un modo elaborato
+   * di leggere `undefined`.
+   */
+  tools.push(
+    makeInspectTool({
+      config,
+      profile,
+      safeMode,
+      // Stesso import dinamico, stessa ragione: `describeBuild` sta in
+      // `cli/update.ts`, ed è la funzione che stampa la riga `build` di
+      // `muffin doctor` (#159). Una seconda lettura di git direbbe la stessa
+      // cosa fino al giorno che non la dice più.
+      build: async () => {
+        const { describeBuild } = await import('../cli/update.js');
+        const { fileURLToPath } = await import('node:url');
+        const { dirname } = await import('node:path');
+        return describeBuild(dirname(fileURLToPath(import.meta.url)));
+      },
+      tools,
+      capabilities,
+      promptBlocks,
+      /**
+       * La stessa funzione che esegue `muffin doctor`, importata al momento
+       * della chiamata.
+       *
+       * L'import è dinamico per non creare un arco statico `agent/` → `cli/`:
+       * in questo repo le dipendenze vanno nell'altro verso, e `cli/` importa
+       * già `agent/runtime.js` così (`cli/memory.ts`, `cli/vault.ts`). Resta
+       * comunque un debito di layering — `runDoctor` è un motore di verifica
+       * che vive in `cli/` perché lì è nato, non perché è il suo posto — ed è
+       * registrato come follow-up invece che nascosto.
+       *
+       * Iniettarla dal chiamante sarebbe stato peggio: un secondo posto da
+       * ricordare, e la stessa storia di `explicitCache` (due harness che
+       * dimenticarono il flag e pagarono pieno in silenzio).
+       */
+      doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
+      turns: () => turns.health({ windowMs: 0 }),
+      jobs: () => jobs.list(),
+    }),
+  );
+
+  /**
+   * Il tetto del profilo taglia in silenzio, e questo lo dice.
+   *
+   * `visibleTools` + `maxToolsExposed` decidono cosa il modello vede, e un
+   * tool oltre la linea non produce né errore né log: semplicemente non esiste
+   * per quel turno. Su `consumer-local` (tetto 10, la soglia contro cui è
+   * disegnato l'harness) i tool registrati sono già più di dieci, quindi la
+   * riga sotto non è ipotetica — è lo stato dell'installazione dell'owner.
+   *
+   * ADR-0008: degradare dichiarando. Chi chiede a Muffin di ispezionarsi e
+   * riceve una risposta recitata deve poter vedere **perché** senza leggere
+   * questo file.
+   */
+  const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
+
   return {
     executor: contained ? executor : null,
     workspace: cwd,
@@ -631,6 +694,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       ...undeliverableNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
+      ...(tagliati.length === 0
+        ? []
+        : [
+            `! profilo ${profile.name}: ${tagliati.length} tool registrati oltre il tetto di ${profile.maxToolsExposed} e quindi invisibili al modello — ${tagliati.join(', ')}`,
+          ]),
       ...searchNotes,
       ...matrixNotes,
       ...budgetNotes,

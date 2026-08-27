@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createNotifier, WATCHDOG_FRACTION } from './notify.js';
+import { createNotifier, WATCHDOG_FRACTION, describeSupervision } from './notify.js';
+import { LAUNCHD_LABEL } from './unit.js';
 
 /**
  * The supervision protocol, with no supervisor anywhere near it.
@@ -26,7 +27,7 @@ describe('notifier without a supervisor', () => {
     n.watchdog();
     n.stopping();
 
-    expect(n.supervised).toBe(false);
+    expect(n.notifySocket).toBe(false);
     expect(n.watchdogIntervalMs).toBeNull();
     // Not "it sent nothing harmful": it never reached the transport at all. On a
     // dev machine the transport is a process spawn that does not exist.
@@ -34,7 +35,7 @@ describe('notifier without a supervisor', () => {
   });
 
   it('treats an empty NOTIFY_SOCKET as absent', () => {
-    expect(createNotifier({ NOTIFY_SOCKET: '' }, sink().send).supervised).toBe(false);
+    expect(createNotifier({ NOTIFY_SOCKET: '' }, sink().send).notifySocket).toBe(false);
   });
 });
 
@@ -135,5 +136,45 @@ describe('notifier under a supervisor', () => {
     expect(() => n.watchdog()).not.toThrow();
     expect(calls).toBe(2);
     expect(n.problem()).toContain('ENOENT');
+  });
+});
+
+/**
+ * Chi ci sta tenendo su, senza inventare.
+ *
+ * La riga di avvio derivava tutto da `NOTIFY_SOCKET`, che è una domanda
+ * solo-systemd. Su macOS stampava «nessun supervisore» mentre launchd teneva su
+ * il processo — e `doctor`, nello stesso momento, diceva il contrario. Due
+ * parti dello stesso programma in disaccordo su un fatto verificabile.
+ */
+describe('describeSupervision', () => {
+  it('systemd: il canale sd_notify è la risposta', () => {
+    expect(describeSupervision({ NOTIFY_SOCKET: '/run/x' }, 'linux')).toContain('sd_notify attivo');
+  });
+
+  it('launchd: supervisionato, e dice che il watchdog manca lo stesso', () => {
+    const line = describeSupervision({ XPC_SERVICE_NAME: LAUNCHD_LABEL }, 'darwin');
+    expect(line).toContain('launchd');
+    expect(line).toContain('watchdog');
+    expect(line).not.toContain('nessun supervisore');
+  });
+
+  it('non basta che XPC_SERVICE_NAME ci sia: deve essere **questo** job', () => {
+    // Misurato il 27/08: una shell dentro un'app GUI ne ha uno
+    // (`application.com.anthropic.claudefordesktop.…`). Se bastasse la
+    // presenza, qualunque processo lanciato a mano si dichiarerebbe
+    // supervisionato — che è il difetto di prima, girato dall'altra parte.
+    const line = describeSupervision({ XPC_SERVICE_NAME: 'application.com.apple.Terminal.12345' }, 'darwin');
+    expect(line).toContain('nessun supervisore');
+  });
+
+  it('la stessa label su Linux non conta: launchd non esiste lì', () => {
+    expect(describeSupervision({ XPC_SERVICE_NAME: LAUNCHD_LABEL }, 'linux')).toContain('nessun supervisore');
+  });
+
+  it('niente di niente: lo dice, e nomina entrambe le cose che ha guardato', () => {
+    const line = describeSupervision({}, 'darwin');
+    expect(line).toContain('NOTIFY_SOCKET');
+    expect(line).toContain('launchd');
   });
 });

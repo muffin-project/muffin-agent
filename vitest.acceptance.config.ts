@@ -21,6 +21,10 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    // Una run che scrive nella home dell owner fallisce, invece di lasciare
+    // il file lì. Vedi `core/config/home-guard.ts` per le due volte in cui è
+    // successo davvero.
+    globalSetup: ['./vitest.home-guard.ts'],
     include: ['evals/acceptance/**/*.accept.ts'],
     exclude: ['**/node_modules/**', '**/.claude/worktrees/**'],
     fileParallelism: false,

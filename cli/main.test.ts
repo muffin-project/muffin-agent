@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -475,5 +475,200 @@ describe('una chiave non passa mai per argv né per l\'environment (owner 2026-0
       rmSync(dir, { recursive: true, force: true });
       rmSync(xdg, { recursive: true, force: true });
     }
+  });
+});
+
+describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)', () => {
+  it('su un install appena fatto: stampa il piano su stdout, exit 1, e non tocca mai il filesystem', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+
+    const before = readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8');
+    const r = muffin(env, ['rot', 'harden']);
+
+    // 1, non 0 né 2: come `doctor` in warn, non un errore bloccante — ma
+    // nemmeno "va tutto bene", perché non lo va ancora.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(join(dir, 'rot'));
+    expect(r.out).toContain('sudo chown');
+    expect(r.out).toContain('sys.shell');
+    // Mai eseguito: il manifest — quindi rot/ — non cambia di una virgola.
+    expect(readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8')).toBe(before);
+    expect(r.err).toBe('');
+  });
+
+  it('un secondo giro dopo `init --hardened` distingue "OS non ancora sistemato" dal caso precedente', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init', '--hardened'], 'sk-ant-fixture');
+
+    const r = muffin(env, ['rot', 'harden']);
+    // Il file resta di proprietà dell'utente che ha girato `init`: dichiarare
+    // "hardened" da solo non regge ancora, quindi il piano va comunque
+    // proposto — è esattamente il difetto misurato che questa slice chiude.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('sudo chown');
+    // E la sezione "dichiaralo in config.json" non compare più, perché quella
+    // parte è già vera.
+    expect(r.out).not.toContain('config.json');
+  });
+
+  it('`rot` senza sub, o con un sub sconosciuto, nomina harden nello usage', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+    const r = muffin(env, ['rot', 'bogus']);
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('harden');
+  });
+
+  it('--help elenca `harden` accanto a verify | reseal', () => {
+    const { dir, xdg } = scratchHome();
+    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['--help']);
+    expect(r.out).toContain('muffin rot verify | reseal | harden');
+  });
+
+  it('un errore che nessuno ha previsto resta una frase, non uno stack', () => {
+    // Il pavimento, non un sostituto della gestione. Tre review separate hanno
+    // trovato la stessa forma — un errore di filesystem ordinario e in cambio
+    // uno stack trace di Node — e ogni volta la riparazione era un `try/catch`
+    // in quel punto, e ogni volta il percorso nuovo dopo arrivava senza.
+    // Il difetto era che `main` potesse lanciare affatto.
+    //
+    // Il caso qui è vero, non simulato: `MUFFIN_HOME` che punta a un file
+    // esistente invece che a una directory. Nessuno lo aveva previsto, ed è
+    // il punto.
+    const { dir, xdg } = scratchHome();
+    const asFile = join(dir, 'sono-un-file');
+    writeFileSync(asFile, 'non sono una directory\n');
+    const r = muffin({ MUFFIN_HOME: asFile, XDG_CONFIG_HOME: xdg }, ['init'], 'sk-ant-fixture');
+
+    expect(r.code).toBe(70); // EX_SOFTWARE, non un crash senza codice
+    expect(r.err).toContain('muffin:');
+    expect(r.err).not.toContain('    at '); // niente frame di stack
+    // E dice come ottenerlo, per chi lo stack lo vuole davvero.
+    expect(r.err).toContain('MUFFIN_DEBUG=1');
+  });
+
+  it('un reseal senza permesso di scrivere il sigillo risponde, invece di vomitare uno stack', () => {
+    // Il guasto che `muffin rot harden` **insegna** a produrre: il piano dice
+    // all'owner che dopo l'indurimento il reseal «ti servirà un privilegio che
+    // oggi non ti serve», quindi dimenticare `sudo` è l'errore previsto, non
+    // uno esotico. `main()` non ha una cattura di livello superiore, e la
+    // ricompensa per aver seguito il nostro consiglio era un `Error: EACCES`
+    // con lo stack. Trovato dal judge su #138.
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    muffin(env, ['init'], 'sk-ant-fixture');
+
+    // `seal` riscrive `rot/manifest.json` in place, e riscrivere un file che
+    // esiste non chiede il permesso sulla directory: quello serve a creare o
+    // cancellare voci. Quindi il permesso da togliere è quello del file.
+    const manifest = join(dir, 'rot', 'manifest.json');
+    chmodSync(manifest, 0o400);
+    try {
+      const r = muffin(env, ['rot', 'reseal']);
+      expect(r.code).toBe(77); // EX_NOPERM, non un'uscita generica
+      expect(r.err).toContain('permesso negato');
+      expect(r.err).toContain('sudo');
+      // Il punto della slice: una frase, non una traccia di stack.
+      expect(r.err).not.toContain('at ');
+      expect(r.err).not.toContain('EACCES:');
+    } finally {
+      chmodSync(manifest, 0o600); // altrimenti la pulizia del temp non riesce
+    }
+  });
+});
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `describeBuild` era provata da sola e `--version` poteva continuare a
+ * stampare `0.0.0` secco: la suite restava verde. Terza volta in tre giorni che
+ * la stessa mutazione sopravvive (#151, #157), quindi la stessa risposta —
+ * il binario vero.
+ */
+describe('muffin --version dice quale build è', () => {
+  it('porta il commit, non solo un numero che non identifica niente', () => {
+    const r = muffin({}, ['--version']);
+    expect(r.code).toBe(0);
+    // Il SHA di questo checkout, letto qui e non assunto: il test vale
+    // ovunque giri, e la mutazione che toglie la build muore comunque.
+    const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd(), encoding: 'utf8' }).stdout.trim();
+    expect(sha).not.toBe('');
+    expect(r.out).toContain(sha.slice(0, 12));
+  });
+});
+
+/**
+ * Le domande di #117 esistono solo su un terminale, e un terminale non si
+ * finge: `process.stdin.isTTY` è la condizione, quindi ogni test che passa da
+ * una pipe prova il ramo headless — cioè l'altro.
+ *
+ * Da qui in giù il binario vero gira dietro un pty vero (`script`), che è
+ * l'unico modo di vedere il ramo che l'owner incontra davvero.
+ */
+const SCRIPT_C_E = process.platform === 'linux';
+
+/** Un argomento, al sicuro dentro `sh -c` — serve solo sul ramo util-linux. */
+function shq(a: string): string {
+  return `'${a.split("'").join(`'\\''`)}'`;
+}
+
+function haScript(): boolean {
+  return spawnSync('script', ['--version'], { encoding: 'utf8' }).status !== null;
+}
+
+/**
+ * Il binario, dietro un pty. Le due `script` non hanno la stessa riga di
+ * comando: BSD (macOS) prende il comando come argv dopo il file, util-linux
+ * (Linux, la produzione) vuole `-c "una stringa"`. Divergono e vanno scritte
+ * entrambe, non scelte.
+ */
+function muffinTty(env: Record<string, string>, args: string[]): { code: number; out: string } {
+  const argv = ['node', '--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args];
+  const comando = SCRIPT_C_E
+    ? `script -qec ${shq(argv.map(shq).join(' '))} /dev/null`
+    : `script -q /dev/null ${argv.map(shq).join(' ')}`;
+  // `< /dev/null` non è cosmetico: dentro un worker di vitest lo stdin che
+  // `spawnSync` fornisce è un socket, e `script` (BSD) ci chiama sopra
+  // `tcgetattr` e muore prima di aprire il pty. Serve un descrittore vero, e
+  // fa anche da EOF immediato — che è precisamente il Ctrl+D sotto esame.
+  const r = spawnSync('sh', ['-c', `${comando} < /dev/null`], {
+    env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 60_000,
+  });
+  // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
+  // CR rende le asserzioni leggibili quanto quelle del ramo headless.
+  const pulito = `${r.stdout ?? ''}${r.stderr ?? ''}`
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\r/g, '\n');
+  return { code: r.status ?? -1, out: pulito };
+}
+
+describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
+  it('chiede la chiave — la domanda esiste solo qui', () => {
+    // Il ramo headless di sopra non la stampa mai. Se `cmdInit` smettesse di
+    // chiedere, nessuno di quei test se ne accorgerebbe.
+    const { dir, xdg } = scratchHome();
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+    expect(r.out).toContain('Chiave API');
+  });
+
+  it('Ctrl+D alla prima domanda finisce come il ramo headless, non come un crash', () => {
+    // Prima: uscita 13 e `Detected unsettled top-level await`, con NIENTE
+    // scritto — nemmeno le directory. `rl.question` non chiama il callback su
+    // EOF, e la promise non si decideva.
+    const { dir, xdg } = scratchHome();
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+
+    expect(r.out).not.toContain('unsettled top-level await');
+    expect(r.code).not.toBe(13);
+    // Init incompleto è 1, e dice cosa manca e come riprendere: è esattamente
+    // ciò che fa una pipe senza chiave, che è il punto — Ctrl+D a una domanda
+    // che dice «invio per saltare» non può fare peggio di Invio.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('api key');
+    expect(existsSync(join(dir, 'config.json'))).toBe(true);
   });
 });
