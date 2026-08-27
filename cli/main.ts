@@ -101,6 +101,8 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
                                 argomenti dice com'e' messa
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
+                                [--image FILE] mostra un'immagine al modello
+                                (JPEG/PNG/GIF/WebP, ripetibile)
 
 comandi operatore:
   muffin init [--hardened] [--force] [--provider anthropic|openai-compat]
@@ -1260,12 +1262,15 @@ async function cmdRun(argv: string[]): Promise<number> {
       json: { type: 'boolean' },
       session: { type: 'string' },
       timeout: { type: 'string' },
+      // Ripetibile: piu' immagini nello stesso turno sono un caso normale
+      // («cosa e' cambiato fra queste due?») ed entrambe le API lo prevedono.
+      image: { type: 'string', multiple: true },
     },
     allowPositionals: true,
   });
   const goal = positionals.join(' ').trim();
   if (goal === '') {
-    process.stderr.write(`usage: muffin run "<goal>"\n`);
+    process.stderr.write(`usage: muffin run "<goal>" [--image FILE]\n`);
     return 78;
   }
   return runHeadless({
@@ -1273,6 +1278,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     ...(values.json ? { json: true } : {}),
     ...(values.session ? { sessionId: values.session } : {}),
     ...(values.timeout ? { timeoutSeconds: Number(values.timeout) } : {}),
+    ...(values.image && values.image.length > 0 ? { images: values.image } : {}),
   });
 }
 

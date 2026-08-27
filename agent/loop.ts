@@ -25,6 +25,7 @@ import {
   type ChatCall,
   type ChatResult,
   type ContentBlock,
+  type ImageBlock,
   type Message,
   type Provider,
   type StreamEvent,
@@ -464,6 +465,22 @@ export type LoopDeps = {
   now?: () => Date;
 };
 
+/**
+ * Il contenuto del primo messaggio utente: le immagini e poi il testo.
+ *
+ * L'ordine non è estetico. Le docs Vision di Anthropic lo dicono esplicitamente
+ * («Claude works best when images come before text»), e non costa niente farlo
+ * anche sull'altro adattatore.
+ *
+ * Una sola funzione perché i due punti che costruiscono questo messaggio —
+ * `enqueueTurn` e `runTurn` — devono costruirlo **identico**: erano già due
+ * copie della stessa riga, e una riga duplicata che cresce è una riga che
+ * diverge.
+ */
+function primoMessaggio(input: TurnInput): ContentBlock[] {
+  return [...(input.images ?? []), { type: 'text', text: input.text }];
+}
+
 export type TurnInput = {
   principal: Principal;
   tenant: TenantId;
@@ -485,6 +502,21 @@ export type TurnInput = {
    * (M5-BIS B16).
    */
   contentTaint?: TrustTier;
+  /**
+   * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
+   *
+   * Entrano nel **primo messaggio utente**, prima del testo: entrambe le API lo
+   * raccomandano nello stesso modo, e a costo zero.
+   *
+   * Finiscono nel record del turno come tutto il resto, e quindi sul disco.
+   * Non è gratis — una foto di telefono sono qualche centinaio di KB, in base64
+   * un terzo in più — ed è comunque la forma giusta: un turno ripreso dopo un
+   * crash deve poter rivedere l'immagine su cui stava ragionando, e una
+   * *referenza* a un file del vault non lo garantisce (il file può non esserci
+   * più). Il tetto per immagine sta in `MAX_IMAGE_BYTES`, controllato prima di
+   * leggere i byte.
+   */
+  images?: ImageBlock[];
   signal?: AbortSignal;
   /**
    * Mint the row under this identity instead of a fresh random one.
@@ -707,7 +739,7 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     surface: input.surface,
     sessionId: input.session.id,
     model: deps.model,
-    messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
+    messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -780,7 +812,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // back thinking signatures it cannot read, and ADR-0037 records that this
     // fails silently rather than loudly.
     model: deps.model,
-    messages: [{ role: 'user', content: [{ type: 'text', text: input.text }] }],
+    messages: [{ role: 'user', content: primoMessaggio(input) }],
     taint: initialTaint(input),
     counters: freshCounters(),
     ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
@@ -1031,6 +1063,15 @@ async function drive(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: lastUserText(record.messages),
+    // Riprese **dal record**, esattamente come il testo qui sopra, e per la
+    // stessa ragione: `drive` non riceve il `TurnInput` originale — lo
+    // ricostruisce — quindi tutto cio' che il modello deve vedere deve essere
+    // passato dal record. Metterle solo nel `TurnInput` di `runTurn` le faceva
+    // sparire fra le due funzioni, senza errori: il modello rispondeva «non
+    // vedo nessuna immagine» a una domanda su una foto arrivata davvero
+    // (misurato contro il modello vero il 28/08/2026). Passare dal record e'
+    // anche cio' che fa sopravvivere l'immagine a una ripresa dopo un crash.
+    ...(userImages(record.messages).length > 0 ? { images: userImages(record.messages) } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
@@ -2129,6 +2170,19 @@ function remoteParent(traceId: string): SpanHandle {
 }
 
 /** The words the turn was started with — the last thing the owner said. */
+/**
+ * Le immagini che l'owner ha mandato in questo turno, dal record.
+ *
+ * Tutte quelle nei messaggi utente e non solo l'ultimo: il testo prende
+ * l'ultimo perche' una ripresa vuole *la domanda corrente*, mentre
+ * un'immagine mandata due giri fa e' ancora la cosa di cui si sta parlando.
+ */
+function userImages(messages: Message[]): ImageBlock[] {
+  return messages
+    .filter((m) => m.role === 'user')
+    .flatMap((m) => m.content.filter((b): b is ImageBlock => b.type === 'image'));
+}
+
 function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
@@ -2778,6 +2832,20 @@ function buildContext(
     content: [
       ...recalled,
       ...(plan === '' ? [] : [{ type: 'text' as const, text: plan }]),
+      // Le immagini stanno **qui**, non nel record.
+      //
+      // `drive` svuota `messages` e lo ricostruisce da questa funzione a ogni
+      // giro: cio' che sta nel record e' cio' che e' successo, cio' che sta qui
+      // e' cio' che il modello vede. Metterle solo nel record — che e' quello
+      // che avevo fatto — le faceva sparire in silenzio, e il modello
+      // rispondeva «non vedo nessuna immagine» a una domanda su una foto che
+      // era arrivata davvero. Misurato contro il modello vero il 28/08/2026.
+      //
+      // Subito prima del testo, dopo il ricordato e il piano: le docs di
+      // entrambi i provider raccomandano immagine-poi-testo, e questa e'
+      // l'unica posizione che lo rispetta senza separare la domanda dal suo
+      // contesto.
+      ...(input.images ?? []),
       { type: 'text', text: input.text },
     ],
   });
