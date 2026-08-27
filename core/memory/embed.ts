@@ -42,12 +42,19 @@ export class EmbedderUnavailable extends Error {
 export class OllamaEmbedder implements Embedder {
   readonly id: string;
   constructor(
-    readonly model = 'qwen3-embedding:0.6b',
-    readonly dimensions = 1024,
-    private readonly baseUrl = process.env['OLLAMA_URL'] ?? 'http://127.0.0.1:11434',
+    model: string = 'qwen3-embedding:0.6b',
+    dimensions: number = 1024,
+    baseUrl: string = process.env['OLLAMA_URL'] ?? 'http://127.0.0.1:11434',
   ) {
+    this.model = model;
+    this.dimensions = dimensions;
+    this.baseUrl = baseUrl;
     this.id = `ollama:${model}`;
   }
+
+  readonly model: string;
+  readonly dimensions: number;
+  private readonly baseUrl: string;
 
   async embed(texts: string[]): Promise<Float32Array[]> {
     const out: Float32Array[] = [];
@@ -115,4 +122,51 @@ export class OpenAICompatEmbedder implements Embedder {
 /** vec0 stores raw little-endian float32; better-sqlite3 wants a Buffer. */
 export function toVectorBlob(vector: Float32Array): Buffer {
   return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+}
+
+/**
+ * L'embedder che questa installazione ha scelto.
+ *
+ * Una sola funzione, e non un `new OllamaEmbedder()` sparso: `buildRuntime` e
+ * `doctor` devono parlare dello **stesso** embedder, o il check di salute
+ * misura una cosa e il runtime ne usa un'altra — che è precisamente il modo in
+ * cui `doctor` diventa verde su una macchina dove la memoria non si indicizza.
+ *
+ * `openai-compat` pretende chiave, modello e dimensioni: la dimensione è cotta
+ * nel DDL della tabella vettoriale, quindi un default inventato qui
+ * significherebbe un indice che si rifà da solo al primo boot in cui qualcuno
+ * scopre il numero vero.
+ */
+export function makeEmbedder(
+  scelta: {
+    kind: 'ollama' | 'openai-compat';
+    model?: string | undefined;
+    dimensions?: number | undefined;
+    baseUrl?: string | undefined;
+    apiKeyRef?: string | undefined;
+  } | undefined,
+  leggiSegreto: (ref: string) => string,
+): Embedder {
+  if (scelta === undefined || scelta.kind === 'ollama') {
+    // Il default di sempre, e i suoi default: assenza di configurazione non
+    // deve mai voler dire un comportamento nuovo.
+    return new OllamaEmbedder(
+      scelta?.model ?? undefined,
+      scelta?.dimensions ?? undefined,
+      scelta?.baseUrl ?? undefined,
+    );
+  }
+  const mancanti = (['model', 'dimensions', 'apiKeyRef'] as const).filter((k) => scelta[k] === undefined);
+  if (mancanti.length > 0) {
+    throw new Error(
+      `embedder openai-compat: mancano ${mancanti.join(', ')} in config.json. ` +
+        `La dimensione in particolare non ha un default sensato: è cotta nella tabella vettoriale.`,
+    );
+  }
+  return new OpenAICompatEmbedder(
+    leggiSegreto(scelta.apiKeyRef!),
+    scelta.model!,
+    scelta.dimensions!,
+    scelta.baseUrl ?? 'https://api.openai.com/v1',
+  );
 }

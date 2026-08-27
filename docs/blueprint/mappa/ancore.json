@@ -441,72 +441,72 @@
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 352,
+    "line": 356,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 357,
+    "line": 361,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 369,
+    "line": 373,
     "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 375,
+    "line": 379,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 388,
+    "line": 392,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 393,
+    "line": 397,
     "testo": "...makeFsTools(scope),"
   },
   "agent/runtime.ts:439": {
     "path": "agent/runtime.ts",
-    "line": 439,
+    "line": 443,
     "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 531,
+    "line": 535,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 538,
+    "line": 542,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 569,
+    "line": 573,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 577,
+    "line": 581,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 614,
+    "line": 618,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 643,
+    "line": 647,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 751,
+    "line": 755,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -1311,22 +1311,22 @@
   },
   "core/config/config.ts:100": {
     "path": "core/config/config.ts",
-    "line": 108,
+    "line": 105,
     "testo": "*/"
   },
   "core/config/config.ts:101": {
     "path": "core/config/config.ts",
-    "line": 120,
+    "line": 153,
     "testo": "discord: z"
   },
   "core/config/config.ts:102": {
     "path": "core/config/config.ts",
-    "line": 85,
+    "line": 77,
     "testo": ".object({"
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
-    "line": 213,
+    "line": 246,
     "testo": "`dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +"
   },
   "core/config/config.ts:39": {
@@ -1341,7 +1341,7 @@
   },
   "core/config/config.ts:96": {
     "path": "core/config/config.ts",
-    "line": 115,
+    "line": 148,
     "testo": "* ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one"
   },
   "core/config/inventory.ts:52": {
@@ -1786,12 +1786,12 @@
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
-    "line": 106,
+    "line": 144,
     "testo": "async index("
   },
   "core/memory/vectors.ts:151": {
     "path": "core/memory/vectors.ts",
-    "line": 151,
+    "line": 189,
     "testo": "async search("
   },
   "core/memory/vectors.ts:18": {
@@ -1801,7 +1801,7 @@
   },
   "core/memory/vectors.ts:212": {
     "path": "core/memory/vectors.ts",
-    "line": 212,
+    "line": 250,
     "testo": "indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {"
   },
   "core/net/egress.ts:41": {
@@ -2761,32 +2761,32 @@
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 391,
+    "line": 395,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 387,
+    "line": 391,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 507,
+    "line": 511,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 531,
+    "line": 535,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 569,
+    "line": 573,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 575,
+    "line": 579,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
@@ -2961,7 +2961,7 @@
   },
   "vectors.ts:67": {
     "path": "core/memory/vectors.ts",
-    "line": 67,
+    "line": 105,
     "testo": "private migrateUnpartitioned(): void {"
   },
   "verify.ts:120": {
