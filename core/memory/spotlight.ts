@@ -44,9 +44,19 @@ export type Fence = {
  * `label` names the kind of content for the model's benefit; `note` is the one
  * line telling it what the content is *for*. Both end up inside the fence
  * header, where the attacker cannot reach them.
+ *
+ * `nonce_` esiste per un solo chiamante, e per una ragione misurata: il recinto
+ * delle skill sta nel **system prompt**, non nel turno. Un nonce nuovo a ogni
+ * chiamata rende quel prompt diverso a ogni processo — e ogni `muffin run` è un
+ * processo — quindi il prefisso non è mai lo stesso due volte e la cache del
+ * provider non prende mai. Misurato: due boot della stessa home producevano due
+ * SHA diversi, e il test che fissa i byte del prompt owner non poteva più essere
+ * ri-fissato per costruzione. Chi passa un nonce si prende la responsabilità di
+ * farlo stabile *e* non indovinabile da fuori; `stripSentinels` resta comunque
+ * la difesa che non dipende dal nonce.
  */
-export function fence(label: string, body: string, note?: string): Fence {
-  const nonce = randomBytes(NONCE_BYTES).toString('hex');
+export function fence(label: string, body: string, note?: string, nonce_?: string): Fence {
+  const nonce = nonce_ ?? randomBytes(NONCE_BYTES).toString('hex');
   const open = `${label}_${nonce}`;
   return {
     nonce,

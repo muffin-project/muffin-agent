@@ -111,8 +111,16 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   }
   step('directories', p.home);
 
-  const installed = installRotDefaults(p.rot, options.force ?? false);
+  const installed = installTree('rot', p.rot, options.force ?? false);
   step('root of trust', installed.length > 0 ? `installed ${installed.length} files` : 'already present');
+
+  // Le skill di serie. Senza questo il meccanismo c'è tutto — scoperta, sezione
+  // nel prompt, `skill_read` — e non ha niente da scoprire: `skillsPromptSection`
+  // torna stringa vuota, il modello non sente mai la parola «skill», e
+  // `skill_read` resta un tool che non può leggere nulla. Un'installazione nuova
+  // deve saper già fare qualcosa, non solo essere in grado di imparare.
+  const skills = installTree('skills', join(p.home, 'skills'), options.force ?? false);
+  step('skills', skills.length > 0 ? `installed ${skills.length} files` : 'already present');
 
   // voice.md lives outside the root of trust on purpose: it is the part that
   // learns, and the ratchet may rewrite it. identity.md is the part that does not.
@@ -135,6 +143,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   if (personaInstalled) copiedForRegistry.push({ path: 'persona.md', content: readFileSync(p.persona) });
   if (voiceInstalled) copiedForRegistry.push({ path: 'voice.md', content: readFileSync(p.voice) });
   for (const f of installed) copiedForRegistry.push({ path: `rot/${f.relPath}`, content: readFileSync(f.dst) });
+  // Anche le skill: sono il tipo di file che l'owner riscrive, ed è
+  // esattamente la distinzione che il registro esiste per tenere —
+  // «di serie, mai toccata» contro «modificata da chi la usa».
+  for (const f of skills) copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
@@ -224,16 +236,23 @@ function installFile(name: string, dest: string, force: boolean): boolean {
 }
 
 /**
- * Copies the shipped defaults without ever overwriting a personalised file.
+ * Copies a whole shipped subtree of `defaults/` without ever overwriting a
+ * personalised file.
  *
- * Returns the *relative* path from `rotDir` for each file actually written
+ * Returns the *relative* path from `destDir` for each file actually written
  * (e.g. `evals/voice.json`, not just `voice.json`) — `recordCopied`
  * (core/config/defaults-drift.ts) needs that full path to key the registry
- * against `defaults/rot/<relPath>`, and a bare basename would silently
+ * against `defaults/<sub>/<relPath>`, and a bare basename would silently
  * collide two files of the same name nested at different depths.
+ *
+ * Preso da `rot` e reso parametrico quando sono arrivate le skill: sono due
+ * alberi con la stessa regola («copia, non sovrascrivere, e dichiara cosa hai
+ * scritto»), e una seconda copia della camminata sarebbe stata libera di
+ * divergere proprio sul ramo che non si guarda.
  */
-function installRotDefaults(rotDir: string, force: boolean): { relPath: string; dst: string }[] {
-  const source = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot');
+function installTree(sub: string, destDir: string, force: boolean): { relPath: string; dst: string }[] {
+  const source = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', sub);
+  if (!existsSync(source)) return [];
   const copied: { relPath: string; dst: string }[] = [];
   const walk = (from: string, to: string, prefix: string): void => {
     mkdirSync(to, { recursive: true });
@@ -248,6 +267,6 @@ function installRotDefaults(rotDir: string, force: boolean): { relPath: string; 
       }
     }
   };
-  walk(source, rotDir, '');
+  walk(source, destDir, '');
   return copied;
 }
