@@ -106,6 +106,29 @@ export const ConfigSchema = z.object({
       baseUrl: z.string().url().optional(),
       /** `secret://name`, come la chiave del modello. Mai la chiave. */
       apiKeyRef: z.string().min(1).optional(),
+      /**
+       * Dove si va quando il primario non risponde.
+       *
+       * Il caso che l'ha prodotto: ollama giù sulla macchina dell'owner,
+       * `EmbedderUnavailable` a ogni giro, niente indicizzato per giorni e il
+       * recall solo testuale. Se il locale è giù e una chiave API c'è, non c'è
+       * ragione perché la memoria smetta di indicizzarsi.
+       *
+       * Non annidato ricorsivamente di proposito: una catena di fallback è una
+       * cosa che nessuno sa più leggere quando si rompe, e qui il secondo passo
+       * è già la rete. Le regole — stessa dimensione obbligatoria, scambio
+       * appiccicoso, `id` di chi ha davvero embeddato — stanno in
+       * `FallbackEmbedder`, e sono lì che vanno lette.
+       */
+      fallback: z
+        .object({
+          kind: z.enum(['ollama', 'openai-compat']),
+          model: z.string().min(1).optional(),
+          dimensions: z.number().int().positive().optional(),
+          baseUrl: z.string().url().optional(),
+          apiKeyRef: z.string().min(1).optional(),
+        })
+        .optional(),
     })
     .optional(),
   // No `budget` here, deliberately. The caps are a rail, so they live inside the
