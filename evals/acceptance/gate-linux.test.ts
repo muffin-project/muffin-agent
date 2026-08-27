@@ -117,15 +117,73 @@ describe('gate-linux.sh — il blocco che decide l-uscita del container', () => 
   });
 });
 
-describe('gate-linux.sh — lo script esterno', () => {
-  const script = readFileSync(GATE, 'utf8');
+/**
+ * La seconda meta della catena, e per la stessa ragione della prima.
+ *
+ * `GATE_EXIT=$?` sta **fuori** dalla stringa fra apici singoli del container,
+ * quindi i marcatori del blocco interno non possono raggiungerla per
+ * costruzione: allargarli non e la riparazione. Finche questa coda era asserita
+ * da due grep sul testo, una riga di pulizia perfettamente plausibile inserita
+ * fra `docker run` e la cattura — lo script lascia dietro un clone intero in
+ * `$OUT/src` e `$OUT/repo.tar` a ogni corsa, quindi `rm -f "$OUT/repo.tar"` e
+ * proprio il genere di riga che ci finisce — azzerava `$?` e riportava il gate
+ * a dire VERDE con il container uscito 1. I grep non possono vedere un comando
+ * *aggiunto*: vedono solo che le righe che cercano esistono ancora.
+ *
+ * Qui la coda si esegue davvero, con un finto `docker` su `PATH` che esce con
+ * il codice che vogliamo: `$OUT` e `$IMAGE` diventano argomenti del finto, e la
+ * stringa del container non viene mai espansa (apici singoli).
+ */
+const APRE_CODA = /^set \+e$/m;
+const CHIUDE_CODA = /^exit "\$GATE_EXIT"$/m;
 
-  it('propaga l-esito del container invece di finire sull-ultimo comando', () => {
-    expect(script).toMatch(/^exit "\$GATE_EXIT"$/m);
+export function codaEsterna(script: string): string {
+  const inizio = APRE_CODA.exec(script);
+  const fine = CHIUDE_CODA.exec(script);
+  if (inizio === null || fine === null || fine.index < inizio.index) {
+    throw new Error(
+      'gate-linux.sh non ha piu una coda esterna riconoscibile (`set +e` … `exit "$GATE_EXIT"` a inizio riga). ' +
+        'Se la forma e cambiata, aggiorna questa estrazione: senza, questo test non prova niente.',
+    );
+  }
+  return script.slice(inizio.index, fine.index + fine[0].length);
+}
+
+describe('gate-linux.sh — la coda esterna, quella che decide l-esito dello script', () => {
+  function eseguiConDocker(codice: number): { status: number | null; stdout: string } {
+    const finto = join(lavoro, 'docker');
+    writeFileSync(finto, `#!/usr/bin/env bash\nexit ${codice}\n`);
+    chmodSync(finto, 0o755);
+
+    const script = [
+      `OUT=${JSON.stringify(join(lavoro, 'out'))}`,
+      'IMAGE=immagine-finta',
+      `PATH=${JSON.stringify(lavoro)}:$PATH`,
+      codaEsterna(readFileSync(GATE, 'utf8')),
+      '',
+    ].join('\n');
+    const run = spawnSync('bash', ['-euo', 'pipefail', '-c', script], { encoding: 'utf8' });
+    return { status: run.status, stdout: `${run.stdout}${run.stderr}` };
+  }
+
+  it('esce 0 e dice VERDE quando il container esce 0', () => {
+    const { status, stdout } = eseguiConDocker(0);
+    expect(status).toBe(0);
+    expect(stdout).toContain('GATE LINUX VERDE');
   });
 
-  it('dice se e verde o rosso', () => {
-    expect(script).toContain('GATE LINUX ROSSO');
-    expect(script).toContain('GATE LINUX VERDE');
+  it('esce non-zero e dice ROSSO quando il container esce 1 — la suite rossa su Linux', () => {
+    const { status, stdout } = eseguiConDocker(1);
+    expect(status).toBe(1);
+    expect(stdout).toContain('GATE LINUX ROSSO');
+    expect(stdout).not.toContain('GATE LINUX VERDE');
+  });
+
+  it('non ingoia nemmeno un fallimento di docker stesso (125: immagine assente)', () => {
+    // 125 e docker che non e riuscito a far partire il container: un gate che
+    // non ha girato non e un gate verde.
+    const { status, stdout } = eseguiConDocker(125);
+    expect(status).toBe(125);
+    expect(stdout).toContain('GATE LINUX ROSSO');
   });
 });

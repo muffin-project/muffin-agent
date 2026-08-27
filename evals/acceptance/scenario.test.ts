@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { entry, promoteMarker } from './manifest.js';
 import { annunciaSalto } from './non-provabile.js';
-import { chiaveEsito, verdictFor, type InventoryRow, type TestOutcome } from './report.js';
+import { chiaviEsito, verdictFor, type InventoryRow, type TestOutcome } from './report.js';
 import { guardAttesoRosso, titoloDelSalto } from './scenario.js';
 
 /**
@@ -84,7 +84,7 @@ describe('guardAttesoRosso — the atteso-rosso failure signature', () => {
  * inventario». Nessun test moriva.
  *
  * Questo test non confronta due costanti: parte dall'etichetta vera e chiede a
- * `chiaveEsito` — la ricerca vera — di ritrovarla.
+ * `chiaviEsito` — la ricerca vera — di ritrovarla.
  */
 describe('titoloDelSalto — l\'etichetta che report.ts deve ritrovare', () => {
   const meta = entry('A1');
@@ -99,11 +99,11 @@ describe('titoloDelSalto — l\'etichetta che report.ts deve ritrovare', () => {
     expect(titolo).not.toBe(annunciaSalto(meta.row, motivo, () => {}));
   });
 
-  it('resta trovabile da chiaveEsito anche dopo che vitest ci ha messo davanti il describe', () => {
+  it('resta trovabile da chiaviEsito anche dopo che vitest ci ha messo davanti il describe', () => {
     const fullName = `acceptance · il giro dell'owner ${titolo}`;
     const results = new Map<string, TestOutcome>([[fullName, { status: 'skipped', failureMessages: [] }]]);
 
-    expect(chiaveEsito(meta.title, results)).toBe(fullName);
+    expect(chiaviEsito(meta.title, results)).toEqual([fullName]);
   });
 
   it('porta il motivo intero fino al verdetto, parentesi quadre comprese', () => {

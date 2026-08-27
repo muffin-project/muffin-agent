@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { promoteMarker } from './manifest.js';
-import { chiaveEsito, outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
+import { chiaviEsito, outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
 import type { ScenarioEntry } from './manifest.js';
 
 /**
@@ -315,46 +315,81 @@ describe('outcomesOf — un file che non si è caricato', () => {
 });
 
 /**
- * `chiaveEsito` è l'unica ricerca: il verdetto di una riga e la deduplica di
- * «fuori inventario» guardano per costruzione lo stesso esito, quindi non
- * possono divergere. Ognuno di questi test uccide una mutazione che il giudice
- * di questa slice ha misurato e che nessun test uccideva.
+ * `chiaviEsito` è l'unica ricerca: il verdetto di una riga e la deduplica di
+ * «fuori inventario» guardano per costruzione gli stessi esiti, quindi non
+ * possono divergere.
+ *
+ * I nomi qui sotto hanno la forma che vitest produce davvero — `"<describe>
+ * <titolo>"`, con **uno spazio**, misurato sul reporter JSON di 2.1.9 — e non
+ * il titolo nudo: nella suite vera ogni scenario vive dentro un `describe`, e
+ * un test scritto sulla forma nuda sarebbe verde per una ragione che non
+ * c'entra col meccanismo.
  */
-describe('chiaveEsito — quale esito appartiene a quale riga', () => {
-  it('preferisce la chiave esatta a una voce inserita prima che finisce con lo stesso titolo', () => {
-    const results = new Map<string, TestOutcome>([
-      ['altro test che finisce con X1 scenario finto', { status: 'failed', failureMessages: ['boom'] }],
-      ['X1 scenario finto', { status: 'passed', failureMessages: [] }],
-    ]);
-    expect(chiaveEsito('X1 scenario finto', results)).toBe('X1 scenario finto');
+const DESCRIBE = 'acceptance · il giro dell owner';
 
-    const scenario = verdeScenario('X1');
-    const summary = summarize([ready('X1')], [scenario], results);
-    expect(summary.counts.verde).toBe(1);
-    expect(summary.counts.unexpectedRed).toBe(0);
-  });
-
+describe('chiaviEsito — quali esiti appartengono a una riga', () => {
   it('trova lo scenario per suffisso, che è come vitest unisce describe e it', () => {
     const results = new Map<string, TestOutcome>([
-      ['acceptance · il giro > X1 scenario finto', { status: 'passed', failureMessages: [] }],
+      [`${DESCRIBE} X1 scenario finto`, { status: 'passed', failureMessages: [] }],
     ]);
-    expect(chiaveEsito('X1 scenario finto', results)).toBe('acceptance · il giro > X1 scenario finto');
+    expect(chiaviEsito('X1 scenario finto', results)).toEqual([`${DESCRIBE} X1 scenario finto`]);
   });
 
   it('trova lo scenario anche quando `annunciaSalto` gli ha appeso il motivo', () => {
-    const results = new Map<string, TestOutcome>([
-      [
-        'acceptance · il giro > X1 scenario finto [non provabile qui: bwrap non monta /proc]',
-        { status: 'skipped', failureMessages: [] },
-      ],
-    ]);
-    expect(chiaveEsito('X1 scenario finto', results)).toBe(
-      'acceptance · il giro > X1 scenario finto [non provabile qui: bwrap non monta /proc]',
-    );
+    const nome = `${DESCRIBE} X1 scenario finto [non provabile qui: bwrap non monta /proc]`;
+    expect(chiaviEsito('X1 scenario finto', new Map([[nome, { status: 'skipped', failureMessages: [] }]]))).toEqual([nome]);
   });
 
   it('non trova niente quando vitest non ha registrato lo scenario', () => {
-    expect(chiaveEsito('X1 scenario finto', new Map())).toBeUndefined();
+    expect(chiaviEsito('X1 scenario finto', new Map())).toEqual([]);
+  });
+
+  it('li raccoglie tutti invece di prendere il primo inserito', () => {
+    const results = new Map<string, TestOutcome>([
+      [`regressione di X1 scenario finto`, { status: 'failed', failureMessages: ['boom'] }],
+      [`${DESCRIBE} X1 scenario finto`, { status: 'passed', failureMessages: [] }],
+    ]);
+    expect(chiaviEsito('X1 scenario finto', results)).toHaveLength(2);
+  });
+});
+
+/**
+ * Il verde falso costruito dal giudice, con i nomi nella forma vera.
+ *
+ * Lo scenario reale è `skipped` con motivo dichiarato — quindi il suo nome
+ * **non** finisce col titolo — e un test estraneo inserito prima ci finisce.
+ * Con una ricerca a cascata la riga prendeva l'esito dell'estraneo e stampava
+ * `verde`, lo scenario vero (mai esercitato) finiva in «fuori inventario · non
+ * provabile qui» senza contare come rosso, e il report usciva 0 su una riga che
+ * nessuno aveva eseguito.
+ */
+describe('summarize — un titolo ambiguo è un difetto, non un ballottaggio', () => {
+  const scenario = verdeScenario('X1');
+  const ambiguo = (): Map<string, TestOutcome> =>
+    new Map([
+      [`regressione di ${scenario.title}`, { status: 'passed' as const, failureMessages: [] }],
+      [
+        `${DESCRIBE} ${scenario.title} [non provabile qui: bwrap non contiene su questo host]`,
+        { status: 'skipped' as const, failureMessages: [] },
+      ],
+    ]);
+
+  it('non stampa verde su una riga che nessuno ha eseguito: esce rosso', () => {
+    const summary = summarize([ready('X1')], [scenario], ambiguo());
+
+    expect(summary.counts.verde).toBe(0);
+    expect(summary.counts.unexpectedRed).toBe(1);
+    expect(summary.failed).toBe(true);
+  });
+
+  it('nomina i candidati invece di sceglierne uno', () => {
+    const righe = summarize([ready('X1')], [scenario], ambiguo()).lines.join('\n');
+    expect(righe).toContain('titolo ambiguo');
+    expect(righe).toContain(`regressione di ${scenario.title}`);
+  });
+
+  it('non li lascia anche fra i fuori inventario: sono rivendicati, e già contati una volta', () => {
+    expect(summarize([ready('X1')], [scenario], ambiguo()).counts.fuoriInventario).toBe(0);
   });
 });
 
@@ -420,5 +455,84 @@ describe('summarize — la deduplica non può ingoiare un rosso', () => {
 
     expect(summary.counts.fuoriInventarioRossi).toBe(1);
     expect(summary.failed).toBe(true);
+  });
+});
+
+/**
+ * Tre ingoi silenziosi della stessa famiglia, misurati dal giudice di questa
+ * slice e chiusi qui: un rosso che sparisce per omonimia, un rosso che arriva
+ * senza dire di quale file parla, e un rosso che sparirebbe se questa lettura
+ * per-file si disallineasse dal formato di vitest.
+ */
+describe('outcomesOf — i modi rimasti di perdere un rosso', () => {
+  it('su due file con lo stesso fullName tiene il peggiore, non l\'ultimo', () => {
+    const out = outcomesOf({
+      numFailedTestSuites: 1,
+      testResults: [
+        {
+          name: '/app/a.accept.ts',
+          status: 'failed',
+          assertionResults: [{ fullName: 'X1 scenario finto', status: 'failed', failureMessages: ['boom'] }],
+        },
+        {
+          name: '/app/b.accept.ts',
+          status: 'passed',
+          assertionResults: [{ fullName: 'X1 scenario finto', status: 'passed' }],
+        },
+      ],
+    });
+    expect(out.size).toBe(1);
+    expect(out.get('X1 scenario finto')).toEqual({ status: 'failed', failureMessages: ['boom'] });
+  });
+
+  it('dice quale file non si è caricato, non solo che uno non lo ha fatto', () => {
+    // Il percorso è lungo come lo scrive vitest quando la suite gira dal
+    // laptop e non dal container: `runAcceptanceSuite` la lancia con `cwd:
+    // REPO`, e il reporter mette percorsi assoluti. Con il solo percorso in
+    // testa, il troncamento a 110 caratteri della riga di `summarize` cadeva
+    // dentro il prefisso e si mangiava proprio il basename — si imparava che
+    // *un* file non si era caricato, non quale.
+    const lungo =
+      '/Users/qualcuno/dev/muffin-agent/.claude/worktrees/agent-ae21909b235cbeda/evals/acceptance/scenarios/._a-lifecycle.accept.ts';
+    expect(lungo.length).toBeGreaterThan(110);
+
+    const out = outcomesOf({
+      numFailedTestSuites: 1,
+      testResults: [{ name: lungo, status: 'failed', message: 'boom', assertionResults: [] }],
+    });
+    expect(summarize([], [], out).lines.join('\n')).toContain('._a-lifecycle.accept.ts');
+  });
+
+  it('grida se vitest dichiara suite rosse e questa lettura non ne vede nessuna', () => {
+    // La controprova a costo zero: `numFailedTestSuites` era già nel JSON e
+    // nessuno lo leggeva. Se il formato cambia, questa lettura smette — e il
+    // modo in cui smetterebbe è in silenzio.
+    expect(() =>
+      outcomesOf({
+        numFailedTestSuites: 2,
+        testResults: [
+          {
+            name: '/app/a.accept.ts',
+            status: 'passed',
+            assertionResults: [{ fullName: 'X1 scenario finto', status: 'passed' }],
+          },
+        ],
+      }),
+    ).toThrow(/disallineata dal formato di vitest/);
+  });
+
+  it('non grida quando il rosso dichiarato è visibile come assertion', () => {
+    expect(() =>
+      outcomesOf({
+        numFailedTestSuites: 1,
+        testResults: [
+          {
+            name: '/app/a.accept.ts',
+            status: 'failed',
+            assertionResults: [{ fullName: 'X1 scenario finto', status: 'failed', failureMessages: ['boom'] }],
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 });

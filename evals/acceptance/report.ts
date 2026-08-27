@@ -90,7 +90,7 @@ function parseInventory(): InventoryRow[] {
  */
 const MOTIVO_NEL_TITOLO = /\[non provabile qui: (.+)\]$/;
 
-/** Il nome, senza il motivo che `annunciaSalto` gli ha appeso — la forma con cui `chiaveEsito` confronta un salto dichiarato. */
+/** Il nome, senza il motivo che `annunciaSalto` gli ha appeso — la forma con cui `chiaviEsito` confronta un salto dichiarato. */
 function senzaMotivo(full: string): string {
   return full.replace(MOTIVO_NEL_TITOLO, '').trimEnd();
 }
@@ -122,7 +122,7 @@ export type VitestStatus = 'passed' | 'failed' | 'pending' | 'skipped';
 export type TestOutcome = { status: VitestStatus; failureMessages: string[] };
 
 export type VitestJsonResult = {
-  /** Presente nel JSON di vitest 2.1.9; qui serve solo come controprova del conteggio per-file di `outcomesOf`. */
+  /** Presente nel JSON di vitest 2.1.9. `outcomesOf` lo legge come controprova: dice quante suite sono fallite. */
   numFailedTestSuites?: number;
   testResults: Array<{
     /** Il percorso del file. `undefined` solo in JSON sintetici: il reporter vero lo scrive sempre. */
@@ -200,45 +200,92 @@ export function outcomesOf(json: VitestJsonResult): Map<string, TestOutcome> {
   const byTitle = new Map<string, TestOutcome>();
   for (const file of json.testResults) {
     for (const a of file.assertionResults) {
-      byTitle.set(a.fullName.trim(), { status: a.status, failureMessages: a.failureMessages ?? [] });
+      const nome = a.fullName.trim();
+      const nuovo: TestOutcome = { status: a.status, failureMessages: a.failureMessages ?? [] };
+      // Due file diversi possono registrare lo stesso `fullName` (stesso
+      // describe, stesso titolo). La `Map` ne tiene uno solo, e prima vinceva
+      // **l'ultimo**: un file A rosso più un file B verde con lo stesso nome
+      // lasciavano una sola chiave `passed`, cioè il rosso spariva. Qui vince
+      // il peggiore: un rosso non si perde per omonimia.
+      const gia = byTitle.get(nome);
+      byTitle.set(nome, gia !== undefined && peggiore(gia, nuovo) === gia ? gia : nuovo);
     }
     if (file.status === 'failed' && file.assertionResults.length === 0) {
-      // Il marcatore va in testa e non in coda: la riga di `summarize` tronca a
-      // 110 caratteri, e un percorso assoluto lungo mangerebbe proprio il pezzo
-      // che spiega perché quel nome è lì.
-      byTitle.set(`${FILE_NON_CARICATO} ${(file.name ?? '(file senza nome nel reporter JSON)').trim()}`, {
+      // Il marcatore va in testa e il basename subito dopo: la riga di
+      // `summarize` tronca a 110 caratteri, e con un percorso assoluto lungo
+      // (`/app/evals/acceptance/scenarios/…`) il taglio si mangiava proprio il
+      // nome del file — si imparava che *un* file non si era caricato, non quale.
+      const percorso = (file.name ?? '(file senza nome nel reporter JSON)').trim();
+      const base = percorso.split('/').pop() || percorso;
+      byTitle.set(`${FILE_NON_CARICATO} ${base} (${percorso})`, {
         status: 'failed',
         failureMessages: [file.message ?? '(nessun messaggio di caricamento nel reporter JSON)'],
       });
     }
   }
+  // Controprova a costo zero, con il contatore che il reporter scrive da sé: se
+  // vitest dice che N suite sono fallite e qui non ne è comparsa nessuna con
+  // zero assertion, la lettura per-file qui sopra ha smesso di funzionare — e
+  // il modo in cui smetterebbe è tornare a essere silenziosa.
+  const suiteRosseViste = [...byTitle.keys()].filter((k) => k.startsWith(FILE_NON_CARICATO)).length;
+  const suiteRosseDichiarate = json.numFailedTestSuites ?? 0;
+  if (suiteRosseDichiarate > 0 && suiteRosseViste === 0 && !haAssertionRosse(byTitle)) {
+    throw new Error(
+      `il reporter JSON dichiara ${suiteRosseDichiarate} suite fallite, ma non c'è né un'assertion rossa né un ` +
+        `file non caricato: la lettura di testResults è disallineata dal formato di vitest, e un rosso sta passando in silenzio`,
+    );
+  }
   return byTitle;
 }
 
+/** L'esito peggiore fra i due, con `failed` in cima: serve solo a non perdere un rosso per omonimia. */
+function peggiore(a: TestOutcome, b: TestOutcome): TestOutcome {
+  const gravita = (s: VitestStatus): number => (s === 'failed' ? 3 : s === 'skipped' || s === 'pending' ? 2 : 1);
+  return gravita(a.status) >= gravita(b.status) ? a : b;
+}
+
+function haAssertionRosse(byTitle: Map<string, TestOutcome>): boolean {
+  for (const esito of byTitle.values()) if (esito.status === 'failed') return true;
+  return false;
+}
+
 /**
- * Il nome completo con cui vitest ha registrato lo scenario `title`, o
- * `undefined` se non l'ha registrato affatto.
+ * **Tutti** i nomi completi con cui vitest può aver registrato lo scenario
+ * `title` — non il primo che capita.
  *
- * Tre forme, in quest'ordine — e l'ordine è il punto:
+ * Tre forme, in unione e non in cascata:
  *
- *  1. `title` esatto. Prima esisteva solo il passo 2, un `find` che prende la
- *     **prima** voce in ordine di inserimento: con `"altro test che finisce con
- *     B1 x"` registrato prima di `"B1 x"`, il verdetto della riga veniva
- *     dall'esito sbagliato.
- *  2. suffisso: vitest unisce il describe e il titolo dell'`it` con uno spazio,
- *     quindi il `fullName` di uno scenario è `"<describe> <title>"`.
+ *  1. `title` esatto (la suite vera non lo produce mai da sola: ogni scenario
+ *     vive dentro un `describe`, quindi il `fullName` è sempre prefissato).
+ *  2. suffisso: vitest unisce il describe e il titolo dell'`it` con **uno
+ *     spazio** — misurato, non ricordato: un `it("A5 …")` dentro
+ *     `describe("acceptance · A · doctor, backup")` produce `fullName ===
+ *     "acceptance · A · doctor, backup A5 …"`.
  *  3. salto dichiarato: `annunciaSalto` appende ` [non provabile qui: <motivo>]`,
- *     quindi il `fullName` non finisce più con `title`. Senza questo passo il
+ *     quindi il `fullName` non finisce più con `title`. Senza questa forma il
  *     ramo `non-provabile-qui` di `verdictFor` era irraggiungibile dalla
- *     produzione — `verdictFor` usciva prima con `nessuno-scenario` — e lo
- *     stesso test si contava due volte: una come riga scoperta, una come «fuori
- *     inventario».
+ *     produzione — si usciva prima con `nessuno-scenario` — e lo stesso test si
+ *     contava due volte: una come riga scoperta, una come «fuori inventario».
+ *
+ * Unione e non cascata perché la cascata sceglieva: `find` prendeva la **prima**
+ * voce in ordine di inserimento, e una precedenza sulla chiave esatta non
+ * ripara niente su un percorso dove la chiave esatta non esiste. Il verde falso
+ * che questo chiude: uno scenario reale `skipped` con motivo dichiarato (forma
+ * 3) più un test estraneo inserito prima il cui nome finisce con lo stesso
+ * titolo (forma 2) — la riga stampava `verde` sull'esito dell'estraneo, lo
+ * scenario vero finiva in «fuori inventario · non provabile qui» senza contare
+ * come rosso, e il report usciva 0 su una riga che nessuno aveva eseguito.
+ *
+ * Due candidati non sono un ballottaggio da vincere ai punti: sono un difetto
+ * del manifest o della suite, e `verdictFor` li chiama `rosso-inatteso` con i
+ * nomi in chiaro invece di sceglierne uno.
  */
-export function chiaveEsito(title: string, results: Map<string, TestOutcome>): string | undefined {
-  if (results.has(title)) return title;
-  for (const full of results.keys()) if (full.endsWith(title)) return full;
-  for (const full of results.keys()) if (senzaMotivo(full).endsWith(title)) return full;
-  return undefined;
+export function chiaviEsito(title: string, results: Map<string, TestOutcome>): string[] {
+  const trovate: string[] = [];
+  for (const full of results.keys()) {
+    if (full === title || full.endsWith(title) || senzaMotivo(full).endsWith(title)) trovate.push(full);
+  }
+  return trovate;
 }
 
 export type RowVerdict =
@@ -270,12 +317,22 @@ export function verdictFor(
   if (scenario.expectation.kind === 'provata-dal-meccanismo') {
     return { kind: 'provata-dal-meccanismo', reason: scenario.expectation.reason };
   }
-  // Una sola ricerca, `chiaveEsito`, invece di due `find` con criteri diversi:
+  // Una sola ricerca, `chiaviEsito`, invece di due `find` con criteri diversi:
   // erano due, e il secondo cercava una forma che il primo aveva già escluso.
-  const chiave = chiaveEsito(scenario.title, results);
-  if (chiave === undefined) {
+  const chiavi = chiaviEsito(scenario.title, results);
+  if (chiavi.length === 0) {
     return { kind: 'nessuno-scenario' }; // registered in the manifest, but vitest never ran it
   }
+  if (chiavi.length > 1) {
+    return {
+      kind: 'rosso-inatteso',
+      detail:
+        `titolo ambiguo: ${chiavi.length} esiti di vitest finiscono con "${scenario.title}" — ` +
+        `${chiavi.map((c) => `"${c.slice(0, 90)}"`).join(', ')}. Un verdetto scelto fra questi sarebbe un ` +
+        `lancio di moneta: rinomina il test estraneo o la riga di manifest.`,
+    };
+  }
+  const chiave = chiavi[0]!;
   const { status, failureMessages } = results.get(chiave)!;
   // Saltato **dichiarando** perché: `scenario(..., nonProvabileQui)` mette il
   // motivo nel titolo del test, e questo è il posto dove quel motivo diventa un
@@ -450,15 +507,12 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
    * `includes` — e scartava in silenzio un esito **rosso** fuori inventario il
    * cui nome citasse un titolo di manifest come sottostringa: con manifest
    * `"A1 il giro"` e un extra rosso `"fuori inventario che parla di A1 il giro
-   * e poi rompe"`, `failed` restava `false`. Passando per `chiaveEsito` la
+   * e poi rompe"`, `failed` restava `false`. Passando per `chiaviEsito` la
    * deduplica e il verdetto guardano per costruzione lo stesso esito, quindi
    * non possono più divergere: né doppio conteggio, né rosso ingoiato.
    */
   const chiaviRivendicate = new Set<string>();
-  for (const s of manifest) {
-    const chiave = chiaveEsito(s.title, results);
-    if (chiave !== undefined) chiaviRivendicate.add(chiave);
-  }
+  for (const s of manifest) for (const chiave of chiaviEsito(s.title, results)) chiaviRivendicate.add(chiave);
   const orfaniDiScenario: { nome: string; stato: string }[] = [];
   for (const [nome, esito] of results) {
     if (chiaviRivendicate.has(nome)) continue;
