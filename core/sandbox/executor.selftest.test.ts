@@ -157,6 +157,27 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(wrapWithSandboxArgv).not.toHaveBeenCalled();
   });
 
+  it('`SandboxManager.initialize()` dice che manca ripgrep: classificato col rimedio dei tre binari, non quello generico', async () => {
+    // La forma reale, misurata in container il 27/08: bubblewrap e socat
+    // installati, ripgrep no. `SandboxManager` controlla le proprie dipendenze
+    // e fallisce PRIMA di invocare bwrap, quindi non passa mai dal ramo
+    // `binary_missing` del probe più stretto — l'owner vedeva `contain_failed`
+    // col rimedio generico «guarda il detail», che non nomina il pacchetto.
+    initialize.mockReset().mockRejectedValue(new Error('Sandbox dependencies not available: ripgrep (rg) not found'));
+
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+
+    const status = await executor.verify();
+    expect(status.available).toBe(false);
+    if (status.available) return;
+    expect(status.reason).toBe('contain_failed');
+    expect(status.remedy).toContain('ripgrep');
+    expect(status.remedy).toContain('bubblewrap');
+    expect(status.remedy).toContain('socat');
+    expect(wrapWithSandboxArgv).not.toHaveBeenCalled();
+  });
+
   it('a cheap probe that already says unavailable short-circuits: SandboxManager.initialize() is never called', async () => {
     const negative = (): SandboxProbe => ({
       available: false,

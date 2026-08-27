@@ -42,7 +42,7 @@ import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
 import { makeTodoTool, todoCapability } from './tools/todo.js';
-import { OllamaEmbedder } from '../core/memory/embed.js';
+import { makeEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
@@ -344,7 +344,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const memoryStore = new MemoryStore(db);
   let vectors: VectorIndex | undefined;
   try {
-    vectors = new VectorIndex(db, new OllamaEmbedder());
+    // Dalla config, non cablato: l'embedder è una scelta di installazione (il
+    // primo commento di `core/memory/embed.ts` lo dice da sempre, e finora non
+    // si poteva fare). Su una VPS senza Ollama, un `new OllamaEmbedder()` fisso
+    // significa che niente viene indicizzato e il recall resta solo testuale.
+    vectors = new VectorIndex(db, makeEmbedder(config.embedder, (ref) => readSecret(ref, home)));
   } catch {
     vectors = undefined;
   }

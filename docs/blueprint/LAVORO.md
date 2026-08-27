@@ -10,9 +10,9 @@ memoria, skill, tool, context engine, compacting, comandi, deep research; ogni
 pezzo per *come è fatto*, non per se passa. E **tutto ciò che manca prima di
 installare sulla VPS.**
 
-**`fs_write` scrive** (#182): `draft` è «prima la copia, poi l'effetto», il file
-lo dichiara il tool (`resolveEffectPath`) e viaggia con la chiamata
-(`ToolContext.effectPath`). D2/D3 READY.
+**`fs_write` scrive**, mergiata (#182): `draft` è «prima la copia, poi
+l'effetto», il file lo dichiara il tool (`resolveEffectPath`) e viaggia con la
+chiamata (`ToolContext.effectPath`). D2/D3 READY.
 
 **Prossima claim: `slice/undo-riallinea-il-turno`** (D11, l'altra metà): l'undo
 rimette il filesystem e non tocca turno/sessione, quindi la cronologia dice
@@ -37,9 +37,8 @@ aggiunge **pulsanti nei messaggi** e **documenti inline**
 (`telegram.org/blog/welcome-messages-buttons-TG-13`). Dalla fonte prima di
 toccare il connettore: cambia cosa Muffin può offrire lì.
 
-**Aperto per l'owner:** token bot Telegram; billing CI; **promozione `dev` →
-`main`, PR #163 in draft** — l'unica cosa che PERCORSO §0 lascia aperta, e
-`dev` è a schema 3 come il DB vivo. Non la mergio io.
+**Aperto per l'owner:** token bot Telegram; billing CI. La promozione `dev` →
+`main` (#163) l'ha mergiata lui il 27/08: PERCORSO §0 non lascia più niente.
 
 **CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR;
 rosso in 2s con zero step = fatturazione. Con `mergeable` a `null`:
