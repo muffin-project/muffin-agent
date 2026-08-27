@@ -77,6 +77,14 @@ function parseInventory(): InventoryRow[] {
  * against — not to rows nobody has gotten to yet, which stay honestly
  * "nessuno scenario".
  */
+/**
+ * Il motivo che `annunciaSalto` (`evals/acceptance/non-provabile.ts`) infila nel
+ * titolo del test saltato. Una sola forma, scritta in un posto e letta in un
+ * altro: se le due divergono il salto torna a leggersi come un rosso, quindi la
+ * forma è pinnata da un test che le confronta.
+ */
+const MOTIVO_NEL_TITOLO = /\[non provabile qui: ([^\]]+)\]/;
+
 const NOT_PROVABLE_HERE: Record<string, string> = {
   C8: 'richiede una trascrizione audio reale — property 2 del brief vieta chiavi/chiamate a pagamento in questa suite',
   // B16 non è più qui. L'override esiste ora in produzione —
@@ -200,6 +208,18 @@ export function verdictFor(
     return { kind: 'nessuno-scenario' }; // registered in the manifest, but vitest never ran it
   }
   const { status, failureMessages } = outcome;
+  // Saltato **dichiarando** perché: `scenario(..., nonProvabileQui)` mette il
+  // motivo nel titolo del test, e questo è il posto dove quel motivo diventa un
+  // verdetto contato invece di un `rosso-inatteso` con scritto «stato vitest:
+  // skipped». Derivato dalla corsa, non da `NOT_PROVABLE_HERE` — quella tabella
+  // si scrive a mano e vale solo per le righe *senza* scenario, quindi non può
+  // dire niente su una macchina che oggi non può provare ciò che ieri provava.
+  const dichiarato = MOTIVO_NEL_TITOLO.exec(
+    [...results.entries()].find(([full]) => full.endsWith(scenario.title) || full.includes(scenario.title))?.[0] ?? '',
+  );
+  if (status === 'skipped' && dichiarato?.[1]) {
+    return { kind: 'non-provabile-qui', reason: dichiarato[1] };
+  }
   if (scenario.expectation.kind === 'verde') {
     return status === 'passed' ? { kind: 'verde' } : { kind: 'rosso-inatteso', detail: `stato vitest: ${status}` };
   }
@@ -238,6 +258,9 @@ export type Summary = {
     readyWithoutScenario: number;
     readyWithAttesoRosso: number;
     orphanRows: number;
+    /** Esiti vitest che nessuna riga del manifest rivendica — di cui `fuoriInventarioRossi` sono rossi o saltati in silenzio. */
+    fuoriInventario: number;
+    fuoriInventarioRossi: number;
   };
   /** Whether the report should fail the process — the gate, as one boolean instead of scattered across counters. */
   failed: boolean;
@@ -338,8 +361,46 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
     }
   }
 
+  /**
+   * Ciò che vitest ha eseguito e che nessuna riga rivendica.
+   *
+   * Il ciclo qui sopra cammina l'inventario, quindi un file `.accept.ts` che non
+   * passa dal manifest — `b-job-script`, oggi — non viene visitato: non stampato,
+   * non contato, e **non fallisce il report anche quando è rosso**. Per chi
+   * legge questo report, che il mandato DAY-1 §4.9 tratta come il gate
+   * autoritativo, un rosso che non arriva qui è indistinguibile da uno scenario
+   * mai esistito. È il buco che il judge di `slice/linux-la-macchina-che-conta`
+   * ha nominato, ed è più vecchio di quella slice.
+   *
+   * Non li promuovo a righe di Gate: non lo sono. Li dichiaro, e un loro
+   * fallimento fa fallire il report come qualsiasi altro rosso.
+   */
+  const rivendicati = new Set(manifest.map((s) => s.title));
+  const orfaniDiScenario: { nome: string; stato: string }[] = [];
+  for (const [nome, esito] of results) {
+    if ([...rivendicati].some((t) => nome.endsWith(t) || nome.includes(t))) continue;
+    orfaniDiScenario.push({ nome, stato: esito.status });
+  }
+  let orfaniRossi = 0;
+  for (const o of orfaniDiScenario) {
+    const saltatoDichiarando = o.stato === 'skipped' && MOTIVO_NEL_TITOLO.test(o.nome);
+    if (o.stato === 'passed' || saltatoDichiarando) {
+      lines.push(
+        `  fuori inventario   ${saltatoDichiarando ? 'non provabile qui' : 'verde'} — ${o.nome.slice(0, 110)}`,
+      );
+      continue;
+    }
+    orfaniRossi++;
+    lines.push(`  FUORI INVENTARIO ROSSO — ${o.nome.slice(0, 110)} (stato vitest: ${o.stato})`);
+  }
+
   const failed =
-    unexpectedRed > 0 || readyWithoutScenario > 0 || readyWithAttesoRosso > 0 || attesoRossoOraVerde > 0 || orphanRows.length > 0;
+    unexpectedRed > 0 ||
+    readyWithoutScenario > 0 ||
+    readyWithAttesoRosso > 0 ||
+    attesoRossoOraVerde > 0 ||
+    orphanRows.length > 0 ||
+    orfaniRossi > 0;
 
   return {
     lines,
@@ -354,6 +415,8 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
       readyWithoutScenario,
       readyWithAttesoRosso,
       orphanRows: orphanRows.length,
+      fuoriInventario: orfaniDiScenario.length,
+      fuoriInventarioRossi: orfaniRossi,
     },
     failed,
   };
@@ -376,14 +439,15 @@ function main(): void {
     `verde ${counts.verde} · atteso-rosso ${counts.attesoRosso} · rosso-inatteso ${counts.unexpectedRed} · ` +
       `atteso-rosso→verde ${counts.attesoRossoOraVerde} · non provabile qui ${counts.nonProvabile} · ` +
       `provata dal meccanismo ${counts.provataDalMeccanismo} · nessuno scenario ${counts.nessunoScenario} · ` +
-      `orfano ${counts.orphanRows}\n`,
+      `orfano ${counts.orphanRows} · fuori inventario ${counts.fuoriInventario} (di cui rossi ${counts.fuoriInventarioRossi})\n`,
   );
 
   if (failed) {
     process.stdout.write(
       `\nFALLITO: ${counts.unexpectedRed} rosso-inatteso, ${counts.readyWithoutScenario} riga READY senza scenario, ` +
         `${counts.readyWithAttesoRosso} riga READY con scenario atteso-rosso (promuovi o degrada), ` +
-        `${counts.attesoRossoOraVerde} atteso-rosso da promuovere, ${counts.orphanRows} scenario orfano nel manifest.\n`,
+        `${counts.attesoRossoOraVerde} atteso-rosso da promuovere, ${counts.orphanRows} scenario orfano nel manifest, ` +
+        `${counts.fuoriInventarioRossi} rosso fuori inventario.\n`,
     );
     process.exitCode = 1;
     return;

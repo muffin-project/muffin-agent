@@ -194,3 +194,55 @@ describe('outcomesOf — the one reading of vitest JSON, whether this script ran
     expect(out.size).toBe(2);
   });
 });
+
+/**
+ * Il buco che il judge di `slice/linux-la-macchina-che-conta` ha nominato, e
+ * che è più vecchio di quella slice: `summarize` cammina l'inventario, quindi
+ * un file `.accept.ts` che non registra una riga M5-BIS non viene visitato
+ * affatto. `b-job-script` è esattamente quel caso. Prima di questi test, il suo
+ * rosso — non il suo salto: il suo **rosso** — non produceva nessuna riga,
+ * nessun contatore e nessun exit code: per chi legge il report che il mandato
+ * DAY-1 §4.9 tratta come gate autoritativo, indistinguibile da uno scenario mai
+ * scritto.
+ */
+describe('summarize — ciò che vitest ha eseguito e nessuna riga rivendica', () => {
+  it('un rosso fuori inventario fa fallire il report, nominato', () => {
+    const results = new Map<string, TestOutcome>([
+      ['evals/acceptance/b-job-script.accept.ts > il job parte davvero', { status: 'failed', failureMessages: ['contain_failed'] }],
+    ]);
+    const summary = summarize([], [], results);
+
+    expect(summary.failed).toBe(true);
+    expect(summary.lines.join('\n')).toMatch(/FUORI INVENTARIO ROSSO/);
+    expect(summary.lines.join('\n')).toContain('b-job-script');
+  });
+
+  it('un salto dichiarato fuori inventario si stampa senza far fallire', () => {
+    // La distinzione che rende utile la riga sopra: «non provabile qui» è una
+    // dichiarazione, «skipped» e basta no.
+    const results = new Map<string, TestOutcome>([
+      ['«il job parte davvero» [non provabile qui: bwrap non monta /proc]', { status: 'skipped', failureMessages: [] }],
+    ]);
+    const summary = summarize([], [], results);
+
+    expect(summary.failed).toBe(false);
+    expect(summary.lines.join('\n')).toMatch(/fuori inventario\s+non provabile qui/);
+  });
+
+  it('uno skip muto fuori inventario resta un rosso', () => {
+    const results = new Map<string, TestOutcome>([
+      ['b-job-script > il job parte davvero', { status: 'skipped', failureMessages: [] }],
+    ]);
+    expect(summarize([], [], results).failed).toBe(true);
+  });
+
+  it('non ripete ciò che l\'inventario ha già raccontato', () => {
+    // Senza questo, ogni scenario del manifest comparirebbe due volte: una
+    // come riga di Gate e una come «fuori inventario».
+    const scenario = verdeScenario('X1');
+    const summary = summarize([ready('X1')], [scenario], outcomeFor(scenario, { status: 'passed', failureMessages: [] }));
+
+    expect(summary.failed).toBe(false);
+    expect(summary.lines.join('\n')).not.toMatch(/fuori inventario/);
+  });
+});

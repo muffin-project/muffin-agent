@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostContiene } from './sandbox-host.js';
+import { BWRAP_COME_IN_PRODUZIONE, hostContiene } from './sandbox-host.js';
 
 /**
  * L'interruttore che decide se uno scenario viene **esercitato o saltato**.
@@ -58,6 +58,24 @@ describe('hostContiene', () => {
       visti = args;
     }, 'linux');
     expect(visti).toContain('--proc');
-    expect(visti).toContain('--unshare-all');
+    expect(visti).toEqual(BWRAP_COME_IN_PRODUZIONE);
+  });
+
+  it('e non chiede **più** di così: nessun unshare che la produzione non fa', () => {
+    // L'errore asimmetrico. `--unshare-all` — che è ciò che questo probe
+    // chiedeva — unshare anche IPC, UTS e cgroup: su un host che nega uno di
+    // quelli e concede tutto il resto, il probe direbbe «non provabile qui» e
+    // la suite resterebbe verde senza esercitare uno scenario che sarebbe
+    // passato. Un salto di troppo è un verde falso, ed è peggio del rosso
+    // falso che questo file è nato per togliere.
+    expect(BWRAP_COME_IN_PRODUZIONE).not.toContain('--unshare-all');
+    expect(BWRAP_COME_IN_PRODUZIONE).not.toContain('--unshare-ipc');
+    expect(BWRAP_COME_IN_PRODUZIONE).not.toContain('--unshare-uts');
+    expect(BWRAP_COME_IN_PRODUZIONE).not.toContain('--unshare-cgroup');
+    // Ciò che invece la produzione fa, e che quindi va chiesto.
+    expect(BWRAP_COME_IN_PRODUZIONE).toContain('--unshare-net');
+    expect(BWRAP_COME_IN_PRODUZIONE).toContain('--unshare-pid');
+    expect(BWRAP_COME_IN_PRODUZIONE).toContain('--unshare-user');
+    expect(BWRAP_COME_IN_PRODUZIONE).toContain('--cap-drop');
   });
 });
