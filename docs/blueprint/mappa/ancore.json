@@ -1661,22 +1661,22 @@
   },
   "core/memory/recall.ts:665": {
     "path": "core/memory/recall.ts",
-    "line": 700,
+    "line": 709,
     "testo": "const key = `episode:${near.id}`;"
   },
   "core/memory/recall.ts:708": {
     "path": "core/memory/recall.ts",
-    "line": 788,
+    "line": 797,
     "testo": "* duplicate was never a separate truth (`store.ts` supersede). Both set"
   },
   "core/memory/rerank.ts:47": {
     "path": "core/memory/rerank.ts",
-    "line": 48,
+    "line": 66,
     "testo": "export class LlmReranker implements Reranker {"
   },
   "core/memory/rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 65,
+    "line": 84,
     "testo": "try {"
   },
   "core/memory/schema.ts:151": {
@@ -2716,22 +2716,22 @@
   },
   "recall.ts:655": {
     "path": "core/memory/recall.ts",
-    "line": 690,
+    "line": 699,
     "testo": "const k = Math.min(Math.max(options.neighbours ?? 0, 0), MAX_NEIGHBOURS);"
   },
   "recall.ts:675": {
     "path": "core/memory/recall.ts",
-    "line": 710,
+    "line": 719,
     "testo": "score: 0,"
   },
   "recall.ts:731": {
     "path": "core/memory/recall.ts",
-    "line": 811,
+    "line": 820,
     "testo": "`${item.neighbourOf === undefined ? '' : ', intorno'}] ` +"
   },
   "recall.ts:750": {
     "path": "core/memory/recall.ts",
-    "line": 830,
+    "line": 839,
     "testo": "`. Dillo, non rispondere con quello che vale oggi.`,"
   },
   "redact.ts:11": {
@@ -2751,7 +2751,7 @@
   },
   "rerank.ts:64": {
     "path": "core/memory/rerank.ts",
-    "line": 65,
+    "line": 84,
     "testo": "try {"
   },
   "runtime.ts:284": {
