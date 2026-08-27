@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { LAUNCHD_LABEL } from './unit.js';
 
 /**
  * `sd_notify`, the half of supervision that answers "is it *healthy*".
@@ -61,8 +62,17 @@ export const WATCHDOG_FRACTION = 0.5;
 export type NotifySink = (payload: string) => void;
 
 export type Notifier = {
-  /** True when a supervisor is listening. False makes every method a no-op. */
-  readonly supervised: boolean;
+  /**
+   * True quando **systemd** sta ascoltando su `NOTIFY_SOCKET`. False rende ogni
+   * metodo un no-op.
+   *
+   * Si chiamava `supervised`, e quel nome ha prodotto esattamente il difetto
+   * che ci si aspetta: la riga di avvio del gateway lo leggeva come «c'è un
+   * supervisore», e su macOS stampava «nessun supervisore» mentre launchd lo
+   * teneva su — contraddicendo `doctor`, che invece lo vedeva. Un canale che
+   * non esiste non è un supervisore che non esiste.
+   */
+  readonly notifySocket: boolean;
   /** How often to call `watchdog()`, or null when nobody asked for it. */
   readonly watchdogIntervalMs: number | null;
   /** Startup is finished and the gateway is actually serving. */
@@ -106,7 +116,7 @@ export function createNotifier(
   env: NodeJS.ProcessEnv = process.env,
   sink: NotifySink = systemdNotifySink,
 ): Notifier {
-  const supervised = (env['NOTIFY_SOCKET'] ?? '') !== '';
+  const notifySocket = (env['NOTIFY_SOCKET'] ?? '') !== '';
 
   // WATCHDOG_PID exists so an inherited environment does not turn every child
   // into a second pinger. Absent means "the process that got this env" — us.
@@ -114,11 +124,11 @@ export function createNotifier(
   const forPid = env['WATCHDOG_PID'];
   const mine = forPid === undefined || forPid === String(process.pid);
   const watchdogIntervalMs =
-    supervised && mine && Number.isFinite(usec) && usec > 0 ? (usec / 1000) * WATCHDOG_FRACTION : null;
+    notifySocket && mine && Number.isFinite(usec) && usec > 0 ? (usec / 1000) * WATCHDOG_FRACTION : null;
 
   let failure: string | null = null;
   const send = (payload: string): void => {
-    if (!supervised) return;
+    if (!notifySocket) return;
     try {
       sink(payload);
       failure = null;
@@ -130,7 +140,7 @@ export function createNotifier(
   };
 
   return {
-    supervised,
+    notifySocket,
     watchdogIntervalMs,
     ready: (status) => send(status === undefined ? 'READY=1' : `READY=1\nSTATUS=${oneLine(status)}`),
     watchdog: (status) => send(status === undefined ? 'WATCHDOG=1' : `WATCHDOG=1\nSTATUS=${oneLine(status)}`),
@@ -149,3 +159,33 @@ const systemdNotifySink: NotifySink = (payload) => {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`systemd-notify è uscito con ${result.status}`);
 };
+
+/**
+ * Chi ci sta tenendo su, detto senza inventare e senza spendere.
+ *
+ * Il difetto che sostituisce: la riga di avvio derivava tutto da
+ * `NOTIFY_SOCKET`, che è una domanda solo-systemd, e su macOS stampava «nessun
+ * supervisore» mentre launchd teneva su il processo — con `doctor` che nello
+ * stesso momento diceva il contrario. Due parti dello stesso programma in
+ * disaccordo su un fatto verificabile.
+ *
+ * Il segnale di launchd è `XPC_SERVICE_NAME`, e **non basta che ci sia**:
+ * misurato il 27/08, una shell dentro un'app GUI ne ha uno
+ * (`application.com.…`). Quello che distingue è il **valore**, che per un job
+ * launchd è la sua label — la nostra, che conosciamo già. Quindi la domanda
+ * non è «esiste una variabile» ma «launchd ha avviato *questo* job», che è
+ * precisamente ciò che la riga afferma.
+ *
+ * Nessuna sonda, nessun processo lanciato: due letture d'ambiente. La domanda
+ * più larga — «su questa macchina un supervisore è configurato?» — resta di
+ * `doctor` (`core/gateway/supervisor.ts`), che può permettersi di pagarla.
+ */
+export function describeSupervision(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if ((env['NOTIFY_SOCKET'] ?? '') !== '') return 'sd_notify attivo (systemd, watchdog possibile)';
+  if (platform === 'darwin' && env['XPC_SERVICE_NAME'] === LAUNCHD_LABEL) {
+    // Detto per intero perché è la differenza che conta: launchd lo riavvia se
+    // muore, ma non ha un canale su cui sentirlo dire «sono vivo ma piantato».
+    return `launchd (${LAUNCHD_LABEL}) — riavvia se muore, ma senza sd_notify non c'è watchdog`;
+  }
+  return 'nessun supervisore (né NOTIFY_SOCKET né launchd per questo job)';
+}
