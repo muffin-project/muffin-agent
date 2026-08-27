@@ -388,14 +388,33 @@ ${args}
   </dict>
   <key>RunAtLoad</key>
   <true/>
-  <!-- KeepAlive incondizionato, e la scelta è fra due difetti. Con
-       {SuccessfulExit: false} launchd riavvia solo su uscita ≠ 0: il drenaggio
-       da SIGUSR1 esce 0 e l'agente resta GIÙ, cioè esattamente il contrario di
-       quello per cui esiste quel segnale. Con {SuccessfulExit: true} un crash
-       non tornerebbe su. Qui torna su sempre — e il prezzo, che launchd non sa
-       esprimere, è che nemmeno "muffin gateway stop" lo tiene giù. -->
+  <!-- Vivo finché quel file NON esiste (launchd.plist(5): PathState a false
+       tiene vivo il job nella condizione inversa). È il modo di dire a launchd
+       una cosa che con KeepAlive non si può dire.
+
+       KeepAlive: true riportava su il gateway anche quando era stato l'owner a
+       fermarlo — misurato sulla sua macchina il 28/08/2026. Le altre due forme
+       erano peggio: {SuccessfulExit: false} riavvia solo su uscita ≠ 0, e il
+       drenaggio da SIGUSR1 esce 0, quindi l'agente sarebbe restato giù proprio
+       nel caso per cui quel segnale esiste; {SuccessfulExit: true} non
+       rialzerebbe un crash.
+
+       Il semaforo lo scrive "muffin gateway stop" e lo toglie "muffin gateway
+       start". Un crash non lo scrive, quindi un crash torna su come prima.
+
+       Il man page avverte che guardare il filesystem è race-prone: per quello
+       il file lo controlla anche "gateway run" all'avvio, e se lo trova esce
+       subito. Le due difese coprono buchi diversi — launchd evita il respawn,
+       il controllo interno chiude la finestra in cui launchd non se n'è ancora
+       accorto. -->
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>PathState</key>
+    <dict>
+      <key>${xml(join(home, 'gateway.stopped'))}</key>
+      <false/>
+    </dict>
+  </dict>
   <key>ThrottleInterval</key>
   <integer>${RESTART_SEC * 2}</integer>
   <key>ExitTimeOut</key>
@@ -432,8 +451,8 @@ ${args}
           ],
     warnings: [
       // The divergence, recorded rather than merely suffered.
-      `launchd non ha un equivalente di RestartPreventExitStatus: né un fallimento permanente (uscita ${EXIT_PERMANENT}: config o secret mancanti, root of trust che rifiuta) né uno stop chiesto (uscita ${EXIT_STOPPED}) lo tengono giù — KeepAlive lo riporta su, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')}.`,
-      `Quindi su macOS \`muffin gateway stop\` ferma *quel processo*, non il servizio: launchd ne avvia un altro. Per tenerlo giù serve il verbo di launchd — \`launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}\` — e per rimetterlo su il \`bootstrap\` qui sopra. Su Linux, che è la produzione, \`stop\` ferma davvero (RestartPreventExitStatus=${EXIT_STOPPED}).`,
+      `launchd non ha un equivalente di RestartPreventExitStatus: un fallimento permanente (uscita ${EXIT_PERMANENT}: config o secret mancanti, root of trust che rifiuta) non lo tiene giù — riparte, al più ogni ${RESTART_SEC * 2}s. Il motivo finisce in ${join(home, 'gateway.err')}.`,
+      `Uno stop **chiesto** invece lo tiene giù: \`muffin gateway stop\` scrive ${join(home, 'gateway.stopped')} e il KeepAlive di questo plist è condizionato a quel file (PathState). \`muffin gateway start\` lo toglie e lo riaccende. Un crash non scrive niente, quindi un crash torna su come prima.`,
       `launchd non ha watchdog: READY=1 e WATCHDOG=1 non hanno un ascoltatore su macOS, quindi qui la supervisione è "riavvia se muore", non "riavvia se si pianta".`,
     ],
   };
