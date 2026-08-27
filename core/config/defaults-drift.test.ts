@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { paths } from './config.js';
 import { sha256 } from '../rot/verify.js';
-import { diagnoseDefaultsDrift, readDefaultsRegistry, recordCopied, type Git } from './defaults-drift.js';
+import { diagnoseDefaultsDrift, isShippedDefault, readDefaultsRegistry, recordCopied, type Git } from './defaults-drift.js';
 
 /**
  * The property that matters most (the task brief's own words): a file the
@@ -507,5 +507,58 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     expect(calls).toEqual([]);
     rmSync(checkout, { recursive: true, force: true });
     rmSync(h, { recursive: true, force: true });
+  });
+});
+
+/**
+ * La spazzatura del sistema operativo dentro `defaults/` non è un default.
+ *
+ * Misurato sul checkout dell'owner il 27/08: un `.DS_Store` da 6148 byte in
+ * `defaults/`, non tracciato da Git, creato dal Finder mesi prima. `doctor` lo
+ * diagnosticava come default mancante e proponeva `muffin init` per
+ * «ricrearlo» — una riga permanente che non vuol dire niente, in mezzo a
+ * quelle che contano.
+ *
+ * La porta più pericolosa però è l'altra: `installTree` copia tutto ciò che
+ * trova, e uno dei tre alberi che copia è `defaults/rot/`, che è **sigillato**.
+ * Il test di `cli/init.test.ts` guarda quella.
+ */
+describe('defaults/ non spedisce spazzatura', () => {
+  it('un .DS_Store nel checkout non diventa un default mancante', () => {
+    const checkout = makeCheckout();
+    const h = home();
+    writeFileSync(join(checkout, 'defaults', '.DS_Store'), 'binaria del Finder\n');
+    writeFileSync(join(h, 'persona.md'), 'v1\n');
+    writeFileSync(join(h, 'voice.md'), 'v1 voice\n');
+    mkdirSync(join(h, 'rot'), { recursive: true });
+    writeFileSync(join(h, 'rot', 'identity.md'), 'v1 identity\n');
+
+    const drift = diagnoseDefaultsDrift(h, checkout);
+    expect(drift.find((d) => d.path === '.DS_Store')).toBeUndefined();
+    // E non ha ingoiato i file veri insieme a quello.
+    expect(drift.find((d) => d.path === 'persona.md')?.status).toBe('up-to-date');
+  });
+
+  it('nemmeno dentro una sottocartella, che è il caso del sigillo', () => {
+    const checkout = makeCheckout();
+    const h = home();
+    writeFileSync(join(checkout, 'defaults', 'rot', '.DS_Store'), 'binaria\n');
+    const drift = diagnoseDefaultsDrift(h, checkout);
+    expect(drift.find((d) => d.path === 'rot/.DS_Store')).toBeUndefined();
+  });
+
+  /**
+   * Elenco esplicito, non un'euristica sui punti iniziali: `defaults/` ha tutto
+   * il diritto di spedire un file che comincia per punto, e una regola larga
+   * che ne salta uno vero fallirebbe **in silenzio** — nella direzione
+   * peggiore, perché un default che non arriva non lo nota nessuno.
+   */
+  it('un file che comincia per punto ma è un default vero passa', () => {
+    expect(isShippedDefault('.muffinrc')).toBe(true);
+    expect(isShippedDefault('rot/policy.json')).toBe(true);
+    expect(isShippedDefault('.DS_Store')).toBe(false);
+    expect(isShippedDefault('rot/.DS_Store')).toBe(false);
+    expect(isShippedDefault('persona.md~')).toBe(false);
+    expect(isShippedDefault('.persona.md.swp')).toBe(false);
   });
 });
