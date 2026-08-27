@@ -409,3 +409,85 @@ describe('the reader a surface with only a database can use', () => {
     expect(s.get('turn-1')?.delivery).toBe('undeliverable');
   });
 });
+
+/**
+ * `undone_at`: la colonna di ritiro che rende vera la seconda metà di D11.
+ *
+ * Marca e basta — `content` resta ciò che il tool rispose davvero. La forma è
+ * quella che questo repo usa già per un fatto superato
+ * (`facts.superseded_by` + `expired_at`, `episodes.superseded_at`), e le regole
+ * che la reggono sono tre: si segna solo ciò che ha già risposto, il primo
+ * annullamento è quello vero, e su un database installato prima la colonna
+ * arriva senza migrazione.
+ */
+describe('una chiamata rimessa indietro dall’undo', () => {
+  const conCall = (s: TurnStore, callId = 'c1'): TurnStore => {
+    s.create(spec());
+    s.startToolCall('turn-1', { callId, tool: 'fs_write', capability: 'fs.write', rerunnable: true, args: {} });
+    return s;
+  };
+
+  it('si segna senza perdere cosa il tool aveva risposto', () => {
+    const s = conCall(store());
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes', isError: false, tier: 0 });
+    expect(s.markUndone('turn-1', 'c1', new Date('2026-08-27T10:00:00.000Z'))).toBe(true);
+    const row = s.recordedOutcomes('turn-1').get('c1');
+    expect(row?.content).toBe('wrote 4 bytes');
+    expect(row?.undoneAt).toBe('2026-08-27T10:00:00.000Z');
+    expect(s.undoneCalls('turn-1')).toEqual(new Set(['c1']));
+    expect(s.undoneTurns(['turn-1', 'turn-2'])).toEqual(new Set(['turn-1']));
+  });
+
+  it('non si segna una chiamata che non ha mai risposto', () => {
+    // Un intento aperto è «forse avvenuta», e `uncertainCalls` è il posto in
+    // cui quella incertezza si legge. Segnarla come annullata la
+    // trasformerebbe in «sicuramente non avvenuta», che è precisamente il
+    // giudizio che nessun record da questa parte può dare.
+    const s = conCall(store());
+    expect(s.markUndone('turn-1', 'c1')).toBe(false);
+    expect(s.undoneCalls('turn-1')).toEqual(new Set());
+    expect(s.uncertainCalls('turn-1').map((c) => c.callId)).toEqual(['c1']);
+  });
+
+  it('il primo annullamento è quello vero', () => {
+    const s = conCall(store());
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes', isError: false, tier: 0 });
+    expect(s.markUndone('turn-1', 'c1', new Date('2026-08-27T10:00:00.000Z'))).toBe(true);
+    expect(s.markUndone('turn-1', 'c1', new Date('2030-01-01T00:00:00.000Z'))).toBe(false);
+    expect(s.recordedOutcomes('turn-1').get('c1')?.undoneAt).toBe('2026-08-27T10:00:00.000Z');
+  });
+
+  it('una chiamata che questa tabella non conosce cambia zero righe, e lo dice', () => {
+    // `cli/undo.ts` scrive un journal di rete sotto `annulla-…`, che non è un
+    // turno vero: il comando deve poter distinguere «segnato» da «non c'era
+    // niente da segnare» invece di annunciare una riconciliazione mai avvenuta.
+    expect(store().markUndone('turno-che-non-esiste', 'c1')).toBe(false);
+  });
+
+  it('arriva su un database scritto prima che esistesse, senza migrazione', () => {
+    // Questo repo non ha un migration runner: ogni store fa il suo
+    // `db.exec(SCHEMA)` nel costruttore, e `CREATE TABLE IF NOT EXISTS` su una
+    // tabella che c'è già non aggiunge colonne. Senza `ensureColumn` la prima
+    // `markUndone` su un'installazione esistente esploderebbe con «no such
+    // column» — e nessun test su `:memory:` lo vedrebbe mai, perché lì la
+    // tabella nasce sempre nuova. Per questo la tabella qui è costruita a mano
+    // nella forma **precedente**.
+    const db = new DatabaseCtor(':memory:');
+    db.exec(`CREATE TABLE turn_tool_calls (
+      turn_id TEXT NOT NULL, call_id TEXT NOT NULL, tool TEXT NOT NULL,
+      capability TEXT NOT NULL, rerunnable INTEGER NOT NULL, args_digest TEXT NOT NULL,
+      started_at TEXT NOT NULL, ended_at TEXT, content TEXT, is_error INTEGER, tier INTEGER,
+      PRIMARY KEY (turn_id, call_id))`);
+    const colonne = (db.prepare(`PRAGMA table_info(turn_tool_calls)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(colonne, 'la tabella di partenza deve essere quella vecchia').not.toContain('undone_at');
+
+    const s = new TurnStore(db);
+    s.create(spec());
+    s.startToolCall('turn-1', { callId: 'c1', tool: 'fs_write', capability: 'fs.write', rerunnable: true, args: {} });
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes', isError: false, tier: 0 });
+    expect(s.markUndone('turn-1', 'c1')).toBe(true);
+    expect(s.undoneCalls('turn-1')).toEqual(new Set(['c1']));
+  });
+});
