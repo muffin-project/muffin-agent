@@ -485,3 +485,40 @@ describe('the request to stop reasoning is wired by endpoint too', () => {
     expect(providerOf('https://openrouter.ai.evil.tld/v1').reasoningEffort).toBe(false);
   });
 });
+
+describe('sys_inspect legge le fonti vere, non le sue', () => {
+  /**
+   * La cucitura, e qui è doppia: il tool deve essere costruito da
+   * `buildRuntime` con le fonti che solo lui conosce, **e** i due import
+   * dinamici (`cli/doctor.js`, `cli/update.js`) devono risolvere davvero. Un
+   * import dinamico rotto non lo vede il compilatore e non lo vede nessun test
+   * che passi fonti finte: fallisce la prima volta che l'owner chiede a Muffin
+   * come funziona, e non prima.
+   */
+  it('costruito dal runtime, nomina il modello che la config dice davvero', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-inspect-wire-'));
+    runInit({ home, apiKey: 'sk-or-v1-never-called' });
+    const runtime = buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-inspect-ws-')));
+    try {
+      const tool = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
+      expect(tool, 'sys_inspect deve essere registrato da buildRuntime').toBeTruthy();
+
+      const out = await tool!.handler({}, {
+        tenant: 'host',
+        principal: { kind: 'owner', connector: 'cli', externalId: 'test' },
+        turnId: 't', sessionId: 's', taint: () => 0, suspend: () => {}, replyChannel: null,
+      } as ToolContext);
+
+      // Il modello vero di questa home, non una costante.
+      expect(out.content).toContain(runtime.config.models.main);
+      // `runDoctor` ha girato davvero: la sezione dei check non è vuota.
+      expect(out.content).toContain('# Salute, misurata adesso');
+      expect(out.content).toMatch(/[✓!✗] /);
+      // `describeBuild` ha girato davvero: o uno SHA o la frase dichiarata.
+      expect(out.content).toMatch(/build: ([0-9a-f]{12}|sconosciuta)/);
+      expect(out.tier).toBe(0);
+    } finally {
+      runtime.close();
+    }
+  }, 30_000);
+});
