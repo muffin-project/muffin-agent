@@ -5,6 +5,7 @@ import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from 
 import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
+import type { UndoJournal } from '../core/undo/journal.js';
 import { SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
@@ -76,6 +77,24 @@ export type ToolContext = {
    * carry this — trust never rises, and a table is not a bath (ADR-0047).
    */
   taint: () => TrustTier;
+  /**
+   * **Il file già risolto** che questa chiamata sta per toccare, quando il
+   * kernel ha giudicato `draft` e il registro di undo ne ha appena preso la
+   * copia. Assente per ogni altro verdetto.
+   *
+   * Esiste perché il judge di questa slice ha trovato il difetto che il
+   * docstring di `resolveEffectPath` diceva di voler evitare: risolvevo il
+   * percorso una volta per la fotografia e l'handler lo risolveva **di nuovo**
+   * dal suo argomento grezzo, con in mezzo un commit SQLite e un `await`. Due
+   * risoluzioni della stessa cosa sono libere di essere in disaccordo, e il
+   * momento in cui contano è esattamente il momento in cui qualcuno sostituisce
+   * il file: la copia sarebbe dell'inode A e la scrittura andrebbe sull'inode B,
+   * quindi un `muffin undo` rimetterebbe il contenuto di A sopra B.
+   *
+   * Una sola risoluzione, e poi una sola `open` con `O_NOFOLLOW` su quel
+   * percorso. Non chiude la finestra per magia — la rende una finestra sola.
+   */
+  effectPath?: string;
   /**
    * Arm the runtime's suspension barrier.
    *
@@ -285,6 +304,26 @@ export type RegisteredTool = {
    * means answering the question rather than discovering the answer later.
    */
   keepResult?: boolean;
+  /**
+   * **Il file assoluto che questa chiamata sta per toccare**, per il registro
+   * di undo. Obbligatorio di fatto per ogni tool la cui capability il kernel
+   * giudica `draft`: senza, il ramo `draft` rifiuta.
+   *
+   * Non è ridondante con `resourceKind: 'path'`. Quello che il kernel riceve è
+   * l'argomento del modello — `note.md` — mentre il file che viene scritto è
+   * `resolveInScope(scope, 'note.md')`, cioè un percorso che solo il tool
+   * conosce, perché solo il tool conosce lo scope. Fotografare l'argomento
+   * grezzo vorrebbe dire copiare un file relativo alla cwd del processo e
+   * ripristinarlo lì: un undo che tocca il file sbagliato è peggio di nessun
+   * undo. Ricalcolare lo scope dal loop sarebbe una seconda copia di
+   * `resolveInScope`, libera di essere in disaccordo con la prima proprio nel
+   * caso in cui il disaccordo costa.
+   *
+   * Può lanciare: se il percorso non è risolvibile (fuori scope, symlink,
+   * negato dalla root of trust) non c'è niente da fotografare e non c'è niente
+   * da eseguire, e il messaggio del lancio è la ragione da mostrare.
+   */
+  resolveEffectPath?: (args: Record<string, unknown>) => string;
 };
 
 export type LoopDeps = {
@@ -366,6 +405,16 @@ export type LoopDeps = {
    * line is where a construction site learns both.
    */
   capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
+  /**
+   * Il registro di undo, cioè l'implementazione del verdetto `draft`.
+   *
+   * Assente = `draft` rifiuta. È il verso giusto in cui degradare: un runtime
+   * che si dimentica di passarlo perde la scrittura di file, non la
+   * reversibilità di una scrittura già avvenuta. Il verso opposto — eseguire
+   * senza copia — è esattamente ciò che il kernel aveva escluso decidendo
+   * `draft` invece di `allow`.
+   */
+  undo?: UndoJournal | undefined;
   /**
    * The turn ended. **Synchronous, and it must not block.**
    *
@@ -2158,6 +2207,13 @@ async function runTool(
   // was waiting for the other, so an empty allowlist permitted every public
   // host — verified against the assembled runtime before this line existed.
   const resource = resourceFor(deps.capabilities?.get(capability), args);
+  /**
+   * Il percorso risolto una volta sola dal ramo `draft`, per l'handler.
+   * `undefined` per ogni altro verdetto: nessun altro ha preso una copia, e
+   * un handler che leggesse un percorso qui senza che una copia esista starebbe
+   * eseguendo un `draft` travestito da `allow`.
+   */
+  let risolto: string | undefined;
 
   const decisionSpan = deps.tracer.start(
     'muffin.policy_decision',
@@ -2195,22 +2251,77 @@ async function runTool(
         content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
         isError: true,
       };
-    case 'draft':
-      // `draft` means "do it, but reversibly, and tell the owner". There is no
-      // undo journal yet, so the honest reading is `ask`: executing it as an
-      // allow was the kernel emitting a verdict nobody implemented, which is
-      // worse than refusing — the caller had already decided the write was
-      // reversible.
-      span.end({ status: 'error', error: 'draft_unavailable' });
-      emitToolEnd(true);
-      return {
-        type: 'tool_result',
-        toolCallId: call.id,
-        content:
-          `"${capability}" richiede una bozza revocabile e il registro di undo non esiste ancora. ` +
-          `Non eseguito: dillo all'owner invece di riprovare.`,
-        isError: true,
-      };
+    case 'draft': {
+      /**
+       * `draft` significa «fallo, ma in modo reversibile, e dillo all'owner».
+       * Per anni qui c'era un rifiuto, perché il registro di undo non esisteva:
+       * il kernel emetteva un verdetto che nessuno implementava, e `fs_write`
+       * veniva offerto al modello senza mai scrivere (M5-BIS D2/D3/D11).
+       *
+       * Adesso il verdetto ha un'implementazione, e la sua forma è una sola
+       * frase: **un checkpoint che non si può prendere è un effetto che non
+       * deve avvenire.** Ogni ramo qui sotto rifiuta *dichiarando cosa manca*,
+       * mai eseguendo lo stesso — perché eseguire senza copia è precisamente
+       * trasformare `draft` in `allow`, che è il difetto da cui si veniva.
+       */
+      if (!deps.undo) {
+        // Nessun journal cablato su questa superficie. Non è un caso di
+        // produzione — `buildRuntime` lo passa sempre — ma un default che
+        // esegue sarebbe la cosa peggiore che questo file possa fare.
+        span.end({ status: 'error', error: 'draft_unavailable' });
+        emitToolEnd(true);
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content:
+            `"${capability}" richiede una bozza revocabile e questo processo non ha un registro di undo. ` +
+            `Non eseguito: dillo all'owner invece di riprovare.`,
+          isError: true,
+        };
+      }
+      if (tool.resolveEffectPath === undefined) {
+        // Il journal sa fotografare un file, e solo il tool sa quale file è
+        // (vedi `resolveEffectPath`). Una capability `undoable` il cui tool non
+        // lo dichiara non è fotografabile, e va detto invece di eseguirla come
+        // se lo fosse: chi dichiara `undoable` promette che si torna indietro.
+        span.end({ status: 'error', error: 'draft_unsnapshottable' });
+        emitToolEnd(true);
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content:
+            `"${capability}" è dichiarata reversibile ma il suo tool non dice quale file toccherà, ` +
+            `quindi non se ne può salvare una copia. Non eseguito.`,
+          isError: true,
+        };
+      }
+      try {
+        // Prima di `recordIntent`, di proposito. Se la copia fallisce si esce
+        // di qui **senza** riga d'intento, cioè "mai partito" — lo stesso stato
+        // di un deny. L'ordine opposto lascerebbe un intento aperto per una
+        // chiamata che non è mai avvenuta, che è la bugia che il WAL esiste
+        // per non dire. Una copia presa e poi un intento fallito lascia invece
+        // una copia inutilizzata: rumore, non falsità.
+        // Una sola risoluzione, e il suo risultato viaggia con la chiamata:
+        // l'handler la riusa invece di rifarla (vedi `ToolContext.effectPath`).
+        risolto = tool.resolveEffectPath(args);
+        deps.undo.take(ctx.turnId, { callId: call.id, capability, path: risolto });
+      } catch (error) {
+        span.end({ status: 'error', error: 'draft_snapshot_failed' });
+        emitToolEnd(true);
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content:
+            `Non ho potuto salvare una copia di quel file prima di modificarlo ` +
+            `(${error instanceof Error ? error.message : String(error)}). Non eseguito: senza copia non si torna indietro.`,
+          isError: true,
+        };
+      }
+      void 0;
+      span.setAttributes({ 'muffin.policy.undo_window_s': decision.undo.windowSeconds });
+      break; // fotografato: si esegue, come 'allow'
+    }
     case 'ask': {
       const request: ApprovalRequest = {
         capability,
@@ -2302,7 +2413,10 @@ async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
-    const outcome = await tool.handler(args, ctx);
+    const outcome = await tool.handler(
+      args,
+      risolto === undefined ? ctx : { ...ctx, effectPath: risolto },
+    );
     // Unconditional. The `!== undefined` guard that used to stand here was the
     // whole defect: it turned "this tool said nothing about provenance" into
     // "this tool brought nothing in". `raiseTaint` only ever raises, so a tool

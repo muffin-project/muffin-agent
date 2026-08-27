@@ -170,7 +170,11 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'D1',
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
   ),
-  verde('D2', 'file write: asking to write a file gets an honest refusal, not a silent no-op'),
+  // Riscritto (slice/undo-journal): asseriva che il file NON atterrasse, che
+  // era vero e non era la domanda della riga. `draft` senza registro di undo
+  // non è «in sicurezza», è «non c'è». Ora prova le due metà: il file c'è, e
+  // `muffin undo` lo toglie.
+  verde('D2', 'file write: the model writes a real file, and the copy taken first makes it revertible'),
   // New (slice/egress-params, mandato inv. 7 / audit P04-1): the row's own
   // BLOCKER text said "solo scenario mancante" — the mechanism (allowlist,
   // redirect recheck, SSRF floor) was already `impl solida`. This scenario is
@@ -208,20 +212,15 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'D9',
     'skills: a fresh install already knows how to do something, the model activates a skill and gets its body, and a skill description that fakes a fence close loses the attempt',
   ),
-  rosso(
-    'D3',
-    'undo: a file modification the model made can be reverted by the owner',
-    'no undo journal exists (M5-BIS §1) — fs.write only ever reaches the kernel\'s `draft` verdict, ' +
-      'which agent/loop.ts refuses outright, so there has never been a modification for an undo path ' +
-      'to revert; "modello di reversibilità" is still an open owner decision per STATE.md, not yet a slice',
-    'M5-BIS §1 (decisione owner aperta: modello di reversibilità)',
-    // The scenario's own thrown message when `muffin undo` is still an
-    // unknown command (cli/main.ts:237-238, exit 78) — not the CLI's raw
-    // stderr, the assertion built on top of it. The day `undo` stops being
-    // unknown, this stops matching and the scenario is a real green, which is
-    // exactly the promotion signal.
-    /muffin undo.*non esiste ancora/,
-  ),
+  // Promosso (slice/undo-journal). Era atteso-rosso con la ragione giusta —
+  // non c'era registro, e `draft` era rifiutato da `agent/loop.ts`, quindi non
+  // esisteva nemmeno una modifica da disfare. Ora esistono entrambi, e lo
+  // scenario è stato riscritto insieme alla promozione: controllare che
+  // `muffin undo` non sia più un comando sconosciuto era la domanda giusta
+  // finché la risposta era «non esiste», ed è la domanda sbagliata il giorno
+  // dopo. D2 copre la creazione (undo = togliere), questo la modifica
+  // (undo = rimettere il contenuto di prima).
+  verde('D3', 'undo: a file the model overwrote goes back to what it said before'),
   // Promoted (this slice): the reason this carried (`slice/taint-in-ingresso`
   // still open) went stale the moment that slice merged (2026-08-15) and
   // its judge round 2 closed the failure-path gap too (PR #28, STATE.md
