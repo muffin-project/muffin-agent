@@ -2001,22 +2001,22 @@
   },
   "core/sandbox/executor.ts:117": {
     "path": "core/sandbox/executor.ts",
-    "line": 378,
+    "line": 409,
     "testo": "filesystem: {"
   },
   "core/sandbox/executor.ts:118": {
     "path": "core/sandbox/executor.ts",
-    "line": 379,
+    "line": 410,
     "testo": "denyRead: [...this.guards.denyRead],"
   },
   "core/sandbox/executor.ts:63": {
     "path": "core/sandbox/executor.ts",
-    "line": 134,
+    "line": 165,
     "testo": "export class SandboxExecutor {"
   },
   "core/sandbox/executor.ts:75": {
     "path": "core/sandbox/executor.ts",
-    "line": 146,
+    "line": 177,
     "testo": "status(): SandboxProbe {"
   },
   "core/sandbox/probe.ts:31": {
@@ -2346,17 +2346,17 @@
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
-    "line": 373,
+    "line": 404,
     "testo": "// v1 skips the optional apply-seccomp layer: two open bugs break it on"
   },
   "executor.ts:114": {
     "path": "core/sandbox/executor.ts",
-    "line": 375,
+    "line": 406,
     "testo": "// Declared limit: Unix-socket hardening is off on Linux."
   },
   "executor.ts:168": {
     "path": "core/sandbox/executor.ts",
-    "line": 429,
+    "line": 460,
     "testo": "private childEnv(srtEnv: NodeJS.ProcessEnv, scratch: string): NodeJS.ProcessEnv {"
   },
   "extract.ts:187": {
@@ -2631,12 +2631,12 @@
   },
   "probe.ts:129": {
     "path": "core/sandbox/probe.ts",
-    "line": 311,
+    "line": 325,
     "testo": "function probeBubblewrap(): SandboxProbe {"
   },
   "probe.ts:130": {
     "path": "core/sandbox/probe.ts",
-    "line": 312,
+    "line": 326,
     "testo": "if (userInfo().uid === 0) {"
   },
   "probe.ts:61": {
