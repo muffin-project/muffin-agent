@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
+import { styleFor } from './ui.js';
 import { cmdUndo } from './undo.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -271,12 +272,16 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
-    case 'model':
+    case 'model': {
+      const style = styleFor(process.stdout);
+      process.stdout.write(`${style.header('muffin model')}\n`);
       return cmdModel(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`) });
+    }
     case 'search':
       // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
       // questa pigrizia, `muffin search` da solo si bloccherebbe su un
       // terminale in attesa di una chiave che nessuno sta per dare.
+      process.stdout.write(`${styleFor(process.stdout).header('muffin search')}\n`);
       return cmdSearch(paths().home, rest, {
         out: (l) => process.stdout.write(`${l}\n`),
         readKey: () => {
@@ -510,13 +515,39 @@ async function cmdInit(argv: string[]): Promise<number> {
   // o approvazioni. Fail closed, e il messaggio nomina **solo la variabile**:
   // mai il valore, mai la lunghezza, mai un prefisso.
   if (process.env['MUFFIN_API_KEY'] !== undefined) {
+    /**
+     * Si rifiuta **la sorgente**, non il comando.
+     *
+     * La distinzione e' stata misurata sull'installazione dell'owner il
+     * 27/08: la chiave era gia' registrata e valida — `doctor` diceva `✓ api
+     * key secret://provider_api_key (persistent), 73 chars` — la variabile
+     * d'ambiente era un residuo che non c'entrava con l'operazione richiesta, e
+     * `init` si e' rifiutato di fare **qualunque cosa**, uscendo 78.
+     *
+     * Fail-closed sulla sorgente resta intero: quel valore non viene letto ne'
+     * qui ne' altrove, ed e' l'unica cosa che la decisione dell'owner del 18/08
+     * chiedeva. Rifiutare anche il comando non aggiungeva nessuna garanzia —
+     * aggiungeva un'installazione che non si puo' riparare finche' qualcuno non
+     * si ricorda di una variabile esportata mesi prima.
+     *
+     * L'avvertimento resta forte e resta primo, perche' una variabile
+     * d'ambiente con dentro una chiave e' comunque una chiave da ruotare.
+     */
+    const gia = locateSecret('secret://provider_api_key', values.local === undefined ? paths().home : home);
     process.stderr.write(
       `MUFFIN_API_KEY non e piu una sorgente supportata: l'environment e un vettore generico, e un segreto non ci passa.\n` +
-        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
-        `  Oppure passala a init:  echo -n "$KEY" | muffin init\n` +
-        `  Poi togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
+        `  Togli la variabile dall'ambiente (e dalla shell rc, se e li) e ruota la chiave se e stata esposta.\n`,
     );
-    return 78;
+    if (gia === null) {
+      process.stderr.write(
+        `  Registrala una volta:  echo -n "$KEY" | muffin secret set provider_api_key --persist\n` +
+          `  Oppure passala a init:  echo -n "$KEY" | muffin init\n`,
+      );
+      return 78;
+    }
+    // Una chiave registrata c'e' gia': il comando non ha bisogno di quella
+    // variabile per fare il suo lavoro, e fermarsi qui non protegge niente.
+    process.stderr.write(`  (una chiave registrata c'e' gia' in ${gia.path} — proseguo senza guardare la variabile)\n`);
   }
   // stdin quando non e un terminale: il percorso di script e CI, lo stesso che
   // `secret set` usa da sempre.
@@ -758,7 +789,16 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     allowPositionals: false,
   });
   const report = await runDoctor(paths().home, values.online ? { online: true } : {});
-  process.stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : `${formatReport(report)}\n`);
+  if (values.json) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    const style = styleFor(process.stdout);
+    // L'intestazione dice **dove comincia questo comando**: senza, l'output di
+    // `doctor` e quello del comando prima sono un blocco solo, e in uno
+    // scrollback lungo non c'e' modo di dire dove finisce uno e comincia
+    // l'altro. Mai in `--json`, che ha un solo lettore e non e' umano.
+    process.stdout.write(`${style.header('muffin doctor', paths().home)}\n${formatReport(report, style)}\n`);
+  }
   return report.exitCode;
 }
 
