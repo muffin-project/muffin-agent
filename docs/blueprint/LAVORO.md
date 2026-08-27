@@ -5,8 +5,9 @@ Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect. Non da questa lista.
 
 **Aperto per l'owner:** token bot Telegram; billing CI; **promozione `dev` →
-`main`** — l'installazione viva gira su `main`, 44 commit indietro, e `update`
-legge `origin/main`: dice «già aggiornato» mentre l'agente non ha #133–#149.
+`main`, PR #163 pronta in draft** — è l'unica cosa che PERCORSO §0 lascia aperta
+(«resta l'installazione reale»). Nessuna migrazione nuova: `dev` è a schema 3
+come il DB vivo, quindi la promozione non tocca i dati. Non la mergio io.
 
 **CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
 Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
