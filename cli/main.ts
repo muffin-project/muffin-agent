@@ -41,6 +41,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cmdUpdate, describeBuild } from './update.js';
 import { cmdConfig } from './config.js';
+import { cmdModel } from './model.js';
 import type { TrustTier } from '../core/policy/types.js';
 import {
   loadConfig,
@@ -86,6 +87,10 @@ alias italiani sui nomi comando: memoria=memory · lavori=jobs · segreto=secret
                                 mai su una pipe)
                                 [--debug] giri, token, millisecondi e stop
                                 reason invece dei soli passi (a caldo: /debug)
+  muffin model [<corsia>] <slug> scegli il modello: main (default), light o
+                                embed. Senza argomenti mostra i tre e cosa
+                                costano; --list [filtro] sfoglia il catalogo
+                                del provider. A caldo: /model
   muffin run "<obiettivo>"      un obiettivo, senza REPL, exit code parlante
                                 [--json] [--session ID] [--timeout S]
 
@@ -262,6 +267,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdInit(rest);
     case 'config':
       return cmdConfig(paths().home, rest);
+    case 'model':
+      return cmdModel(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`) });
     case 'doctor':
       return cmdDoctor(rest);
     case 'backup':

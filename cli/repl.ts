@@ -10,7 +10,8 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
-import { paths, saveConfig } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig } from '../core/config/config.js';
+import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
@@ -27,6 +28,7 @@ const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
 /spend   quanto hai speso questo mese e oggi
 /think   ragionamento: on | off | reset (senza argomenti lo mostra)
+/model   modello: [main|light|embed] <slug>, --list, o niente per vederli
 /debug   giri, token e millisecondi: on | off (da solo, inverte)
 /exit    esci (o Ctrl+D)`;
 
@@ -594,6 +596,16 @@ export async function runRepl(
         }
         if (line === '/session') {
           process.stderr.write(`${session.id}\n`);
+          continue;
+        }
+        if (line === '/model' || line.startsWith('/model ')) {
+          // Stessa funzione di `muffin model`, con la sola differenza che il
+          // REPL possiede il terminale: la riga di stato va tolta prima.
+          const args = line.slice('/model'.length).trim();
+          await cmdModel(home, args === '' ? [] : args.split(/\s+/), { out: (l) => status.line(l) });
+          // La config e' cambiata sotto i piedi del runtime gia' costruito.
+          runtime.config = loadConfig(home);
+          status.line('(il modello nuovo vale dal prossimo avvio: `/exit` e riapri)');
           continue;
         }
         if (line === '/debug' || line.startsWith('/debug ')) {
