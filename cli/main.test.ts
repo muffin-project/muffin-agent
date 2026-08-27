@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, chmodSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -684,12 +684,48 @@ function muffinTty(env: Record<string, string>, args: string[]): { code: number;
   return { code: r.status ?? -1, out: pulito };
 }
 
+/**
+ * `MUFFIN_LOCAL_RUNTIME_URL` puntato su una porta chiusa: senza, **cosa**
+ * questi test esercitano dipende da se chi li esegue ha ollama acceso, e con
+ * ollama acceso `init` fa una domanda in piu' prima della chiave. Misurato il
+ * 28/08/2026: e' esattamente cosi' che il blocco su Ctrl+D e' rimasto
+ * invisibile per settimane.
+ */
+const SENZA_RUNTIME_LOCALE = { MUFFIN_LOCAL_RUNTIME_URL: 'http://127.0.0.1:1/v1' };
+
+/**
+ * Un `/v1/models` che risponde, in un processo separato — vedi il commento nel
+ * test che lo usa per il perche' del processo separato.
+ *
+ * La porta la sceglie il figlio e la scrive su un file: chiederla al sistema
+ * qui e poi passarla al figlio lascerebbe una finestra in cui qualcun altro se
+ * la prende.
+ */
+function runtimeFinto(): { porta: number; ferma: () => void } {
+  const marca = join(mkdtempSync(join(tmpdir(), 'muffin-runtime-finto-')), 'porta');
+  const codice =
+    `const {createServer}=require('node:http');const {writeFileSync}=require('node:fs');` +
+    `const s=createServer((_q,r)=>{r.writeHead(200,{'content-type':'application/json'});` +
+    `r.end(JSON.stringify({data:[{id:'qwen3:8b'}]}))});` +
+    `s.listen(0,'127.0.0.1',()=>writeFileSync(${JSON.stringify(marca)},String(s.address().port)));`;
+  const figlio = spawn('node', ['-e', codice], { stdio: 'ignore' });
+  // Attesa sincrona: questo processo non puo' await-are, perche' subito dopo
+  // chiamera' `spawnSync` e bloccherebbe comunque.
+  const scadenza = Date.now() + 10_000;
+  while (!existsSync(marca) && Date.now() < scadenza) spawnSync('sleep', ['0.05']);
+  if (!existsSync(marca)) {
+    figlio.kill();
+    throw new Error('il runtime finto non e partito');
+  }
+  return { porta: Number(readFileSync(marca, 'utf8')), ferma: () => figlio.kill() };
+}
+
 describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
   it('chiede la chiave — la domanda esiste solo qui', () => {
     // Il ramo headless di sopra non la stampa mai. Se `cmdInit` smettesse di
     // chiedere, nessuno di quei test se ne accorgerebbe.
     const { dir, xdg } = scratchHome();
-    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE }, ['init']);
     expect(r.out).toContain('Chiave API');
   });
 
@@ -698,7 +734,7 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     // scritto — nemmeno le directory. `rl.question` non chiama il callback su
     // EOF, e la promise non si decideva.
     const { dir, xdg } = scratchHome();
-    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir }, ['init']);
+    const r = muffinTty({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg, HOME: dir, ...SENZA_RUNTIME_LOCALE }, ['init']);
 
     expect(r.out).not.toContain('unsettled top-level await');
     expect(r.code).not.toBe(13);
@@ -708,5 +744,51 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain('api key');
     expect(existsSync(join(dir, 'config.json'))).toBe(true);
+  });
+
+  /**
+   * **Un EOF vale una volta sola per il processo, non per la domanda.**
+   *
+   * Con un runtime locale acceso `init` fa DUE domande: prima «uso il runtime
+   * locale?», poi la chiave. Il Ctrl+D veniva consumato dalla prima; la
+   * seconda apriva una nuova interfaccia readline sullo stesso stdin, da cui
+   * non sarebbe mai piu' arrivato ne' un dato ne' un `close` — e `init`
+   * restava appeso **per sempre**. Misurato il 28/08/2026 sulla macchina
+   * dell'owner: 60s di timeout, exit -1, con ollama in esecuzione.
+   *
+   * In raw mode readline sintetizza l'EOF dal carattere `^D` e il tty non
+   * emette mai `end`, quindi lo stream non lo sa: `readableEnded` resta
+   * `false`. Chi deve ricordarlo e' `cli/prompt.ts`.
+   *
+   * Il finto runtime e' un server HTTP vero sul loopback, perche' il difetto
+   * vive nel ramo che esiste **solo** quando la sonda trova qualcosa.
+   */
+  it('con un runtime locale acceso, un solo Ctrl+D chiude comunque — non resta appeso', () => {
+    // Il finto runtime gira in un **altro processo**, e non e' un dettaglio:
+    // `muffinTty` usa `spawnSync`, che blocca l'event loop di questo processo
+    // finche' il comando non finisce. Un server aperto qui dentro non
+    // accetterebbe mai la connessione della sonda, e il test passerebbe
+    // provando il ramo sbagliato — quello a una domanda sola.
+    const { porta, ferma } = runtimeFinto();
+    try {
+      const { dir, xdg } = scratchHome();
+      const r = muffinTty(
+        {
+          MUFFIN_HOME: dir,
+          XDG_CONFIG_HOME: xdg,
+          HOME: dir,
+          MUFFIN_LOCAL_RUNTIME_URL: `http://127.0.0.1:${String(porta)}/v1`,
+        },
+        ['init'],
+      );
+      // La domanda in piu' c'e' davvero: senza, questo test non proverebbe
+      // niente sul caso a due domande.
+      expect(r.out).toContain('runtime locale');
+      // E il comando e' finito. -1 significa ucciso dal timeout, cioe' appeso.
+      expect(r.code).not.toBe(-1);
+      expect(existsSync(join(dir, 'config.json'))).toBe(true);
+    } finally {
+      ferma();
+    }
   });
 });

@@ -73,6 +73,24 @@ const MAX_REDIRECTS = 5;
 const MAX_BODY_CHARS = 50_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
+/**
+ * Uno stato HTTP che un secondo tentativo puo' davvero cambiare.
+ *
+ * **429** e' il caso per cui il retry esiste: dice letteralmente «riprova piu'
+ * tardi». **5xx** e' il server che sta avendo un problema suo, non la
+ * richiesta. Tutto il resto — 401, 403, 404, 422 — e' una risposta *sulla
+ * richiesta*, e ripeterla identica ottiene identicamente la stessa cosa:
+ * riprovarla e' tempo speso per arrivare allo stesso errore tre volte, con in
+ * piu' il rischio di far arrabbiare un rate limiter che ci aveva gia' detto
+ * di no.
+ *
+ * `408` e `425` stanno dentro per la stessa ragione del 429: sono il server
+ * che chiede di rifare, non che rifiuta.
+ */
+function isTransient(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 /** Injectable for tests: the logic under test is ours, not undici's. */
 export type HttpDeps = {
   fetchFn?: typeof fetch;
@@ -143,7 +161,17 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          return { content: `fetch failed for ${current.hostname}: ${detail}`, isError: true, tier: 0 };
+          // Transitorio: DNS che non risolve per un attimo, connessione che
+          // cade, timeout. Nessuna di queste dice niente sulla richiesta —
+          // dicono qualcosa sulla rete, ed e' esattamente il caso che un
+          // secondo tentativo risolve. `sys.http.get` e' `rerunnable`, quindi
+          // il loop puo' davvero riprovare (`eseguiConRitentativi`).
+          return {
+            content: `fetch failed for ${current.hostname}: ${detail}`,
+            isError: true,
+            retryable: true,
+            tier: 0,
+          };
         }
 
         if (response.status >= 300 && response.status < 400) {
@@ -180,7 +208,7 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
         const fenced = fence('web', body, `GET ${current.href} → ${response.status}`);
         return {
           content: `${response.status} ${contentType ?? ''}\n${fenced.block}`,
-          ...(response.ok ? {} : { isError: true }),
+          ...(response.ok ? {} : { isError: true, ...(isTransient(response.status) ? { retryable: true } : {}) }),
           tier: 3,
         };
       }

@@ -14,7 +14,20 @@ import {
   type TelegramDeliveryPlanPart,
   TelegramDeliveryStore,
 } from './delivery.js';
+import { join } from 'node:path';
 import { attachmentOf, downloadToVault, type MediaSpec } from './media.js';
+import { loadImage } from '../../agent/images.js';
+import type { ImageBlock } from '../../agent/providers/types.js';
+
+/**
+ * Cosa e' arrivato con un allegato: la riga da raccontare al modello e, quando
+ * i byte sono un'immagine, i byte stessi.
+ *
+ * Due campi e non due funzioni perche' l'informazione nasce nello stesso posto
+ * — il download piu' il tentativo di indicizzazione — e separarli vorrebbe dire
+ * leggere il file due volte per rispondere a due meta' della stessa domanda.
+ */
+type Arrivo = { line: string; image?: ImageBlock };
 import { startPresence } from './presence.js';
 import { startProgress } from './progress.js';
 import { renderForTelegram } from './render.js';
@@ -674,7 +687,13 @@ export class TelegramConnector {
         // One session per chat, so a conversation continues where it left off
         // and two chats never share one.
         session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
-        text: composeTurnText(incoming, arrival),
+        text: composeTurnText(incoming, arrival?.line ?? null),
+        // I byte dell'immagine viaggiano nello stesso messaggio della domanda.
+        // Non serve alzare niente a mano: il turno parte gia' a
+        // `max(tierOf(principal), contentTaint)` per la riga qui sotto, e
+        // l'immagine e' contenuto dello stesso mittente — un'immagine
+        // inoltrata eredita `FORWARD_TIER` come il testo che la accompagna.
+        ...(arrival?.image ? { images: [arrival.image] } : {}),
         // M5-BIS B16: a forwarded message's content is not the principal's own
         // words, so the turn cannot be allowed to start at the principal's
         // tier alone. `agent/loop.ts` takes `max(tierOf(principal),
@@ -887,13 +906,13 @@ export class TelegramConnector {
     spec: MediaSpec,
     tenantId: string,
     tier: TrustTier,
-  ): Promise<string> {
+  ): Promise<Arrivo> {
     // The name the sender chose is not interpolated here: `composeTurnText`
     // already adds it as its own fenced block whenever `incoming.attachment`
     // is set, unconditionally. Saying it again here as free text would be the
     // exact leak M5-BIS B16 exists to close — attacker-chosen bytes copied
     // straight into the prompt instead of entering as typed, fenced data.
-    if (!this.deps.vault) return '[allegato ricevuto ma il vault non è configurato]';
+    if (!this.deps.vault) return { line: '[allegato ricevuto ma il vault non è configurato]' };
     try {
       const saved = await downloadToVault(
         this.deps.api,
@@ -908,17 +927,35 @@ export class TelegramConnector {
       const report = await this.deps.vault.reindexPath(tenantId, saved.vaultPath, tier);
       const skipped = report.skipped.find((s) => s.path === saved.vaultPath);
       if (skipped) {
-        return `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`;
+        // Il vault non ha un estrattore per questi byte. Prima di dire «non
+        // indicizzato» e chiudere lì, si guarda se sono **un'immagine**: quelle
+        // non si indicizzano come testo e non devono, si mostrano.
+        //
+        // La decisione la prendono i byte (`loadImage` fa lo sniff), non
+        // `spec.kind` e non l'estensione: una foto mandata come documento è
+        // un'immagine lo stesso, e su Telegram il nome del file lo sceglie il
+        // mittente.
+        const assoluto = join(this.deps.vault.root, saved.vaultPath);
+        const immagine = loadImage(assoluto);
+        if (immagine.ok) {
+          return {
+            line: `[immagine ricevuta: \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) — te la sto mostrando in questo messaggio]`,
+            image: immagine.block,
+          };
+        }
+        return {
+          line: `[ricevuto \`${saved.vaultPath}\` (${Math.round(saved.bytes / 1024)}KB) ma non indicizzato: ${skipped.why}]`,
+        };
       }
       const document = report.documents.find((d) => d.path === saved.vaultPath);
       if (document) {
-        return `[documento acquisito]\n${document.outline}`;
+        return { line: `[documento acquisito]\n${document.outline}` };
       }
-      return `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]`;
+      return { line: `[ricevuto e indicizzato: \`${saved.vaultPath}\`, ${Math.round(saved.bytes / 1024)}KB]` };
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       (this.deps.log ?? (() => {}))(`telegram: allegato non scaricato — ${why}`);
-      return `[allegato NON ricevuto: ${why}. Dillo, non fingere di averlo.]`;
+      return { line: `[allegato NON ricevuto: ${why}. Dillo, non fingere di averlo.]` };
     }
   }
 
