@@ -1481,7 +1481,7 @@
   },
   "core/memory/extract.ts:150": {
     "path": "core/memory/extract.ts",
-    "line": 275,
+    "line": 306,
     "testo": "{"
   },
   "core/memory/ingest-lock.ts:58": {
@@ -2356,12 +2356,12 @@
   },
   "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 350,
+    "line": 381,
     "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
   "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 355,
+    "line": 386,
     "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
