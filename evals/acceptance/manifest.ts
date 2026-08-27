@@ -198,6 +198,16 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'D7',
     'web search: the query now answers to the kernel — after tainted content, a search asks the owner and the backend is never called unapproved',
   ),
+  // Nuovo (slice/skill-di-serie). La riga D9 chiedeva «la prova stretta al
+  // profilo richiesto (injection/fake-close + production wiring)». Il recinto
+  // era già provato in unità; il cablaggio no, e non era provabile: nessuna
+  // skill veniva spedita, quindi su un'installazione vera la sezione non
+  // esisteva proprio e `skill_read` non aveva un oggetto. Costruire una skill
+  // dentro lo scenario avrebbe misurato lo scenario.
+  verde(
+    'D9',
+    'skills: a fresh install already knows how to do something, the model activates a skill and gets its body, and a skill description that fakes a fence close loses the attempt',
+  ),
   rosso(
     'D3',
     'undo: a file modification the model made can be reverted by the owner',
