@@ -34,6 +34,7 @@ import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRun,
+  cmdGatewayStart,
   cmdGatewayStatus,
   cmdGatewayStop,
   GATEWAY_USAGE,
@@ -1074,6 +1075,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   if (sub === 'run') return cmdGatewayRun(home);
   if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
   if (sub === 'stop') return cmdGatewayStop(home);
+  if (sub === 'start') return cmdGatewayStart(home);
   if (sub === 'install') return cmdGatewayInstall(home, rest);
   process.stderr.write(GATEWAY_USAGE);
   return 78;
