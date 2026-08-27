@@ -19,16 +19,10 @@ Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
 Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
 
 **La corsia della memoria era morta dal 25/08**, dal cambio modello a
-`qwen/qwen3.8-27b`: il tetto di 1500 token speso a ragionare senza scrivere un
-carattere di JSON. `facts` 16 → **30** dopo #148/#153/#155. Gli strumenti
-mentivano mentre succedeva: `doctor` verde su due giri morti su tre (#147),
-`vector index in sync` con l'embedder giù (#149), il rerank senza costo nelle
-tracce (#165).
-
-**Il no-op aveva un prezzo** (#167): `thinking:"off"` era dichiarato e non
-portato, e costava reasoning fatturato. Ora l'adapter lo porta e le tre corsie
-JSON lo chiedono — **204 → 85** token, misurato vivo. `REASONING_HEADROOM`
-resta per Ollama/vLLM, che il campo non lo capiscono.
+`qwen/qwen3.8-27b`: 1500 token spesi a ragionare senza scrivere JSON. `facts`
+16 → **30** (#148/#153/#155), e gli strumenti mentivano mentre succedeva
+(#147, #149, #165). Da #167 `thinking:"off"` è portato davvero: **204 → 85**
+token. `REASONING_HEADROOM` resta per Ollama/vLLM, che il campo non capiscono.
 
 **Resta da fare, con le prove già in mano:**
 
@@ -48,15 +42,19 @@ meccanismo c'è da #138. Una concessione durevole contraddirebbe ADR-0003.
 
 **Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`).
 
-**Da non riperdere.** (a) `init` fa le domande di #117 **solo su TTY**, mai
-testato (pty con `script`). (b) E7: a «che modello usi?» non lo sa. (c)
-`inputSchema` non valida niente e `types.ts` promette il contrario. (d) Le
-ancore verificano solo il primo intervallo di `file:A-B,C-D`.
+**Da non riperdere.** (a) E7: a «che modello usi?» non lo sa. (b)
+`inputSchema` non valida niente e `types.ts` promette il contrario. (c) Le
+ancore verificano solo il primo intervallo di `file:A-B,C-D`. (d) Il ramo
+util-linux di `script` in `cli/main.test.ts` è scritto e mai eseguito: qui c'è
+solo il BSD, ed è Linux la produzione.
 
-**Install reale (#169).** `gateway install --start` accende il servizio in un
-comando, `loginctl enable-linger` compreso — era l'ultima riga da copiare, e
-quella che saltata uccide il gateway al logout settimane dopo. `init` continua
-a offrire solo `--write`: accendere un servizio resta una decisione digitata.
+**Install reale.** `gateway install --start` (#169) accende il servizio in un
+comando, `loginctl enable-linger` compreso — la riga che saltata uccide il
+gateway al logout. `init` offre solo `--write`: accenderlo resta una decisione
+digitata. Da #172 le domande di `init` girano sotto un pty vero nei test, ed è
+così che si è visto che **Ctrl+D alla prima domanda usciva 13 senza scrivere
+niente**: ora è una risposta come Invio. Da #171 la suite fallisce se un test
+tocca la home vera — è successo due volte.
 
 **Design da non riscoprire:** THESIS §5 e ADR-0027 (le lezioni di Claude si
 trasferiscono SELETTIVAMENTE: non è lo stesso prodotto).
