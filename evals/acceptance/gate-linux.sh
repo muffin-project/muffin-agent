@@ -96,8 +96,10 @@ docker run --rm \
     chown -R nobody /install-check "$IHOME"
     IAS="runuser -u nobody -- env HOME=$IHOME"
     echo "=== INSTALL.SH (non-root, da zero) ==="
+    # >>> BLOCCO INSTALL PROVATO DA gate-linux.test.ts
     $IAS bash /install-check/install.sh < /dev/null
     $IAS env PATH="$IHOME/.local/bin:/usr/local/bin:/usr/bin:/bin" muffin --version
+    # <<< BLOCCO INSTALL PROVATO DA gate-linux.test.ts
 
     npm ci --no-audit --no-fund >/dev/null
     # Non-root, come in CI: il probe del sandbox RIFIUTA di rispondere da root
