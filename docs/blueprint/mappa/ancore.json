@@ -1786,12 +1786,12 @@
   },
   "core/memory/vectors.ts:106": {
     "path": "core/memory/vectors.ts",
-    "line": 144,
+    "line": 203,
     "testo": "async index("
   },
   "core/memory/vectors.ts:151": {
     "path": "core/memory/vectors.ts",
-    "line": 189,
+    "line": 248,
     "testo": "async search("
   },
   "core/memory/vectors.ts:18": {
@@ -1801,7 +1801,7 @@
   },
   "core/memory/vectors.ts:212": {
     "path": "core/memory/vectors.ts",
-    "line": 250,
+    "line": 309,
     "testo": "indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {"
   },
   "core/net/egress.ts:41": {
@@ -2961,7 +2961,7 @@
   },
   "vectors.ts:67": {
     "path": "core/memory/vectors.ts",
-    "line": 105,
+    "line": 163,
     "testo": "private migrateUnpartitioned(): void {"
   },
   "verify.ts:120": {

@@ -399,32 +399,63 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
         // verde, «55 chunks, 55 vectors, in sync». Tutto vero e tutto
         // fuorviante: la metà semantica del recall era spenta da due giorni.
         //
-        // Locale e a tempo, non dietro `--online`: quel flag copre la
-        // raggiungibilità di un servizio esterno, questa è una porta su
-        // 127.0.0.1 che rifiuta subito quando è chiusa. Il tetto serve per il
-        // caso opposto — un server che accetta la connessione e non risponde —
+        // A tempo e non dietro `--online`. Sul default — Ollama — è una porta
+        // su 127.0.0.1 che rifiuta subito quando è chiusa, e il tetto serve per
+        // il caso opposto: un server che accetta la connessione e non risponde,
         // perché `doctor` è ciò che si lancia quando la macchina è già strana.
+        // Con `openai-compat` in config non è più una porta locale: la sonda
+        // diventa una chiamata autenticata a terzi, un embedding della parola
+        // «probe» e nulla della memoria dell'owner. È la config a deciderlo, e
+        // resta da decidere se meriti il flag.
+        //
         // L'embedder configurato, costruito qui e non assunto: se la config
         // dice `openai-compat` e `doctor` interroga Ollama, dice «giù» su una
         // macchina sana e «su» su una rotta.
         let configurato: Embedder | undefined;
+        let configRotta: string | undefined;
         try {
           configurato = config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
-        } catch {
+        } catch (error) {
           // Una config di embedder incompleta non deve far cadere `doctor`: è
-          // proprio il momento in cui serve. Il ramo sotto la segnala.
-          configurato = undefined;
+          // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
+          // `catch {}` che lasciava `configurato = undefined`, e `undefined`
+          // faceva cadere la sonda sul default Ollama. Su una macchina con
+          // Ollama vivo la sonda rispondeva e `doctor` diceva «1 chunks, 1
+          // vectors, in sync» — verde — mentre `agent/runtime.ts:352`
+          // inghiottiva lo stesso errore e girava con `vectors === undefined`.
+          // Cioè esattamente lo stato da cui nasce questa slice, ricreato dalla
+          // manopola nuova per un campo dimenticato in config.json. Misurato.
+          //
+          // Il messaggio di `makeEmbedder` esiste apposta per nominare i campi
+          // che mancano: qui è l'unico posto che lo legge.
+          configRotta = error instanceof Error ? error.message : String(error);
         }
-        const embedderError = await probeEmbedder(options.embedderProbe, configurato);
-        if (embedderError === null) {
-          ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
-        } else {
-          warn(
+        if (configRotta !== undefined) {
+          fail(
             'vector index',
-            `${chunks} chunks, ${vectors} vectors coerenti, ma l'embedder non risponde (${embedderError}): ` +
-              'niente di nuovo viene indicizzato e il recall è solo testuale',
-            'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL',
+            `${chunks} chunks, ${vectors} vectors coerenti, ma config.embedder non è costruibile ` +
+              `(${configRotta}): niente viene indicizzato e il recall è solo testuale`,
+            'correggi config.embedder',
           );
+        } else {
+          const embedderError = await probeEmbedder(options.embedderProbe, configurato);
+          if (embedderError === null) {
+            ok('vector index', `${chunks} chunks, ${vectors} vectors, in sync`);
+          } else {
+            // Il rimedio segue la config, non l'abitudine. Dire «avvia ollama»
+            // a chi ha configurato `openai-compat` manda a riparare la cosa
+            // sbagliata, e la seconda metà era pure inerte: `makeEmbedder`
+            // lascia vincere `config.embedder.baseUrl` su `OLLAMA_URL`.
+            const remoto = config?.embedder?.kind === 'openai-compat';
+            warn(
+              'vector index',
+              `${chunks} chunks, ${vectors} vectors coerenti, ma l'embedder non risponde (${embedderError}): ` +
+                'niente di nuovo viene indicizzato e il recall è solo testuale',
+              remoto
+                ? "controlla l'endpoint e la chiave in config.embedder (baseUrl, apiKeyRef)"
+                : 'avvia ollama (`ollama serve`) oppure indica un embedder raggiungibile con OLLAMA_URL',
+            );
+          }
         }
       }
     }
