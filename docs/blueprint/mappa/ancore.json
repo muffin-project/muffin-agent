@@ -396,7 +396,7 @@
   },
   "agent/providers/types.ts:107": {
     "path": "agent/providers/types.ts",
-    "line": 141,
+    "line": 169,
     "testo": "stream: boolean;"
   },
   "agent/runtime.ts:104": {
@@ -526,77 +526,77 @@
   },
   "agent/tools/fs.ts:105": {
     "path": "agent/tools/fs.ts",
-    "line": 105,
+    "line": 106,
     "testo": "* separately gated — off-allowlist above taint 1 is DENY, never ask\"*. True"
   },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
-    "line": 108,
+    "line": 109,
     "testo": "* read an injected file was still at taint 0 and the off-allowlist host came"
   },
   "agent/tools/fs.ts:123": {
     "path": "agent/tools/fs.ts",
-    "line": 123,
+    "line": 124,
     "testo": "* one legitimate direction is tightening (`core/policy/matrix.ts`)."
   },
   "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 315,
+    "line": 316,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:360": {
     "path": "agent/tools/fs.ts",
-    "line": 366,
+    "line": 367,
     "testo": "fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 486,
+    "line": 512,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
-    "line": 486,
+    "line": 512,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:62": {
     "path": "agent/tools/fs.ts",
-    "line": 62,
+    "line": 63,
     "testo": "* destination and wait for a tired yes. The whole chain closes at 2 and nowhere"
   },
   "agent/tools/fs.ts:65": {
     "path": "agent/tools/fs.ts",
-    "line": 65,
+    "line": 66,
     "testo": "* leaves nothing to say about something genuinely worse — and it would put the"
   },
   "agent/tools/fs.ts:69": {
     "path": "agent/tools/fs.ts",
-    "line": 69,
+    "line": 70,
     "testo": "* tempting one: it is a rule you evade by *moving a file*, and it buys less"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
-    "line": 70,
+    "line": 71,
     "testo": "* than it looks like. `skill.read` already gives the readable parts of the"
   },
   "agent/tools/fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 78,
+    "line": 79,
     "testo": "* already draws, one level up, and it would still launder a poisoned file the"
   },
   "agent/tools/fs.ts:79": {
     "path": "agent/tools/fs.ts",
-    "line": 79,
+    "line": 80,
     "testo": "* moment anything wrote it inside the home."
   },
   "agent/tools/fs.ts:89": {
     "path": "agent/tools/fs.ts",
-    "line": 89,
+    "line": 90,
     "testo": "* `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —"
   },
   "agent/tools/fs.ts:99": {
     "path": "agent/tools/fs.ts",
-    "line": 99,
+    "line": 100,
     "testo": "* every read taints the turn to `DISK_TIER`, which is what a turn that has"
   },
   "agent/tools/http.ts:116": {
@@ -2376,7 +2376,7 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 257,
+    "line": 258,
     "testo": "const parent = dirname(current);"
   },
   "fs.ts:7": {
@@ -2386,12 +2386,12 @@
   },
   "fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 78,
+    "line": 79,
     "testo": "* already draws, one level up, and it would still launder a poisoned file the"
   },
   "fs.ts:88": {
     "path": "agent/tools/fs.ts",
-    "line": 88,
+    "line": 89,
     "testo": "/**"
   },
   "guards.ts:41": {
