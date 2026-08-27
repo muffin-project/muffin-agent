@@ -1228,3 +1228,32 @@ at all is that the in-process test *failed loudly* — it hit the "refuses to
 clobber an edited unit" branch and returned 2, because a previous run had left
 a file behind. A defense that produces a confusing failure is still doing more
 than one that produces none.
+
+## The branch no test can reach is where the crash lives
+
+A guard that reads `process.stdin.isTTY` splits the program in two, and only
+one half is reachable from a test that pipes its input. Every test of `muffin
+init` piped, so every test proved the headless branch — thoroughly, and for a
+long time. The interactive branch, the one an owner actually meets, had never
+run outside a human's hands.
+
+It took a real pty to see that Ctrl+D at the first prompt exited 13 with
+`Detected unsettled top-level await` and nothing written to disk. `rl.question`
+does not call its callback on EOF; readline emits `close` instead, and a promise
+that resolves only inside that callback never settles. The `isTTY` guard covered
+"no terminal at all" and read as though it covered this too — **an input that
+ends is not an input that was never there.**
+
+Two things generalize.
+
+**A test that cannot reach a branch is not weak coverage of it; it is none.**
+The tell is a condition on the environment rather than on the data — `isTTY`,
+`platform`, `process.env.CI`. Coverage numbers do not show it, because the lines
+are executed, by the other branch. The fix is to make the environment reachable
+(a pty, a forced platform) or injectable, and then to say which one was done.
+
+**The harness is where the second bug hides.** The first attempt at the fix
+registered the `close` listener and left `rl.close()` ahead of the `resolve`, so
+every answer became "did not answer" — a pasted API key dropped in silence. The
+unit tests with a fake stream stayed green; the pty run caught it. A verification
+that only exercises the shape you imagined will confirm the shape you imagined.
