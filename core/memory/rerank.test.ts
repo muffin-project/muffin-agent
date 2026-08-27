@@ -35,14 +35,14 @@ const items = (n: number): RecallItem[] =>
 describe('reranking', () => {
   it('does not pay for a model call on a small candidate set', async () => {
     const provider = new Scripted('{"order":[2,1,0]}');
-    const reranked = await new LlmReranker(provider, 'light').rerank('q', items(5), 3);
+    const reranked = (await new LlmReranker(provider, 'light').rerank('q', items(5), 3)).items;
     expect(provider.calls).toBe(0); // nothing to reorder that was not already in
     expect(reranked).toHaveLength(3);
   });
 
   it('reorders a vault-sized set by relevance', async () => {
     const provider = new Scripted('{"order":[14,3,7]}');
-    const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
+    const reranked = (await new LlmReranker(provider, 'light').rerank('q', items(20), 3)).items;
     expect(provider.calls).toBe(1);
     expect(reranked.map((i) => i.id)).toEqual([14, 3, 7]);
     // Honesty about what this pin defends: the marker is correct by
@@ -58,13 +58,13 @@ describe('reranking', () => {
   it('keeps the RRF order when the reranker breaks', async () => {
     // A worse order is a worse answer; no answer is a broken turn.
     const provider = new Scripted(new Error('502'));
-    const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
+    const reranked = (await new LlmReranker(provider, 'light').rerank('q', items(20), 3)).items;
     expect(reranked.map((i) => i.id)).toEqual([0, 1, 2]);
   });
 
   it('ignores indices the model invented, and fills the rest', async () => {
     const provider = new Scripted('{"order":[5,999,-2,5,1]}');
-    const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 4);
+    const reranked = (await new LlmReranker(provider, 'light').rerank('q', items(20), 4)).items;
     // 999 and -2 do not exist, 5 is repeated: what is left is 5 and 1, then the
     // tail fills the remaining slots rather than returning short.
     expect(reranked.slice(0, 2).map((i) => i.id)).toEqual([5, 1]);
@@ -74,7 +74,7 @@ describe('reranking', () => {
 
   it('survives prose wrapped around the JSON', async () => {
     const provider = new Scripted('Ecco l\'ordine che propongo:\n```json\n{"order":[9,2]}\n```\nSpero sia utile.');
-    const reranked = await new LlmReranker(provider, 'light').rerank('q', items(20), 2);
+    const reranked = (await new LlmReranker(provider, 'light').rerank('q', items(20), 2)).items;
     expect(reranked.map((i) => i.id)).toEqual([9, 2]);
   });
 
@@ -95,5 +95,41 @@ it('chiede un tetto che lascia spazio al reasoning — 200 token non bastano nem
     const provider = new Scripted('{"order":[14,3,7]}');
     await new LlmReranker(provider, 'light').rerank('q', items(20), 3);
     expect(provider.seen[0]?.maxOutputTokens).toBeGreaterThan(200);
+  });
+});
+
+/**
+ * Un rerank fallito è una risposta peggiore, non nessuna risposta — e va detto.
+ *
+ * `RecallResult.strategies` promette di «nominare le metà che hanno davvero
+ * girato, così un recall degradato non è mai silenzioso». Per questa metà
+ * diceva il falso: `rerank(id)` finiva nell'elenco anche quando l'ordine veniva
+ * da RRF, perché il fallimento restituiva gli stessi candidati e nient'altro.
+ */
+describe('il rerank dice se ha davvero riordinato', () => {
+  it('riordinato dal modello: lo dichiara, senza motivo da dare', async () => {
+    const out = await new LlmReranker(new Scripted('{"order":[14,3,7]}'), 'light').rerank('q', items(20), 3);
+    expect(out.reordered).toBe(true);
+    expect(out.why).toBeUndefined();
+  });
+
+  it('il modello lancia: torna RRF e dice perché', async () => {
+    const out = await new LlmReranker(new Scripted(new Error('rete giù')), 'light').rerank('q', items(20), 3);
+    expect(out.reordered).toBe(false);
+    expect(out.why).toContain('rete giù');
+    // E l'ordine di prima resta, che è il punto: peggiore, non assente.
+    expect(out.items.map((i) => i.id)).toEqual([0, 1, 2]);
+  });
+
+  it('risposta illeggibile: stessa cosa, motivo diverso', async () => {
+    const out = await new LlmReranker(new Scripted('non è affatto JSON'), 'light').rerank('q', items(20), 3);
+    expect(out.reordered).toBe(false);
+    expect(out.why).toContain('non leggibile');
+  });
+
+  it('troppo pochi candidati: non è un fallimento, ed è comunque un non-riordino', async () => {
+    const out = await new LlmReranker(new Scripted('{"order":[2,1,0]}'), 'light').rerank('q', items(5), 3);
+    expect(out.reordered).toBe(false);
+    expect(out.why).toContain('troppo pochi');
   });
 });
