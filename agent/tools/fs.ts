@@ -445,8 +445,21 @@ export function fsList(scope: FsScope, path: string): string {
     .join('\n');
 }
 
-export function fsWrite(scope: FsScope, path: string, content: string): string {
-  const full = resolveInScope(scope, path, true);
+/**
+ * `resolved` è il percorso assoluto **già** risolto in questo scope, quando
+ * qualcun altro l'ha risolto un istante prima per una ragione che dipende dal
+ * fatto che sia lo stesso file — il registro di undo, che ne ha preso la copia
+ * (`ToolContext.effectPath`).
+ *
+ * Senza questo parametro il percorso veniva risolto due volte, e fra le due
+ * c'era un commit SQLite e un `await`: la fotografia poteva essere dell'inode
+ * che stava lì prima e la scrittura finire su quello messo lì dopo, così che un
+ * `muffin undo` rimettesse il contenuto sbagliato sul file sbagliato. Trovato
+ * dal judge di `slice/undo-journal`, e ironicamente è la stessa cosa che il
+ * docstring di `resolveEffectPath` diceva di voler evitare.
+ */
+export function fsWrite(scope: FsScope, path: string, content: string, resolved?: string): string {
+  const full = resolved ?? resolveInScope(scope, path, true);
   mkdirSync(dirname(full), { recursive: true });
   // Same `O_NOFOLLOW` hardening as `fsRead`, and it closes the write half of
   // the TOCTOU window that matters more here: `resolveInScope` already
@@ -562,9 +575,19 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // `throwTier: 0` to match: `fsWrite`'s only throws are `PathDenied`,
       // built the same way as the two tools above.
       throwTier: 0,
-      handler: (args) => {
+      // Il file che questa chiamata toccherà davvero, per il registro di undo.
+      // È `resolveInScope` — la stessa funzione che userà `fsWrite` un istante
+      // dopo — e non una seconda derivazione del percorso: la copia e la
+      // scrittura devono parlare dello stesso file, o l'undo ripristina
+      // qualcos'altro. Lancia `PathDenied` sugli stessi casi su cui lancerebbe
+      // la scrittura, e il loop legge il lancio come «non eseguire».
+      resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),
+      handler: (args, ctx) => {
         const a = writeArgs.parse(args);
-        return { content: fsWrite(scope, a.path, a.content), tier: 0 };
+        // `ctx.effectPath` c'è solo quando il ramo `draft` del loop ha appena
+        // fotografato quel file: riusarlo è ciò che rende copia e scrittura lo
+        // stesso file per costruzione invece che per coincidenza.
+        return { content: fsWrite(scope, a.path, a.content, ctx.effectPath), tier: 0 };
       },
     },
   ];

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { isatty } from 'node:tty';
 import { parseArgs } from 'node:util';
 import { formatReport, runDoctor } from './doctor.js';
+import { cmdUndo } from './undo.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
@@ -96,6 +97,11 @@ comandi operatore:
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
+  muffin undo [<turno>|--last] [--yes]
+                                i file che Muffin ha scritto tornano com'erano
+                                prima di quel turno; senza --yes stampa cosa
+                                farebbe. Lo stato attuale viene messo da parte,
+                                quindi l'undo si disfà a sua volta.
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le
                                 migrazioni
@@ -156,6 +162,7 @@ const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   memoria: 'memory',
   lavori: 'jobs',
   segreto: 'secret',
+  annulla: 'undo',
 };
 
 /**
@@ -281,6 +288,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdSecret(rest);
     case 'trace':
       return cmdTrace(rest);
+    case 'undo':
+      return cmdUndo(rest);
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
