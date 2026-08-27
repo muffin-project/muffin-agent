@@ -821,42 +821,42 @@
   },
   "cli/gateway.ts:27": {
     "path": "cli/gateway.ts",
-    "line": 27,
+    "line": 29,
     "testo": "import type { SurfaceRegistry } from '../core/surface/registry.js';"
   },
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 317,
+    "line": 340,
     "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 318,
+    "line": 341,
     "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 403,
+    "line": 426,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 426,
+    "line": 449,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 432,
+    "line": 455,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 447,
+    "line": 470,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/gateway.ts:81": {
     "path": "cli/gateway.ts",
-    "line": 81,
+    "line": 83,
     "testo": "*"
   },
   "cli/init.ts:101": {
@@ -1411,7 +1411,7 @@
   },
   "core/gateway/unit.ts:232": {
     "path": "core/gateway/unit.ts",
-    "line": 282,
+    "line": 343,
     "testo": "<!-- KeepAlive incondizionato, e la scelta è fra due difetti. Con"
   },
   "core/lock/durable.ts:93": {

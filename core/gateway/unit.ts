@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
 
 /**
@@ -130,6 +130,67 @@ export type UnitOptions = {
    */
   systemdNotify?: boolean;
 };
+
+/**
+ * What the caller has to be able to answer to find a stable interpreter
+ * directory. Injected so the test can build a Homebrew, a distro and an nvm
+ * machine without being on one.
+ */
+export type InterpreterProbes = {
+  /** The directories on the PATH this install was launched with. */
+  pathEntries: () => string[];
+  /** What the path resolves to, or `null` when it does not resolve. */
+  realpath: (path: string) => string | null;
+};
+
+/**
+ * The directory to put on the unit's PATH so `#!/usr/bin/env node` finds an
+ * interpreter — **next month too**.
+ *
+ * `dirname(process.execPath)` is the obvious answer and it is the one that
+ * expires. Node resolves `execPath` through symlinks, so on the owner's
+ * machine it is `/opt/homebrew/Cellar/node@22/22.22.2_2/bin` — a directory
+ * whose name carries a version *and a revision*, and which Homebrew deletes on
+ * the next `brew upgrade`. The unit then points at a path that no longer
+ * exists, `env node` exits 127, and launchd retries every ten seconds forever.
+ *
+ * That is the exact failure this option was added to fix (see `interpreterDir`
+ * above, found during the RETURN install): the repair replaced "no node on the
+ * PATH" with "a node path with an expiry date", and `gateway.err` on that same
+ * machine carries both episodes.
+ *
+ * The discriminant is not a list of package managers: it is **another way to
+ * reach this same interpreter**. The first PATH directory whose `node`
+ * resolves to exactly `execPath` wins; otherwise nothing changes and the
+ * interpreter's own directory is used, as before.
+ *
+ * A directory other than the interpreter's own can only resolve there through
+ * a link — on the file, or on the directory holding it — and a link is the
+ * package manager's own indirection point, its standing promise to keep
+ * pointing at a working interpreter. The versioned directory it points *at* is
+ * the artefact, and the artefact is what gets removed.
+ *
+ * The first draft of this also demanded that `node` itself be a symlink. That
+ * check was worse than redundant: where `/usr/local/bin` is a symlinked
+ * *directory*, `node` inside it is an ordinary file, and the check rejected
+ * exactly the stable path it was meant to find.
+ *
+ * This makes it a strict improvement where a stable link exists (Homebrew,
+ * MacPorts, a distro that links into `/usr/local/bin`) and a no-op where none
+ * does (nvm, a hand-built Node) — never a guess.
+ */
+export function resolveInterpreterDir(execPath: string, probes: InterpreterProbes): string {
+  const own = dirname(execPath);
+  for (const dir of probes.pathEntries()) {
+    if (dir === '' || dir === own) continue;
+    // Equality with `execPath`, not merely "a node is here". A link to a
+    // *different* interpreter would run the unit under a Node this install was
+    // never tested on, and it would do it silently.
+    if (probes.realpath(join(dir, 'node')) !== execPath) continue;
+    return dir;
+  }
+  return own;
+}
 
 /** The system directories a service still needs, after the interpreter's own. */
 const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];

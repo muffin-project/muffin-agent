@@ -1,10 +1,10 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { loadConfig, paths } from '../core/config/config.js';
@@ -133,13 +133,18 @@ function jobRow(dir: string, id: string): { last_run_at: string | null; next_fir
   }
 }
 
-function muffin(dir: string, args: string[], stdin = ''): { code: number; out: string; err: string } {
+function muffin(
+  dir: string,
+  args: string[],
+  stdin = '',
+  extraEnv: Record<string, string> = {},
+): { code: number; out: string; err: string } {
   const result = spawnSync('node', ['--import', 'tsx', join(process.cwd(), 'cli/main.ts'), ...args], {
     // HOME and XDG_CONFIG_HOME are redirected into the temp home so `install
     // --write` can never put a real service unit in the owner's `~/Library` or
     // `~/.config`. It did exactly that once, and the file outlived the run
     // because the cleanup was after a failing assertion.
-    env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1' },
+    env: { ...process.env, MUFFIN_HOME: dir, HOME: dir, XDG_CONFIG_HOME: join(dir, '.config'), NO_COLOR: '1', ...extraEnv },
     input: stdin,
     encoding: 'utf8',
     timeout: 60_000,
@@ -902,5 +907,33 @@ describe('MUFFIN_GATEWAY_TICK_MS — the acceptance suite\'s only way to speed u
 
   it('parses a real override', () => {
     expect(tickMsFromEnv('250')).toBe(250);
+  });
+});
+
+
+/**
+ * La cucitura, non il calcolo.
+ *
+ * `resolveInterpreterDir` era provata da sola e `gateway install` continuava a
+ * passare `dirname(process.execPath)`: rimettendo quella riga com'era, tutta la
+ * suite restava verde. La funzione giusta scollegata è lo stesso guasto della
+ * funzione sbagliata, e sul binario vero è l'unico posto dove si vede.
+ */
+describe('muffin gateway install — quale interprete finisce nella unit', () => {
+  it('sceglie la directory stabile del PATH, non quella versionata dell interprete', () => {
+    // Una directory con dentro un link al Node che sta girando: è la forma di
+    // `/opt/homebrew/bin` sulla macchina dell'owner, costruita a mano così il
+    // test vale anche dove quella forma non esiste.
+    const dir = home();
+    const stable = mkdtempSync(join(tmpdir(), 'muffin-bin-stabile-'));
+    symlinkSync(process.execPath, join(stable, 'node'));
+
+    const r = muffin(dir, ['gateway', 'install'], '', { PATH: `${stable}${delimiter}${process.env['PATH'] ?? ''}` });
+
+    expect(r.out).toContain(stable);
+    // E non quella versionata: averle tutte e due significherebbe non aver
+    // scelto, che è il caso in cui l'upgrade rompe comunque.
+    expect(r.out).not.toContain(dirname(realpathSync(process.execPath)));
+    rmSync(stable, { recursive: true, force: true });
   });
 });
