@@ -25,12 +25,10 @@ mentivano mentre succedeva: `doctor` verde su due giri morti su tre (#147),
 `vector index in sync` con l'embedder giù (#149), il rerank senza costo nelle
 tracce (#165).
 
-**Il no-op aveva un prezzo, due livelli più in là.** Il profilo dichiarava
-`thinking: "off"` per `*qwen3*` e l'adapter non sapeva portarlo — scritto, non
-nascosto. Da #167 lo porta (`reasoning:{effort:'none'}`) e le tre corsie JSON
-lo chiedono: misurato vivo, **204 → 85** token in uscita. Il handoff diceva che
-la via era *leggere* il reasoning: era la metà che paga.
-`REASONING_HEADROOM` resta per Ollama/vLLM, che il campo non lo capiscono.
+**Il no-op aveva un prezzo** (#167): `thinking:"off"` era dichiarato e non
+portato, e costava reasoning fatturato. Ora l'adapter lo porta e le tre corsie
+JSON lo chiedono — **204 → 85** token, misurato vivo. `REASONING_HEADROOM`
+resta per Ollama/vLLM, che il campo non lo capiscono.
 
 **Resta da fare, con le prove già in mano:**
 
@@ -51,10 +49,14 @@ meccanismo c'è da #138. Una concessione durevole contraddirebbe ADR-0003.
 **Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`).
 
 **Da non riperdere.** (a) `init` fa le domande di #117 **solo su TTY**, mai
-testato (pty con `script`). (b) `gateway install` **stampa** i comandi del
-supervisore, non li esegue. (c) E7: a «che modello usi?» non lo sa. (d)
-`inputSchema` non valida niente e `types.ts` promette il contrario. (e) Le
+testato (pty con `script`). (b) E7: a «che modello usi?» non lo sa. (c)
+`inputSchema` non valida niente e `types.ts` promette il contrario. (d) Le
 ancore verificano solo il primo intervallo di `file:A-B,C-D`.
+
+**Install reale (#169).** `gateway install --start` accende il servizio in un
+comando, `loginctl enable-linger` compreso — era l'ultima riga da copiare, e
+quella che saltata uccide il gateway al logout settimane dopo. `init` continua
+a offrire solo `--write`: accendere un servizio resta una decisione digitata.
 
 **Design da non riscoprire:** THESIS §5 e ADR-0027 (le lezioni di Claude si
 trasferiscono SELETTIVAMENTE: non è lo stesso prodotto).
