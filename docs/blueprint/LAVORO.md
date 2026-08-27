@@ -4,12 +4,16 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect. Non da questa lista.
 
-**Decisione aperta (E7, #176).** `sys.inspect` esiste e legge dalle fonti
-vere, ma `consumer-local` ha **dodici** tool registrati contro un tetto di
-**dieci**: sull'installazione dell'owner il modello non lo vede. Vie: alzare il
-tetto (le note lo chiamano «the floor the harness is designed against» — serve
-evidenza nuova), togliere un tool, o lasciarlo cadere. Il taglio è dichiarato
-in `bootLines`, non silenzioso.
+**Il prossimo lavoro vero: `slice/undo-journal`** (D2+D3+D11, forma decisa in
+M5-BIS §1). `fs_write` non scrive **in nessun caso**: `draft` è ineseguibile
+senza registro di undo (#180), e il modello se lo vede offerto lo stesso. Il
+ramo `draft` ora ha due test che diventeranno rossi quando atterra.
+
+**Dopo, non prima: il tetto di taint.** Dopo un `fs_read` il turno è a 2 e
+`fs.write` ha soffitto 1, quindi «leggi, calcola, scrivi» resta rotto anche col
+journal (#179, 0/9 misurato). ADR-0044 dichiarò il costo e chiese il sì
+dell'owner **per `sys.shell`**, non per `fs.write` — liquidato come gratis
+perché già morto. Non lo è più quando il journal atterra.
 
 **Aperto per l'owner:** token bot Telegram; billing CI; **promozione `dev` →
 `main`, PR #163 pronta in draft** — è l'unica cosa che PERCORSO §0 lascia aperta
@@ -21,19 +25,11 @@ Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
 (successo), si verifica a mano — `git merge-base --is-ancestor origin/dev HEAD`
 — e si dichiara.
 
-## Audit dell'installazione viva (27/08)
-
-Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
-
-**Chiuso dall'audit** (#147→#174, storia in `docs/lessons.md` e nei commit):
-la corsia della memoria morta dal cambio modello (`facts` 16 → **30**), gli
-strumenti che mentivano mentre succedeva, `thinking:"off"` portato davvero
-(**204 → 85** token), `install --start`, Ctrl+D che usciva 13 senza scrivere
-niente, `fs_write` che troncava un file quando il modello scordava `content`.
-
-**Resta aperto qui: l'embedder è giù** sulla macchina dell'owner (ollama non
-gira). Da #149 `doctor` lo dice, ma finché resta giù niente di nuovo viene
-indicizzato e il recall è solo testuale. Stato della macchina, non del codice.
+**Audit del 27/08, chiuso** (#147→#180, storia nei commit e in
+`docs/lessons.md`). Il giro base funziona. **Resta aperto: l'embedder è giù**
+sulla macchina dell'owner (ollama non gira) — `doctor` lo dice da #149, ma
+finché resta giù niente viene indicizzato e il recall è solo testuale. Stato
+della macchina, non del codice.
 
 **Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
 modello vivo (`research/cache-prompt-2026-08-26.md`); da #142 `doctor` vede il
@@ -45,12 +41,14 @@ prompt vivo vecchio di due settimane.
 modalità (utente di servizio, `rot/` di un altro uid): sulla VPS si può, il
 meccanismo c'è da #138. Una concessione durevole contraddirebbe ADR-0003.
 
-**Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`).
+**Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`). Il
+tetto tool è 14 (owner, 27/08): un numero senza misura, come lo era 10, e
+misurato non è il vincolo (#179). La risposta strutturale è la tool search.
 
-**Da non riperdere.** (a) E7: a «che modello usi?» non lo sa. (b) Le ancore
-verificano solo il primo intervallo di `file:A-B,C-D`. (c) Il ramo util-linux
+**Da non riperdere.** (a) Le ancore verificano solo il primo intervallo di
+`file:A-B,C-D`. (b) Il ramo util-linux
 di `script` in `cli/main.test.ts` è scritto e mai eseguito: qui c'è solo il
-BSD, ed è Linux la produzione. (d) `inputSchema` e lo zod dell'handler restano
+BSD, ed è Linux la produzione. (c) `inputSchema` e lo zod dell'handler restano
 due copie: `z.toJSONSchema` (zod 4.4.3, già in albero) genererebbe la prima
 dalla seconda, ma cambia i byte del prompt di ogni tool — cache compresa.
 
