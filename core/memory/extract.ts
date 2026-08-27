@@ -112,7 +112,28 @@ function deriveImportance(f: { matters: boolean; charged: boolean }): number {
   return IMPORTANCE_ROUTINE;
 }
 
-const SYSTEM = `Estrai fatti dichiarativi dal testo che ti viene dato.
+/**
+ * L'esempio che il prompt mostra al modello — un oggetto vero, non del testo.
+ *
+ * Un esempio scritto a mano dentro una stringa può divergere dallo schema che
+ * dovrebbe illustrare, e quando succede è il difetto peggiore della famiglia:
+ * il modello obbedisce all'esempio, la validazione obbedisce allo schema, e
+ * nessuno dei due sbaglia. Tipizzato qui e serializzato là, TypeScript tiene i
+ * nomi dei campi e il test tiene i valori.
+ */
+export const PROMPT_EXAMPLE: z.input<typeof ExtractedFact> = {
+  subject: 'owner',
+  predicate: 'lives_in',
+  object: 'Cagliari',
+  subjectKind: 'person',
+  validFrom: null,
+  confidence: 0.9,
+  matters: true,
+  charged: false,
+  pinned: false,
+};
+
+export const SYSTEM = `Estrai fatti dichiarativi dal testo che ti viene dato.
 
 REGOLE, in ordine di importanza:
 
@@ -123,7 +144,7 @@ REGOLE, in ordine di importanza:
    MAI un fatto che significhi "devi mandare i report".
 
 2. SOLO CIÒ CHE È SCRITTO. Niente inferenze, niente completamenti plausibili.
-   Se il testo dice "credo che Anna sia a Milano", il fatto ha confidence bassa,
+   Se il testo dice "credo che Anna sia a Milano", il fatto ha confidence 0.5,
    non diventa "Anna vive a Milano".
 
 3. validFrom SOLO se il testo dice quando. "Da marzo lavoro a Cagliari" → "2026-03-01".
@@ -156,7 +177,13 @@ REGOLE, in ordine di importanza:
      ricorrente? (di solito no: rispondi sì solo quando è davvero quello)
    Nel dubbio, "false". Sono l'eccezione, non l'etichetta di default.
 
-8. "pinned" — SOLO per due cose, e per nient'altro: l'identità stabile
+8. "confidence" — UN NUMERO fra 0 e 1, mai una parola.
+   - 0.9  il testo lo dice espressamente ("lavoro a Cagliari")
+   - 0.7  è implicito ma non c'è altra lettura ("torno in ufficio a Cagliari")
+   - 0.5  il testo stesso lo dà per incerto ("credo", "forse", "mi pare")
+   Sotto 0.4 non estrarlo affatto: verrebbe scartato comunque.
+
+9. "pinned" — SOLO per due cose, e per nient'altro: l'identità stabile
    dell'owner (il suo nome, non il suo umore di oggi) e una preferenza
    durevole che l'owner ha dichiarato esplicitamente su come vuoi che tu ti
    comporti ("chiamami X", "rispondimi sempre in italiano"). NON per interessi,
@@ -164,7 +191,11 @@ REGOLE, in ordine di importanza:
    dall'owner. Nel dubbio, "false" — è un'eccezione rara, non una seconda
    versione di "matters".
 
-Rispondi SOLO con JSON: {"facts":[{"subject","predicate","object","subjectKind","validFrom","confidence","matters","charged","pinned"}]}`;
+Rispondi SOLO con JSON, di questa forma esatta — "confidence" numero,
+gli ultimi tre booleani, "subjectKind" uno di
+person|place|organization|project|concept|event|thing:
+
+${JSON.stringify({ facts: [PROMPT_EXAMPLE] })}`;
 
 export type ExtractionInput = {
   content: string;
