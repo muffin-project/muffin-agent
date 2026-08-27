@@ -29,6 +29,7 @@ import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memor
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
 import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
+import { cmdAdopt } from './adopt.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import {
   cmdGatewayInstall,
@@ -109,6 +110,11 @@ comandi operatore:
                                 riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
   muffin doctor [--json]
+  muffin adopt [<file>|--tutto] i file di defaults/ (persona.md, voice.md, le
+                                skill) che l'installazione ha lasciato indietro.
+                                Senza argomenti dice solo com'e' messa; adotta
+                                solo cio' che non hai mai toccato tu, e mai
+                                dentro il sigillo
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO), validata
   muffin undo [<turno>|--last] [--yes]
                                 i file che Muffin ha scritto tornano com'erano
@@ -295,6 +301,11 @@ async function main(rawArgv: string[]): Promise<number> {
       });
     case 'doctor':
       return cmdDoctor(rest);
+    case 'adopt': {
+      const style = styleFor(process.stdout);
+      process.stdout.write(`${style.header('muffin adopt', paths().home)}\n`);
+      return cmdAdopt(paths().home, rest, { out: (l) => process.stdout.write(`${l}\n`), style });
+    }
     case 'backup':
       return cmdBackup(rest);
     case 'restore':

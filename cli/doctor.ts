@@ -942,11 +942,17 @@ function defaultsDriftCheck(
       return;
     case 'adoptable': {
       const cmd = d.adoptCommand ?? '(comando non disponibile)';
+      // Fuori dal sigillo il rimedio è un **verbo**, non un `cp` da incollare.
+      // Il `cp` funziona e resta scritto qui accanto, ma non aggiorna il
+      // registro d'installazione: chi lo incolla si ritrova il file marchiato
+      // `owner-modified` al giro dopo, e non più adottabile — vedi
+      // `cli/adopt.ts`. Nominare per primo il comando che fa la cosa giusta è
+      // l'unico modo per cui la cosa giusta è anche quella comoda.
       const remedy = d.sealed
         ? `questo file è dentro il sigillo (rot/): adottarlo fa divergere l'hash sigillato e manda l'installazione in ` +
           `safe mode — conseguenza da decidere tu, mai automatica. Se la vuoi: ${cmd} — quindi \`muffin rot reseal\` ` +
           "(atto della tua autorità: solo lui fa uscire l'installazione dalla safe mode)"
-        : cmd;
+        : `\`muffin adopt ${d.path}\` (o \`muffin adopt --tutto\`) — copia e registra. Il ${cmd} equivalente copia e basta.`;
       warn(name, d.detail, remedy);
       return;
     }

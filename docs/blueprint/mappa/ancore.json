@@ -901,132 +901,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 170,
+    "line": 176,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:121": {
     "path": "cli/main.ts",
-    "line": 142,
+    "line": 148,
     "testo": "muffin rot verify | reseal | harden"
   },
   "cli/main.ts:134": {
     "path": "cli/main.ts",
-    "line": 159,
+    "line": 165,
     "testo": "muffin trace tail [-n N] [--errors] | grep PATTERN"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 236,
+    "line": 242,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 238,
+    "line": 244,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 240,
+    "line": 246,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 242,
+    "line": 248,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 173,
+    "line": 179,
     "testo": "*/"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 248,
+    "line": 254,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 252,
+    "line": 258,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 254,
+    "line": 260,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 256,
+    "line": 262,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 262,
+    "line": 268,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 264,
+    "line": 270,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 266,
+    "line": 272,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 268,
+    "line": 274,
     "testo": "case 'run':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 272,
+    "line": 278,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 305,
+    "line": 316,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 309,
+    "line": 320,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 425,
+    "line": 436,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 444,
+    "line": 455,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 617,
+    "line": 628,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 663,
+    "line": 674,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 673,
+    "line": 684,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 704,
+    "line": 715,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 922,
+    "line": 933,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
