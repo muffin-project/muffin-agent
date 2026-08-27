@@ -505,10 +505,21 @@ export function buildRuntime(
     // three lines down already degrades to a boot line; this one did not.
     let backend;
     try {
-      backend = tavilyBackend({
+      const opzioni = {
         apiKey: readSecret(config.search.apiKeyRef, home),
         ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
-      });
+      };
+      // Uno `switch` esaustivo e non un `tavilyBackend` incondizionato: con un
+      // solo caso il codice generato è lo stesso, ma aggiungere un id al
+      // catalogo diventa un **errore di compilazione qui** invece di un motore
+      // scelto in config e ignorato a runtime.
+      switch (config.search.provider) {
+        case 'tavily':
+          backend = tavilyBackend(opzioni);
+          break;
+        default:
+          throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
+      }
     } catch (error) {
       searchNotes.push(
         `! web_search spento: ${error instanceof Error ? error.message : String(error)}`,

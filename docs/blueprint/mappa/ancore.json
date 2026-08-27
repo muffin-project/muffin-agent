@@ -476,37 +476,37 @@
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 570,
+    "line": 581,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 577,
+    "line": 588,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 608,
+    "line": 619,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 616,
+    "line": 627,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 653,
+    "line": 664,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 682,
+    "line": 693,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 790,
+    "line": 801,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -901,132 +901,132 @@
   },
   "cli/main.ts:101": {
     "path": "cli/main.ts",
-    "line": 164,
+    "line": 168,
     "testo": "* where Italian has the word an owner would actually say — not a translation"
   },
   "cli/main.ts:121": {
     "path": "cli/main.ts",
-    "line": 136,
+    "line": 140,
     "testo": "muffin rot verify | reseal | harden"
   },
   "cli/main.ts:134": {
     "path": "cli/main.ts",
-    "line": 153,
+    "line": 157,
     "testo": "muffin trace tail [-n N] [--errors] | grep PATTERN"
   },
   "cli/main.ts:159": {
     "path": "cli/main.ts",
-    "line": 230,
+    "line": 234,
     "testo": "* which is what a real terminal always gets. `--stream` exists for the"
   },
   "cli/main.ts:161": {
     "path": "cli/main.ts",
-    "line": 232,
+    "line": 236,
     "testo": "* progressive text (`muffin repl --stream | tee log`, and the acceptance"
   },
   "cli/main.ts:163": {
     "path": "cli/main.ts",
-    "line": 234,
+    "line": 238,
     "testo": "* to autodetect from). `--no-stream` wins if a script passes both — the"
   },
   "cli/main.ts:165": {
     "path": "cli/main.ts",
-    "line": 236,
+    "line": 240,
     "testo": "* conflicting pair elsewhere in this CLI (flag beats flag, most restrictive"
   },
   "cli/main.ts:167": {
     "path": "cli/main.ts",
-    "line": 167,
+    "line": 171,
     "testo": "*/"
   },
   "cli/main.ts:171": {
     "path": "cli/main.ts",
-    "line": 242,
+    "line": 246,
     "testo": "return undefined;"
   },
   "cli/main.ts:175": {
     "path": "cli/main.ts",
-    "line": 246,
+    "line": 250,
     "testo": "loadDotenvIfPresent();"
   },
   "cli/main.ts:177": {
     "path": "cli/main.ts",
-    "line": 248,
+    "line": 252,
     "testo": "// is the same whether they ride with a bare `muffin` (`command` ends up"
   },
   "cli/main.ts:179": {
     "path": "cli/main.ts",
-    "line": 250,
+    "line": 254,
     "testo": "const stream = streamOverride(rawArgv);"
   },
   "cli/main.ts:181": {
     "path": "cli/main.ts",
-    "line": 256,
+    "line": 260,
     "testo": "const [typed, ...rest] = argv;"
   },
   "cli/main.ts:183": {
     "path": "cli/main.ts",
-    "line": 258,
+    "line": 262,
     "testo": "// only ever sees canonical command names. `typed` itself is undefined for a"
   },
   "cli/main.ts:185": {
     "path": "cli/main.ts",
-    "line": 260,
+    "line": 264,
     "testo": "const command = typed !== undefined ? (COMMAND_ALIASES[typed] ?? typed) : typed;"
   },
   "cli/main.ts:187": {
     "path": "cli/main.ts",
-    "line": 262,
+    "line": 266,
     "testo": "case 'run':"
   },
   "cli/main.ts:191": {
     "path": "cli/main.ts",
-    "line": 266,
+    "line": 270,
     "testo": "case 'init':"
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 281,
+    "line": 299,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 285,
+    "line": 303,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 401,
+    "line": 419,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 420,
+    "line": 438,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 562,
+    "line": 580,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 608,
+    "line": 626,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 618,
+    "line": 636,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 649,
+    "line": 667,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 852,
+    "line": 870,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1311,37 +1311,37 @@
   },
   "core/config/config.ts:100": {
     "path": "core/config/config.ts",
-    "line": 104,
+    "line": 102,
     "testo": "*/"
   },
   "core/config/config.ts:101": {
     "path": "core/config/config.ts",
-    "line": 196,
+    "line": 203,
     "testo": "discord: z"
   },
   "core/config/config.ts:102": {
     "path": "core/config/config.ts",
-    "line": 71,
+    "line": 72,
     "testo": ".object({"
   },
   "core/config/config.ts:169": {
     "path": "core/config/config.ts",
-    "line": 289,
+    "line": 296,
     "testo": "`dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +"
   },
   "core/config/config.ts:39": {
     "path": "core/config/config.ts",
-    "line": 39,
+    "line": 40,
     "testo": "kind: z.enum(['anthropic', 'openai-compat']),"
   },
   "core/config/config.ts:50": {
     "path": "core/config/config.ts",
-    "line": 70,
+    "line": 71,
     "testo": "search: z"
   },
   "core/config/config.ts:96": {
     "path": "core/config/config.ts",
-    "line": 191,
+    "line": 198,
     "testo": "* ones already exceed `Number.MAX_SAFE_INTEGER` (2^53), so parsing one"
   },
   "core/config/inventory.ts:52": {
@@ -2771,22 +2771,22 @@
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 546,
+    "line": 557,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 570,
+    "line": 581,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 608,
+    "line": 619,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 614,
+    "line": 625,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
