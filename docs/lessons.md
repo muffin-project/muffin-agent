@@ -1173,3 +1173,31 @@ on an ordinary run, needs no corruption of its own, leaves no trace and does
 not come back — while whatever wrote that entry is precisely what someone would
 want to look at later. A reader that ignores what it cannot parse is careful; a
 writer that drops it is destroying the evidence of the thing being diagnosed.
+
+## A declared no-op is honest about the mechanism and silent about the price
+
+ADR-0008 says: degrade declaredly, never silently. The adapter did. Its own
+docstring said `ChatCall.thinking` was a no-op, gave the reason, and named what
+turning it on would cost. The profile said `"thinking": "off"` for `*qwen3*`,
+and its notes said the adapter could not honour it. Nothing was hidden and
+nobody was misled.
+
+It still cost 1502 output tokens per extraction, every cycle, for an empty
+answer — because the declaration was written when the install ran a model whose
+reasoning was **opt-in**, and the install later moved to one that reasons by
+**default**. The sentence "nothing is being dropped today" stayed true in its
+own terms and stopped describing the machine. A no-op's declaration ages against
+a config file it never mentions.
+
+**Two things follow.** The first is that a declared no-op needs a measurement,
+not just a reason: not "this knob does nothing here" but "this knob does nothing
+here and here is what that costs on the model we actually run". A price nobody
+measured is a price nobody notices changing.
+
+The second is about which direction gets investigated. The handoff had recorded
+the follow-up as *the adapter cannot read the reasoning back, so those tokens
+are paid and the text is lost* — true, and the expensive half: reading it back
+needs a schema at the boundary and keeps paying. The cheap half was in the same
+sentence, unlooked-at: **stop asking for it**. When a capability is missing in
+both directions, the one that removes cost is not automatically the one the
+note is written about, and the note is what the next person reads.
