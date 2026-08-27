@@ -18,6 +18,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { makeStatusLine } from './status-line.js';
+import { styleFor } from './ui.js';
 import { backupNow } from './backup.js';
 import { realishPath } from './init.js';
 import { promptLine } from './prompt.js';
@@ -768,6 +769,8 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
    * mente il vecchio comportamento — quindi uno script che legge questo output
    * legge gli stessi byte di prima.
    */
+  const style = styleFor(process.stderr);
+  process.stderr.write(`${style.header('muffin update')}\n`);
   const status = makeStatusLine((text) => process.stderr.write(text), process.stderr.isTTY === true);
   const result = runUpdate({
     home,
