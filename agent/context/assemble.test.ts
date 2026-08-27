@@ -7,7 +7,7 @@ import { runInit } from '../../cli/init.js';
 import { paths } from '../../core/config/config.js';
 import type { Principal } from '../../core/policy/types.js';
 import { buildRuntime, type Runtime } from '../runtime.js';
-import { tenantClass, visibleTools } from './assemble.js';
+import { buildSystemPromptBlocks, tenantClass, visibleTools } from './assemble.js';
 
 /**
  * The prompt is a function of the tenant, and the tool list is a function of the
@@ -24,10 +24,21 @@ import { tenantClass, visibleTools } from './assemble.js';
 
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'muffin-assemble-ws-'));
 
+/**
+ * Il nonce del recinto delle skill, fissato.
+ *
+ * È per-installazione e casuale, e deve esserlo: se fosse una costante di
+ * repository chiunque lo saprebbe. Ma un prompt fissato per byte non può
+ * dipendere da un valore casuale, quindi il test lo scrive prima di bootare —
+ * dichiarando così che il prompt varia per *questo* valore e per nient'altro.
+ */
+const NONCE_FISSO = 'aaaaaaaaaaaa';
+
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-assemble-'));
   // No turn runs, so the key is never used — the check stays model-free.
   runInit({ home, apiKey: 'sk-assemble-never-called' });
+  writeFileSync(paths(home).promptNonce, `${NONCE_FISSO}\n`, 'utf8');
   return home;
 }
 
@@ -86,6 +97,21 @@ describe('the owner-class prompt does not move', () => {
    * Note that the three files named above are not the only inputs: `WORK_RULES`
    * in `assemble.ts` is a fourth, and it is the one the re-capture below moved.
    *
+   * Ri-fissato 2026-08-27 (`slice/skill-di-serie`): due cose insieme, e la
+   * seconda è il motivo per cui questo test esiste. (1) Il catalogo delle skill
+   * ora ha contenuto — `defaults/skills/` spedisce due skill e `init` le mette
+   * in casa — quindi il blocco `skills`, che prima era vuoto e cadeva fuori,
+   * occupa 744 caratteri su 23.648, il 3,1%: solo `name` e `description`, il
+   * corpo si legge con `skill_read` e solo se serve. (2) Quel blocco arrivava
+   * con un **nonce nuovo a ogni chiamata**, quindi il prompt owner era diverso
+   * a ogni processo — e ogni `muffin run` è un processo. Misurato su due boot
+   * della stessa home: due SHA diversi. Non era ri-fissabile per costruzione, e
+   * peggio, la cache del provider non poteva prendere sul prefisso. Il nonce è
+   * ora per-installazione (`core/skills/nonce.ts`, `paths().promptNonce`), il
+   * test lo fissa a `NONCE_FISSO` prima di bootare, e la stabilità fra processi
+   * ha una prova sua qui sotto. Pin precedente:
+   * `a83e22ce2ab67a953c1c0b1af96c38a67ff5271593d903d1ca87c728724cde73`.
+   *
    * Re-captured 2026-08-26 (`slice/come-lavori`): three rules added to
    * `WORK_RULES`, each closing a gap the runtime does not close on its own —
    * see that constant's docstring for which trace produced which rule. The
@@ -102,7 +128,32 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'a83e22ce2ab67a953c1c0b1af96c38a67ff5271593d903d1ca87c728724cde73';
+    '19f1e7d300ad74c4c28d4ac0d9ff1dab0519f85c0d64fdcfabda060c2bd45d4a';
+
+  it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
+    // Misurato prima di essere riparato: il recinto delle skill prendeva un
+    // nonce nuovo a ogni chiamata, e ogni `muffin run` è un processo, quindi il
+    // prefisso del prompt era diverso ogni volta e la cache del provider non
+    // poteva prendere per costruzione. Due boot **della stessa home**: due SHA
+    // uguali. Due home diverse devono invece differire, o il nonce non è un
+    // nonce — ed è la seconda metà che rende questo test una prova.
+    const home = mkdtempSync(join(tmpdir(), 'muffin-assemble-'));
+    runInit({ home, apiKey: 'sk-assemble-never-called' });
+    const uno = boot(home);
+    const primo = uno.deps.systemPrompts.owner;
+    uno.close();
+    const due = boot(home);
+    const secondo = due.deps.systemPrompts.owner;
+    due.close();
+    expect(secondo).toBe(primo);
+
+    const altra = boot(bootHome());
+    try {
+      expect(altra.deps.systemPrompts.owner).not.toBe(primo);
+    } finally {
+      altra.close();
+    }
+  });
 
   it('is byte-identical to the single prompt that preceded the split', () => {
     const runtime = boot(bootHome());
@@ -201,20 +252,28 @@ describe('what a group turn is allowed to be told', () => {
   });
 
   it('reuses the voice file rather than growing a second one for groups', () => {
-    const runtime = boot(bootHome());
+    const home = bootHome();
+    const runtime = boot(home);
     try {
-      const { owner, group } = runtime.deps.systemPrompts;
+      const { group } = runtime.deps.systemPrompts;
       // `voice.md` already knows how to behave in a group, and it is the file
       // whose staleness this repo has already paid for once — shipped, then
       // opened by nobody for months. A separate group voice would recreate
       // exactly that: two files, one of them rarely read.
       expect(group).toContain('Quando parlo in gruppo');
       expect(group).toContain('🧁 è ancora più raro in gruppo');
-      // Byte-identical in both classes, not merely present in both.
-      const voiceStart = '# Voce';
-      expect(group.slice(group.indexOf(voiceStart))).toContain(
-        owner.slice(owner.indexOf(voiceStart), owner.indexOf('## Come lavori')).trim(),
-      );
+      // Byte-identical in both classes, not merely present in both — chiesto ai
+      // blocchi e non a una fetta della stringa resa. Ritagliare da `# Voce`
+      // fino a `## Come lavori` presupponeva che nulla si inserisse fra i due,
+      // e il catalogo delle skill si è inserito lì: il test è andato rosso
+      // mentre la proprietà che afferma era ancora vera. Il confronto fra i
+      // blocchi nominati dice la stessa cosa e non si rompe quando l'assemblaggio
+      // ne guadagna uno.
+      const blocchi = buildSystemPromptBlocks(home, false);
+      const voceOwner = blocchi.owner.find((b) => b.name === 'voice')?.text;
+      const voceGruppo = blocchi.group.find((b) => b.name === 'voice')?.text;
+      expect(voceOwner).toBeTruthy();
+      expect(voceGruppo).toBe(voceOwner);
     } finally {
       runtime.close();
     }

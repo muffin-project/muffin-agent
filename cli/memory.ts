@@ -226,6 +226,36 @@ export async function cmdMemorySearch(
  * same lane lock, and the same row in the run log, which is what lets `memory
  * stats` say "it ran" without asking who started it.
  */
+/**
+ * Se il giro appena fatto ha prodotto progresso, e quindi vale rifarlo.
+ *
+ * Esportata perché è la condizione, non un dettaglio del ciclo: dentro il `for`
+ * l'unico modo di provarla sarebbe costruire un runtime vero con un provider
+ * vero, cioè non provarla.
+ *
+ * `indexed` accanto a `marked` è la riparazione. Il drenaggio dell'indice è
+ * progresso quanto un'estrazione, e dopo un cambio di embedder è l'**unico**
+ * progresso possibile: un wipe non lascia episodi *pending*, quindi `marked` è
+ * 0 al primo giro mentre `indexed` è 200 — il `limit` di `indexBacklog`.
+ * Misurato su 250 episodi: si usciva lì, con 50 sorgenti fuori dal recall
+ * semantico e `doctor` che diceva «200 chunks, 200 vectors, in sync».
+ *
+ * Il tetto su `rounds` resta l'unico che vale sempre: è ciò che impedisce a un
+ * indice enorme di trasformare un comando in una nottata.
+ */
+export function valeUnAltroGiro(
+  report: { marked: number; indexed: number; fetched: number },
+  rounds: number,
+  limit: number,
+): boolean {
+  if (report.marked === 0 && report.indexed === 0) return false;
+  // Solo quando è l'estrazione a essere a corto di lavoro: con `marked` a 0 e
+  // l'indice ancora da drenare, `fetched` è 0 per costruzione, e questa riga
+  // fermerebbe proprio il giro che serve.
+  if (report.marked > 0 && report.fetched < Math.min(limit, 25)) return false;
+  return rounds * 25 < limit;
+}
+
 export async function cmdMemoryExtract(home: string, limit: number): Promise<number> {
   const { buildRuntime } = await import('../agent/runtime.js');
   const runtime = buildRuntime(home);
@@ -280,9 +310,7 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       // exhausted, re-paying the same failing model call each round.
       // `marked` counts the marker itself, so it cannot drift from what
       // progress means.
-      if (report.marked === 0) break;
-      if (report.fetched < Math.min(limit, 25)) break;
-      if (rounds * 25 >= limit) break;
+      if (!valeUnAltroGiro(report, rounds, limit)) break;
     }
     process.stdout.write(
       `${total.episodes} episodi estratti · ${total.facts} fatti · ${total.superseded} ritirati · ` +

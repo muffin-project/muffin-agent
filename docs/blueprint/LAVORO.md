@@ -4,59 +4,65 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect. Non da questa lista.
 
-**Aperto per l'owner:** token bot Telegram; billing CI; **promozione `dev` →
-`main`, PR #163 pronta in draft** — è l'unica cosa che PERCORSO §0 lascia aperta
-(«resta l'installazione reale»). Nessuna migrazione nuova: `dev` è a schema 3
-come il DB vivo, quindi la promozione non tocca i dati. Non la mergio io.
+**Goal owner (27/08), sostituisce «DAY-1 READY» come criterio di scelta:** un
+agente *davvero usabile*, non un chatbot, rivisto **modulo per modulo** — loop,
+memoria, skill, tool, context engine, compacting, comandi, deep research; ogni
+pezzo per *come è fatto*, non per se passa. E **tutto ciò che manca prima di
+installare sulla VPS.**
 
-**CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
-Rosso in 2s con zero step = fatturazione. Se anche `mergeable` resta `null`
-(successo), si verifica a mano — `git merge-base --is-ancestor origin/dev HEAD`
-— e si dichiara.
+**`fs_write` scrive**, mergiata (#182): `draft` è «prima la copia, poi
+l'effetto», il file lo dichiara il tool (`resolveEffectPath`) e viaggia con la
+chiamata (`ToolContext.effectPath`). D2/D3 READY.
 
-## Audit dell'installazione viva (27/08)
+**In volo: PR #186** (`slice/undo-riallinea-il-turno`, D11, head `d7d1502`,
+MERGEABLE). CRITICAL, due NON-MERGE già riparati; il **terzo giudizio non è mai
+girato** — è il prossimo passo, non il merge.
 
-Il giro base funziona: `muffin run` risponde in 4.7s, gateway e RoT sani.
+**Dopo: il tetto di taint.** Dopo un `fs_read` il turno è a 2 e `fs.write` ha
+soffitto 1: «leggi, calcola, scrivi» resta rifiutato (#179, 0/9). ADR-0044
+dichiarò quel costo per `sys.shell` e liquidò `fs.write` come gratis «perché già
+morto»: non lo è più.
 
-**Chiuso dall'audit** (#147→#174, storia in `docs/lessons.md` e nei commit):
-la corsia della memoria morta dal cambio modello (`facts` 16 → **30**), gli
-strumenti che mentivano mentre succedeva, `thinking:"off"` portato davvero
-(**204 → 85** token), `install --start`, Ctrl+D che usciva 13 senza scrivere
-niente, `fs_write` che troncava un file quando il modello scordava `content`.
+**Linux, chiuso il 27/08** (#184, #189): il gate ora gira anche `report.ts`
+ed **esce non-zero** (l'ultimo comando era `set -e`, che riesce sempre), vede
+gli scenari fuori manifest (erano 4 invisibili), e installa Muffin da zero
+non-root a ogni corsa — `muffin --version` legge lo sha vero. Ultimo giro:
+30 passati, 1 saltato dichiarato, `GATE_LINUX_EXIT=0`.
 
-**Resta aperto qui: l'embedder è giù** sulla macchina dell'owner (ollama non
-gira). Da #149 `doctor` lo dice, ma finché resta giù niente di nuovo viene
-indicizzato e il recall è solo testuale. Stato della macchina, non del codice.
+**Modulo Telegram, da verificare** (owner, 27/08): la patch del 13° anniversario
+aggiunge **pulsanti nei messaggi** e **documenti inline**
+(`telegram.org/blog/welcome-messages-buttons-TG-13`). Dalla fonte prima di
+toccare il connettore: cambia cosa Muffin può offrire lì.
 
-**Misurato prima.** La cache non prende — 2.8% su 18 chiamate, **0** sul
-modello vivo (`research/cache-prompt-2026-08-26.md`). Il prompt vivo è del 9
-agosto (11498 contro 22477 caratteri); da #142 `doctor` lo vede.
+**Aperto per l'owner:** token bot Telegram; billing CI. La promozione `dev` →
+`main` (#163) l'ha mergiata lui il 27/08: PERCORSO §0 non lascia più niente.
 
-**Delle quattro lamentele dogfood ne resta una:** `sys.shell` chiede sempre
-(`decide.ts:245`) — allow silenzioso solo con `ctx.hardened`, falso perché
-`rot/` è dello stesso uid dell'agente. La via è rendere **vera** quella
-modalità (utente di servizio, `rot/` di un altro uid): sulla VPS si può, il
-meccanismo c'è da #138. Una concessione durevole contraddirebbe ADR-0003.
+**CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR;
+rosso in 2s con zero step = fatturazione. Con `mergeable` a `null`:
+`git merge-base --is-ancestor origin/dev HEAD`.
 
-**Non riaprire.** `muffin run` non ha timeout di default (`cli/run.ts:59`).
+**Stato macchina, non codice:** ollama non gira. Da #185 l'embedder è una
+scelta di config (`config.embedder`), quindi non è più un vicolo cieco. La cache non prende: 2.8% su 18 chiamate, **0** sul
+modello vivo (`research/cache-prompt-2026-08-26.md`).
 
-**Da non riperdere.** (a) E7: a «che modello usi?» non lo sa. (b) Le ancore
-verificano solo il primo intervallo di `file:A-B,C-D`. (c) Il ramo util-linux
-di `script` in `cli/main.test.ts` è scritto e mai eseguito: qui c'è solo il
-BSD, ed è Linux la produzione. (d) `inputSchema` e lo zod dell'handler restano
-due copie: `z.toJSONSchema` (zod 4.4.3, già in albero) genererebbe la prima
-dalla seconda, ma cambia i byte del prompt di ogni tool — cache compresa.
+**Dogfood, ne resta una:** `sys.shell` chiede sempre (`decide.ts:245`): allow
+silenzioso solo con `ctx.hardened`, falso perché `rot/` ha lo stesso uid
+dell'agente. Renderla **vera** sulla VPS si può: il meccanismo c'è da #138.
 
-**Design da non riscoprire:** THESIS §5 e ADR-0027 (le lezioni di Claude si
-trasferiscono SELETTIVAMENTE: non è lo stesso prodotto).
+**Non riaprire.** `muffin run` non ha timeout di default; il tetto tool è 14
+(owner, 27/08) e non è il vincolo (#179).
 
-**Coda owner:** ASK durevole; avanzamento con validazione della compaction
-(arxiv 2605.08580); dedup gateway/repl.
+**Da non riperdere.** Le ancore verificano solo il primo intervallo di
+`file:A-B,C-D`; `resolved?` in `fsWrite` non è un tipo legato a
+`resolveInScope`; `inputSchema` e lo zod dell'handler sono due copie.
+**Design:** THESIS §5 e ADR-0027 (le lezioni di Claude si trasferiscono
+SELETTIVAMENTE).
 
-**Follow-up.** REPL muore su input non-TTY; `doctor` pre-boot dà rimedio
-sbagliato; composizione N→1 senza assembler; `possibly_sent` non distingue
-crash da in-volo; TOCTOU gateway; repl-lock assente; finestra pairing; Discord
-`handle()` non bound; un 429 persistente spegne il progresso.
+**Follow-up.** REPL su input non-TTY; `doctor` pre-boot dà rimedio sbagliato;
+N→1 senza assembler; `possibly_sent` non distingue crash da in-volo; TOCTOU
+gateway; repl-lock; finestra pairing; Discord `handle()` non bound; un 429
+persistente spegne il progresso; ASK durevole; compaction validata (arxiv
+2605.08580); **`web_search` non è registrato senza chiave Tavily** — niente
+deep research di serie.
 
-**Truth maintenance:** M5-BIS possiede status Gate/RETURN, PERCORSO §0
-l'ordine. `dev` resta privato.
+**Truth maintenance:** M5-BIS possiede status Gate, PERCORSO §0 l'ordine.

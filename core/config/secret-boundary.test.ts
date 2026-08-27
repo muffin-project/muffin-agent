@@ -33,6 +33,24 @@ const ALLOWED_CALLERS: Readonly<Record<string, string>> = {
   'cli/surface.ts': 'builds TelegramApi/DiscordApi at pairing/setup time, and one existence check (hasSecret) that discards the value',
   'cli/doctor.ts': 'diagnostic: reports backend, path and byte length only — never a character of the value (see doctor.test.ts)',
   'core/mcp/connect.ts': "resolves a server's `secret://` env refs at spawn time — the value goes into the child's environment (never argv, never the registry on disk) and no intermediate structure holds it",
+  /**
+   * Aggiunto il 27/08/2026, ed è una decisione sul confine, non una formalità.
+   *
+   * L'eval del floor **è** un sink privilegiato nel senso di ADR-0048: la sua
+   * ragione di esistere è chiamare il modello vero, quindi la chiave va dritta
+   * nel costruttore di `OpenAICompatProvider` e da lì sul filo, esattamente
+   * come in `agent/runtime.ts`. Nessuna struttura intermedia la tiene, niente
+   * la stampa, e resta un `const` in cima al file.
+   *
+   * L'alternativa era peggio per l'owner, non migliore: senza questo,
+   * misurare qualcosa richiede di esportare la chiave a mano in una shell —
+   * dove finisce nella history e nella process table. È lo stesso pericolo che
+   * `AGENTS.md` vieta per argv, spostato di un metro.
+   *
+   * L'ambiente resta primo: questo è il fallback, e serve a non chiedere di
+   * nuovo una chiave che l'installazione ha già.
+   */
+  'evals/floor/run.ts': 'runs the real loop against the real model — the key goes straight into the provider constructor and onto the wire, same shape as agent/runtime.ts; env vars still win, this is the fallback so nobody has to paste a secret into a shell to measure something',
 };
 
 /** Files matching this are never walked for callers: tests exercise the primitive on purpose. */

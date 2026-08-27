@@ -43,6 +43,26 @@ export const ConfigSchema = z.object({
   }),
   models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
   /**
+   * Il ragionamento sul turno di conversazione, quando l'owner non vuole quello
+   * che il profilo del suo modello dichiara.
+   *
+   * Assente significa «quello che dice il profilo», mai un valore implicito:
+   * `agent/profiles/*.json` resta il posto dove sta la conoscenza *sul modello*
+   * (Fable 5 va in 400 se glielo spegni, un qwen3 ragiona di default), e questo
+   * campo è la conoscenza *sull'installazione* — una manopola dell'owner, che
+   * ADR-0036 mette esplicitamente fra le cose che Muffin stesso può scrivere.
+   * Le due cose sono separate perché un `muffin update` che porta un profilo
+   * nuovo non deve cancellare una scelta dell'owner, e una scelta dell'owner
+   * non deve viaggiare dentro un file di profilo che vale per tutti.
+   *
+   * Vale **solo per la corsia principale**. Le corsie della memoria
+   * (estrazione, giudice, reranker) chiedono `off` da sé e non leggono né
+   * questo campo né il profilo: lì il ragionamento non è un extra, è un costo
+   * puro che ha già mangiato il tetto dei token una volta
+   * (`core/memory/corsie-senza-reasoning.test.ts`).
+   */
+  thinking: z.enum(['adaptive', 'off', 'unset']).optional(),
+  /**
    * Absent means no web search, and the tool is simply not registered — the
    * same posture as the shell without a working sandbox. A capability that
    * costs the owner money per call does not get switched on by a default.
@@ -53,6 +73,39 @@ export const ConfigSchema = z.object({
       /** `secret://name`, like the model key. Never the key itself. */
       apiKeyRef: z.string().min(1),
       maxResults: z.number().int().min(1).max(20).optional(),
+    })
+    .optional(),
+  /**
+   * Quale embedder indicizza la memoria. Assente = Ollama locale coi suoi
+   * default, che è il comportamento di sempre: nessuna migrazione, nessun
+   * cambio per chi non tocca niente.
+   *
+   * Esiste perché `core/memory/embed.ts` dichiara da sempre, nel suo primo
+   * commento, che l'interfaccia c'è «perché sia una scelta di configurazione e
+   * non architetturale» — e la scelta non si poteva fare: `buildRuntime`
+   * costruiva `new OllamaEmbedder()` e basta, e `OpenAICompatEmbedder` era
+   * codice che nessuno istanziava. Su una VPS senza Ollama installato questo
+   * significa che niente viene indicizzato e il recall resta solo testuale,
+   * senza che nulla di rotto lo dica.
+   *
+   * Il locale resta il default per la ragione scritta lì: un agente che legge
+   * tutto quello che scrivi è l'ultimo posto da cui mandare ogni frase a terzi
+   * per indicizzarla. Ma restare local-first non è la stessa cosa che essere
+   * local-only.
+   */
+  embedder: z
+    .object({
+      kind: z.enum(['ollama', 'openai-compat']),
+      model: z.string().min(1).optional(),
+      /**
+       * Obbligatoria per `openai-compat`: la dimensione è cotta nel DDL della
+       * tabella vettoriale, quindi indovinarla sbagliata significa un indice
+       * che si rifà da solo al primo boot dopo aver scoperto l'errore.
+       */
+      dimensions: z.number().int().positive().optional(),
+      baseUrl: z.string().url().optional(),
+      /** `secret://name`, come la chiave del modello. Mai la chiave. */
+      apiKeyRef: z.string().min(1).optional(),
     })
     .optional(),
   // No `budget` here, deliberately. The caps are a rail, so they live inside the
@@ -156,6 +209,16 @@ export const paths = (home = muffinHome()) => ({
   // (not even `muffin rot reseal`). `muffin doctor` reads it to tell "never
   // touched since init" from "the owner edited this" without needing Git.
   defaultsManifest: join(home, 'defaults-manifest.json'),
+  /**
+   * Il nonce del recinto delle skill nel system prompt, uno per installazione.
+   *
+   * Non è un segreto nel senso di `secrets/` — non apre niente — ma è
+   * imprevedibile da chi non può leggere questa home, che è esattamente la
+   * proprietà che serve a un recinto. Vive in un file suo perché deve essere
+   * **stabile fra processi**: derivarlo a ogni boot rifarebbe il difetto che ha
+   * motivato questa riga (prompt diverso a ogni `muffin run`, cache a zero).
+   */
+  promptNonce: join(home, 'prompt-nonce'),
   // Outside the root of trust on purpose: the voice is the part that learns,
   // so the agent may propose changes to it through the ratchet. `identity.md`
   // lives under rot/ and stays fixed. One entry here rather than the same
@@ -168,6 +231,15 @@ export const paths = (home = muffinHome()) => ({
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),
   secrets: join(home, 'secrets'),
+  /**
+   * Le copie prese prima di una mutazione, una directory per turno.
+   *
+   * Decisione owner del 16/08 (M5-BIS §1, via B): il journal vive nel
+   * filesystem sotto `~/.muffin/`, non in una tabella. Costa una migrazione in
+   * meno su un database che sta gia accumulando dati veri, e la forma e
+   * ispezionabile con `ls` il giorno che qualcosa va storto.
+   */
+  undo: join(home, 'undo'),
 });
 
 /**

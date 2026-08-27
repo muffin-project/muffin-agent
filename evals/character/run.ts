@@ -11,7 +11,7 @@ import { runTurn, type RegisteredTool } from '../../agent/loop.js';
 import { buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { AnthropicProvider } from '../../agent/providers/anthropic.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
-import type { Provider } from '../../agent/providers/types.js';
+import { REASONING_HEADROOM, type ChatCall, type Provider } from '../../agent/providers/types.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { CapabilityDecl, Principal } from '../../core/policy/types.js';
 import { describeInterrupted } from '../../core/turns/store.js';
@@ -266,6 +266,58 @@ function plainTranscript(transcript: TurnRecord[]): string {
 export type Verdict = 'pass' | 'fail' | 'n/a' | 'unparsed';
 export type PropertyJudgement = { property: PropertyId; verdict: Verdict; evidence: string };
 
+/**
+ * Il tetto di uscita del giudice, e perché non è più 1024 secco.
+ *
+ * Il giudice è la **quarta** corsia che chiede JSON e non legge prosa, dopo le
+ * tre di `core/memory/corsie-senza-reasoning.test.ts` — e quando quelle sono
+ * state collegate a `thinking: 'off'` (27/08) questa è rimasta indietro: non
+ * perché l'adapter non sappia spegnere il reasoning (`buildProvider` costruisce
+ * un `OpenAICompatProvider` su openrouter.ai, quindi `speaksReasoningEffort` è
+ * già vero), ma perché nessuno glielo chiedeva. La `ChatCall` qui sotto non
+ * portava il campo, quindi il giudice ragionava.
+ *
+ * La misura, sull'installazione dell'owner il 27/08 con `qwen/qwen3.8-27b`
+ * giudice di sé stesso, sulla trascrizione di `memory-relevant`, 6 giri per
+ * variante:
+ *
+ *  - com'era (tetto 1024, nessun `thinking`): uscita 652–1024 token, **mediana
+ *    1024**, `stop=max_tokens` in 3 giri su 6 — due con `content` **vuoto** e
+ *    uno troncato a metà JSON. Tre misure perse su sei giri.
+ *  - com'è ora (`thinking: 'off'`, tetto 1024 + `REASONING_HEADROOM`): uscita
+ *    147–294 token, zero troncati, zero misure perse.
+ *
+ * I due sintomi dei 30 `unparsed` della corsa del 27/08 — evidenza vuota e JSON
+ * tagliato a metà parola — sono lo stesso guasto letto a due distanze dal tetto.
+ *
+ * Il margine resta anche con `off`, per la ragione scritta in
+ * `REASONING_HEADROOM`: `max_tokens` è un limite, non una richiesta, quindi per
+ * un modello che non ragiona non costa niente, e per un endpoint che non capisce
+ * il campo (Ollama, llama.cpp, vLLM, o un giudice Anthropic) è l'unica cosa che
+ * tiene viva la corsia. `thinking: 'off'` senza margine sarebbe riparare solo
+ * dove si è misurato.
+ */
+export const JUDGE_OUTPUT_TOKENS = 1024 + REASONING_HEADROOM;
+
+/**
+ * La `ChatCall` del giudice, in una funzione sola, perché è il posto dove i due
+ * campi che decidono se la misura arriva a destinazione si possono provare senza
+ * una chiave e senza rete. `runEval` non ne costruisce un'altra.
+ */
+export function judgeCall(model: string, prompt: { system: string; user: string }): ChatCall {
+  return {
+    model,
+    system: [{ type: 'text', text: prompt.system }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
+    maxOutputTokens: JUDGE_OUTPUT_TOKENS,
+    // La quarta corsia che chiede JSON e non legge prosa, dopo le tre di
+    // `core/memory/corsie-senza-reasoning.test.ts`. Senza questo campo il
+    // giudice ragionava dentro il proprio tetto di uscita e tornava vuoto.
+    thinking: 'off',
+    stream: false,
+  };
+}
+
 export function buildJudgePrompt(probe: Probe, transcript: string): { system: string; user: string } {
   const rubricLines = probe.properties.map((p) => `- ${p}: ${RUBRIC[p]}`).join('\n');
   const system =
@@ -313,29 +365,77 @@ export function parseJudgeOutput(raw: string, properties: readonly PropertyId[])
 // Reports
 // ---------------------------------------------------------------------------
 
-type ReportRow = { model: string; probe: string; property: PropertyId; verdict: Verdict; evidence: string };
+export type ReportRow = { model: string; probe: string; property: PropertyId; verdict: Verdict; evidence: string };
 
 function escapeCell(s: string): string {
   return s.replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 240);
 }
 
-export function renderReport(rows: ReportRow[], models: readonly ModelTarget[], judge: ModelTarget): string {
-  const counts = new Map<string, { pass: number; fail: number; other: number }>();
+/**
+ * Quante misure per modello, e — separatamente — quante ne sono andate perse.
+ *
+ * `n/a` e `unparsed` stavano in un contatore solo, `other`, stampato «n/a o
+ * non-parsato». Sono cose diverse: `n/a` è un **giudizio** («questo scambio non
+ * dà materiale per giudicare questa proprietà»), `unparsed` è una **misura
+ * persa** — il giudice non ha risposto, o ha risposto qualcosa che nessuno può
+ * leggere, e della proprietà non si sa niente. Sommate, una corsa che ha perso
+ * più di metà delle misure si legge come un successo: il 27/08, su 55 misure,
+ * «25 pass, 0 fail, 30 n/a o non-parsato» erano 30 misure perse.
+ *
+ * Puro ed esportato per la stessa ragione di `summarize` in
+ * `evals/acceptance/report.ts`: il gate è una condizione su questi numeri, e
+ * `main` la legge da qui invece di ri-derivarla dal testo che ha stampato.
+ */
+export type VerdictCounts = { pass: number; fail: number; na: number; unparsed: number; total: number };
+export type RunSummary = {
+  byModel: Map<string, VerdictCounts>;
+  /** Misure perse in tutta la corsa. `failed` è questo `> 0` e nient'altro. */
+  unparsed: number;
+  total: number;
+  failed: boolean;
+};
+
+export function summarizeVerdicts(rows: readonly ReportRow[]): RunSummary {
+  const byModel = new Map<string, VerdictCounts>();
   for (const r of rows) {
-    const c = counts.get(r.model) ?? { pass: 0, fail: 0, other: 0 };
+    const c = byModel.get(r.model) ?? { pass: 0, fail: 0, na: 0, unparsed: 0, total: 0 };
     if (r.verdict === 'pass') c.pass += 1;
     else if (r.verdict === 'fail') c.fail += 1;
-    else c.other += 1;
-    counts.set(r.model, c);
+    else if (r.verdict === 'n/a') c.na += 1;
+    else c.unparsed += 1;
+    c.total += 1;
+    byModel.set(r.model, c);
   }
-  const summary = [...counts.entries()]
-    .map(([model, c]) => `- ${model}: ${c.pass} pass, ${c.fail} fail, ${c.other} n/a o non-parsato (su ${c.pass + c.fail + c.other})`)
+  let unparsed = 0;
+  let total = 0;
+  for (const c of byModel.values()) {
+    unparsed += c.unparsed;
+    total += c.total;
+  }
+  return { byModel, unparsed, total, failed: unparsed > 0 };
+}
+
+export function renderReport(rows: ReportRow[], models: readonly ModelTarget[], judge: ModelTarget): string {
+  const { byModel, unparsed: persePerCorsa, total: totalePerCorsa, failed } = summarizeVerdicts(rows);
+  const summary = [...byModel.entries()]
+    .map(([model, c]) => {
+      const giudicate = c.pass + c.fail + c.na;
+      const perse = c.unparsed > 0 ? ` — **${c.unparsed} misure PERSE** (giudice non parsato)` : ' — nessuna misura persa';
+      return `- ${model}: ${giudicate}/${c.total} misure giudicate (${c.pass} pass, ${c.fail} fail, ${c.na} n/a)${perse}`;
+    })
     .join('\n');
-  const findings = [...counts.entries()]
+  // La riga che dice se la corsa vale: una corsa con misure perse non è una
+  // corsa riuscita, e non deve poterlo sembrare a chi legge solo la sintesi.
+  const esito = failed
+    ? `**CORSA NON RIUSCITA: ${persePerCorsa} misure perse su ${totalePerCorsa}.** Un \`unparsed\` non è un \`n/a\`: ` +
+      `di quella proprietà non si sa niente. La risposta grezza del giudice è in \`<probe>.judge.raw.json\` accanto ` +
+      `al verdetto — guarda \`stopReason\` e \`usage.outputTokens\` prima di leggere i pass qui sotto come un risultato.`
+    : `Nessuna misura persa: ${totalePerCorsa} misure su ${totalePerCorsa} sono state giudicate.`;
+  const findings = [...byModel.entries()]
     .filter(([, c]) => c.fail > 0 && c.fail >= c.pass)
     .map(([model, c]) => `- **${model}**: ${c.fail} fail contro ${c.pass} pass — verifica a mano prima di considerarlo compatibile con questa persona; non deformare Muffin per adattarlo al modello.`)
     .join('\n');
-  const header = `# Character eval — report\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map((m) => m.label).join(', ')}\ngiudice: ${judge.label}\n\n`;
+  const header = `# Character eval — report\n\ngenerato: ${new Date().toISOString()}\nmodelli: ${models.map((m) => m.label).join(', ')}\ngiudice: ${judge.label}\n\n${esito}\n\n`;
   const table =
     '| Probe | Proprietà | Modello | Giudice | Evidenza | Revisione umana |\n|---|---|---|---|---|---|\n' +
     rows.map((r) => `| ${r.probe} | ${r.property} | ${r.model} | ${r.verdict} | ${escapeCell(r.evidence)} | |`).join('\n');
@@ -379,7 +479,19 @@ export function renderTokenReport(rows: readonly TokenRow[], models: readonly Mo
  * `--dry-run` (or a fully-mocked real run) in-process, fast, without spawning
  * `tsx` as a child. `main()` below is the only caller that touches `process.argv`.
  */
-export async function runEval(config: RunConfig): Promise<{ reportPath: string; report: string }> {
+export async function runEval(
+  config: RunConfig,
+  /**
+   * Un giudice già costruito, al posto di quello che `buildProvider` tirerebbe
+   * su dalla chiave in ambiente. Esiste perché la domanda «la corsa vera chiede
+   * davvero al giudice di non ragionare?» non ha una risposta osservabile
+   * altrimenti: il campo `reasoning` parte solo su endpoint openrouter.ai, quindi
+   * un finto server locale non lo vedrebbe mai arrivare e un test contro di lui
+   * proverebbe il contrario di quello che sembra. Qui il test guarda la
+   * `ChatCall` che la corsa costruisce, che è l'anello che si è rotto.
+   */
+  overrides: { judgeProvider?: Provider } = {},
+): Promise<{ reportPath: string; report: string; summary: RunSummary }> {
   const probes = config.probeIds ? PROBES.filter((p) => config.probeIds!.includes(p.id)) : PROBES;
   if (probes.length === 0) throw new Error('nessun probe corrisponde a --probes');
 
@@ -388,7 +500,7 @@ export async function runEval(config: RunConfig): Promise<{ reportPath: string; 
   mkdirSync(runOutDir, { recursive: true });
 
   const fake: FakeProvider | null = config.dryRun ? await startFakeProvider({ main: [{ text: 'Ok, capito.' }] }) : null;
-  const judgeProvider = !config.dryRun && config.judge ? buildProvider(config.judge) : null;
+  const judgeProvider = overrides.judgeProvider ?? (!config.dryRun && config.judge ? buildProvider(config.judge) : null);
   const reportRows: ReportRow[] = [];
   const tokenRows: TokenRow[] = [];
 
@@ -433,15 +545,19 @@ export async function runEval(config: RunConfig): Promise<{ reportPath: string; 
             const turnTokens = made.reduce((sum, r) => sum + approxTokens(r.transcript), 0) - systemTokens;
             tokenRows.push({ model: target.label, probe: probe.id, systemTokens, turnTokens, calls: made.length });
           } else {
-            const { system, user } = buildJudgePrompt(probe, plainTranscript(transcript));
-            const result = await judgeProvider!.chat({
-              model: config.judge!.model,
-              system: [{ type: 'text', text: system }],
-              messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
-              maxOutputTokens: 1024,
-              stream: false,
-            });
+            const result = await judgeProvider!.chat(judgeCall(config.judge!.model, buildJudgePrompt(probe, plainTranscript(transcript))));
             const judgements = parseJudgeOutput(result.text ?? '', probe.properties);
+            // La risposta grezza, sempre, accanto al verdetto — non solo quando
+            // il verdetto la sopravvive. `parseJudgeOutput` salvava 200
+            // caratteri di `raw` come evidenza, che di una risposta **vuota**
+            // sono zero: la corsa del 27/08 ha perso 30 misure su 55 e non ha
+            // lasciato niente con cui capire perché. `stopReason` e `usage`
+            // stanno qui perché sono i due campi che hanno nominato la causa
+            // (`max_tokens` a 1024 token di uscita), e nel `.md` non compaiono.
+            writeFileSync(
+              join(modelOutDir, `${probe.id}.judge.raw.json`),
+              JSON.stringify({ model: result.model, stopReason: result.stopReason, usage: result.usage, raw: result.text ?? '' }, null, 2),
+            );
             writeFileSync(join(modelOutDir, `${probe.id}.judge.json`), JSON.stringify(judgements, null, 2));
             for (const j of judgements) reportRows.push({ model: target.label, probe: probe.id, ...j });
           }
@@ -457,7 +573,10 @@ export async function runEval(config: RunConfig): Promise<{ reportPath: string; 
   const report = config.dryRun ? renderTokenReport(tokenRows, config.models) : renderReport(reportRows, config.models, config.judge!);
   const reportPath = join(runOutDir, 'report.md');
   writeFileSync(reportPath, report);
-  return { reportPath, report };
+  // Anche sotto `--dry-run`, dove `reportRows` è vuoto: zero misure perse su
+  // zero misure, `failed: false`. Un dry-run non giudica niente, quindi non può
+  // perdere niente — e non deve poter far uscire il comando rosso.
+  return { reportPath, report, summary: summarizeVerdicts(reportRows) };
 }
 
 async function main(): Promise<void> {
@@ -468,8 +587,19 @@ async function main(): Promise<void> {
   }
   const repoRoot = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
   const config = parseCli(argv, join(repoRoot, 'evals', 'character', 'out'));
-  const { reportPath, report } = await runEval(config);
+  const { reportPath, report, summary } = await runEval(config);
   process.stdout.write(config.dryRun ? report : `report scritto in ${reportPath}\n`);
+  // Il gate, come in `evals/acceptance/report.ts`: una condizione sui conteggi,
+  // non una stampa. Una corsa che ha perso misure ha misurato meno di quanto
+  // dichiara, e chi la lancia da uno script deve poterlo sapere senza leggere
+  // il markdown.
+  if (summary.failed) {
+    process.stderr.write(
+      `FALLITO: ${summary.unparsed} misure perse su ${summary.total} — il giudice non ha prodotto un verdetto leggibile. ` +
+        `Le risposte grezze sono nei file <probe>.judge.raw.json accanto al report.\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;

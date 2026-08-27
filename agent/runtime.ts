@@ -15,8 +15,9 @@ import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
 import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import { UndoJournal } from '../core/undo/journal.js';
 import type { Provider } from './providers/types.js';
-import { loadProfiles, selectProfile } from './profiles/profile.js';
+import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
@@ -33,6 +34,7 @@ import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
 import { discoverSkills, skillsPromptSection } from '../core/skills/skills.js';
 import { makeSkillTool, skillCapability } from './tools/skill.js';
+import { promptNonce } from '../core/skills/nonce.js';
 import { inspectCapability, makeInspectTool } from './tools/inspect.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { JobStore } from '../core/scheduler/jobs.js';
@@ -40,7 +42,7 @@ import { TurnStore, describeInterrupted } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
 import { makeTodoTool, todoCapability } from './tools/todo.js';
-import { OllamaEmbedder } from '../core/memory/embed.js';
+import { makeEmbedder } from '../core/memory/embed.js';
 import { LlmReranker } from '../core/memory/rerank.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
@@ -311,7 +313,10 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
 
   const profileProblems: string[] = [];
   const profiles = loadProfiles(undefined, (line) => profileProblems.push(line));
-  const profile = selectProfile(config.models.main, profiles);
+  // L'override dell'owner (`config.json` §thinking) sulla sola corsia di
+  // conversazione: la light qui sotto tiene il profilo del *suo* modello, e le
+  // corsie della memoria chiedono `off` da sé.
+  const profile = withThinking(selectProfile(config.models.main, profiles), config.thinking);
 
   const recordSpend = (entry: SpendEntry): number => {
     const usd = costUsd(entry.model, entry, config.provider.baseUrl);
@@ -342,7 +347,11 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const memoryStore = new MemoryStore(db);
   let vectors: VectorIndex | undefined;
   try {
-    vectors = new VectorIndex(db, new OllamaEmbedder());
+    // Dalla config, non cablato: l'embedder è una scelta di installazione (il
+    // primo commento di `core/memory/embed.ts` lo dice da sempre, e finora non
+    // si poteva fare). Su una VPS senza Ollama, un `new OllamaEmbedder()` fisso
+    // significa che niente viene indicizzato e il recall resta solo testuale.
+    vectors = new VectorIndex(db, makeEmbedder(config.embedder, (ref) => readSecret(ref, home)));
   } catch {
     vectors = undefined;
   }
@@ -613,7 +622,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
   const promptBlocks = buildSystemPromptBlocks(
     home,
     safeMode !== null,
-    skillsPromptSection(skillScan.skills),
+    skillsPromptSection(skillScan.skills, promptNonce(home)),
   );
 
   /**
@@ -724,6 +733,12 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
       // The declarations, so the loop derives the policy resource from
       // resourceKind/policyArgs instead of guessing at argument names.
       capabilities,
+      // Il registro di undo: senza questa riga `fs_write` è offerto al modello e
+      // non scrive mai, perché il kernel giudica `draft` e `draft` senza copia
+      // rifiuta (M5-BIS D2/D3/D11). Il difetto era esattamente qui — un verdetto
+      // del kernel senza implementazione a valle — quindi la cucitura ha un test
+      // suo in `runtime.test.ts`, non solo il ramo nel loop.
+      undo: new UndoJournal(p.undo),
       tracer,
       sessions: new SessionStore(home),
       // On the same connection as everything else, for ADR-0022's reason: one

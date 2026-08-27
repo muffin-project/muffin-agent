@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
-import { probeSandbox, isUsernsDenied, APPARMOR_REMEDY, message, type SandboxProbe } from './probe.js';
+import {
+  probeSandbox,
+  isUsernsDenied,
+  APPARMOR_REMEDY,
+  SANDBOX_BINARIES_REMEDY,
+  message,
+  type SandboxProbe,
+} from './probe.js';
 
 /**
  * The one door to sandboxed execution.
@@ -115,12 +122,36 @@ function classifyContainmentError(error: unknown): ContainmentFailure {
   if (isUsernsDenied(detail)) {
     return { reason: 'userns_denied', detail, remedy: APPARMOR_REMEDY };
   }
+  if (isMissingDependency(detail)) {
+    // Il caso che si incontra davvero su una macchina nuova, e che finora
+    // rispondeva col rimedio generico «guarda il detail». `SandboxManager`
+    // controlla le sue dipendenze da sé e fallisce *prima* di invocare bwrap,
+    // quindi non passa mai dal ramo `binary_missing` del probe — l'owner
+    // vedeva `contain_failed` e un rimedio che non nominava il pacchetto
+    // mancante. Misurato in container: con bubblewrap e socat installati e
+    // ripgrep no, il messaggio è «Sandbox dependencies not available:
+    // ripgrep (rg) not found».
+    return { reason: 'contain_failed', detail, remedy: SANDBOX_BINARIES_REMEDY };
+  }
   return {
     reason: 'contain_failed',
     detail,
     remedy:
       'the real sandbox invocation (SandboxManager) failed on this host — see detail; this is the same path the runtime uses to run commands, not the narrower probe',
   };
+}
+
+/**
+ * Il messaggio dice che manca un binario, non che il contenimento ha ceduto.
+ *
+ * Le parole sono quelle di `@anthropic-ai/sandbox-runtime`, che controlla le
+ * proprie dipendenze prima di invocare bwrap; qui si riconoscono per poter dare
+ * il rimedio che le nomina tutte e tre invece di quello generico.
+ */
+function isMissingDependency(detail: string): boolean {
+  return /dependencies not available|not found in PATH|\b(?:rg|ripgrep|socat|bwrap|bubblewrap)\b[^\n]{0,40}not found/i.test(
+    detail,
+  );
 }
 
 /** Paths the sandbox must never touch, whatever the per-call scope says. */

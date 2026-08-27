@@ -1,5 +1,6 @@
 import { it } from 'vitest';
-import { entry, promoteMarker, type Expectation } from './manifest.js';
+import { entry, promoteMarker, type Expectation, type ScenarioEntry } from './manifest.js';
+import { annunciaSalto } from './non-provabile.js';
 
 /**
  * Registers an M5-BIS row's acceptance scenario as a real vitest test, using
@@ -21,8 +22,57 @@ import { entry, promoteMarker, type Expectation } from './manifest.js';
  * against the manifest's own `expectFailure`, inside a plain `it` — see
  * `guardAttesoRosso` for the three outcomes.
  */
-export function scenario(row: string, fn: () => Promise<void>, timeout?: number): void {
+/**
+ * `nonProvabileQui` è per l'unico caso onesto in cui uno scenario non deve né
+ * passare né fallire: quando **l'host** non è attrezzato per esercitare la cosa
+ * che lo scenario prova. Non è un interruttore di comodo — la funzione deve
+ * interrogare il prerequisito *fuori* da Muffin (vedi `hostContiene`, che
+ * chiede a bwrap direttamente), così un difetto di Muffin resta rosso e solo un
+ * limite della macchina diventa un salto.
+ *
+ * Il motivo è misurato: dentro Docker `bwrap` non può montare `/proc`, quindi
+ * il job script non parte e lo scenario andava rosso con un messaggio che si
+ * legge come «il sandbox di Muffin è rotto su Linux». Non lo era. Un rosso
+ * falso costa quanto un verde falso, e insegna a ignorare quel rosso.
+ *
+ * Il salto **si stampa**: una capability non esercitata che non lascia traccia
+ * nell'output è indistinguibile da una provata.
+ */
+/**
+ * Come si chiama il test che `scenario()` registra quando l'host non è
+ * attrezzato — e **con quale etichetta**.
+ *
+ * Estratta dalla registrazione perché il nome è l'unica cosa che `report.ts`
+ * guarda: cerca l'esito di una riga per suffisso del titolo di manifest
+ * (`chiaviEsito`). Le due parti divergevano proprio qui — il salto si
+ * intitolava con la **riga** (`"A1 [non provabile qui: …]"`) mentre la ricerca
+ * usava il **titolo** (`"A1 continuity: …"`) — quindi `verdictFor` usciva con
+ * `nessuno-scenario` prima ancora di arrivare al ramo del salto: la riga si
+ * leggeva scoperta, e lo stesso test si contava una seconda volta come «fuori
+ * inventario». `meta.title` e non `row`, e `scenario.test.ts` fa il giro
+ * completo attraverso `chiaveEsito` perché le due non possano più separarsi in
+ * silenzio.
+ */
+export function titoloDelSalto(meta: ScenarioEntry, motivo: string, scrivi: (s: string) => void): string {
+  return annunciaSalto(meta.title, motivo, scrivi);
+}
+
+/**
+ * Registers an M5-BIS row's acceptance scenario as a real vitest test — see the
+ * two comments above for `verde`/`atteso-rosso` and for `nonProvabileQui`.
+ */
+export function scenario(
+  row: string,
+  fn: () => Promise<void>,
+  timeout?: number,
+  nonProvabileQui?: () => string | null,
+): void {
   const meta = entry(row);
+  const motivo = nonProvabileQui?.() ?? null;
+  if (motivo !== null) {
+    it.skip(titoloDelSalto(meta, motivo, (s) => process.stderr.write(s)), fn, timeout);
+    return;
+  }
   if (meta.expectation.kind === 'verde') {
     it(meta.title, fn, timeout);
     return;

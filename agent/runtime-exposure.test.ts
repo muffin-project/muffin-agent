@@ -59,13 +59,10 @@ const REGISTERED = [
   // the wrong trade on the profile least able to run a multi-turn plan.
   'wait',
   'todo',
-  // Ultimo, e per ora è il prezzo che paga: su `consumer-local` (tetto 10) i
-  // dodici registrati sono già oltre, quindi `sys_inspect` non arriva al
-  // modello su quel profilo. Registrarlo più in alto costerebbe `http_get` —
-  // il web — che questo file vieta esplicitamente. La scelta fra
-  // propriocezione e uno dei dieci è una decisione prodotto, non un ordine di
-  // `push`: fino a che non è presa, il taglio è **dichiarato** in
-  // `bootLines` invece di essere invisibile (ADR-0008).
+  // Ultimo, e non paga più il prezzo: il tetto di `consumer-local` è passato
+  // da 10 a 14 (owner, 27/08) proprio perché tagliava questo. Resta ultimo —
+  // se il tetto tornerà a mordere, è il primo a sparire, e il test sopra lo
+  // dice invece di lasciarlo succedere.
   'sys_inspect',
 ];
 
@@ -76,7 +73,7 @@ describe('quali tool vede davvero un turno', () => {
     expect(rt.names.filter((n) => n !== SANDBOXED)).toEqual(REGISTERED);
   });
 
-  it('su consumer-local il tetto taglia solo le due primitive, mai il web', () => {
+  it('su consumer-local il tetto non taglia più niente, e questo va visto', () => {
     /**
      * The profile that actually truncates. The cap is not a hypothetical: it is
      * what a local model gets, and the tools past the line are invisible to it —
@@ -92,23 +89,34 @@ describe('quali tool vede davvero un turno', () => {
      */
     const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
     const profile = selectProfile('qwen3.8-27b', profiles);
-    expect(profile.maxToolsExposed).toBe(10);
+    // 14, alzato dai 10 originali (owner, 27/08) — un numero senza misura
+    // dietro, come lo era 10. Pinnato qui perché cambiarlo è una decisione,
+    // non un refactor: è la sola cosa che decide cosa il modello dell'owner
+    // può chiamare.
+    expect(profile.maxToolsExposed).toBe(14);
 
     const rt = realRuntime();
     rt.close();
-    const shown = rt.names.slice(0, profile.maxToolsExposed);
     const cut = rt.names.slice(profile.maxToolsExposed);
 
-    // The cap really bites on this profile — otherwise the rest proves nothing.
-    expect(cut.length).toBeGreaterThan(0);
-    // And everything it takes is one of the two primitives, or `sys_inspect`
-    // — which is registered last precisely so that it is what the cap takes
-    // first. Before the reordering this set was `['skill_read', 'http_get']`.
-    expect(cut.every((n) => n === 'wait' || n === 'todo' || n === 'sys_inspect')).toBe(true);
+    /**
+     * Niente tagliato **oggi**, ed è la ragione per cui questo test resta.
+     *
+     * Fino al 27/08 il tetto mordeva e il file asseriva *cosa* poteva
+     * prendere. Ora non prende niente, e l'asserzione utile si è capovolta:
+     * il prossimo tool registrato lo rimette a mordere, in silenzio, e il
+     * primo a sparire sarà l'ultimo della lista. Qui diventa rosso invece.
+     *
+     * La risposta strutturale non è alzare ancora il numero — è la tool
+     * search, scartata il 26/08 valutandola contro il budget di token invece
+     * che contro questo tetto (`research/tool-design-2026-08-26.md`).
+     */
+    expect(cut, 'il tetto è tornato a tagliare: alzarlo ancora è un cerotto, non una risposta').toEqual([]);
 
-    // Said positively too, because a subset assertion passes on an empty world.
-    for (const kept of ['fs_read', 'memory_search', 'document_read', 'skill_read', 'http_get']) {
-      expect(shown, `${kept} deve restare esposto`).toContain(kept);
+    // Detto anche al positivo, perché un'asserzione su un insieme vuoto passa
+    // in un mondo vuoto.
+    for (const kept of ['fs_read', 'memory_search', 'document_read', 'skill_read', 'http_get', 'wait', 'todo', 'sys_inspect']) {
+      expect(rt.names, `${kept} deve restare esposto`).toContain(kept);
     }
   });
 
