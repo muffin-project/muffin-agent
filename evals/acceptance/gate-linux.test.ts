@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,5 +185,79 @@ describe('gate-linux.sh — la coda esterna, quella che decide l-esito dello scr
     const { status, stdout } = eseguiConDocker(125);
     expect(status).toBe(125);
     expect(stdout).toContain('GATE LINUX ROSSO');
+  });
+});
+
+const APRE_INSTALL = '# >>> BLOCCO INSTALL PROVATO DA gate-linux.test.ts';
+const CHIUDE_INSTALL = '# <<< BLOCCO INSTALL PROVATO DA gate-linux.test.ts';
+
+/** Le due righe che provano `install.sh`, lette dallo script invece che ricopiate. */
+export function bloccoInstall(script: string): string {
+  const inizio = script.indexOf(APRE_INSTALL);
+  const fine = script.indexOf(CHIUDE_INSTALL);
+  if (inizio === -1 || fine === -1 || fine < inizio) {
+    throw new Error(
+      `gate-linux.sh non contiene piu i marcatori del blocco install (${APRE_INSTALL} … ${CHIUDE_INSTALL}). ` +
+        `Se il blocco e stato spostato, sposta i marcatori con lui: senza, questo test non prova niente.`,
+    );
+  }
+  return script.slice(inizio + APRE_INSTALL.length, fine);
+}
+
+/**
+ * Un `install.sh` rotto deve arrossare il gate, non passare inosservato.
+ *
+ * Il blocco che prova l'installazione sta **fuori** dalla regione decisionale,
+ * e la sua rossezza non dipende da un `if`: dipende dal fatto che il container
+ * gira sotto `bash -euo pipefail -c`, quindi un comando che esce non-zero
+ * abortisce tutto. È una garanzia per omissione — regge finché nessuno appende
+ * un `|| true`, e nessuno lo noterebbe.
+ *
+ * Il worker che ha aggiunto il blocco l'ha provata **una volta a mano**,
+ * iniettando `exit 1` in `install.sh` e girando il gate vero in Docker:
+ * `GATE LINUX ROSSO`, exit 1. Giusto, e non ripetibile: quella prova non gira
+ * più. Questo test la rende permanente senza Docker, eseguendo le stesse due
+ * righe con un finto `runuser` sul PATH.
+ */
+describe('gate-linux.sh — il blocco che prova install.sh', () => {
+  function eseguiInstall(esitoRunuser: number): { status: number | null; stdout: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-gate-install-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    // `runuser` non esiste su macOS e non deve esistere: qui interessa solo
+    // cosa fa lo script quando quel comando fallisce.
+    const finto = join(bin, 'runuser');
+    writeFileSync(finto, `#!/bin/sh\necho "runuser: $*"\nexit ${esitoRunuser}\n`);
+    chmodSync(finto, 0o755);
+    const corpo = bloccoInstall(readFileSync(GATE, 'utf8'));
+    const script = `IAS="runuser -u nobody -- env HOME=/tmp/x"\nIHOME=/tmp/x\n${corpo}\n`;
+    const r = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}` },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    return { status: r.status, stdout: `${r.stdout}${r.stderr}` };
+  }
+
+  it('un install.sh che fallisce ferma il gate invece di lasciarlo proseguire', () => {
+    const r = eseguiInstall(1);
+    expect(r.status).not.toBe(0);
+    // E si ferma **subito**: la riga dopo non deve essere stata eseguita, o il
+    // gate proseguirebbe fino all'accettazione e la direbbe verde.
+    expect(r.stdout).not.toContain('muffin --version');
+  });
+
+  it('quando install.sh riesce, il blocco arriva in fondo', () => {
+    const r = eseguiInstall(0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('muffin --version');
+  });
+
+  it('nessuno ha neutralizzato le due righe con un `|| true`', () => {
+    // La mutazione più probabile non è cancellare il blocco: è renderlo
+    // innocuo per far passare una corsa, e lasciarcelo.
+    const corpo = bloccoInstall(readFileSync(GATE, 'utf8'));
+    expect(corpo).not.toMatch(/\|\|\s*(true|:)/);
+    expect(corpo).toContain('install.sh');
   });
 });
