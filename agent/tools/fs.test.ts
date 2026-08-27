@@ -385,3 +385,48 @@ describe('what a filesystem tool says about where its bytes came from', () => {
     expect(out.tier).toBe(0);
   });
 });
+
+/**
+ * Un campo obbligatorio che manca non è una stringa vuota.
+ *
+ * `fs_write` faceva `String(a.content ?? '')`. Il default trasformava una tool
+ * call a cui il modello aveva scordato `content` in un troncamento a zero byte
+ * del file nominato, con risposta «scritto». Lo schema dichiarato diceva
+ * `required: ['path', 'content']` e nessuno lo pretendeva — vedi
+ * `agent/tools/schema-conformance.test.ts`, che è il posto da cui è saltato
+ * fuori.
+ *
+ * Non è ipotetico: questo modello emette JSON malformato abbastanza spesso da
+ * aver ucciso l'estrazione per due giorni (#153).
+ */
+describe('gli argomenti dei tool fs sono pretesi, non convertiti', () => {
+  const byName = (scope: FsScope, name: string) =>
+    makeFsTools(scope).find((t) => t.spec.name === name)!;
+
+  it('fs_write senza content non tocca il file che avrebbe troncato', () => {
+    const { scope, root } = scoped();
+    const vittima = join(root, 'note.md');
+    writeFileSync(vittima, 'roba che vale');
+
+    // Sincrono: il rifiuto arriva prima che l'handler restituisca una promise,
+    // che è il punto — niente è ancora successo al file.
+    expect(() => byName(scope, 'fs_write').handler({ path: 'note.md' }, toolContext())).toThrow();
+
+    expect(readFileSync(vittima, 'utf8')).toBe('roba che vale');
+  });
+
+  it('un content vuoto voluto passa: si chiede con "", non dimenticandolo', async () => {
+    const { scope, root } = scoped();
+    const f = join(root, 'vuoto.txt');
+    writeFileSync(f, 'prima');
+    await byName(scope, 'fs_write').handler({ path: 'vuoto.txt', content: '' }, toolContext());
+    expect(readFileSync(f, 'utf8')).toBe('');
+  });
+
+  it('fs_read senza path non va a cercare un file chiamato «undefined»', () => {
+    // `String(undefined)` è `'undefined'`, che è un nome di file valido: il
+    // messaggio d'errore parlava di un file che il modello non ha mai nominato.
+    const { scope } = scoped();
+    expect(() => byName(scope, 'fs_read').handler({}, toolContext())).toThrow(/path/i);
+  });
+});
