@@ -1,3 +1,4 @@
+import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -595,5 +596,43 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
 
     expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
     runtime.close();
+  });
+});
+
+/**
+ * L'embedder configurato arriva alla tabella vettoriale.
+ *
+ * La cucitura, e la lezione che si ripete: `makeEmbedder` era coperto da cinque
+ * test suoi, `VectorIndex` da quattro, e sostituire `config.embedder` con
+ * `undefined` in `runtime.ts` lasciava **356 test verdi**. Cioè la manopola
+ * poteva essere morta in produzione — su una VPS senza Ollama, esattamente il
+ * caso per cui esiste — e nessuna suite se ne accorgeva.
+ *
+ * La prova non è che `makeEmbedder` viene chiamato: è che la **dimensione
+ * scelta nella config finisce cotta nel DDL della tabella su disco**, che è il
+ * punto dove la scelta smette di essere una preferenza e diventa un fatto
+ * durevole.
+ */
+describe('l\'embedder della config raggiunge la tabella vettoriale', () => {
+  it('la dimensione scelta finisce nel DDL di chunks_vec, non quella di default', () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-embedder-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    const configPath = paths(home).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    // `ollama` e non `openai-compat` di proposito: prova la stessa cucitura
+    // senza far passare nessun segreto per un test.
+    config.embedder = { kind: 'ollama', model: 'un-modello-inventato', dimensions: 7 };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    buildRuntime(home, mkdtempSync(join(tmpdir(), 'muffin-embedder-ws-')));
+
+    const db = new DatabaseCtor(paths(home).db, { readonly: true });
+    try {
+      const ddl = (db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'`).get() as { sql: string }).sql;
+      expect(ddl).toContain('float[7]');
+      expect(ddl).not.toContain('float[1024]');
+    } finally {
+      db.close();
+    }
   });
 });
