@@ -73,6 +73,10 @@ const lastSaid = (call: ChatCall): string => {
 const decls: CapabilityDecl[] = [
   { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
   { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+  // `medium` + `undoable` è la coppia che il kernel mappa su `draft`, ed è
+  // esattamente quella di `fs.write` in produzione. Serve a esercitare un ramo
+  // del loop che non aveva nessun test: vedi il describe in fondo al file.
+  { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
 ];
 
 function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDeps> = {}) {
@@ -106,6 +110,15 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
       throwTier: 0,
       handler: () => {
         calls.push('demo_write');
+        return { content: 'scritto', tier: 0 as const };
+      },
+    },
+    {
+      capability: 'demo.draft',
+      spec: { name: 'demo_draft', description: 'undoable write', inputSchema: { type: 'object', properties: {} } },
+      throwTier: 0,
+      handler: () => {
+        calls.push('demo_draft');
         return { content: 'scritto', tier: 0 as const };
       },
     },
@@ -657,7 +670,8 @@ describe('the context a turn is given', () => {
 
     const turn = tracer.spans.find((s) => s.name === 'muffin.turn');
     expect(turn?.attributes['muffin.context.class']).toBe('owner');
-    expect(turn?.attributes['muffin.context.tools_exposed']).toBe(4);
+    // 5 da quando esiste `demo_draft` (il ramo `draft` del loop non aveva test).
+    expect(turn?.attributes['muffin.context.tools_exposed']).toBe(5);
   });
 
   it('hands the model the prompt of its class and only its tools', async () => {
@@ -1450,5 +1464,57 @@ describe('agent loop · progress (B13)', () => {
         expect.objectContaining({ type: 'tool_end', name: 'demo_high', isError: true }) as unknown as TurnEvent,
       ]);
     });
+  });
+});
+
+/**
+ * `draft`: il verdetto che il kernel emette e che nessun percorso esegue.
+ *
+ * `fs.write` è `medium` + `undoable`, e `decide` mappa esattamente quella
+ * coppia su `draft`. Il loop arriva al ramo e **rifiuta**, perché il registro
+ * di undo non esiste. Detto senza attenuanti: **`fs_write` non scrive un file,
+ * a nessun taint, e il modello se lo vede offerto lo stesso.**
+ *
+ * Sono tre righe di M5-BIS (D2, D3, D11) puntate su una slice sola, con la
+ * forma già decisa dall'owner il 16/08 (§1: journal per turno, copia prima
+ * della mutazione, undo che riallinea filesystem e turno). Ma il ramo nel loop
+ * non aveva **nessun test** — cercando `draft_unavailable` in tutto l'albero si
+ * trovava solo `agent/loop.ts` e dei documenti.
+ *
+ * Questi due test sono il ponte verso quella slice: descrivono lo stato di
+ * oggi e diventano rossi il giorno in cui il journal atterra, che è quando
+ * qualcuno deve venire a cambiarli di proposito.
+ */
+describe('una capability undoable è rifiutata finché non c e un registro di undo', () => {
+  it("non esegue l'handler, e lo dice invece di far finta", async () => {
+    const { deps: d, store, calls } = deps([callTool('demo_draft'), answer('ok')]);
+    const result = await runTurn(d, input(store));
+
+    // La cosa che conta: l'effetto non è avvenuto. Un `draft` eseguito come
+    // allow sarebbe il kernel che emette un verdetto che nessuno implementa —
+    // peggio di un rifiuto, perché chi ha dichiarato la capability reversibile
+    // aveva già deciso che ci fosse un modo di tornare indietro.
+    expect(calls).not.toContain('demo_draft');
+    expect(result.stopped).toBe('answered');
+  });
+
+  it('dice al modello perché, e nomina il registro che manca', async () => {
+    const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')]);
+    const provider = d.provider as ScriptedProvider;
+    await runTurn(d, input(store));
+
+    // Il `tool_result` che il secondo giro porta al modello — non il testo
+    // dell'ultimo messaggio: un risultato di tool non è un blocco di testo, e
+    // asserire su `lastSaid` qui passava per stringa vuota.
+    const risultati = (provider.seen[1]?.messages ?? [])
+      .flatMap((m) => m.content)
+      .filter((b): b is Extract<typeof b, { type: 'tool_result' }> => b.type === 'tool_result');
+
+    expect(risultati).toHaveLength(1);
+    // Se dicesse solo "rifiutato" il modello riproverebbe: il testo esiste per
+    // evitarlo, e lo dice nominando la cosa che manca.
+    expect(risultati[0]?.content).toContain('registro di undo');
+    expect(risultati[0]?.content).toContain('Non eseguito');
+    expect(risultati[0]?.isError).toBe(true);
   });
 });

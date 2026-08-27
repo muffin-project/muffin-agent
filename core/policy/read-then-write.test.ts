@@ -6,9 +6,30 @@ import { fsCapabilities } from '../../agent/tools/fs.js';
 import { DISK_TIER } from '../../agent/tools/fs.js';
 
 /**
- * Leggi un file, poi scrivine uno: **oggi non si può**, e nessuno lo diceva.
+ * Leggi un file, poi scrivine uno: **oggi non si può — ma il taint è la
+ * seconda ragione, non la prima.**
  *
- * Misurato il 27/08 sull'installazione dell'owner, non dedotto: lo scenario
+ * Correzione a come questo file era scritto quando è nato, poche ore prima
+ * (#179). Diceva che lo scenario `breadth` fallisce perché il kernel rifiuta la
+ * scrittura per `taint_exceeded`, ed è vero; lasciava credere che togliendo
+ * quel rifiuto la scrittura funzionerebbe, e **non è vero**. `fs.write` è
+ * `medium`+`undoable`, quindi a taint 0 il kernel risponde `draft` — e il loop
+ * rifiuta ogni `draft`, perché il registro di undo non esiste
+ * (`agent/loop.ts`, "il registro di undo non esiste ancora"). **`fs_write` non
+ * scrive un file in nessun caso**, a nessun taint, da quando esiste.
+ *
+ * Non è una scoperta: sono tre righe di M5-BIS (D2 «`fs_write` non scrive mai
+ * un file reale oggi», D3 «`muffin undo` non esiste», D11 «`draft` è ancora
+ * ineseguibile da ogni percorso»), tutte e tre puntate sulla stessa slice
+ * `undo-journal`, con la forma già decisa dall'owner il 16/08 (M5-BIS §1:
+ * journal per turno, copia prima della mutazione, undo che riallinea
+ * filesystem **e** turno).
+ *
+ * Vale la pena tenere separate le due cose perché si riparano in ordine: prima
+ * il journal rende `draft` eseguibile, e **solo allora** il tetto di taint
+ * diventa la cosa che decide se «leggi, calcola, scrivi» funziona.
+ *
+ * La misura resta quella del 27/08 sull'installazione dell'owner: lo scenario
  * `breadth` di `evals/floor` («quanto ho speso secondo spesa.txt? scrivi il
  * totale in totale.txt») fallisce 9 volte su 9 con `qwen/qwen3.8-27b`, a
  * qualunque tetto di tool (10, 14, 20). Il modello fa la cosa giusta — legge,
