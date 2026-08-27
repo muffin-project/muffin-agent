@@ -257,6 +257,23 @@ export const paths = (home = muffinHome()) => ({
   // Pure muffin — the character every install shares. `identity.md` under rot/
   // is the owner's overlay on top of it and is read after, so it wins.
   persona: join(home, 'persona.md'),
+  /**
+   * Il semaforo che dice «fermo di proposito, non morto».
+   *
+   * Esiste perche' launchd non ha un equivalente di
+   * `RestartPreventExitStatus`: con `KeepAlive: true` riporta su il gateway
+   * anche quando e' stato l'owner a fermarlo — misurato sulla sua macchina il
+   * 28/08/2026 («ho buttato giu il gateway e lo ha riportato su da solo,
+   * questo non va bene»).
+   *
+   * Ma launchd *sa* leggere il filesystem: `KeepAlive: {PathState: {<questo>:
+   * false}}` vuol dire «tienilo vivo finche' questo file NON esiste»
+   * (launchd.plist(5)). Quindi lo stop scrive il file, e launchd smette di
+   * insistere. Su Linux non serviva — `RestartPreventExitStatus` c'e' gia' —
+   * ma vale lo stesso: `gateway run` lo controlla da se', quindi il
+   * comportamento e' identico sulle due macchine invece che simile.
+   */
+  gatewayStopped: join(home, 'gateway.stopped'),
   vault: join(home, 'vault'),
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),
