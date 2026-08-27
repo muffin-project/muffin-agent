@@ -13,6 +13,7 @@ import { hardeningHolds, verify } from '../core/rot/verify.js';
 import { checkRotReaders } from '../core/rot/readers.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import { readGateway } from '../core/gateway/lock.js';
+import { askGateway } from '../core/gateway/control-socket.js';
 import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
@@ -737,7 +738,27 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     const gateway = readGateway(db);
     if (gateway) {
       const since = gateway.since.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
-      ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}`);
+      /**
+       * Il socket di controllo, chiesto **oltre** alla riga, non al suo posto.
+       *
+       * v1 è sola osservazione (`core/gateway/control-socket.ts`), e questa
+       * riga è dove si osserva: la riga `gateway_lock` dice quello che l'ultimo
+       * scrittore ha lasciato scritto, il socket risponde solo se c'è ancora
+       * qualcuno. Vederli **affiancati** è il modo di scoprire il caso che
+       * questa migrazione esiste per chiudere — un pid vivo che non è più il
+       * nostro — prima di far dipendere qualcosa dal socket.
+       *
+       * Un silenzio non è un guasto: su un gateway avviato prima di questa
+       * versione il socket semplicemente non c'è.
+       */
+      const identita = (await askGateway(home, 'identify')) as { pid?: number } | null;
+      const canale =
+        identita === null
+          ? ' · socket muto (gateway di prima di questa versione, o non aperto)'
+          : identita.pid === gateway.pid
+            ? ' · socket concorde'
+            : ` · socket risponde pid ${String(identita.pid)}, la riga dice ${gateway.pid}`;
+      ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}${canale}`);
     } else {
       warn(
         'gateway',

@@ -10,7 +10,9 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
-import { paths, saveConfig } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig } from '../core/config/config.js';
+import { cmdModel } from './model.js';
+import { makeStatusLine, type StatusLine } from './status-line.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
@@ -26,6 +28,7 @@ const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
 /spend   quanto hai speso questo mese e oggi
 /think   ragionamento: on | off | reset (senza argomenti lo mostra)
+/model   modello: [main|light|embed] <slug>, --list, o niente per vederli
 /debug   giri, token e millisecondi: on | off (da solo, inverte)
 /exit    esci (o Ctrl+D)`;
 
@@ -100,95 +103,6 @@ export function statusFor(event: TurnEvent): string | null {
     default:
       return null;
   }
-}
-
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-export type StatusLine = {
-  /** Mostra (o sostituisce) l'attesa in corso. */
-  show(text: string): void;
-  /** Toglie la riga dal terminale: si chiama prima di stampare qualunque altra cosa. */
-  clear(): void;
-  /** Ferma il timer senza toccare il terminale — per l'uscita e per Ctrl+C. */
-  stop(): void;
-};
-
-/**
- * La riga che dice «sto ancora facendo qualcosa», e sparisce quando non è più
- * vera.
- *
- * **Senza TTY diventa una riga normale, stampata una volta.** Non è una
- * degradazione, è la condizione per cui `muffin | tee log` e i test vedono
- * byte deterministici invece di dieci frame di spinner e una sequenza di
- * cancellazione: `\r\x1b[2K` su un file è spazzatura, e uno spinner su un
- * pipe è spazzatura che si ripete. Stessa scelta, e stessa ragione, di
- * `streamEnabled`/`progressEnabled` qui sopra.
- *
- * `unref()` sul timer perché un intervallo attivo tiene vivo l'event loop: un
- * turno che finisce mentre lo spinner gira non deve poter lasciare il processo
- * appeso a un `setInterval` che nessuno ferma.
- */
-export function makeStatusLine(write: (s: string) => void, tty: boolean): StatusLine {
-  if (!tty) {
-    let last = '';
-    return {
-      show(text) {
-        // Ripetere lo stesso stato non aggiunge informazione: senza riscrittura
-        // in place, «penso…» a ogni giro sarebbe rumore su ogni riga.
-        if (text === last) return;
-        last = text;
-        write(`· ${text}\n`);
-      },
-      clear() {
-        last = '';
-      },
-      stop() {},
-    };
-  }
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let frame = 0;
-  let current = '';
-  /**
-   * Se c'è qualcosa da cancellare.
-   *
-   * `clear()` si chiama prima di **ogni** riga che va nello scrollback, perché
-   * chi stampa non può sapere se un'attesa è in corso — ed è giusto così. Ma
-   * una cancellazione a schermo pulito non è innocua: scrive `\r\x1b[2K`
-   * davanti alla riga, e da lì in poi quella riga non comincia più con quello
-   * con cui dice di cominciare. In `--debug`, dove la riga di stato non viene
-   * mai mostrata, sarebbe una sequenza di escape davanti a ogni singola riga.
-   */
-  let acceso = false;
-  const paint = (): void => {
-    acceso = true;
-    write(`\r\x1b[2K${FRAMES[frame % FRAMES.length]} ${current}`);
-  };
-  const halt = (): void => {
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-  };
-  return {
-    show(text) {
-      current = text;
-      if (timer === null) {
-        timer = setInterval(() => {
-          frame += 1;
-          paint();
-        }, 90);
-        timer.unref?.();
-      }
-      paint();
-    },
-    clear() {
-      halt();
-      if (!acceso) return;
-      acceso = false;
-      write('\r\x1b[2K');
-    },
-    stop: halt,
-  };
 }
 
 /**
@@ -275,9 +189,21 @@ export function thinkingCommand(
  * after every line for the reason it always did: a delivery that arrives while
  * the owner is looking at an empty prompt must not leave the REPL looking hung.
  */
-export function makeReplCliWrite(rl: { prompt: () => void }): (text: string) => void {
+export function makeReplCliWrite(
+  rl: { prompt: () => void },
+  /**
+   * Toglie l'attesa in corso prima di consegnare.
+   *
+   * Una consegna arriva **fuori banda**, cioè per definizione mentre può
+   * esserci uno spinner acceso: senza questa, `⏰ …` si incolla dentro la riga
+   * di stato invece di sostituirla. Default no-op perché la superficie CLI si
+   * costruisce anche dove una riga di stato non esiste (i test, `muffin run`).
+   */
+  clear: () => void = () => {},
+): (text: string) => void {
   return (text) => {
     try {
+      clear();
       process.stdout.write(`\n⏰ ${text}\n`);
     } finally {
       rl.prompt();
@@ -408,9 +334,43 @@ export async function runRepl(
     stdin?: NodeJS.ReadableStream;
   } = {},
 ): Promise<number> {
+  // Sopra `buildRuntime` e sopra `connectSurfaces`, non accanto agli altri
+  // flag: entrambi ricevono un writer che deve poter cancellare l'attesa in
+  // corso prima di scrivere, e un `const` dichiarato più in basso sarebbe nella
+  // sua temporal dead zone nel momento in cui glielo si passa.
+/**
+   * B13: whether *this* turn attaches `TurnInput.onProgress` at all.
+   *
+   * Gated on **`process.stderr`**'s own TTY-ness, not `process.stdout`'s
+   * (`streamEnabled`) — progress lines are written to stderr
+   * (below), so the stream whose interactivity decides whether to bother is
+   * the one the lines actually land on. A REPL with only stdout redirected
+   * (`muffin > risposte.txt`) still shows progress on the terminal, because
+   * stderr is still a TTY there; a fully non-interactive run (both streams
+   * redirected — cron, `muffin < script > log 2>&1`) attaches nothing, the
+   * same way `onDelta` attaches nothing to `muffin run` (see `streamEnabled`
+   * above).
+   *
+   * No `opts` override, unlike `streamEnabled`: there is no `--no-progress`
+   * a human needs a deterministic escape hatch for, so nothing here has to
+   * carry one. A test that wants this on or off sets `process.stderr.isTTY`
+   * directly before calling `runRepl`, the same kind of stream fake
+   * `cli/prompt.test.ts` and `cli/onboarding.test.ts` already construct by
+   * hand for `isTTY`.
+   */
+  const progressEnabled = process.stderr.isTTY === true;
+
+
+  /**
+   * La riga di stato viva, una per REPL e non una per turno: il timer che la
+   * anima va fermato dall'uscita e da Ctrl+C, e un oggetto creato dentro il
+   * ciclo non sarebbe raggiungibile da nessuno dei due.
+   */
+  const status = makeStatusLine((text) => process.stderr.write(text), progressEnabled);
+
   let runtime: Runtime;
   try {
-    runtime = buildRuntime(home);
+    runtime = buildRuntime(home, process.cwd(), { log: (line) => status.line(line) });
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -432,7 +392,7 @@ export async function runRepl(
   // printed. So the CLI surface is handed a prompt it resolves at call time; a
   // delivery that lands before the prompt exists simply does not redraw one.
   let redrawPrompt: () => void = () => {};
-  const surfaces = connectSurfaces(runtime, home, makeReplCliWrite({ prompt: () => redrawPrompt() }));
+  const surfaces = connectSurfaces(runtime, home, makeReplCliWrite({ prompt: () => redrawPrompt() }, () => status.clear()));
   // M5-BIS B14: a file the model produces can now reach the owner as a real
   // attachment on whichever surface this turn is on, not only as a path cited
   // in text — the same registry `deliver` uses, one call later.
@@ -458,37 +418,8 @@ export async function runRepl(
    */
   const streamEnabled = opts.stream ?? process.stdout.isTTY === true;
 
-  /**
-   * B13: whether *this* turn attaches `TurnInput.onProgress` at all.
-   *
-   * Gated on **`process.stderr`**'s own TTY-ness, not `process.stdout`'s
-   * (`streamEnabled`, just above) — progress lines are written to stderr
-   * (below), so the stream whose interactivity decides whether to bother is
-   * the one the lines actually land on. A REPL with only stdout redirected
-   * (`muffin > risposte.txt`) still shows progress on the terminal, because
-   * stderr is still a TTY there; a fully non-interactive run (both streams
-   * redirected — cron, `muffin < script > log 2>&1`) attaches nothing, the
-   * same way `onDelta` attaches nothing to `muffin run` (see `streamEnabled`
-   * above).
-   *
-   * No `opts` override, unlike `streamEnabled`: there is no `--no-progress`
-   * a human needs a deterministic escape hatch for, so nothing here has to
-   * carry one. A test that wants this on or off sets `process.stderr.isTTY`
-   * directly before calling `runRepl`, the same kind of stream fake
-   * `cli/prompt.test.ts` and `cli/onboarding.test.ts` already construct by
-   * hand for `isTTY`.
-   */
-  const progressEnabled = process.stderr.isTTY === true;
-
-  /** `muffin --debug` decide il valore iniziale; `/debug` lo cambia da qui in poi. */
+    /** `muffin --debug` decide il valore iniziale; `/debug` lo cambia da qui in poi. */
   let verbosity: Verbosity = opts.debug === true ? 'debug' : 'normale';
-
-  /**
-   * La riga di stato viva, una per REPL e non una per turno: il timer che la
-   * anima va fermato dall'uscita e da Ctrl+C, e un oggetto creato dentro il
-   * ciclo non sarebbe raggiungibile da nessuno dei due.
-   */
-  const status = makeStatusLine((text) => process.stderr.write(text), progressEnabled);
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.
@@ -520,7 +451,7 @@ export async function runRepl(
   // own — a paraphrase is a chance to make the request sound smaller than it is —
   // and anything that is not an explicit yes is a no.
   runtime.deps.approve = async (request) => {
-    process.stderr.write(`\n⚠ ${request.prompt}\n`);
+    status.line(`\n⚠ ${request.prompt}`);
     if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
     // Taint 0 is the quiet default; anything above it means untrusted content
     // already steered this turn, and that changes the answer more often than
@@ -543,7 +474,7 @@ export async function runRepl(
     const now = Date.now();
     if (controller) {
       controller.abort();
-      process.stderr.write(`\n^C turno annullato\n`);
+      status.line(`\n^C turno annullato`);
       lastInterrupt = now;
       return;
     }
@@ -607,13 +538,13 @@ export async function runRepl(
     foreground,
     (e) => {
       if (e.kind === 'delivery_failed') {
-        process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+        status.line(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})`);
       } else if (e.kind === 'yielded') {
         // P21 (1b)/(2) MEDIUM: see the identical branch in `cli/gateway.ts` —
         // an aborted job retried silently on every tick before this.
-        process.stderr.write(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro\n`);
+        status.line(`job ${e.job.id.slice(0, 8)}: ceduto — riproverà al prossimo giro`);
       } else if (e.kind === 'not_recorded') {
-        process.stderr.write(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}\n`);
+        status.line(`job ${e.job.id.slice(0, 8)}: esito non registrato — ${e.error}`);
       }
     },
     undefined,
@@ -665,6 +596,16 @@ export async function runRepl(
         }
         if (line === '/session') {
           process.stderr.write(`${session.id}\n`);
+          continue;
+        }
+        if (line === '/model' || line.startsWith('/model ')) {
+          // Stessa funzione di `muffin model`, con la sola differenza che il
+          // REPL possiede il terminale: la riga di stato va tolta prima.
+          const args = line.slice('/model'.length).trim();
+          await cmdModel(home, args === '' ? [] : args.split(/\s+/), { out: (l) => status.line(l) });
+          // La config e' cambiata sotto i piedi del runtime gia' costruito.
+          runtime.config = loadConfig(home);
+          status.line('(il modello nuovo vale dal prossimo avvio: `/exit` e riapri)');
           continue;
         }
         if (line === '/debug' || line.startsWith('/debug ')) {
