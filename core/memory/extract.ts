@@ -346,7 +346,13 @@ export async function extractFacts(
     return { facts: [], rejected: 0, usage, error: `${parsed.error} — ha risposto: "${head}"` };
   }
 
-  const validated = ExtractionResponse.safeParse(parsed.value);
+  // A bare array is the wrapper's contents without the wrapper — the shape the
+  // model reaches for when the list is empty, and sometimes when it is not.
+  // Normalised here rather than widened in `ExtractionResponse`, so the schema
+  // keeps stating the one shape the prompt asks for.
+  const validated = ExtractionResponse.safeParse(
+    Array.isArray(parsed.value) ? { facts: parsed.value } : parsed.value,
+  );
   if (!validated.success) {
     return {
       facts: [],
@@ -550,12 +556,36 @@ function canonicalPredicate(raw: string): string {
 function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const candidate = fenced?.[1] ?? text;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start === -1 || end <= start) return { ok: false, error: 'nessun JSON nella risposta' };
+  const sliced = outermost(candidate);
+  if (sliced === null) return { ok: false, error: 'nessun JSON nella risposta' };
   try {
-    return { ok: true, value: JSON.parse(candidate.slice(start, end + 1)) };
+    return { ok: true, value: JSON.parse(sliced) };
   } catch (error) {
     return { ok: false, error: `JSON non parsabile: ${error instanceof Error ? error.message : error}` };
   }
+}
+
+/**
+ * The outermost JSON value in a model's answer — object **or** array.
+ *
+ * It looked only for `{`…`}`, and that one missing bracket was a permanent
+ * error loop rather than a lost fact. `[]` is the honest answer to an episode
+ * with nothing in it ("Hey!"), the model gives it, and `nessun JSON nella
+ * risposta` sent it down `ingest.ts`'s not-marked-as-processed branch — where
+ * the retry is the right call for a transient failure and exactly wrong for a
+ * deterministic one. Measured on the owner's machine 27/08: episodes 72 and 74
+ * had each failed seven times, identically, and would have kept going; every
+ * greeting joins that queue and never leaves it.
+ *
+ * Whichever bracket opens first wins, so `{"facts":[…]}` still reads as the
+ * object it is — the array inside it is not the outermost value.
+ */
+function outermost(text: string): string | null {
+  const brace = text.indexOf('{');
+  const bracket = text.indexOf('[');
+  const start = brace === -1 ? bracket : bracket === -1 ? brace : Math.min(brace, bracket);
+  if (start === -1) return null;
+  const end = text.lastIndexOf(text[start] === '{' ? '}' : ']');
+  if (end <= start) return null;
+  return text.slice(start, end + 1);
 }

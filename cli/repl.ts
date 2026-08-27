@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
+import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { readGateway } from '../core/gateway/lock.js';
@@ -9,7 +10,7 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
-import { paths } from '../core/config/config.js';
+import { paths, saveConfig } from '../core/config/config.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
 
 /**
@@ -24,7 +25,239 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 const HELP = `/new     inizia una sessione nuova
 /session mostra l'id della sessione
 /spend   quanto hai speso questo mese e oggi
+/think   ragionamento: on | off | reset (senza argomenti lo mostra)
+/debug   giri, token e millisecondi: on | off (da solo, inverte)
 /exit    esci (o Ctrl+D)`;
+
+/**
+ * Quanto racconta il terminale mentre lavora.
+ *
+ * `normale` è il default e mostra **cosa** sta succedendo: una riga di stato
+ * viva mentre aspetta, e un segno di spunta per ogni passo finito. `debug` è
+ * la stessa cosa più i numeri — giro, token, millisecondi, stop reason — che
+ * prima erano l'unica modalità che esistesse: un owner che chiedeva «come
+ * stai?» leggeva `· modello: 2269ms, 5487→2 token, stop: end`, cioè la
+ * strumentazione di chi ha scritto il loop, non lo stato di chi risponde.
+ */
+export type Verbosity = 'normale' | 'debug';
+
+/**
+ * Il nome del tool → cosa sta facendo, in italiano, in prima persona.
+ *
+ * `memory_search` è il nome di una funzione; «cerco in memoria» è quello che
+ * sta succedendo. La distinzione è la stessa che `formatProgressLine` faceva
+ * già per il resto (B13: «l'owner's own wording, not the trace's `muffin.*`
+ * vocabulary») e che si fermava al confine dei tool.
+ *
+ * Una mappa e non un campo su `ToolSpec` perché la frase è di **questa
+ * superficie**: Telegram non stampa passi, il gateway nemmeno, e un campo
+ * obbligatorio su ogni tool per un solo consumatore è il tipo di peso che poi
+ * nessuno toglie. Il prezzo — che una mappa a mano invecchia quando arriva un
+ * tool nuovo — lo paga il test di drift accanto a questa riga, non un lettore
+ * che se ne accorge in produzione leggendo `send_file…`.
+ */
+const TOOL_PHRASE: Readonly<Record<string, string>> = {
+  memory_search: 'cerco in memoria',
+  fs_read: 'leggo un file',
+  fs_list: 'guardo una cartella',
+  fs_write: 'scrivo un file',
+  document_read: 'leggo un documento',
+  http_get: 'apro una pagina',
+  web_search: 'cerco sul web',
+  shell_run: 'eseguo un comando',
+  process_list: 'guardo i processi',
+  process_kill: 'chiudo un processo',
+  send_file: 'ti mando un file',
+  skill_read: 'leggo una skill',
+  sys_inspect: 'mi guardo dentro',
+  todo: 'aggiorno il piano',
+  wait: 'mi metto in attesa',
+};
+
+/** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */
+export function toolPhrase(name: string): string {
+  return TOOL_PHRASE[name] ?? name;
+}
+
+/** Ogni tool che questa build registra ha una frase — letto dal test di drift. */
+export const TOOL_PHRASES: Readonly<Record<string, string>> = TOOL_PHRASE;
+
+/**
+ * Cosa mostra la riga di stato viva, per evento.
+ *
+ * Solo gli eventi che **aprono un'attesa**: `round` (sta per parlare il
+ * modello) e `tool_start`. `model` e `tool_end` chiudono, e chi chiude non
+ * scrive uno stato — lo cancella. Separata da `formatProgressLine` perché sono
+ * due destinazioni diverse e non due formati della stessa: questa riga viene
+ * riscritta e poi sparisce, quella resta nello scrollback.
+ */
+export function statusFor(event: TurnEvent): string | null {
+  switch (event.type) {
+    case 'round':
+      return 'penso…';
+    case 'tool_start':
+      return `${toolPhrase(event.name)}…`;
+    default:
+      return null;
+  }
+}
+
+const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+export type StatusLine = {
+  /** Mostra (o sostituisce) l'attesa in corso. */
+  show(text: string): void;
+  /** Toglie la riga dal terminale: si chiama prima di stampare qualunque altra cosa. */
+  clear(): void;
+  /** Ferma il timer senza toccare il terminale — per l'uscita e per Ctrl+C. */
+  stop(): void;
+};
+
+/**
+ * La riga che dice «sto ancora facendo qualcosa», e sparisce quando non è più
+ * vera.
+ *
+ * **Senza TTY diventa una riga normale, stampata una volta.** Non è una
+ * degradazione, è la condizione per cui `muffin | tee log` e i test vedono
+ * byte deterministici invece di dieci frame di spinner e una sequenza di
+ * cancellazione: `\r\x1b[2K` su un file è spazzatura, e uno spinner su un
+ * pipe è spazzatura che si ripete. Stessa scelta, e stessa ragione, di
+ * `streamEnabled`/`progressEnabled` qui sopra.
+ *
+ * `unref()` sul timer perché un intervallo attivo tiene vivo l'event loop: un
+ * turno che finisce mentre lo spinner gira non deve poter lasciare il processo
+ * appeso a un `setInterval` che nessuno ferma.
+ */
+export function makeStatusLine(write: (s: string) => void, tty: boolean): StatusLine {
+  if (!tty) {
+    let last = '';
+    return {
+      show(text) {
+        // Ripetere lo stesso stato non aggiunge informazione: senza riscrittura
+        // in place, «penso…» a ogni giro sarebbe rumore su ogni riga.
+        if (text === last) return;
+        last = text;
+        write(`· ${text}\n`);
+      },
+      clear() {
+        last = '';
+      },
+      stop() {},
+    };
+  }
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let frame = 0;
+  let current = '';
+  /**
+   * Se c'è qualcosa da cancellare.
+   *
+   * `clear()` si chiama prima di **ogni** riga che va nello scrollback, perché
+   * chi stampa non può sapere se un'attesa è in corso — ed è giusto così. Ma
+   * una cancellazione a schermo pulito non è innocua: scrive `\r\x1b[2K`
+   * davanti alla riga, e da lì in poi quella riga non comincia più con quello
+   * con cui dice di cominciare. In `--debug`, dove la riga di stato non viene
+   * mai mostrata, sarebbe una sequenza di escape davanti a ogni singola riga.
+   */
+  let acceso = false;
+  const paint = (): void => {
+    acceso = true;
+    write(`\r\x1b[2K${FRAMES[frame % FRAMES.length]} ${current}`);
+  };
+  const halt = (): void => {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  return {
+    show(text) {
+      current = text;
+      if (timer === null) {
+        timer = setInterval(() => {
+          frame += 1;
+          paint();
+        }, 90);
+        timer.unref?.();
+      }
+      paint();
+    },
+    clear() {
+      halt();
+      if (!acceso) return;
+      acceso = false;
+      write('\r\x1b[2K');
+    },
+    stop: halt,
+  };
+}
+
+/**
+ * `/debug` — la stessa manopola di `muffin --debug`, girata a caldo.
+ *
+ * Una funzione sola dietro le due porte, e non è una comodità: due
+ * implementazioni della stessa manopola sono la *cucitura* che `docs/JUDGE.md`
+ * descrive — corrette separatamente, capaci di non essere d'accordo il giorno
+ * che una delle due cambia. Il flag decide con cosa si parte, questo comando
+ * decide cosa si fa dopo, e la decisione è scritta qui una volta.
+ *
+ * Da solo **inverte**, invece di mostrare come fa `/think`: qui gli stati sono
+ * due e «switchalo» è l'unica cosa che si può volere da un interruttore.
+ * `/think` ne ha tre (`on`, `off`, «quello che dice il profilo») e un giro
+ * ciclico fra tre stati è un indovinello, non un comando.
+ *
+ * **Di sessione, non di `config.json`**, ed è l'altra metà della simmetria con
+ * `/think`: quello cambia cosa viene mandato al modello e quanto costa, quindi
+ * deve valere anche per il gateway al prossimo avvio; questo cambia cosa
+ * compare su *questo* terminale, e una preferenza di visualizzazione scritta
+ * nella config la ritroverebbe un processo che non ha nessun terminale.
+ */
+export function debugCommand(arg: string, current: Verbosity): { line: string; set?: Verbosity } {
+  const dillo = (v: Verbosity): string =>
+    v === 'debug' ? 'debug: on — giro, token, millisecondi, stop reason' : 'debug: off';
+  if (arg === '') {
+    const next: Verbosity = current === 'debug' ? 'normale' : 'debug';
+    return { line: dillo(next), set: next };
+  }
+  if (arg === 'on') return { line: dillo('debug'), set: 'debug' };
+  if (arg === 'off') return { line: dillo('normale'), set: 'normale' };
+  return { line: `/debug on | off, oppure /debug da solo per invertirlo — «${arg}» non è nessuno dei due` };
+}
+
+/**
+ * `/think` — la manopola del ragionamento, girata da qui e non solo a mano.
+ *
+ * Esiste perché la scelta è **misurabile e reversibile in una riga**: su un
+ * modello a reasoning ibrido il ragionamento cambia sia la qualità sia il conto,
+ * l'effetto è model-specific (il profilo lo dice: ha già fatto regredire l'uso
+ * dei tool) e l'unico modo di saperlo è provare due turni identici a manopola
+ * girata. Chiedere all'owner di editare un JSON e riavviare fra i due turni è
+ * il motivo per cui quella prova non la fa nessuno.
+ *
+ * Scrive `config.json`, che ADR-0036 mette esplicitamente fra le cose che
+ * Muffin può cambiare da sé — i tetti stanno nel sigillo apposta perché tutto
+ * il resto qui sotto sia negoziabile. Quindi la scelta **dura**: vale anche per
+ * il gateway al prossimo avvio, non solo per questa sessione.
+ *
+ * `reset` toglie la riga invece di scriverci `adaptive`, e non è la stessa cosa:
+ * senza override torna a valere il profilo del modello, che è dove sta la
+ * conoscenza su quel modello e che un `muffin update` ha il diritto di
+ * cambiare sotto i piedi. Un `adaptive` scritto a mano inchioderebbe
+ * l'installazione a una risposta giusta oggi per il modello di oggi.
+ */
+export function thinkingCommand(
+  arg: string,
+  current: 'adaptive' | 'off' | 'unset',
+  override: 'adaptive' | 'off' | 'unset' | undefined,
+  profileName: string,
+): { line: string; set?: 'adaptive' | 'off' | 'unset' | null } {
+  const stato = (t: string, da: string): string => `ragionamento: ${t === 'off' ? 'off' : 'on'} (${da})`;
+  const da = override === undefined ? `profilo ${profileName}` : 'config.json';
+  if (arg === '') return { line: stato(current, da) };
+  if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
+  if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
+  if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
+  return { line: `/think on | off | reset — «${arg}» non è nessuno dei tre` };
+}
 
 /**
  * How the CLI surface writes inside a REPL, and the one thing it has to do that
@@ -60,16 +293,35 @@ export function makeReplCliWrite(rl: { prompt: () => void }): (text: string) => 
  * running a turn (or faking a TTY) at all, the same reason `makeReplCliWrite`
  * above is its own function rather than inlined where it is used.
  */
-export function formatProgressLine(event: TurnEvent): string {
+export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): string | null {
+  if (verbosity === 'debug') {
+    switch (event.type) {
+      case 'round':
+        return `· giro ${event.n}`;
+      case 'model':
+        return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
+      case 'tool_start':
+        return `· ${event.name}…`;
+      case 'tool_end':
+        return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
+      default:
+        return assertNever(event);
+    }
+  }
   switch (event.type) {
+    // Il giro e la chiamata al modello non lasciano traccia: che stia pensando
+    // lo dice la riga di stato mentre è vero, e uno scrollback pieno di `giro
+    // 3` è la strumentazione del loop, non il racconto di cosa è successo.
     case 'round':
-      return `· giro ${event.n}`;
     case 'model':
-      return `· modello: ${event.ms}ms, ${event.inputTokens}→${event.outputTokens} token, stop: ${event.stopReason}`;
+      return null;
+    // Nemmeno l'inizio di un tool: `statusFor` lo mostra vivo, e stampare
+    // «cerco in memoria…» e poi «✓ cerco in memoria» sarebbe la stessa cosa
+    // detta due volte.
     case 'tool_start':
-      return `· ${event.name}…`;
+      return null;
     case 'tool_end':
-      return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
+      return `${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
     default:
       return assertNever(event);
   }
@@ -139,6 +391,13 @@ export async function runRepl(
      * terminal", which is the only thing `muffin` itself ever passes.
      */
     stream?: boolean;
+    /**
+     * Lo stato iniziale della verbosità — `muffin --debug`. La stessa manopola
+     * che `/debug` gira a caldo, e deliberatamente la stessa funzione dietro
+     * (`debugCommand`): il flag decide con cosa si parte, il comando decide
+     * cosa si fa dopo.
+     */
+    debug?: boolean;
     /**
      * Where the readline interface reads from. Injectable for the same reason
      * `cli/prompt.ts`'s functions already take an `input` parameter: a real
@@ -220,6 +479,16 @@ export async function runRepl(
    * hand for `isTTY`.
    */
   const progressEnabled = process.stderr.isTTY === true;
+
+  /** `muffin --debug` decide il valore iniziale; `/debug` lo cambia da qui in poi. */
+  let verbosity: Verbosity = opts.debug === true ? 'debug' : 'normale';
+
+  /**
+   * La riga di stato viva, una per REPL e non una per turno: il timer che la
+   * anima va fermato dall'uscita e da Ctrl+C, e un oggetto creato dentro il
+   * ciclo non sarebbe raggiungibile da nessuno dei due.
+   */
+  const status = makeStatusLine((text) => process.stderr.write(text), progressEnabled);
 
   // Allowlisted MCP servers, verified against their pins. A suspension is
   // boot-visible, not buried: the owner reads why before the first turn.
@@ -398,6 +667,34 @@ export async function runRepl(
           process.stderr.write(`${session.id}\n`);
           continue;
         }
+        if (line === '/debug' || line.startsWith('/debug ')) {
+          const out = debugCommand(line.slice('/debug'.length).trim(), verbosity);
+          if (out.set !== undefined) verbosity = out.set;
+          process.stderr.write(`${out.line}\n`);
+          continue;
+        }
+        if (line === '/think' || line.startsWith('/think ')) {
+          const arg = line.slice('/think'.length).trim();
+          const out = thinkingCommand(
+            arg,
+            runtime.deps.profile.thinking,
+            runtime.config.thinking,
+            runtime.deps.profile.name,
+          );
+          if (out.set !== undefined) {
+            const { thinking: _dropped, ...senza } = runtime.config;
+            const next = out.set === null ? senza : { ...runtime.config, thinking: out.set };
+            saveConfig(next, home);
+            runtime.config = next;
+            // La corsia principale ha un `Profile` tutto suo (`withThinking`
+            // copia sempre), quindi girare la manopola qui non tocca la corsia
+            // della memoria — che il ragionamento se lo spegne da sé comunque.
+            runtime.deps.profile.thinking =
+              out.set ?? selectProfile(runtime.config.models.main, loadProfiles()).thinking;
+          }
+          process.stderr.write(`${out.line}\n`);
+          continue;
+        }
         if (line === '/spend') {
           const s = runtime.budget.status();
           // `status()` only ever answers the month — E2's own claim is "so
@@ -430,6 +727,11 @@ export async function runRepl(
         const onDelta = streamEnabled
           ? (delta: TurnDelta): void => {
               if (!streamedAnyText) {
+                // La riga di stato se ne va **prima** del primo byte di
+                // risposta: lo spinner riscrive in place, e una risposta che
+                // comincia mentre lui gira si troverebbe `⠹ penso…` incollato
+                // davanti alla prima parola.
+                status.clear();
                 process.stdout.write('\n');
                 streamedAnyText = true;
               }
@@ -438,7 +740,16 @@ export async function runRepl(
           : undefined;
         const onProgress = progressEnabled
           ? (event: TurnEvent): void => {
-              process.stderr.write(`${formatProgressLine(event)}\n`);
+              const line = formatProgressLine(event, verbosity);
+              if (line !== null) {
+                status.clear();
+                process.stderr.write(`${line}\n`);
+              }
+              // In debug la riga di stato non serve: ogni giro e ogni tool
+              // lasciano già una riga propria, e uno spinner sopra righe che
+              // scorrono da sole è solo una cosa in più che lampeggia.
+              const attesa = verbosity === 'debug' ? null : statusFor(event);
+              if (attesa !== null) status.show(attesa);
             }
           : undefined;
 
@@ -458,6 +769,10 @@ export async function runRepl(
           ...(onDelta ? { onDelta } : {}),
           ...(onProgress ? { onProgress } : {}),
         });
+        // Anche sul ramo non-streaming: senza `onDelta` nessuno ha ancora
+        // tolto la riga di stato, e l'ultima attesa resterebbe stampata sopra
+        // la risposta.
+        status.clear();
         process.stdout.write(streamedAnyText ? '\n\n' : `\n${result.text}\n\n`);
         if (result.stopped === 'suspended') {
           /**
@@ -479,8 +794,13 @@ export async function runRepl(
           process.stderr.write(`(${result.stopped} dopo ${result.iterations} passaggi)\n`);
         }
       } catch (error) {
+        status.clear();
         process.stderr.write(`errore: ${error instanceof Error ? error.message : String(error)}\n`);
       } finally {
+        // Anche su Ctrl+C e su un turno che esplode: uno spinner che gira dopo
+        // la fine del turno è un processo che sembra ancora al lavoro, ed è la
+        // bugia che questa riga esiste per non dire.
+        status.stop();
         controller = null;
       }
     }
@@ -490,6 +810,7 @@ export async function runRepl(
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     }
   } finally {
+    status.stop();
     clearInterval(ticker);
     rl.close();
     // Surfaces first, then the runtime: the connector must stop polling before

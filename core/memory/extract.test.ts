@@ -319,6 +319,47 @@ describe('un fatto rotto costa un fatto', () => {
 });
 
 /**
+ * Un episodio senza fatti non è un episodio fallito.
+ *
+ * `parseJson` cercava solo `{`…`}`. Il modello risponde `[]` — la risposta
+ * giusta per «Hey!» — e diventava `nessun JSON nella risposta`, cioè il ramo
+ * di `ingest.ts` che **non** marca l'episodio: il ritentativo è corretto per un
+ * guasto transitorio ed è esattamente sbagliato per uno deterministico.
+ * Misurato sulla macchina dell'owner il 27/08: gli episodi 72 e 74 avevano
+ * fallito sette volte a testa, identici, e non sarebbero mai usciti dalla coda.
+ */
+describe('una lista nuda è una lista, non un guasto', () => {
+  it('`[]` è zero fatti e nessun errore — l episodio si chiude', async () => {
+    const r = await extractFacts(new Scripted('[]'), 'm', INPUT);
+    expect(r.facts).toHaveLength(0);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('una lista di fatti senza il guscio `facts` vale come la risposta completa', async () => {
+    const r = await extractFacts(new Scripted(JSON.stringify([fact('Giusto', 'vive_a', 'Capoterra')])), 'm', INPUT);
+    expect(r.facts).toHaveLength(1);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('la stessa lista dentro un fence, che è come la scrive un modello', async () => {
+    const r = await extractFacts(new Scripted('```json\n[]\n```'), 'm', INPUT);
+    expect(r.facts).toHaveLength(0);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('il guscio resta il guscio: `{"facts": […]}` non si legge come la lista interna', async () => {
+    const r = await extractFacts(new Scripted(respond(fact('Giusto', 'vive_a', 'Capoterra'))), 'm', INPUT);
+    expect(r.facts).toHaveLength(1);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('e la prosa senza nessuna parentesi resta un errore', async () => {
+    const r = await extractFacts(new Scripted('Non ho trovato nulla di rilevante.'), 'm', INPUT);
+    expect(r.error).toContain('nessun JSON nella risposta');
+  });
+});
+
+/**
  * Il prompt deve dire ciò che lo schema pretende.
  *
  * Misurato sulla macchina dell'owner il 27/08: il modello rispondeva

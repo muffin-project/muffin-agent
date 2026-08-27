@@ -51,6 +51,7 @@ export type ConfigKnob = {
 const OPTIONAL_GROUPS: readonly { prefix: string; note: string }[] = [
   { prefix: 'provider.baseUrl', note: '(non impostato — endpoint di default del provider)' },
   { prefix: 'models.deep', note: '(non configurato)' },
+  { prefix: 'thinking', note: '(non impostato — vale il profilo del modello)' },
   { prefix: 'search', note: '(non configurata — nessuna ricerca web registrata)' },
   { prefix: 'surfaces.telegram', note: '(non configurata — muffin surface enable telegram)' },
 ];
