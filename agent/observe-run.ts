@@ -127,6 +127,19 @@ export function makeAbsenceComposer(deps: LoopDeps, channel: string): ComposeAbs
          */
         trustTier: result.taint,
         createdAt: (deps.now ?? (() => new Date()))().toISOString(),
+        /**
+         * Il turno che ha prodotto questa frase, come per l'episodio che
+         * `agent/loop.ts` scrive dal suo lato.
+         *
+         * Senza, questa riga è il buco di D1 a HEAD: `annullaRicordi` esce
+         * sull'item quando `turnId` è `undefined`, quindi un nudge che scrive
+         * un file e viene poi disfatto lascia in memoria la propria frase
+         * **nuda**, e il recall la ripesca come un fatto — anche dopo che
+         * `attribuisciEpisodi` ha riparato i database di ieri, perché questa
+         * riga nasce senza turno oggi. `result.turnId` è a portata di mano
+         * poche righe più su: il buco erano tre caratteri.
+         */
+        turnId: result.turnId,
       });
     };
     return { text, record };

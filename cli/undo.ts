@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { paths } from '../core/config/config.js';
+import { attribuisciEpisodi } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
 
@@ -21,11 +22,45 @@ const USAGE = `uso:
   muffin undo --dimentica <turno> --yes
                                  butta via le copie di quel turno`;
 
+/** Il prefisso che distingue una rete di undo da un turno vero. */
+const RETE = 'annulla-';
+
 /** Il turno sotto cui finisce lo stato *attuale* prima che l'undo lo sovrascriva. */
 export function undoOfId(turnId: string): string {
   // Il journal tronca a 64 caratteri, e un id di turno è un uuid (36): il
   // prefisso ci sta. Il taglio qui è per non dipendere da quel fatto.
-  return `annulla-${turnId.slice(0, 48)}`;
+  return `${RETE}${turnId.slice(0, 48)}`;
+}
+
+/**
+ * Cosa sta chiedendo davvero un bersaglio: quale turno, e in che verso.
+ *
+ * `undoOfId` è invertibile, e questa è l'inversione. Serve perché il comando
+ * **pubblicizza** il percorso inverso — ogni undo riuscito finisce con «per
+ * tornare com'era: muffin undo annulla-… --yes» — e quel percorso rimette i
+ * file allo stato *dopo* il turno: se la marcatura non torna indietro con
+ * loro, il contesto del giro seguente dice «i file sono tornati com'erano
+ * prima» con il file pieno del contenuto nuovo.
+ *
+ * Si contano i prefissi invece di guardarne uno solo perché il comando li
+ * annida davvero: disfare una rete produce `annulla-annulla-…`, e quello è di
+ * nuovo un undo del turno vero. **Pari annulla, dispari rifà** — la parità è
+ * la stessa cosa che il journal sta facendo ai file, letta sull'id.
+ *
+ * `turno` è ciò che resta tolti i prefissi, e può essere **troncato**:
+ * `undoOfId` taglia a 48 caratteri, quindi dal terzo annidamento in poi la
+ * coda dell'id si perde. Chi risolve lo cerca prima esatto e poi per prefisso
+ * — e se il prefisso è ambiguo non sceglie, perché sbagliare turno qui vuol
+ * dire marcare la cronologia di qualcun altro.
+ */
+export function dietroLaRete(bersaglio: string): { turno: string; verso: 'annulla' | 'rifai' } {
+  let turno = bersaglio;
+  let n = 0;
+  while (turno.startsWith(RETE)) {
+    turno = turno.slice(RETE.length);
+    n++;
+  }
+  return { turno, verso: n % 2 === 0 ? 'annulla' : 'rifai' };
 }
 
 export function cmdUndo(argv: string[], home = paths().home): number {
@@ -150,9 +185,25 @@ export function cmdUndo(argv: string[], home = paths().home): number {
   // «annullato» di un effetto ancora sul disco, cioè inventerebbe la
   // riconciliazione; ripristinare per primo e non riuscire a segnare lascia il
   // difetto che c'era, ma **dichiarato** — e sotto si dichiara.
-  const riallineati = riallinea(home, bersaglio, esito.undone.map((s) => s.callId));
+  const ric = riconcilia(home, bersaglio, esito.undone.map((s) => s.callId));
+  const riallineati = ric.chiamate;
 
-  if (riallineati > 0) {
+  if (ric.verso === 'rifai') {
+    // Il verso opposto ha una frase opposta, non la stessa con un numero
+    // diverso: qui i file sono tornati **in avanti**, e la cosa che il turno
+    // seguente deve smettere di leggere è «sono stati disfatti».
+    if (riallineati > 0) {
+      process.stdout.write(
+        `\n${riallineati} ${riallineati === 1 ? 'chiamata non è più segnata' : 'chiamate non sono più segnate'} come annullata` +
+          `${riallineati === 1 ? '' : 'e'} nel record del turno: la cronologia non dice più che quei file sono tornati indietro.\n`,
+      );
+    } else if (esito.undone.length > 0) {
+      process.stdout.write(
+        `\nnessuna riga rimessa in avanti nel record del turno: i file sono tornati com'erano dopo il turno, ` +
+          `la cronologia no. Se ci parli sopra, ricordagli che quel turno **non** è più disfatto.\n`,
+      );
+    }
+  } else if (riallineati > 0) {
     // «quei file», non «i file del turno»: su un ripristino parziale una parte
     // è ancora sul disco, e la frase larga direbbe di quella parte esattamente
     // la bugia che questo comando esiste per togliere. La riga che segue nomina
@@ -176,6 +227,20 @@ export function cmdUndo(argv: string[], home = paths().home): number {
     );
   }
 
+  // La terza copia dell'affermazione, dichiarata quando non si è potuta
+  // riallineare. Stessa forma del paragrafo qui sopra e per la stessa ragione:
+  // un ricordo che il recall ripesca senza la marca arriva al modello come un
+  // fatto, e chi ha chiesto l'undo deve saperlo adesso invece di scoprirlo dal
+  // comportamento del giro dopo.
+  if (ric.ricordiNonAttribuiti > 0) {
+    process.stdout.write(
+      `\n${ric.ricordiNonAttribuiti} ${ric.ricordiNonAttribuiti === 1 ? 'ricordo' : 'ricordi'} di questa sessione ${ric.ricordiNonAttribuiti === 1 ? 'non porta' : 'non portano'} nessun turno ` +
+        `e non ho attribuito ${ric.ricordiNonAttribuiti === 1 ? 'quello' : 'quelli'} di ${bersaglio}: un altro turno della stessa sessione ha scritto ` +
+        `nella stessa finestra, e sceglierne uno vorrebbe dire segnare come annullato un turno che nessuno ha disfatto. ` +
+        `La memoria può ancora ripescare quelle frasi senza dire che sono state rimesse indietro.\n`,
+    );
+  }
+
   if (esito.problems.length === 0) {
     // Turno disfatto: le sue copie sono peso morto, e il ritorno indietro
     // dell'undo vive sotto `annulla-…`, che resta.
@@ -189,33 +254,138 @@ export function cmdUndo(argv: string[], home = paths().home): number {
   return 1;
 }
 
+/** Cosa la riconciliazione ha davvero cambiato, in entrambe le direzioni. */
+type Riconciliazione = {
+  /** `annulla` marca le chiamate, `rifai` toglie la marca. */
+  verso: 'annulla' | 'rifai';
+  /** Righe di `turn_tool_calls` che hanno davvero cambiato stato. */
+  chiamate: number;
+  /** Episodi di memoria agganciati al turno adesso, che prima non lo portavano. */
+  ricordi: number;
+  /** Episodi candidati che si è **scelto** di non attribuire, e che vanno dichiarati. */
+  ricordiNonAttribuiti: number;
+};
+
 /**
- * Segna nel record del turno le chiamate che l'undo ha appena rimesso indietro.
+ * Riallinea il record del turno con quello che l'undo ha appena fatto ai file —
+ * **nei due versi**, e su **tutte e tre** le copie dell'affermazione.
  *
- * Restituisce quante righe ha davvero segnato, mai quante ci ha provato: il
+ * Restituisce quante righe ha davvero cambiato, mai quante ci ha provato: il
  * chiamante deve poter dire «cronologia riallineata» solo quando lo è. Zero è
- * un esito legittimo e frequente — il turno di rete `annulla-…` che questo
- * stesso comando scrive non è un turno vero e non ha righe in
- * `turn_tool_calls`, e un `muffin undo` ripetuto trova le righe già segnate.
+ * un esito legittimo — un `muffin undo` ripetuto trova le righe già segnate, e
+ * un journal preso a mano il cui turno non è mai stato un turno vero non ha
+ * righe in `turn_tool_calls`.
+ *
+ * ## Il verso
+ *
+ * Prima, `annulla-…` cadeva qui come un turno qualunque, non trovava righe e
+ * usciva 0. Ma `annulla-…` non è un turno che non esiste: è il turno vero
+ * letto al contrario, e il comando lo raccomanda una riga dopo ogni undo
+ * riuscito. `dietroLaRete` dice quale turno e in che verso; il resto è
+ * simmetrico, `markUndone` da un lato e `markRedone` dall'altro.
+ *
+ * ## La terza copia
+ *
+ * Marcare `turn_tool_calls` riallinea la cronologia di sessione e — via
+ * `episodes.turn_id` — la memoria. Ma quella colonna è arrivata nullable e
+ * senza backfill, quindi sulle righe di ieri non c'è, `annullaRicordi` esce
+ * sull'item e il blocco `MEMORIA` di una sessione nuova consegna la frase nuda.
+ * `attribuisciEpisodi` ricostruisce la giunzione dalla finestra del turno prima
+ * di marcare — e si rifiuta di indovinare se un altro turno della stessa
+ * sessione ha scritto dentro la stessa finestra, perché attribuire male qui
+ * vuol dire marcare come annullato l'episodio di un turno che nessuno ha
+ * disfatto. Quello che non attribuisce lo **dichiara**, come si dichiara già il
+ * database assente.
  *
  * Non lancia. Il filesystem è già tornato indietro quando questa gira: farla
  * fallire il comando trasformerebbe un undo riuscito-a-metà in un undo che
  * *sembra* non essere avvenuto, che è la lettura peggiore delle due.
  */
-function riallinea(home: string, turnId: string, callIds: readonly string[]): number {
-  if (callIds.length === 0) return 0;
+function riconcilia(home: string, bersaglio: string, callIds: readonly string[]): Riconciliazione {
+  const { turno: chiave, verso } = dietroLaRete(bersaglio);
+  const vuoto: Riconciliazione = { verso, chiamate: 0, ricordi: 0, ricordiNonAttribuiti: 0 };
+  if (callIds.length === 0) return vuoto;
   const file = paths(home).db;
-  if (!existsSync(file)) return 0;
+  if (!existsSync(file)) return vuoto;
   let db: DatabaseCtor.Database | undefined;
   try {
     db = new DatabaseCtor(file);
+    const turnId = risolviTurno(db, chiave);
+    if (turnId === null) return vuoto;
     const turns = new TurnStore(db);
-    let n = 0;
-    for (const callId of callIds) if (turns.markUndone(turnId, callId)) n++;
-    return n;
+
+    let chiamate = 0;
+    for (const callId of callIds) {
+      if (verso === 'annulla' ? turns.markUndone(turnId, callId) : turns.markRedone(turnId, callId))
+        chiamate++;
+    }
+
+    // Solo nel verso `annulla`: un `rifai` arriva sempre dopo un `annulla`
+    // dello stesso turno, che ha già attaccato ciò che c'era da attaccare, e
+    // togliere la marca alle chiamate toglie la marca alla memoria da sé.
+    if (verso === 'rifai') return { verso, chiamate, ricordi: 0, ricordiNonAttribuiti: 0 };
+    const record = turns.get(turnId);
+    if (record === null) return { verso, chiamate, ricordi: 0, ricordiNonAttribuiti: 0 };
+    const { attribuiti, nonAttribuiti } = attribuisciEpisodi(
+      db,
+      {
+        turnId,
+        tenantId: record.tenant,
+        connector: record.surface,
+        threadKey: record.sessionId,
+        from: record.createdAt,
+        to: record.updatedAt,
+      },
+      sovrapposti(db, turnId, record.sessionId, record.createdAt, record.updatedAt),
+    );
+    return { verso, chiamate, ricordi: attribuiti, ricordiNonAttribuiti: nonAttribuiti };
   } catch {
-    return 0;
+    return vuoto;
   } finally {
     db?.close();
   }
+}
+
+/**
+ * Da una chiave — un id intero, o il troncamento a 48 che `undoOfId` lascia —
+ * al turno vero, o `null` se non è **uno solo**.
+ *
+ * L'ambiguità non si risolve scegliendo: due turni con lo stesso prefisso di 48
+ * caratteri sono un caso che non capita con gli id attuali (32 esadecimali) e
+ * che, se capitasse, farebbe marcare la cronologia del turno sbagliato. `LIMIT 2`
+ * perché la domanda è «quanti», non «quali».
+ */
+function risolviTurno(db: DatabaseCtor.Database, chiave: string): string | null {
+  const esatto = db.prepare(`SELECT id FROM turns WHERE id = ?`).get(chiave) as
+    | { id: string }
+    | undefined;
+  if (esatto !== undefined) return esatto.id;
+  const righe = db
+    .prepare(`SELECT id FROM turns WHERE substr(id, 1, ?) = ? LIMIT 2`)
+    .all(chiave.length, chiave) as { id: string }[];
+  return righe.length === 1 ? righe[0]!.id : null;
+}
+
+/**
+ * Un altro turno della stessa sessione ha scritto dentro questa finestra?
+ *
+ * È la condizione che rende la chiave (sessione + finestra) ambigua, ed è
+ * l'unica ragione per cui `attribuisciEpisodi` può sbagliare bersaglio. Il
+ * confronto è il test di sovrapposizione standard fra due intervalli: l'altro
+ * comincia prima che questo finisca e finisce dopo che questo comincia.
+ */
+function sovrapposti(
+  db: DatabaseCtor.Database,
+  turnId: string,
+  sessionId: string,
+  from: string,
+  to: string,
+): boolean {
+  const { n } = db
+    .prepare(
+      `SELECT count(*) AS n FROM turns
+        WHERE session_id = ? AND id != ? AND created_at <= ? AND updated_at >= ?`,
+    )
+    .get(sessionId, turnId, to, from) as { n: number };
+  return n > 0;
 }

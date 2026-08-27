@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../core/config/config.js';
 import { TurnStore } from '../core/turns/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
-import { cmdUndo, undoOfId } from './undo.js';
+import { MemoryStore } from '../core/memory/store.js';
+import { cmdUndo, dietroLaRete, undoOfId } from './undo.js';
 
 /** Una home di prova con un turno già registrato nel journal. */
 function homeConTurno(contenutoPrima = 'prima'): { home: string; file: string; journal: UndoJournal } {
@@ -249,6 +250,96 @@ describe('muffin undo riallinea anche il turno', () => {
     expect(cmdUndo(['t1', '--yes'], home)).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe('prima');
     expect(out.join('')).toContain('la cronologia di quel turno no');
+  });
+
+  /**
+   * Il verso opposto, sulla stessa cucitura.
+   *
+   * Il comando **raccomanda** questo percorso: ogni undo riuscito finisce con
+   * «per tornare com'era: muffin undo annulla-… --yes». Prima di `markRedone`
+   * quel giro rimetteva il file in avanti e lasciava `undone_at` scritto, e
+   * `riallinea` girava su `annulla-t1` — un id senza righe in
+   * `turn_tool_calls` — quindi 0. Risultato: il file pieno di `dopo` e il
+   * contesto del turno seguente che dice «sono tornati com'erano prima».
+   */
+  it('il redo che il comando raccomanda toglie la marca invece di lasciarla', () => {
+    const { home, file } = homeConTurno();
+    const db = conRecord(home);
+    try {
+      expect(cmdUndo(['t1', '--yes'], home)).toBe(0);
+      expect(readFileSync(file, 'utf8')).toBe('prima');
+      expect(new TurnStore(db).undoneCalls('t1')).toEqual(new Set(['toolu_1']));
+
+      expect(cmdUndo([undoOfId('t1'), '--yes'], home)).toBe(0);
+      expect(readFileSync(file, 'utf8')).toBe('dopo');
+      // La marca è tolta, non accumulata: `undoneTurns` non conosce più `t1`.
+      expect(new TurnStore(db).undoneCalls('t1')).toEqual(new Set());
+      expect(new TurnStore(db).undoneTurns(['t1']).get('t1')).toBeUndefined();
+      // E `content` non è stato riscritto in nessuno dei due versi.
+      expect(new TurnStore(db).recordedOutcomes('t1').get('toolu_1')?.content).toBe(
+        'wrote 4 bytes to nota.md',
+      );
+      expect(out.join('')).toContain('non è più segnata');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('la parità dei prefissi dice il verso, e l\'annidamento non la confonde', () => {
+    // `undoOfId` è invertibile, e disfare una rete produce `annulla-annulla-…`,
+    // che è di nuovo un undo del turno vero. Contare i prefissi è l'unico modo
+    // di leggerlo: guardarne uno solo direbbe «rifai» a ogni livello dispari e
+    // pari indifferentemente.
+    expect(dietroLaRete('t1')).toEqual({ turno: 't1', verso: 'annulla' });
+    expect(dietroLaRete(undoOfId('t1'))).toEqual({ turno: 't1', verso: 'rifai' });
+    expect(dietroLaRete(undoOfId(undoOfId('t1')))).toEqual({ turno: 't1', verso: 'annulla' });
+  });
+
+  /**
+   * La terza copia dell'affermazione, quando non si può riallineare.
+   *
+   * `episodes.turn_id` è arrivato nullable e senza backfill, quindi l'undo
+   * ricongiunge gli episodi del turno dalla sua finestra. Ma se un **altro**
+   * turno della stessa sessione ha scritto dentro la stessa finestra, la chiave
+   * è ambigua: attribuire vorrebbe dire marcare come annullato l'episodio di un
+   * turno che nessuno ha disfatto — cioè mettere una seconda affermazione falsa
+   * al posto della prima. Qui non si sceglie: si dichiara, come si dichiara già
+   * il database assente.
+   */
+  it('non attribuisce un ricordo ambiguo, e lo dichiara invece di indovinare', () => {
+    const { home } = homeConTurno();
+    const db = conRecord(home);
+    try {
+      const memoria = new MemoryStore(db);
+      const quando = new TurnStore(db).get('t1')!;
+      memoria.addEpisode({
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 's1',
+        role: 'agent',
+        kind: 'message',
+        content: 'Fatto: ho scritto nota.md.',
+        trustTier: 0,
+        createdAt: quando.createdAt,
+      });
+      // Un secondo turno della stessa sessione, con la finestra sovrapposta.
+      // Le date a mano perché è l'unico modo di avere qui due turni davvero
+      // concorrenti — un gruppo, o un `resume` che sposta `updated_at` oltre
+      // un turno più recente — senza far girare due loop in parallelo.
+      conRecord(home, 't2', 'toolu_9').close();
+      db.prepare(`UPDATE turns SET created_at = ?, updated_at = ? WHERE id = 't2'`).run(
+        quando.createdAt,
+        quando.updatedAt,
+      );
+
+      expect(cmdUndo(['t1', '--yes'], home)).toBe(0);
+      expect(
+        (db.prepare(`SELECT turn_id AS t FROM episodes`).get() as { t: string | null }).t,
+      ).toBeNull();
+      expect(out.join('')).toContain('non ho attribuito');
+    } finally {
+      db.close();
+    }
   });
 
   it('un secondo mark non sposta la data del primo', () => {

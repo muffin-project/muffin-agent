@@ -187,14 +187,23 @@ describe('makeAbsenceComposer', () => {
 
     (await makeAbsenceComposer(h.deps, 'telegram')(ABSENCE)).record();
 
-    const row = db.prepare('SELECT content, connector, trust_tier AS tier FROM episodes').get() as {
+    const row = db
+      .prepare('SELECT content, connector, trust_tier AS tier, turn_id AS turnId FROM episodes')
+      .get() as {
       content: string;
       connector: string;
       tier: number;
+      turnId: string | null;
     };
     expect(row.content).toBe('quando hai visto la tesi?');
     expect(row.connector).toBe('telegram');
     expect(row.tier).toBe(0);
+    // E col turno che l'ha prodotta. Senza, questa riga è il buco che
+    // `attribuisciEpisodi` ripara sui database di ieri, riaperto **oggi** a
+    // ogni nudge: `annullaRicordi` esce sull'item quando `turnId` è
+    // `undefined`, quindi un nudge disfatto lascerebbe la propria frase nuda
+    // in memoria e il recall la ripescherebbe come un fatto.
+    expect(row.turnId).not.toBeNull();
   });
 
   it('a reply made of whitespace is nothing sent, not an empty nudge', async () => {

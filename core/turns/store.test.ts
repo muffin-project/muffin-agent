@@ -500,6 +500,28 @@ describe('una chiamata rimessa indietro dall’undo', () => {
     expect(s.recordedOutcomes('turn-1').get('c1')?.undoneAt).toBe('2026-08-27T10:00:00.000Z');
   });
 
+  it('markRedone toglie la marca, e solo se c\'era', () => {
+    // `undone_at` non è un latch, e la ragione sta nel comando che lo scrive:
+    // `cli/undo.ts` chiude ogni undo riuscito raccomandando «muffin undo
+    // annulla-… --yes», che rimette i file allo stato **dopo** il turno. Se la
+    // marca restasse, il contesto del giro seguente direbbe «sono tornati
+    // com'erano prima» di file pieni del contenuto nuovo.
+    const s = conCall(store());
+    s.endToolCall('turn-1', 'c1', { content: 'wrote 4 bytes', isError: false, tier: 0 });
+    // Niente da togliere: il redo non deve annunciare una riconciliazione.
+    expect(s.markRedone('turn-1', 'c1')).toBe(false);
+    expect(s.markUndone('turn-1', 'c1')).toBe(true);
+    expect(s.markRedone('turn-1', 'c1')).toBe(true);
+    expect(s.undoneCalls('turn-1')).toEqual(new Set());
+    // Il turno sparisce dalla mappa: non è annullato «in parte», non lo è.
+    expect(s.undoneTurns(['turn-1']).get('turn-1')).toBeUndefined();
+    // E `content` non è stato toccato in nessuno dei due versi.
+    expect(s.recordedOutcomes('turn-1').get('c1')?.content).toBe('wrote 4 bytes');
+    expect(s.recordedOutcomes('turn-1').get('c1')?.undoneAt).toBeNull();
+    // Idempotente come il suo opposto.
+    expect(s.markRedone('turn-1', 'c1')).toBe(false);
+  });
+
   it('una chiamata che questa tabella non conosce cambia zero righe, e lo dice', () => {
     // `cli/undo.ts` scrive un journal di rete sotto `annulla-…`, che non è un
     // turno vero: il comando deve poter distinguere «segnato» da «non c'era

@@ -511,6 +511,7 @@ export class TurnStore {
   private readonly suspendedCountStmt: Database.Statement;
   private readonly outcomesStmt: Database.Statement;
   private readonly undoneStmt: Database.Statement;
+  private readonly redoneStmt: Database.Statement;
   private readonly undoneCallsStmt: Database.Statement;
   private readonly undeliverableCountStmt: Database.Statement;
 
@@ -724,6 +725,14 @@ export class TurnStore {
     this.undoneStmt = db.prepare(
       `UPDATE turn_tool_calls SET undone_at = @now
        WHERE turn_id = @turnId AND call_id = @callId AND ended_at IS NOT NULL AND undone_at IS NULL`,
+    );
+    // Il verso opposto, e la ragione per cui `undone_at` **non** è un latch.
+    // `WHERE undone_at IS NOT NULL` per la stessa simmetria che `undoneStmt`
+    // ha con `IS NULL`: chi chiama deve poter distinguere «l'ho rimessa in
+    // avanti» da «non c'era niente da rimettere in avanti».
+    this.redoneStmt = db.prepare(
+      `UPDATE turn_tool_calls SET undone_at = NULL
+       WHERE turn_id = @turnId AND call_id = @callId AND undone_at IS NOT NULL`,
     );
     this.undoneCallsStmt = db.prepare(
       `SELECT call_id AS callId FROM turn_tool_calls WHERE turn_id = ? AND undone_at IS NOT NULL`,
@@ -949,6 +958,38 @@ export class TurnStore {
    */
   markUndone(turnId: string, callId: string, at: Date = this.clock()): boolean {
     return this.undoneStmt.run({ turnId, callId, now: at.toISOString() }).changes === 1;
+  }
+
+  /**
+   * «No: quella chiamata è di nuovo sul disco.»
+   *
+   * L'inverso di `markUndone`, e la ragione per cui deve esistere è che il
+   * comando che scrive il mark **pubblicizza** il percorso che lo invalida:
+   * `cli/undo.ts` chiude ogni undo riuscito con «per tornare com'era: muffin
+   * undo annulla-… --yes». Quel giro rimette i file allo stato *dopo* il turno.
+   * Con `undone_at` come latch il contesto del turno seguente consegnava
+   * «i file che dice di aver toccato sono tornati com'erano prima» con il file
+   * pieno del contenuto nuovo: un'affermazione falsa che **prima** della
+   * riconciliazione non esisteva — la cronologia diceva «ho scritto» e il disco
+   * era scritto, coerenti — e che nulla azzerava mai.
+   *
+   * Misurato su `buildRuntime` + `runTurn` prima di questa riga: dopo il redo,
+   * `ANNULLATO` presente sia sulla riga di cronologia sia nel blocco `MEMORIA`,
+   * `nota.md` = `dopo`.
+   *
+   * Azzera, non riscrive niente altro: `content`, `tier` e `is_error` restano
+   * quelli che il tool rispose davvero, esattamente come nel verso opposto. La
+   * riga torna a essere presentata come corrente perché **lo è**, e non resta
+   * traccia della marcatura per la stessa ragione per cui `undone_at` non
+   * accumula: la colonna risponde a «questo effetto è sul disco adesso?», che
+   * è una domanda sul presente. La cronologia dell'undo vive nel journal.
+   *
+   * Restituisce se ha davvero tolto una marca: `undone_at IS NOT NULL` nella
+   * `WHERE`, così un redo su righe mai annullate non si annuncia come
+   * riconciliazione, la stessa distinzione che `markUndone` fa dall'altro lato.
+   */
+  markRedone(turnId: string, callId: string): boolean {
+    return this.redoneStmt.run({ turnId, callId }).changes === 1;
   }
 
   /**

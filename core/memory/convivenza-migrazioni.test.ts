@@ -1,8 +1,10 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { VectorIndex } from './vectors.js';
-import { MemoryStore } from './store.js';
+import { attribuisciEpisodi, MemoryStore } from './store.js';
 import { MEMORY_SCHEMA } from './schema.js';
+import { recall } from './recall.js';
+import { annullaRicordi } from '../../agent/context/assemble.js';
 import type { Embedder } from './embed.js';
 
 const finto = (id: string, dimensions: number): Embedder => ({
@@ -119,6 +121,63 @@ describe('convivenza fra il reset dell indice vettoriale e la colonna episodes.t
     );
     expect(scritti).toBe(5);
     expect(conta(db, 'chunks_vec')).toBe(5);
+    db.close();
+  });
+
+  /**
+   * La domanda che mancava: **cosa fa un `turn_id` NULL al recall.**
+   *
+   * I test qui sopra chiedono se le due migrazioni si portino via i dati a
+   * vicenda. Nessuno chiedeva cosa succede alle righe che la colonna nuova
+   * lascia vuote — ed è l'unica cosa che il consumatore della colonna vede.
+   * La risposta misurata: `annullaRicordi` esce sull'item (`turnId === undefined`),
+   * quindi dopo `muffin undo` la frase arriva al modello **nuda**, con la sua
+   * provenienza normale. Su un database di ieri il difetto che la slice ripara
+   * non è riparato.
+   *
+   * Non è una finestra che si chiude all'upgrade: il journal di undo non ha né
+   * pruning né retention, quindi un turno registrato prima della colonna resta
+   * disfacibile per sempre.
+   */
+  it('un episodio migrato senza turn_id torna nudo dal recall, finché l undo non lo ricongiunge', async () => {
+    const db = dbVecchio();
+    new MemoryStore(db);
+    const store = new MemoryStore(db);
+
+    const primo = await recall({ store }, 'host', 'frase');
+    const nudo = primo.items.filter((i) => i.kind === 'episode' && i.role === 'agent');
+    expect(nudo.length).toBeGreaterThan(0);
+    // Nessuno di questi porta un turno: è quello che l'`ALTER TABLE` lascia.
+    expect(nudo.every((i) => i.turnId === undefined)).toBe(true);
+    // E quindi la marcatura non li tocca, per quanto il turno sia disfatto.
+    const finto42 = new Set(['T-42']);
+    expect(annullaRicordi(primo, finto42)).toBe(primo);
+
+    // L'undo ricongiunge dalla finestra del turno, e la stessa domanda cambia
+    // risposta senza che sia cambiato niente nel recall.
+    const { attribuiti } = attribuisciEpisodi(
+      db,
+      {
+        turnId: 'T-42',
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't1',
+        from: '2026-08-27',
+        to: '2026-08-27',
+      },
+      false,
+    );
+    expect(attribuiti).toBe(5);
+
+    const dopo = await recall({ store }, 'host', 'frase');
+    const marcabili = dopo.items.filter((i) => i.kind === 'episode' && i.role === 'agent');
+    expect(marcabili.every((i) => i.turnId === 'T-42')).toBe(true);
+    const marcato = annullaRicordi(dopo, finto42);
+    expect(marcato).not.toBe(dopo);
+    expect(
+      marcato.items.filter((i) => i.kind === 'episode' && i.role === 'agent')
+        .every((i) => i.source.includes('ANNULLATO')),
+    ).toBe(true);
     db.close();
   });
 

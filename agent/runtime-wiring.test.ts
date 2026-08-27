@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { paths, secretDir } from '../core/config/config.js';
 import { UndoJournal } from '../core/undo/journal.js';
-import { cmdUndo } from '../cli/undo.js';
+import { cmdUndo, undoOfId } from '../cli/undo.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
 import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
@@ -815,6 +815,145 @@ describe('un turno vero scrive un file vero, e si disfa', () => {
     expect(marcato!.text).toContain('solo una parte');
     // E dice quale parte, con le parole del tool invece che con una parafrasi.
     expect(marcato!.text).toContain('uno.md');
+
+    runtime.close();
+  }, 30_000);
+
+  /**
+   * Il database di **ieri**, cioè quello che ogni installazione ha già.
+   *
+   * `episodes.turn_id` è arrivato con un `ALTER TABLE` nullable e senza
+   * backfill: le righe scritte prima dell'upgrade hanno `turn_id NULL`,
+   * `annullaRicordi` esce sull'item, e il blocco `MEMORIA` di una sessione
+   * nuova consegna la frase nuda con la provenienza `[Muffin via cli]` — unica
+   * copia nel contesto, perché lì la cronologia non c'è affatto. Cioè il
+   * difetto che questa slice ripara, **non riparato per i dati veri**.
+   *
+   * E non è una finestra che si chiude il giorno dell'upgrade: `core/undo/journal.ts`
+   * non ha né pruning né retention, quindi ogni turno mai registrato resta
+   * disfacibile e ogni suo episodio ha `turn_id NULL` per sempre.
+   *
+   * Il `NULL` è messo a mano di proposito: è l'unico modo di avere qui lo stato
+   * che un `ALTER TABLE` lascia dietro di sé, e la stessa forma che
+   * `core/memory/store.test.ts` usa per provare `ensureColumn`. Misurato prima
+   * della riparazione, con questa identica sequenza: 2 righe svuotate,
+   * `cmdUndo` = 0, `nota.md` = `prima`, e in sessione nuova
+   * «- [Muffin via cli, …] Fatto: ho scritto nota.md con il contenuto nuovo.»
+   * senza `ANNULLATO`.
+   */
+  it('un episodio senza turno viene ricongiunto dall\'undo, e non torna nudo in sessione nuova', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const modello = new Scripted([
+      writeCall('nota.md', 'dopo'),
+      {
+        text: DETTO, toolCalls: [], stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+    ]);
+    const deps: LoopDeps = { ...runtime.deps, provider: modello };
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u5'), text: 'scrivi nota.md',
+    });
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    // Lo stato che l'`ALTER TABLE` lascia: la colonna c'è, i valori no.
+    const db = new DatabaseCtor(paths(home).db);
+    const svuotate = db.prepare(`UPDATE episodes SET turn_id = NULL`).run().changes;
+    db.close();
+    expect(svuotate).toBe(2);
+
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0]!;
+    expect(cmdUndo([turno, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    // La sessione **nuova**: nessuna cronologia, quindi il recall è l'unica
+    // strada per cui quella frase raggiunge il modello.
+    modello.seen.length = 0;
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli',
+      session: deps.sessions.open('u5-bis'), text: 'nota.md, e adesso?',
+    });
+    const nuova = modello.seen[0]!;
+    expect(tutti(nuova).some((b) => b.role === 'assistant')).toBe(false);
+    nessunaCopiaNuda(nuova);
+
+    runtime.close();
+  }, 30_000);
+
+  /**
+   * Il redo che il comando stesso raccomanda, e la bugia speculare.
+   *
+   * `cli/undo.ts` chiude ogni undo riuscito con «per tornare com'era: muffin
+   * undo annulla-… --yes». Quel percorso rimette i file allo stato **dopo** il
+   * turno. Con `undone_at` come latch — nessun `markRedone`, e `riallinea` che
+   * girava su `annulla-…`, un id senza righe in `turn_tool_calls` — la
+   * marcatura restava, e il contesto del giro seguente consegnava «i file che
+   * dice di aver toccato sono tornati com'erano prima» con `nota.md` pieno di
+   * `dopo`.
+   *
+   * È il caso peggiore di tutta la slice, ed è il motivo per cui questo test
+   * esiste: **prima** della riconciliazione questa sequenza non produceva
+   * nessuna affermazione falsa (la cronologia diceva «ho scritto», il disco era
+   * scritto: coerenti). La riparazione ne creava una nuova, permanente, sul
+   * percorso che il comando raccomanda una riga dopo l'undo.
+   *
+   * Misurato prima di `markRedone`, con questa identica sequenza:
+   * `nota.md` = `dopo`, `ANNULLATO` presente sia sulla riga `assistant` sia nel
+   * blocco `MEMORIA`, e sulla riga di cronologia anche la frase **categorica**.
+   */
+  it('dopo il redo, la cronologia smette di dire «annullato» — e il file è tornato in avanti', async () => {
+    const home = homeAllowing('ok.example.com');
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-write-'));
+    writeFileSync(join(workspace, 'nota.md'), 'prima', 'utf8');
+
+    const runtime = buildRuntime(home, workspace);
+    const modello = new Scripted([
+      writeCall('nota.md', 'dopo'),
+      {
+        text: DETTO, toolCalls: [], stopReason: 'end',
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, model: 't',
+      },
+    ]);
+    const deps: LoopDeps = { ...runtime.deps, provider: modello };
+    const session = deps.sessions.open('u6');
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'scrivi nota.md',
+    });
+
+    const journal = new UndoJournal(paths(home).undo);
+    const turno = journal.turns()[0]!;
+    expect(cmdUndo([turno, '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('prima');
+
+    // L'incantesimo che il comando stampa, parola per parola.
+    expect(cmdUndo([undoOfId(turno), '--yes'], home)).toBe(0);
+    expect(readFileSync(join(workspace, 'nota.md'), 'utf8')).toBe('dopo');
+
+    modello.seen.length = 0;
+    await runTurn(deps, {
+      principal: owner, tenant: 'host', surface: 'cli', session, text: 'nota.md, e adesso?',
+    });
+    const blocchi = tutti(modello.seen[0]!);
+
+    // La rete contro il verde per assenza: la frase deve esserci davvero, in
+    // cronologia **e** in memoria, altrimenti i due cicli sotto non guardano
+    // niente.
+    const storia = blocchi.find((b) => b.role === 'assistant' && b.text.includes(DETTO));
+    expect(storia).toBeDefined();
+    const memoria = blocchi.find((b) => b.text.includes('MEMORIA'));
+    expect(memoria?.text).toContain(DETTO);
+
+    // E nessuna delle due dice più «annullato», perché non lo è.
+    expect(storia!.text).not.toContain('ANNULLATO');
+    for (const riga of memoria!.text.split('\n')) {
+      if (riga.includes(DETTO)) expect(riga).not.toContain('ANNULLATO');
+    }
 
     runtime.close();
   }, 30_000);

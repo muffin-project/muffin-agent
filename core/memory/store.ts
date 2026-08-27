@@ -1190,3 +1190,87 @@ export type MemoryStats = {
   topPredicates: { predicate: string; n: number }[];
   span: { from_: string | null; to_: string | null };
 };
+
+/**
+ * Attacca a posteriori un turno agli episodi che quel turno ha prodotto e che
+ * non lo portano.
+ *
+ * Esiste per una sola ragione, ed è la più antipatica: `episodes.turn_id` è
+ * arrivato con un `ALTER TABLE` **nullable e senza backfill**, quindi ogni riga
+ * scritta prima dell'upgrade ha `turn_id NULL`. Il consumatore del campo —
+ * `annullaRicordi` in `agent/context/assemble.ts` — esce sull'item quando
+ * `turnId === undefined`, e il risultato misurato su un database di ieri è che
+ * dopo `muffin undo` il blocco `MEMORIA` di una **sessione nuova** consegna la
+ * frase nuda, con la provenienza `[Muffin via cli]`, unica copia nel contesto.
+ * Cioè esattamente il difetto che la slice ripara, non riparato per i dati che
+ * ogni installazione ha già.
+ *
+ * E non è una finestra che si chiude il giorno dell'upgrade: `core/undo/journal.ts`
+ * non ha né pruning né retention, quindi un turno registrato un anno fa resta
+ * disfacibile oggi, e i suoi episodi hanno `turn_id NULL` per sempre.
+ *
+ * ## Con quale chiave
+ *
+ * Non c'è un id da ritrovare, quindi la giunzione si ricostruisce con quello
+ * che l'episodio porta davvero: `agent/loop.ts` scrive `threadKey: input.session.id`,
+ * `connector: input.surface`, `tenantId: input.tenant`, `createdAt: now()` — e
+ * il record del turno (`TurnStore.get`) ha `sessionId`, `surface`, `tenant` e la
+ * finestra `[created_at, updated_at]`. Sono gli stessi quattro campi dai due
+ * lati, il che rende questa una **ricostruzione**, non un'euristica.
+ *
+ * ## Quando si rifiuta di indovinare
+ *
+ * L'unico modo in cui la chiave sbaglia è che un **altro** turno della stessa
+ * sessione abbia scritto dentro la stessa finestra: allora attribuire vorrebbe
+ * dire marcare come annullato l'episodio di un turno che nessuno ha disfatto,
+ * cioè mettere una seconda affermazione falsa al posto della prima. Il chiamante
+ * passa `sovrapposti`: se è vero, questa non tocca niente e restituisce i
+ * candidati come **non attribuiti**, perché `cli/undo.ts` li dichiari come già
+ * dichiara il database assente. Meglio muto che sbagliato.
+ *
+ * Non lancia mai: gira dopo che il filesystem è già tornato indietro, e una
+ * memoria disabilitata (nessuna tabella `episodes`) è una configurazione
+ * legittima, non un errore dell'undo.
+ */
+export function attribuisciEpisodi(
+  db: Database.Database,
+  turno: {
+    turnId: string;
+    tenantId: string;
+    connector: string;
+    threadKey: string;
+    from: string;
+    to: string;
+  },
+  sovrapposti: boolean,
+): { attribuiti: number; nonAttribuiti: number } {
+  try {
+    const tabella = db
+      .prepare(`SELECT 1 AS c FROM sqlite_master WHERE type = 'table' AND name = 'episodes'`)
+      .get() as { c: number } | undefined;
+    if (tabella === undefined) return { attribuiti: 0, nonAttribuiti: 0 };
+    const colonne = db.prepare(`PRAGMA table_info(episodes)`).all() as { name: string }[];
+    if (!colonne.some((c) => c.name === 'turn_id')) return { attribuiti: 0, nonAttribuiti: 0 };
+
+    // Posizionali e non nominati: `better-sqlite3` rifiuta un parametro
+    // nominato che l'istruzione non usa, e la `SELECT` qui sotto non usa
+    // `turn_id` mentre la `UPDATE` sì. Due oggetti diversi sarebbero due
+    // liste da tenere allineate a mano.
+    const dove =
+      `WHERE turn_id IS NULL AND tenant_id = ? AND connector = ?` +
+      ` AND thread_key = ? AND created_at >= ? AND created_at <= ?`;
+    const chiave = [turno.tenantId, turno.connector, turno.threadKey, turno.from, turno.to];
+    if (sovrapposti) {
+      const { n } = db.prepare(`SELECT count(*) AS n FROM episodes ${dove}`).get(...chiave) as {
+        n: number;
+      };
+      return { attribuiti: 0, nonAttribuiti: n };
+    }
+    const changes = db
+      .prepare(`UPDATE episodes SET turn_id = ? ${dove}`)
+      .run(turno.turnId, ...chiave).changes;
+    return { attribuiti: changes, nonAttribuiti: 0 };
+  } catch {
+    return { attribuiti: 0, nonAttribuiti: 0 };
+  }
+}
