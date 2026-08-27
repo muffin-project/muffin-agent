@@ -562,6 +562,13 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       // `throwTier: 0` to match: `fsWrite`'s only throws are `PathDenied`,
       // built the same way as the two tools above.
       throwTier: 0,
+      // Il file che questa chiamata toccherà davvero, per il registro di undo.
+      // È `resolveInScope` — la stessa funzione che userà `fsWrite` un istante
+      // dopo — e non una seconda derivazione del percorso: la copia e la
+      // scrittura devono parlare dello stesso file, o l'undo ripristina
+      // qualcos'altro. Lancia `PathDenied` sugli stessi casi su cui lancerebbe
+      // la scrittura, e il loop legge il lancio come «non eseguire».
+      resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),
       handler: (args) => {
         const a = writeArgs.parse(args);
         return { content: fsWrite(scope, a.path, a.content), tier: 0 };
