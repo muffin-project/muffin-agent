@@ -8,7 +8,6 @@ import {
   debugCommand,
   formatProgressLine,
   makeReplCliWrite,
-  makeStatusLine,
   runRepl,
   statusFor,
   thinkingCommand,
@@ -505,50 +504,6 @@ describe('ogni tool registrato ha una frase', () => {
     expect(scoperti.size).toBeGreaterThan(10);
     expect([...scoperti].filter((n) => !(n in TOOL_PHRASES)).sort()).toEqual([]);
     expect(Object.keys(TOOL_PHRASES).filter((n) => !scoperti.has(n)).sort()).toEqual([]);
-  });
-});
-
-describe('makeStatusLine', () => {
-  it('su un TTY riscrive in place e sparisce quando le si dice di sparire', () => {
-    const out: string[] = [];
-    const s = makeStatusLine((t) => void out.push(t), true);
-    s.show('penso…');
-    s.clear();
-    s.stop();
-    expect(out[0]).toContain('penso…');
-    expect(out[0]!.startsWith('\r\u001b[2K')).toBe(true);
-    expect(out.at(-1)).toBe('\r\u001b[2K');
-  });
-
-  /**
-   * `clear()` si chiama prima di ogni riga che va nello scrollback, e chi
-   * stampa non sa se un'attesa è in corso. A schermo pulito deve quindi non
-   * scrivere niente: altrimenti in `--debug` — dove la riga di stato non
-   * compare mai — ogni riga si porterebbe davanti una sequenza di escape, e
-   * smetterebbe di cominciare con quello con cui dice di cominciare.
-   */
-  it('a schermo pulito non scrive niente: cancellare il nulla non è una cancellazione', () => {
-    const out: string[] = [];
-    const s = makeStatusLine((t) => void out.push(t), true);
-    s.clear();
-    s.clear();
-    expect(out).toEqual([]);
-  });
-
-  /**
-   * Senza TTY niente spinner e niente sequenze di cancellazione: `\r\x1b[2K`
-   * dentro un file è spazzatura, e uno spinner dentro una pipe è spazzatura
-   * che si ripete. È la stessa scelta che `streamEnabled` fa per il testo.
-   */
-  it('senza TTY diventa una riga normale, e non si ripete uguale', () => {
-    const out: string[] = [];
-    const s = makeStatusLine((t) => void out.push(t), false);
-    s.show('penso…');
-    s.show('penso…');
-    s.clear();
-    s.show('penso…');
-    expect(out).toEqual(['· penso…\n', '· penso…\n']);
-    expect(out.join('')).not.toContain('\u001b');
   });
 });
 

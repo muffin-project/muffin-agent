@@ -148,7 +148,25 @@ export type Runtime = {
   close(): void;
 };
 
-export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime {
+export function buildRuntime(
+  home = paths().home,
+  cwd = process.cwd(),
+  opts: {
+    /**
+     * Dove finiscono le righe che il consolidamento scrive **mentre** qualcosa
+     * d'altro sta usando il terminale.
+     *
+     * Iniettabile e non cablata su `process.stderr` per un difetto misurato: il
+     * REPL ha una riga di stato che si riscrive in place, e questo log —
+     * costruito qui, dove di quella riga non si sa niente — le si incollava
+     * dentro invece di sostituirla (`⠋ penso…consolidamento: …`). Chi possiede
+     * il terminale è il chiamante, quindi è il chiamante a dire come ci si
+     * scrive. Il default resta il comportamento di sempre, per il gateway e per
+     * chiunque non abbia un terminale da proteggere.
+     */
+    log?: (line: string) => void;
+  } = {},
+): Runtime {
   const p = paths(home);
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
@@ -610,7 +628,7 @@ export function buildRuntime(home = paths().home, cwd = process.cwd()): Runtime 
     // rows the batch just wrote — so there is no install for which switching it
     // off would be the right default.
     sweep: (at) => sweepDuplicates(memoryStore, CONSOLIDATION_TENANT, at),
-    log: (line) => process.stderr.write(`${line}\n`),
+    log: opts.log ?? ((line) => process.stderr.write(`${line}\n`)),
   });
 
   // One prompt per tenant class, assembled here and never per turn: the class
