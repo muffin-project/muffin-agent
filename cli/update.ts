@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { makeStatusLine } from './status-line.js';
 import { backupNow } from './backup.js';
 import { realishPath } from './init.js';
 import { promptLine } from './prompt.js';
@@ -88,6 +89,23 @@ export type UpdateDeps = {
   backup?: typeof backupNow;
   /** Where launcher symlinks are looked for. Real bindirs by default; tests point this at a throwaway directory. */
   bindirs?: string[];
+  /**
+   * Cosa sta per succedere, prima che succeda.
+   *
+   * `runUpdate` accumulava i passi in un array e non stampava **niente** fino
+   * alla fine: `npm ci` dentro la release nuova prende decine di secondi, e per
+   * tutto quel tempo il terminale era vuoto. Un aggiornamento che sembra
+   * bloccato e' un aggiornamento che qualcuno interrompe a meta' — e questo
+   * comando scambia un symlink.
+   *
+   * Due callback e non una perche' sono due momenti diversi: `onBegin` apre
+   * un'attesa (la riga di stato viva), `onStep` la chiude con un esito che
+   * resta nello scrollback. E' la stessa coppia `statusFor`/`formatProgressLine`
+   * del REPL, sulla stessa `StatusLine`.
+   */
+  onBegin?: (name: string) => void;
+  /** Un passo finito — con il suo esito. Fired man mano, non alla fine. */
+  onStep?: (step: UpdateStep) => void;
 };
 
 function run(cmd: string, args: string[], cwd: string, timeoutMs = 120_000): SpawnResult {
@@ -510,8 +528,14 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   const moduleDir = deps.moduleDir ?? dirname(fileURLToPath(import.meta.url));
   const steps: UpdateStep[] = [];
   const step = (name: string, detail: string, done = true): void => {
-    steps.push({ name, done, detail });
+    const s = { name, done, detail };
+    steps.push(s);
+    // Emesso **e** accumulato: `cmdUpdate` lo mostra mentre succede, e
+    // `UpdateResult.steps` resta il riepilogo che i test leggono. Due consumatori
+    // dello stesso evento, non due elenchi che possono divergere.
+    deps.onStep?.(s);
   };
+  const begin = (name: string): void => deps.onBegin?.(name);
 
   const checkoutRoot = findCheckoutRoot(moduleDir, gitRunner);
   if (checkoutRoot === null) {
@@ -527,6 +551,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 
   if (deps.rollback) return rollback(checkoutRoot, home, deps, steps);
 
+  begin('fetch');
   const fetchRes = gitRunner(['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'], checkoutRoot);
   if (fetchRes.status !== 0) {
     step('fetch', `${fetchRes.stderr.trim() || 'git fetch fallito'}\n  → ${fetchFailureRemedy(fetchRes.stderr)}`, false);
@@ -565,6 +590,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
     gitRunner(['worktree', 'prune'], checkoutRoot);
   }
   mkdirSync(releasesDir(checkoutRoot), { recursive: true });
+  begin('release');
   const addRes = gitRunner(['worktree', 'add', releaseDir, newSha], checkoutRoot);
   if (addRes.status !== 0) {
     step('release', `\`git worktree add\` fallito: ${addRes.stderr.trim()}`, false);
@@ -573,6 +599,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   step('release', `worktree creato in ${releaseDir} — il codice in esecuzione non è toccato`);
 
   const npmCi = deps.npmCi ?? defaultNpmCi;
+  begin('npm ci');
   const ciRes = npmCi(releaseDir);
   if (ciRes.status !== 0) {
     gitRunner(['worktree', 'remove', '--force', releaseDir], checkoutRoot);
@@ -593,6 +620,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
     // Se manca del tutto lo scoprirà lo smoke test giusto sotto.
   }
   const smokeTest = deps.smokeTest ?? defaultSmokeTest;
+  begin('smoke test');
   const smokeRes = smokeTest(releaseDir);
   if (smokeRes.status !== 0) {
     gitRunner(['worktree', 'remove', '--force', releaseDir], checkoutRoot);
@@ -660,6 +688,22 @@ export const UPDATE_USAGE = `uso:
   muffin update --rollback [--yes]      torna alla release precedente (flip inverso)
 `;
 
+/**
+ * Il nome del passo → cosa sta facendo, in italiano.
+ *
+ * Stessa distinzione di `toolPhrase` nel REPL: `npm ci` e' il nome di un
+ * comando, «installo e compilo la release nuova» e' quello che sta succedendo —
+ * ed e' il passo che da solo vale questa slice, perche' e' quello lungo.
+ * Il nome grezzo resta il fallback: un passo senza frase e' un passo che si
+ * legge lo stesso, non un errore.
+ */
+const UPDATE_PHRASE: Readonly<Record<string, string>> = {
+  fetch: 'guardo se c\'e\' qualcosa di nuovo',
+  release: 'preparo la release nuova, senza toccare quella in esecuzione',
+  'npm ci': 'installo e compilo la release nuova',
+  'smoke test': 'provo che la release nuova risponda, prima di toccare qualunque cosa viva',
+};
+
 export async function cmdUpdate(argv: string[]): Promise<number> {
   let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean };
   try {
@@ -674,8 +718,22 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
   }
 
   const home = paths().home;
-  const result = runUpdate({ home, dryRun: values['dry-run'] ?? false, rollback: values.rollback ?? false });
-  for (const s of result.steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(14)} ${s.detail}\n`);
+  /**
+   * Lo stesso oggetto del REPL, e per la stessa ragione: `npm ci` dentro la
+   * release nuova prende decine di secondi durante i quali questo comando non
+   * diceva niente. Senza TTY torna a essere una riga per passo, che e' esatta-
+   * mente il vecchio comportamento — quindi uno script che legge questo output
+   * legge gli stessi byte di prima.
+   */
+  const status = makeStatusLine((text) => process.stderr.write(text), process.stderr.isTTY === true);
+  const result = runUpdate({
+    home,
+    dryRun: values['dry-run'] ?? false,
+    rollback: values.rollback ?? false,
+    onBegin: (name) => status.show(`${UPDATE_PHRASE[name] ?? name}…`),
+    onStep: (s) => status.line(`${s.done ? '✓' : '!'} ${s.name.padEnd(14)} ${s.detail}`),
+  });
+  status.stop();
 
   if (result.code !== 0 || values['dry-run']) return result.code;
 

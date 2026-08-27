@@ -574,3 +574,65 @@ describe('describeBuild', () => {
     expect(b).toBeNull();
   });
 });
+
+/** Lo stesso setup dell'happy path sopra, impacchettato: qui interessa la sequenza degli eventi, non l'esito. */
+function fakeDeps(): Parameters<typeof runUpdate>[0] {
+  const f = makeFixture();
+  pushNewVersion(f, 'v2');
+  const { bindir } = seedLauncher(f.installed);
+  return {
+    moduleDir: f.installed,
+    home: dir('muffin-update-ux-'),
+    bindirs: [bindir],
+    npmCi: ok,
+    smokeTest: ok,
+    readNewSchemaVersion: () => 1,
+  };
+}
+
+/**
+ * `npm ci` dentro la release nuova prende decine di secondi, e per tutto quel
+ * tempo il comando non diceva niente: i passi si accumulavano in un array e si
+ * stampavano tutti alla fine. Un aggiornamento che sembra bloccato è un
+ * aggiornamento che qualcuno interrompe a metà — e questo comando scambia un
+ * symlink.
+ */
+describe('update — i passi si vedono mentre succedono', () => {
+  it('ogni passo arriva a `onStep` man mano, e resta anche nel riepilogo', () => {
+    const vivi: string[] = [];
+    const r = runUpdate({ ...fakeDeps(), onStep: (s) => void vivi.push(s.name) });
+    // Gli stessi passi, nello stesso ordine: due consumatori dello stesso
+    // evento, non due elenchi che possono divergere.
+    expect(vivi).toEqual(r.steps.map((s) => s.name));
+    expect(vivi.length).toBeGreaterThan(3);
+  });
+
+  it("`onBegin` apre l'attesa prima dell'operazione lenta, non dopo", () => {
+    const eventi: string[] = [];
+    runUpdate({
+      ...fakeDeps(),
+      onBegin: (n) => void eventi.push(`>${n}`),
+      onStep: (s) => void eventi.push(`<${s.name}`),
+    });
+    // Il passo che da solo vale la slice: l'attesa si apre prima che `npm ci`
+    // parta, e si chiude col suo esito.
+    const apre = eventi.indexOf('>npm ci');
+    const chiude = eventi.indexOf('<npm ci');
+    expect(apre).toBeGreaterThanOrEqual(0);
+    expect(chiude).toBeGreaterThan(apre);
+  });
+
+  it('un passo fallito arriva vivo come gli altri, non solo nel riepilogo', () => {
+    const vivi: { name: string; done: boolean }[] = [];
+    runUpdate({
+      ...fakeDeps(),
+      npmCi: () => ({ status: 1, stdout: '', stderr: 'boom' }),
+      onStep: (s) => void vivi.push({ name: s.name, done: s.done }),
+    });
+    expect(vivi.some((s) => s.name === 'npm ci' && !s.done)).toBe(true);
+  });
+
+  it('senza callback si comporta esattamente come prima', () => {
+    expect(() => runUpdate(fakeDeps())).not.toThrow();
+  });
+});
