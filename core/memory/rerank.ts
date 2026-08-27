@@ -122,6 +122,11 @@ export class LlmReranker implements Reranker {
         // Il più piccolo dei tre e quindi il primo a morire: 200 token non
         // bastano nemmeno a iniziare a ragionare. Vedi `REASONING_HEADROOM`.
         maxOutputTokens: 200 + REASONING_HEADROOM,
+        // Queste tre corsie chiedono JSON e non leggono prosa: il ragionamento qui
+        // non è un extra, è un costo puro. Dirlo è la metà che mancava — l'adapter
+        // sa spegnerlo da 27/08, ma nessuno glielo chiedeva: il profilo lo dichiara
+        // per il turno (`agent/loop.ts`), e queste corsie il profilo non lo leggono.
+        thinking: 'off' as const,
         temperature: 0,
         stream: false,
       });

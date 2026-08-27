@@ -381,22 +381,22 @@
   },
   "agent/providers/openai-compat.ts:112": {
     "path": "agent/providers/openai-compat.ts",
-    "line": 112,
+    "line": 121,
     "testo": "}"
   },
   "agent/providers/openai-compat.ts:173": {
     "path": "agent/providers/openai-compat.ts",
-    "line": 173,
+    "line": 207,
     "testo": "async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {"
   },
   "agent/providers/openai-compat.ts:91": {
     "path": "agent/providers/openai-compat.ts",
-    "line": 91,
+    "line": 98,
     "testo": "}"
   },
   "agent/providers/types.ts:107": {
     "path": "agent/providers/types.ts",
-    "line": 133,
+    "line": 141,
     "testo": "stream: boolean;"
   },
   "agent/runtime.ts:104": {
@@ -2356,12 +2356,12 @@
   },
   "extract.ts:187": {
     "path": "core/memory/extract.ts",
-    "line": 381,
+    "line": 386,
     "testo": "const f = { ...raw, predicate: canonicalPredicate(raw.predicate), importance: deriveImportance(raw) };"
   },
   "extract.ts:192": {
     "path": "core/memory/extract.ts",
-    "line": 386,
+    "line": 391,
     "testo": "if (f.confidence < 0.4 || looksInjected(f)) {"
   },
   "extract.ts:25": {
