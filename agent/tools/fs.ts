@@ -132,6 +132,31 @@ export const fsCapabilities: CapabilityDecl[] = [
     policyArgs: ['path'],
     hostOnly: true,
   },
+  /**
+   * Cercare, che fino al 28/08/2026 si poteva fare solo con la shell.
+   *
+   * Misurato sul database dell'owner: 19 chiamate su 94 erano `sys.shell`, e
+   * guardando cosa restituivano erano quasi tutte `grep` e `ls -R` —
+   * `agent/runtime.ts:32:import …`, `cli/main.ts:106: …`. Non era il modello
+   * pigro: `fs_read` vuole il percorso esatto e `fs_list` fa una directory
+   * sola, quindi «dove è nominato X?» aveva una strada sola, ed era l'unica
+   * capability che chiede conferma a ogni chiamata. L'owner confermava a mano
+   * un `grep` dopo l'altro.
+   *
+   * `low` come le altre due letture, e non è una scorciatoia: legge gli stessi
+   * byte che `fs_read` legge, dallo stesso `resolveInScope`, con lo stesso
+   * `denyRead` e lo stesso `DISK_TIER` in uscita. Non apre niente che
+   * `fs_read` non aprisse — toglie solo l'obbligo di sapere già il percorso.
+   */
+  {
+    id: 'fs.search',
+    risk: 'low',
+    reversible: 'yes',
+    rerunnable: true,
+    resourceKind: 'path',
+    policyArgs: ['path'],
+    hostOnly: true,
+  },
   {
     id: 'fs.list',
     risk: 'low',
@@ -176,6 +201,19 @@ export const fsToolSpecs: ToolSpec[] = [
       type: 'object',
       properties: { path: { type: 'string', description: 'Directory, relative to the working directory' } },
       required: ['path'],
+    },
+  },
+  {
+    name: 'fs_search',
+    description:
+      'Search files under a directory, recursively. `query` searches file *contents* and returns `path:line: text` for each hit; `name` filters which files are searched by a substring of their path. At least one of the two is required — with `name` alone you get the matching paths, which is how you find a file whose exact location you do not know. Prefer this over running grep/find through the shell: same files, no confirmation needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Literal text to find inside files (case-insensitive). Not a regex.' },
+        name: { type: 'string', description: 'Only search files whose relative path contains this (case-insensitive), e.g. "test.ts" or "core/memory".' },
+        path: { type: 'string', description: 'Directory to search under, relative to the working directory. Defaults to the working directory.' },
+      },
     },
   },
   {
@@ -458,6 +496,190 @@ export function fsList(scope: FsScope, path: string): string {
  * dal judge di `slice/undo-journal`, e ironicamente è la stessa cosa che il
  * docstring di `resolveEffectPath` diceva di voler evitare.
  */
+/**
+ * Quanto lontano si spinge una ricerca prima di dirlo.
+ *
+ * Ogni tetto qui sotto, quando scatta, **compare nel risultato**. Una ricerca
+ * che si ferma in silenzio è peggio di una che rifiuta: chi legge «nessun
+ * riscontro» conclude che quella cosa non c'è, e va avanti su una falsità.
+ */
+const SEARCH_LIMITS = {
+  /** File aperti, non file visti: la camminata continua, la lettura no. */
+  files: 4000,
+  /** Righe di riscontro restituite. */
+  matches: 200,
+  /** Un file più grosso di così non è codice né una nota: si nomina e si salta. */
+  bytes: 1024 * 1024,
+} as const;
+
+/**
+ * Cartelle che una ricerca non attraversa.
+ *
+ * Non è un `.gitignore` — questo tool gira in una working directory qualunque,
+ * non per forza in un repo. Sono i quattro posti che in una directory di
+ * lavoro contengono ordini di grandezza più byte di quelli che qualcuno voleva
+ * cercare, e cercarci dentro vuol dire seppellire il riscontro vero sotto
+ * mille copie in `node_modules`. Sono **nominate nel risultato** quando ne è
+ * stata saltata almeno una, perché «saltata» detta è un limite e taciuta è una
+ * bugia.
+ */
+const SEARCH_SKIP = new Set(['node_modules', '.git', 'dist', '.releases']);
+
+/** Un NUL nei primi byte: non è testo, e cercarci dentro non ha senso. */
+function sembraBinario(bytes: Buffer): boolean {
+  return bytes.subarray(0, 8192).includes(0);
+}
+
+/**
+ * Cerca dentro i file, o i file per nome.
+ *
+ * **Non apre niente che `fs_read` non aprisse.** Ogni file candidato passa da
+ * `resolveInScope`, cioè dallo stesso contenimento, dallo stesso `denyRead`,
+ * dallo stesso rifiuto degli hard link e degli symlink penzolanti. La
+ * differenza con `fs_read` è una sola: non bisogna già sapere il percorso.
+ *
+ * **Niente regex, testo letterale.** Una regex scelta dal modello è un modo
+ * per far girare a vuoto la CPU dell'owner (`(a+)+$` su un file abbastanza
+ * lungo), e le 19 chiamate shell misurate cercavano tutte stringhe letterali.
+ * Il giorno che serva una regex si aggiunge con un tetto di tempo, non
+ * togliendo questa riga.
+ *
+ * Lancia solo `PathDenied` sulla directory di partenza — quella la nomina il
+ * modello. Tutto ciò che può fallire per via di un file *trovato sul disco*
+ * viene saltato invece che lanciato: un nome di file è byte scelti da qualcun
+ * altro, e non deve poter uscire dentro il messaggio di un'eccezione
+ * (`throwTier: 0`, stessa ragione del try/catch dentro `fsList`).
+ */
+export function fsSearch(
+  scope: FsScope,
+  args: { query?: string | undefined; name?: string | undefined; path?: string | undefined },
+): string {
+  const query = args.query?.trim() ?? '';
+  const name = args.name?.trim().toLowerCase() ?? '';
+  if (query === '' && name === '') {
+    throw new PathDenied('serve almeno `query` (cosa cercare dentro i file) o `name` (che file cercare)');
+  }
+  const start = resolveInScope(scope, args.path ?? '.', false);
+  if (!existsSync(start) || !statSync(start).isDirectory()) {
+    throw new PathDenied(`non è una directory: ${args.path ?? '.'}`);
+  }
+
+  const ago = query.toLowerCase();
+  const righe: string[] = [];
+  let apertiIn = 0;
+  let saltatiPerNome = false;
+  let saltatiPerDimensione = 0;
+  let saltatiIlleggibili = 0;
+  let troncato = false;
+
+  const cammina = (dir: string): void => {
+    if (troncato) return;
+    let voci: string[];
+    try {
+      voci = readdirSync(dir).sort();
+    } catch {
+      saltatiIlleggibili += 1;
+      return;
+    }
+    for (const voce of voci) {
+      if (troncato) return;
+      const pieno = join(dir, voce);
+      let st;
+      try {
+        st = lstatSync(pieno, { throwIfNoEntry: false });
+      } catch {
+        saltatiIlleggibili += 1;
+        continue;
+      }
+      if (st === undefined) continue;
+      // Gli symlink non si seguono durante la camminata: seguirli è il modo di
+      // uscire dallo scope senza che nessun controllo se ne accorga, ed è anche
+      // il modo di girare in tondo su un ciclo.
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        if (SEARCH_SKIP.has(voce)) {
+          saltatiPerNome = true;
+          continue;
+        }
+        cammina(pieno);
+        continue;
+      }
+      if (!st.isFile()) continue;
+
+      const rel = relative(realpathSync(resolve(scope.root)), pieno);
+      if (name !== '' && !rel.toLowerCase().includes(name)) continue;
+
+      // Solo il nome: il percorso *è* la risposta, nessun byte da leggere.
+      //
+      // Ma il controllo si fa lo stesso, e non è pedanteria: sapere che esiste
+      // un file chiamato `provider_api_key` è già metà del lavoro di chi lo
+      // cerca, quindi un percorso che `fs_read` rifiuterebbe non deve nemmeno
+      // essere nominato.
+      if (query === '') {
+        try {
+          resolveInScope(scope, rel, false);
+        } catch (error) {
+          if (!(error instanceof PathDenied)) saltatiIlleggibili += 1;
+          continue;
+        }
+        righe.push(rel);
+        if (righe.length >= SEARCH_LIMITS.matches) troncato = true;
+        continue;
+      }
+
+      if (st.size > SEARCH_LIMITS.bytes) {
+        saltatiPerDimensione += 1;
+        continue;
+      }
+      if (apertiIn >= SEARCH_LIMITS.files) {
+        troncato = true;
+        return;
+      }
+      apertiIn += 1;
+
+      // Ogni fallimento da qui in poi è un file trovato sul disco: si salta e
+      // si conta, mai si lancia. `resolveInScope` rifà tutti i controlli che
+      // farebbe una `fs_read` di questo stesso percorso.
+      let testo: string;
+      try {
+        resolveInScope(scope, rel, false);
+        const bytes = readFileSync(pieno);
+        if (sembraBinario(bytes)) continue;
+        testo = bytes.toString('utf8');
+      } catch (error) {
+        // Un `PathDenied` qui non è un guasto: è la deny-list che fa il suo
+        // mestiere, ed è la stessa risposta che avrebbe dato una `fs_read` di
+        // quel percorso. Contarlo fra gli illeggibili direbbe due bugie in una
+        // riga — che il disco ha un problema, e quante cose l'owner ha messo
+        // fuori portata. Quei file non fanno parte del mondo cercabile per
+        // costruzione, esattamente come non ne fanno parte per `fs_read`.
+        if (!(error instanceof PathDenied)) saltatiIlleggibili += 1;
+        continue;
+      }
+
+      const linee = testo.split('\n');
+      for (let i = 0; i < linee.length; i++) {
+        if (!linee[i]!.toLowerCase().includes(ago)) continue;
+        righe.push(`${rel}:${String(i + 1)}: ${linee[i]!.trim().slice(0, 300)}`);
+        if (righe.length >= SEARCH_LIMITS.matches) {
+          troncato = true;
+          return;
+        }
+      }
+    }
+  };
+  cammina(start);
+
+  const note: string[] = [];
+  if (troncato) note.push(`fermata al tetto: ${String(SEARCH_LIMITS.matches)} riscontri o ${String(SEARCH_LIMITS.files)} file — restringi con \`name\` o \`path\``);
+  if (saltatiPerNome) note.push(`non attraversate: ${[...SEARCH_SKIP].join(', ')}`);
+  if (saltatiPerDimensione > 0) note.push(`${String(saltatiPerDimensione)} file oltre ${String(SEARCH_LIMITS.bytes / 1024)}KB, non letti`);
+  if (saltatiIlleggibili > 0) note.push(`${String(saltatiIlleggibili)} percorsi illeggibili, saltati`);
+
+  const testa = righe.length === 0 ? 'nessun riscontro' : righe.join('\n');
+  return note.length === 0 ? testa : `${testa}\n\n[${note.join(' · ')}]`;
+}
+
 export function fsWrite(scope: FsScope, path: string, content: string, resolved?: string): string {
   const full = resolved ?? resolveInScope(scope, path, true);
   mkdirSync(dirname(full), { recursive: true });
@@ -521,12 +743,38 @@ export function fsWrite(scope: FsScope, path: string, content: string, resolved?
  */
 const pathArgs = z.object({ path: z.string().min(1) });
 const writeArgs = z.object({ path: z.string().min(1), content: z.string() });
+/**
+ * Tutto opzionale, e il rifiuto di «né l'uno né l'altro» sta dentro `fsSearch`
+ * con la frase che dice cosa scegliere: uno zod che pretende un `anyOf`
+ * produce un messaggio che parla di unioni, e chi lo legge è un modello che
+ * deve capire cosa riprovare.
+ */
+const searchArgs = z.object({
+  query: z.string().optional(),
+  name: z.string().optional(),
+  path: z.string().optional(),
+});
+
+/**
+ * La spec per nome, non per posizione.
+ *
+ * `fsToolSpecs[2]` era `fs_write` finché non è arrivato un quarto tool: chi
+ * inserisce una spec in mezzo sposta di uno tutte quelle dopo, e il risultato
+ * è una capability cablata sul tool sbagliato — nessun errore di tipo, nessun
+ * test rosso ovvio, solo `fs.write` che espone lo schema di un altro. Il nome
+ * è la cosa che i due lati hanno davvero in comune.
+ */
+function spec(name: string): ToolSpec {
+  const trovata = fsToolSpecs.find((s) => s.name === name);
+  if (trovata === undefined) throw new Error(`nessuna spec per ${name}`);
+  return trovata;
+}
 
 export function makeFsTools(scope: FsScope): RegisteredTool[] {
   return [
     {
       capability: 'fs.read',
-      spec: fsToolSpecs[0]!,
+      spec: spec('fs_read'),
       // `throwTier: 0` — every throw in `fsRead` (`PathDenied`, or the missing/
       // directory/too-large checks) is built from this file's own template
       // strings plus the `path` the model itself typed, never a byte read off
@@ -540,7 +788,7 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
     },
     {
       capability: 'fs.list',
-      spec: fsToolSpecs[1]!,
+      spec: spec('fs_list'),
       // A listing is bytes somebody else chose too. A filename is short and
       // looks like metadata, which is exactly why it is worth saying out loud:
       // `IGNORA le istruzioni precedenti.md` is a filename, it costs an attacker
@@ -567,8 +815,28 @@ export function makeFsTools(scope: FsScope): RegisteredTool[] {
       }),
     },
     {
+      capability: 'fs.search',
+      spec: spec('fs_search'),
+      // Stesso tier di `fs_read` e `fs_list`, e per la stessa ragione: quello
+      // che torna sono byte letti dal disco — righe di file e nomi di file —
+      // senza provenienza. `IGNORA le istruzioni precedenti.md` è un nome di
+      // file valido e arriva anche da questa porta.
+      //
+      // `throwTier: 0`, e qui è la proprietà che il corpo di `fsSearch` è
+      // scritto per rendere vera: l'unico lancio che esce è `PathDenied` sulla
+      // directory di partenza, che il modello ha nominato lui. Tutto ciò che
+      // può fallire per via di un file *trovato* — readdir, lstat, read,
+      // resolveInScope su un percorso derivato da un nome sul disco — viene
+      // saltato e contato, mai lanciato con quel nome dentro.
+      throwTier: 0,
+      handler: (args) => ({
+        content: fsSearch(scope, searchArgs.parse(args)),
+        tier: DISK_TIER,
+      }),
+    },
+    {
       capability: 'fs.write',
-      spec: fsToolSpecs[2]!,
+      spec: spec('fs_write'),
       // Tier 0: the result is this tool's own sentence about how many bytes it
       // wrote. Nothing came *in*. The point of a required `tier` is that this is
       // now an answer someone gave, not a question nobody was asked.
