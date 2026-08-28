@@ -628,7 +628,22 @@ export type TurnEvent =
       cacheReadTokens: number;
       stopReason: string;
     }
-  | { type: 'tool_start'; name: string; capability: string }
+  /**
+   * `args` sono gli argomenti **come il modello li ha chiesti**, non ripuliti.
+   *
+   * Ci sono perché senza, una superficie può dire solo *quale* tool è partito,
+   * mai su cosa: sette `memory_search` con sette query diverse stampavano sette
+   * righe identiche («✓ cerco in memoria»), e a schermo si legge come un giro a
+   * vuoto. Non lo era — misurato sul WAL il 28/08/2026, sette `args_digest`
+   * diversi, e nell'intero store non esiste una sola coppia (tool, args)
+   * ripetuta. Il difetto era la riga, non il loop.
+   *
+   * Il loop li passa e basta: **quale** campo valga la pena mostrare, e come
+   * accorciarlo, è una decisione di chi disegna — la stessa ragione per cui la
+   * frase in italiano vive in `cli/repl.ts` e non su `ToolSpec`. Chi li stampa
+   * li tratta come non fidati: dentro c'è testo scritto dal modello.
+   */
+  | { type: 'tool_start'; name: string; capability: string; args?: unknown }
   /**
    * Un tentativo transitorio è andato male e se ne fa un altro.
    *
@@ -637,8 +652,8 @@ export type TurnEvent =
    * succedendo qualcosa. `attempt` è il numero del tentativo che sta per
    * partire (2 = il primo ritentativo).
    */
-  | { type: 'tool_retry'; name: string; attempt: number; inMs: number; why: string }
-  | { type: 'tool_end'; name: string; ms: number; isError: boolean };
+  | { type: 'tool_retry'; name: string; attempt: number; inMs: number; why: string; args?: unknown }
+  | { type: 'tool_end'; name: string; ms: number; isError: boolean; args?: unknown };
 
 export type TurnResult = {
   text: string;
@@ -2293,7 +2308,7 @@ async function eseguiConRitentativi(
     // Annunciato **prima** dell'attesa: un retry dichiarato quando e' gia'
     // finito non serve a chi sta guardando lo spinner fermo, ed e' per quello
     // che l'evento esiste.
-    onProgress?.({ type: 'tool_retry', name: nome, attempt: tentativo, inMs, why: outcome.content });
+    onProgress?.({ type: 'tool_retry', name: nome, attempt: tentativo, inMs, why: outcome.content, args });
     await sleep(inMs, signal);
     outcome = await tool.handler(args, ctx);
   }
@@ -2346,9 +2361,9 @@ async function runTool(
   // `span`'s clock back to its caller, so `ms` below is measured at the same
   // call site that reports the start it is measuring from, not guessed at.
   const toolCallStartedAt = Date.now();
-  input.onProgress?.({ type: 'tool_start', name: call.name, capability });
+  input.onProgress?.({ type: 'tool_start', name: call.name, capability, args });
   const emitToolEnd = (isError: boolean): void => {
-    input.onProgress?.({ type: 'tool_end', name: call.name, ms: Date.now() - toolCallStartedAt, isError });
+    input.onProgress?.({ type: 'tool_end', name: call.name, ms: Date.now() - toolCallStartedAt, isError, args });
   };
   // The kernel decides on a *resource*, so anything it is supposed to gate has
   // to be lifted out of the args here. `url` was missing, and the consequence

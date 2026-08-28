@@ -13,6 +13,8 @@ import {
   statusFor,
   thinkingCommand,
   toolPhrase,
+  toolSubject,
+  toolLine,
   TOOL_PHRASES,
 } from './repl.js';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -466,6 +468,60 @@ describe('formatProgressLine — modalità normale', () => {
     expect(formatProgressLine({ type: 'tool_end', name: 'fs_write', ms: 3, isError: true }, 'normale')).toBe(
       '  ✗ scrivo un file',
     );
+  });
+});
+
+/**
+ * Il difetto vero, misurato sul WAL il 28/08/2026: un turno ha fatto **sette**
+ * `memory_search` con sette `args_digest` **diversi**, e a schermo erano sette
+ * righe identiche. Si legge come un giro a vuoto, e non lo era — nell'intero
+ * store non esiste una sola coppia (tool, args) ripetuta. Una riga che non dice
+ * su cosa fa diagnosticare la cosa sbagliata, ed è quello che è successo.
+ */
+describe('la riga dice anche su cosa', () => {
+  it('sette ricerche diverse sono sette righe diverse', () => {
+    const riga = (query: string): string | null =>
+      formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false, args: { query } }, 'normale');
+    expect(riga('cosa ha detto ieri')).toBe('  ✓ cerco in memoria: cosa ha detto ieri');
+    expect(riga('primo messaggio')).toBe('  ✓ cerco in memoria: primo messaggio');
+    expect(riga('cosa ha detto ieri')).not.toBe(riga('primo messaggio'));
+  });
+
+  it('e anche la riga di stato viva, che è dove si guarda mentre succede', () => {
+    expect(statusFor({ type: 'tool_start', name: 'fs_read', capability: 'fs.read', args: { path: 'note/spesa.md' } })).toBe(
+      '  leggo un file: note/spesa.md…',
+    );
+  });
+
+  /** Un campo solo, quello che risponde a «su cosa?» — non un dump degli argomenti. */
+  it('di `fs_write` mostra il percorso e non il contenuto', () => {
+    const s = toolLine('fs_write', { path: 'note/x.md', content: 'un file intero, riga dopo riga' });
+    expect(s).toBe('scrivo un file: note/x.md');
+    expect(s).not.toContain('riga dopo riga');
+  });
+
+  /**
+   * Gli argomenti li ha scritti il **modello**. Una sequenza di escape dentro
+   * un percorso, stampata cruda, muove il cursore — e sotto questa riga sta il
+   * riquadro dell'input, che si ridisegna contando le righe che ha scritto.
+   */
+  it('e appiattisce quello che il modello ha scritto, prima di stamparlo', () => {
+    expect(toolSubject('shell_run', { command: 'ls\n\u001b[2Arm -rf x' })).toBe('ls [2Arm -rf x');
+    expect(toolSubject('fs_read', { path: 'a\tb\nc' })).toBe('a b c');
+  });
+
+  it('e accorcia invece di mandare a capo', () => {
+    const lungo = toolSubject('memory_search', { query: 'x'.repeat(200) });
+    expect(lungo.length).toBeLessThanOrEqual(48);
+    expect(lungo.endsWith('…')).toBe(true);
+  });
+
+  /** Senza soggetto la riga resta quella di prima: un tool MCP non è nella mappa. */
+  it('e senza un campo da mostrare non aggiunge niente', () => {
+    expect(toolLine('sys_inspect', { qualcosa: 'x' })).toBe('mi guardo dentro');
+    expect(toolLine('mcp_qualcosa', { path: 'x' })).toBe('mcp_qualcosa');
+    expect(toolLine('fs_read', undefined)).toBe('leggo un file');
+    expect(toolLine('fs_read', { path: '' })).toBe('leggo un file');
   });
 });
 
