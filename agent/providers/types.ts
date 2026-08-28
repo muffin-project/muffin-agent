@@ -200,6 +200,31 @@ export type ChatCall = {
    */
   temperature?: number;
   thinking?: ThinkingMode;
+  /**
+   * Quale conversazione è questa — un'identità opaca, non un'istruzione.
+   *
+   * Esiste perché una cache di prompt vive **dal lato del provider**, e un
+   * gateway che smista fra provider diversi la manca per costruzione. Misurato
+   * il 28/08/2026 sulle tracce: dentro un turno la cache prendeva il 54%, fra
+   * due turni consecutivi a trenta secondi di distanza lo **0%**, due volte di
+   * fila, con 8907 e 8964 token in ingresso. `qwen/qwen3.8-27b` su OpenRouter
+   * ha **dodici** provider a monte e undici sanno cachare: dodici cache, tutte
+   * fredde a turno.
+   *
+   * OpenRouter instrada già in modo *sticky* per far prendere la cache, ma la
+   * chiave la deriva «dall'hash del primo messaggio di sistema e del primo
+   * messaggio non-di-sistema» (loro documentazione, letta il 28/08/2026). Il
+   * primo non-di-sistema di Muffin è il recall, che **cambia a ogni turno**:
+   * chiave nuova, provider nuovo, cache fredda. È la terza delle quattro cause
+   * di miss che quella pagina elenca — «un blocco iniziale che continua a
+   * cambiare» — e ci cadiamo per come è costruito `buildContext`.
+   *
+   * Dichiarato qui in termini di dominio e non come `session_id`: il campo del
+   * fornitore lo sceglie l'adapter, che è l'unico posto che sa con chi sta
+   * parlando. Un adapter che non ha un concetto di conversazione lo ignora, e
+   * non deve fingere di averlo.
+   */
+  conversation?: string;
   stream: boolean;
   signal?: AbortSignal;
 };
@@ -233,6 +258,20 @@ export type ChatResult = {
   stopReason: StopReason;
   usage: Usage;
   model: string;
+  /**
+   * Chi ha risposto davvero, quando fra noi e il modello c'è uno smistatore.
+   *
+   * `model` dice *quale modello*; questo dice *su quale macchina*, ed è una
+   * differenza che si vede solo in bolletta e nella cache. `qwen/qwen3.8-27b`
+   * su OpenRouter ha dodici provider a monte, con prezzi diversi, quantizzazioni
+   * diverse (fp8, bf16) e **cache separate**. Senza questo campo, «perché la
+   * cache non prende» non è una domanda a cui si possa rispondere: si vede lo
+   * zero e non si vede che la richiesta è finita altrove.
+   *
+   * Assente quando non c'è nessuno smistatore — un Ollama locale è la macchina,
+   * e dirlo due volte non aggiunge niente.
+   */
+  upstream?: string;
 };
 
 /**
