@@ -59,6 +59,7 @@ export interface TelegramApiLike {
   sendChatAction(chatId: number, action?: string): Promise<boolean>;
   sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
+  setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
 }
 
 export class TelegramApi implements TelegramApiLike {
@@ -271,6 +272,25 @@ export class TelegramApi implements TelegramApiLike {
    * again. Anything beyond 20 MB cannot be downloaded through the public Bot
    * API at all, whatever the path says.
    */
+  /**
+   * Pubblica i comandi nel menu del bot.
+   *
+   * Non è un file: è un metodo dell'API (`setMyCommands`, docs lette il
+   * 28/08/2026), e vincola i nomi a 1-32 caratteri di sole minuscole inglesi,
+   * cifre e underscore — i nostri otto passano. La descrizione arriva a 256.
+   *
+   * `BotCommandScopeAllPrivateChats` e non il default: questi comandi toccano
+   * la config e il conto dell'owner, quindi in un gruppo non devono nemmeno
+   * comparire nel menu. Chi li chiama viene comunque ricontrollato — un menu
+   * è un suggerimento, non un permesso.
+   */
+  setMyCommands(commands: { command: string; description: string }[]): Promise<boolean> {
+    return this.call<boolean>('setMyCommands', {
+      commands,
+      scope: { type: 'all_private_chats' },
+    });
+  }
+
   async fileUrl(fileId: string): Promise<string> {
     const file = await this.call<{ file_path?: string }>('getFile', { file_id: fileId });
     if (!file.file_path) throw new TelegramError(0, `no file_path for ${fileId}`);
