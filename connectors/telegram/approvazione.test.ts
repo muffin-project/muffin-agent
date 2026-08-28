@@ -54,6 +54,7 @@ function harness() {
   const turns = new TurnStore(db);
 
   const risposte: { id: string; text?: string | undefined }[] = [];
+  const spinte: number[] = [];
   const modifiche: { chatId: number; messageId: number; html: string }[] = [];
   const api = {
     answerCallbackQuery: async (id: string, text?: string) => {
@@ -88,9 +89,10 @@ function harness() {
     delivery: new TelegramDeliveryStore(db),
     api,
     approvals,
+    onWork: () => spinte.push(1),
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
   });
-  return { connector, approvals, turns, risposte, modifiche };
+  return { connector, approvals, turns, risposte, modifiche, spinte };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -153,8 +155,11 @@ describe('un pulsante premuto dall owner', () => {
 
     expect(h.approvals.get(approvalId)?.decision).toBe('allow');
     expect(h.risposte[0]).toEqual({ id: 'q1', text: 'Consentito.' });
-    // Da `waiting` a `runnable`: a farlo girare è la lane, non il connettore.
+    // Da `waiting` a `runnable`: a farlo girare è la corsia, non il connettore
+    // — che però le dice di guardare subito, invece di far aspettare mezzo
+    // minuto chi ha appena premuto.
     expect(h.turns.get(turnId)?.status).toBe('runnable');
+    expect(h.spinte).toHaveLength(1);
   });
 
   it('e un rifiuto è un rifiuto, non un silenzio', async () => {
@@ -229,6 +234,8 @@ describe('la tastiera non risponde a chi non ha fatto la domanda', () => {
 
     expect(h.approvals.get(approvalId)?.decision).toBeNull();
     expect(h.turns.get(turnId)?.status).toBe('waiting');
+    // E nessuna corsia svegliata per niente.
+    expect(h.spinte).toEqual([]);
     // Risposto sì — il pulsante non deve girare per sempre — ma senza testo:
     // nemmeno «non sei autorizzato», che confermerebbe che c'è qualcosa.
     expect(h.risposte).toEqual([{ id: 'q1', text: undefined }]);

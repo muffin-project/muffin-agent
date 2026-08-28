@@ -153,6 +153,16 @@ export type ConnectorDeps = {
    * mai lasciato girare.
    */
   approvals?: { decide: ApprovalDecide; get: ApprovalGet };
+  /**
+   * «C'è un turno pronto adesso.»
+   *
+   * Chiamata dopo aver riportato una riga a `runnable`, e non è un secondo
+   * esecutore: il turno lo fa girare la corsia, questa le dice solo di
+   * guardare subito invece che al prossimo battito. Un connettore che
+   * riprendesse turni per conto suo sarebbe una seconda corsia, e due corsie
+   * su una riga sono la corsa che il claim esiste per arbitrare.
+   */
+  onWork?: () => void;
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -1216,7 +1226,17 @@ export class TelegramConnector {
     }
 
     const riga = this.deps.approvals.get(id);
-    if (riga !== null) this.deps.loop.turns.wake(riga.turnId, now);
+    if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
+      // Solo se la riga si è davvero mossa: svegliare la corsia per un turno
+      // che qualcun altro ha già preso è lavoro per niente.
+      try {
+        this.deps.onWork?.();
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: corsia non svegliata — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /**
