@@ -331,7 +331,7 @@
   },
   "agent/profiles/consumer-local.json:6": {
     "path": "agent/profiles/consumer-local.json",
-    "line": 6,
+    "line": 12,
     "testo": "\"maxToolCallsPerTurn\": 15,"
   },
   "agent/profiles/frontier.json:1": {
@@ -541,27 +541,27 @@
   },
   "agent/tools/fs.ts:145": {
     "path": "agent/tools/fs.ts",
-    "line": 145,
+    "line": 170,
     "testo": "id: 'fs.write',"
   },
   "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 316,
+    "line": 354,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 525,
+    "line": 773,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
-    "line": 525,
+    "line": 773,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:571": {
     "path": "agent/tools/fs.ts",
-    "line": 584,
+    "line": 852,
     "testo": "resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),"
   },
   "agent/tools/fs.ts:62": {
@@ -1081,52 +1081,52 @@
   },
   "cli/repl.ts:100": {
     "path": "cli/repl.ts",
-    "line": 456,
+    "line": 463,
     "testo": "export async function runRepl("
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 474,
+    "line": 481,
     "testo": "* Where the readline interface reads from. Injectable for the same reason"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 567,
+    "line": 574,
     "testo": "// M5-BIS B14: a file the model produces can now reach the owner as a real"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 579,
+    "line": 586,
     "testo": "* possible (`--no-stream`), and the capability object has no room to carry"
   },
   "cli/repl.ts:174": {
     "path": "cli/repl.ts",
-    "line": 599,
+    "line": 606,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 737,
+    "line": 744,
     "testo": "* `gatewayStandDown` arbitrates each tick — which is also what lets this"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 773,
+    "line": 780,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 775,
+    "line": 782,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 776,
+    "line": 783,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 793,
+    "line": 800,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
@@ -2371,7 +2371,7 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 258,
+    "line": 296,
     "testo": "const parent = dirname(current);"
   },
   "fs.ts:7": {
