@@ -248,6 +248,17 @@ export function buildSystemPromptBlocks(
   // The operational rules and the safe-mode note stay: they are about the turn,
   // not about the owner, and an agent that cannot say why it just refused is
   // the silent failure this repository keeps paying for.
+  //
+  // **The consequence of (1) and (3) together, which bites whoever next trims
+  // these files.** `voice.md` reaches both classes; `identity.md` reaches only
+  // the owner. So a sentence in `voice.md` that also appears in `identity.md`
+  // is *not* redundant — it is the group's only copy, and deleting it as a
+  // duplicate silently removes a behavioural floor from the room full of
+  // strangers while the owner's prompt still looks fine. On 28/08/2026 the
+  // reverse cut was the right one: `persona.md` is owner-only and sits beside
+  // the sealed pact that already says most of it, so it shrank by a third and
+  // `voice.md` was left whole. `muffin prompt show --eco` reports the overlap
+  // but does not know this rule; it measures, it does not decide.
   const group: PromptBlock[] = [
     { name: 'persona', source: 'agent/context/assemble.ts (GROUP_PERSONA)', text: GROUP_PERSONA },
     { name: 'voice', source: 'voice.md', text: voice },

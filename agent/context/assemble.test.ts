@@ -112,6 +112,22 @@ describe('the owner-class prompt does not move', () => {
    * ha una prova sua qui sotto. Pin precedente:
    * `a83e22ce2ab67a953c1c0b1af96c38a67ff5271593d903d1ca87c728724cde73`.
    *
+   * Ri-fissato 2026-08-28 (`slice/prompt-senza-eco`): `persona.md` è passato da
+   * 7.528 a 4.629 byte. Non è una potatura estetica — è la conseguenza di una
+   * cosa che si vede solo guardando i blocchi **insieme**: `identity.md` spedisce
+   * 4.928 byte di patto autorizzato dall'owner (da c090dce; non è più vuoto,
+   * qualunque cosa dicessero i commenti rimasti in giro), e `persona.md` ne
+   * ripeteva metà in terza persona. «La familiarità non è authority / la memoria
+   * non è permesso» stava in tutti e due quasi parola per parola.
+   *
+   * Tagliato `persona.md` e **non** `voice.md`, e la ragione è di classe, non di
+   * gusto: `voice.md` va anche ai gruppi, `identity.md` no. Una frase di
+   * `voice.md` che compare pure in `identity.md` non è un doppione — è l'unica
+   * copia che la stanza riceve. `persona.md` invece è solo dell'owner e sta
+   * accanto al patto sigillato che già la dice. Prompt owner: 23.648 → 20.770
+   * caratteri. Pin precedente:
+   * `19f1e7d300ad74c4c28d4ac0d9ff1dab0519f85c0d64fdcfabda060c2bd45d4a`.
+   *
    * Re-captured 2026-08-26 (`slice/come-lavori`): three rules added to
    * `WORK_RULES`, each closing a gap the runtime does not close on its own —
    * see that constant's docstring for which trace produced which rule. The
@@ -128,7 +144,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    '19f1e7d300ad74c4c28d4ac0d9ff1dab0519f85c0d64fdcfabda060c2bd45d4a';
+    '81f2e880260f50e2621affa008bb64980e8d4dff10981a37535513f57be986ed';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
