@@ -470,6 +470,22 @@ export function connectSurfaces(
    * surface of last resort and is never absent).
    */
   cliWrite: CliWriter = (text) => process.stdout.write(`${text}\n`),
+  /**
+   * «C'è un turno pronto adesso»: una spinta alla corsia, non un secondo
+   * esecutore.
+   *
+   * Serve a una cosa sola, ed è la differenza fra usabile e irritante: quando
+   * l'owner preme «consenti», il connettore riporta la riga a `runnable` ma a
+   * farla girare è la corsia del gateway, che batte ogni 30 secondi. Senza
+   * questa spinta, premere il pulsante e non veder succedere niente per mezzo
+   * minuto è la forma che ha «non ha funzionato».
+   *
+   * Assente dove non c'è nessuna corsia da spingere: il REPL cede i turni al
+   * gateway (ADR-0035), quindi lì non esiste niente da svegliare — e un turno
+   * sospeso su un'installazione senza gateway aspetta la sua scadenza, che è
+   * la stessa cosa che vale già per `wait`.
+   */
+  onWork?: () => void,
 ): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver } {
   const lines: string[] = [];
   const stops: (() => void)[] = [];
@@ -530,6 +546,7 @@ export function connectSurfaces(
           // runtime senza registro è un runtime dove i pulsanti non si mandano —
           // quindi non c'è niente da gestire quando tornano.
           ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
+          ...(onWork === undefined ? {} : { onWork }),
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),

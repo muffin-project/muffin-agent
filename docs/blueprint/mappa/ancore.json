@@ -1196,7 +1196,7 @@
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 518,
+    "line": 534,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
@@ -1211,7 +1211,7 @@
   },
   "connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 918,
+    "line": 928,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "connectors/discord/connector.ts:139": {
@@ -1221,47 +1221,47 @@
   },
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
-    "line": 418,
+    "line": 428,
     "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
   "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
-    "line": 546,
+    "line": 556,
     "testo": "export class TelegramConnector {"
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 581,
+    "line": 591,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
-    "line": 307,
+    "line": 223,
     "testo": "*"
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
-    "line": 307,
+    "line": 317,
     "testo": "*"
   },
   "connectors/telegram/connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
-    "line": 303,
+    "line": 308,
     "testo": "}"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1102,
+    "line": 1112,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1108,
+    "line": 1118,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 918,
+    "line": 928,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
