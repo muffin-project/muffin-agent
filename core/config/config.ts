@@ -186,6 +186,28 @@ export const ConfigSchema = z.object({
   // carry a second copy of them.
   rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),
   traces: z.object({ retentionDays: z.number().int().positive() }),
+  /**
+   * Le note vocali, quando vanno trascritte in casa.
+   *
+   * Tutto opzionale e senza default nello schema, come `provider.routing`: una
+   * config che non nomina l'audio deve restare byte per byte quella di prima,
+   * e un campo assente qui vuol dire «cerca nel PATH», non «disattivato».
+   *
+   * Esiste solo per il ramo locale. Il ramo diretto — audio spedito al modello
+   * — non ha niente da configurare, perche' la domanda «questo modello accetta
+   * audio?» si misura sul provider (`agent/providers/modalita.ts`) invece di
+   * essere una manopola che qualcuno deve ricordarsi di girare.
+   */
+  audio: z
+    .object({
+      /** Il binario whisper.cpp. Assente: `whisper-cli` dal PATH. */
+      whisperBin: z.string().min(1).optional(),
+      /** Il modello ggml. Assente: `<home>/models/ggml-base.bin`, se c'e'. */
+      whisperModel: z.string().min(1).optional(),
+      /** Il convertitore. Assente: `ffmpeg` dal PATH. */
+      ffmpegBin: z.string().min(1).optional(),
+    })
+    .optional(),
   surfaces: z.object({
     /** Where Muffin speaks when nobody asked. Deliberately not the CLI by default. */
     default: z.string().min(1),
@@ -291,6 +313,15 @@ export const paths = (home = muffinHome()) => ({
    * motivato questa riga (prompt diverso a ogni `muffin run`, cache a zero).
    */
   promptNonce: join(home, 'prompt-nonce'),
+  /**
+   * Dove va il modello whisper, quando `config.audio.whisperModel` non lo dice.
+   *
+   * Un percorso e non un file: qui non lo scrive nessuno. Lo scarica l'owner —
+   * 142 MiB per `ggml-base.bin` — e `core/audio/trascrivi.ts` stampa il `curl`
+   * esatto quando non lo trova. Dentro la home e non in `rot/`: non e' una
+   * cosa dell'identita', e' un pezzo di macchina rimpiazzabile.
+   */
+  whisperModel: join(home, 'models', 'ggml-base.bin'),
   // Outside the root of trust on purpose: the voice is the part that learns,
   // so the agent may propose changes to it through the ratchet. `identity.md`
   // lives under rot/ and stays fixed. One entry here rather than the same

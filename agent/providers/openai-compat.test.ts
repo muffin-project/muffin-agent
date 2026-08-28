@@ -384,3 +384,70 @@ describe("openai-compat · un'immagine non può sparire in silenzio", () => {
     expect((h.bodies[0] as Body).messages[1]!.content).toBe('ciao');
   });
 });
+
+/**
+ * Una nota vocale, nella forma che questo lato del filo vuole.
+ *
+ * `input_audio` con il base64 **nudo** e la sigla del formato — docs OpenRouter
+ * «Audio Inputs», lette il 28/08/2026. Qui la forma è l'opposto di quella delle
+ * immagini, che vogliono un data URL, e la regola che per le immagini ci
+ * eravamo dati noi (solo base64, mai un URL) qui è anche la loro: per l'audio
+ * gli URL non sono proprio supportati.
+ *
+ * Si rompe come si rompono le immagini, cioè **in silenzio**: un blocco audio
+ * che finisse in `flatten` diventerebbe stringa vuota, e il modello
+ * risponderebbe a una nota vocale che non ha mai sentito. Contare le parti è
+ * l'unica cosa che distingue i due casi.
+ */
+describe('openai-compat · una nota vocale non può sparire in silenzio', () => {
+  const VOCE = { type: 'audio' as const, mediaType: 'audio/ogg' as const, data: 'T2dnUw==' };
+
+  it("manda l'audio come parte input_audio, base64 nudo e formato a parte", async () => {
+    const h = harness(false);
+    await h.provider.chat({
+      ...CALL,
+      messages: [{ role: 'user', content: [VOCE, { type: 'text', text: 'che ti ho detto?' }] }],
+    });
+
+    const parti = (h.bodies[0] as Body).messages[1]!.content as {
+      type: string;
+      input_audio?: { data: string; format: string };
+    }[];
+    expect(parti[0]).toMatchObject({ type: 'input_audio', input_audio: { data: 'T2dnUw==', format: 'ogg' } });
+    // Nudo davvero: nessun `data:` davanti, che è la forma dell'altra colonna.
+    expect(parti[0]?.input_audio?.data.startsWith('data:')).toBe(false);
+  });
+
+  /**
+   * `ogg` è proprio il formato di una nota vocale di Telegram, e il tipo
+   * dell'SDK OpenAI ammette solo `wav|mp3`: restringere a ciò che l'SDK sa
+   * nominare vorrebbe dire riconvertire ogni nota in wav per un fatto del tipo
+   * e non del filo — cioè triplicarne i byte per niente.
+   */
+  it('e ogni media type che sappiamo produrre ha la sua sigla', async () => {
+    const sigle: [string, string][] = [
+      ['audio/ogg', 'ogg'],
+      ['audio/mpeg', 'mp3'],
+      ['audio/mp4', 'm4a'],
+      ['audio/wav', 'wav'],
+    ];
+    for (const [media, sigla] of sigle) {
+      const h = harness(false);
+      await h.provider.chat({
+        ...CALL,
+        messages: [
+          { role: 'user', content: [{ type: 'audio', mediaType: media as typeof VOCE.mediaType, data: 'AAAA' }] },
+        ],
+      });
+      const parti = (h.bodies[0] as Body).messages[1]!.content as { input_audio?: { format: string } }[];
+      expect(parti[0]?.input_audio?.format).toBe(sigla);
+    }
+  });
+
+  /** Senza audio la forma resta la stringa, byte identici a prima. */
+  it('e un messaggio senza audio non diventa un array di parti', async () => {
+    const h = harness(false);
+    await h.provider.chat({ ...CALL, messages: [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }] });
+    expect((h.bodies[0] as Body).messages[1]!.content).toBe('ciao');
+  });
+});

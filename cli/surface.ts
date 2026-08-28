@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
@@ -290,6 +291,35 @@ export function cmdSurfaceDisable(home: string, id: string): number {
 }
 
 /**
+ * Come questa installazione tratta le note vocali.
+ *
+ * Costruita qui e non dentro il connettore: è il punto che ha già in mano sia
+ * la config sia il provider, e il connettore non deve conoscere nessuno dei
+ * due. La decisione fra «lo manda al modello» e «lo trascrive in casa» la
+ * prende `decidiVoce` misurando le modalità del modello sul provider, non una
+ * manopola che qualcuno deve ricordarsi di girare.
+ *
+ * **Senza chiave.** L'elenco modelli di OpenRouter risponde uguale senza
+ * autenticazione — misurato il 28/08/2026 — quindi la domanda «questo modello
+ * accetta audio?» non ha nessun bisogno del segreto, e un segreto che non
+ * serve non si fa viaggiare. Un endpoint compatibile che invece la volesse
+ * risponderebbe non-ok, cioè «non so»: si trascrive in casa, che è il ramo
+ * conservativo.
+ */
+function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
+  const audio = runtime.config.audio;
+  const modello = audio?.whisperModel ?? paths(home).whisperModel;
+  return (percorso) =>
+    decidiVoce(percorso, {
+      baseUrl: runtime.config.provider.baseUrl,
+      model: runtime.config.models.main,
+      whisperModel: modello,
+      ...(audio?.whisperBin === undefined ? {} : { whisperBin: audio.whisperBin }),
+      ...(audio?.ffmpegBin === undefined ? {} : { ffmpegBin: audio.ffmpegBin }),
+    });
+}
+
+/**
  * Connects every enabled surface, inside this process.
  *
  * Called by the REPL and by headless serve alike. Returns the stops, a line per
@@ -368,6 +398,7 @@ export function connectSurfaces(
           delivery,
           api,
           vault: telegramVault(runtime, vaultRoot),
+          voce: voceFor(runtime, home),
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
