@@ -12,11 +12,8 @@ import {
   closingLine,
   statusFor,
   thinkingCommand,
-  toolPhrase,
-  toolSubject,
-  toolLine,
-  TOOL_PHRASES,
 } from './repl.js';
+import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
