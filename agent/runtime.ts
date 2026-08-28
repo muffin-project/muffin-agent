@@ -14,7 +14,8 @@ import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
-import type { LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
+import { ApprovalStore } from '../core/approvals/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
 import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
@@ -124,6 +125,18 @@ export type Runtime = {
   consolidation: Consolidator;
   /** Set when the root of trust diverged and we are running degraded. */
   safeMode: { reason: string; diverged: string[] } | null;
+  /**
+   * Chi sa chiedere un'approvazione, superficie per superficie.
+   *
+   * Era una funzione sola su `deps.approve`, e una funzione sola era il difetto:
+   * il REPL ci scriveva la sua, quindi un turno arrivato da Telegram faceva
+   * comparire `[s/N]` nel terminale — la domanda a chi non l'aveva fatta, in un
+   * posto che chi ha il telefono in mano non sta guardando. Il terminale
+   * registra `cli` (`cli/repl.ts`), Telegram registra `telegram`
+   * (`cli/surface.ts`), e `deps.approve` è l'instradatore: una superficie senza
+   * nessuno registrato risponde `unavailable`, che è la cosa vera da dire.
+   */
+  approvers: Map<string, Approver>;
   /**
    * The named blocks `deps.systemPrompts` was rendered from — the same call,
    * not a second one. `muffin prompt show --blocks` (`cli/prompt-show.ts`)
@@ -627,6 +640,8 @@ export function buildRuntime(
   });
 
   const closeHooks: Array<() => Promise<void>> = [];
+  const approvers = new Map<string, Approver>();
+  const approvals = new ApprovalStore(db);
 
   /**
    * The thing that makes memory fill itself (ADR-0038).
@@ -746,6 +761,7 @@ export function buildRuntime(
     db,
     consolidation,
     safeMode,
+    approvers,
     promptBlocks,
     bootLines: [
       ...turnNotes,
@@ -789,6 +805,16 @@ export function buildRuntime(
       // del kernel senza implementazione a valle — quindi la cucitura ha un test
       // suo in `runtime.test.ts`, non solo il ramo nel loop.
       undo: new UndoJournal(p.undo),
+      approvals,
+      /**
+       * L'instradatore, e il fatto che sia qui e non su una superficie è la
+       * proprietà: chi chiede è **la superficie da cui il turno è arrivato**,
+       * scelta dal record del turno, non l'ultima che si è registrata.
+       */
+      approve: async (request, where) => {
+        const chiedi = approvers.get(where.surface);
+        return chiedi === undefined ? 'unavailable' : chiedi(request, where);
+      },
       tracer,
       sessions: new SessionStore(home),
       // On the same connection as everything else, for ADR-0022's reason: one

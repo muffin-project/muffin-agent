@@ -120,3 +120,58 @@ describe('cosa viene detto al modello al risveglio', () => {
     expect(wakeReport({ kind: 'process_exit', pid: 7 }, 'timer')).toMatch(/Decidi tu/);
   });
 });
+
+describe("la seconda barriera: l'owner ha risposto", () => {
+  it('va e torna dalla colonna senza perdersi', () => {
+    const b = { kind: 'approval', id: 'a1b2c3d4' } as const;
+    expect(encodeWaitFor(b)).toBe('approval:a1b2c3d4');
+    expect(decodeWaitFor('approval:a1b2c3d4')).toEqual(b);
+  });
+
+  /**
+   * Un id di una forma che non scriviamo noi è una riga che non abbiamo
+   * scritto noi. Degrada come ogni barriera illeggibile: il turno resta con la
+   * sola scadenza, che è la direzione che finisce comunque.
+   */
+  it('e un id che non è il nostro non diventa una barriera', () => {
+    expect(decodeWaitFor('approval:../../etc/passwd')).toBeNull();
+    expect(decodeWaitFor('approval:')).toBeNull();
+  });
+
+  it('si apre solo se qualcuno sa dire che la risposta è arrivata', () => {
+    const b = { kind: 'approval', id: 'abc' } as const;
+    expect(satisfied(b, { answered: () => true })).toBe(true);
+    expect(satisfied(b, { answered: () => false })).toBe(false);
+    // Nessun valutatore: non sapere non è sì. Il turno aspetta la scadenza.
+    expect(satisfied(b, {})).toBe(false);
+  });
+
+  /**
+   * **Il modello non può armarsela.** `parseWait` è l'unico parser che legge
+   * argomenti di una tool call, e non ha nessun ramo che produca una barriera
+   * d'approvazione: potersela armare vorrebbe dire potersi far riprendere da
+   * una risposta che nessuno ha dato.
+   */
+  it("e il modello non può chiederla: `wait` produce solo l'uscita di un processo", () => {
+    const now = new Date('2026-08-28T10:00:00.000Z');
+    for (const argomenti of [
+      { seconds: 120, untilProcessExits: 4242 },
+      { seconds: 120, untilProcessExits: 'approval:abc' },
+      { seconds: 120, waitFor: 'approval:abc' },
+      { seconds: 120, kind: 'approval', id: 'abc' },
+    ]) {
+      const esito = parseWait(argomenti as { seconds?: unknown; untilProcessExits?: unknown }, now);
+      if (!esito.ok) continue;
+      expect(esito.spec.waitFor?.kind ?? 'process_exit').toBe('process_exit');
+    }
+  });
+
+  it('e quando torna, dice che è tornata per una risposta e non per il tempo', () => {
+    const b = { kind: 'approval', id: 'abc' } as const;
+    expect(wakeReport(b, 'event')).toContain('ha risposto');
+    const scaduta = wakeReport(b, 'timer');
+    expect(scaduta).toContain('non ha risposto');
+    // E dice cosa fare adesso, invece di lasciare il modello a riprovare.
+    expect(scaduta).toContain('non rifare la chiamata');
+  });
+});
