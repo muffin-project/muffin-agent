@@ -63,7 +63,7 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
 }
 
 const round = (n: number): TurnEvent => ({ type: 'round', n });
-const toolStart = (name: string): TurnEvent => ({ type: 'tool_start', name, capability: 'test' });
+const toolStart = (name: string, args?: unknown): TurnEvent => ({ type: 'tool_start', name, capability: 'test', ...(args === undefined ? {} : { args }) });
 const toolEnd = (name: string, isError = false): TurnEvent => ({ type: 'tool_end', name, ms: 1, isError });
 const modelEvent = (stopReason: string): TurnEvent => ({
   type: 'model',
@@ -76,25 +76,51 @@ const modelEvent = (stopReason: string): TurnEvent => ({
 });
 
 describe('telegram progress · formatTelegramProgress (M5-BIS B13)', () => {
-  it('renders every TurnEvent variant as one summarised line — brief\'s own example shape', () => {
-    expect(formatTelegramProgress(3, round(3), 0)).toBe('passaggio 3 · sto pensando · 0s');
-    expect(formatTelegramProgress(2, modelEvent('tool_use'), 5000)).toBe('passaggio 2 · ho deciso i prossimi passi · 5s');
-    expect(formatTelegramProgress(2, modelEvent('end'), 5000)).toBe('passaggio 2 · sto scrivendo la risposta · 5s');
-    expect(formatTelegramProgress(4, toolStart('shell_run'), 47_000)).toBe('passaggio 4 · sto usando shell_run · 47s');
-    expect(formatTelegramProgress(4, toolEnd('shell_run', false), 50_000)).toBe('passaggio 4 · shell_run fatto · 50s');
-    expect(formatTelegramProgress(4, toolEnd('shell_run', true), 50_000)).toBe('passaggio 4 · shell_run fallito · 50s');
+  /**
+   * Cosa sta facendo, e da quanto. Niente numero di giro.
+   *
+   * L'owner ha acceso Telegram il 28/08/2026, ha letto le sue prime righe di
+   * avanzamento e ha detto: «non voglio che scriva "passaggio 1", voglio che
+   * scriva cosa sta facendo». `passaggio N` è un contatore interno al loop —
+   * quante volte ha parlato il modello — e occupava il posto in testa, cioè
+   * l'unico pezzo che si legge davvero guardando un telefono di sfuggita.
+   */
+  it('dice cosa sta facendo e da quanto, senza il numero del giro', () => {
+    expect(formatTelegramProgress(round(3), 0)).toBe('sto pensando · 0s');
+    expect(formatTelegramProgress(modelEvent('tool_use'), 5000)).toBe('ho deciso i prossimi passi · 5s');
+    expect(formatTelegramProgress(modelEvent('end'), 5000)).toBe('sto scrivendo la risposta · 5s');
+    expect(formatTelegramProgress(toolEnd('shell_run', false), 50_000)).toBe('✓ eseguo un comando · 50s');
+    expect(formatTelegramProgress(toolEnd('shell_run', true), 50_000)).toBe('✗ eseguo un comando · 50s');
+  });
+
+  /**
+   * Le stesse parole del terminale, dalla stessa mappa.
+   *
+   * Qui si leggeva `sto usando fs_list` mentre il REPL diceva `guardo una
+   * cartella: core/memory` — stessa persona, stesso istante, due vocabolari.
+   * Il commento su `tool_end` in `progress.ts` la regola l'aveva già scritta;
+   * non poteva mantenerla finché le frasi stavano dietro la porta della CLI
+   * (`agent/tool-phrase.ts`, estratto il 28/08).
+   */
+  it('e usa le stesse parole del terminale, argomento compreso', () => {
+    expect(formatTelegramProgress(toolStart('fs_list', { path: 'core/memory' }), 47_000)).toBe(
+      'guardo una cartella: core/memory · 47s',
+    );
+    expect(formatTelegramProgress(toolStart('shell_run'), 47_000)).toBe('eseguo un comando · 47s');
   });
 
   it('escapes HTML in a tool name — the model chooses `call.name`, and this line is sent with parse_mode HTML', () => {
-    const text = formatTelegramProgress(1, toolStart('<script>&</script>'), 0);
+    const text = formatTelegramProgress(toolStart('<script>&</script>'), 0);
     expect(text).not.toContain('<script>');
-    expect(text).toBe('passaggio 1 · sto usando &lt;script&gt;&amp;&lt;/script&gt; · 0s');
+    // Un tool MCP non sta nella mappa delle frasi, quindi il nome grezzo passa
+    // di qui — ed è esattamente il caso in cui l'escape deve tenere.
+    expect(text).toBe('&lt;script&gt;&amp;&lt;/script&gt; · 0s');
   });
 
   it('rounds elapsed time to the nearest second and never prints a negative one', () => {
-    expect(formatTelegramProgress(1, round(1), 499)).toBe('passaggio 1 · sto pensando · 0s');
-    expect(formatTelegramProgress(1, round(1), 500)).toBe('passaggio 1 · sto pensando · 1s');
-    expect(formatTelegramProgress(1, round(1), -50)).toBe('passaggio 1 · sto pensando · 0s');
+    expect(formatTelegramProgress(round(1), 499)).toBe('sto pensando · 0s');
+    expect(formatTelegramProgress(round(1), 500)).toBe('sto pensando · 1s');
+    expect(formatTelegramProgress(round(1), -50)).toBe('sto pensando · 0s');
   });
 });
 
@@ -108,7 +134,7 @@ describe('telegram progress · startProgress (M5-BIS B13)', () => {
       progress.report(round(1));
       await vi.advanceTimersByTimeAsync(0);
       expect(calls.filter((c) => c.method === 'sendMessage')).toHaveLength(1);
-      expect(calls[0]?.text).toBe('passaggio 1 · sto pensando · 0s');
+      expect(calls[0]?.text).toBe('sto pensando · 0s');
 
       // Arrives inside the 3s window (at t=1s) — must coalesce, not fire yet.
       await vi.advanceTimersByTimeAsync(1000);
@@ -124,7 +150,7 @@ describe('telegram progress · startProgress (M5-BIS B13)', () => {
       await vi.advanceTimersByTimeAsync(1000);
       const edits = calls.filter((c) => c.method === 'editMessageText');
       expect(edits).toHaveLength(1);
-      expect(edits[0]?.text).toBe('passaggio 1 · sto usando shell_run · 1s');
+      expect(edits[0]?.text).toBe('eseguo un comando · 1s');
 
       const [t0, t1] = [calls[0]!.at, edits[0]!.at];
       expect(t1 - t0).toBeGreaterThanOrEqual(3000);

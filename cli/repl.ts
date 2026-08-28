@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
+import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
@@ -61,111 +62,6 @@ export const COMANDI: readonly string[] = HELP.split('\n')
  * strumentazione di chi ha scritto il loop, non lo stato di chi risponde.
  */
 export type Verbosity = 'normale' | 'debug';
-
-/**
- * Il nome del tool → cosa sta facendo, in italiano, in prima persona.
- *
- * `memory_search` è il nome di una funzione; «cerco in memoria» è quello che
- * sta succedendo. La distinzione è la stessa che `formatProgressLine` faceva
- * già per il resto (B13: «l'owner's own wording, not the trace's `muffin.*`
- * vocabulary») e che si fermava al confine dei tool.
- *
- * Una mappa e non un campo su `ToolSpec` perché la frase è di **questa
- * superficie**: Telegram non stampa passi, il gateway nemmeno, e un campo
- * obbligatorio su ogni tool per un solo consumatore è il tipo di peso che poi
- * nessuno toglie. Il prezzo — che una mappa a mano invecchia quando arriva un
- * tool nuovo — lo paga il test di drift accanto a questa riga, non un lettore
- * che se ne accorge in produzione leggendo `send_file…`.
- */
-const TOOL_PHRASE: Readonly<Record<string, string>> = {
-  memory_search: 'cerco in memoria',
-  fs_read: 'leggo un file',
-  fs_list: 'guardo una cartella',
-  fs_search: 'cerco nei file',
-  fs_write: 'scrivo un file',
-  document_read: 'leggo un documento',
-  http_get: 'apro una pagina',
-  web_search: 'cerco sul web',
-  shell_run: 'eseguo un comando',
-  process_list: 'guardo i processi',
-  process_kill: 'chiudo un processo',
-  send_file: 'ti mando un file',
-  skill_read: 'leggo una skill',
-  sys_inspect: 'mi guardo dentro',
-  todo: 'aggiorno il piano',
-  wait: 'mi metto in attesa',
-};
-
-/**
- * Quale argomento vale la pena vedere, per ogni tool.
- *
- * Il difetto che chiude, misurato sul WAL il 28/08/2026: un turno ha fatto
- * **sette** `memory_search` con sette `args_digest` **diversi**, e a schermo
- * erano sette righe identiche — `✓ cerco in memoria`, sette volte. Si legge
- * come un giro a vuoto e non lo era: nell'intero store non esiste una sola
- * coppia (tool, args) ripetuta. Il difetto era la riga, non il loop, ed è il
- * tipo di difetto che fa diagnosticare la cosa sbagliata — l'ho fatto io.
- *
- * Un campo solo per tool, quello che risponde a «su cosa?». Non un dump degli
- * argomenti: `fs_write` porta anche `content`, e stampare quello vuol dire
- * rovesciare un file intero nello scrollback a ogni scrittura.
- *
- * I nomi vengono dagli schemi veri (`agent/tools/*.ts`), letti, non ricordati.
- */
-const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
-  memory_search: 'query',
-  web_search: 'query',
-  fs_read: 'path',
-  fs_list: 'path',
-  // Due campi, provati in quest'ordine: `fs_search` cerca dentro i file con
-  // `query`, oppure — quando non sai dove sta una cosa — i file stessi con
-  // `name`. Un solo campo lascerebbe muta metà delle chiamate, che è la metà
-  // in cui l'owner ha più bisogno di sapere cosa sta guardando.
-  fs_search: ['query', 'name'],
-  fs_write: 'path',
-  document_read: 'path',
-  http_get: 'url',
-  shell_run: 'command',
-  skill_read: 'name',
-  send_file: 'path',
-};
-
-/** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
-const SOGGETTO_MASSIMO = 48;
-
-/**
- * Il soggetto da mostrare accanto alla frase, o `''` se non c'è.
- *
- * Gli argomenti li ha scritti il **modello**: possono contenere a capo, escape
- * e qualunque cosa. Si appiattiscono e si accorciano prima di toccare un
- * terminale — una sequenza di escape dentro un percorso, stampata cruda, muove
- * il cursore del riquadro che sta appena sotto.
- */
-export function toolSubject(name: string, args: unknown): string {
-  const campo = TOOL_SUBJECT[name];
-  if (campo === undefined || args === null || typeof args !== 'object') return '';
-  const campi = typeof campo === 'string' ? [campo] : campo;
-  const grezzo = campi.map((c) => (args as Record<string, unknown>)[c]).find((v) => typeof v === 'string' && v !== '');
-  if (typeof grezzo !== 'string' || grezzo === '') return '';
-  // eslint-disable-next-line no-control-regex
-  const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (piatto === '') return '';
-  return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
-}
-
-/** La frase, col suo soggetto quando ce n'è uno. */
-export function toolLine(name: string, args: unknown): string {
-  const soggetto = toolSubject(name, args);
-  return soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
-}
-
-/** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */
-export function toolPhrase(name: string): string {
-  return TOOL_PHRASE[name] ?? name;
-}
-
-/** Ogni tool che questa build registra ha una frase — letto dal test di drift. */
-export const TOOL_PHRASES: Readonly<Record<string, string>> = TOOL_PHRASE;
 
 /**
  * Cosa mostra la riga di stato viva, per evento.
