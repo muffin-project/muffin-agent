@@ -140,6 +140,104 @@ describe('UndoJournal', () => {
     expect(j.turns()).toEqual(['vecchio']);
   });
 
+  /**
+   * L'ordine dei turni, quando l'orologio non aiuta.
+   *
+   * Il test qui sopra passava per un caso fortunato: «nuovo» viene prima di
+   * «vecchio» in ordine alfabetico, cioè l'ordine che `readdirSync` restituisce
+   * e che un `sort` con comparatore a zero conserva. Con `t1`/`t2`
+   * l'alfabeto dà la risposta **sbagliata**, ed è lì che il difetto si vedeva
+   * (`cli/undo.test.ts`).
+   *
+   * Misurato il 28/08/2026 dentro un container Linux: due turni consecutivi
+   * hanno lo **stesso** `mtime` del manifest in 10 giri su 12 — overlayfs ha
+   * granularità di un millisecondo, APFS è più fine, e per questo su macOS non
+   * si vedeva mai. `--last` sceglieva il turno più vecchio e disfaceva quello
+   * sbagliato in silenzio.
+   *
+   * Qui l'istante identico non è più un caso fortunato: il seam `now` lo
+   * impone. Prima di questa riparazione un `sleep` nel test l'avrebbe nascosto
+   * senza toccare il difetto, che stava nel codice di produzione.
+   */
+  describe('due turni nello stesso istante', () => {
+    const fermo = () => new Date('2026-08-28T12:00:00.000Z');
+
+    const dueTurni = (): UndoJournal => {
+      const { root, work } = scratch();
+      const j = new UndoJournal(root, fermo);
+      writeFileSync(join(work, 'a'), 'a', 'utf8');
+      // `t1` poi `t2`: l'ordine alfabetico è quello sbagliato, quindi un
+      // pareggio non risolto si vede subito invece di passare per fortuna.
+      j.take('t1', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      j.take('t2', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      return j;
+    };
+
+    it("il più recente resta il più recente, con l'orologio fermo", () => {
+      expect(dueTurni().turns()).toEqual(['t2', 't1']);
+    });
+
+    it("e `ultimo()` lo dice senza ambiguità", () => {
+      expect(dueTurni().ultimo()).toEqual({ turnId: 't2' });
+    });
+
+    /**
+     * Il numero d'ordine è la sola cosa che non dipende da nessun orologio, e
+     * si scrive nel manifest: sopravvive a un `rsync`, a un ripristino da
+     * backup e a un `cp` senza `-p`, che invece riscrivono `mtime` senza che
+     * sia successo niente.
+     */
+    it('perché il registro si scrive il proprio numero d ordine', () => {
+      const j = dueTurni();
+      expect(j.read('t1')?.seq).toBe(1);
+      expect(j.read('t2')?.seq).toBe(2);
+    });
+
+    /**
+     * Un turno vecchio che scrive adesso è la cosa che si è appena mossa:
+     * «più recente» è l'ultima copia presa, non il turno nato per primo. Il
+     * numero d'ordine è solo lo spareggio, mai la chiave principale.
+     */
+    it("ma è lo spareggio, non la chiave: chi scrive per ultimo passa davanti", () => {
+      const { root, work } = scratch();
+      let quando = new Date('2026-08-28T12:00:00.000Z');
+      const j = new UndoJournal(root, () => quando);
+      writeFileSync(join(work, 'a'), 'a', 'utf8');
+      j.take('t1', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      j.take('t2', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      quando = new Date('2026-08-28T12:05:00.000Z');
+      j.take('t1', { callId: 'c2', capability: 'fs.write', path: join(work, 'a') });
+
+      expect(j.turns()).toEqual(['t1', 't2']);
+      // E il numero d'ordine non si muove: `t1` è nato per primo e resta 1.
+      expect(j.read('t1')?.seq).toBe(1);
+    });
+
+    /**
+     * Il pareggio vero — stesso istante **e** stesso numero d'ordine — può
+     * nascere solo da due processi che creano un turno insieme. Non si risolve
+     * con una monetina: disfare il turno sbagliato è distruttivo e silenzioso.
+     */
+    it('e quando due turni sono davvero indistinguibili, si rifiuta di indovinare', () => {
+      const { root, work } = scratch();
+      const j = new UndoJournal(root, fermo);
+      writeFileSync(join(work, 'a'), 'a', 'utf8');
+      j.take('t1', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      j.take('t2', { callId: 'c', capability: 'fs.write', path: join(work, 'a') });
+      // Due processi che non si sono visti: stesso istante, stesso numero.
+      const m = JSON.parse(readFileSync(join(root, 't2', 'manifest.json'), 'utf8')) as { seq: number };
+      writeFileSync(join(root, 't2', 'manifest.json'), JSON.stringify({ ...m, seq: 1 }), 'utf8');
+
+      expect(j.ultimo()).toEqual({ ambigui: ['t1', 't2'] });
+    });
+
+    /** Un registro vuoto non è un'ambiguità: è niente da disfare. */
+    it('e su un registro vuoto non c è nessun ultimo', () => {
+      const { root } = scratch();
+      expect(new UndoJournal(root).ultimo()).toBeNull();
+    });
+  });
+
   it('reads nothing from a corrupted manifest instead of throwing', () => {
     const { root, work } = scratch();
     const j = new UndoJournal(root);
