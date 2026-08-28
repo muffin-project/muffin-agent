@@ -4,70 +4,68 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect. Non da questa lista.
 
-**Goal owner (27/08):** un agente *davvero usabile*, rivisto **modulo per
-modulo** — loop, memoria, skill, tool, context engine, compacting, comandi,
-deep research; ogni pezzo per *come è fatto*. E tutto ciò che manca prima della
-VPS.
+**Goal owner:** un agente *davvero usabile*, rivisto modulo per modulo. E tutto
+ciò che manca prima della VPS.
 
-**Serata del 27/08 (#197 → #211).** Tre cause del «Muffin risponde male»:
-`parseJson` accettava solo `{…}`; il reasoning era **spento** sul turno
-conversazionale da #167; `.releases` si annidava.
+**Come si trovano le cose.** Le ultime otto slice sono nate tutte allo stesso
+modo: pilotando il REPL vero dentro **tmux** (`capture-pane` rende lo schermo;
+`script` registra i byte e fa concludere il falso), o misurando su tracce e WAL
+invece che sullo schermo. Nessuna è nata leggendo il codice.
 
-**Notte del 28/08 (#212 → #218).** I tool riprovano, ma solo se dichiarano il
-fallimento transitorio **e** la capability è `rerunnable`. Il modello vede le
-immagini, solo base64 e mai una sorgente `url`. Uno stop chiesto tiene giù il
-gateway anche su macOS. E una textzone vera: riquadro, multilinea, storia.
+**28/08 (#219 → #224).** `npm run build` era `tsc --noEmit` e mi ha fatto
+misurare due volte il binario di ieri. Ctrl+J spediva invece di andare a capo
+(Node consegna `\n` come `enter`). Il prompt si ripeteva: `persona.md` 7.528 →
+4.629 byte, e `prompt show --eco` misura l'eco. Le righe di lavoro dicono su
+cosa (sette ricerche diverse erano sette righe identiche). Muffin non sapeva
+che giorno fosse: `## Questo turno` porta ora momento, fuso+offset, superficie,
+con chi parli, modello e profilo. `gateway status` e `rot harden` davano rimedi
+diventati falsi dopo #217.
 
-**Mattina del 28/08 — pilotato il REPL dentro tmux, che rende lo schermo invece
-dei byte.** `npm run build` era `tsc --noEmit`: ho letto «ok» e ho misurato il
-binario di ieri sera. Il mandato DAY-1 aveva dichiarato questo rischio parola
-per parola e non era mai stato soddisfatto. **In volo: PR #219** (build che
-costruisce, Ctrl+J che va a capo — Node lo consegna come `enter`, non come
-ctrl+j — Tab che nomina i candidati) e **PR #220** (`prompt show --eco`;
-persona.md 7.528 → 4.629 byte, prompt owner 23.648 → 20.770). Entrambe con gate
-locale dichiarato; il merge è **bloccato dal classificatore**, lo fa l'owner.
+**Peer da guardare sempre**, e soprattutto gli agenti personali continui:
+openclaw, hermes, pi, odysseus, opencode, codex, claude, gemini. Letti finora:
+Hermes (`stable`/`context`/`volatile`, offset UTC argomentato), OpenClaw
+(`## Temporal Context`, `## Authorized Senders`, owner id hashato), Codex
+(`<permission_profile>`, world state).
 
-**Regola trovata, che morde chi pota il prompt:** `voice.md` va anche ai
-gruppi, `identity.md` no. Una frase di voice.md che sta pure in identity.md non
-è un doppione — è l'unica copia che la stanza riceve.
+## Le tre decisioni aperte, tutte dell'owner
 
-**Prossimo, e serve una decisione dell'owner: C8, le note vocali.** La forma è
-già scritta (audio originale = Evidence, transcript = derived con la propria
-provenance). Manca il trascrittore, e la scelta non è tecnica: whisper.cpp
-locale (un binario in più, gratis, la voce non esce di casa) oppure un'API (una
-chiave in più, un costo, e la voce dell'owner che esce). Non la prendo io.
+1. **Instradamento** (`config.provider.routing`, da #221). Oggi 0% di cache:
+   OpenRouter manda al più economico dei 12 provider a monte, che non onora i
+   breakpoint. Con `only: ["alibaba"]` la cache prende il 95% dal secondo turno
+   e costa **meno** (~$0.0009 contro ~$0.0031 a turno). Ma è cinese, e
+   `dataCollection: "deny"` non l'ha mai deciso nessuno: oggi `identity.md` e i
+   ricordi vanno a chi costa meno senza vincoli su chi può tenerseli.
+2. **`muffin rot harden`** — serve `sudo`, e da lì i reseal servono `sudo`.
+   Finché non è fatto, `sys.shell` chiede **sempre** conferma.
+3. **C8, note vocali**: whisper.cpp locale o un'API. Decide se la voce
+   dell'owner esce di casa.
 
-**Sulla macchina.** Verificato dopo l'`update` dell'owner: le release sono
-sorelle piatte in `.releases/`, **nessun annidamento** da sbrogliare. Dopo #217
-servono `muffin update` **e** `muffin gateway install --write --force` (il
-plist installato ha ancora il vecchio `KeepAlive: true`).
+## Cosa manca per usarlo davvero
 
-**Lasciato all'owner:** `pricing.ts` sottostima **5 famiglie su 8** (qwen3:
-tabella 0.1/0.3, reale 0.425/2.55) — tocca il tetto sigillato.
+Muffin oggi è **solo terminale**: `surfaces.enabled = ["cli"]`, un solo segreto
+(`provider_api_key`). Servono, dall'owner: **token bot Telegram** (senza,
+niente telefono), **chiave Tavily** (senza, `web_search` non si registra),
+**billing CI**.
 
-**In volo: PR #186** (`slice/undo-riallinea-il-turno`, D11, MERGEABLE).
-CRITICAL, due NON-MERGE riparati; il **terzo giudizio non è mai girato** — è il
-prossimo passo, non il merge.
+## Aperto, non bloccante
 
-**Il tetto di taint.** Dopo un `fs_read` il turno è a 2 e `fs.write` ha
-soffitto 1: «leggi, calcola, scrivi» resta rifiutato (#179, 0/9).
+**Prossimo grosso, con evidenza dai peer:** dichiarare i **permessi** nel
+prompt. Oggi il kernel rifiuta al momento della chiamata e il modello impara
+per rifiuto — incluso il tetto di taint (`defaultMaxTaint` medium/high = 1),
+per cui «leggi, calcola, scrivi» è rifiutato *sempre* e nessuno gli dice
+perché. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
+Va nella coda volatile, perché il taint cambia dentro il turno. Lì nasce anche
+l'hashing degli identificatori: oggi nessun `externalId` arriva al prompt.
 
-**Telegram** (owner): la patch del 13° anniversario aggiunge **pulsanti** e
-**documenti inline**. Dalla fonte prima di toccare il connettore.
+**PR ferme:** #186 (undo riallinea il turno, CRITICAL, terzo giudizio mai
+girato, CONFLICTING) e #192 (docs, CONFLICTING).
 
-**Aperto per l'owner:** token bot Telegram; billing CI; chiave Tavily (senza,
-`web_search` non si registra).
+**Community:** esiste solo come forma di stringa (`community:${slug}` in
+`TenantId`). Nessuna macchina: né appartenenza, né raggruppamento fra
+superfici, né memoria condivisa. Promessa nel tipo, non capability.
 
-**CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR.
-
-**Stato macchina:** la cache non prende — 2.8% su 18 chiamate, **0** sul
-modello vivo.
-
-**Dogfood:** `sys.shell` chiede sempre (`decide.ts:245`) — allow silenzioso
-solo con `ctx.hardened`, falso perché `rot/` ha lo stesso uid dell'agente.
-
-**Follow-up.** ADR «il REPL è un client del gateway?»; socket v2; review dei
-peer dove il 429 l'ha fermata; `doctor` pre-boot dà rimedio sbagliato;
-`possibly_sent` non distingue crash da in-volo; TOCTOU gateway; ASK durevole.
+**Altro:** la cache non prende fra un turno e l'altro (vedi decisione 1);
+`pricing.ts` sottostima 5 famiglie su 8; ADR su «il REPL è un client del
+gateway?»; socket v2; `possibly_sent` non distingue crash da in-volo.
 
 **Truth maintenance:** M5-BIS possiede status Gate, PERCORSO §0 l'ordine.
