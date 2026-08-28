@@ -140,15 +140,37 @@ export function makeTextzone(deps: TextzoneDeps) {
      * il 28/08/2026: una colonna di riquadri, uno per lettera digitata.
      */
     let cursoreRigaOra = 0;
+    /**
+     * I comandi che l'ultimo Tab non ha saputo scegliere.
+     *
+     * Prendono il posto della riga di suggerimenti finché non si preme
+     * qualcos'altro: così l'elenco vive dentro il riquadro, e il ridisegno che
+     * già cancella le proprie righe lo toglie senza sapere che esiste.
+     */
+    let candidati: readonly string[] = [];
 
-    const disegna = (): void => {
+    /**
+     * `finale` disegna il riquadro **come resterà nello scrollback**: senza la
+     * riga dei suggerimenti.
+     *
+     * I suggerimenti dicono cosa puoi premere *adesso*; sotto un messaggio già
+     * spedito non dicono niente, e si accumulano — una copia per turno, per
+     * tutta la sessione. Il riquadro invece resta: è quello che fa vedere dove
+     * finisce ciò che hai scritto tu.
+     */
+    const disegna = (finale = false): void => {
       const w = output.columns ?? 80;
       // Si risale da dove sta il cursore adesso fino alla prima riga del
       // riquadro, poi si cancella tutto ciò che sta sotto.
       if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
       output.write('\r\x1b[0J');
 
-      const d = disponi(stato.righe, stato.riga, stato.colonna, cornice, w);
+      const conElenco = finale
+        ? { ...cornice, suggerimenti: '' }
+        : candidati.length === 0
+          ? cornice
+          : { ...cornice, suggerimenti: candidati.join('  ') };
+      const d = disponi(stato.righe, stato.riga, stato.colonna, conElenco, w);
       output.write(d.righe.join('\n'));
       righeDisegnateOra = d.righe.length;
 
@@ -166,6 +188,7 @@ export function makeTextzone(deps: TextzoneDeps) {
       output.write(PASTE_ON);
 
       const finisci = (esito: Esito): void => {
+        disegna(true);
         disegnaCorrente = undefined;
         input.off('keypress', onKey);
         output.write(PASTE_OFF);
@@ -186,13 +209,15 @@ export function makeTextzone(deps: TextzoneDeps) {
         // non in `editor.ts` perché l'elenco dei comandi è una cosa della CLI,
         // non del testo.
         if (key.name === 'tab' && stato.righe.length === 1) {
-          const completato = completa(stato.righe[0] ?? '', deps.comandi ?? []);
-          if (completato !== null) {
-            stato = { ...stato, righe: [completato], colonna: completato.length };
-            disegna();
-          }
+          const c = completa(stato.righe[0] ?? '', deps.comandi ?? []);
+          candidati = c.candidati;
+          stato = { ...stato, righe: [c.testo], colonna: c.testo.length };
+          disegna();
           return;
         }
+        // Qualunque altro tasto rimette i suggerimenti al posto dell'elenco:
+        // i candidati valgono per la riga che li ha chiesti, non per la dopo.
+        candidati = [];
 
         const r = premi(stato, key);
         stato = r.stato;
@@ -283,18 +308,39 @@ export function makeTextzone(deps: TextzoneDeps) {
   return { read, readLine, redraw: () => disegnaCorrente?.() };
 }
 
+/** Il prefisso più lungo che tutte le stringhe date hanno in comune. */
+function prefissoComune(parole: readonly string[]): string {
+  const prima = parole[0] ?? '';
+  let n = prima.length;
+  for (const p of parole) {
+    let i = 0;
+    while (i < n && i < p.length && p[i] === prima[i]) i += 1;
+    n = i;
+  }
+  return prima.slice(0, n);
+}
+
 /**
- * Il completamento di un comando, o `null` se non c'è niente da completare.
+ * Il completamento di un comando: cosa diventa la riga, e cosa mostrare.
  *
- * Un solo candidato completa; zero o più di uno non fanno niente. Stampare un
- * elenco sarebbe la cosa che rompe il disegno del prompt, e la lista sta già
- * in `/help`.
+ * Un candidato solo completa. **Più di uno completa fino al prefisso comune e
+ * si fa nominare**: è il comportamento di ogni shell, e la versione di prima —
+ * «zero o più di uno non fanno niente» — rendeva il Tab un tasto morto proprio
+ * nel momento in cui serve. Misurato dentro tmux il 28/08/2026: `/` più Tab
+ * non muoveva niente e non diceva niente, che si legge come un tasto rotto.
+ *
+ * Il motivo che avevo scritto per non stampare l'elenco — «romperebbe il
+ * disegno del prompt» — non vale: l'elenco non si *stampa*, prende il posto
+ * della riga di suggerimenti, che è già una riga del riquadro e che il
+ * ridisegno già cancella da sé.
  */
-export function completa(riga: string, comandi: readonly string[]): string | null {
-  if (!riga.startsWith('/')) return null;
+export function completa(riga: string, comandi: readonly string[]): { testo: string; candidati: readonly string[] } {
+  if (!riga.startsWith('/')) return { testo: riga, candidati: [] };
   const candidati = comandi.filter((c) => c.startsWith(riga));
-  if (candidati.length !== 1) return null;
-  return candidati[0] === riga ? null : (candidati[0] ?? null);
+  if (candidati.length === 0) return { testo: riga, candidati: [] };
+  if (candidati.length === 1) return { testo: candidati[0] ?? riga, candidati: [] };
+  // Più di uno: si allunga quanto si può senza scegliere al posto dell'owner.
+  return { testo: prefissoComune(candidati), candidati };
 }
 
 /**
