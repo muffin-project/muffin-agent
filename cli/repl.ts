@@ -144,6 +144,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
         return `· ${event.name} tentativo ${event.attempt} fra ${event.inMs}ms — ${event.why}`;
       case 'tool_end':
         return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
+      case 'ask':
+        return `· ${event.name} in attesa di approvazione`;
       default:
         return assertNever(event);
     }
@@ -171,6 +173,11 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
       // prodotto la risposta sta sotto la domanda, non accanto ad essa
       // (`cli/STYLES.md` §«La forma di un turno»).
       return `  ${event.isError ? '✗' : '✓'} ${toolLine(event.name, event.args)}`;
+    // Un terzo segno, perché sono tre cose diverse: fatto, fallito, e **fermo
+    // su di te**. Nel terminale la domanda arriva subito dopo, quindi questa
+    // riga dice soltanto perché il lavoro si è fermato lì.
+    case 'ask':
+      return `  ⏸ ${toolPhrase(event.name)}: aspetto la tua approvazione`;
     default:
       return assertNever(event);
   }
@@ -486,7 +493,12 @@ export async function runRepl(
   // verdict becomes a question instead of a refusal. The wording is the kernel's
   // own — a paraphrase is a chance to make the request sound smaller than it is —
   // and anything that is not an explicit yes is a no.
-  runtime.deps.approve = async (request) => {
+  //
+  // Registrata sotto `cli` e non scritta su `deps.approve`: quella era una
+  // funzione sola per processo, e un turno arrivato da Telegram finiva a
+  // chiedere `[s/N]` qui dentro — a chi non l'aveva chiesto, su uno schermo che
+  // in quel momento nessuno guarda.
+  runtime.approvers.set('cli', async (request) => {
     status.line(`\n⚠ ${request.prompt}`);
     if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
     // Taint 0 is the quiet default; anything above it means untrusted content
@@ -504,7 +516,7 @@ export async function runRepl(
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
     process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
     return allowed ? 'allow' : 'deny';
-  };
+  });
 
   let session = runtime.deps.sessions.open();
   let controller: AbortController | null = null;
