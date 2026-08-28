@@ -115,6 +115,8 @@ export function makeTextzone(deps: TextzoneDeps) {
    * far comparire un prompt che nessuno sta usando.
    */
   let disegnaCorrente: (() => void) | undefined;
+  /** E come **toglierlo**, che è la metà senza la quale il ridisegno non serve. */
+  let cancellaCorrente: (() => void) | undefined;
 
   /**
    * Legge un messaggio.
@@ -187,9 +189,29 @@ export function makeTextzone(deps: TextzoneDeps) {
       input.resume();
       output.write(PASTE_ON);
 
+      /**
+       * Toglie il riquadro da schermo, per far scrivere qualcosa al suo posto.
+       *
+       * È la metà che mancava, e senza di lei `redraw` da solo non basta: chi
+       * consegna un messaggio fuori banda lo scriveva dove stava il cursore,
+       * cioè **dentro** il riquadro, e poi ne faceva comparire un secondo
+       * sotto. Visto su uno schermo vero il 28/08/2026 — un avviso del
+       * consolidatore finito dentro la riga di input come se l'avesse battuto
+       * qualcuno.
+       */
+      const cancella = (): void => {
+        if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
+        output.write('\r\x1b[0J');
+        // Il riquadro non è più a schermo: il prossimo disegno non deve
+        // risalire di nuovo, o mangerebbe la riga appena scritta sopra.
+        cursoreRigaOra = 0;
+        righeDisegnateOra = 0;
+      };
+
       const finisci = (esito: Esito): void => {
         disegna(true);
         disegnaCorrente = undefined;
+        cancellaCorrente = undefined;
         input.off('keypress', onKey);
         output.write(PASTE_OFF);
         input.setRawMode(false);
@@ -248,6 +270,7 @@ export function makeTextzone(deps: TextzoneDeps) {
       // questo il REPL resterebbe in attesa di un tasto che non arriverà.
       input.once('end', () => finisci({ tipo: 'fine' }));
       disegnaCorrente = disegna;
+      cancellaCorrente = cancella;
       disegna();
     });
   }
@@ -305,7 +328,20 @@ export function makeTextzone(deps: TextzoneDeps) {
     });
   }
 
-  return { read, readLine, redraw: () => disegnaCorrente?.() };
+  return {
+    read,
+    readLine,
+    redraw: () => disegnaCorrente?.(),
+    /**
+     * Toglie il riquadro, se ce n'è uno. `redraw` lo rimette.
+     *
+     * Due mosse e non una sola «scrivi sopra», perché fra le due ci sta la
+     * scrittura di chi consegna, e chi consegna deve poter fallire senza
+     * lasciare lo schermo senza prompt — la garanzia che `makeReplCliWrite`
+     * tiene nel suo `finally`.
+     */
+    cancella: () => cancellaCorrente?.(),
+  };
 }
 
 /** Il prefisso più lungo che tutte le stringhe date hanno in comune. */
