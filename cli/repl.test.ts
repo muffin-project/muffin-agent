@@ -5,15 +5,14 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
 import {
-  debugCommand,
   formatProgressLine,
   makeReplCliWrite,
   runRepl,
   closingLine,
   statusFor,
-  thinkingCommand,
 } from './repl.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
+import { debugCommand, thinkingCommand } from '../agent/comandi.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';

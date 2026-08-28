@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { aiuto, eseguiComando } from '../agent/comandi.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
@@ -28,6 +29,7 @@ import { DiscordInbox } from '../connectors/discord/inbox.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
+import { cmdModel } from './model.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -320,6 +322,72 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
 }
 
 /**
+ * I comandi della CLI, eseguibili da Telegram.
+ *
+ * L'owner l'ha chiesto con una parola sola: «tutti i / commands che abbiamo
+ * nella CLI dobbiamo riportarli su telegram, SEMPRE». Il "sempre" non regge
+ * copiandoli — regge perché `agent/comandi.ts` è l'unico posto dove sono
+ * scritti, e qui si costruisce soltanto il **contesto** che quel modulo non
+ * può avere: la config di questa home, il conto, il profilo caricato.
+ *
+ * Le tre differenze fra le due superfici, e perché stanno qui e non lì:
+ *
+ * - **`/exit`** non esiste. Su Telegram non c'è nessun processo da chiudere,
+ *   e `puoiUscire: false` lo toglie sia dall'aiuto sia dal menu.
+ * - **`/new`** non apre un id nuovo. L'id di sessione lo decide la chat
+ *   (`telegram:<chatId>`), quindi «una conversazione nuova» è `rotate`: il
+ *   file viene messo da parte e la stessa chat riparte vuota. Il messaggio lo
+ *   dice esplicitamente, perché qui la storia resta visibile scorrendo in su
+ *   — e la cosa peggiore sarebbe che l'owner rilegga uno scambio che Muffin
+ *   non ha più.
+ * - **Un comando che non esiste** riceve l'aiuto invece di finire al modello.
+ *   Su Telegram lo slash è un gesto: apre il menu, non capita per sbaglio a
+ *   inizio frase come un percorso in un terminale.
+ *
+ * `runtime.config` viene riscritta in memoria dopo `/model` e `/think` per lo
+ * stesso motivo per cui lo fa il REPL: senza, il turno dopo continuerebbe a
+ * leggere la config di prima, e la manopola sembrerebbe non aver fatto niente.
+ */
+function comandiPerTelegram(
+  runtime: Runtime,
+  home: string,
+): (riga: string, sessionId: string) => Promise<{ testo: string } | null> {
+  return async (riga, sessionId) => {
+    const esito = await eseguiComando(riga, {
+      home,
+      config: runtime.config,
+      onConfig: (next) => {
+        runtime.config = next;
+      },
+      profilo: { name: runtime.deps.profile.name, thinking: runtime.deps.profile.thinking },
+      onThinking: (t) => {
+        runtime.deps.profile.thinking = t;
+      },
+      budget: runtime.budget,
+      sessionId,
+      // Telegram non ha una riga di stato né un footer dove metterli: il
+      // livello di dettaglio parte da quello normale a ogni avvio, e `/debug`
+      // qui cambia soltanto cosa risponde il comando stesso. Vedi
+      // `agent/comandi.ts`.
+      verbosity: 'normale',
+      puoiUscire: false,
+      model: (argv, out) => cmdModel(home, argv, { out }),
+    });
+    if (esito.sconosciuto === true) return { testo: `comando sconosciuto.\n${aiuto(false)}` };
+    if (esito.nuovaSessione === true) {
+      const archivio = runtime.deps.sessions.rotate(runtime.deps.sessions.open(sessionId));
+      return {
+        testo:
+          archivio === null
+            ? "non c'era niente da archiviare: la conversazione era già nuova."
+            : `${esito.testo}\nQui sopra resta scritto, ma per me quella conversazione è chiusa.`,
+      };
+    }
+    return { testo: esito.testo };
+  };
+}
+
+/**
  * Connects every enabled surface, inside this process.
  *
  * Called by the REPL and by headless serve alike. Returns the stops, a line per
@@ -399,6 +467,7 @@ export function connectSurfaces(
           api,
           vault: telegramVault(runtime, vaultRoot),
           voce: voceFor(runtime, home),
+          comandi: comandiPerTelegram(runtime, home),
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
