@@ -6,13 +6,21 @@ import { paths } from '../core/config/config.js';
 import { UndoJournal } from '../core/undo/journal.js';
 import { cmdUndo, undoOfId } from './undo.js';
 
-/** Una home di prova con un turno già registrato nel journal. */
+/**
+ * Una home di prova con un turno già registrato nel journal.
+ *
+ * L'orologio è **fermo**, e non per comodità: è la condizione che faceva
+ * fallire `--last`. Due turni scritti nello stesso millisecondo sono la norma
+ * su Linux — misurato il 28/08/2026, 10 giri su 12 in un container — e con
+ * l'orologio vero questi test dipendevano da quanto era veloce la macchina.
+ * Fermarlo qui li rende una prova della riparazione invece che della fortuna.
+ */
 function homeConTurno(contenutoPrima = 'prima'): { home: string; file: string; journal: UndoJournal } {
   const home = mkdtempSync(join(tmpdir(), 'muffin-cli-undo-'));
   const work = mkdtempSync(join(tmpdir(), 'muffin-cli-undo-work-'));
   const file = join(work, 'nota.md');
   writeFileSync(file, contenutoPrima, 'utf8');
-  const journal = new UndoJournal(paths(home).undo);
+  const journal = new UndoJournal(paths(home).undo, () => new Date('2026-08-28T12:00:00.000Z'));
   journal.take('t1', { callId: 'toolu_1', capability: 'fs.write', path: file });
   writeFileSync(file, 'dopo', 'utf8');
   return { home, file, journal };
@@ -58,13 +66,39 @@ describe('muffin undo', () => {
     expect(readFileSync(file, 'utf8')).toBe('prima');
   });
 
-  it('--last prende il turno più recente', () => {
+  /**
+   * `t1` e `t2` con lo stesso istante, e l'ordine alfabetico è quello
+   * **sbagliato**: prima della riparazione `--last` prendeva `t1` e rimetteva
+   * «prima», cioè disfaceva il turno sbagliato. Rosso in 10 giri su 12 dentro
+   * un container Linux, sempre verde su macOS.
+   */
+  it('--last prende il turno più recente, anche a parità di istante', () => {
     const { home, file, journal } = homeConTurno();
     journal.take('t2', { callId: 'c', capability: 'fs.write', path: file });
     writeFileSync(file, 'dopo ancora', 'utf8');
 
     expect(cmdUndo(['--last', '--yes'], home)).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe('dopo');
+  });
+
+  /**
+   * Il pareggio vero: stesso istante **e** stesso numero d'ordine, cioè due
+   * processi che hanno creato un turno insieme. Su un'operazione distruttiva
+   * non si tira a sorte — l'owner riceve i due nomi e sceglie lui.
+   */
+  it("e quando i due in testa sono indistinguibili, si rifiuta invece di indovinare", () => {
+    const { home, file, journal } = homeConTurno();
+    journal.take('t2', { callId: 'c', capability: 'fs.write', path: file });
+    writeFileSync(file, 'dopo ancora', 'utf8');
+    const manifest = join(paths(home).undo, 't2', 'manifest.json');
+    const m = JSON.parse(readFileSync(manifest, 'utf8')) as { seq: number };
+    writeFileSync(manifest, JSON.stringify({ ...m, seq: 1 }), 'utf8');
+
+    expect(cmdUndo(['--last', '--yes'], home)).toBe(1);
+    // Il file non è stato toccato: un rifiuto è un rifiuto.
+    expect(readFileSync(file, 'utf8')).toBe('dopo ancora');
+    expect(err.join('')).toContain('muffin undo t1 --yes');
+    expect(err.join('')).toContain('muffin undo t2 --yes');
   });
 
   it('mette da parte lo stato attuale, così anche l\'undo si disfa', () => {

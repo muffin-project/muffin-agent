@@ -35,7 +35,29 @@ export type Snapshot = {
   takenAt: string;
 };
 
-export type UndoEntry = { turnId: string; snapshots: Snapshot[] };
+export type UndoEntry = {
+  turnId: string;
+  snapshots: Snapshot[];
+  /**
+   * In che ordine questo turno è comparso nel registro: 1, 2, 3…
+   *
+   * Esiste per una sola ragione, ed è misurata. `turns()` ordinava per `mtime`
+   * del manifest, e su Linux i due manifest di due turni consecutivi hanno lo
+   * **stesso** mtime in 10 giri su 12 (overlayfs ha granularità di un
+   * millisecondo; APFS è più fine, per questo su macOS non si vedeva). A parità
+   * `Array.prototype.sort` conserva l'ordine di `readdirSync`, che è alfabetico:
+   * `--last` sceglieva `t1` invece di `t2`, cioè **il turno più vecchio**, e
+   * disfaceva quello sbagliato in silenzio.
+   *
+   * `takenAt` da solo non basta come rimedio: è ISO al millisecondo, quindi ha
+   * lo stesso pareggio. Questo è un intero che non dipende da nessun orologio.
+   *
+   * Assegnato una volta sola, alla nascita della directory del turno, come
+   * `1 + il massimo già su disco`. Un manifest vecchio non ce l'ha e vale `0`:
+   * fra due manifest vecchi non aggiunge nulla, e non fa peggio di prima.
+   */
+  seq?: number;
+};
 
 const MANIFEST = 'manifest.json';
 
@@ -54,7 +76,16 @@ export function copyNameFor(callId: string, index: number): string {
 }
 
 export class UndoJournal {
-  constructor(private readonly root: string) {}
+  /**
+   * `now` è un seam di prova, e serve a provare proprio il caso che il
+   * filesystem produceva per conto suo: due turni con l'istante identico.
+   * Prima quel caso si otteneva per fortuna — ed è per fortuna che il test
+   * passava su una piattaforma e falliva sull'altra.
+   */
+  constructor(
+    private readonly root: string,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   private dir(turnId: string): string {
     // Stesso trattamento del `callId`, e per la stessa ragione: il turnId è
@@ -106,9 +137,13 @@ export class UndoJournal {
       capability: call.capability,
       path: call.path,
       copy,
-      takenAt: new Date().toISOString(),
+      takenAt: this.now().toISOString(),
     };
-    this.write(turnId, { turnId, snapshots: [...(esistente?.snapshots ?? []), snapshot] });
+    // Il numero d'ordine si assegna alla nascita e non si tocca più: un turno
+    // che scrive dieci volte resta dov'era in coda, e `takenAt` è ciò che dice
+    // quando è stato attivo l'ultima volta.
+    const seq = esistente?.seq ?? this.prossimoSeq();
+    this.write(turnId, { turnId, seq, snapshots: [...(esistente?.snapshots ?? []), snapshot] });
     return snapshot;
   }
 
@@ -170,14 +205,72 @@ export class UndoJournal {
     return { restored, problems };
   }
 
-  /** I turni che hanno qualcosa da disfare, dal più recente. */
-  turns(): string[] {
+  /**
+   * Il numero d'ordine per un turno che nasce adesso: uno più del massimo che
+   * c'è già.
+   *
+   * Legge i manifest invece di tenere un contatore da qualche parte, che è
+   * coerente con la forma decisa dall'owner — una directory, non una tabella —
+   * e costa una lettura per turno, contro le `n` che `turns()` fa comunque a
+   * ogni `muffin undo`.
+   */
+  private prossimoSeq(): number {
+    return this.registri().reduce((max, r) => Math.max(max, r.entry.seq ?? 0), 0) + 1;
+  }
+
+  /** Ogni turno del registro con il suo manifest, senza ordine. */
+  private registri(): { name: string; entry: UndoEntry }[] {
     if (!existsSync(this.root)) return [];
     return readdirSync(this.root, { withFileTypes: true })
       .filter((e) => e.isDirectory() && existsSync(join(this.root, e.name, MANIFEST)))
-      .map((e) => ({ name: e.name, at: statSync(join(this.root, e.name, MANIFEST)).mtimeMs }))
-      .sort((a, b) => b.at - a.at)
-      .map((e) => e.name);
+      .flatMap((e) => {
+        const entry = this.read(e.name);
+        return entry === null ? [] : [{ name: e.name, entry }];
+      });
+  }
+
+  /**
+   * I turni che hanno qualcosa da disfare, dal più recente.
+   *
+   * Ordinati per **quello che il registro ha scritto**, mai per un attributo
+   * del filesystem. `mtime` era la chiave di prima e sbagliava due volte: ha
+   * una granularità che cambia da piattaforma a piattaforma (vedi `seq`), e
+   * mente comunque, perché un `rsync`, un ripristino da backup o un `cp` senza
+   * `-p` lo riscrivono senza che sia successo niente.
+   *
+   * «Più recente» vuol dire l'ultima copia presa, non il turno nato per ultimo:
+   * un turno vecchio che scrive adesso è la cosa che si è appena mossa.
+   */
+  turns(): string[] {
+    return this.registri()
+      .map((r) => ({ name: r.name, at: r.entry.snapshots.at(-1)?.takenAt ?? '', seq: r.entry.seq ?? 0 }))
+      .sort((a, b) => (a.at === b.at ? b.seq - a.seq : a.at < b.at ? 1 : -1))
+      .map((r) => r.name);
+  }
+
+  /**
+   * Il turno da disfare con `--last`, **o il rifiuto di indovinare**.
+   *
+   * `turns()[0]` non basta come risposta a questa domanda: un ordinamento
+   * totale restituisce sempre un primo, anche quando i due in testa sono
+   * indistinguibili. Succede solo se due processi hanno creato un turno nello
+   * stesso istante e con lo stesso numero d'ordine — raro, e comunque non una
+   * cosa da risolvere con una monetina: disfare il turno sbagliato è
+   * distruttivo e silenzioso, ed è esattamente ciò da cui `undo` esiste per
+   * proteggere.
+   */
+  ultimo(): { turnId: string } | { ambigui: string[] } | null {
+    const ordinati = this.registri().map((r) => ({
+      name: r.name,
+      at: r.entry.snapshots.at(-1)?.takenAt ?? '',
+      seq: r.entry.seq ?? 0,
+    }));
+    if (ordinati.length === 0) return null;
+    ordinati.sort((a, b) => (a.at === b.at ? b.seq - a.seq : a.at < b.at ? 1 : -1));
+    const primo = ordinati[0]!;
+    const pari = ordinati.filter((r) => r.at === primo.at && r.seq === primo.seq);
+    if (pari.length > 1) return { ambigui: pari.map((r) => r.name).sort() };
+    return { turnId: primo.name };
   }
 
   /** Butta via il journal di un turno — dopo un undo riuscito, o per pulizia. */
