@@ -1,4 +1,5 @@
 import type { TurnEvent } from '../../agent/loop.js';
+import { toolLine, toolPhrase } from '../../agent/tool-phrase.js';
 import type { TelegramApiLike } from './api.js';
 import { escapeHtml } from './render.js';
 
@@ -108,7 +109,6 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
   let stopped = false;
   /** Set on the first failed send/edit. Never cleared — like `presence.ts`, this session does not retry into a channel that just rejected it. */
   let disabled = false;
-  let round = 0;
   let messageId: number | null = null;
   /** The latest not-yet-shown status line, or null once it has been (or there is nothing new). Coalescing: a later `report` overwrites this rather than queuing. */
   let pendingText: string | null = null;
@@ -185,8 +185,7 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
   return {
     report(event: TurnEvent): void {
       if (stopped || disabled) return;
-      if (event.type === 'round') round = event.n;
-      pendingText = formatTelegramProgress(round, event, now() - turnStartedAt);
+      pendingText = formatTelegramProgress(event, now() - turnStartedAt);
       if (flushTimer !== null) return; // a flush is already scheduled; it reads `pendingText` fresh when it runs
       const wait = Math.max(0, MIN_EDIT_MS - (now() - lastLiveAt));
       flushTimer = setTimeout(() => void flush(), wait);
@@ -251,21 +250,26 @@ export function startProgress(api: TelegramApiLike, chatId: number, options: Pro
 }
 
 /**
- * One summarised status line — the current round, what is happening right now,
- * and how long the turn has been running. Never the event's own raw shape
- * (contrast `cli/repl.ts`'s `formatProgressLine`, which prints token counts and
- * `stopReason` verbatim for a terminal audience): a chat bubble is read by the
- * owner glancing at a phone, not grepped, so this reports the same facts in the
- * register rule 3 of the brief asks for — "passaggio 3 · sto usando shell_run ·
- * 47s", not a trace line.
+ * One status line: **what is happening**, and for how long.
+ *
+ * Il numero del giro non c'è più, e la richiesta è dell'owner il 28/08/2026,
+ * il giorno in cui ha acceso Telegram e ha letto le sue prime righe di
+ * avanzamento: «non voglio che scriva "passaggio 1", voglio che scriva cosa
+ * sta facendo». Aveva ragione due volte. `passaggio 3` è un contatore interno
+ * al loop — dice quante volte ha parlato il modello, che è una cosa che
+ * interessa a chi ha scritto il loop; e occupava il posto in testa alla riga,
+ * cioè il solo pezzo che si legge davvero guardando un telefono di sfuggita.
+ *
+ * `elapsedS` resta, perché «da quanto» è l'altra metà della domanda che uno si
+ * fa mentre aspetta.
  *
  * Pure and exported so a test can check every `TurnEvent` variant's wording
  * without a fake clock or a fake `TelegramApiLike` at all — the same reason
  * `formatProgressLine` is its own function in `cli/repl.ts`.
  */
-export function formatTelegramProgress(round: number, event: TurnEvent, elapsedMs: number): string {
+export function formatTelegramProgress(event: TurnEvent, elapsedMs: number): string {
   const elapsedS = Math.max(0, Math.round(elapsedMs / 1000));
-  return escapeHtml(`passaggio ${round} · ${activityFor(event)} · ${elapsedS}s`);
+  return escapeHtml(`${activityFor(event)} · ${elapsedS}s`);
 }
 
 function activityFor(event: TurnEvent): string {
@@ -279,16 +283,27 @@ function activityFor(event: TurnEvent): string {
       // turn's own finish/recovery already speaks for a bad outcome.
       return event.stopReason === 'tool_use' ? 'ho deciso i prossimi passi' : 'sto scrivendo la risposta';
     case 'tool_start':
-      return `sto usando ${event.name}`;
+      // `toolLine` e non il nome grezzo: dove il terminale diceva «guardo una
+      // cartella: core/memory», qui si leggeva «sto usando fs_list». Stessa
+      // persona, stesso momento, due vocabolari — che è precisamente ciò che
+      // il commento su `tool_end` qui sotto prometteva di non fare, e che non
+      // poteva mantenere finché le frasi stavano dietro la porta della CLI.
+      return toolLine(event.name, event.args);
     case 'tool_retry':
+      // Anche qui la frase, non il nome: chi legge «cerco sul web non ha
+      // risposto» sa cosa sta aspettando; chi legge «web_search non ha
+      // risposto» deve saperlo già.
       // Stessa ragione della riga nel REPL: senza, la barra resta ferma per il
       // doppio del tempo e non dice perche'.
-      return `${event.name} non ha risposto, riprovo (${event.attempt}/3)`;
+      return `${toolPhrase(event.name)}: non risponde, riprovo (${event.attempt}/3)`;
     case 'tool_end':
       // Same wording `cli/repl.ts`'s `formatProgressLine` already uses for this
       // event — one owner reading both surfaces should not learn two words for
       // the same fact.
-      return `${event.name} ${event.isError ? 'fallito' : 'fatto'}`;
+      // Gli stessi due segni del terminale (`cli/repl.ts`), invece di
+      // incollare «fatto» in coda a una frase in prima persona: «eseguo un
+      // comando fatto» non è una frase che direbbe qualcuno.
+      return `${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
     default:
       return assertNever(event);
   }

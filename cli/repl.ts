@@ -12,6 +12,9 @@ import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
+import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
+import { COMANDI as ELENCO_COMANDI, aiuto, debugCommand, eseguiComando, sembraComando, thinkingCommand } from '../agent/comandi.js';
+import type { Verbosity } from '../agent/comandi.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
@@ -28,137 +31,18 @@ import { attachSendFile, connectSurfaces } from './surface.js';
  * "stop, that is not what I meant", not "kill the process".
  */
 
-const HELP = `/new     inizia una sessione nuova
-/session mostra l'id della sessione
-/spend   quanto hai speso questo mese e oggi
-/think   ragionamento: on | off | reset (senza argomenti lo mostra)
-/model   modello: [main|light|embed] <slug>, --list, o niente per vederli
-/debug   giri, token e millisecondi: on | off (da solo, inverte)
-/exit    esci (o Ctrl+D)
-
-Invio spedisce · Shift+Invio (o Ctrl+J) va a capo · Tab completa un comando
-Freccia su: la riga di sopra, e dalla prima la storia`;
-
 /**
  * I comandi che il Tab completa.
  *
- * Derivati da `HELP` e non scritti di nuovo: due elenchi divergono, e quello
- * che divergerebbe per primo è quello che nessuno legge — un comando aggiunto
- * a `HELP` e non qui semplicemente non si completerebbe, in silenzio.
+ * Derivati dall'elenco condiviso (`agent/comandi.ts`) e non riscritti: due
+ * elenchi divergono, e quello che divergerebbe per primo è quello che nessuno
+ * legge — un comando aggiunto di là e non qui semplicemente non si
+ * completerebbe, in silenzio.
  */
-export const COMANDI: readonly string[] = HELP.split('\n')
-  .map((r) => /^(\/[a-z]+)/.exec(r)?.[1])
-  .filter((c): c is string => c !== undefined);
+export const COMANDI: readonly string[] = ELENCO_COMANDI.map((c) => `/${c.nome}`);
 
-/**
- * Quanto racconta il terminale mentre lavora.
- *
- * `normale` è il default e mostra **cosa** sta succedendo: una riga di stato
- * viva mentre aspetta, e un segno di spunta per ogni passo finito. `debug` è
- * la stessa cosa più i numeri — giro, token, millisecondi, stop reason — che
- * prima erano l'unica modalità che esistesse: un owner che chiedeva «come
- * stai?» leggeva `· modello: 2269ms, 5487→2 token, stop: end`, cioè la
- * strumentazione di chi ha scritto il loop, non lo stato di chi risponde.
- */
-export type Verbosity = 'normale' | 'debug';
-
-/**
- * Il nome del tool → cosa sta facendo, in italiano, in prima persona.
- *
- * `memory_search` è il nome di una funzione; «cerco in memoria» è quello che
- * sta succedendo. La distinzione è la stessa che `formatProgressLine` faceva
- * già per il resto (B13: «l'owner's own wording, not the trace's `muffin.*`
- * vocabulary») e che si fermava al confine dei tool.
- *
- * Una mappa e non un campo su `ToolSpec` perché la frase è di **questa
- * superficie**: Telegram non stampa passi, il gateway nemmeno, e un campo
- * obbligatorio su ogni tool per un solo consumatore è il tipo di peso che poi
- * nessuno toglie. Il prezzo — che una mappa a mano invecchia quando arriva un
- * tool nuovo — lo paga il test di drift accanto a questa riga, non un lettore
- * che se ne accorge in produzione leggendo `send_file…`.
- */
-const TOOL_PHRASE: Readonly<Record<string, string>> = {
-  memory_search: 'cerco in memoria',
-  fs_read: 'leggo un file',
-  fs_list: 'guardo una cartella',
-  fs_write: 'scrivo un file',
-  document_read: 'leggo un documento',
-  http_get: 'apro una pagina',
-  web_search: 'cerco sul web',
-  shell_run: 'eseguo un comando',
-  process_list: 'guardo i processi',
-  process_kill: 'chiudo un processo',
-  send_file: 'ti mando un file',
-  skill_read: 'leggo una skill',
-  sys_inspect: 'mi guardo dentro',
-  todo: 'aggiorno il piano',
-  wait: 'mi metto in attesa',
-};
-
-/**
- * Quale argomento vale la pena vedere, per ogni tool.
- *
- * Il difetto che chiude, misurato sul WAL il 28/08/2026: un turno ha fatto
- * **sette** `memory_search` con sette `args_digest` **diversi**, e a schermo
- * erano sette righe identiche — `✓ cerco in memoria`, sette volte. Si legge
- * come un giro a vuoto e non lo era: nell'intero store non esiste una sola
- * coppia (tool, args) ripetuta. Il difetto era la riga, non il loop, ed è il
- * tipo di difetto che fa diagnosticare la cosa sbagliata — l'ho fatto io.
- *
- * Un campo solo per tool, quello che risponde a «su cosa?». Non un dump degli
- * argomenti: `fs_write` porta anche `content`, e stampare quello vuol dire
- * rovesciare un file intero nello scrollback a ogni scrittura.
- *
- * I nomi vengono dagli schemi veri (`agent/tools/*.ts`), letti, non ricordati.
- */
-const TOOL_SUBJECT: Readonly<Record<string, string>> = {
-  memory_search: 'query',
-  web_search: 'query',
-  fs_read: 'path',
-  fs_list: 'path',
-  fs_write: 'path',
-  document_read: 'path',
-  http_get: 'url',
-  shell_run: 'command',
-  skill_read: 'name',
-  send_file: 'path',
-};
-
-/** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
-const SOGGETTO_MASSIMO = 48;
-
-/**
- * Il soggetto da mostrare accanto alla frase, o `''` se non c'è.
- *
- * Gli argomenti li ha scritti il **modello**: possono contenere a capo, escape
- * e qualunque cosa. Si appiattiscono e si accorciano prima di toccare un
- * terminale — una sequenza di escape dentro un percorso, stampata cruda, muove
- * il cursore del riquadro che sta appena sotto.
- */
-export function toolSubject(name: string, args: unknown): string {
-  const campo = TOOL_SUBJECT[name];
-  if (campo === undefined || args === null || typeof args !== 'object') return '';
-  const grezzo = (args as Record<string, unknown>)[campo];
-  if (typeof grezzo !== 'string' || grezzo === '') return '';
-  // eslint-disable-next-line no-control-regex
-  const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (piatto === '') return '';
-  return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
-}
-
-/** La frase, col suo soggetto quando ce n'è uno. */
-export function toolLine(name: string, args: unknown): string {
-  const soggetto = toolSubject(name, args);
-  return soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
-}
-
-/** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */
-export function toolPhrase(name: string): string {
-  return TOOL_PHRASE[name] ?? name;
-}
-
-/** Ogni tool che questa build registra ha una frase — letto dal test di drift. */
-export const TOOL_PHRASES: Readonly<Record<string, string>> = TOOL_PHRASE;
+/** Ri-esportato: il tipo vive con i comandi (`agent/comandi.ts`), che sono la cosa che lo gira. */
+export type { Verbosity } from '../agent/comandi.js';
 
 /**
  * Cosa mostra la riga di stato viva, per evento.
@@ -180,73 +64,7 @@ export function statusFor(event: TurnEvent): string | null {
   }
 }
 
-/**
- * `/debug` — la stessa manopola di `muffin --debug`, girata a caldo.
- *
- * Una funzione sola dietro le due porte, e non è una comodità: due
- * implementazioni della stessa manopola sono la *cucitura* che `docs/JUDGE.md`
- * descrive — corrette separatamente, capaci di non essere d'accordo il giorno
- * che una delle due cambia. Il flag decide con cosa si parte, questo comando
- * decide cosa si fa dopo, e la decisione è scritta qui una volta.
- *
- * Da solo **inverte**, invece di mostrare come fa `/think`: qui gli stati sono
- * due e «switchalo» è l'unica cosa che si può volere da un interruttore.
- * `/think` ne ha tre (`on`, `off`, «quello che dice il profilo») e un giro
- * ciclico fra tre stati è un indovinello, non un comando.
- *
- * **Di sessione, non di `config.json`**, ed è l'altra metà della simmetria con
- * `/think`: quello cambia cosa viene mandato al modello e quanto costa, quindi
- * deve valere anche per il gateway al prossimo avvio; questo cambia cosa
- * compare su *questo* terminale, e una preferenza di visualizzazione scritta
- * nella config la ritroverebbe un processo che non ha nessun terminale.
- */
-export function debugCommand(arg: string, current: Verbosity): { line: string; set?: Verbosity } {
-  const dillo = (v: Verbosity): string =>
-    v === 'debug' ? 'debug: on — giro, token, millisecondi, stop reason' : 'debug: off';
-  if (arg === '') {
-    const next: Verbosity = current === 'debug' ? 'normale' : 'debug';
-    return { line: dillo(next), set: next };
-  }
-  if (arg === 'on') return { line: dillo('debug'), set: 'debug' };
-  if (arg === 'off') return { line: dillo('normale'), set: 'normale' };
-  return { line: `/debug on | off, oppure /debug da solo per invertirlo — «${arg}» non è nessuno dei due` };
-}
 
-/**
- * `/think` — la manopola del ragionamento, girata da qui e non solo a mano.
- *
- * Esiste perché la scelta è **misurabile e reversibile in una riga**: su un
- * modello a reasoning ibrido il ragionamento cambia sia la qualità sia il conto,
- * l'effetto è model-specific (il profilo lo dice: ha già fatto regredire l'uso
- * dei tool) e l'unico modo di saperlo è provare due turni identici a manopola
- * girata. Chiedere all'owner di editare un JSON e riavviare fra i due turni è
- * il motivo per cui quella prova non la fa nessuno.
- *
- * Scrive `config.json`, che ADR-0036 mette esplicitamente fra le cose che
- * Muffin può cambiare da sé — i tetti stanno nel sigillo apposta perché tutto
- * il resto qui sotto sia negoziabile. Quindi la scelta **dura**: vale anche per
- * il gateway al prossimo avvio, non solo per questa sessione.
- *
- * `reset` toglie la riga invece di scriverci `adaptive`, e non è la stessa cosa:
- * senza override torna a valere il profilo del modello, che è dove sta la
- * conoscenza su quel modello e che un `muffin update` ha il diritto di
- * cambiare sotto i piedi. Un `adaptive` scritto a mano inchioderebbe
- * l'installazione a una risposta giusta oggi per il modello di oggi.
- */
-export function thinkingCommand(
-  arg: string,
-  current: 'adaptive' | 'off' | 'unset',
-  override: 'adaptive' | 'off' | 'unset' | undefined,
-  profileName: string,
-): { line: string; set?: 'adaptive' | 'off' | 'unset' | null } {
-  const stato = (t: string, da: string): string => `ragionamento: ${t === 'off' ? 'off' : 'on'} (${da})`;
-  const da = override === undefined ? `profilo ${profileName}` : 'config.json';
-  if (arg === '') return { line: stato(current, da) };
-  if (arg === 'on') return { line: `${stato('adaptive', 'config.json')} — vale anche ai prossimi avvii`, set: 'adaptive' };
-  if (arg === 'off') return { line: `${stato('off', 'config.json')} — vale anche ai prossimi avvii`, set: 'off' };
-  if (arg === 'reset') return { line: `ragionamento: torna a valere il profilo ${profileName}`, set: null };
-  return { line: `/think on | off | reset — «${arg}» non è nessuno dei tre` };
-}
 
 /**
  * How the CLI surface writes inside a REPL, and the one thing it has to do that
@@ -822,74 +640,37 @@ export async function runRepl(
       const line = esito.testo.trim();
       if (line === '') continue;
 
-      if (line.startsWith('/')) {
-        if (line === '/exit') break;
-        if (line === '/help') {
-          process.stderr.write(`${HELP}\n`);
-          continue;
-        }
-        if (line === '/new') {
-          session = runtime.deps.sessions.open();
-          process.stderr.write(`sessione nuova: ${session.id}\n`);
-          continue;
-        }
-        if (line === '/session') {
-          process.stderr.write(`${session.id}\n`);
-          continue;
-        }
-        if (line === '/model' || line.startsWith('/model ')) {
-          // Stessa funzione di `muffin model`, con la sola differenza che il
-          // REPL possiede il terminale: la riga di stato va tolta prima.
-          const args = line.slice('/model'.length).trim();
-          await cmdModel(home, args === '' ? [] : args.split(/\s+/), { out: (l) => status.line(l) });
-          // La config e' cambiata sotto i piedi del runtime gia' costruito.
-          runtime.config = loadConfig(home);
-          status.line('(il modello nuovo vale dal prossimo avvio: `/exit` e riapri)');
-          continue;
-        }
-        if (line === '/debug' || line.startsWith('/debug ')) {
-          const out = debugCommand(line.slice('/debug'.length).trim(), verbosity);
-          if (out.set !== undefined) verbosity = out.set;
-          process.stderr.write(`${out.line}\n`);
-          continue;
-        }
-        if (line === '/think' || line.startsWith('/think ')) {
-          const arg = line.slice('/think'.length).trim();
-          const out = thinkingCommand(
-            arg,
-            runtime.deps.profile.thinking,
-            runtime.config.thinking,
-            runtime.deps.profile.name,
-          );
-          if (out.set !== undefined) {
-            const { thinking: _dropped, ...senza } = runtime.config;
-            const next = out.set === null ? senza : { ...runtime.config, thinking: out.set };
-            saveConfig(next, home);
+      if (sembraComando(line)) {
+        // Un posto solo per tutte le superfici (`agent/comandi.ts`): qui resta
+        // solo ciò che è davvero del terminale — chiudere il processo, la
+        // riga di stato da togliere prima di scrivere, e la sessione nuova,
+        // che qui è un id nuovo mentre su Telegram è un archivio.
+        const esito = await eseguiComando(line, {
+          home,
+          config: runtime.config,
+          onConfig: (next) => {
             runtime.config = next;
-            // La corsia principale ha un `Profile` tutto suo (`withThinking`
-            // copia sempre), quindi girare la manopola qui non tocca la corsia
-            // della memoria — che il ragionamento se lo spegne da sé comunque.
-            runtime.deps.profile.thinking =
-              out.set ?? selectProfile(runtime.config.models.main, loadProfiles()).thinking;
-          }
-          process.stderr.write(`${out.line}\n`);
+          },
+          profilo: { name: runtime.deps.profile.name, thinking: runtime.deps.profile.thinking },
+          onThinking: (t) => {
+            runtime.deps.profile.thinking = t;
+          },
+          budget: runtime.budget,
+          sessionId: session.id,
+          verbosity,
+          puoiUscire: true,
+          model: (argv, out) => cmdModel(home, argv, { out }),
+        });
+        if (esito.esci === true) break;
+        if (esito.sconosciuto === true) {
+          process.stderr.write(`comando sconosciuto.\n${aiuto(true)}\n`);
           continue;
         }
-        if (line === '/spend') {
-          const s = runtime.budget.status();
-          // `status()` only ever answers the month — E2's own claim is "so
-          // quanto costa una giornata", and tenantTodayUsd('host') existed
-          // (core/budget/budget.ts) with nothing calling it: BudgetEngine's
-          // per-tenant-daily gate excludes the owner outright
-          // (`tenantExhausted`), so the number was computed and never read.
-          const today = runtime.budget.tenantTodayUsd('host');
-          process.stderr.write(
-            `$${s.monthUsd.toFixed(4)} / $${s.monthlyCapUsd} questo mese${s.exhausted ? ' — esaurito' : ''}\n` +
-              `oggi: $${today.toFixed(4)}\n`,
-          );
-          continue;
-        }
-        process.stderr.write(`comando sconosciuto. ${HELP}\n`);
+        if (esito.nuovaSessione === true) session = runtime.deps.sessions.open();
+        if (esito.verbosity !== undefined) verbosity = esito.verbosity;
+        // `status.line` e non `stderr.write`: lo spinner possiede il terminale
+        // mentre gira, e una riga scritta sotto di lui gli finisce dentro.
+        status.line(esito.testo);
         continue;
       }
 
