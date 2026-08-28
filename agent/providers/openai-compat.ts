@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import {
   ProviderError,
   ProviderStreamError,
+  type AudioMediaType,
   type ChatCall,
   type ChatResult,
   type ContentBlock,
@@ -521,7 +522,7 @@ function toChatResult(response: {
 /**
  * Il testo di un blocco, vuoto per tutto il resto.
  *
- * **Non e' la via delle immagini.** `toChatMessages` le raccoglie a parte e le
+ * **Non e' la via delle immagini ne' dell'audio.** `toChatMessages` le raccoglie a parte e le
  * manda come parti `image_url`; se un'immagine arrivasse qui verrebbe
  * appiattita in stringa vuota e sparirebbe senza un errore — il modello
  * risponderebbe lo stesso, su qualcosa che non ha visto. Il test
@@ -545,6 +546,7 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
   const toolUses = message.content.filter((b) => b.type === 'tool_use');
   const toolResults = message.content.filter((b) => b.type === 'tool_result');
   const immagini = message.content.filter((b) => b.type === 'image');
+  const audio = message.content.filter((b) => b.type === 'audio');
 
   if (message.role === 'assistant') {
     out.push({
@@ -560,7 +562,7 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
           }
         : {}),
     });
-  } else if (immagini.length > 0) {
+  } else if (immagini.length > 0 || audio.length > 0) {
     // Con un'immagine il contenuto deve diventare un **array di parti**: la
     // forma a stringa non ha uno slot per un'immagine, e mandare la stringa
     // perderebbe l'immagine in silenzio — che e' peggio di un 400, perche' il
@@ -577,6 +579,15 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
         // avvolgere qui costa una riga mentre spacchettare costerebbe un parser.
         image_url: { url: `data:${b.mediaType};base64,${b.data}` },
       })),
+      ...audio.map((b) => ({
+        type: 'input_audio' as const,
+        // `data` base64 **nudo**, non un data URL: qui la forma e' l'opposto di
+        // quella delle immagini qui sopra, ed e' il provider a volerla cosi'
+        // (docs OpenRouter «Audio Inputs», lette il 28/08/2026). Gli URL per
+        // l'audio non sono proprio supportati — cioe' la regola che per le
+        // immagini ci eravamo dati noi, qui e' anche la loro.
+        input_audio: { data: b.data, format: formatoAudio(b.mediaType) },
+      })),
       ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
     ];
     out.push({ role: 'user', content: parti });
@@ -590,6 +601,24 @@ function toChatMessages(message: Message): OpenAI.Chat.ChatCompletionMessagePara
     out.push({ role: 'tool', tool_call_id: result.toolCallId, content: result.content });
   }
   return out;
+}
+
+/**
+ * Da media type a `input_audio.format`, che vuole la sigla nuda.
+ *
+ * Il tipo dell'SDK OpenAI ammette solo `'wav' | 'mp3'`, ma l'insieme che
+ * accetta OpenRouter e' piu' largo — `wav, mp3, aiff, aac, ogg, flac, m4a,
+ * pcm16, pcm24`, dalla loro documentazione letta il 28/08/2026 — e `ogg` e'
+ * proprio il formato di una nota vocale di Telegram. Restringere a cio' che
+ * l'SDK sa nominare vorrebbe dire riconvertire ogni nota vocale in wav per un
+ * fatto del *tipo* e non del filo, cioe' triplicarne i byte per niente.
+ *
+ * Il cast e' quindi deliberato e locale, e `AudioMediaType` resta chiuso: cio'
+ * che finisce sul filo non e' una stringa qualunque, e' uno di quattro.
+ */
+function formatoAudio(media: AudioMediaType): 'wav' | 'mp3' {
+  const sigla = { 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/wav': 'wav' }[media];
+  return sigla as 'wav' | 'mp3';
 }
 
 function mapStopReason(reason: string | null, hasToolCalls: boolean): StopReason {

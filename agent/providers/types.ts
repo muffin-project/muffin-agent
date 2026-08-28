@@ -76,9 +76,44 @@ export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/w
  */
 export type ImageBlock = { type: 'image'; mediaType: ImageMediaType; data: string };
 
+/**
+ * Il tipo di un audio dentro un messaggio.
+ *
+ * Chiuso e corto come `ImageMediaType`, e per la stessa ragione: il formato
+ * finisce **sul filo** (`input_audio.format`), e un valore inventato deve
+ * diventare un errore qui invece di un 400 dal provider.
+ *
+ * Sono i quattro che Muffin puo' davvero produrre, non quelli che OpenRouter
+ * elenca: una nota vocale di Telegram e' `audio/ogg` (Opus), un file musicale
+ * inoltrato e' mp3 o m4a, e `audio/wav` e' cio' in cui ffmpeg converte quando
+ * la trascrizione locale deve passare a `whisper-cli`.
+ */
+export type AudioMediaType = 'audio/ogg' | 'audio/mpeg' | 'audio/mp4' | 'audio/wav';
+
+/**
+ * Un audio dentro un messaggio — una nota vocale, quasi sempre.
+ *
+ * **Solo base64, mai un URL**, identico a `ImageBlock` e per la stessa ragione
+ * di sicurezza: una sorgente `url` farebbe scaricare l'audio **al provider**,
+ * cioe' un'uscita di rete che il kernel non vede e non puo' negare. Qui non e'
+ * nemmeno una scelta nostra e basta — la documentazione OpenRouter (letta il
+ * 28/08/2026) dice che per l'audio gli URL non sono proprio supportati.
+ *
+ * `data` e' base64 **nudo**: stessa forma di `ImageBlock`, avvolta da un
+ * adattatore solo.
+ *
+ * Un blocco di questi esiste unicamente quando il modello a cui stiamo
+ * parlando accetta audio in ingresso — la domanda la fa
+ * `agent/providers/modalita.ts`, misurandola sul provider invece di indovinarla
+ * da una lista scritta a mano. Se non lo accetta, l'audio non diventa mai un
+ * blocco: diventa testo, trascritto in casa.
+ */
+export type AudioBlock = { type: 'audio'; mediaType: AudioMediaType; data: string };
+
 export type ContentBlock =
   | { type: 'text'; text: string; cache?: 'stable' }
   | ImageBlock
+  | AudioBlock
   | { type: 'tool_result'; toolCallId: string; content: string; isError?: boolean }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ThinkingBlock;
