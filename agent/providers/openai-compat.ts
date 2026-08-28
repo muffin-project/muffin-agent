@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import {
   ProviderError,
@@ -111,6 +112,24 @@ export function wantsExplicitCache(baseURL?: string): boolean {
  * `wantsExplicitCache`'s, unchanged: `openrouter.ai.evil.tld` must not flip
  * request shape.
  */
+/**
+ * Se questo endpoint sa tenere una conversazione sullo stesso provider a monte.
+ *
+ * Stesso argomento di `wantsExplicitCache` e `speaksReasoningEffort`, e stesso
+ * hostname esatto col punto finale ripiegato: `session_id` è un campo del corpo
+ * di OpenRouter, e un server che non lo conosce o lo ignora o 400a. Non è una
+ * cosa che si prova mandandolo e vedendo.
+ */
+export function speaksStickySession(baseURL?: string): boolean {
+  try {
+    if (!baseURL) return false;
+    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
+    return /(^|\.)openrouter\.ai$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export function speaksReasoningEffort(baseURL?: string): boolean {
   try {
     if (!baseURL) return false;
@@ -121,11 +140,58 @@ export function speaksReasoningEffort(baseURL?: string): boolean {
   }
 }
 
+/**
+ * Le preferenze di instradamento, coi **nostri** nomi.
+ *
+ * La traduzione verso i nomi di OpenRouter (`require_parameters`,
+ * `data_collection`) sta in `routingBody`, qui sotto, e in nessun altro posto:
+ * un nome del fornitore copiato in due punti diverge al primo cambio.
+ */
+export type Routing = {
+  // `| undefined` esplicito su ogni campo: sotto `exactOptionalPropertyTypes`
+  // «assente» e «presente e undefined» sono due tipi diversi, e ciò che arriva
+  // da uno schema zod è il secondo. Senza, il config non è assegnabile qui e la
+  // manopola resterebbe una manopola scollegata.
+  only?: readonly string[] | undefined;
+  order?: readonly string[] | undefined;
+  ignore?: readonly string[] | undefined;
+  sort?: 'price' | 'throughput' | 'latency' | undefined;
+  requireParameters?: boolean | undefined;
+  dataCollection?: 'allow' | 'deny' | undefined;
+  quantizations?: readonly string[] | undefined;
+};
+
+/**
+ * Le preferenze nella forma del corpo di OpenRouter, o `undefined` se non c'è
+ * niente da dire.
+ *
+ * `undefined` per un oggetto vuoto e non `{}`: mandare un `provider: {}` vuoto
+ * è un campo in più che non chiede niente, e su un endpoint che non lo conosce
+ * è un campo in più su cui può inciampare.
+ */
+export function routingBody(r: Routing | undefined): Record<string, unknown> | undefined {
+  if (!r) return undefined;
+  const fuori: Record<string, unknown> = {
+    ...(r.only ? { only: [...r.only] } : {}),
+    ...(r.order ? { order: [...r.order] } : {}),
+    ...(r.ignore ? { ignore: [...r.ignore] } : {}),
+    ...(r.sort !== undefined ? { sort: r.sort } : {}),
+    ...(r.requireParameters !== undefined ? { require_parameters: r.requireParameters } : {}),
+    ...(r.dataCollection !== undefined ? { data_collection: r.dataCollection } : {}),
+    ...(r.quantizations ? { quantizations: [...r.quantizations] } : {}),
+  };
+  return Object.keys(fuori).length > 0 ? fuori : undefined;
+}
+
 export class OpenAICompatProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   private readonly client: OpenAI;
   /** Public because the wiring is the part of this feature that must be provable. */
   readonly explicitCache: boolean;
+  /** Se mandare `session_id` per tenere la conversazione sullo stesso provider a monte. */
+  readonly stickySession: boolean;
+  /** Le preferenze di instradamento dell'owner, già nella forma del corpo. */
+  private readonly routing: Record<string, unknown> | undefined;
   /** Public for the same reason: the wiring is the part that must be provable. */
   readonly reasoningEffort: boolean;
 
@@ -133,9 +199,20 @@ export class OpenAICompatProvider implements Provider {
     apiKey: string,
     baseURL?: string,
     private readonly headers: Record<string, string> = {},
-    opts: { explicitCache?: boolean; reasoningEffort?: boolean; fetch?: typeof globalThis.fetch } = {},
+    opts: {
+      explicitCache?: boolean;
+      reasoningEffort?: boolean;
+      stickySession?: boolean;
+      routing?: Routing;
+      fetch?: typeof globalThis.fetch;
+    } = {},
   ) {
     this.explicitCache = opts.explicitCache ?? wantsExplicitCache(baseURL);
+    this.stickySession = opts.stickySession ?? speaksStickySession(baseURL);
+    // Le preferenze si mandano solo a chi smista. Su un Ollama locale non c'è
+    // niente da instradare, e un campo che non conosce è un campo su cui può
+    // inciampare — stesso argomento di `session_id` e `reasoning`.
+    this.routing = speaksStickySession(baseURL) ? routingBody(opts.routing) : undefined;
     this.reasoningEffort = opts.reasoningEffort ?? speaksReasoningEffort(baseURL);
     this.client = new OpenAI({
       apiKey,
@@ -176,6 +253,7 @@ export class OpenAICompatProvider implements Provider {
           // reads as "cache unavailable" when the truth was "never requested".
           cacheWriteTokens: response.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
+        upstream: upstreamOf(response),
         model: response.model,
       });
     } catch (error) {
@@ -223,6 +301,8 @@ export class OpenAICompatProvider implements Provider {
     let finishReason: string | null = null;
     let usage: OpenAI.Chat.Completions.ChatCompletionChunk['usage'];
     let model = call.model;
+    // Lo smistatore mette `provider` su ogni chunk; basta l'ultimo che lo porta.
+    let upstream: string | undefined;
     // See `ProviderStreamError.partial`.
     let receivedAnyEvent = false;
 
@@ -230,6 +310,7 @@ export class OpenAICompatProvider implements Provider {
       for await (const chunk of stream) {
         receivedAnyEvent = true;
         model = chunk.model;
+        upstream = upstreamOf(chunk) ?? upstream;
         if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices[0];
         if (choice?.finish_reason) finishReason = choice.finish_reason;
@@ -272,6 +353,7 @@ export class OpenAICompatProvider implements Provider {
           cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
         },
         model,
+        upstream,
       }),
     };
   }
@@ -300,6 +382,38 @@ export class OpenAICompatProvider implements Provider {
       // exactly what sending nothing already means.
       ...(this.reasoningEffort && call.thinking === 'off'
         ? ({ reasoning: { effort: 'none' } } as Record<string, unknown>)
+        : {}),
+      // **Tieni questa conversazione sullo stesso provider a monte.**
+      //
+      // OpenRouter instrada già sticky per far prendere la cache, ma senza
+      // questo campo deriva la chiave «dall'hash del primo messaggio di sistema
+      // e del primo non-di-sistema» — e il nostro primo non-di-sistema è il
+      // recall, che cambia a ogni turno. Chiave nuova, provider nuovo, cache
+      // fredda: misurato, 0% su due turni consecutivi mentre dentro un turno
+      // prendeva il 54%. Il campo esiste nella loro documentazione proprio per
+      // «i flussi agentici multi-turno in cui i messaggi di apertura cambiano
+      // fra una richiesta e l'altra», che è esattamente il nostro caso.
+      //
+      // **Non `provider.order`**, che sarebbe stato il rimedio ovvio e che la
+      // stessa pagina dice disattivare lo sticky routing: un ordine esplicito
+      // vince sulla stickiness e ci saremmo inchiodati al primo della lista
+      // invece che a quello che ha la cache calda.
+      //
+      // Si manda l'**impronta**, non l'identificatore: la stickiness ha bisogno
+      // di un valore stabile e opaco, non del nostro id di sessione, che porta
+      // scritta la data. Stabile fra processi perché lo è l'id da cui nasce.
+      //
+      // Non nei tipi dell'SDK, quindi passa dal cast che `reasoning` e
+      // `cache_control` usano già.
+      // Dove instradare, quando l'owner l'ha detto. Vedi `config.provider.routing`:
+      // un modello su uno smistatore non è una macchina, e chi risponde decide
+      // prezzo, quantizzazione, politica sui dati e se la cache prende.
+      ...(this.routing !== undefined ? ({ provider: this.routing } as Record<string, unknown>) : {}),
+      ...(this.stickySession && call.conversation !== undefined && call.conversation !== ''
+        ? ({ session_id: createHash('sha256').update(call.conversation).digest('hex').slice(0, 32) } as Record<
+            string,
+            unknown
+          >)
         : {}),
       messages: [this.systemMessage(call), ...call.messages.flatMap(toChatMessages)],
       ...(call.tools && call.tools.length > 0
@@ -357,12 +471,26 @@ type RawToolCall = { id: string; name: string; argsRaw: string };
  * `ProviderError` is the same error on both paths rather than two similar ones
  * that could drift.
  */
+/**
+ * Chi ha servito la richiesta, quando la risposta lo dice.
+ *
+ * OpenRouter mette `provider` nel corpo, e non sta nei tipi dell'SDK: si legge
+ * col controllo, non col cast, perché un campo che un giorno cambia forma deve
+ * sparire e non diventare `"[object Object]"` dentro una traccia.
+ */
+function upstreamOf(response: unknown): string | undefined {
+  if (response === null || typeof response !== 'object') return undefined;
+  const p = (response as { provider?: unknown }).provider;
+  return typeof p === 'string' && p !== '' ? p : undefined;
+}
+
 function toChatResult(response: {
   text: string | null;
   toolCalls: RawToolCall[];
   finishReason: string | null;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   model: string;
+  upstream?: string | undefined;
 }): ChatResult {
   const toolCalls = response.toolCalls.map((tc) => {
     let args: unknown;
@@ -386,6 +514,7 @@ function toChatResult(response: {
     stopReason: mapStopReason(response.finishReason, toolCalls.length > 0),
     usage: response.usage,
     model: response.model,
+    ...(response.upstream !== undefined ? { upstream: response.upstream } : {}),
   };
 }
 
