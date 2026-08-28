@@ -1,6 +1,7 @@
 import type { Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
+import { COMANDI, sembraComando } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
@@ -124,6 +125,16 @@ export type ConnectorDeps = {
    * riscrive la decisione, chiama la stessa funzione.
    */
   voce?: (percorso: string) => Promise<Voce>;
+  /**
+   * I comandi, eseguiti dove sono scritti una volta sola
+   * (`agent/comandi.ts`). `null` vuol dire «questo testo non è un comando».
+   *
+   * Iniettato come `voce` e per la stessa ragione: eseguirli qui vorrebbe dire
+   * che il connettore conosce la config, il budget e i profili — cioè che
+   * `/spend` esiste due volte, una per superficie, e che la seconda diverge
+   * dalla prima il giorno che qualcuno tocca una sola delle due.
+   */
+  comandi?: (riga: string, sessionId: string) => Promise<{ testo: string } | null>;
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -427,6 +438,7 @@ export class TelegramConnector {
       }
     }
     log(`telegram: connesso come @${me.username ?? me.id}`);
+    await this.publishCommands(log);
 
     // Anything left pending from a previous life comes first, before new work.
     await this.drain();
@@ -458,6 +470,40 @@ export class TelegramConnector {
 
   stop(): void {
     this.running = false;
+  }
+
+  /**
+   * Il menu dei comandi, dichiarato a Telegram a ogni avvio.
+   *
+   * Telegram non scopre i comandi: li mostra solo se glieli si dice, con
+   * `setMyCommands`, e se li **tiene** finche' non glieli si ridice. Da qui
+   * scendono due conseguenze che questo metodo esiste per chiudere.
+   *
+   * Primo, l'elenco e' quello di `agent/comandi.ts`, non un secondo scritto
+   * qui: un comando aggiunto di la' e non di qua comparirebbe funzionante ma
+   * invisibile, e quello e' il modo in cui il menu smette di essere vero.
+   * `soloTerminale` viene tolto perche' un `/exit` nel menu prometterebbe una
+   * cosa che su Telegram non succede.
+   *
+   * Secondo, si ridichiara ogni avvio invece che una volta sola: e' l'unico
+   * momento in cui sappiamo di essere allineati, e la chiamata e' una sola per
+   * processo. Un menu rimasto indietro rispetto al codice non da' nessun
+   * segnale — sono i comandi vecchi che continuano a comparire.
+   *
+   * **Non e' un motivo per non partire.** `setMyCommands` che fallisce lascia
+   * il menu com'era: i comandi funzionano lo stesso, perche' li riconosce
+   * `tryCommand` leggendo il testo, non il menu. Quindi si scrive nel diario e
+   * si va avanti — cadere qui vorrebbe dire che una rete storta il momento
+   * dell'avvio spegne Telegram del tutto.
+   */
+  private async publishCommands(log: (line: string) => void): Promise<void> {
+    try {
+      await this.deps.api.setMyCommands(
+        COMANDI.filter((c) => c.soloTerminale !== true).map((c) => ({ command: c.nome, description: c.aiuto })),
+      );
+    } catch (error) {
+      log(`telegram: menu comandi non aggiornato — ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -544,6 +590,15 @@ export class TelegramConnector {
     if (stored.turnId !== null) return this.resolveBound(stored, incoming, stored.turnId);
 
     if (await this.tryPair(incoming)) {
+      this.deps.inbox.markProcessed(stored.updateId, this.now());
+      return;
+    }
+
+    // Un comando non crea mai un turno — stessa forma del pairing qui sopra,
+    // e per la stessa ragione: non chiama il modello, non costa niente, e
+    // legarlo a un turno vorrebbe dire farlo passare da tutta la macchina di
+    // ripresa e consegna costruita per una risposta che non arriverà.
+    if (await this.tryCommand(incoming)) {
       this.deps.inbox.markProcessed(stored.updateId, this.now());
       return;
     }
@@ -902,6 +957,39 @@ export class TelegramConnector {
         `telegram: consegna non registrata per il turno ${turnId.slice(0, 12)} — ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /**
+   * `/spend`, `/new`, `/think`… su Telegram.
+   *
+   * Vero solo se il testo era un comando e la risposta è partita. Un comando
+   * mai eseguito — perché non è un comando, o perché non lo ha chiesto
+   * l'owner — torna `false` e il messaggio prosegue come tutti gli altri,
+   * cioè verso il modello.
+   *
+   * **Solo l'owner.** Questi comandi toccano la config e il conto: in un
+   * gruppo, `/spend` da uno sconosciuto non è una domanda a cui rispondere. E
+   * non si risponde nemmeno «non sei autorizzato», che direbbe a un estraneo
+   * che quel comando esiste ed è di qualcuno: il testo prosegue verso il
+   * modello come una frase qualunque, che è quello che è.
+   */
+  private async tryCommand(incoming: Incoming): Promise<boolean> {
+    if (!this.deps.comandi || !sembraComando(incoming.text)) return false;
+    const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
+    if (principal.kind !== 'owner') return false;
+
+    const sessione = this.deps.sessions.open(`telegram:${String(incoming.chatId)}`);
+    const esito = await this.deps.comandi(incoming.text, sessione.id);
+    if (esito === null) return false;
+    // `renderForTelegram` taglia sotto il limite di Telegram: `/model --list`
+    // supera i 4096 caratteri con una manciata di modelli, e mandarne solo il
+    // primo pezzo sarebbe un elenco troncato in silenzio. La citazione sta sul
+    // primo: e' li' che si vede a quale messaggio si sta rispondendo.
+    const pezzi = renderForTelegram(esito.testo);
+    for (const [i, pezzo] of pezzi.entries()) {
+      await this.deps.api.sendMessage(incoming.chatId, pezzo, i === 0 ? { replyTo: incoming.messageId } : {});
+    }
+    return true;
   }
 
   /**
