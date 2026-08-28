@@ -240,3 +240,27 @@ describe('buildHardenPlan + formatHardenPlan — the plan an owner actually read
     },
   );
 });
+
+/**
+ * L'ultima riga del piano, che è quella che l'owner esegue davvero.
+ *
+ * Diceva «`muffin gateway stop`, poi il supervisore lo rialza da solo», ed era
+ * vera fino a #217: da lì uno stop **chiesto** scrive `gateway.stopped` e il
+ * supervisore non lo rialza, di proposito. Chi seguiva la vecchia riga si
+ * ritrovava il gateway spento e l'hardening che sembrava averlo rotto.
+ *
+ * È lo stesso difetto trovato in `gateway status` lo stesso giorno, e la stessa
+ * lezione: un rimedio che invecchia sotto una modifica fatta altrove non
+ * fallisce — si esegue, e lascia le cose peggio di prima. Nessun test lo
+ * teneva, ed è per questo che è invecchiato in silenzio.
+ */
+describe('il riavvio in fondo al piano', () => {
+  it('dice di riaccenderlo, perché uno stop chiesto resta giù', () => {
+    const dir = home();
+    const text = formatHardenPlan(buildHardenPlan(dir, 'single-user', { myUsername: () => 'giusto' }));
+    expect(text).toContain('muffin gateway stop');
+    expect(text).toContain('muffin gateway start');
+    // La frase che #217 ha reso falsa.
+    expect(text).not.toContain('il supervisore lo rialza da solo');
+  });
+});
