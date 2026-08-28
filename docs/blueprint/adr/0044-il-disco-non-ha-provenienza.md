@@ -599,3 +599,114 @@ nascosto):
 - **Discord non è toccato.** Stessa forma di difetto, altra superficie —
   `connectors/discord/connector.ts` non legge un equivalente di
   `forward_origin`. Follow-up dichiarato, non silenzioso.
+
+## Riconciliazione — 2026-08-28: due decisioni che si contraddicevano nello stesso file
+
+**La domanda che ha aperto questa sezione non è nata da un audit, è nata
+dall'owner che usava Telegram per la prima volta sul serio e ha visto
+`fs_write` negato su un "Ciao!".** Misurato sul database reale, non su un
+probe: una sessione Telegram (`telegram:130493441`) bloccata a `taint 2` per
+oltre venti turni consecutivi, ognuno dei quali rifiutato dal kernel con
+`Rifiutato dal kernel dei permessi (taint_exceeded)` — inclusi turni il cui
+unico contenuto era "Ciao!" e "Hai visto dove siamo?".
+
+**La catena, ricostruita dai turni veri.** Un turno CLI di ore prima aveva
+letto del codice (`fs_read` → `DISK_TIER` 2) e risposto — correttamente, per
+§Decisione 2 di questa ADR, taint 2 su quella risposta. Quella risposta è
+entrata in memoria a `trustTier: 2`. Un "Ciao!" su Telegram, ore dopo, ha
+fatto recall di quel ricordo — `recallTaint` alza il turno a 2, correttamente:
+un fatto richiamato è contenuto che il turno sta usando adesso. **Ma la
+risposta *nuova* di quel turno — "Ciao! Tutto in ordine" — è stata scritta in
+sessione e in memoria essa stessa a `tier: 2`**, perché entrambi i siti
+scrivevano `snapshot.currentTaint()`, il tetto del turno, non ciò che il turno
+aveva effettivamente prodotto. Il turno successivo ha reiniettato quella
+risposta come storia, `historyTaint` l'ha letta a 2, il turno si è aperto a 2
+prima di dire una parola, e la *sua* risposta — comunque pulita — è stata
+scritta a 2 a sua volta. Nessun punto di uscita: ogni turno pulito riempiva la
+finestra di reiniezione con un'altra riga sporca, all'infinito.
+
+**Questo file, lo stesso giorno del 15/08, prometteva il contrario:**
+
+> «Il taint muore con il turno, per disegno (`03-threat-model.md` §2: lo
+> scope è il turno, non la sessione). Un file letto ieri non sporca oggi. È
+> deliberato e va saputo.» (§Cosa NON copre, versione originale)
+
+**E la revisione del 17/08, comprensibilmente, l'aveva già segnalato come
+costo aperto:**
+
+> «La taint fa cricchetto, e la finestra si pulisce più tardi di quanto
+> sembri... quindi la finestra torna pulita `MAX_HISTORY_TURNS` messaggi dopo
+> **l'ultima risposta sporca**, non dopo la lettura che aveva alzato la
+> taint. È corretto — quella risposta *è* derivata dal contenuto tier 3 — ma
+> è più lungo di quanto un lettore assuma.»
+
+Il giudice del 17/08 aveva ragione sul meccanismo e aveva sottostimato
+l'effetto: "più lungo di quanto sembri" era in pratica "non finisce mai",
+perché ogni risposta pulita rientra nella finestra come se fosse sporca
+quanto quella che l'ha preceduta, e la finestra non smette mai di essere
+rifornita finché la conversazione continua. `03-threat-model.md` §2 non è
+mai stata emendata per riconoscere questo — le altre revisioni di questa ADR
+dicono esplicitamente "emenda `03-threat-model.md` §X" quando la toccano,
+questa no.
+
+### Decisione
+
+**Non si torna al 15/08 (il taint che riparte da zero ha riaperto il
+laundering che il probe del 17/08 ha trovato), e non si resta al 17/08 così
+com'è (ha reso il costo permanente, non ne ha data la portata).** Si separano
+le due domande che la stessa parola — "taint" — teneva insieme:
+
+1. **Cosa un turno può fare adesso** — `PermissionSnapshot.currentTaint()`,
+   letto da ogni `decide()`. Deve riflettere tutto ciò che è fisicamente nel
+   prompt di questo turno, storia reiniettata e piano inclusi: un turno seduto
+   su contenuto sporco non deve poter agire come se fosse pulito. **Invariato
+   dal 17/08.**
+2. **Cosa un turno scrive di sé stesso per chi lo reinietterà** —
+   `PermissionSnapshot.intrinsicTaint()`, nuovo. Riflette solo ciò che questo
+   turno ha realmente prodotto o osservato — un tool che ha girato, un recall
+   che è scattato — mai un tetto ereditato da una storia o da un piano scritti
+   da un turno precedente.
+
+Un terzo metodo, `raiseCeiling`, alza (1) senza alzare (2): è ciò che
+`historyTaint` e `planTaint` chiamano oggi al posto di `raiseTaint`, perché
+storia reiniettata e piano aperto sono esattamente "reinjected", mai "questo
+turno l'ha fatto". `recallTaint` e il tier dichiarato da un tool restano su
+`raiseTaint` invariato — quelli *sono* qualcosa che questo turno ha fatto, e
+l'argomento del 17/08 su un riassunto che lava la provenienza resta vero
+parola per parola per loro.
+
+**Cosa cambia nei numeri.** Nello scenario misurato sopra: il turno che legge
+il file resta a taint 2 (invariato — è casa sua). Il turno "Ciao!" che
+richiama quel ricordo resta a taint 2 *lui stesso* (il recall è successo
+davvero, in quel turno) — ma la *sua* risposta si scrive a `intrinsicTaint()`,
+che è 2 solo perché il recall l'ha alzato, non per eredità dalla storia. Il
+turno dopo ancora, se non richiama niente di suo, riparte pulito: la sua
+risposta non aveva niente da ereditare. La finestra torna a chiudersi
+`MAX_HISTORY_TURNS` messaggi dopo l'**ultimo evento vero**, non dopo l'ultima
+risposta che si limitava a esistere nella stessa sessione.
+
+### Cosa NON copre
+
+- **`agent/tools/todo.ts`'s `ctx.taint()`** (il tier scritto su un nuovo item
+  di piano) resta `snapshot.currentTaint()` — il tetto, non l'intrinseco.
+  Stessa famiglia di difetto, canale diverso: un piano scritto mentre la
+  sessione eredita un tetto vecchio si stampa a quel tetto e lo perpetua
+  attraverso `planTaint` finché resta aperto. Trovato leggendo questo file
+  mentre si scriveva la riconciliazione, non chiuso qui — `ToolContext.taint`
+  è letto da ogni handler esistente e cambiarne il significato è un raggio
+  più ampio di quello che questa sessione ha in mandato.
+- **Il residuo teorico è dichiarato, non nascosto.** Una risposta di un turno
+  che vede storia sporca *potrebbe* parafrasarla senza che nessun evento
+  "intrinseco" lo segnali — `intrinsicTaint()` non guarda il contenuto, guarda
+  solo se qualcosa è stato letto/richiamato/eseguito. Il turno originale che
+  ha causato il taint resta comunque nella finestra e continua a taintare ogni
+  turno che lo reinietta finché non ne esce — la protezione del 17/08 contro
+  l'agire-come-se-pulito resta intera; quello che si perde è solo la garanzia
+  più forte, mai realmente sostenibile, che ogni eco indiretta resti marcata
+  per sempre.
+
+### Riferimenti
+
+`agent/session-history-taint.test.ts` — i quattro scenari del 17/08 restano
+verdi invariati (controllano `turns.taint`/`TurnResult.taint`, cioè il
+tetto); una quinta descrizione prova che la finestra torna a chiudersi.
