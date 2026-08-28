@@ -30,6 +30,8 @@ import { mandatoryGuards } from '../core/rot/guards.js';
 import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js';
 import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
+import type { Approver } from '../agent/loop.js';
+import { escapeHtml } from '../connectors/telegram/render.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -322,6 +324,60 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
 }
 
 /**
+ * La domanda di approvazione, su Telegram, con i pulsanti.
+ *
+ * Prima di questa funzione il kernel su Telegram poteva solo dire «su questa
+ * superficie non posso chiederla»: cioè dal telefono non era usabile niente di
+ * ciò che chiede conferma — che oggi è quasi tutto, perché finché `muffin rot
+ * harden` non è stato fatto `sys.shell` chiede **sempre**.
+ *
+ * **Torna `asked`, non una promessa.** La funzione manda il messaggio e finisce;
+ * la risposta arriverà come un `callback_query`, forse fra un'ora, forse a un
+ * altro processo dopo un riavvio. È il turno a sospendersi su una barriera
+ * persistita (`approval:<id>`), e questa è l'unica forma che sopravvive a un
+ * riavvio: tenere aperta una promessa in memoria vorrebbe dire che spegnere il
+ * gateway perde la domanda e il lavoro dietro.
+ *
+ * **Cosa mostra.** L'azione concreta e il taint del turno — i due fatti che
+ * `M5-BIS` D12 chiede per non fare teatro: «approvi sys.shell?» non è una
+ * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
+ * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
+ * quello che è.
+ */
+function approvatoreTelegram(api: TelegramApi): Approver {
+  const ETICHETTA_TAINT = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'];
+  return async (request, where) => {
+    const chatId = where.replyTo?.['chatId'];
+    // Nessun indirizzo durevole vuol dire nessun posto dove far comparire la
+    // domanda. Non si inventa la chat dell'owner: un turno il cui indirizzo non
+    // sappiamo leggere è un turno di cui non sappiamo a chi stiamo parlando.
+    if (typeof chatId !== 'number' || where.approvalId === undefined) return 'unavailable';
+
+    const righe = [`⚠ <b>${escapeHtml(request.prompt)}</b>`];
+    if (request.resource !== undefined && request.resource !== '') {
+      righe.push(`<pre><code>${escapeHtml(request.resource)}</code></pre>`);
+    }
+    if (request.taint > 0) {
+      const etichetta = ETICHETTA_TAINT[request.taint];
+      righe.push(
+        `contesto: turno a taint ${request.taint}${etichetta ? ` — ${etichetta}` : ''} ` +
+          `(contenuto non tuo è già entrato in questo turno)`,
+      );
+    }
+
+    await api.sendMessage(chatId, righe.join('\n\n'), {
+      keyboard: [
+        [
+          { text: `Consenti "${request.capability}"`, callback_data: `ok:${where.approvalId}`, style: 'success' },
+          { text: 'Rifiuta', callback_data: `no:${where.approvalId}`, style: 'danger' },
+        ],
+      ],
+    });
+    return 'asked';
+  };
+}
+
+/**
  * I comandi della CLI, eseguibili da Telegram.
  *
  * L'owner l'ha chiesto con una parola sola: «tutti i / commands che abbiamo
@@ -468,6 +524,12 @@ export function connectSurfaces(
           vault: telegramVault(runtime, vaultRoot),
           voce: voceFor(runtime, home),
           comandi: comandiPerTelegram(runtime, home),
+          // La metà che torna indietro: i pulsanti li manda l'approvatore qui
+          // sotto, il dito che li preme lo gestisce il connettore. Condizionale
+          // e non un cast: `LoopDeps.approvals` è opzionale nel tipo, e un
+          // runtime senza registro è un runtime dove i pulsanti non si mandano —
+          // quindi non c'è niente da gestire quando tornano.
+          ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
@@ -496,6 +558,11 @@ export function connectSurfaces(
           },
           log: (line) => process.stderr.write(`\r${line}\n`),
         });
+
+        // Registrato prima di far partire il connettore: un turno che chiede
+        // un'approvazione al primo messaggio non deve trovare l'instradatore
+        // vuoto e rispondere «qui non posso chiedertelo».
+        runtime.approvers.set('telegram', approvatoreTelegram(api));
 
         // Same process, background. A crash of the surface is reported and does
         // not take the REPL down: the terminal is the surface of last resort,

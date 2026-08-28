@@ -304,6 +304,11 @@ function activityFor(event: TurnEvent): string {
       // incollare «fatto» in coda a una frase in prima persona: «eseguo un
       // comando fatto» non è una frase che direbbe qualcuno.
       return `${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
+    case 'ask':
+      // La riga di stato sparisce quando il turno si sospende, e al suo posto
+      // resta il messaggio con i pulsanti. Questa frase è il mezzo secondo in
+      // cui chi sta guardando capisce che tocca a lui.
+      return `⏸ ${toolPhrase(event.name)}: aspetto la tua approvazione`;
     default:
       return assertNever(event);
   }

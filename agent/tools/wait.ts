@@ -190,7 +190,11 @@ export function makeWaitTool(turns: Pick<TurnStore, 'countSuspended'>, now: () =
       // the transcript *before* the suspension, so it must not claim the wait
       // is over.
       ctx.suspend(parsed.spec);
-      const until = parsed.spec.waitFor === null ? '' : ` o finché il processo ${parsed.spec.waitFor.pid} non esce`;
+      // `parseWait` produce solo `process_exit` — una barriera d'approvazione
+      // la arma il kernel, mai il modello — ma il tipo porta entrambe, e
+      // stringerlo qui è il controllo che lo dice invece di darlo per scontato.
+      const attesa = parsed.spec.waitFor;
+      const until = attesa?.kind === 'process_exit' ? ` o finché il processo ${attesa.pid} non esce` : '';
       return {
         content: `Attesa armata fino a ${parsed.spec.wakeAt}${until}. Il turno si sospende qui e riprende da solo.`,
         tier: CLEAN,

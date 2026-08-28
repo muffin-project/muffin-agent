@@ -10,6 +10,7 @@ import { SCRIPT_MODEL } from '../core/turns/store.js';
 import type { TurnCounters, TurnOutcome, TurnRecord, TurnStopped, TurnStore } from '../core/turns/store.js';
 import { planTaint, type TodoItem, type TodoStore } from '../core/turns/todo.js';
 import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } from '../core/turns/wait.js';
+import { APPROVAL_WINDOW_MS, type ApprovalStore } from '../core/approvals/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { redactText } from '../core/tracing/redact.js';
@@ -214,7 +215,47 @@ export type ApprovalRequest = {
   taint: TrustTier;
 };
 
-type Approver = (request: ApprovalRequest) => Promise<'allow' | 'deny'>;
+/**
+ * Dove sta il turno che chiede, e con che nome chiamare questa domanda.
+ *
+ * Serve perché **un approvatore solo non basta**: `runtime.deps.approve` è uno
+ * per processo, e finché lo era davvero un turno arrivato da Telegram faceva
+ * comparire la domanda nel terminale — cioè la chiedeva a chi non l'aveva
+ * fatta, in un posto che l'owner col telefono in mano non sta guardando.
+ * `surface` è la riga che permette di instradarla dove il turno è nato.
+ *
+ * `replyTo` è l'indirizzo **durevole** scritto sulla riga del turno, non un
+ * canale vivo: sopravvive al riavvio, che è la condizione perché una domanda
+ * possa aspettare una risposta.
+ */
+export type ApprovalWhere = {
+  surface: string;
+  turnId: string;
+  replyTo?: Record<string, unknown> | undefined;
+  /**
+   * L'id già scritto nel registro delle approvazioni.
+   *
+   * Coniato **prima** di chiedere, perché su una superficie a pulsanti l'id
+   * viaggia dentro il pulsante: senza, la risposta tornerebbe senza sapere a
+   * quale domanda appartiene. Assente quando non c'è un registro (un test, un
+   * runtime senza database delle approvazioni), e in quel caso una superficie
+   * asincrona non può chiedere e lo dice tornando `unavailable`.
+   */
+  approvalId?: string | undefined;
+};
+
+/**
+ * Le quattro risposte possibili a una richiesta di approvazione.
+ *
+ * `asked` è quella nuova, ed è il motivo per cui questo tipo è cambiato: su
+ * Telegram la domanda parte e la risposta arriva **dopo**, forse dopo un
+ * riavvio. `asked` vuol dire «l'ho chiesto davvero, il turno si sospenda»;
+ * `unavailable` vuol dire «qui non c'è nessun canale per chiederlo», che è la
+ * cosa che il turno deve dire invece di fingere un errore del tool.
+ */
+export type ApprovalAnswer = 'allow' | 'deny' | 'asked' | 'unavailable';
+
+export type Approver = (request: ApprovalRequest, where: ApprovalWhere) => Promise<ApprovalAnswer>;
 
 /** Thrown by a tool call that needs an approval this surface cannot obtain. */
 class ApprovalRequired extends Error {
@@ -396,6 +437,15 @@ export type LoopDeps = {
    * `stopped: 'ask'` rather than pretending the tool failed.
    */
   approve?: Approver | undefined;
+  /**
+   * Il registro delle approvazioni chieste, e la loro risposta.
+   *
+   * Assente vuol dire che questa installazione può solo chiedere **subito**:
+   * `approve` risponde sincrono o non risponde. Con il registro esiste anche
+   * la terza strada — chiedere e sospendersi — che è l'unica che funziona su
+   * una superficie dove l'owner non è davanti allo schermo.
+   */
+  approvals?: ApprovalStore | undefined;
   /**
    * Bills a model call and returns what it cost. Absent in tests; absent in
    * production means the caps are decorative, which is why `doctor` reports it.
@@ -704,6 +754,16 @@ export type TurnEvent =
    */
   | { type: 'tool_start'; name: string; capability: string; args?: unknown }
   /**
+   * La chiamata non è finita e non è fallita: **è ferma su di te**.
+   *
+   * Esiste perché le altre due parole erano tutte e due false. Chiudere con
+   * `tool_end` e `isError: false` mette una spunta accanto a un comando che
+   * non è partito; con `isError: true` mette una croce accanto a qualcosa che
+   * non si è rotto. Chi guarda lo schermo in quel momento sta cercando di
+   * capire se deve fare qualcosa lui — ed è esattamente quello che deve fare.
+   */
+  | { type: 'ask'; name: string; capability: string }
+  /**
    * Un tentativo transitorio è andato male e se ne fa un altro.
    *
    * Esiste perché un retry silenzioso è indistinguibile da uno stallo: chi
@@ -951,7 +1011,20 @@ export async function resumeTurn(
   if (existing.status === 'done') {
     return { turnId, why: 'finished', detail: `il turno ${turnId} è già chiuso (${existing.outcome ?? '?'})` };
   }
-  const wasWaiting = existing.status === 'waiting';
+  /**
+   * Questo turno sta tornando da una sospensione?
+   *
+   * **Non lo dice lo stato.** Un turno svegliato da un *evento* — la lane che
+   * chiama `wake` perché la barriera si è soddisfatta — arriva qui come
+   * `runnable`, esattamente come uno che non ha mai aspettato: leggere solo lo
+   * stato voleva dire che un `wait` finito per evento riprendeva **senza dire
+   * al modello perché**, e con le approvazioni sarebbe stato lo stesso silenzio
+   * proprio nel momento in cui l'owner ha appena risposto.
+   *
+   * Lo dice la barriera: se la riga ne porta ancora una, questa ripresa è la
+   * sua. Vale una volta sola perché `claim`, subito qui sotto, la spegne.
+   */
+  const wasWaiting = existing.status === 'waiting' || existing.waitFor !== null || existing.wakeAt !== null;
 
   /**
    * Is this picking work **back** up, or running it for the first time?
@@ -1064,7 +1137,15 @@ export async function resumeTurn(
     return { turnId, why: 'exhausted', detail };
   }
 
-  return drive(deps, record, span, { resumed: !firstAttempt, wokenFromWait: wasWaiting });
+  return drive(deps, record, span, {
+    resumed: !firstAttempt,
+    wokenFromWait: wasWaiting,
+    // La barriera letta **prima** del claim, che è ciò che la spegne. `record`
+    // qui sotto è la riga già reclamata: chiederla a lui vorrebbe dire dire
+    // sempre «è passato il tempo», anche quando a svegliare il turno è stata
+    // una risposta dell'owner arrivata un istante fa.
+    waitForAtWake: existing.waitFor,
+  });
 }
 
 /**
@@ -1083,6 +1164,8 @@ async function drive(
     signal?: AbortSignal | undefined;
     resumed?: boolean;
     wokenFromWait?: boolean;
+    /** La barriera com'era prima del claim: vedi `resumeTurn`. */
+    waitForAtWake?: string | null;
     /** The ref the caller already opened. Absent on a resume — see `input.session`. */
     session?: SessionRef | undefined;
     /**
@@ -1384,8 +1467,18 @@ async function drive(
     const lostClaim = await reconcile();
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
-      const waitFor = decodeWaitFor(record.waitFor);
-      const why = waitFor !== null && satisfied(waitFor) ? 'event' : 'timer';
+      const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
+      // Lo stesso giudizio che dà la lane quando sceglie chi svegliare, con lo
+      // stesso registro sotto: senza `answered` una barriera d'approvazione
+      // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
+      // «non hai risposto» proprio nel momento in cui la risposta è arrivata.
+      const why =
+        waitFor !== null &&
+        satisfied(waitFor, {
+          ...(deps.approvals === undefined ? {} : { answered: (id: string) => deps.approvals?.answered(id) === true }),
+        })
+          ? 'event'
+          : 'timer';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       messages.push({ role: 'user', content: [{ type: 'text', text: wakeReport(waitFor, why) }] });
     }
@@ -2626,16 +2719,7 @@ async function runTool(
           : { resource: summarizeCallArgs(call.args) }),
         taint: snapshot.currentTaint(),
       };
-      if (!deps.approve) {
-        // No channel on this surface: the turn stops and says what it wanted,
-        // rather than the tool reporting a failure it did not have.
-        span.end({ status: 'error', error: 'ask_unavailable' });
-        emitToolEnd(true);
-        throw new ApprovalRequired(request);
-      }
-      const answer = await deps.approve(request);
-      span.setAttributes({ 'muffin.policy.approval': answer });
-      if (answer === 'deny') {
+      const nega = (): ContentBlock => {
         span.end({ status: 'error', error: 'ask_denied' });
         emitToolEnd(true);
         return {
@@ -2644,6 +2728,107 @@ async function runTool(
           content: `L'owner ha rifiutato "${capability}". Non insistere: prosegui senza, o spiega cosa ti manca.`,
           isError: true,
         };
+      };
+
+      /**
+       * Una risposta già data, prima di chiederne un'altra.
+       *
+       * È il ramo che chiude il giro su una superficie a pulsanti: l'owner ha
+       * premuto, il turno si è risvegliato, il modello rifà la chiamata, e qui
+       * quella risposta viene **consumata** — una volta, per questa capability
+       * su questa risorsa. Senza, si richiederebbe la stessa cosa all'infinito
+       * e il sì dell'owner non arriverebbe mai a valere.
+       */
+      const gia = deps.approvals?.take(
+        { turnId: ctx.turnId, capability, ...(request.resource === undefined ? {} : { resource: request.resource }) },
+        (deps.now ?? (() => new Date()))(),
+      );
+      if (gia === 'deny') return nega();
+      if (gia !== 'allow') {
+        if (!deps.approve) {
+          // No channel on this surface: the turn stops and says what it wanted,
+          // rather than the tool reporting a failure it did not have.
+          span.end({ status: 'error', error: 'ask_unavailable' });
+          emitToolEnd(true);
+          throw new ApprovalRequired(request);
+        }
+
+        /**
+         * La riga si scrive **prima** di chiedere, e vale sia per chi risponde
+         * subito sia per chi risponde domani.
+         *
+         * Su una superficie a pulsanti l'id viaggia dentro il pulsante, quindi
+         * deve esistere prima che il messaggio parta. Sul terminale, dove la
+         * risposta è immediata, la riga resta comunque come traccia: `M5-BIS`
+         * D12 chiede una coda durevole degli ask, e una coda che registra solo
+         * le domande scomode non è la coda delle domande.
+         */
+        const approvalId = deps.approvals?.ask(
+          {
+            turnId: ctx.turnId,
+            capability,
+            ...(request.resource === undefined ? {} : { resource: request.resource }),
+            prompt: request.prompt,
+            taint: request.taint,
+          },
+          (deps.now ?? (() => new Date()))(),
+        );
+
+        const answer = await deps.approve(request, {
+          surface: input.surface,
+          turnId: ctx.turnId,
+          ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+          ...(approvalId === undefined ? {} : { approvalId }),
+        });
+        span.setAttributes({ 'muffin.policy.approval': answer });
+
+        if (answer === 'unavailable') {
+          span.end({ status: 'error', error: 'ask_unavailable' });
+          emitToolEnd(true);
+          throw new ApprovalRequired(request);
+        }
+
+        if (answer === 'asked') {
+          if (deps.approvals === undefined || approvalId === undefined) {
+            // Una superficie che dice «l'ho chiesto» senza un registro dove la
+            // risposta possa tornare avrebbe sospeso il turno su una barriera
+            // che nessuno può soddisfare: aspetterebbe la sua scadenza e basta.
+            span.end({ status: 'error', error: 'ask_unavailable' });
+            emitToolEnd(true);
+            throw new ApprovalRequired(request);
+          }
+          // Armata, non immediata: come ogni sospensione, il loop la onora al
+          // prossimo punto di sospensione, quando ogni `tool_use` di questo
+          // giro ha il suo `tool_result` (`ToolContext.suspend`).
+          ctx.suspend({
+            wakeAt: new Date((deps.now ?? (() => new Date()))().getTime() + APPROVAL_WINDOW_MS).toISOString(),
+            waitFor: { kind: 'approval', id: approvalId },
+          });
+          span.end({ status: 'ok' });
+          // Né `✓` né `✗`: la chiamata è ferma sull'owner, e le altre due
+          // parole sarebbero tutte e due false (vedi `TurnEvent`).
+          input.onProgress?.({ type: 'ask', name: call.name, capability });
+          return {
+            type: 'tool_result',
+            toolCallId: call.id,
+            content:
+              `Ho chiesto la sua approvazione per "${capability}"${request.resource ? ` su ${request.resource}` : ''} ` +
+              `e sto aspettando che risponda. Non l'ho fatto. Non richiederlo e non cercare un'altra strada per farlo ` +
+              `lo stesso: il turno si sospende qui e riprende da solo quando arriva la risposta.`,
+          };
+        }
+
+        // Risposta subito: la riga registra cosa è stato deciso e viene
+        // consumata nello stesso momento, o un secondo `sys.shell` più avanti
+        // nello stesso turno la troverebbe libera e passerebbe senza chiedere.
+        if (deps.approvals !== undefined && approvalId !== undefined) {
+          deps.approvals.decide(approvalId, answer, (deps.now ?? (() => new Date()))());
+          deps.approvals.take(
+            { turnId: ctx.turnId, capability, ...(request.resource === undefined ? {} : { resource: request.resource }) },
+            (deps.now ?? (() => new Date()))(),
+          );
+        }
+        if (answer === 'deny') return nega();
       }
       break; // approved: fall through to execution below, same as 'allow'
     }

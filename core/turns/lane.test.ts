@@ -46,7 +46,7 @@ const spec = (id: string): NewTurn => ({
   counters: counters(),
 });
 
-function world(over: { alive?: (pid: number) => boolean } = {}) {
+function world(over: { alive?: (pid: number) => boolean; approvals?: { answered: (id: string) => boolean } } = {}) {
   const store = new TurnStore(new DatabaseCtor(':memory:'));
   const events: LaneEvent[] = [];
   const ran: string[] = [];
@@ -70,6 +70,7 @@ function world(over: { alive?: (pid: number) => boolean } = {}) {
     // block below.
     modelLane: new ModelLane(),
     ...(over.alive ? { alive: over.alive } : {}),
+    ...(over.approvals ? { approvals: over.approvals } : {}),
   });
 
   return {
@@ -173,6 +174,67 @@ describe('le barriere a evento', () => {
     await settle();
     expect(w.ran).toEqual([]);
     expect(w.store.get('t-armed')?.status).toBe('waiting');
+  });
+
+  /**
+   * La seconda barriera del set chiuso: «l'owner ha risposto».
+   *
+   * È la barriera su cui si sospende un turno che ha chiesto un'approvazione
+   * su una superficie dove l'owner non è davanti allo schermo. Vale la stessa
+   * regola dell'altra — un predicato che *qualcuno valuta*, qui la riga di una
+   * tabella che questo processo sa leggere.
+   */
+  it("sveglia in anticipo il turno a cui l'owner ha risposto", async () => {
+    const risposte = new Set<string>();
+    const w = world({ approvals: { answered: (id) => risposte.has(id) } });
+    const created = w.store.create(spec('t-appr'));
+    w.store.suspend(
+      't-appr',
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        // Fra sei ore: solo la risposta può essere ciò che lo ha svegliato.
+        wakeAt: '2026-08-16T16:00:00.000Z',
+        waitFor: encodeWaitFor({ kind: 'approval', id: 'abc123' }),
+      },
+      created.claimToken,
+    );
+
+    // Nessuno ha ancora premuto niente.
+    w.lane.tick(new Date('2026-08-16T10:00:00.000Z'));
+    await settle();
+    expect(w.ran).toEqual([]);
+    expect(w.store.get('t-appr')?.status).toBe('waiting');
+
+    risposte.add('abc123');
+    w.lane.tick(new Date('2026-08-16T10:00:30.000Z'));
+    await settle();
+    expect(w.ran).toEqual(['t-appr']);
+  });
+
+  /**
+   * Un processo che non ha il registro sott'occhio non sveglia per sbaglio un
+   * turno in attesa di conferma: resta fermo fino alla sua scadenza, che è la
+   * ragione per cui `wakeAt` è obbligatorio anche quando c'è un evento.
+   */
+  it('e senza registro non sveglia niente, invece di indovinare', async () => {
+    const w = world({});
+    const created = w.store.create(spec('t-appr'));
+    w.store.suspend(
+      't-appr',
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        wakeAt: '2026-08-16T16:00:00.000Z',
+        waitFor: encodeWaitFor({ kind: 'approval', id: 'abc123' }),
+      },
+      created.claimToken,
+    );
+    w.lane.tick(new Date('2026-08-16T10:00:00.000Z'));
+    await settle();
+    expect(w.ran).toEqual([]);
   });
 
   it('una barriera illeggibile degrada alla scadenza invece di far cadere la corsia', async () => {
