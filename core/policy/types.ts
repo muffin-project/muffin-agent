@@ -131,12 +131,45 @@ export type Decide = (req: DecisionRequest) => Decision;
 /**
  * Per-turn permission view. principal/tenant are fixed for the turn; taint is
  * not — a tier-3 tool result raises it for every decision that follows.
+ *
+ * **Ceiling vs intrinsic (ADR-0044 §Riconciliazione 2026-08-28).** Two turns
+ * asked the same question two days apart — `il taint muore col turno` (15/08)
+ * and `la history non lava la provenienza` (17/08) — and both were right about
+ * a different half of it. What a turn may **do** has to reflect everything
+ * physically in its prompt, reinjected history included, or a turn sitting on
+ * top of tainted context acts as if it were clean (the 17/08 laundering
+ * probe). What a turn's **own freshly-written output** gets stamped with, for
+ * a *later* turn to reinject, has to reflect only what this turn itself
+ * touched — or a single old, aged-out event never actually ages out: every
+ * turn downstream re-stamps its own clean text at the inherited ceiling,
+ * refilling the reinjection window forever, which is the ratchet the 17/08
+ * revision's own "Cosa NON copre" named and never closed. `currentTaint` is
+ * the first; `intrinsicTaint` is the second, and they diverge only for taint
+ * that arrived via `raiseCeiling` — content reinjected from a *past* turn
+ * (session history, an open plan item), never something this turn itself did.
  */
 export interface PermissionSnapshot {
   readonly principal: Principal;
   readonly tenant: TenantId;
   currentTaint(): TrustTier;
+  /** What this turn is gated on right now — every raise, ceiling-only included. */
   raiseTaint(tier: TrustTier): void;
+  /**
+   * Raises the ceiling `currentTaint` reads, without raising what
+   * `intrinsicTaint` reports — for taint that is reinjected from a *past*
+   * turn's own recorded provenance rather than something this turn itself
+   * produced or observed. The turn still may not act freely on it (the
+   * ceiling gates every `check()` below); its own new output does not inherit
+   * it as if this turn had caused it.
+   */
+  raiseCeiling(tier: TrustTier): void;
+  /**
+   * What this turn's own newly-written content should be stamped with, for a
+   * later turn's reinjection to read back — the ceiling, minus whatever
+   * arrived only through `raiseCeiling`. Never lower than the turn started at
+   * (a fresh turn's own principal/content tier is always intrinsic to it).
+   */
+  intrinsicTaint(): TrustTier;
   /**
    * Throws away memoised decisions. The taint does this for itself; the budget
    * is the other input the kernel reads and it can change mid-turn, in which

