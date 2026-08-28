@@ -1,4 +1,6 @@
-import { createInterface } from 'node:readline/promises';
+import { join } from 'node:path';
+import { makeTextzone } from './textzone.js';
+import { intestazione } from './riquadro.js';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
@@ -32,7 +34,21 @@ const HELP = `/new     inizia una sessione nuova
 /think   ragionamento: on | off | reset (senza argomenti lo mostra)
 /model   modello: [main|light|embed] <slug>, --list, o niente per vederli
 /debug   giri, token e millisecondi: on | off (da solo, inverte)
-/exit    esci (o Ctrl+D)`;
+/exit    esci (o Ctrl+D)
+
+Invio spedisce · Shift+Invio (o Ctrl+J) va a capo · Tab completa un comando
+Freccia su: la riga di sopra, e dalla prima la storia`;
+
+/**
+ * I comandi che il Tab completa.
+ *
+ * Derivati da `HELP` e non scritti di nuovo: due elenchi divergono, e quello
+ * che divergerebbe per primo è quello che nessuno legge — un comando aggiunto
+ * a `HELP` e non qui semplicemente non si completerebbe, in silenzio.
+ */
+export const COMANDI: readonly string[] = HELP.split('\n')
+  .map((r) => /^(\/[a-z]+)/.exec(r)?.[1])
+  .filter((c): c is string => c !== undefined);
 
 /**
  * Quanto racconta il terminale mentre lavora.
@@ -208,6 +224,9 @@ export function makeReplCliWrite(
       clear();
       process.stdout.write(`\n⏰ ${text}\n`);
     } finally {
+      // Nel `finally`, e non dopo la scrittura: una `write` che lancia (EPIPE)
+      // lascerebbe il REPL senza prompt e con l'aria di essere piantato. È la
+      // stessa ragione di prima; l'unica cosa cambiata è chi ridisegna.
       rl.prompt();
     }
   };
@@ -423,6 +442,14 @@ export async function runRepl(
    */
   const style = styleFor(process.stderr);
   const promptText = style.enabled ? `${style.accent('›')} ` : '› ';
+  /**
+   * La guida delle righe successive, larga quanto il prompt.
+   *
+   * Serve a far vedere a colpo d'occhio che tre righe sono **un** messaggio e
+   * non tre: senza, un testo multilinea sembra tre turni già spediti. Smorzata,
+   * perché è cornice — `cli/STYLES.md`.
+   */
+
 
   let runtime: Runtime;
   try {
@@ -489,18 +516,64 @@ export async function runRepl(
   // Only when there is something to decide — see `reviewBootLine`.
   const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
 
+  /**
+   * L'intestazione di apertura — «personaggio in alto», parole dell'owner.
+   *
+   * Una volta sola e poi scrollback come tutto il resto: non si ridisegna e non
+   * si aggancia in cima allo schermo, perché `cli/STYLES.md` esclude lo schermo
+   * alternato e la ragione vale ancora (quello che è scorso resta copiabile).
+   * Le cose che servono anche dopo venti messaggi — modello e sessione — non
+   * stanno qui: stanno sul bordo del riquadro, che è sempre l'ultima cosa a
+   * schermo.
+   *
+   * Le righe di avvio (superfici, MCP, memoria) restano **fuori**: sono
+   * diagnostica, cambiano di numero a ogni avvio, e infilarle in una cornice le
+   * farebbe sembrare identità.
+   */
   process.stderr.write(
-    `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
+    `${intestazione(
+      [
+        `${style.accent('✳')} ${style.bold('muffin')}`,
+        style.dim(`${runtime.config.models.main} · profilo ${runtime.deps.profile.name}`),
+      ],
+      style.dim,
+      process.stderr.columns ?? 80,
+    ).join('\n')}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
-      `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
+      `\n`,
   );
 
-  const rl = createInterface({ input: opts.stdin ?? process.stdin, output: process.stdout });
-  redrawPrompt = () => rl.prompt();
+  /**
+   * La textzone: il messaggio si scrive qui, non in `rl.question`.
+   *
+   * readline legge **una riga** — Invio spedisce sempre — e non ha un modo di
+   * estendersi: la sua unità è la riga. Resta comunque in piedi qui accanto
+   * perché la domanda di approvazione è davvero una riga sola (`[s/N]`), e
+   * usare la textzone per quella vorrebbe dire offrire un editor multilinea a
+   * chi deve dire sì o no.
+   *
+   * I due non leggono mai insieme: `approve` gira **dentro** un turno, cioè
+   * mentre la textzone non sta leggendo niente.
+   */
+  const textzone = makeTextzone({
+    input: (opts.stdin ?? process.stdin) as NodeJS.ReadStream,
+    output: process.stdout,
+    historyFile: join(home, 'repl-history'),
+    comandi: COMANDI,
+  });
+  // Dopo una scrittura fuori banda — un messaggio consegnato da una superficie
+  // mentre stavi scrivendo — il prompt e ciò che avevi già digitato tornano al
+  // loro posto. È la stessa promessa di prima (`rl.prompt()`), mantenuta da chi
+  // adesso possiede il terminale: la textzone sa anche **cosa** c'era scritto,
+  // che readline da lì non poteva sapere.
+  //
+  // Non fa niente quando non stiamo leggendo: un messaggio arrivato mentre il
+  // modello risponde non deve far comparire un prompt che nessuno sta usando.
+  redrawPrompt = () => textzone.redraw();
 
   // The terminal is the surface that *can* ask, so here the kernel's `ask`
   // verdict becomes a question instead of a refusal. The wording is the kernel's
@@ -516,7 +589,11 @@ export async function runRepl(
       const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][request.taint];
       process.stderr.write(`   contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}\n`);
     }
-    const answer = (await rl.question(`   approvi "${request.capability}"? [s/N] `)).trim().toLowerCase();
+    const risposta = await textzone.readLine(`   approvi "${request.capability}"? [s/N] `);
+    // Ctrl+C qui è un no, non un'attesa. Prima non lo era: il gestore SIGINT
+    // annullava il turno e questa domanda restava appesa, quindi il terminale
+    // continuava a chiedere l'approvazione di una cosa già annullata.
+    const answer = risposta.tipo === 'testo' ? risposta.testo.trim().toLowerCase() : '';
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
     process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
     return allowed ? 'allow' : 'deny';
@@ -526,22 +603,21 @@ export async function runRepl(
   let controller: AbortController | null = null;
   let lastInterrupt = 0;
 
-  rl.on('SIGINT', () => {
-    const now = Date.now();
+  /**
+   * Ctrl+C **mentre un turno gira**.
+   *
+   * A prompt fermo non passa di qui: la textzone possiede il terminale in modo
+   * raw e il tasto le arriva come tasto, non come segnale — quel ramo sta nel
+   * loop, dove si sa se è il primo o il secondo. Qui resta il caso che nessuno
+   * dei due può gestire: il terminale non lo sta leggendo nessuno perché il
+   * modello sta rispondendo.
+   */
+  process.on('SIGINT', () => {
     if (controller) {
       controller.abort();
       status.line(`\n^C turno annullato`);
-      lastInterrupt = now;
-      return;
+      lastInterrupt = Date.now();
     }
-    // Nothing running: a second Ctrl+C in quick succession means leave.
-    if (now - lastInterrupt < 2000) {
-      rl.close();
-      return;
-    }
-    lastInterrupt = now;
-    process.stderr.write(`\n(di nuovo Ctrl+C per uscire)\n`);
-    rl.prompt();
   });
 
   // The scheduler runs here only when nothing else owns it (ADR-0035). A tick
@@ -583,7 +659,6 @@ export async function runRepl(
     runtime.db,
     (line) => {
       process.stderr.write(`\n${line}\n`);
-      rl.prompt();
     },
     gateway !== null,
   );
@@ -636,7 +711,26 @@ export async function runRepl(
 
   try {
     for (;;) {
-      const line = (await rl.question(promptText)).trim();
+      const esito = await textzone.read({
+        prompt: promptText,
+        // Sul bordo: modello e sessione, cioè le due cose che l'intestazione
+        // dice all'avvio e che dopo venti messaggi non sono più sullo schermo.
+        etichetta: style.dim(`${runtime.config.models.main} · ${session.id}`),
+        suggerimenti: 'invio spedisce · shift+invio va a capo · tab completa · /help',
+        smorza: style.dim,
+      });
+      if (esito.tipo === 'fine') break;
+      if (esito.tipo === 'interrotto') {
+        // Ctrl+C a prompt vuoto: la stessa regola di prima — il primo avverte,
+        // il secondo entro due secondi esce. Con un turno in volo non si passa
+        // mai di qui, perché la textzone non sta leggendo.
+        const ora = Date.now();
+        if (ora - lastInterrupt < 2000) break;
+        lastInterrupt = ora;
+        process.stderr.write(`(di nuovo Ctrl+C per uscire)\n`);
+        continue;
+      }
+      const line = esito.testo.trim();
       if (line === '') continue;
 
       if (line.startsWith('/')) {
@@ -818,7 +912,11 @@ export async function runRepl(
   } finally {
     status.stop();
     clearInterval(ticker);
-    rl.close();
+    // Il terminale torna com'era, sempre. Uscire lasciando lo stdin in raw mode
+    // non rompe Muffin: rompe la **shell** che resta dopo — niente eco, niente
+    // Ctrl+C — e chi ci finisce dentro non ha nessun motivo di collegare la
+    // cosa a un comando che è già uscito.
+    if (process.stdin.isTTY === true) process.stdin.setRawMode(false);
     // Surfaces first, then the runtime: the connector must stop polling before
     // the database under it goes away.
     surfaces.stop();
