@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { makeTextzone } from './textzone.js';
+import { intestazione } from './riquadro.js';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
@@ -448,7 +449,7 @@ export async function runRepl(
    * non tre: senza, un testo multilinea sembra tre turni già spediti. Smorzata,
    * perché è cornice — `cli/STYLES.md`.
    */
-  const continuazione = style.enabled ? `${style.dim('┊')} ` : '┊ ';
+
 
   let runtime: Runtime;
   try {
@@ -515,14 +516,35 @@ export async function runRepl(
   // Only when there is something to decide — see `reviewBootLine`.
   const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
 
+  /**
+   * L'intestazione di apertura — «personaggio in alto», parole dell'owner.
+   *
+   * Una volta sola e poi scrollback come tutto il resto: non si ridisegna e non
+   * si aggancia in cima allo schermo, perché `cli/STYLES.md` esclude lo schermo
+   * alternato e la ragione vale ancora (quello che è scorso resta copiabile).
+   * Le cose che servono anche dopo venti messaggi — modello e sessione — non
+   * stanno qui: stanno sul bordo del riquadro, che è sempre l'ultima cosa a
+   * schermo.
+   *
+   * Le righe di avvio (superfici, MCP, memoria) restano **fuori**: sono
+   * diagnostica, cambiano di numero a ogni avvio, e infilarle in una cornice le
+   * farebbe sembrare identità.
+   */
   process.stderr.write(
-    `muffin · ${runtime.config.models.main} · profilo ${runtime.deps.profile.name}\n` +
+    `${intestazione(
+      [
+        `${style.accent('✳')} ${style.bold('muffin')}`,
+        style.dim(`${runtime.config.models.main} · profilo ${runtime.deps.profile.name}`),
+      ],
+      style.dim,
+      process.stderr.columns ?? 80,
+    ).join('\n')}\n` +
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
-      `/help per i comandi, Ctrl+C annulla il turno, Ctrl+D esce\n\n`,
+      `\n`,
   );
 
   /**
@@ -689,7 +711,14 @@ export async function runRepl(
 
   try {
     for (;;) {
-      const esito = await textzone.read(promptText, continuazione);
+      const esito = await textzone.read({
+        prompt: promptText,
+        // Sul bordo: modello e sessione, cioè le due cose che l'intestazione
+        // dice all'avvio e che dopo venti messaggi non sono più sullo schermo.
+        etichetta: style.dim(`${runtime.config.models.main} · ${session.id}`),
+        suggerimenti: 'invio spedisce · shift+invio va a capo · tab completa · /help',
+        smorza: style.dim,
+      });
       if (esito.tipo === 'fine') break;
       if (esito.tipo === 'interrotto') {
         // Ctrl+C a prompt vuoto: la stessa regola di prima — il primo avverte,
