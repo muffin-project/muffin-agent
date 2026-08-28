@@ -85,6 +85,26 @@ async function batti(testo: string): Promise<{ righe: string[] }> {
   return applica(output.scritture);
 }
 
+/**
+ * Come `batti`, ma restituisce **due** schermi: quello mentre si sta scrivendo
+ * e quello che resta dopo aver spedito. Sono diversi di proposito, ed è la
+ * differenza che va provata.
+ */
+async function battiEGuardaDueVolte(testo: string): Promise<{ mentre: string[]; dopo: string[] }> {
+  const input = tastieraFinta();
+  const output = schermoFinto();
+  const tz = makeTextzone({ input: input as never, output: output as never });
+  const letto = tz.read(CORNICE);
+  for (const c of testo) {
+    input.write(c);
+    await new Promise((r) => setImmediate(r));
+  }
+  const mentre = applica(output.scritture).righe;
+  input.write('\r');
+  await letto;
+  return { mentre, dopo: applica(output.scritture).righe };
+}
+
 const riquadri = (righe: string[]): number => righe.filter((r) => r.startsWith('╭')).length;
 
 /** Cosa era già a schermo prima del riquadro deve esserci ancora. */
@@ -118,11 +138,22 @@ describe('a schermo resta un riquadro solo', () => {
     expect(s.righe.find((r) => r.includes('›'))).toContain('ciao mondo');
   });
 
-  it('e il riquadro porta la sua etichetta e i suggerimenti', async () => {
-    const s = await batti('x');
-    const tutto = s.righe.join('\n');
-    expect(tutto).toContain('modello · sessione');
-    expect(tutto).toContain('invio spedisce');
+  it("e il riquadro porta la sua etichetta, anche dopo che l'hai spedito", async () => {
+    const s = await battiEGuardaDueVolte('x');
+    expect(s.mentre.join('\n')).toContain('modello · sessione');
+    expect(s.dopo.join('\n')).toContain('modello · sessione');
+  });
+
+  /**
+   * I suggerimenti dicono cosa puoi premere **adesso**. Sotto un messaggio già
+   * spedito non dicono niente e restano lì per sempre: una copia per turno, per
+   * tutta la sessione, in mezzo alla conversazione. Il riquadro invece resta,
+   * perché è quello che fa vedere dove finisce ciò che hai scritto tu.
+   */
+  it('ma i suggerimenti spariscono quando il messaggio è partito', async () => {
+    const s = await battiEGuardaDueVolte('x');
+    expect(s.mentre.join('\n')).toContain('invio spedisce');
+    expect(s.dopo.join('\n')).not.toContain('invio spedisce');
   });
 
   /**
