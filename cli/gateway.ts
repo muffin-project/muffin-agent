@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,7 @@ import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock
 import { CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
 import { describeBuild } from './update.js';
 import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
-import { Gateway, EXIT_ALREADY_RUNNING, type GatewayDeps } from '../core/gateway/service.js';
+import { Gateway, EXIT_ALREADY_RUNNING, EXIT_STOPPED, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import {
@@ -58,7 +58,9 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 
 export const GATEWAY_USAGE = `usage:
   muffin gateway status         attivo? da quando? cosa sta facendo?
-  muffin gateway stop           drena i turni in volo e lo ferma
+  muffin gateway stop           drena i turni in volo e lo ferma — e lo tiene
+                                giù, anche su macOS
+  muffin gateway start          lo riaccende dopo uno stop
   muffin gateway install        genera la unit del supervisore (stdout)
                                 [--write] scrivila al suo posto [--force]
                                 [--start] e poi accendila davvero (implica
@@ -93,7 +95,12 @@ function launchAgentPath(): string {
  */
 export function stopCaveat(platform: NodeJS.Platform, agentInstalled: boolean): string | null {
   if (platform !== 'darwin' || !agentInstalled) return null;
-  return `! su macOS launchd lo riavvia entro ${RESTART_SEC * 2}s. Per tenerlo giù: \`launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}\`\n`;
+  // Non più un avvertimento: un promemoria. La frase che stava qui — «launchd
+  // lo riavvia entro Ns» — era vera e ora non lo è più, ed è la ragione per
+  // cui questa funzione esiste ancora invece di essere stata cancellata: chi
+  // ha fermato il gateway deve sapere che resta fermo, altrimenti al prossimo
+  // riavvio del Mac si chiede perché i job non girano.
+  return `il semaforo di stop resta finché non fai \`muffin gateway start\` — anche dopo un riavvio\n`;
 }
 
 /** Read-only view of the gateway, for the three commands that only look. */
@@ -139,6 +146,20 @@ const REAL_INTERPRETER_PROBES: InterpreterProbes = {
 export function cmdGatewayStatus(home: string): number {
   const info = inspect(home);
   if (!info) {
+    // **Fermo di proposito non è «non c'è».** `doctor` questa distinzione la
+    // faceva già da #217; qui no, e questo è il comando che uno prova per
+    // primo. Il risultato, misurato sulla macchina dell'owner il 28/08/2026
+    // subito dopo un `gateway stop` riuscito: «nessun gateway attivo →
+    // `muffin gateway install`». Il rimedio è sbagliato due volte — è già
+    // installato, e installarlo di nuovo non lo riaccende. Un rimedio
+    // sbagliato è peggio di nessun rimedio: si esegue.
+    if (existsSync(paths(home).gatewayStopped)) {
+      process.stdout.write(`fermo di proposito (\`muffin gateway stop\`)\n`);
+      process.stderr.write(`→ \`muffin gateway start\` lo riaccende — resta giù anche dopo un riavvio\n`);
+      // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
+      // qualunque sia la ragione. Il perché sta nel testo, non nell'exit code.
+      return 1;
+    }
     process.stdout.write(`nessun gateway attivo\n`);
     process.stderr.write(`→ \`muffin gateway install\` per farlo partire da solo all'avvio\n`);
     // 1 and not 0: `muffin gateway status` is the scriptable "is it up", the
@@ -149,12 +170,89 @@ export function cmdGatewayStatus(home: string): number {
   return 0;
 }
 
+/**
+ * `muffin gateway start` — l'inverso esatto di `stop`.
+ *
+ * Non esisteva, e finché `stop` non teneva davvero giù niente non serviva:
+ * launchd riaccendeva da solo entro dieci secondi. Ora che `stop` scrive un
+ * semaforo che lo tiene giù, serve il verbo che lo toglie — altrimenti
+ * l'owner si ritrova con un gateway fermo e nessun modo di rialzarlo che non
+ * sia ricordarsi il nome di un file.
+ *
+ * Due passi, e il secondo è quello che si dimentica: togliere il semaforo non
+ * riaccende niente da solo. Il supervisore va toccato — `launchctl kickstart`
+ * su macOS, `systemctl --user start` su Linux — perché il PathState riarma il
+ * KeepAlive per il *futuro*, non fa partire un processo adesso.
+ */
+export function cmdGatewayStart(home: string, deps: { run?: StepRunner } = {}): number {
+  const semaforo = paths(home).gatewayStopped;
+  const cera = existsSync(semaforo);
+  if (cera) rmSync(semaforo, { force: true });
+
+  const gia = inspect(home);
+  if (gia) {
+    process.stdout.write(`${describe(gia)}\n`);
+    if (cera) process.stderr.write(`(il semaforo di stop è stato tolto)\n`);
+    return 0;
+  }
+
+  // Nessun LaunchAgent/unit installato: non c'è un supervisore da svegliare, e
+  // dirlo è meglio che eseguire un comando che fallirà.
+  const supervisore = supervisorStart(home);
+  if (supervisore === null) {
+    process.stderr.write(
+      `semaforo tolto, ma non c'è un supervisore installato su questa macchina\n` +
+        `→ \`muffin gateway install --write --start\`\n`,
+    );
+    return 1;
+  }
+
+  const run = deps.run ?? REAL_RUNNER;
+  const esito = run(supervisore);
+  if (esito.status !== 0) {
+    process.stderr.write(
+      `${supervisore.join(' ')} → ${esito.status === null ? 'non eseguibile' : `uscita ${String(esito.status)}`}` +
+        `${esito.stderr ? `: ${esito.stderr.trim()}` : ''}\n`,
+    );
+    return 2;
+  }
+  process.stdout.write(`gateway riacceso\n`);
+  return 0;
+}
+
+/**
+ * Il comando che dice al supervisore «riparti adesso», o `null` se su questa
+ * macchina non ce n'è uno installato.
+ *
+ * Il semaforo che `start` ha appena tolto riarma il KeepAlive per il futuro;
+ * non fa partire un processo ora. Sono due cose diverse e vanno fatte
+ * entrambe.
+ */
+function supervisorStart(home: string): string[] | null {
+  if (process.platform === 'darwin') {
+    return existsSync(launchAgentPath()) ? ['launchctl', 'kickstart', `gui/${String(userInfo().uid)}/${LAUNCHD_LABEL}`] : null;
+  }
+  return existsSync(join(homedir(), '.config', 'systemd', 'user', `${LAUNCHD_LABEL}.service`))
+    ? ['systemctl', '--user', 'start', `${LAUNCHD_LABEL}.service`]
+    : null;
+}
+
 export async function cmdGatewayStop(home: string): Promise<number> {
   const info = inspect(home);
   if (!info) {
     process.stderr.write(`nessun gateway attivo\n`);
     return 1;
   }
+
+  // Scritto **prima** del segnale, e l'ordine è la cosa che funziona: launchd
+  // reagisce alla morte del processo, quindi il semaforo deve già esserci
+  // quando quella morte arriva. Scriverlo dopo lascerebbe una finestra in cui
+  // launchd vede un processo uscito e nessun file, cioè esattamente il caso
+  // «riportalo su» che questo evita.
+  //
+  // Un crash non passa di qui e non scrive niente: è così che «fermato» e
+  // «morto» restano due cose diverse per il supervisore.
+  writeFileSync(paths(home).gatewayStopped, `${new Date().toISOString()}\n`, 'utf8');
 
   try {
     // SIGTERM, which the gateway turns into a drain — not SIGKILL. The whole
@@ -484,6 +582,19 @@ export async function cmdGatewayRun(
    */
   onAssembled?: (parts: { turnLane: TurnLane; lock: GatewayLock }) => void,
 ): Promise<number> {
+  // Il semaforo, prima di qualunque cosa. È la seconda delle due difese: il
+  // `PathState` del plist dice a launchd di non riavviare, questo chiude la
+  // finestra in cui launchd non se n'è ancora accorto (launchd.plist(5)
+  // avverte che guardare il filesystem è race-prone). Su Linux non serve —
+  // `RestartPreventExitStatus` c'era già — ma renderlo uguale sulle due
+  // macchine costa tre righe e toglie una differenza da ricordare.
+  if (existsSync(paths(home).gatewayStopped)) {
+    process.stderr.write(
+      `il gateway è stato fermato di proposito (${paths(home).gatewayStopped})\n` +
+        `→ \`muffin gateway start\` per riaccenderlo\n`,
+    );
+    return EXIT_STOPPED;
+  }
   let runtime;
   try {
     runtime = buildRuntime(home);

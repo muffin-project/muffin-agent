@@ -778,6 +778,20 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
             ? ' · socket concorde'
             : ` · socket risponde pid ${String(identita.pid)}, la riga dice ${gateway.pid}`;
       ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}${canale}`);
+    } else if (existsSync(paths(home).gatewayStopped)) {
+      // Fermo **di proposito** non è un guasto, ed è la distinzione che decide
+      // se questa riga vale la pena di essere letta. Un `!` giallo su uno stato
+      // che l'owner ha voluto è il modo più rapido per insegnargli a scorrere
+      // oltre `doctor` — la stessa ragione per cui `stopCaveat` non allarma
+      // quando nessun LaunchAgent è installato.
+      //
+      // `ok` e non `warn`, ma la conseguenza si dice lo stesso: chi ha fermato
+      // il gateway tre settimane fa non ricorda di averlo fatto.
+      ok(
+        'gateway',
+        'fermo di proposito (`muffin gateway stop`) — resta giù anche dopo un riavvio, ' +
+          'e i job schedulati girano solo mentre una sessione `muffin` è aperta. `muffin gateway start` lo riaccende',
+      );
     } else {
       warn(
         'gateway',

@@ -8,7 +8,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DELIVERED } from '../core/surface/types.js';
 import { loadConfig, paths } from '../core/config/config.js';
-import { GatewayLock, STALE_AFTER_MS } from '../core/gateway/lock.js';
+import { GatewayLock, readGateway, STALE_AFTER_MS } from '../core/gateway/lock.js';
 import { describeSupervision } from '../core/gateway/notify.js';
 import { LAUNCHD_LABEL } from '../core/gateway/unit.js';
 import { HARD_STALE_MULTIPLIER } from '../core/lock/durable.js';
@@ -18,7 +18,7 @@ import type { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
-import { cmdGatewayInstall, EXIT_NOT_ACTIVATED } from './gateway.js';
+import { cmdGatewayInstall, cmdGatewayStatus, EXIT_NOT_ACTIVATED } from './gateway.js';
 import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
@@ -853,14 +853,22 @@ describe('muffin gateway stop admits what it cannot do', () => {
     expect(stopCaveat('darwin', false)).toBeNull();
   });
 
-  it('names launchd and the verb that actually holds it down', () => {
-    // The plist has to keep `KeepAlive: true` — otherwise the SIGUSR1
-    // drain-restart, which exits 0, leaves the agent down — so "gateway
-    // fermato" is true of the process and false of the service, and the
-    // difference has to be said where it happens rather than only in `install`.
+  /**
+   * Non più una scusa: un promemoria.
+   *
+   * La frase che stava qui — «launchd lo riavvia entro Ns, per tenerlo giù usa
+   * `launchctl bootout`» — era vera e non lo è più: il KeepAlive del plist è
+   * condizionato al semaforo che `stop` scrive. Ma il fatto opposto ora va
+   * detto, e va detto qui: chi ferma il gateway deve sapere che resta fermo
+   * **anche dopo un riavvio del Mac**, altrimenti si chiede perché i job non
+   * girano più e non ha nessun motivo di sospettare un file.
+   */
+  it('dice che lo stop resta, e nomina il verbo che lo disfa', () => {
     const caveat = stopCaveat('darwin', true) ?? '';
-    expect(caveat).toContain('launchctl bootout');
-    expect(caveat).toContain('ai.muffin.gateway');
+    expect(caveat).toContain('muffin gateway start');
+    // E non promette più il contrario di quello che fa.
+    expect(caveat).not.toContain('riavvia');
+    expect(caveat).not.toContain('bootout');
   });
 });
 
@@ -1093,5 +1101,147 @@ it('stampa il passo prima di eseguirlo, non dopo', () => {
       ? join(dir, 'Library', 'LaunchAgents', 'ai.muffin.gateway.plist')
       : join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service');
     expect(existsSync(unit)).toBe(true);
+  });
+});
+
+/**
+ * Uno stop chiesto tiene giù il gateway; un crash no.
+ *
+ * Misurato sulla macchina dell'owner il 28/08/2026 — «ho buttato giù il
+ * gateway e lo ha riportato su da solo, questo non va bene». Su Linux il verbo
+ * era vero da sempre (`RestartPreventExitStatus`); su macOS launchd non ha un
+ * equivalente per codice di uscita, e il plist si limitava ad ammettere la
+ * bugia in una riga di avvertimento.
+ *
+ * La traduzione è un **semaforo sul filesystem**, che launchd sa leggere
+ * (`KeepAlive: {PathState: {…: false}}`). Il file lo scrive `stop` e lo toglie
+ * `start`; un crash non passa da nessuno dei due, ed è così che «fermato» e
+ * «morto» restano due cose diverse per il supervisore.
+ *
+ * Qui si prova la metà che vive dentro Muffin: il semaforo esiste, `run` lo
+ * rispetta, `start` lo toglie. La metà dentro launchd è provata in
+ * `core/gateway/unit.test.ts`, contro il plist generato.
+ */
+describe('uno stop chiesto tiene giù il gateway', () => {
+  it('`gateway run` si rifiuta di partire quando il semaforo c è, e dice come riaccenderlo', () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, '2026-08-28T00:00:00.000Z\n', 'utf8');
+
+    const r = muffin(dir, ['gateway', 'run']);
+    // Su stderr: stdout di un demone è il suo output, e un rifiuto non è
+    // output. Stessa regola di ogni altro messaggio di questo file.
+    expect(r.err).toContain('fermato di proposito');
+    expect(r.err).toContain('muffin gateway start');
+    // E non ha preso il lock: un processo che non parte non deve lasciare
+    // dietro di sé una rivendicazione che faccia sembrare vivo il gateway.
+    const db = new DatabaseCtor(paths(dir).db, { readonly: true });
+    try {
+      expect(readGateway(db)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('senza semaforo `run` parte come sempre — il difetto è il rifiuto, non il file', () => {
+    const dir = home();
+    // Non lo si lascia girare (è un demone): basta sapere che NON esce con la
+    // riga del semaforo. Il lock già preso lo fa uscire subito per un'altra
+    // ragione, che è esattamente ciò che serve per distinguere i due rifiuti.
+    holdGateway(dir);
+    const r = muffin(dir, ['gateway', 'run']);
+    expect(r.err).not.toContain('fermato di proposito');
+  });
+
+  it('`gateway start` toglie il semaforo', () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, 'x\n', 'utf8');
+
+    muffin(dir, ['gateway', 'start']);
+    expect(existsSync(paths(dir).gatewayStopped)).toBe(false);
+  });
+
+  /**
+   * Fermo di proposito non è un guasto. Un `!` giallo su uno stato voluto è il
+   * modo più rapido per insegnare all'owner a scorrere oltre `doctor`.
+   */
+  it('e `doctor` lo chiama fermo di proposito, non guasto', () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, 'x\n', 'utf8');
+
+    const r = muffin(dir, ['doctor']);
+    expect(r.out).toMatch(/gateway.*fermo di proposito/s);
+    expect(r.out).toContain('muffin gateway start');
+    // E non la vecchia riga d'allarme, che qui sarebbe falsa.
+    expect(r.out).not.toContain('nessun processo attivo');
+  });
+
+  it("e lo dice, invece di fingere di aver acceso qualcosa che non c'è", () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, 'x\n', 'utf8');
+
+    // Nessun LaunchAgent né unit installati in un home di prova: non c'è un
+    // supervisore da svegliare, e stamparlo è meglio che eseguire un comando
+    // che fallirà.
+    const r = muffin(dir, ['gateway', 'start']);
+    expect(r.err).toContain('supervisore');
+    expect(r.err).toContain('muffin gateway install');
+  });
+});
+
+/**
+ * `muffin gateway status`, quando il gateway è giù.
+ *
+ * Misurato sulla macchina dell'owner il 28/08/2026, subito dopo un
+ * `gateway stop` riuscito: «nessun gateway attivo → `muffin gateway install`».
+ * Il rimedio è sbagliato due volte — è già installato, e installarlo di nuovo
+ * non lo riaccende. `doctor` la distinzione la faceva già da #217; questo è il
+ * comando che uno prova per primo, e non la faceva.
+ *
+ * Un rimedio sbagliato è peggio di nessun rimedio: si esegue.
+ */
+describe('status distingue «fermo» da «non c è»', () => {
+  const home = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-gwstatus-'));
+    runInit({ home: dir, apiKey: 'sk-mai-usata' });
+    return dir;
+  };
+
+  it('senza semaforo dice che non c è, e come installarlo', () => {
+    const dir = home();
+    const out: string[] = [];
+    const err: string[] = [];
+    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    try {
+      expect(cmdGatewayStatus(dir)).toBe(1);
+    } finally {
+      o.mockRestore();
+      e.mockRestore();
+    }
+    expect(out.join('')).toContain('nessun gateway attivo');
+    expect(err.join('')).toContain('gateway install');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('col semaforo dice che è fermo di proposito, e come riaccenderlo', () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, `${new Date().toISOString()}\n`, 'utf8');
+    const out: string[] = [];
+    const err: string[] = [];
+    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    try {
+      // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
+      // qualunque sia la ragione.
+      expect(cmdGatewayStatus(dir)).toBe(1);
+    } finally {
+      o.mockRestore();
+      e.mockRestore();
+    }
+    expect(out.join('')).toContain('fermo di proposito');
+    expect(err.join('')).toContain('gateway start');
+    // E soprattutto **non** il rimedio sbagliato.
+    expect(err.join('')).not.toContain('gateway install');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

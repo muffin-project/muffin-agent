@@ -4,68 +4,68 @@
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
 authority/data/effect. Non da questa lista.
 
-**Goal owner (27/08):** un agente *davvero usabile*, rivisto **modulo per
-modulo** — loop, memoria, skill, tool, context engine, compacting, comandi,
-deep research; ogni pezzo per *come è fatto*. E tutto ciò che manca prima della
-VPS.
+**Goal owner:** un agente *davvero usabile*, rivisto modulo per modulo. E tutto
+ciò che manca prima della VPS.
 
-**Serata del 27/08 (#197 → #208), su `main`.** Da un failure osservato. Tre
-cause misurate: `parseJson` accettava solo `{…}`, quindi un `[]` era un errore
-di estrazione **permanente**; il reasoning era **spento** sul turno
-conversazionale da #167 (ora `adaptive`, `/think` lo commuta); `.releases` si
-annidava a ogni update (`--show-toplevel` risponde col worktree *corrente*, e
-una release È un worktree). Ne sono usciti `muffin model|search|adopt`, il
-fallback dell'embedder, il socket di controllo (v1, sola osservazione), e una
-cornice per ogni comando (`cli/ui.ts`, `cli/STYLES.md`).
+**Come si trovano le cose.** Le ultime otto slice sono nate tutte allo stesso
+modo: pilotando il REPL vero dentro **tmux** (`capture-pane` rende lo schermo;
+`script` registra i byte e fa concludere il falso), o misurando su tracce e WAL
+invece che sullo schermo. Nessuna è nata leggendo il codice.
 
-**Sulla macchina, prima di toccarla.** L'annidamento `.releases` già esistente
-va sbrogliato **a gateway fermo** (il launcher punta lì dentro), e il
-*prossimo* update gira ancora il codice vecchio: cade giusto quello dopo.
+**28/08 (#219 → #224).** `npm run build` era `tsc --noEmit` e mi ha fatto
+misurare due volte il binario di ieri. Ctrl+J spediva invece di andare a capo
+(Node consegna `\n` come `enter`). Il prompt si ripeteva: `persona.md` 7.528 →
+4.629 byte, e `prompt show --eco` misura l'eco. Le righe di lavoro dicono su
+cosa (sette ricerche diverse erano sette righe identiche). Muffin non sapeva
+che giorno fosse: `## Questo turno` porta ora momento, fuso+offset, superficie,
+con chi parli, modello e profilo. `gateway status` e `rot harden` davano rimedi
+diventati falsi dopo #217.
 
-**Lasciato all'owner:** `core/budget/pricing.ts` sottostima **cinque famiglie su
-otto** (qwen3: tabella 0.1/0.3, reale 0.425/2.55). La conseguenza è sul tetto
-sigillato, quindi i numeri li mette lui.
+**Peer da guardare sempre**, e soprattutto gli agenti personali continui:
+openclaw, hermes, pi, odysseus, opencode, codex, claude, gemini. Letti finora:
+Hermes (`stable`/`context`/`volatile`, offset UTC argomentato), OpenClaw
+(`## Temporal Context`, `## Authorized Senders`, owner id hashato), Codex
+(`<permission_profile>`, world state).
 
-**In volo: PR #186** (`slice/undo-riallinea-il-turno`, D11, MERGEABLE).
-CRITICAL, due NON-MERGE riparati; il **terzo giudizio non è mai girato** — è il
-prossimo passo, non il merge.
+## Le tre decisioni aperte, tutte dell'owner
 
-**Dopo: il tetto di taint.** Dopo un `fs_read` il turno è a 2 e `fs.write` ha
-soffitto 1: «leggi, calcola, scrivi» resta rifiutato (#179, 0/9). ADR-0044
-dichiarò quel costo per `sys.shell` e liquidò `fs.write` come gratis «perché già
-morto»: non lo è più.
+1. **Instradamento** (`config.provider.routing`, da #221). Oggi 0% di cache:
+   OpenRouter manda al più economico dei 12 provider a monte, che non onora i
+   breakpoint. Con `only: ["alibaba"]` la cache prende il 95% dal secondo turno
+   e costa **meno** (~$0.0009 contro ~$0.0031 a turno). Ma è cinese, e
+   `dataCollection: "deny"` non l'ha mai deciso nessuno: oggi `identity.md` e i
+   ricordi vanno a chi costa meno senza vincoli su chi può tenerseli.
+2. **`muffin rot harden`** — serve `sudo`, e da lì i reseal servono `sudo`.
+   Finché non è fatto, `sys.shell` chiede **sempre** conferma.
+3. **C8, note vocali**: whisper.cpp locale o un'API. Decide se la voce
+   dell'owner esce di casa.
 
-**Chiuso, non riaprire.** Linux (#184, #189). `fs_write` scrive (#182), D2/D3
-READY. `muffin run` non ha timeout di default; il tetto tool è 14 (#179).
+## Cosa manca per usarlo davvero
 
-**Modulo Telegram, da verificare** (owner, 27/08): la patch del 13° anniversario
-aggiunge **pulsanti** e **documenti inline**
-(`telegram.org/blog/welcome-messages-buttons-TG-13`). Dalla fonte prima di
-toccare il connettore.
+Muffin oggi è **solo terminale**: `surfaces.enabled = ["cli"]`, un solo segreto
+(`provider_api_key`). Servono, dall'owner: **token bot Telegram** (senza,
+niente telefono), **chiave Tavily** (senza, `web_search` non si registra),
+**billing CI**.
 
-**Aperto per l'owner:** token bot Telegram; billing CI; chiave Tavily (il
-meccanismo c'è da #199, `web_search` non si registra senza).
+## Aperto, non bloccante
 
-**CI senza minuti:** merge con gate locale dichiarato in un commento sulla PR;
-rosso in 2s con zero step = fatturazione. Con `mergeable` a `null`:
-`git merge-base --is-ancestor origin/dev HEAD`.
+**Prossimo grosso, con evidenza dai peer:** dichiarare i **permessi** nel
+prompt. Oggi il kernel rifiuta al momento della chiamata e il modello impara
+per rifiuto — incluso il tetto di taint (`defaultMaxTaint` medium/high = 1),
+per cui «leggi, calcola, scrivi» è rifiutato *sempre* e nessuno gli dice
+perché. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
+Va nella coda volatile, perché il taint cambia dentro il turno. Lì nasce anche
+l'hashing degli identificatori: oggi nessun `externalId` arriva al prompt.
 
-**Stato macchina, non codice:** ollama non gira (da #185 l'embedder è config).
-La cache non prende: 2.8% su 18 chiamate, **0** sul modello vivo
-(`research/cache-prompt-2026-08-26.md`).
+**PR ferme:** #186 (undo riallinea il turno, CRITICAL, terzo giudizio mai
+girato, CONFLICTING) e #192 (docs, CONFLICTING).
 
-**Dogfood, ne resta una:** `sys.shell` chiede sempre (`decide.ts:245`): allow
-silenzioso solo con `ctx.hardened`, falso perché `rot/` ha lo stesso uid
-dell'agente. Renderla **vera** sulla VPS si può: il meccanismo c'è da #138.
+**Community:** esiste solo come forma di stringa (`community:${slug}` in
+`TenantId`). Nessuna macchina: né appartenenza, né raggruppamento fra
+superfici, né memoria condivisa. Promessa nel tipo, non capability.
 
-**Da non riperdere.** Le ancore verificano solo il primo intervallo di
-`file:A-B,C-D`; `inputSchema` e lo zod dell'handler sono due copie.
-
-**Follow-up.** Verifica di forma dopo il flip di `update`; ADR su «il REPL è un
-client del gateway?»; socket v2 (liveness dal pidfile al socket); riprendere la
-review dei peer dove il 429 l'ha fermata; input multilinea nel REPL
-(`tui-2026-08-27.md` raccomanda di **rimandare**); REPL su input non-TTY;
-`doctor` pre-boot dà rimedio sbagliato; `possibly_sent` non distingue crash da
-in-volo; TOCTOU gateway; repl-lock; finestra pairing; ASK durevole.
+**Altro:** la cache non prende fra un turno e l'altro (vedi decisione 1);
+`pricing.ts` sottostima 5 famiglie su 8; ADR su «il REPL è un client del
+gateway?»; socket v2; `possibly_sent` non distingue crash da in-volo.
 
 **Truth maintenance:** M5-BIS possiede status Gate, PERCORSO §0 l'ordine.

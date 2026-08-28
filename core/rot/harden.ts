@@ -206,11 +206,21 @@ export function formatHardenPlan(plan: HardenPlan): string {
     );
   }
 
+  // `stop` **e poi** `start`, non `stop` da solo.
+  //
+  // Questa riga diceva «`muffin gateway stop`, poi il supervisore lo rialza da
+  // solo», ed era vera fino a #217: da lì uno stop *chiesto* scrive un semaforo
+  // e il supervisore **non** lo rialza, di proposito. Chi seguiva la vecchia
+  // riga si ritrovava il gateway spento e l'hardening che sembrava averlo
+  // rotto. È lo stesso difetto trovato in `gateway status` lo stesso giorno: un
+  // rimedio che invecchia sotto una modifica fatta altrove, e che non fallisce
+  // — si esegue, e lascia le cose peggio.
   lines.push(
     'infine:',
     '  riavvia il gateway — la modalità hardened si legge una volta sola, al suo',
-    "  avvio: `muffin gateway stop`, poi il supervisore lo rialza da solo (o",
-    "  `muffin gateway run` a mano se non è supervisionato)",
+    '  avvio: `muffin gateway stop`, poi `muffin gateway start` (uno stop chiesto',
+    '  resta giù finché non sei tu a riaccenderlo — oppure `muffin gateway run` a',
+    "  mano se non è supervisionato)",
   );
 
   return `${lines.join('\n')}\n`;

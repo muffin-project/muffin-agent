@@ -158,6 +158,125 @@ export function todoSection(open: TodoItem[]): string {
 }
 
 /**
+ * Le superfici, dette come le direbbe una persona.
+ *
+ * `voice.md` ha una regola che **dipende** da questo — «non uso LaTeX nei
+ * messaggi destinati a superfici che non lo renderizzano» — e fino al
+ * 28/08/2026 era insoddisfacibile: la regola c'era, il dato per applicarla no.
+ */
+const SUPERFICI: Readonly<Record<string, string>> = {
+  cli: 'un terminale',
+  telegram: 'Telegram',
+  discord: 'Discord',
+};
+
+/**
+ * Dove sei, quando, e con cosa stai rispondendo.
+ *
+ * **Il difetto che chiude, misurato il 28/08/2026:** chiesto «che giorno e che
+ * ora sono adesso», Muffin ha provato a eseguire `date` con `sys.shell` — cioè
+ * ha chiesto un permesso all'owner per sapere l'ora. Non è una stranezza del
+ * modello: nel prompt la data non c'era, in nessuna forma. Un agente con
+ * memoria, uno scheduler, dei `todo` con scadenze e una persona che dice «posso
+ * riprendere qualcosa dopo ore o giorni» non sapeva in che giorno fosse.
+ *
+ * Tutti i peer che ne hanno uno ce l'hanno, e li ho letti prima di scriverlo:
+ * Codex CLI porta `current_date` e `timezone` nel world state accanto a cwd e
+ * shell; OpenClaw ha una sezione `## Temporal Context` con `Current date` e
+ * `Time zone`; Hermes appende `Session ID`, `Model`, `Provider`, `Platform` a
+ * una riga di data. Nessuno lascia il modello a indovinare.
+ *
+ * ## Cosa c'è dentro, e perché ognuna serve
+ *
+ *  - **Il momento**, con fuso **e offset UTC**. La sigla da sola non basta:
+ *    Hermes lo argomenta e ha ragione — i tool che accettano istanti rifiutano
+ *    i datetime naive, e vicino a un cambio d'ora indovinare fra due sigle
+ *    scrive il record sul giorno sbagliato senza dirlo.
+ *  - **La superficie**, perché `voice.md` ha una regola che dipende da quella
+ *    («non uso LaTeX su superfici che non lo renderizzano») e fino a qui era
+ *    insoddisfacibile: la regola c'era, il dato per applicarla no.
+ *  - **Con chi stai parlando**: il canale privato dell'owner, o una stanza.
+ *    È la distinzione su cui gira tutto il resto — `voice.md` §«Quando parlo in
+ *    gruppo» chiede di occupare meno spazio, e il modello non sapeva quale dei
+ *    due fosse. Non è un dettaglio di cortesia: è la stessa linea su cui il
+ *    prompt cambia classe.
+ *  - **Il modello e il profilo**, perché «non so quale modello mi esegue» è una
+ *    risposta che Muffin dà spesso e che non deve dare: il profilo decide
+ *    quanti tool vede e quante chiamate può fare in un turno, e sono numeri che
+ *    cambiano cosa è ragionevole tentare.
+ *
+ * ## Perché sta nella coda volatile e non in `systemPrompts`
+ *
+ * I prompt di sistema si assemblano una volta all'avvio proprio per restare un
+ * prefisso cacheable byte per byte; un orologio lì davanti è l'errore che la
+ * documentazione di Anthropic sul prompt caching chiama per nome — «il
+ * breakpoint su contenuto che cambia a ogni richiesta». Stessa ragione, e
+ * stesso posto, del piano e del recall.
+ *
+ * Hermes va oltre e tiene la **data senza i minuti** anche nella parte
+ * volatile, perché da loro quella parte viene ricostruita (compattazione,
+ * ripresa, turno del gateway) e un minuto diverso butta la KV cache. Da noi
+ * quel costo non c'è: questo blocco vive dentro l'**ultimo** messaggio utente,
+ * che è nuovo comunque, e nel record della sessione si salva il testo senza —
+ * quindi il prefisso dei turni successivi non lo contiene e resta identico. I
+ * minuti sono gratis, e un agente che sa che ore sono è meglio di uno che sa
+ * che giorno è.
+ */
+export function ambienteSection(a: {
+  adesso: Date;
+  surface: string;
+  /** `owner` = il canale privato dell'owner; `group` = una stanza con altre persone. */
+  classe: TenantClass;
+  model: string;
+  profilo: string;
+  timeZone?: string;
+}): string {
+  const zona = a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
+  // che parla italiano non deve leggere «Friday» per sapere che giorno è.
+  const quando = new Intl.DateTimeFormat('it-IT', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: zona,
+  }).format(a.adesso);
+  const dove = SUPERFICI[a.surface] ?? a.surface;
+  const conChi =
+    a.classe === 'owner'
+      ? "in privato con l'owner"
+      : 'in un gruppo, dove ci sono altre persone oltre a chi ti ha scritto';
+  return [
+    // `## Questo turno` e non `## Dove sei`: `GROUP_PERSONA` ha già una
+    // `## Dove sei adesso` — la postura da ospite in una stanza — e due sezioni
+    // quasi omonime, una stabile e una che cambia a ogni turno, sono confuse
+    // per chi legge e per il modello. Trovato facendole collidere.
+    '## Questo turno',
+    '',
+    `- Adesso: ${quando} — ${zona}, ${offsetUtc(a.adesso, zona)}.`,
+    `- Superficie: ${dove}, ${conChi}.`,
+    `- Ti sta eseguendo: ${a.model} (profilo ${a.profilo}).`,
+  ].join('\n');
+}
+
+/**
+ * L'offset da UTC, come `UTC+02:00`.
+ *
+ * Non è ridondante col nome del fuso, ed è Hermes ad averlo argomentato meglio:
+ * il nome IANA da solo obbliga a sapere se in quel momento vige l'ora legale, e
+ * vicino a un cambio d'ora indovinarlo mette un record sul giorno sbagliato in
+ * silenzio. L'offset è il dato che non richiede di sapere niente.
+ */
+function offsetUtc(quando: Date, zona: string): string {
+  const parti = new Intl.DateTimeFormat('en-US', { timeZone: zona, timeZoneName: 'longOffset' }).formatToParts(quando);
+  const nome = parti.find((p) => p.type === 'timeZoneName')?.value ?? '';
+  // `longOffset` dà già `GMT+02:00`; a UTC dà `GMT`, che va detto per intero.
+  return nome === 'GMT' ? 'UTC+00:00' : nome.replace('GMT', 'UTC');
+}
+
+/**
  * One block of a system prompt, named and sourced.
  *
  * `name`/`source` exist for exactly one consumer, `muffin prompt show
@@ -248,6 +367,17 @@ export function buildSystemPromptBlocks(
   // The operational rules and the safe-mode note stay: they are about the turn,
   // not about the owner, and an agent that cannot say why it just refused is
   // the silent failure this repository keeps paying for.
+  //
+  // **The consequence of (1) and (3) together, which bites whoever next trims
+  // these files.** `voice.md` reaches both classes; `identity.md` reaches only
+  // the owner. So a sentence in `voice.md` that also appears in `identity.md`
+  // is *not* redundant — it is the group's only copy, and deleting it as a
+  // duplicate silently removes a behavioural floor from the room full of
+  // strangers while the owner's prompt still looks fine. On 28/08/2026 the
+  // reverse cut was the right one: `persona.md` is owner-only and sits beside
+  // the sealed pact that already says most of it, so it shrank by a third and
+  // `voice.md` was left whole. `muffin prompt show --eco` reports the overlap
+  // but does not know this rule; it measures, it does not decide.
   const group: PromptBlock[] = [
     { name: 'persona', source: 'agent/context/assemble.ts (GROUP_PERSONA)', text: GROUP_PERSONA },
     { name: 'voice', source: 'voice.md', text: voice },
@@ -293,7 +423,15 @@ function concat(parts: string[]): string {
  *    calls and said nothing until it was over.
  */
 const WORK_RULES = [
-  '## Come lavori',
+  // `#` e non `##`, ed è una correzione di struttura, non di stile. I quattro
+  // blocchi si concatenano con una riga vuota, e i primi tre aprono con `#`
+  // (`# Muffin`, `# Identità`, `# Voce`): un `##` qui dentro finiva
+  // **annidato sotto «Voce»**, cioè le regole su come usare i tool si
+  // leggevano come una sottosezione di come si scrive. La documentazione di
+  // Anthropic sul context engineering chiede sezioni distinte, delimitate da
+  // intestazioni; questa non lo era, e nessuno lo vedeva perché ogni file si
+  // legge da solo e la gerarchia esiste solo dopo la concatenazione.
+  '# Come lavori',
   '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
   "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
@@ -303,7 +441,7 @@ const WORK_RULES = [
 ].join('\n');
 
 const SAFE_MODE_NOTE =
-  '## Modalità sicura\nIl Root of Trust è divergente: alcune capability sono negate. Dillo se ti impedisce di fare qualcosa.';
+  '# Modalità sicura\nIl Root of Trust è divergente: alcune capability sono negate. Dillo se ti impedisce di fare qualcosa.';
 
 /**
  * The character a group gets. Pure muffin: the same for every install, no
