@@ -61,7 +61,27 @@ export function cmdUndo(argv: string[], home = paths().home): number {
     return 0;
   }
 
-  const bersaglio = argv.includes('--last') ? journal.turns()[0] : turno;
+  let bersaglio = turno;
+  if (argv.includes('--last')) {
+    const ultimo = journal.ultimo();
+    if (ultimo !== null && 'ambigui' in ultimo) {
+      // Non si tira a sorte su un'operazione distruttiva. Succede solo se due
+      // turni hanno l'ultima copia nello stesso istante **e** lo stesso numero
+      // d'ordine, cioè se due processi li hanno creati insieme; l'owner ha i
+      // due nomi e sceglie lui.
+      process.stderr.write(
+        `due turni hanno l'ultima copia nello stesso istante, non so quale sia «l'ultimo»:
+` +
+          ultimo.ambigui.map((t) => `    muffin undo ${t} --yes
+`).join('') +
+          `
+scegli tu: disfare quello sbagliato non si disfà.
+`,
+      );
+      return 1;
+    }
+    bersaglio = ultimo === null ? undefined : ultimo.turnId;
+  }
 
   if (bersaglio === undefined) {
     // Nessun bersaglio: è la lista, non un errore d'uso. Un `muffin undo` a
