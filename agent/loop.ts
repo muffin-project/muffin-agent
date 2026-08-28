@@ -14,7 +14,7 @@ import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
-import { tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
+import { ambienteSection, tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
 import { historyTaint, reinjectedHistory, type ReinjectedHistory } from './context/history-taint.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
@@ -1282,7 +1282,7 @@ async function drive(
     snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken));
+    messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name));
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -2807,6 +2807,18 @@ function buildContext(
    * accident. See `agent/context/history-taint.ts`'s `reinjectedHistory`.
    */
   spoken: ReinjectedHistory,
+  /**
+   * Il momento del turno.
+   *
+   * Passato, non letto qui, per la stessa ragione di `open` e `spoken`: la
+   * funzione compone e non decide, e un `new Date()` dentro renderebbe questa
+   * funzione impossibile da provare — la data cambierebbe a ogni esecuzione del
+   * test. Il chiamante ha già il suo orologio iniettabile (`deps.now`).
+   */
+  adesso: Date,
+  /** Quale modello sta rispondendo, e con quale profilo. Vedi `ambienteSection`. */
+  modello: string,
+  profilo: string,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -2852,6 +2864,18 @@ function buildContext(
    */
   const plan = todoSection(open);
 
+  /**
+   * Che momento è, e dove stai parlando. Vedi `ambienteSection`: senza,
+   * chiedere l'ora faceva partire una richiesta di permesso per `sys.shell`.
+   */
+  const ambiente = ambienteSection({
+    adesso,
+    surface: input.surface,
+    classe: tenantClass(input.principal, input.tenant),
+    model: modello,
+    profilo,
+  });
+
   // Recalled memory rides in the same turn as the message it is context for, not
   // as a separate user turn the model might answer. It is already fenced and
   // framed as low-authority context (renderForPrompt); here it simply precedes
@@ -2860,6 +2884,7 @@ function buildContext(
     role: 'user',
     content: [
       ...recalled,
+      { type: 'text' as const, text: ambiente },
       ...(plan === '' ? [] : [{ type: 'text' as const, text: plan }]),
       // Le immagini stanno **qui**, non nel record.
       //

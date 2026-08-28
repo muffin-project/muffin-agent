@@ -59,23 +59,29 @@ describe("the REPL's cli surface", () => {
 
   it('writes the message and gives the prompt back', async () => {
     const { out } = capture();
-    const rl = { prompt: vi.fn() };
+    const rl = { cancella: vi.fn(), redraw: vi.fn() };
     const registry = new SurfaceRegistry([cliSurface(makeReplCliWrite(rl))]);
 
     await expect(registry.deliver('cli', 'promemoria: chiama Marco')).resolves.toEqual({ delivered: true });
     expect(out.join('')).toContain('promemoria: chiama Marco');
-    expect(rl.prompt).toHaveBeenCalledTimes(1);
+    // Prima si toglie il riquadro, poi si scrive, poi si rimette: senza la
+    // prima mossa il messaggio finisce dentro la riga di input.
+    expect(rl.cancella).toHaveBeenCalledTimes(1);
+    expect(rl.redraw).toHaveBeenCalledTimes(1);
   });
 
   it('re-prompts even if writing throws, so the REPL never looks hung', async () => {
-    const rl = { prompt: vi.fn() };
+    const rl = { cancella: vi.fn(), redraw: vi.fn() };
     vi.spyOn(process.stdout, 'write').mockImplementation(() => {
       throw new Error('EPIPE');
     });
     const write = makeReplCliWrite(rl);
 
     expect(() => write('x')).toThrow(/EPIPE/);
-    expect(rl.prompt).toHaveBeenCalledTimes(1);
+    // Prima si toglie il riquadro, poi si scrive, poi si rimette: senza la
+    // prima mossa il messaggio finisce dentro la riga di input.
+    expect(rl.cancella).toHaveBeenCalledTimes(1);
+    expect(rl.redraw).toHaveBeenCalledTimes(1);
   });
 });
 
