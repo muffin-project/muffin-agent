@@ -294,3 +294,67 @@ describe('un piano scritto sporco non si lava passando dalla tabella', () => {
     expect(second.taint).toBe(0);
   });
 });
+
+/**
+ * L'ambiente arriva al turno.
+ *
+ * Qui e non accanto a `ambienteSection` per la ragione che `agent/persona.test.ts`
+ * scrive in testa: una prova della funzione da sola sarebbe passata per mesi
+ * mentre nessuno la chiamava. Ed è esattamente il difetto che c'era —
+ * `voice.md` ha una regola che dipende dalla superficie, e il dato per
+ * applicarla non arrivava.
+ *
+ * Misurato su uno schermo vero il 28/08/2026: alla domanda «che giorno e che
+ * ora sono adesso?», Muffin ha provato a eseguire `date` con `sys.shell`, cioè
+ * ha chiesto un permesso all'owner per sapere l'ora.
+ */
+describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => {
+  it('il turno porta data, ora, fuso e superficie', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Capturing([answer('eccomi')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const session = runtime.deps.sessions.open('ambiente');
+
+    await runTurn(deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'che ore sono?' });
+    runtime.close();
+
+    const p = prompt(provider.seen[0]);
+    expect(p).toContain('## Adesso');
+    expect(p).toContain('un terminale');
+    // L'anno corrente, quale che sia quando gira il test: la prova è che ci sia
+    // una data vera, non che sia una data che ho scritto io.
+    expect(p).toContain(String(new Date().getFullYear()));
+  });
+
+  /** E la superficie è quella del turno, non una costante. */
+  it('e la superficie è quella su cui si sta parlando davvero', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Capturing([answer('eccomi')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const session = runtime.deps.sessions.open('ambiente-tg');
+
+    await runTurn(deps, { principal: owner, tenant: 'host', surface: 'telegram', session, text: 'ciao' });
+    runtime.close();
+
+    expect(prompt(provider.seen[0])).toContain('Telegram');
+  });
+
+  /**
+   * **Non** nel prompt di sistema, mai. Quello si assembla una volta all'avvio
+   * per restare un prefisso cacheable byte per byte, e un orologio lì davanti è
+   * l'errore che la documentazione di Anthropic sul prompt caching chiama per
+   * nome — «il breakpoint su contenuto che cambia a ogni richiesta».
+   */
+  it('ma non nel prompt di sistema, che deve restare identico a se stesso', async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    try {
+      expect(runtime.deps.systemPrompts.owner).not.toContain('## Adesso');
+      expect(runtime.deps.systemPrompts.group).not.toContain('## Adesso');
+    } finally {
+      runtime.close();
+    }
+  });
+});

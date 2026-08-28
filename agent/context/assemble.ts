@@ -158,6 +158,59 @@ export function todoSection(open: TodoItem[]): string {
 }
 
 /**
+ * Le superfici, dette come le direbbe una persona.
+ *
+ * `voice.md` ha una regola che **dipende** da questo — «non uso LaTeX nei
+ * messaggi destinati a superfici che non lo renderizzano» — e fino al
+ * 28/08/2026 era insoddisfacibile: la regola c'era, il dato per applicarla no.
+ */
+const SUPERFICI: Readonly<Record<string, string>> = {
+  cli: 'un terminale',
+  telegram: 'Telegram',
+  discord: 'Discord',
+};
+
+/**
+ * Che momento è, e dove stai parlando.
+ *
+ * **Il difetto che chiude, misurato il 28/08/2026:** chiesto «che giorno e che
+ * ora sono adesso», Muffin ha provato a eseguire `date` con `sys.shell` — cioè
+ * ha chiesto un permesso all'owner per sapere l'ora. Non è una stranezza del
+ * modello: nel prompt la data non c'era, in nessuna forma. Un agente che ha
+ * memoria, uno scheduler, dei `todo` con delle scadenze e che nella sua persona
+ * dice «posso riprendere qualcosa dopo ore o giorni» non sapeva in che giorno
+ * fosse.
+ *
+ * **Perché sta nella coda volatile e non in `systemPrompts`.** I prompt di
+ * sistema si assemblano una volta all'avvio proprio per restare un prefisso
+ * cacheable byte per byte; un orologio lì davanti è letteralmente l'errore che
+ * la documentazione di Anthropic sul prompt caching chiama per nome — «il
+ * breakpoint su contenuto che cambia a ogni richiesta» — e costerebbe il
+ * prefisso caldo a ogni messaggio. Stessa ragione, e stesso posto, del piano e
+ * del recall.
+ *
+ * Si dice anche il fuso, perché «le 4:58» senza fuso non è un momento; e la
+ * superficie, perché è il dato che rende applicabile una regola che `voice.md`
+ * dà già per applicabile.
+ */
+export function ambienteSection(now: Date, surface: string, timeZone?: string): string {
+  const zona = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
+  // che parla italiano non deve leggere «Friday» per sapere che giorno è.
+  const quando = new Intl.DateTimeFormat('it-IT', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: zona,
+  }).format(now);
+  const dove = SUPERFICI[surface] ?? surface;
+  return ['## Adesso', '', `${quando} (${zona}). Stai parlando su ${dove}.`].join('\n');
+}
+
+/**
  * One block of a system prompt, named and sourced.
  *
  * `name`/`source` exist for exactly one consumer, `muffin prompt show
@@ -304,7 +357,15 @@ function concat(parts: string[]): string {
  *    calls and said nothing until it was over.
  */
 const WORK_RULES = [
-  '## Come lavori',
+  // `#` e non `##`, ed è una correzione di struttura, non di stile. I quattro
+  // blocchi si concatenano con una riga vuota, e i primi tre aprono con `#`
+  // (`# Muffin`, `# Identità`, `# Voce`): un `##` qui dentro finiva
+  // **annidato sotto «Voce»**, cioè le regole su come usare i tool si
+  // leggevano come una sottosezione di come si scrive. La documentazione di
+  // Anthropic sul context engineering chiede sezioni distinte, delimitate da
+  // intestazioni; questa non lo era, e nessuno lo vedeva perché ogni file si
+  // legge da solo e la gerarchia esiste solo dopo la concatenazione.
+  '# Come lavori',
   '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
   "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
@@ -314,7 +375,7 @@ const WORK_RULES = [
 ].join('\n');
 
 const SAFE_MODE_NOTE =
-  '## Modalità sicura\nIl Root of Trust è divergente: alcune capability sono negate. Dillo se ti impedisce di fare qualcosa.';
+  '# Modalità sicura\nIl Root of Trust è divergente: alcune capability sono negate. Dillo se ti impedisce di fare qualcosa.';
 
 /**
  * The character a group gets. Pure muffin: the same for every install, no
