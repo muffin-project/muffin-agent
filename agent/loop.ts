@@ -1282,7 +1282,7 @@ async function drive(
     snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken, now()));
+    messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name));
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -2816,6 +2816,9 @@ function buildContext(
    * test. Il chiamante ha già il suo orologio iniettabile (`deps.now`).
    */
   adesso: Date,
+  /** Quale modello sta rispondendo, e con quale profilo. Vedi `ambienteSection`. */
+  modello: string,
+  profilo: string,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -2865,7 +2868,13 @@ function buildContext(
    * Che momento è, e dove stai parlando. Vedi `ambienteSection`: senza,
    * chiedere l'ora faceva partire una richiesta di permesso per `sys.shell`.
    */
-  const ambiente = ambienteSection(adesso, input.surface);
+  const ambiente = ambienteSection({
+    adesso,
+    surface: input.surface,
+    classe: tenantClass(input.principal, input.tenant),
+    model: modello,
+    profilo,
+  });
 
   // Recalled memory rides in the same turn as the message it is context for, not
   // as a separate user turn the model might answer. It is already fenced and

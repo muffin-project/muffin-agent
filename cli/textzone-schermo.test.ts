@@ -214,3 +214,48 @@ describe('a schermo resta un riquadro solo', () => {
     expect(s.righe.filter((r) => r.startsWith('╰'))).toHaveLength(1);
   });
 });
+
+describe('un messaggio che arriva mentre stai scrivendo', () => {
+  /**
+   * Il difetto vero, visto su uno schermo dentro tmux il 28/08/2026: un avviso
+   * del consolidatore è comparso **dentro** il riquadro dell'input, dopo il
+   * `›`, come se l'avesse battuto qualcuno. Poi ne è comparso un secondo sotto.
+   *
+   * La causa: `makeReplCliWrite` chiamava `rl.prompt()` — l'interfaccia di
+   * readline — rimasta lì dopo che #218 ha tolto readline. Ridisegnare non
+   * basta: chi consegna scrive dove sta il cursore, e il cursore sta dentro il
+   * riquadro. Prima bisogna **togliere**.
+   */
+  it('finisce sopra il riquadro, non dentro, e il riquadro resta uno', async () => {
+    const input = tastieraFinta();
+    const output = schermoFinto();
+    const tz = makeTextzone({ input: input as never, output: output as never });
+    const letto = tz.read(CORNICE);
+
+    for (const c of 'sto scrivendo') {
+      input.write(c);
+      await new Promise((r) => setImmediate(r));
+    }
+
+    // La consegna fuori banda, nell'ordine che `makeReplCliWrite` usa.
+    tz.cancella();
+    output.write('\n⏰ promemoria: chiama Marco\n');
+    tz.redraw();
+    await new Promise((r) => setImmediate(r));
+
+    input.write('\r');
+    await letto;
+
+    const s = applica(output.scritture);
+    const righe = s.righe;
+    const avviso = righe.findIndex((r) => r.includes('chiama Marco'));
+    const cornice = righe.findIndex((r) => r.startsWith('╭'));
+    expect(avviso).toBeGreaterThanOrEqual(0);
+    // Sopra, non dentro: la riga dell'avviso precede il bordo alto.
+    expect(avviso).toBeLessThan(cornice);
+    // E dentro il riquadro c'è ancora quello che si stava scrivendo.
+    expect(righe.find((r) => r.includes('›'))).toContain('sto scrivendo');
+    expect(riquadri(righe)).toBe(1);
+    scrollbackIntatto(righe);
+  });
+});
