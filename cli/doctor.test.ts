@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeSecret } from '../core/config/config.js';
 import { TurnStore } from '../core/turns/store.js';
@@ -822,7 +823,18 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
 
   it('a fresh install reports every tracked default as up-to-date, ok — never a warn A10 does not expect', async () => {
     const dir = home();
-    const r = await runDoctor(dir);
+    // **Il checkout va detto, non lasciato all'ambiente.** Senza questo il test
+    // usa `findCheckoutRoot`, che per `muffin update` prende di proposito la
+    // *prima* riga di `git worktree list` — cioè sempre il checkout
+    // principale. Ma `runInit` qui sopra ha copiato i default da **questo**
+    // albero: dentro un worktree che tocca `defaults/`, il confronto è fra due
+    // checkout diversi e la riga esce `adoptable`. Il 28/08/2026 è successo
+    // esattamente questo, e il rosso sembrava un difetto della modifica invece
+    // che di dove girava il test. La proprietà che questo test vuole provare è
+    // «i file appena copiati risultano allineati alla sorgente da cui sono
+    // stati copiati», e quella sorgente è nota: non serve indovinarla.
+    const questoCheckout = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const r = await runDoctor(dir, { checkoutRoot: questoCheckout });
     const defaultsChecks = r.checks.filter((c) => c.name.startsWith('default '));
     // At minimum the files the research doc measured — a fresh `muffin init`
     // just copied them from this very checkout, so every one must read as
