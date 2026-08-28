@@ -12,6 +12,11 @@
 # prerequisiti del workflow (bubblewrap, socat, ripgrep) e gira la stessa
 # suite. Se le due divergono, quella giusta e il workflow.
 #
+# ATTENZIONE: prova cio che e **committato**, non il working tree. Il clone qui
+# sotto prende il ramo, quindi una modifica non committata non entra nel
+# container e il verde che ne esce parla di HEAD. Committa prima di girarlo,
+# oppure quel verde risponde a una domanda diversa da quella che hai fatto.
+#
 #   evals/acceptance/gate-linux.sh <repo> <dir-di-lavoro>
 #   MUFFIN_GATE_IMAGE=<immagine> evals/acceptance/gate-linux.sh …
 #

@@ -58,6 +58,7 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
     },
     fileUrl: async () => 'https://example.test/file',
     setMyCommands: async () => true,
+    answerCallbackQuery: async () => true,
     ...(makeOverrides ? makeOverrides(calls) : {}),
   };
   return { api, calls };

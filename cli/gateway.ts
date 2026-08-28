@@ -801,7 +801,11 @@ export async function cmdGatewayRun(
     process.stderr.write(`socket di controllo non aperto: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 
-  const surfaces = connectSurfaces(runtime, home, gatewayCliWrite);
+  // La spinta alla corsia: quando l'owner risponde a un'approvazione da
+  // Telegram, il turno riparte subito invece che al prossimo battito.
+  const surfaces = connectSurfaces(runtime, home, gatewayCliWrite, () => {
+    turnLane.tick();
+  });
   stopSurfaces = surfaces.stop;
   // Bound now that the surfaces exist. Before this line a resumed turn would be
   // recorded `failed:` rather than sent nowhere quietly — the window is the boot

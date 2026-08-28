@@ -23,6 +23,18 @@ export default defineConfig({
     // joining the fast suite and blowing the CI budget nobody would notice
     // until the bill did. `vitest.acceptance.config.ts` is the separate,
     // slower command (`npm run test:acceptance`) that runs these on purpose.
-    exclude: ['**/node_modules/**', '**/.claude/worktrees/**', 'evals/acceptance/**/*.accept.ts'],
+    //
+    // `.gate-linux/` è il clone superficiale che `evals/acceptance/gate-linux.sh`
+    // lascia sul disco: `.gitignore` lo copre, vitest no. Misurato il
+    // 28/08/2026 — dopo una passata del gate la suite passava da 196 file a
+    // 396 e da 2587 test a 5174, cioè girava due volte, la seconda contro una
+    // copia congelata del codice. Un verde che vale metà di quello che dice è
+    // peggio di un rosso.
+    exclude: [
+      '**/node_modules/**',
+      '**/.claude/worktrees/**',
+      '**/.gate-linux/**',
+      'evals/acceptance/**/*.accept.ts',
+    ],
   },
 });

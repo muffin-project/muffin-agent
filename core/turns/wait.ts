@@ -78,10 +78,20 @@ export const MAX_SUSPENDED_PER_TENANT = 8;
  * adding its evaluator in the same change; `satisfied` below is a `switch` with
  * an exhaustive `default`, so the build says so.
  */
-type WaitKind = 'process_exit';
+type WaitKind = 'process_exit' | 'approval';
 
-/** `process_exit:<pid>` — the persisted form, one string, so the column stays a column. */
-export type WaitFor = { kind: WaitKind; pid: number };
+/**
+ * `process_exit:<pid>` o `approval:<id>` — la forma persistita: una stringa,
+ * così la colonna resta una colonna.
+ *
+ * **`approval` non è armabile dal modello.** `parseWait` — l'unico parser che
+ * legge argomenti di una tool call — produce solo `process_exit`, e non ha
+ * nessun ramo che arrivi qui. Una barriera d'approvazione la arma il kernel
+ * quando *lui* decide di chiedere, mai il modello dicendo di volerla: potersela
+ * armare da sé vorrebbe dire potersi far riprendere da una risposta che nessuno
+ * ha dato.
+ */
+export type WaitFor = { kind: 'process_exit'; pid: number } | { kind: 'approval'; id: string };
 
 export type WaitSpec = {
   /** ISO 8601. The deadline, always present. */
@@ -95,7 +105,7 @@ export type WaitRefusal = { ok: false; why: string };
 export type WaitParsed = { ok: true; spec: WaitSpec };
 
 export function encodeWaitFor(waitFor: WaitFor): string {
-  return `${waitFor.kind}:${waitFor.pid}`;
+  return waitFor.kind === 'approval' ? `approval:${waitFor.id}` : `process_exit:${waitFor.pid}`;
 }
 
 /**
@@ -109,7 +119,13 @@ export function encodeWaitFor(waitFor: WaitFor): string {
 export function decodeWaitFor(raw: string | null): WaitFor | null {
   if (raw === null) return null;
   const [kind, rest] = raw.split(':', 2);
-  if (kind !== 'process_exit' || rest === undefined) return null;
+  if (rest === undefined || rest === '') return null;
+  if (kind === 'approval') {
+    // Esadecimale, come lo scrive `ApprovalStore.ask`. Un id di un'altra forma
+    // è una riga che non abbiamo scritto noi.
+    return /^[0-9a-f]+$/.test(rest) ? { kind: 'approval', id: rest } : null;
+  }
+  if (kind !== 'process_exit') return null;
   const pid = Number(rest);
   return Number.isInteger(pid) && pid > 0 ? { kind: 'process_exit', pid } : null;
 }
@@ -166,12 +182,32 @@ export function parseWait(
  * crash. This is `core/lock/durable.ts`'s `pidAlive`, reused rather than
  * rewritten.
  */
-export function satisfied(waitFor: WaitFor, alive: (pid: number) => boolean = pidAlive): boolean {
+export type BarrierChecks = {
+  alive?: ((pid: number) => boolean) | undefined;
+  /**
+   * L'owner ha risposto a questa domanda? `ApprovalStore.answered`.
+   *
+   * Assente vuol dire «questo processo non sa rispondere», e la barriera resta
+   * **non** soddisfatta: un turno che aspetta una conferma non si sveglia
+   * perché chi guarda non ha il registro sott'occhio. Il turno ha comunque la
+   * sua scadenza, che è la ragione per cui `wakeAt` è obbligatorio.
+   */
+  answered?: ((id: string) => boolean) | undefined;
+};
+
+export function satisfied(waitFor: WaitFor, checks: BarrierChecks | ((pid: number) => boolean) = {}): boolean {
+  // `satisfied(barrier, alive)` era la firma di prima, e i suoi chiamanti sono
+  // in due file. Accettare ancora la funzione nuda costa una riga e toglie una
+  // modifica meccanica da un punto — la sweep delle barriere — dove sbagliare
+  // vuol dire turni che non si svegliano più.
+  const c: BarrierChecks = typeof checks === 'function' ? { alive: checks } : checks;
   switch (waitFor.kind) {
     case 'process_exit':
-      return !alive(waitFor.pid);
+      return !(c.alive ?? pidAlive)(waitFor.pid);
+    case 'approval':
+      return c.answered !== undefined && c.answered(waitFor.id);
     default:
-      return assertNever(waitFor.kind);
+      return assertNever(waitFor);
   }
 }
 
@@ -186,6 +222,14 @@ export function satisfied(waitFor: WaitFor, alive: (pid: number) => boolean = pi
  * "the process exited" and "you ran out of time" lead to different next moves.
  */
 export function wakeReport(waitFor: WaitFor | null, reason: 'timer' | 'event'): string {
+  if (waitFor?.kind === 'approval') {
+    // Cosa ha risposto l'owner non si dice qui: lo dice il ramo che rifà la
+    // chiamata, perché è quello che ha letto il registro. Qui si dice soltanto
+    // che l'attesa è finita e come — e le due uscite portano a mosse diverse.
+    return reason === 'event'
+      ? "L'owner ha risposto alla richiesta di approvazione. Rifai la chiamata che stavi facendo: se ha detto di sì parte, se ha detto di no te lo dico e non insisti."
+      : "L'owner non ha risposto alla richiesta di approvazione entro il tempo previsto. Non l'hai fatto. Diglielo, e proponi cosa fare invece — non rifare la chiamata sperando che stavolta passi.";
+  }
   if (reason === 'event' && waitFor !== null) {
     return `Attesa finita: il processo ${waitFor.pid} è uscito. Riprendi da dove eri.`;
   }
