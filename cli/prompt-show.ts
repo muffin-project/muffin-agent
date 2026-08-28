@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { tenantClass, type PromptBlock, type TenantClass } from '../agent/context/assemble.js';
+import { caratteriInEco, eco } from '../agent/context/eco.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { paths } from '../core/config/config.js';
 import type { Principal, TenantId } from '../core/policy/types.js';
@@ -37,6 +38,8 @@ export const PROMPT_USAGE = `usage: muffin prompt show [--surface cli|telegram|d
   --tenant    tenant esplicito (default: host; con --member, group:<surface>:preview)
   --blocks    annota il testo con intestazioni di provenienza e sha256 per blocco —
               l'output NON è più byte-identico al prompt reale, solo per ispezione
+  --eco       invece del prompt, le affermazioni che compaiono in più di un blocco:
+              la stessa regola detta due o quattro volte in registri diversi
 `;
 
 const SURFACES = ['cli', 'telegram', 'discord'] as const;
@@ -55,6 +58,7 @@ export function cmdPromptShow(home: string, argv: string[]): number {
       member: { type: 'boolean' },
       tenant: { type: 'string' },
       blocks: { type: 'boolean' },
+      eco: { type: 'boolean' },
     },
     allowPositionals: false,
   });
@@ -105,7 +109,9 @@ export function cmdPromptShow(home: string, argv: string[]): number {
         `[tool] ${runtime.deps.tools.length} tool registrati in questo processo; quali sono esposti al turno dipende da principal e profilo (agent/context/assemble.ts visibleTools), non da questo comando\n`,
     );
 
-    if (values.blocks) {
+    if (values.eco === true) {
+      process.stdout.write(`${renderEco(runtime.promptBlocks[cls], charCount)}\n`);
+    } else if (values.blocks) {
       process.stdout.write(`${renderBlocks(home, runtime.promptBlocks[cls])}\n`);
     } else {
       process.stdout.write(`${redactPrompt(prompt)}\n`);
@@ -145,4 +151,36 @@ function renderBlocks(home: string, blocks: readonly PromptBlock[]): string {
     parts.push(`--- blocco: ${block.name} (${provenance}) ---\n${redactPrompt(block.text)}`);
   }
   return parts.join('\n\n');
+}
+
+/**
+ * Il rapporto sull'eco.
+ *
+ * Non decide niente e non propone tagli: dice quali affermazioni si ripetono
+ * fra blocchi e quanto prompt è coinvolto. La decisione su quale delle due
+ * copie tenere dipende da quale blocco *possiede* quel tema, ed è una cosa che
+ * sa chi legge, non una soglia.
+ *
+ * `identity.md` merita una nota a parte ed è il motivo per cui la sorgente si
+ * stampa sempre: è sigillato sotto `rot/`, quindi in ogni coppia che lo tocca
+ * il lato da tagliare è **l'altro**. Non c'è una scelta da fare lì.
+ */
+function renderEco(blocchi: readonly PromptBlock[], caratteriTotali: number): string {
+  const presenti = blocchi.filter((b) => b.text.length > 0);
+  const trovate = eco(presenti);
+  if (trovate.length === 0) return 'Nessuna eco sopra soglia fra i blocchi.';
+
+  const inEco = caratteriInEco(trovate);
+  const quota = Math.round((inEco / caratteriTotali) * 100);
+  const righe = [
+    `${trovate.length} coppie sopra soglia; ${inEco} caratteri su ${caratteriTotali} (${quota}%) stanno in affermazioni ripetute altrove.`,
+    '',
+  ];
+  for (const e of trovate) {
+    righe.push(`${Math.round(e.somiglianza * 100)}%  ${e.a.blocco} ↔ ${e.b.blocco}`);
+    righe.push(`      ${e.a.blocco}: ${e.a.testo}`);
+    righe.push(`      ${e.b.blocco}: ${e.b.testo}`);
+    righe.push('');
+  }
+  return righe.join('\n').trimEnd();
 }

@@ -57,20 +57,28 @@ describe('persona in the system prompt', () => {
   });
 
   it('gives a fresh install a character, without the owner having written a word', () => {
-    // identity.md ships empty by default (see A9 in M5-BIS.md) — on an install
-    // that has not adopted this repo's committed pact, a first run has three
-    // bullet points and a set of formatting rules where the personality should
-    // be, unless persona.md alone already reads as Muffin. That is what this
-    // proves: `home` here has no edits to identity.md at all.
+    // The comment that used to sit here said `identity.md` ships empty and that
+    // therefore `persona.md` alone had to carry the whole floor. That stopped
+    // being true at commit c090dce — the file-level docstring above says so, and
+    // the two contradicted each other for months. Measured 28/08/2026 on a real
+    // `runInit` home: `defaults/rot/identity.md` ships 4.928 bytes of authored
+    // pact and reaches the prompt.
+    //
+    // It matters because it decides where a floor is allowed to live. On
+    // 28/08 `persona.md` lost a third of its text to de-duplication, and the
+    // honesty rule below was one of the sentences cut — it is asserted here
+    // still, because the guarantee is about the *prompt*, not about which file
+    // pays for it. If `identity.md` ever ships empty again, this goes red, and
+    // that is the correct place for it to go red.
     const home = bootHome();
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).toContain('Sono Muffin');
-    // Two load-bearing promises persona.md makes about itself: a second
-    // perspective with memory, not a mirror of whatever was just said — and
-    // honest about whether an action actually happened.
+    // Two load-bearing promises: a second perspective with memory, not a mirror
+    // of whatever was just said — and honest about whether an action happened.
     expect(prompt).toMatch(/seconda prospettiva con memoria/);
-    expect(prompt).toMatch(/Non descrivo un'azione come fatta se non l'ho fatta davvero/);
+    expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato, eseguito/);
+    expect(prompt).toMatch(/Non descrivi un lavoro come completato se non lo è/);
     // The said/inferred discipline the memory layer enforces in SQL.
     expect(prompt).toContain('quello che ho inferito');
   });
