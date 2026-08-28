@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -52,5 +52,37 @@ describe('session transcript', () => {
   it('starts empty for a session that never existed', () => {
     const store = new SessionStore(home());
     expect(store.read(store.open('mai-vista'))).toEqual([]);
+  });
+});
+
+describe('rotate: la conversazione di prima si chiude senza cambiare id', () => {
+  /**
+   * Serve a `/new` dove l'id non è libero — Telegram lo deriva dalla chat.
+   * Quello che deve valere è che l'id resti lo stesso (altrimenti sarebbe
+   * un'altra chat) e che la storia non venga distrutta: `/new` si scrive di
+   * fretta, e tre lettere non possono cancellare una conversazione.
+   */
+  it('mette il file da parte e riparte vuota, stesso id', () => {
+    const dir = home();
+    const store = new SessionStore(dir);
+    const s = store.open('telegram:123');
+    store.append(s, msg('user', 'ciao'));
+    expect(store.read(s)).toHaveLength(1);
+
+    const archivio = store.rotate(s, new Date('2026-08-28T10:00:00.000Z'));
+
+    expect(archivio).not.toBeNull();
+    expect(existsSync(archivio!)).toBe(true);
+    // Stesso id, stesso file: è la stessa chat che riparte, non un'altra.
+    expect(store.open('telegram:123').file).toBe(s.file);
+    expect(store.read(s)).toEqual([]);
+    // La storia esiste ancora, nel file messo da parte.
+    expect(readFileSync(archivio!, 'utf8')).toContain('ciao');
+  });
+
+  /** Una conversazione mai cominciata è già nuova: non è un errore, è `null`. */
+  it('e su una conversazione mai cominciata non archivia niente', () => {
+    const store = new SessionStore(home());
+    expect(store.rotate(store.open('telegram:123'))).toBeNull();
   });
 });

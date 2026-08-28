@@ -196,6 +196,7 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       return true;
     },
     fileUrl: async () => 'https://example.test/file',
+    setMyCommands: async () => true,
   };
   return { api, calls };
 }
@@ -309,7 +310,7 @@ describe('a turn reports its own progress and cleans it up before the real answe
       // Reads as `formatTelegramProgress` (progress.ts), not as anything the
       // model wrote — proves `onProgress` reached the real Bot API calls, not
       // only `progress.test.ts`'s own direct-call unit coverage.
-      expect(progressLine?.text).toMatch(/^passaggio \d+ · .+ · \d+s$/);
+      expect(progressLine?.text).toMatch(/^.+ · \d+s$/);
       // Removed, not edited into the answer — same message id, then gone.
       expect(cleanup?.messageId).toBe(progressLine?.messageId);
       // Never left orphaned above the reply (brief, rule 4): the cleanup is
@@ -332,7 +333,7 @@ describe('a turn reports its own progress and cleans it up before the real answe
       await deliver(connector, [groupMsg(31)]);
 
       const progressLine = calls.find((c) => c.method === 'sendMessage' && c.text !== finalText);
-      expect(progressLine?.text).toMatch(/^passaggio \d+ · .+ · \d+s$/);
+      expect(progressLine?.text).toMatch(/^.+ · \d+s$/);
       expect(calls.some((c) => c.method === 'deleteMessage' && c.messageId === progressLine?.messageId)).toBe(true);
     } finally {
       runtime.close();

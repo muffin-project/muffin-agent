@@ -47,6 +47,11 @@ const SANDBOXED = 'shell_run';
 const REGISTERED = [
   'fs_read',
   'fs_list',
+  // Terzo, con le altre due letture, perché è una lettura: apre gli stessi
+  // file di `fs_read`, dallo stesso scope, e serve nello stesso momento —
+  // quando non sai ancora quale file aprire. Metterlo in fondo lo avrebbe
+  // esposto solo ai profili che non hanno il problema.
+  'fs_search',
   'fs_write',
   'memory_search',
   'document_read',
@@ -89,11 +94,20 @@ describe('quali tool vede davvero un turno', () => {
      */
     const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
     const profile = selectProfile('qwen3.8-27b', profiles);
-    // 14, alzato dai 10 originali (owner, 27/08) — un numero senza misura
-    // dietro, come lo era 10. Pinnato qui perché cambiarlo è una decisione,
-    // non un refactor: è la sola cosa che decide cosa il modello dell'owner
-    // può chiamare.
-    expect(profile.maxToolsExposed).toBe(14);
+    // 15, alzato da 14 il 28/08 per fare posto a `fs_search`. Il commento qui
+    // sotto chiamava «cerotto» esattamente questa mossa, e aveva ragione: il
+    // numero continua a non avere una misura dietro.
+    //
+    // Fatta lo stesso, e con una misura almeno sul lato del beneficio. Sul
+    // database dell'owner 19 chiamate su 94 erano `sys.shell`, quasi tutte
+    // `grep` e `ls -R`, ognuna con una conferma da dare a mano — perché
+    // cercare dentro i file non si poteva fare altrimenti. L'alternativa a
+    // questo +1 era perdere `sys_inspect`, cioè l'auto-ispezione, che è il
+    // primo della lista a cadere. Fra un cerotto dichiarato e un agente che
+    // non sa più guardarsi, il cerotto.
+    //
+    // La risposta strutturale resta quella scritta sotto, e non è un numero.
+    expect(profile.maxToolsExposed).toBe(15);
 
     const rt = realRuntime();
     rt.close();
