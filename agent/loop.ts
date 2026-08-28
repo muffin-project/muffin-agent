@@ -1403,15 +1403,19 @@ async function drive(
     /**
      * The plan, and the taint that comes with it — in that order.
      *
-     * `raiseTaint` **before** the rows reach the transcript, because the whole
-     * property is that the turn is decided at the tier of everything in its
-     * context. A plan written by a turn that had read the web is model text
-     * shaped by that page: shown to a later turn at tier 0 it would be laundered
-     * into the agent's own intention, which is the fetch-then-act pattern
-     * wearing a table (ADR-0047).
+     * `raiseCeiling` **before** the rows reach the transcript, because the
+     * whole property is that the turn is *decided* at the tier of everything in
+     * its context — a plan written by a turn that had read the web is model
+     * text shaped by that page, and this turn may not act as if it were not.
+     *
+     * `raiseCeiling`, not `raiseTaint` (ADR-0044 §Riconciliazione 2026-08-28):
+     * the plan item is *this turn's own reinjected past*, not something this
+     * turn did. Stamping this turn's own fresh output at the plan's inherited
+     * tier is what kept a session dirty long after the item that dirtied it —
+     * every clean answer re-poisoning the window it was meant to age out of.
      */
     const open = deps.todos.open(input.tenant, input.session.id);
-    snapshot.raiseTaint(planTaint(open));
+    snapshot.raiseCeiling(planTaint(open));
 
     /**
      * The session transcript, and the taint that comes with it — same order,
@@ -1423,10 +1427,20 @@ async function drive(
      * (`agent/context/history-taint.ts`'s own docstring). `taintForIds` is one
      * query for every `traceId` this window carries, not one per message: a
      * long session can hand this dozens of rows to resolve.
+     *
+     * `raiseCeiling`, same reasoning as the plan above, and the exact gap the
+     * 17/08 revision's own "Cosa NON copre" named and left open: without it, a
+     * clean turn two messages after a `fs_read` was still marked as tainted as
+     * the read that never aged out of the window, because every turn's own
+     * reply re-entered as new history at the tier it had merely *inherited*.
+     * The 17/08 fix stays — a turn sitting on tainted reinjected history still
+     * cannot act as if it were clean, `currentTaint()` still says so to every
+     * `check()` below — only the *stamp this turn leaves for the next one* no
+     * longer inherits a tier this turn did not itself produce.
      */
     const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
     const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
-    snapshot.raiseTaint(historyTaint(spoken.kept, taintByTrace));
+    snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
 
     messages.length = 0;
     messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name));
@@ -1807,12 +1821,17 @@ async function drive(
           surface: input.surface,
           createdAt: now().toISOString(),
           traceId: turn.traceId,
-          // The turn's taint *right now* — read the same way the memory
-          // episode a few lines down does, and for the same reason (03 §2):
-          // an answer derived from tier-3 content is tier-3 the moment it is
-          // written, not a literal 0 a later turn in this session would
-          // reinject as clean.
-          tier: snapshot.currentTaint(),
+          // The turn's *intrinsic* taint, not its ceiling (ADR-0044
+          // §Riconciliazione 2026-08-28) — read the same way the memory episode
+          // a few lines down does. Still everything this turn itself produced
+          // or observed (a recall, a tool result this turn ran): 03 §2's rule
+          // — an answer derived from tier-3 content is tier-3 the moment it is
+          // written — is unchanged for that. What it excludes is a tier this
+          // turn only *inherited* from reinjected history/plan: stamping that
+          // here is what a *later*, unrelated turn's own clean reply would
+          // reinject as if it, too, had derived from the tainted content —
+          // the ratchet, not the provenance rule.
+          tier: snapshot.intrinsicTaint(),
         });
         if (deps.memory) {
           deps.memory.store.addEpisode({
@@ -1823,14 +1842,21 @@ async function drive(
             kind: 'message',
             content: text,
             /**
-             * The tier of the turn that produced it, never a literal.
+             * The turn's own intrinsic tier, never a literal — and, since
+             * ADR-0044 §Riconciliazione 2026-08-28, not the ceiling either.
              *
              * This line used to read `trustTier: 0`, and 03 §2 names exactly
              * what that is: «un riassunto di contenuto tier-3 è tier-3, sempre
              * — altrimenti la sintesi diventa una lavanderia del taint». The
              * model summarising a poisoned page into its reply is that summary,
              * and the whole of `raiseTaint` upstream was undone by one constant
-             * on the way out.
+             * on the way out. That argument still holds exactly as written —
+             * `intrinsicTaint()` still rises for a page *this turn* read. What
+             * it no longer inherits is a tier this turn only saw because an
+             * unrelated old exchange was sitting in its reinjected history: a
+             * plain "ciao" recalling a three-day-old note about a file read is
+             * not a summary of that file, and stamping it as one is the second
+             * defect the same date's fix named as still open.
              *
              * The laundering is not theoretical and it does not stop at the
              * write. `searchEpisodes` has no role filter and `indexBacklog`
@@ -1848,7 +1874,7 @@ async function drive(
              * own episode — has nothing to fire on. The graph invariant cannot
              * see this defect at all. Recall can, and does.
              */
-            trustTier: snapshot.currentTaint(),
+            trustTier: snapshot.intrinsicTaint(),
             createdAt: now().toISOString(),
           });
         }
@@ -3215,16 +3241,34 @@ function makeSnapshot(
   // that has not started, that is who is speaking. From M2 the recall raises it
   // too, and a tool result raises it further — monotonically, never down.
   let taint: TrustTier = from;
+  /**
+   * The ceiling, minus whatever `raiseCeiling` alone contributed — ADR-0044
+   * §Riconciliazione 2026-08-28. Starts equal to `taint`: a fresh turn's own
+   * `from` (its principal, or the content it was sent) is intrinsic to it by
+   * construction, and so is a resumed turn's — a crash mid-turn does not get to
+   * un-happen whatever this turn itself had already climbed to before it died.
+   */
+  let intrinsic: TrustTier = from;
   const cache = new Map<string, ReturnType<Decide>>();
   return {
     principal,
     tenant,
     currentTaint: () => taint,
+    intrinsicTaint: () => intrinsic,
     raiseTaint(tier) {
       if (tier > taint) {
         taint = tier;
         cache.clear(); // decisions taken at a lower taint no longer apply
       }
+      if (tier > intrinsic) intrinsic = tier;
+    },
+    raiseCeiling(tier) {
+      if (tier > taint) {
+        taint = tier;
+        cache.clear();
+      }
+      // `intrinsic` is deliberately left alone: this is exactly the raise that
+      // must not reach it.
     },
     invalidate: () => cache.clear(),
     check(capability, resource, args) {
