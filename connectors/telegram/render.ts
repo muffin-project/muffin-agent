@@ -75,12 +75,63 @@ export function toTelegramHtml(markdown: string): string {
   // Headings have no Telegram equivalent; bold is the closest honest rendering.
   text = text.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
 
+  // Le citazioni per ultime, e su `&gt;` invece che su `>`: a questo punto
+  // `escapeHtml` è già passato, e cercare il carattere originale non
+  // troverebbe niente. I blocchi di codice sono già parcheggiati, quindi una
+  // freccia dentro un esempio di shell non diventa mai una citazione.
+  text = quoteBlocks(text);
+
   // A NUL the input itself carried is dropped rather than restored: it cannot
   // be a valid index, and passing it through would put a control character in
   // a message.
   return text
     .replace(new RegExp(`${MARK}(\\d+)${MARK}`, 'g'), (m, i: string) => blocks[Number(i)] ?? m)
     .replace(new RegExp(MARK, 'g'), '');
+}
+
+/**
+ * Righe consecutive che cominciano con `>` in una citazione sola.
+ *
+ * Telegram ha `<blockquote>` da Bot API 6.4 e `<blockquote expandable>` da
+ * 7.10 — prima di questa funzione una citazione arrivava come `&gt; testo`,
+ * cioè il carattere grezzo, che è il modo in cui una risposta ben scritta
+ * arriva brutta.
+ *
+ * **Lunga vuol dire richiudibile.** Una citazione di quaranta righe in cima
+ * seppellisce la risposta sotto ciò che si stava citando: `expandable` la
+ * mostra chiusa, e chi vuole leggerla la apre. La soglia è sulle righe *e*
+ * sui caratteri perché entrambe le forme sono capaci di riempire lo schermo,
+ * una riga lunghissima e quaranta righe corte.
+ *
+ * Righe consecutive diventano **un** blocco: Telegram non annida le
+ * citazioni, e una sequenza di blocchi da una riga l'una si legge come una
+ * cosa rotta invece che come una citazione.
+ */
+function quoteBlocks(text: string): string {
+  const righe = text.split('\n');
+  const out: string[] = [];
+  let citate: string[] | null = null;
+
+  const chiudi = (): void => {
+    if (citate === null) return;
+    const corpo = citate.join('\n');
+    const lungo = citate.length > 10 || corpo.length > 500;
+    out.push(`<blockquote${lungo ? ' expandable' : ''}>${corpo}</blockquote>`);
+    citate = null;
+  };
+
+  for (const riga of righe) {
+    const m = /^&gt;\s?(.*)$/.exec(riga);
+    if (m) {
+      citate ??= [];
+      citate.push(m[1] ?? '');
+      continue;
+    }
+    chiudi();
+    out.push(riga);
+  }
+  chiudi();
+  return out.join('\n');
 }
 
 /**
@@ -96,55 +147,72 @@ export function splitHtml(html: string, max = TELEGRAM_MAX): string[] {
 
   const out: string[] = [];
   let rest = html;
-  /** Reopened at the head of the next piece when a cut lands inside a code block. */
-  let carry = '';
+  /** Reopened at the head of the next piece when a cut lands inside a block. */
+  let carry: Blocco | null = null;
 
-  while (carry.length + rest.length > max) {
-    const budget = max - carry.length;
+  while ((carry?.open.length ?? 0) + rest.length > max) {
+    const budget: number = max - (carry?.open.length ?? 0);
     // Once inside a block we stay inside until its closing tag goes out: after
     // the first cut the remaining text no longer contains `<pre>`, so asking the
     // text again would answer "not in a block" and emit an unterminated one.
     // The state lives in the loop.
-    const openTag = carry !== '' ? carry : openPreAt(rest, budget);
+    const aperto: Blocco | null = carry ?? openBlockAt(rest, budget);
 
-    if (openTag !== null) {
+    if (aperto !== null) {
       // A code block longer than one message. Splitting it is unavoidable, so
       // close the tags here and reopen them on the other side: the reader gets
       // several readable blocks instead of one broken one, and every message is
       // well-formed on its own.
-      const cut = lastLineBefore(rest, budget - CLOSE_PRE.length) ?? budget - CLOSE_PRE.length;
-      out.push(`${carry}${rest.slice(0, cut).trimEnd()}${CLOSE_PRE}`);
-      carry = openTag;
+      const cut = lastLineBefore(rest, budget - aperto.close.length) ?? budget - aperto.close.length;
+      out.push(`${carry?.open ?? ''}${rest.slice(0, cut).trimEnd()}${aperto.close}`);
+      carry = aperto;
       rest = rest.slice(cut).replace(/^\n/, '');
       continue;
     }
 
     const cut = safeCut(rest, budget);
-    out.push(`${carry}${rest.slice(0, cut).trimEnd()}`);
-    carry = '';
+    out.push(`${carry?.open ?? ''}${rest.slice(0, cut).trimEnd()}`);
+    carry = null;
     rest = rest.slice(cut).trimStart();
   }
 
-  const tail = `${carry}${rest}`.trim();
+  const tail = `${carry?.open ?? ''}${rest}`.trim();
   if (tail !== '') out.push(tail);
   return out;
 }
 
+/** Un blocco che va richiuso di qua e riaperto di là, tag verbatim. */
+type Blocco = { open: string; close: string };
+
 const CLOSE_PRE = '</code></pre>';
 
 /**
- * The opening tags of a `<pre>` that is still open at `limit`, or null.
+ * Il blocco ancora aperto a `limit`, o `null`.
  *
- * Returns the tags rather than a boolean so the caller can reopen them verbatim,
- * language class included — a reopened block that lost its `class` renders as
- * plain text and the reader notices.
+ * Restituisce i tag e non un booleano perché il chiamante li riapre
+ * **verbatim**: un blocco riaperto che ha perso la sua `class` viene reso come
+ * testo semplice, e un `<blockquote expandable>` riaperto senza `expandable`
+ * si apre da solo a metà citazione — differenze che si vedono.
+ *
+ * Due famiglie, e vince quella aperta più tardi: è quella dentro cui il
+ * taglio sta davvero cadendo.
  */
-function openPreAt(html: string, limit: number): string | null {
+function openBlockAt(html: string, limit: number): Blocco | null {
   const window = html.slice(0, limit);
-  const open = window.lastIndexOf('<pre>');
-  if (open === -1 || open < window.lastIndexOf('</pre>')) return null;
-  const codeTag = /<pre><code[^>]*>/.exec(html.slice(open));
-  return codeTag ? codeTag[0] : '<pre><code>';
+
+  const pre = window.lastIndexOf('<pre>');
+  const preAperto = pre !== -1 && pre > window.lastIndexOf('</pre>') ? pre : -1;
+
+  const bq = window.lastIndexOf('<blockquote');
+  const bqAperto = bq !== -1 && bq > window.lastIndexOf('</blockquote>') ? bq : -1;
+
+  if (preAperto === -1 && bqAperto === -1) return null;
+  if (preAperto > bqAperto) {
+    const codeTag = /<pre><code[^>]*>/.exec(html.slice(preAperto));
+    return { open: codeTag ? codeTag[0] : '<pre><code>', close: CLOSE_PRE };
+  }
+  const bqTag = /<blockquote[^>]*>/.exec(html.slice(bqAperto));
+  return { open: bqTag ? bqTag[0] : '<blockquote>', close: '</blockquote>' };
 }
 
 function lastLineBefore(html: string, limit: number): number | null {
