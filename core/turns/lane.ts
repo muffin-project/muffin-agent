@@ -82,6 +82,16 @@ export type LaneDeps = {
   /** Injected for the same reason the store injects it: a test needs a dead pid. */
   alive?: (pid: number) => boolean;
   /**
+   * Il registro delle approvazioni, per l'altra barriera.
+   *
+   * Assente vuol dire che questo processo non sa dire se l'owner ha risposto,
+   * e un turno in attesa di una conferma resta fermo fino alla sua scadenza —
+   * mai svegliato per sbaglio. È la ragione per cui `wakeAt` è obbligatorio
+   * anche quando c'è un evento: la barriera che nessuno valuta finisce
+   * comunque.
+   */
+  approvals?: { answered: (id: string) => boolean };
+  /**
    * The single model lane, shared with `Scheduler` when both are running.
    *
    * **Mandatory, and that is the fix for D1 (judge, round 2).** This used to
@@ -177,11 +187,12 @@ export class TurnLane {
   /**
    * Event barriers, evaluated here because this is the only process that can.
    *
-   * The predicate has to be *checkable*, which is why `WaitKind` is a closed set
-   * of one: `process_exit` is decidable on this machine without a broker. A
-   * barrier nothing evaluates is a suspension only its deadline can ever end,
-   * and a closed set whose members nothing can satisfy would be one more
-   * mechanism connected to nothing.
+   * The predicate has to be *checkable*, which is why `WaitKind` is a closed
+   * set: `process_exit` is decidable on this machine without a broker, and
+   * `approval` is a row in a table this process can read. A barrier nothing
+   * evaluates is a suspension only its deadline can ever end, and a closed set
+   * whose members nothing can satisfy would be one more mechanism connected to
+   * nothing.
    *
    * An unreadable `wait_for` is skipped rather than thrown on: the value came
    * off disk, and a row written by a future version must not take the lane down.
@@ -190,7 +201,9 @@ export class TurnLane {
   private sweepBarriers(): void {
     for (const row of this.deps.turns.armed()) {
       const barrier = decodeWaitFor(row.waitFor);
-      if (barrier === null || !satisfied(barrier, this.alive)) continue;
+      const risposto = this.deps.approvals?.answered.bind(this.deps.approvals);
+      if (barrier === null || !satisfied(barrier, { alive: this.alive, ...(risposto ? { answered: risposto } : {}) }))
+        continue;
       // Guarded on `waiting` inside the store, so an event arriving twice — or
       // arriving for a row the deadline already woke — moves nothing.
       if (this.deps.turns.wake(row.id, this.clock())) {

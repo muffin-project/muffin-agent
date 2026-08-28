@@ -1,4 +1,4 @@
-import type { Message, MessageOrigin, Update } from '@grammyjs/types';
+import type { CallbackQuery, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
 import { COMANDI, sembraComando } from '../../agent/comandi.js';
@@ -31,9 +31,13 @@ import type { Voce } from '../../core/audio/voce.js';
  * leggere il file due volte per rispondere a due meta' della stessa domanda.
  */
 type Arrivo = { line: string; image?: ImageBlock; audio?: AudioBlock };
+
+/** Solo i due metodi che questo file usa: il connettore non possiede il registro. */
+type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
+type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { startProgress } from './progress.js';
-import { renderForTelegram } from './render.js';
+import { escapeHtml, renderForTelegram } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -135,6 +139,30 @@ export type ConnectorDeps = {
    * dalla prima il giorno che qualcuno tocca una sola delle due.
    */
   comandi?: (riga: string, sessionId: string) => Promise<{ testo: string } | null>;
+  /**
+   * Il registro delle approvazioni, per la metà che arriva **indietro**.
+   *
+   * I pulsanti li manda l'approvatore (`cli/surface.ts`), che è l'unico che sa
+   * cosa il kernel ha chiesto; qui si gestisce il dito che li preme. Le due
+   * metà stanno in due posti perché sono due direzioni: una esce dentro un
+   * turno, l'altra entra come un update qualunque, forse in un processo che
+   * quel turno non l'ha mai visto.
+   *
+   * Assente vuol dire che questa installazione non chiede niente da qui, e un
+   * pulsante premuto viene chiuso dicendo che non si sa di cosa si tratti —
+   * mai lasciato girare.
+   */
+  approvals?: { decide: ApprovalDecide; get: ApprovalGet };
+  /**
+   * «C'è un turno pronto adesso.»
+   *
+   * Chiamata dopo aver riportato una riga a `runnable`, e non è un secondo
+   * esecutore: il turno lo fa girare la corsia, questa le dice solo di
+   * guardare subito invece che al prossimo battito. Un connettore che
+   * riprendesse turni per conto suo sarebbe una seconda corsia, e due corsie
+   * su una riga sono la corsa che il claim esiste per arbitrare.
+   */
+  onWork?: () => void;
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -702,6 +730,22 @@ export class TelegramConnector {
   private async drain(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
       const update = JSON.parse(stored.payload) as Update;
+      // Prima di `parseUpdate`, che di un `callback_query` non sa niente e
+      // restituirebbe `null`: un pulsante premuto verrebbe archiviato come
+      // «niente da fare», e il client continuerebbe a mostrarlo che gira.
+      const premuto = (update as { callback_query?: CallbackQuery }).callback_query;
+      if (premuto !== undefined) {
+        try {
+          await this.handleCallback(premuto);
+        } catch (error) {
+          (this.deps.log ?? (() => {}))(
+            `telegram: pulsante non gestito — ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        continue;
+      }
+
       const incoming = parseUpdate(update, this.meId);
 
       if (!incoming) {
@@ -1107,6 +1151,91 @@ export class TelegramConnector {
       (this.deps.log ?? (() => {}))(
         `telegram: consegna non registrata per il turno ${turnId.slice(0, 12)} — ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  /**
+   * L'owner ha premuto un pulsante di approvazione.
+   *
+   * Tre cose, in quest'ordine, e l'ordine è la parte che conta.
+   *
+   * **Primo, si risponde sempre.** `answerCallbackQuery` non è cortesia:
+   * finché non arriva, il client mostra il pulsante che gira. Vale anche —
+   * soprattutto — per i casi storti: «non so di cosa si tratti», «avevi già
+   * risposto». È il momento in cui l'owner sta guardando per capire se il tocco
+   * ha funzionato.
+   *
+   * **Secondo, la risposta si scrive dove il turno la cercherà.** La decisione
+   * finisce nel registro, che è la barriera su cui quel turno si è sospeso.
+   * Da lì in poi la conferma esiste anche se questo processo muore adesso.
+   *
+   * **Terzo, il turno torna eseguibile.** `wake` lo riporta da `waiting` a
+   * `runnable`; a farlo girare è la lane del gateway al suo battito, non
+   * questo metodo — un connettore che riprendesse turni per conto suo sarebbe
+   * una seconda lane, e due lane su una riga sono la corsa che il claim esiste
+   * per arbitrare.
+   *
+   * **Solo l'owner.** In un gruppo chiunque vede quei pulsanti. Un estraneo che
+   * ne preme uno riceve la stessa risposta vuota di un pulsante scaduto: non
+   * gli si conferma che era una domanda vera, fatta a qualcun altro.
+   */
+  private async handleCallback(query: CallbackQuery): Promise<void> {
+    const rispondi = async (testo?: string): Promise<void> => {
+      try {
+        await this.deps.api.answerCallbackQuery(query.id, testo);
+      } catch (error) {
+        // Il pulsante resta a girare, ma la decisione qui sopra è già scritta:
+        // non è una ragione per rifare niente.
+        (this.deps.log ?? (() => {}))(
+          `telegram: risposta al pulsante non consegnata — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+
+    const owner = this.deps.config.ownerUserId;
+    if (owner === undefined || query.from.id !== owner) return rispondi();
+
+    const parsed = /^(ok|no):([0-9a-f]+)$/.exec(query.data ?? '');
+    if (parsed === null || this.deps.approvals === undefined) {
+      return rispondi('Non so a cosa si riferisca questo pulsante.');
+    }
+    const [, verbo, id] = parsed as unknown as [string, 'ok' | 'no', string];
+    const decisione = verbo === 'ok' ? 'allow' : 'deny';
+    const now = new Date(this.now());
+
+    const esito = this.deps.approvals.decide(id, decisione, now);
+    if (esito === 'unknown') return rispondi('Questa richiesta non esiste più.');
+    if (esito === 'already') return rispondi('Avevi già risposto a questa richiesta.');
+
+    await rispondi(decisione === 'allow' ? 'Consentito.' : 'Rifiutato.');
+
+    // I pulsanti spariscono e il messaggio dice cosa è stato deciso: una
+    // tastiera che resta premibile dopo la risposta invita a rispondere due
+    // volte a una domanda che è già chiusa.
+    const testo = query.message;
+    if (testo !== undefined && 'text' in testo && typeof testo.text === 'string') {
+      try {
+        await this.deps.api.editMessageText(
+          testo.chat.id,
+          testo.message_id,
+          `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
+        );
+      } catch {
+        /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
+      }
+    }
+
+    const riga = this.deps.approvals.get(id);
+    if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
+      // Solo se la riga si è davvero mossa: svegliare la corsia per un turno
+      // che qualcun altro ha già preso è lavoro per niente.
+      try {
+        this.deps.onWork?.();
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: corsia non svegliata — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 

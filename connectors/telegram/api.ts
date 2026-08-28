@@ -34,10 +34,33 @@ export class TelegramError extends Error {
 const POLL_SECONDS = 50;
 const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 15) * 1000;
 
+/**
+ * Un pulsante sotto un messaggio.
+ *
+ * `callback_data` sta in **64 byte** (docs lette il 28/08/2026) e torna
+ * verbatim dentro il `callback_query`: è l'unico posto dove far viaggiare
+ * l'identità della domanda, perché il messaggio a cui il pulsante è attaccato
+ * può essere modificato, e il testo non è un identificatore.
+ *
+ * `style` è opzionale e vale quello che sembra: `danger` rosso, `success`
+ * verde, `primary`. Un "rifiuta" e un "consenti" che si somigliano sono un
+ * pulsante premuto per sbaglio.
+ */
+export type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
+
 export type SendOptions = {
   replyTo?: number;
   /** Off by default: an agent quoting a link should not turn it into a card. */
   preview?: boolean;
+  /**
+   * Una tastiera sotto il messaggio: righe di pulsanti.
+   *
+   * Esiste per una cosa sola, ed è la ragione per cui non è generica: una
+   * domanda di approvazione a cui l'owner risponde da dove sta leggendo. Senza,
+   * su Telegram il kernel poteva solo dire «qui non posso chiedertelo» — cioè
+   * niente di ciò che chiede conferma era usabile dal telefono.
+   */
+  keyboard?: InlineButton[][];
 };
 
 /**
@@ -60,6 +83,7 @@ export interface TelegramApiLike {
   sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
+  answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean>;
 }
 
 export class TelegramApi implements TelegramApiLike {
@@ -188,7 +212,14 @@ export class TelegramApi implements TelegramApiLike {
    * update type added by a future Bot API version does not silently arrive and
    * fall through the connector's `else`.
    */
-  getUpdates(offset: number, allowed: string[] = ['message', 'edited_message']): Promise<Update[]> {
+  getUpdates(
+    offset: number,
+    // `callback_query` è nell'elenco perché senza non arriva: `allowed_updates`
+    // è esplicito di proposito (vedi sopra), quindi un tipo che non si nomina
+    // non viene mai consegnato — e un pulsante che nessuno riceve è un pulsante
+    // che gira per sempre.
+    allowed: string[] = ['message', 'edited_message', 'callback_query'],
+  ): Promise<Update[]> {
     return this.call<Update[]>('getUpdates', {
       offset,
       timeout: POLL_SECONDS,
@@ -203,6 +234,24 @@ export class TelegramApi implements TelegramApiLike {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: options.preview !== true },
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
+      ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
+    });
+  }
+
+  /**
+   * La risposta obbligatoria a un pulsante premuto.
+   *
+   * Non è cortesia: finché non arriva, il client mostra il pulsante che gira.
+   * Va mandata **sempre**, anche quando la risposta è «questa domanda era già
+   * chiusa» — soprattutto allora, perché è il caso in cui l'owner ha premuto
+   * due volte e sta guardando per capire se ha funzionato.
+   *
+   * `text` sta in 200 caratteri (docs lette il 28/08/2026).
+   */
+  answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
+    return this.call<boolean>('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      ...(text === undefined ? {} : { text: text.slice(0, 200) }),
     });
   }
 

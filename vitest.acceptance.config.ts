@@ -26,7 +26,10 @@ export default defineConfig({
     // successo davvero.
     globalSetup: ['./vitest.home-guard.ts'],
     include: ['evals/acceptance/**/*.accept.ts'],
-    exclude: ['**/node_modules/**', '**/.claude/worktrees/**'],
+    // `.gate-linux/` per la stessa ragione di `vitest.config.ts`: il gate
+    // Linux lascia un clone del repo qui dentro, e senza questa riga la suite
+    // di accettazione gira anche sulla copia congelata.
+    exclude: ['**/node_modules/**', '**/.claude/worktrees/**', '**/.gate-linux/**'],
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,
