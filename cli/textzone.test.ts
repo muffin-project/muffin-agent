@@ -90,21 +90,37 @@ describe('il Tab completa un comando', () => {
   const comandi = ['/new', '/session', '/spend', '/think', '/model', '/debug', '/exit'];
 
   it('completa quando il candidato è uno solo', () => {
-    expect(completa('/th', comandi)).toBe('/think');
-    expect(completa('/ex', comandi)).toBe('/exit');
+    expect(completa('/th', comandi)).toEqual({ testo: '/think', candidati: [] });
+    expect(completa('/ex', comandi)).toEqual({ testo: '/exit', candidati: [] });
   });
 
   /**
-   * Zero o più di uno non fanno niente: stampare un elenco romperebbe il
-   * disegno del prompt, e la lista sta già in `/help`.
+   * Il caso che rendeva il Tab un tasto morto. Con più candidati si allunga
+   * **fino al prefisso comune** e si nominano: fermarsi lì è ciò che evita di
+   * scegliere al posto dell'owner, e nominarli è ciò che gli dice perché ci si
+   * è fermati. Prima non succedeva né l'una né l'altra cosa: `/s` più Tab non
+   * muoveva niente e non diceva niente.
    */
-  it('e non fa niente quando i candidati sono zero o più di uno', () => {
-    expect(completa('/s', comandi)).toBeNull(); // /session e /spend
-    expect(completa('/zzz', comandi)).toBeNull();
+  it('con più candidati allunga fino al prefisso comune e li nomina', () => {
+    const r = completa('/s', comandi); // /session e /spend
+    expect(r.testo).toBe('/s');
+    expect(r.candidati).toEqual(['/session', '/spend']);
   });
 
-  it('né su un comando già completo, né su testo normale', () => {
-    expect(completa('/exit', comandi)).toBeNull();
-    expect(completa('ciao', comandi)).toBeNull();
+  /** E il prefisso comune si allunga davvero quando c'è da allungarlo. */
+  it('e allunga davvero, quando i candidati condividono più del prefisso dato', () => {
+    const r = completa('/m', ['/memory', '/memory-stats', '/model']);
+    expect(r.testo).toBe('/m');
+    const r2 = completa('/me', ['/memory', '/memory-stats', '/model']);
+    expect(r2.testo).toBe('/memory');
+    expect(r2.candidati).toEqual(['/memory', '/memory-stats']);
+  });
+
+  it('e su zero candidati lascia la riga com era', () => {
+    expect(completa('/zzz', comandi)).toEqual({ testo: '/zzz', candidati: [] });
+  });
+
+  it('né tocca il testo normale, che non è un comando', () => {
+    expect(completa('ciao', comandi)).toEqual({ testo: 'ciao', candidati: [] });
   });
 });

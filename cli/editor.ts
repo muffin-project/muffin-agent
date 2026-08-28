@@ -126,19 +126,35 @@ export function premi(s: Stato, k: Key): { stato: Stato; azione: Azione } {
     return niente(s);
   }
 
-  if (k.name === 'return' || k.name === 'enter') {
-    // **Le due Invio.** Dentro un incollaggio, o con un modificatore, è un
-    // a capo; da solo, spedisce. Senza questa distinzione un messaggio di due
-    // paragrafi non è scrivibile — che è esattamente la lamentela.
-    //
-    // `meta` copre Alt+Invio, `shift` Shift+Invio dove il terminale lo manda
-    // distinto (non tutti lo fanno: iTerm2 e Ghostty sì, Terminal.app no), e
-    // Ctrl+J è la via che funziona ovunque perché è un carattere vero (0x0A) e
-    // non una sequenza che il terminale deve decidere di inventare.
-    if (s.incollando || k.meta || k.shift) return niente(aCapo(s));
+  /**
+   * **Le due Invio, e sono due tasti diversi sul filo.**
+   *
+   * Misurato il 28/08/2026 con `emitKeypressEvents`, dopo aver visto il difetto
+   * su uno schermo vero dentro tmux:
+   *
+   *   `\r`      -> `{name:'return'}`            Invio
+   *   `\n`      -> `{name:'enter'}`             Ctrl+J
+   *   `ESC \r`  -> `{name:'return', meta:true}` Alt+Invio
+   *
+   * `enter` **non** arriva con `ctrl: true`. Il ramo che avevo scritto —
+   * `k.ctrl && k.name === 'j'` — era quindi codice morto, e `enter` cadeva nel
+   * ramo di sopra insieme a `return`: Ctrl+J spediva invece di andare a capo,
+   * cioè la via che doveva funzionare su ogni terminale era l'unica rotta.
+   *
+   * Il mio test non l'aveva visto perché costruiva `{name:'j', ctrl:true}` —
+   * una forma che Node non produce mai. Provava la mia assunzione, non il
+   * terminale.
+   *
+   * Quindi: `return` nudo spedisce; `enter` (Ctrl+J) va a capo sempre; un
+   * `return` con un modificatore va a capo — `meta` è Alt+Invio, `shift` è
+   * Shift+Invio dove il terminale lo manda distinto (iTerm2 e Ghostty sì,
+   * Terminal.app no, ed è per questo che Ctrl+J deve funzionare).
+   */
+  if (k.name === 'enter') return niente(aCapo(s));
+  if (k.name === 'return') {
+    if (s.incollando || k.meta === true || k.shift === true) return niente(aCapo(s));
     return { stato: s, azione: { tipo: 'spedisci', testo: testo(s) } };
   }
-  if (k.ctrl && k.name === 'j') return niente(aCapo(s));
 
   if (k.name === 'backspace') {
     if (s.colonna > 0) {
