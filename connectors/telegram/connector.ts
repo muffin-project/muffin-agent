@@ -658,11 +658,19 @@ export class TelegramConnector {
       // M5-BIS B11: fed to `presence.streamText`, which owns the rate limit,
       // the coalescing and the transport choice (draft vs. edit) — this
       // closure only accumulates, exactly like the REPL's own `onDelta` does
-      // for `process.stdout` (`cli/repl.ts`). `deltaText` grows to
-      // `result.text` byte for byte (`agent/loop.ts`'s `trimChunkEdges`),
-      // which is what lets the finalisation below compare the two directly.
+      // for `process.stdout` (`cli/repl.ts`). `deltaText` holds what the draft
+      // currently shows, and by the end of the turn that is `result.text` byte
+      // for byte (`agent/loop.ts`'s `edgeTrimmer` is what makes that true).
       let deltaText = '';
       const onDelta = (delta: TurnDelta): void => {
+        if (delta.type === 'boundary') {
+          // Quel testo non era la risposta, e da oggi arriva davvero fin qui:
+          // il preambolo di un giro con tool si vede mentre l'agente lavora.
+          // Senza l'azzeramento resterebbe incollato in testa alla risposta —
+          // e sarebbe il messaggio finale, non una riga di servizio.
+          deltaText = '';
+          return;
+        }
         deltaText += delta.text;
         presence.streamText(deltaText);
       };
