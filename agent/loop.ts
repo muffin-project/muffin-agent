@@ -1378,6 +1378,12 @@ async function drive(
         model: deps.model,
         system: [{ type: 'text', text: deps.systemPrompts[turnClass], cache: 'stable' }],
         messages: compacted.messages,
+        // Quale conversazione è questa, per chi smista fra più provider a
+        // monte: la sessione, che è già l'identità che dura quanto dura il
+        // filo del discorso. Vedi `ChatCall.conversation` per cosa ci si
+        // compra — una cache che, misurata, prendeva 0% fra un turno e
+        // l'altro.
+        conversation: input.session.id,
         ...(exposed.length > 0 ? { tools: exposed.map((t) => t.spec), toolChoice: 'auto' as const } : {}),
         maxOutputTokens: 4096,
         // The profile decides both, and until this slice neither reached the
@@ -1517,6 +1523,14 @@ async function drive(
       }
       chatSpan.setAttributes({
         [ATTR.responseModel]: result.model,
+        // L'attributo era dichiarato in `core/tracing/types.ts` e **non lo
+        // scriveva nessuno**: il difetto di serie di questa repo, un
+        // meccanismo senza chiamante. Ora porta chi ha risposto davvero,
+        // che è ciò che l'attributo significa e ciò che serviva il
+        // 28/08/2026 per chiedersi perché la cache non prendeva — con dodici
+        // provider a monte per lo stesso modello e una cache per ciascuno,
+        // uno zero senza il nome di chi ha servito non è diagnosticabile.
+        ...(result.upstream !== undefined ? { [ATTR.providerName]: result.upstream } : {}),
         [ATTR.usageInputTokens]: result.usage.inputTokens,
         [ATTR.usageOutputTokens]: result.usage.outputTokens,
         [ATTR.cacheReadTokens]: result.usage.cacheReadTokens,

@@ -327,6 +327,13 @@ export function buildRuntime(
           // the endpoint (`wantsExplicitCache`): the first version made every
           // caller pass the flag, and the two eval harnesses immediately forgot
           // — same endpoint, full price, silently.
+          //
+          // L'instradamento invece **non** ha un default: è una scelta
+          // dell'owner su prezzo, quantizzazione e chi può conservare i suoi
+          // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
+          // Assente = quello che fa il gateway da sé; `muffin doctor` dice
+          // cosa vuol dire.
+          config.provider.routing ? { routing: config.provider.routing } : {},
         );
 
   const profileProblems: string[] = [];
