@@ -622,4 +622,37 @@ describe('closingLine', () => {
     expect(l).not.toContain('$');
     expect(l).toContain('token');
   });
+
+  /**
+   * Il numero c'era già in `result.usage` e non lo leggeva nessuno. «La cache
+   * non prende, 0 sul modello vivo» è girato per giorni come stato di fatto,
+   * sulla base di un documento di ricerca del 26/08; il 28/08, misurando le
+   * tracce, un turno da nove chiamate prendeva il **54%** — con tre chiamate a
+   * zero in mezzo ad altre che colpivano. Né «non prende» né «prende», e
+   * nessuno dei due si scopriva senza rileggere i trace a mano.
+   */
+  it('dice quanto del prompt è arrivato dalla cache', () => {
+    expect(closingLine({ inputTokens: 8866, outputTokens: 785, cacheReadTokens: 7840 }, 4712, 0.0023)).toBe(
+      '  4.7s · 8866→785 token · 88% da cache · $0.0023',
+    );
+  });
+
+  /** Lo zero è il caso che conta: si vede mentre succede, invece di ricostruirlo dopo. */
+  it("e lo dice anche quando è zero, che è l'unica lettura che serviva", () => {
+    expect(closingLine({ inputTokens: 9607, outputTokens: 158, cacheReadTokens: 0 }, 3000, null)).toContain(
+      '0% da cache',
+    );
+  });
+
+  /** Senza il campo la riga resta quella di prima: non si inventa uno 0%. */
+  it('ma se il campo non arriva non si inventa una percentuale', () => {
+    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, null)).not.toContain('cache');
+  });
+
+  /** Un turno interrotto prima di parlare col modello non divide per zero. */
+  it('e a zero token in ingresso non stampa NaN', () => {
+    const l = closingLine({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, 120, null);
+    expect(l).not.toContain('NaN');
+    expect(l).not.toContain('cache');
+  });
 });

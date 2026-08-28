@@ -360,17 +360,33 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
  * Pura e con l'orologio come parametro: si prova senza far girare un turno.
  */
 export function closingLine(
-  usage: { inputTokens: number; outputTokens: number },
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number },
   ms: number,
   usd: number | null,
 ): string {
   const secondi = `${(ms / 1000).toFixed(1)}s`;
   const token = `${usage.inputTokens}→${usage.outputTokens} token`;
+  // **Quanto del prompt è arrivato dalla cache, ogni turno.**
+  //
+  // Il numero c'era già in `result.usage` e non lo leggeva nessuno: «la cache
+  // non prende, 0 sul modello vivo» è girato per giorni come stato di fatto
+  // sulla base di un documento di ricerca del 26/08, e il 28/08 misurando le
+  // tracce prendeva il **54%** su un turno da nove chiamate — con tre chiamate
+  // a zero in mezzo ad altre che colpivano. Cioè: né «non prende» né «prende»,
+  // e nessuno dei due si sarebbe scoperto senza andare a rileggere i trace a
+  // mano.
+  //
+  // Si stampa anche quando è zero, che è il caso che conta: uno 0% ripetuto è
+  // la cosa da vedere mentre succede, non da ricostruire dopo.
+  const cache =
+    usage.cacheReadTokens === undefined || usage.inputTokens === 0
+      ? null
+      : `${Math.round((usage.cacheReadTokens / usage.inputTokens) * 100)}% da cache`;
   // Un costo che arrotonda a zero si scrive `<$0.0001` e non `$0.0000`: il
   // secondo dice «gratis», che e' falso e per un tetto di spesa e' la bugia
   // che conta.
   const costo = usd === null ? null : usd < 0.0001 ? '<$0.0001' : `$${usd.toFixed(4)}`;
-  return `  ${[secondi, token, costo].filter((x): x is string => x !== null).join(' · ')}`;
+  return `  ${[secondi, token, cache, costo].filter((x): x is string => x !== null).join(' · ')}`;
 }
 
 /**
