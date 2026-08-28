@@ -709,3 +709,47 @@ describe('le release non si annidano', () => {
     expect(puntaA.startsWith(join(f.installed, '.releases'))).toBe(true);
   });
 });
+
+/**
+ * Il nome di uno script è una promessa, e questa il repo l'aveva già fatta.
+ *
+ * Dal mandato DAY-1: *«il naming degli script (`build` vs `compile`) non deve
+ * permettere a una persona di credere di avere costruito `dist` quando non è
+ * successo»*. Non era mai stato soddisfatto: `build` era `tsc --noEmit`, cioè
+ * un controllo di tipi che non scrive un file, e usciva **zero**.
+ *
+ * Il 28/08/2026 mi è costato una conclusione sbagliata: ho lanciato
+ * `npm run build`, ho letto «ok», ho pilotato il REPL vero dentro tmux e ho
+ * concluso che l'input multilinea fosse rotto. Stavo guardando il binario di
+ * ieri sera. Un comando che dice di aver costruito senza aver costruito non
+ * produce un errore: produce una misura di qualcos'altro, che è peggio.
+ *
+ * Da qui in avanti `build` costruisce. Questo test è la promessa scritta dove
+ * si rompe.
+ */
+describe('gli script fanno quello che dice il loro nome', () => {
+  const scripts = (
+    JSON.parse(readFileSync(join(dirname(new URL(import.meta.url).pathname), '..', 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    }
+  ).scripts;
+
+  it('`build` non è un controllo di tipi travestito', () => {
+    expect(scripts.build).toBeDefined();
+    expect(scripts.build).not.toContain('--noEmit');
+  });
+
+  /** E chi vuole solo i tipi ha un nome per chiederli, invece di prendersi `build`. */
+  it('e chi vuole solo i tipi chiede `typecheck`', () => {
+    expect(scripts.typecheck).toContain('--noEmit');
+  });
+
+  /**
+   * `install.sh` e `muffin update` costruiscono con `compile`: è quello che
+   * produce l'artefatto che finisce installato, e non deve sparire sotto di
+   * loro perché qualcuno ha riordinato i nomi.
+   */
+  it('e `compile` resta, perché è quello che install.sh e update chiamano', () => {
+    expect(scripts.compile).toContain('tsconfig.build.json');
+  });
+});

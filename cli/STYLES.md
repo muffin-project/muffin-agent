@@ -107,3 +107,34 @@ e gli acceptance test lo guidano senza TTY.
 sembrare una CLI «una schermata» si ottiene con le regole qui sopra, e ciò che
 resta — un input multilinea con editing decente — è una voce di spesa che va
 decisa per sé, non presa di contrabbando dentro l'estetica.
+
+## Il riquadro dell'input (28/08/2026)
+
+Owner: *«guarda tipo claude code, che ha i bordi, text area, personaggio in
+alto, nomi testi e cose così»*. Da lì `cli/riquadro.ts`.
+
+**Cosa c'è.** Un'intestazione all'avvio (il «personaggio in alto»), e attorno a
+ciò che scrivi un riquadro che porta sul bordo alto **modello e sessione** —
+le due cose che l'intestazione dice una volta e che dopo venti messaggi non
+sono più a schermo. Sotto, una riga di suggerimenti smorzata.
+
+**Cosa non c'è, e resta escluso.** Lo schermo alternato. La regola di questo
+file non cambia: il riquadro si disegna **in fondo allo scrollback** e si
+ridisegna cancellando solo le proprie righe. Quello che è già scorso sopra
+resta selezionabile e copiabile — che è la ragione per cui la regola esiste, e
+vale quanto la cornice.
+
+**Le tre cose che si sbagliano disegnando, e chi le tiene chiuse.**
+
+1. *Il colore conta come larghezza.* Il prompt colorato è dodici caratteri e
+   due colonne. `larghezzaVisibile` toglie le sequenze; senza, il riquadro è
+   storto **solo** col colore acceso, cioè mai in un test su una pipe.
+2. *L'ancora del ridisegno.* Alla fine di un disegno il cursore non sta in
+   fondo al riquadro, sta dove sta il testo. Risalire di «tutte le righe»
+   invece che «fino alla riga del cursore» cancella righe che non sono nostre:
+   a schermo si vede come **la risposta di prima che sparisce** mentre scrivi
+   la domanda dopo.
+3. *Guardare l'output invece dello schermo.* `script` registra i byte, e i byte
+   di dieci ridisegni sono dieci riquadri anche quando a schermo ce n'è sempre
+   stato uno. `cli/schermo.ts` applica quei byte e restituisce la griglia; è
+   l'unica cosa che risponde alla domanda «quanti riquadri vede l'owner».

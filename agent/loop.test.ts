@@ -1470,9 +1470,16 @@ describe('agent loop · progress (B13)', () => {
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
-    expect(byType(events, 'tool_start')).toEqual([{ type: 'tool_start', name: 'demo_read', capability: 'demo.read' }]);
+    // `args` viaggia con l'evento perché senza, una superficie può dire quale
+    // tool è partito ma mai su cosa — e sette chiamate diverse allo stesso tool
+    // diventano sette righe identiche a schermo, che si leggono come un giro a
+    // vuoto. Sono gli argomenti **come il modello li ha chiesti**: quale campo
+    // valga la pena mostrare, e come accorciarlo, lo decide chi stampa.
+    expect(byType(events, 'tool_start')).toEqual([
+      { type: 'tool_start', name: 'demo_read', capability: 'demo.read', args: { q: 1 } },
+    ]);
     const [end] = byType(events, 'tool_end');
-    expect(end).toMatchObject({ type: 'tool_end', name: 'demo_read', isError: false });
+    expect(end).toMatchObject({ type: 'tool_end', name: 'demo_read', isError: false, args: { q: 1 } });
     expect(typeof end?.ms).toBe('number');
     expect(end?.ms).toBeGreaterThanOrEqual(0);
   });

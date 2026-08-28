@@ -58,13 +58,30 @@ function systemdRestartsAfter(text: string, code: number): boolean {
   return !prevented.includes(code);
 }
 
-function launchdRestartsAfter(text: string, code: number): boolean {
+/**
+ * Se launchd riavvia dopo un'uscita con questo codice, **e con questo
+ * semaforo**.
+ *
+ * Il secondo parametro è la parte nuova: da quando il KeepAlive è condizionato
+ * a un `PathState`, «riavvia?» non è più una domanda sul solo codice di uscita.
+ * `stopped: true` significa che il file semaforo esiste, cioè che qualcuno ha
+ * chiesto uno stop.
+ */
+function launchdRestartsAfter(text: string, code: number, stopped = false): boolean {
   const keepAlive = /<key>KeepAlive<\/key>\s*(<true\/>|<false\/>|<dict>[\s\S]*?<\/dict>)/.exec(text)?.[1];
   if (keepAlive === undefined || keepAlive === '<false/>') return false;
   if (keepAlive === '<true/>') return true;
   const successful = /<key>SuccessfulExit<\/key>\s*<(true|false)\/>/.exec(keepAlive)?.[1];
   if (successful === 'false') return code !== 0;
   if (successful === 'true') return code === 0;
+  // `PathState` con `<false/>`: vivo finché quel file NON esiste
+  // (launchd.plist(5)). È l'unico modo di dire a launchd «questo stop è voluto»
+  // che launchd sappia leggere.
+  const pathState = /<key>PathState<\/key>\s*<dict>\s*<key>([^<]*)<\/key>\s*<(true|false)\/>/.exec(keepAlive);
+  if (pathState) {
+    const vivoSeEsiste = pathState[2] === 'true';
+    return vivoSeEsiste ? stopped : !stopped;
+  }
   return true;
 }
 
@@ -179,25 +196,36 @@ describe('what the supervisor does with each exit code', () => {
     expect(codes).not.toContain(EXIT_PERMANENT);
   });
 
-  it('launchd: restarts a crash and a restart-me, and cannot express the other two', () => {
+  /**
+   * launchd non ha `RestartPreventExitStatus`, quindi non sa distinguere i
+   * codici di uscita — ma sa leggere il filesystem. Il semaforo è la
+   * traduzione: ciò che systemd dice per codice, qui si dice per file.
+   *
+   * Misurato sulla macchina dell'owner il 28/08/2026: «ho buttato giù il
+   * gateway e lo ha riportato su da solo, questo non va bene». Prima, ogni
+   * riga qui sotto era `true`.
+   */
+  it('launchd: rialza un crash, e NON rialza uno stop chiesto', () => {
     const { text, warnings } = planUnit({
       platform: 'darwin',
       home: '/Users/g/.muffin',
       exec: ['/usr/local/bin/muffin', 'gateway', 'run'],
     });
-    // The failure this replaces: under `SuccessfulExit: false` the SIGUSR1
-    // drain-restart exited 0 and launchd left the agent down — the opposite of
-    // what the signal exists for.
+    // Senza semaforo si comporta come prima, e deve: un crash torna su, e il
+    // drenaggio da SIGUSR1 — che esce 0 — pure. È il caso che
+    // `{SuccessfulExit: false}` sbagliava.
     expect(launchdRestartsAfter(text, 0)).toBe(true);
     expect(launchdRestartsAfter(text, 1)).toBe(true);
-    // launchd has no per-code exemption, so both of these come back up. Not a
-    // silent divergence: the warning has to name the verb it costs, or macOS
-    // gets a `gateway stop` that lies (JUDGE: "la divergenza è registrata o
-    // solo avvenuta?").
-    expect(launchdRestartsAfter(text, EXIT_STOPPED)).toBe(true);
     expect(launchdRestartsAfter(text, EXIT_PERMANENT)).toBe(true);
-    expect(warnings.join(' ')).toContain('bootout');
-    expect(warnings.join(' ')).toMatch(new RegExp(`${EXIT_STOPPED}`));
+    // Col semaforo, no. È la riga che l'owner ha chiesto.
+    expect(launchdRestartsAfter(text, EXIT_STOPPED, true)).toBe(false);
+    expect(launchdRestartsAfter(text, 1, true)).toBe(false);
+    // Il semaforo è quello di `paths(home).gatewayStopped`, non un percorso
+    // inventato qui: se i due divergono, launchd guarda un file che nessuno
+    // scrive e il difetto torna, muto.
+    expect(text).toContain('/Users/g/.muffin/gateway.stopped');
+    // Resta una cosa che launchd non sa esprimere, e va ancora detta.
+    expect(warnings.join(' ')).toMatch(new RegExp(`${EXIT_PERMANENT}`));
   });
 });
 
@@ -320,13 +348,15 @@ describe('the launchd agent', () => {
     expect(p.text).toContain('<string>/Users/g/.muffin</string>');
   });
 
-  it('keeps itself alive and throttles, and says what it cannot express', () => {
+  it('resta vivo finché nessuno ha chiesto il contrario, e throttla', () => {
     const p = mac();
-    // Unconditional, not `{SuccessfulExit: false}` — see the exit-code table
-    // above for what each choice does. Asserted on the value and not on the
-    // key: `toContain('<key>KeepAlive</key>')` was green through the whole
-    // period when SIGUSR1 left the agent down.
-    expect(p.text).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
+    // `PathState`, non `<true/>` e non `{SuccessfulExit: …}` — la tabella dei
+    // codici qui sopra dice cosa fa ognuna delle tre. Asserito sul valore e non
+    // sulla chiave: `toContain('<key>KeepAlive</key>')` è rimasto verde per
+    // tutto il periodo in cui SIGUSR1 lasciava l'agente giù, e sarebbe rimasto
+    // verde anche adesso.
+    expect(p.text).toMatch(/<key>KeepAlive<\/key>\s*<dict>\s*<key>PathState<\/key>/);
+    expect(p.text).toMatch(/gateway\.stopped<\/key>\s*<false\/>/);
     expect(p.text).toContain('<key>ThrottleInterval</key>');
     // launchd has no RestartPreventExitStatus. Divergence recorded rather than
     // silently accepted (JUDGE: "la divergenza è registrata o solo avvenuta?").

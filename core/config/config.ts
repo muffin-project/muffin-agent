@@ -41,6 +41,48 @@ export const ConfigSchema = z.object({
     baseUrl: z.string().url().optional(),
     /** `secret://name` — resolved through the secret store, never inlined here. */
     apiKeyRef: z.string().min(1),
+    /**
+     * Le preferenze di instradamento, per un `baseUrl` che è uno **smistatore**
+     * e non un modello.
+     *
+     * Serve perché «un modello» su OpenRouter non è una macchina: il
+     * 28/08/2026, `qwen/qwen3.8-27b` aveva **dodici** provider a monte, con
+     * prezzi diversi, quantizzazioni diverse (fp8, bf16) e politiche sui dati
+     * diverse. Senza dire niente, si finisce su quello che costa meno — e
+     * misurato in quella data si finiva su Chutes, che non onora i breakpoint
+     * di cache che mandiamo: la cache era **0% su sei turni di fila** mentre
+     * l'instradamento era perfettamente stabile.
+     *
+     * `dataCollection: 'deny'` è la manopola che conta più della cache, e
+     * nessuno l'aveva mai decisa: il prompt dell'owner porta `identity.md` —
+     * il patto privato, scritto a mano — e i ricordi richiamati. Oggi vanno a
+     * chiunque sia il più economico dei dodici, senza vincoli su chi può
+     * conservarli. È una scelta dell'owner, non mia: qui c'è la manopola, il
+     * default non cambia comportamento, e `muffin doctor` la nomina.
+     *
+     * Assente = nessuna preferenza mandata, cioè quello che il gateway fa da
+     * sé. Ogni campo è quello di OpenRouter, con lo stesso nome tradotto in
+     * camelCase da un solo posto (`agent/providers/openai-compat.ts`), perché
+     * un nome del fornitore copiato in due punti diverge al primo cambio.
+     */
+    routing: z
+      .object({
+        /** `only` di OpenRouter: instrada esclusivamente a questi slug. */
+        only: z.array(z.string().min(1)).nonempty().optional(),
+        /** `order`: prova questi in ordine. Attenzione — disattiva lo sticky routing. */
+        order: z.array(z.string().min(1)).nonempty().optional(),
+        /** `ignore`: salta questi slug. */
+        ignore: z.array(z.string().min(1)).nonempty().optional(),
+        /** `sort`: ordina in modo deterministico invece di bilanciare il carico. */
+        sort: z.enum(['price', 'throughput', 'latency']).optional(),
+        /** `require_parameters`: solo provider che supportano tutto ciò che la richiesta chiede. */
+        requireParameters: z.boolean().optional(),
+        /** `data_collection`: `deny` esclude i provider che possono conservare i dati. */
+        dataCollection: z.enum(['allow', 'deny']).optional(),
+        /** `quantizations`: filtra per quantizzazione — `fp8` e `bf16` non sono lo stesso modello. */
+        quantizations: z.array(z.string().min(1)).nonempty().optional(),
+      })
+      .optional(),
   }),
   models: z.object({ main: z.string().min(1), light: z.string().min(1), deep: z.string().min(1).optional() }),
   /**
@@ -257,6 +299,23 @@ export const paths = (home = muffinHome()) => ({
   // Pure muffin — the character every install shares. `identity.md` under rot/
   // is the owner's overlay on top of it and is read after, so it wins.
   persona: join(home, 'persona.md'),
+  /**
+   * Il semaforo che dice «fermo di proposito, non morto».
+   *
+   * Esiste perche' launchd non ha un equivalente di
+   * `RestartPreventExitStatus`: con `KeepAlive: true` riporta su il gateway
+   * anche quando e' stato l'owner a fermarlo — misurato sulla sua macchina il
+   * 28/08/2026 («ho buttato giu il gateway e lo ha riportato su da solo,
+   * questo non va bene»).
+   *
+   * Ma launchd *sa* leggere il filesystem: `KeepAlive: {PathState: {<questo>:
+   * false}}` vuol dire «tienilo vivo finche' questo file NON esiste»
+   * (launchd.plist(5)). Quindi lo stop scrive il file, e launchd smette di
+   * insistere. Su Linux non serviva — `RestartPreventExitStatus` c'e' gia' —
+   * ma vale lo stesso: `gateway run` lo controlla da se', quindi il
+   * comportamento e' identico sulle due macchine invece che simile.
+   */
+  gatewayStopped: join(home, 'gateway.stopped'),
   vault: join(home, 'vault'),
   traces: join(home, 'traces'),
   sessions: join(home, 'sessions'),

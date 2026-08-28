@@ -13,6 +13,8 @@ import {
   statusFor,
   thinkingCommand,
   toolPhrase,
+  toolSubject,
+  toolLine,
   TOOL_PHRASES,
 } from './repl.js';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -57,23 +59,29 @@ describe("the REPL's cli surface", () => {
 
   it('writes the message and gives the prompt back', async () => {
     const { out } = capture();
-    const rl = { prompt: vi.fn() };
+    const rl = { cancella: vi.fn(), redraw: vi.fn() };
     const registry = new SurfaceRegistry([cliSurface(makeReplCliWrite(rl))]);
 
     await expect(registry.deliver('cli', 'promemoria: chiama Marco')).resolves.toEqual({ delivered: true });
     expect(out.join('')).toContain('promemoria: chiama Marco');
-    expect(rl.prompt).toHaveBeenCalledTimes(1);
+    // Prima si toglie il riquadro, poi si scrive, poi si rimette: senza la
+    // prima mossa il messaggio finisce dentro la riga di input.
+    expect(rl.cancella).toHaveBeenCalledTimes(1);
+    expect(rl.redraw).toHaveBeenCalledTimes(1);
   });
 
   it('re-prompts even if writing throws, so the REPL never looks hung', async () => {
-    const rl = { prompt: vi.fn() };
+    const rl = { cancella: vi.fn(), redraw: vi.fn() };
     vi.spyOn(process.stdout, 'write').mockImplementation(() => {
       throw new Error('EPIPE');
     });
     const write = makeReplCliWrite(rl);
 
     expect(() => write('x')).toThrow(/EPIPE/);
-    expect(rl.prompt).toHaveBeenCalledTimes(1);
+    // Prima si toglie il riquadro, poi si scrive, poi si rimette: senza la
+    // prima mossa il messaggio finisce dentro la riga di input.
+    expect(rl.cancella).toHaveBeenCalledTimes(1);
+    expect(rl.redraw).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -469,6 +477,60 @@ describe('formatProgressLine — modalità normale', () => {
   });
 });
 
+/**
+ * Il difetto vero, misurato sul WAL il 28/08/2026: un turno ha fatto **sette**
+ * `memory_search` con sette `args_digest` **diversi**, e a schermo erano sette
+ * righe identiche. Si legge come un giro a vuoto, e non lo era — nell'intero
+ * store non esiste una sola coppia (tool, args) ripetuta. Una riga che non dice
+ * su cosa fa diagnosticare la cosa sbagliata, ed è quello che è successo.
+ */
+describe('la riga dice anche su cosa', () => {
+  it('sette ricerche diverse sono sette righe diverse', () => {
+    const riga = (query: string): string | null =>
+      formatProgressLine({ type: 'tool_end', name: 'memory_search', ms: 9, isError: false, args: { query } }, 'normale');
+    expect(riga('cosa ha detto ieri')).toBe('  ✓ cerco in memoria: cosa ha detto ieri');
+    expect(riga('primo messaggio')).toBe('  ✓ cerco in memoria: primo messaggio');
+    expect(riga('cosa ha detto ieri')).not.toBe(riga('primo messaggio'));
+  });
+
+  it('e anche la riga di stato viva, che è dove si guarda mentre succede', () => {
+    expect(statusFor({ type: 'tool_start', name: 'fs_read', capability: 'fs.read', args: { path: 'note/spesa.md' } })).toBe(
+      '  leggo un file: note/spesa.md…',
+    );
+  });
+
+  /** Un campo solo, quello che risponde a «su cosa?» — non un dump degli argomenti. */
+  it('di `fs_write` mostra il percorso e non il contenuto', () => {
+    const s = toolLine('fs_write', { path: 'note/x.md', content: 'un file intero, riga dopo riga' });
+    expect(s).toBe('scrivo un file: note/x.md');
+    expect(s).not.toContain('riga dopo riga');
+  });
+
+  /**
+   * Gli argomenti li ha scritti il **modello**. Una sequenza di escape dentro
+   * un percorso, stampata cruda, muove il cursore — e sotto questa riga sta il
+   * riquadro dell'input, che si ridisegna contando le righe che ha scritto.
+   */
+  it('e appiattisce quello che il modello ha scritto, prima di stamparlo', () => {
+    expect(toolSubject('shell_run', { command: 'ls\n\u001b[2Arm -rf x' })).toBe('ls [2Arm -rf x');
+    expect(toolSubject('fs_read', { path: 'a\tb\nc' })).toBe('a b c');
+  });
+
+  it('e accorcia invece di mandare a capo', () => {
+    const lungo = toolSubject('memory_search', { query: 'x'.repeat(200) });
+    expect(lungo.length).toBeLessThanOrEqual(48);
+    expect(lungo.endsWith('…')).toBe(true);
+  });
+
+  /** Senza soggetto la riga resta quella di prima: un tool MCP non è nella mappa. */
+  it('e senza un campo da mostrare non aggiunge niente', () => {
+    expect(toolLine('sys_inspect', { qualcosa: 'x' })).toBe('mi guardo dentro');
+    expect(toolLine('mcp_qualcosa', { path: 'x' })).toBe('mcp_qualcosa');
+    expect(toolLine('fs_read', undefined)).toBe('leggo un file');
+    expect(toolLine('fs_read', { path: '' })).toBe('leggo un file');
+  });
+});
+
 describe('statusFor — solo chi apre un attesa', () => {
   it('il giro è «penso», perché è esattamente quello che sta succedendo', () => {
     expect(statusFor({ type: 'round', n: 1 })).toBe('  penso…');
@@ -565,5 +627,38 @@ describe('closingLine', () => {
     const l = closingLine({ inputTokens: 10, outputTokens: 1 }, 800, null);
     expect(l).not.toContain('$');
     expect(l).toContain('token');
+  });
+
+  /**
+   * Il numero c'era già in `result.usage` e non lo leggeva nessuno. «La cache
+   * non prende, 0 sul modello vivo» è girato per giorni come stato di fatto,
+   * sulla base di un documento di ricerca del 26/08; il 28/08, misurando le
+   * tracce, un turno da nove chiamate prendeva il **54%** — con tre chiamate a
+   * zero in mezzo ad altre che colpivano. Né «non prende» né «prende», e
+   * nessuno dei due si scopriva senza rileggere i trace a mano.
+   */
+  it('dice quanto del prompt è arrivato dalla cache', () => {
+    expect(closingLine({ inputTokens: 8866, outputTokens: 785, cacheReadTokens: 7840 }, 4712, 0.0023)).toBe(
+      '  4.7s · 8866→785 token · 88% da cache · $0.0023',
+    );
+  });
+
+  /** Lo zero è il caso che conta: si vede mentre succede, invece di ricostruirlo dopo. */
+  it("e lo dice anche quando è zero, che è l'unica lettura che serviva", () => {
+    expect(closingLine({ inputTokens: 9607, outputTokens: 158, cacheReadTokens: 0 }, 3000, null)).toContain(
+      '0% da cache',
+    );
+  });
+
+  /** Senza il campo la riga resta quella di prima: non si inventa uno 0%. */
+  it('ma se il campo non arriva non si inventa una percentuale', () => {
+    expect(closingLine({ inputTokens: 10, outputTokens: 1 }, 800, null)).not.toContain('cache');
+  });
+
+  /** Un turno interrotto prima di parlare col modello non divide per zero. */
+  it('e a zero token in ingresso non stampa NaN', () => {
+    const l = closingLine({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, 120, null);
+    expect(l).not.toContain('NaN');
+    expect(l).not.toContain('cache');
   });
 });

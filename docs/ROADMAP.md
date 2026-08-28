@@ -52,9 +52,21 @@ Record and count:
 - retries/recovery failures;
 - ignored or annoying proactive behaviour;
 - context/latency/cost pressure;
+- tool-catalogue pressure: a needed capability exists but is not exposed, or the model repeatedly chooses the wrong tool as breadth grows;
 - reasons the owner reaches for another device/interface.
 
 Observed repeated pain outranks speculative roadmap items below.
+
+**Freeze cognitive growth by default during this window.** A new salience,
+decay, person-model, consolidation, ranking or other cognitive mechanism needs an
+observed failure it is meant to fix and a way to tell whether it helped. A
+mechanism does not earn a place merely because it is plausible or inspired by a
+paper. Simplifying or deleting harness that no longer earns its cost is a valid
+dogfood result.
+
+Likewise, do not turn the current numeric tool-exposure cap into architecture.
+Measure whether catalogue breadth actually hurts selection or hides needed
+capabilities before adding discovery/deferred-loading machinery.
 
 ## MVP / trusted alpha
 
@@ -97,6 +109,26 @@ This is distinct from active-active replication.
 ### Consumer control plane
 
 A desktop/consumer UI may expose Home health, Nodes, provider/model, work, approvals, budget, backup/update and capability status. It is a control surface for the same Muffin, never a second agent.
+
+It should also make **data placement** legible rather than forcing the owner to infer it from config: which model provider receives assembled context, whether embeddings are local or remote, which network destinations a capability may reach, and which execution paths are locally sandboxed. This is visibility over existing boundaries, not a promise of automatic privacy routing.
+
+### Capability discovery / deferred tool loading
+
+Default placement: **MVP / trusted alpha, only after measured catalogue pressure**.
+
+If dogfood shows that useful capabilities are being hidden by a static exposure cap, or tool choice degrades as the catalogue grows, replace repeated cap increases with a two-stage shape:
+
+```text
+small always-visible primitive set
+        ↓
+capability/tool discovery
+        ↓
+load the relevant definition when needed
+```
+
+The point is not token optimization by itself. It is to let capability breadth grow without forcing every model to choose among the whole catalogue on every turn. Preserve the same policy kernel: discovery changes what the model can see, not what it is authorised to execute.
+
+Do not build this merely because external agent SDKs support tool search/deferred loading. The trigger is Muffin-specific evidence.
 
 ### Local / owner-controlled compute experiments
 

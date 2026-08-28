@@ -327,6 +327,13 @@ export function buildRuntime(
           // the endpoint (`wantsExplicitCache`): the first version made every
           // caller pass the flag, and the two eval harnesses immediately forgot
           // — same endpoint, full price, silently.
+          //
+          // L'instradamento invece **non** ha un default: è una scelta
+          // dell'owner su prezzo, quantizzazione e chi può conservare i suoi
+          // dati, e sceglierla al posto suo qui sarebbe deciderla in silenzio.
+          // Assente = quello che fa il gateway da sé; `muffin doctor` dice
+          // cosa vuol dire.
+          config.provider.routing ? { routing: config.provider.routing } : {},
         );
 
   const profileProblems: string[] = [];
@@ -830,8 +837,19 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
   const registry = loadMcpRegistry(home);
   if (Object.keys(registry.servers).length === 0) return [];
   const attachment = await buildMcpTools(registry);
-  for (const decl of attachment.capabilities) {
-    const tool = attachment.tools.filter((t) => t.capability === decl.id);
+  // **Ordine deterministico, e non è pedanteria.** Nella gerarchia della cache
+  // di prompt i `tools` vengono **prima** del `system` (documentazione
+  // Anthropic sul prompt caching: «tools, system, then messages»), quindi un
+  // elenco di tool che cambia ordine fra due processi non invalida solo se
+  // stesso: porta via anche il prefisso di sistema, che è la parte grossa.
+  // Questi tool arrivano da server interrogati in rete, cioè nell'ordine in
+  // cui rispondono. Oggi è latente — con zero server configurati la funzione
+  // esce sopra — ed è il momento giusto per renderlo impossibile.
+  const capacita = [...attachment.capabilities].sort((a, b) => a.id.localeCompare(b.id));
+  for (const decl of capacita) {
+    const tool = attachment.tools
+      .filter((t) => t.capability === decl.id)
+      .sort((a, b) => a.spec.name.localeCompare(b.spec.name));
     for (const t of tool) runtime.register(t, decl);
   }
   runtime.onClose(() => attachment.close());
