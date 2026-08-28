@@ -907,6 +907,21 @@ export async function runRepl(
         let streamedAnyText = false;
         const onDelta = streamEnabled
           ? (delta: TurnDelta): void => {
+              if (delta.type === 'boundary') {
+                // Quel testo non era la risposta. Non lo si toglie — è stato
+                // scritto davvero — ma si chiude, così quello che viene dopo
+                // non gli si incolla addosso e `streamedAnyText` torna a dire
+                // il vero: la risposta **non** è ancora a schermo.
+                if (streamedAnyText) process.stdout.write('\n');
+                streamedAnyText = false;
+                if (delta.reason === 'superseded') {
+                  // Il caso raro va detto, non lasciato indovinare: senza
+                  // questa riga il turno mostra due stesure di fila e sembra
+                  // che l'agente si sia ripetuto.
+                  process.stderr.write(`${style.dim('↺ quel tentativo è stato sostituito')}\n`);
+                }
+                return;
+              }
               if (!streamedAnyText) {
                 // La riga di stato se ne va **prima** del primo byte di
                 // risposta: lo spinner riscrive in place, e una risposta che

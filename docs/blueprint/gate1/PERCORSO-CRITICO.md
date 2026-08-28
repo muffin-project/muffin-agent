@@ -1,161 +1,184 @@
-# Percorso critico verso DAY 1
+# Percorso critico verso il dogfood
 
-Questo file possiede **ordine e dipendenze**, non lo stato Gate. Lo stato vive soltanto in `../M5-BIS.md`; il lavoro vivo in Git + `../LAVORO.md`; le deliberate deferral in `../../ROADMAP.md`.
+Questo file possiede **ordine e dipendenze**, non lo stato. Lo stato Gate vive
+solo in `../M5-BIS.md`; il lavoro vivo in Git + `../LAVORO.md`; le deliberate
+deferral in `../../ROADMAP.md`.
 
-La versione immediatamente precedente alla riconciliazione ADR-0050/0051/0052 è preservata in `docs/history/day1-2026-08-25/PERCORSO-CRITICO-pre-topology.md`.
+La regola è: una cosa compare qui soltanto se **deve precederne un'altra**. Se è
+solo un finding, un follow-up o una feature desiderabile, non è percorso
+critico.
 
-## Stato dell'ordine — riconciliato 25/08/2026
+## Fase corrente
 
-M5 è stato riletto contro il `dev` successivo a PR #88. Il percorso non usa più la vecchia equivalenza `transport event == Turn` e non tratta più voice/multipart come opzionali per il DAY-1 personale.
+La milestone **RETURN TO OWNER è conclusa**. L'installazione reale è stata
+eseguita e la promozione `dev → main` è avvenuta il 27/08. Non sono più “il
+prossimo passo”. La cronaca delle slice chiuse resta in Git/PR e nella history,
+non in questo file.
 
-Principio di ordinamento:
+Il progetto è nella convergenza immediatamente precedente/al principio del
+**dogfood reale**: abbastanza vicino all'uso da far ordinare il lavoro ai
+failure osservati, ma con due problemi di Effects/Authority già misurati che
+vengono prima di allargare capability o architettura.
+
+## Ordine corrente
 
 ```text
-semantic invariants / durable identities
+1  undo semantico
         ↓
-schema + recovery of valuable continuity
+2  read → transform → local write / taint
         ↓
-authority/effect primitives
+3  riconciliazione Gate contro HEAD
         ↓
-capability mechanisms that would force fallback
+4  dogfood reale e backlog guidato dai fallback
         ↓
-integrated evidence + real owner battery
+5  journey integrate / battery finale quando una claim lo richiede
 ```
 
-Una riga di sola evidence non riceve un subsystem nuovo. Più righe con la stessa causa radice condividono una slice quando il claim resta reviewable.
+### 1 · Chiudere la compensazione, non solo il restore
 
-## 0 · RETURN TO OWNER viene prima del resto dell'ordine
+La parte fisica esiste: per gli effect reversibili supportati, Muffin prende il
+checkpoint prima della mutazione e `muffin undo` può ripristinare il filesystem.
 
-Milestone owner del 2026-08-25; definizione e classificazione vivono in
-`../M5-BIS.md` §Milestone RETURN TO OWNER (una sola casa, qui solo l'ordine).
-Fino al suo stop-point l'ordine operativo è:
-
-```text
-S1  ingress foundation atterra   CHIUSA — #90, judge CRITICAL MERGE giro 1
-S2  schema lifecycle             CHIUSA — #93, judge CRITICAL MERGE giro 2
-S3  hardening minimo             CHIUSA — #95 (D12-min + E6)
-S4  bring-up modello             CHIUSA per lo smoke (3/3 su home temporanea)
-    install reale                ← unica cosa rimasta
-```
-
-Le quattro slice sono chiuse: **lo stop-point è raggiunto**. Da qui non si
-sviluppa altro prima del dogfood — resta l'installazione reale, e poi l'ordine
-lo detta l'uso. Le sezioni da §2.3 in giù restano l'ordine *di Gate*, ma la loro
-esecuzione riparte **dopo** RETURN, riprioritizzata dall'evidence del dogfood.
-
-## 1 · Chiudi l'ingress foundation prima di costruirci sopra
-
-### 1.1 `recall-speaker` — chiuso
-
-Speaker e trust sono assi separati fino al prompt. Una risposta precedente di Muffin non diventa owner speech perché è tier 0. Evidence: `core/memory/recall-speaker.test.ts` + judge CRITICAL di PR #82.
-
-### 1.2 Native-event identity / mediazione di #78 — primo claim runtime aperto
-
-**Claim:** ogni native event ricevuto ha identità durevole e viene consumato semanticamente una sola volta attraverso crash/retry, ma non è per definizione un Turn.
-
-Forma current:
+La claim che deve chiudersi prima è più larga:
 
 ```text
-NativeEvent
-   ↓ durable/idempotent receipt
-IngressFragment / composition membership
-   ↓
-sealed user intent
-   ↓
-durable Work identity
-```
-
-Più eventi possono condividere lo stesso Work. Una volta esistente la Work identity, retry/recovery non ricrea model call, tool/effect o delivery soltanto per riconsegnare lo stesso evento.
-
-PR #78 contiene evidence preziosa da riusare: inbox durevole, accept/bind/settle, fault injection e no-duplicate execution/delivery. Va **mediata**, non mergiata meccanicamente e non riscritta da zero. Il judge CRITICAL deve attaccare la nuova claim, non `update_id → exactly one Turn`.
-
-### 1.3 Surface composition + busy input + typed provenance
-
-Dopo che l'evento ha una identità onesta, il runtime deve rendere vera la seconda metà di ADR-0052:
-
-- una Surface continua a ricevere durevolmente mentre Work è vivo;
-- primitive native di grouping precedono euristiche temporali;
-- input successivo può diventare `COLLECT`, `STEER`, `FOLLOWUP` o `INTERRUPT` a safe boundary;
-- typed parts dei consumer DAY-1 conservano provenance/taint separata;
-- un already-started Effect non viene reinterpretato come “mai successo”.
-
-B2 e B16 sono due viste dello stesso confine, ma non richiedono per forza una PR monolitica: separare durability/composition da busy-input/provider-media quando serve alla review. Non introdurre broker, tabella `Intent` o universal media envelope senza consumer.
-
-## 2 · Chiudi la forma durevole prima che il dogfood la renda costosa
-
-### 2.1 Schema evolution / migrations — A6 + A7
-
-Serve un percorso versionato provato da database precedente **popolato** a HEAD. Derived indexes possono ricostruirsi; Evidence/Beliefs/Work/Effects/Authority canonici no.
-
-### 2.2 Hot backup + restore — A8
-
-Backup/restore nella topologia reale con gateway residente e SQLite WAL. La copia a freddo già provata non chiude la claim.
-
-### 2.3 Reversible effects / undo — D2 + D3 + D11
-
-Una semantica sola:
-
-```text
-safety snapshot/precondition
+checkpoint/precondition
 → durable effect intent
 → execute
 → outcome
-→ reusable undo
-→ Work/context reconciliation
+→ compensate/undo
+→ Work + context + memory reconciliation
 ```
 
-Se lo snapshot è ciò che rende eseguibile un effect reversibile, snapshot failure = effect non parte. Non trasformare `draft` in `allow` per aggirare il problema.
+Dopo una compensazione la storia non deve presentare l'effetto come ancora
+corrente, ma non deve nemmeno cancellare il fatto storico che l'effetto è
+avvenuto ed è stato poi annullato. È una **compensating transaction / Saga**,
+non un rollback che riscrive il passato.
 
-## 3 · Chiudi i mechanism blocker che causerebbero fallback
+La slice viva è `slice/undo-riallinea-il-turno` / PR #186. Git decide se è ancora
+aperta: non creare una seconda implementazione parallela. `M5-BIS.md` possiede lo
+stato D11.
 
-Ordine relativo dopo le fondamenta:
+### 2 · Decidere il workflow locale read → write
 
-1. **D12 ASK/approval durevole:** mostra canonical plan/args/resource/taint; il consenso non sopravvive a un piano cambiato.
-2. **B6 retry/failure semantics:** provider/network/tool recovery coerente con rerunnability ed effect uncertainty.
-3. **B15 owner binding protetto:** identity della Surface non deve dipendere da config authority modificabile come preferenza ordinaria.
-4. **B10 + C8 Telegram multimodale/voice:** immagini/file sul provider path; audio originale come Evidence, transcript derivato/provenanced; errori espliciti. Consumano il contratto B16 invece di crearne uno parallelo.
-5. **E1 work/job spend bound:** evitare che un singolo background Work consumi il budget globale.
-6. **E6 action cap reale:** il cap deve limitare anche un batch di molte tool call in una singola model response.
-7. **C5 model-facing provenance:** lettura read-only dello stesso store usato da `memory why`.
-8. **E7 `sys.inspect`:** propriocezione live dalle stesse source of truth di doctor/status/prompt.
-9. **A2/A3 character behaviour:** mechanism già cablato; qui resta soprattutto real-model evidence, quindi non inventare runtime.
+È già un failure osservato, quindi precede qualunque discussione astratta sulla
+breadth dei tool: leggere un file porta oggi il turno a taint 2 e la scrittura
+locale viene rifiutata dal soffitto della capability.
 
-D9 Skills resta fuori da questa lista di implementation: HEAD ha già `fence()` + prompt wiring; va risolta come **evidence reconciliation**, non con nuovo codice salvo finding reale.
+La decisione non è “sicurezza sì/no” e non si chiude spostando un numero finché
+un eval diventa verde. Va separato almeno concettualmente:
 
-## 4 · Completa poche journey integrate per i blocker di sola evidence
+```text
+provenance/trust dei byte letti
+≠ rischio dell'effetto proposto
+≠ destinazione/sink dell'effetto
+```
 
-Raggruppa per percorso, non una PR/test per riga:
+Un write confinato e reversibile nella root locale non è lo stesso sink di una
+richiesta HTTP, una mail o altro egress. Qualunque rilassamento del workflow
+locale deve lasciare intatte le garanzie anti-esfiltrazione e la monotonicità
+della provenance.
 
-- install/config/doctor/update/backup — A4 e la prova finale dei mechanism A6/A7/A8;
-- memory extraction/consolidation/temporal/provenance/documents — C2/C3/C5/C6/C7;
-- shell/process/http/search — D4/D5/D6/D7;
-- file production/delivery — B14;
-- Skills fencing/wiring — D9, con mutation/acceptance appropriata senza reimplementazione;
-- trace reconstruction — E3;
-- Telegram owner journey — B1/B8/B10/B16/C8 sul servizio/surface reale dove il fake cambierebbe la claim;
-- identity/persona — A2/A3 sui modelli Gate;
-- failure synthesis — E5 solo dopo che le classi sottostanti sono chiuse.
+La prova terminale è un percorso reale del tipo:
 
-Il criterio è falsificare la claim vera. Una journey può coprire più righe quando passa davvero dagli stessi confini.
+> leggi `spesa.txt` → calcola → scrivi `totale.txt` → verifica → undo
 
-## 5 · Owner-machine battery e audit finale
+non un test isolato del valore di taint.
 
-Quando M5 non ha più blocker:
+### 3 · Riconciliare il Gate prima di usare i conteggi per decidere
 
-1. build/install/update sulla macchina dell'owner;
-2. supervisor + reboot/logout dove necessari;
-3. Telegram/provider/network reali per le claim non falsificabili onestamente con fake;
-4. voice/transcription reale;
-5. doctor/status/sys.inspect sullo stato effettivo;
-6. fresh integrated red-team con la domanda terminale del mandato: “cosa mi costringerebbe ancora ad aprire un altro agente/app durante i 14 giorni?”;
-7. solo dopo: `dev → main` secondo `BRANCHING.md` e inizio DAY 1.
+`M5-BIS.md` è l'unica authority degli status, ma alcuni suoi motivi sono rimasti
+indietro rispetto a HEAD. Prima di usare “N BLOCKER” come criterio operativo va
+riletto riga per riga contro codice, acceptance e PR correnti.
+
+Casi già noti da verificare, non da aggiornare alla cieca:
+
+- **A2/A3**: il character eval esiste ora e non perde più misure; resta da
+  classificare cosa significano i fail e quale evidence manca davvero;
+- **E7**: il vecchio motivo “`sys_inspect` è oltre il cap 10” non vale più dopo
+  il passaggio del profilo a 14 tool;
+- **D11**: dipende dallo stato effettivo della slice di undo semantico;
+- conteggi e testo introduttivo devono essere ricalcolati dalle 55 righe, non
+  modificati per differenza mentale.
+
+Questa riconciliazione non autorizza nuovi subsystem. Se una riga è rossa solo
+per evidence, la risposta è evidence.
+
+### 4 · Da qui ordina l'uso
+
+Durante il dogfood il segnale più forte è un fallback reale. Registrare almeno:
+
+- apertura di un altro agente/app o interfaccia diretta;
+- capability mancante o tool non raggiungibile;
+- ASK ripetitivo o non consegnabile;
+- errore/retry/recovery che richiede intervento manuale;
+- memory miss, belief errata o contraddizione non gestita;
+- lavoro promesso e dimenticato;
+- costo, latency o pressione di contesto che cambiano davvero il comportamento;
+- caso in cui la superficie non riesce a ricevere/steerare mentre Muffin lavora.
+
+Un dolore ripetuto può promuovere un item da ROADMAP o riordinare un BLOCKER.
+Senza evidence nuova, l'ordine non si espande.
+
+## Cluster Gate quando diventano il prossimo problema
+
+Questi cluster preservano dipendenze utili, ma **non sono uno sprint pre-caricato**.
+Lo stato di ogni riga resta in M5.
+
+### Effects / Authority
+
+Prima la correttezza degli effetti, poi più potere:
+
+1. ASK/approval durevole e legato al canonical plan;
+2. retry coerente con rerunnability ed effect uncertainty;
+3. owner/surface binding protetto dove ancora necessario;
+4. spend/action bound per Work/capability quando l'uso lo richiede.
+
+### Ingress / Surfaces
+
+Receipt idempotente, composition e durable Work restano concetti distinti.
+Busy-input (`COLLECT` / `STEER` / `FOLLOWUP` / `INTERRUPT`) viene implementato
+contro consumer reali, senza inventare broker, tabella `Intent` o universal
+media envelope prima che servano.
+
+Voice/multimedia conserva sempre originale come Evidence e transcript/caption
+come rappresentazione derivata con provenance.
+
+### Capability mechanisms
+
+Una capability entra prima quando la sua assenza costringe l'owner a operare
+un'interfaccia direttamente. Non si costruisce un “E5 subsystem” o un “retry
+framework” generico se la claim può essere chiusa nel percorso che fallisce.
+
+### Evidence-only journeys
+
+Raggruppare per journey reale, non una PR per riga: lifecycle/install/backup,
+memory/documenti, shell/http/search, Telegram, identity/persona, tracing. Una
+journey può chiudere più righe se attraversa davvero gli stessi confini.
+
+## Battery finale
+
+Quando serve dichiarare una fase pronta:
+
+1. build/install/update sulla macchina target;
+2. supervisor/restart/reboot dove la claim lo richiede;
+3. provider, Telegram, rete, voice e altri servizi reali solo dove un fake
+   cambierebbe la domanda;
+4. `doctor`, `status`, `sys.inspect` sullo stato effettivo;
+5. red-team integrato con la domanda: **“cosa mi costringe ancora ad aprire un
+   altro agente/app?”**;
+6. promozione secondo `BRANCHING.md` solo dopo le garanzie della fase.
 
 ## Fuori da questo ordine
 
-Le righe `OUT` hanno la loro fase in `docs/ROADMAP.md`: proactivity oltre job espliciti, overflow/context-pressure UX, Discord parity, MCP hot lifecycle, world-state generico e altre capability non richieste dalla finestra personale.
-
-Nodes, local inference, Home migration e public extension work non diventano Gate per eleganza. Entrano solo se il deployment DAY-1 o un fallback reale li rende indispensabili.
+Senza un consumer/failure che li promuova: active-active/multi-Home, scheduler
+distribuito, Node platform generica, world-state generico, grande ecosystem di
+extension, nuove strutture cognitive, riscrittura del runtime o cambio framework.
+La loro eventuale fase è `ROADMAP.md`.
 
 ## Regola di manutenzione
 
-Aggiorna questo file soltanto quando cambia una **dipendenza/causa radice/ordine**. Gli stati vanno in M5; le PR vive in Git/LAVORO; la fase futura in ROADMAP. Se una nuova decisione architetturale cambia il significato di una claim, si riconcilia prima la domanda e solo dopo si implementa contro di essa.
+Aggiorna questo file solo quando cambia una **dipendenza, causa radice o ordine**.
+Non copiarci stato macchina, conteggi, dettagli di una PR chiusa o cronaca di una
+riparazione. Git/PR possiede il lavoro vivo; M5 lo stato; ROADMAP la fase;
+`docs/history/` e `docs/lessons.md` il passato e ciò che abbiamo imparato.

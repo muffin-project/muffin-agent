@@ -343,6 +343,18 @@ function toContentBlock(block: ContentBlock): Anthropic.ContentBlockParam {
       return { type: 'thinking', thinking: block.thinking, signature: block.signature };
     case 'redacted_thinking':
       return { type: 'redacted_thinking', data: block.data };
+    // L'API Messages non accetta audio in ingresso, in nessuna forma. Un blocco
+    // audio qui non e' un formato da tradurre: e' un instradamento sbagliato a
+    // monte, perche' `audioAccettato` (providers/modalita.ts) deve aver gia'
+    // deciso di trascrivere in casa invece di spedire i byte.
+    //
+    // Tira, e non lo lascia cadere. Filtrarlo in silenzio manderebbe il turno
+    // senza la cosa che l'owner ha detto, e la risposta parlerebbe di un
+    // messaggio vuoto senza che nessuno sappia perche'.
+    case 'audio':
+      throw new Error(
+        "l'API Anthropic non accetta audio in ingresso: questo audio andava trascritto, non spedito (agent/providers/modalita.ts)",
+      );
   }
 }
 
