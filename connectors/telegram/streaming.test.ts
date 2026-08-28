@@ -196,6 +196,7 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       return true;
     },
     fileUrl: async () => 'https://example.test/file',
+    setMyCommands: async () => true,
   };
   return { api, calls };
 }

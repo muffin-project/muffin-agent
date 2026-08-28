@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { TrustTier } from '../policy/types.js';
@@ -63,6 +63,32 @@ export class SessionStore {
   open(id?: string): SessionRef {
     const sessionId = id ?? `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
     return { id: sessionId, file: join(this.dir, `${sessionId}.jsonl`) };
+  }
+
+  /**
+   * Chiude la conversazione di prima senza cambiare id.
+   *
+   * Serve a `/new` su una superficie il cui id di sessione **non è libero**:
+   * Telegram lo deriva dalla chat (`telegram:<chatId>`), quindi «una sessione
+   * nuova» non può essere un id nuovo — sarebbe una chat diversa. Il file
+   * viene messo da parte con la data, e da lì la stessa conversazione riparte
+   * vuota.
+   *
+   * Messo da parte e non cancellato: `/new` è una cosa che si dice di fretta,
+   * e buttare la storia di una conversazione perché qualcuno ha scritto tre
+   * lettere è il tipo di irreversibilità che questo progetto rifiuta altrove
+   * (cfr. `muffin undo`, che mette da parte pure sé stesso).
+   *
+   * Restituisce il nome dell'archivio, o `null` se non c'era niente da
+   * archiviare — che non è un errore: una conversazione mai cominciata è già
+   * nuova.
+   */
+  rotate(session: SessionRef, now: Date = new Date()): string | null {
+    if (!existsSync(session.file)) return null;
+    const marca = now.toISOString().replace(/[:.]/g, '-');
+    const archivio = session.file.replace(/\.jsonl$/, `.${marca}.jsonl`);
+    renameSync(session.file, archivio);
+    return archivio;
   }
 
   append(session: SessionRef, message: SessionMessage): void {

@@ -57,6 +57,7 @@ function fakeApi(makeOverrides?: (calls: Recorded[]) => Partial<TelegramApiLike>
       throw new Error('unused in this fake');
     },
     fileUrl: async () => 'https://example.test/file',
+    setMyCommands: async () => true,
     ...(makeOverrides ? makeOverrides(calls) : {}),
   };
   return { api, calls };
