@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
 import { premi, statoIniziale, testo, type Key, type Stato } from './editor.js';
+import { disponi, type Cornice } from './riquadro.js';
 
 /**
  * Il terminale attorno al buffer: modo raw, disegno, storia su disco.
@@ -122,35 +123,40 @@ export function makeTextzone(deps: TextzoneDeps) {
    * guida della stessa larghezza, così il testo resta allineato e si vede a
    * colpo d'occhio che sono lo stesso messaggio.
    */
-  async function read(prompt: string, continuazione: string): Promise<Esito> {
+  async function read(cornice: Cornice): Promise<Esito> {
     if (input.isTTY !== true) return leggiSenzaTty(input);
 
     let stato = statoIniziale(storia);
     let righeDisegnateOra = 0;
-
-    const larghezza = (): number => output.columns ?? 80;
+    /**
+     * Su **quale** riga del riquadro è rimasto il cursore dopo l'ultimo disegno.
+     *
+     * È la cosa da ricordare, e ricordare il numero di righe invece era il
+     * difetto: alla fine di ogni disegno il cursore non sta in fondo al
+     * riquadro, sta dove sta il testo. Risalire di `righe - 1` da lì portava
+     * troppo in su o troppo in giù, la cancellazione partiva dal punto
+     * sbagliato, e ogni tasto premuto stampava un riquadro **nuovo** sotto il
+     * precedente invece di sostituirlo. Visto pilotando il REPL dentro un pty
+     * il 28/08/2026: una colonna di riquadri, uno per lettera digitata.
+     */
+    let cursoreRigaOra = 0;
 
     const disegna = (): void => {
-      const w = larghezza();
-      // Su, fino all'inizio di ciò che avevamo disegnato, poi si cancella tutto
-      // ciò che sta sotto: è l'unico modo di non lasciare code di una riga più
-      // lunga di quella nuova.
-      if (righeDisegnateOra > 1) output.write(`\x1b[${String(righeDisegnateOra - 1)}A`);
+      const w = output.columns ?? 80;
+      // Si risale da dove sta il cursore adesso fino alla prima riga del
+      // riquadro, poi si cancella tutto ciò che sta sotto.
+      if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
       output.write('\r\x1b[0J');
 
-      let disegnate = 0;
-      stato.righe.forEach((riga, i) => {
-        const prefisso = i === 0 ? prompt : continuazione;
-        output.write(`${prefisso}${riga}`);
-        if (i < stato.righe.length - 1) output.write('\n');
-        disegnate += righeDisegnate(prefisso + riga, w);
-      });
-      righeDisegnateOra = disegnate;
+      const d = disponi(stato.righe, stato.riga, stato.colonna, cornice, w);
+      output.write(d.righe.join('\n'));
+      righeDisegnateOra = d.righe.length;
 
-      // Il cursore, dove sta davvero nel buffer.
-      const { su, colonnaSchermo } = posizioneCursore(stato.righe, stato.riga, stato.colonna, prompt, continuazione, w);
+      // Il cursore, dalla fine di ciò che si è appena scritto fino alla sua riga.
+      const su = d.righe.length - 1 - d.cursore.riga;
       if (su > 0) output.write(`\x1b[${String(su)}A`);
-      output.write(`\r\x1b[${String(colonnaSchermo)}G`);
+      output.write(`\r\x1b[${String(d.cursore.colonna)}G`);
+      cursoreRigaOra = d.cursore.riga;
     };
 
     return new Promise<Esito>((resolve) => {
@@ -165,7 +171,11 @@ export function makeTextzone(deps: TextzoneDeps) {
         output.write(PASTE_OFF);
         input.setRawMode(false);
         input.pause();
-        output.write('\n');
+        // Sotto tutto il riquadro, non sotto la riga del cursore: uscire da
+        // metà riquadro farebbe cominciare la risposta dentro la cornice.
+        const giu = righeDisegnateOra - 1 - cursoreRigaOra;
+        if (giu > 0) output.write(`\x1b[${String(giu)}B`);
+        output.write('\r\n');
         resolve(esito);
       };
 
