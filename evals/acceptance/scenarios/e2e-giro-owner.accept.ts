@@ -196,11 +196,30 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           // `git status`, che è un test il cui risultato è una proprietà
           // dell'albero di chi lo lancia.
           'build',
+          // Stessa famiglia di `build`, e per la stessa ragione misurata il
+          // 28/08/2026: `findCheckoutRoot` risolve di proposito al checkout
+          // **principale** (`cli/update.ts` — la prima riga di `git worktree
+          // list`, perche' e' quello che `muffin update` aggiorna), mentre
+          // l'`init` di questo giro copia da `dist/`. Su un worktree di slice i
+          // due alberi sono diversi per costruzione, quindi la deriva che
+          // doctor segnala e' fra il checkout principale e il build di chi
+          // lancia — non fra l'installazione sotto esame e cio' che le e' stato
+          // copiato dentro un minuto fa.
+          //
+          // In una home appena inizializzata quel confronto non puo' dire altro:
+          // `init` ha copiato i default in questo istante, quindi non esiste una
+          // modifica dell'owner da scoprire. Ammesso come `sandbox`, mai in
+          // silenzio — la riga esce sotto con la ragione che doctor ha dato.
+          'default',
         ];
         for (const line of warnLines) {
           if (!expectedWarnNames.some((name) => line.startsWith(`! ${name}`))) {
             throw new Error(`doctor riporta un WARN non dichiarato a questo punto del giro: "${line}"\n\n${doctor.out}`);
           }
+        }
+        const defaultWarn = warnLines.find((l) => l.startsWith('! default'));
+        if (defaultWarn) {
+          console.warn(`[A10] i default del checkout principale non sono quelli di questo build: ${defaultWarn.trim()}`);
         }
         const sandboxWarn = warnLines.find((l) => l.startsWith('! sandbox'));
         if (sandboxWarn) {
