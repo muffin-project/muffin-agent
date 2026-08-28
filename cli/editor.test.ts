@@ -79,14 +79,27 @@ describe('le due Invio', () => {
   /**
    * Ctrl+J è la via che funziona ovunque: è un carattere vero (0x0A), non una
    * sequenza che il terminale deve decidere di inventare. Terminal.app non
-   * distingue Shift+Invio, quindi senza questa riga su quel terminale la
-   * textzone non esisterebbe.
+   * distingue Shift+Invio, quindi senza questo su quel terminale la textzone
+   * non esisterebbe.
+   *
+   * **Il tasto è quello che Node produce davvero**, non quello che sembrava
+   * ovvio. Misurato con `emitKeypressEvents`: `\n` arriva come
+   * `{name:'enter'}` — senza `ctrl`. La versione precedente di questo test
+   * costruiva `{name:'j', ctrl:true}`, una forma che Node non emette mai:
+   * passava verde mentre su un terminale vero Ctrl+J spediva il messaggio.
+   * Provava la mia assunzione, non il terminale.
    */
-  it('e Ctrl+J pure, che è la via che funziona su ogni terminale', () => {
+  it('e Ctrl+J pure — che Node consegna come `enter`, non come ctrl+j', () => {
     const s = scrivi(statoIniziale(), 'primo');
-    const r = agisci(s, { name: 'j', ctrl: true });
+    const r = agisci(s, { name: 'enter', sequence: '\n' });
     expect(r.azione.tipo).toBe('niente');
     expect(testo(scrivi(r.stato, 'secondo'))).toBe('primo\nsecondo');
+  });
+
+  /** E `return` nudo resta l'unico che spedisce. */
+  it('mentre `return` nudo è il solo che spedisce', () => {
+    const s = scrivi(statoIniziale(), 'ciao');
+    expect(agisci(s, { name: 'return', sequence: '\r' }).azione.tipo).toBe('spedisci');
   });
 });
 
