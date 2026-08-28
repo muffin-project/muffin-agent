@@ -95,6 +95,63 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   wait: 'mi metto in attesa',
 };
 
+/**
+ * Quale argomento vale la pena vedere, per ogni tool.
+ *
+ * Il difetto che chiude, misurato sul WAL il 28/08/2026: un turno ha fatto
+ * **sette** `memory_search` con sette `args_digest` **diversi**, e a schermo
+ * erano sette righe identiche — `✓ cerco in memoria`, sette volte. Si legge
+ * come un giro a vuoto e non lo era: nell'intero store non esiste una sola
+ * coppia (tool, args) ripetuta. Il difetto era la riga, non il loop, ed è il
+ * tipo di difetto che fa diagnosticare la cosa sbagliata — l'ho fatto io.
+ *
+ * Un campo solo per tool, quello che risponde a «su cosa?». Non un dump degli
+ * argomenti: `fs_write` porta anche `content`, e stampare quello vuol dire
+ * rovesciare un file intero nello scrollback a ogni scrittura.
+ *
+ * I nomi vengono dagli schemi veri (`agent/tools/*.ts`), letti, non ricordati.
+ */
+const TOOL_SUBJECT: Readonly<Record<string, string>> = {
+  memory_search: 'query',
+  web_search: 'query',
+  fs_read: 'path',
+  fs_list: 'path',
+  fs_write: 'path',
+  document_read: 'path',
+  http_get: 'url',
+  shell_run: 'command',
+  skill_read: 'name',
+  send_file: 'path',
+};
+
+/** Quanto sta su una riga accanto alla frase, senza mandarla a capo. */
+const SOGGETTO_MASSIMO = 48;
+
+/**
+ * Il soggetto da mostrare accanto alla frase, o `''` se non c'è.
+ *
+ * Gli argomenti li ha scritti il **modello**: possono contenere a capo, escape
+ * e qualunque cosa. Si appiattiscono e si accorciano prima di toccare un
+ * terminale — una sequenza di escape dentro un percorso, stampata cruda, muove
+ * il cursore del riquadro che sta appena sotto.
+ */
+export function toolSubject(name: string, args: unknown): string {
+  const campo = TOOL_SUBJECT[name];
+  if (campo === undefined || args === null || typeof args !== 'object') return '';
+  const grezzo = (args as Record<string, unknown>)[campo];
+  if (typeof grezzo !== 'string' || grezzo === '') return '';
+  // eslint-disable-next-line no-control-regex
+  const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (piatto === '') return '';
+  return piatto.length > SOGGETTO_MASSIMO ? `${piatto.slice(0, SOGGETTO_MASSIMO - 1)}…` : piatto;
+}
+
+/** La frase, col suo soggetto quando ce n'è uno. */
+export function toolLine(name: string, args: unknown): string {
+  const soggetto = toolSubject(name, args);
+  return soggetto === '' ? toolPhrase(name) : `${toolPhrase(name)}: ${soggetto}`;
+}
+
 /** Il nome grezzo è il fallback, mai un errore: un tool MCP non è in questa mappa e non può esserlo. */
 export function toolPhrase(name: string): string {
   return TOOL_PHRASE[name] ?? name;
@@ -117,7 +174,7 @@ export function statusFor(event: TurnEvent): string | null {
     case 'round':
       return '  penso…';
     case 'tool_start':
-      return `  ${toolPhrase(event.name)}…`;
+      return `  ${toolLine(event.name, event.args)}…`;
     default:
       return null;
   }
@@ -280,12 +337,12 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     // qualcosa. È l'unica riga che compare *prima* che un tool finisca, e
     // compare solo quando c'è una ragione.
     case 'tool_retry':
-      return `  ↻ ${toolPhrase(event.name)} — riprovo (${event.attempt}/${MAX_TOOL_RETRIES_MOSTRATI})`;
+      return `  ↻ ${toolLine(event.name, event.args)} — riprovo (${event.attempt}/${MAX_TOOL_RETRIES_MOSTRATI})`;
     case 'tool_end':
       // Rientrato di due, come l'attesa che sostituisce: il lavoro che ha
       // prodotto la risposta sta sotto la domanda, non accanto ad essa
       // (`cli/STYLES.md` §«La forma di un turno»).
-      return `  ${event.isError ? '✗' : '✓'} ${toolPhrase(event.name)}`;
+      return `  ${event.isError ? '✗' : '✓'} ${toolLine(event.name, event.args)}`;
     default:
       return assertNever(event);
   }
