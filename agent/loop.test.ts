@@ -1249,7 +1249,10 @@ class StreamCapableProvider implements Provider {
 
   constructor(
     /** One entry per expected `chatStream` call, consumed in order. */
-    private readonly streamScript: ({ chunks: string[]; result: ChatResult } | { chunks: string[]; breaks: true })[],
+    private readonly streamScript: (
+      | { chunks: string[]; result: ChatResult; attendiPrimaDelDone?: Promise<void> }
+      | { chunks: string[]; breaks: true }
+    )[],
     /** What a *fallback* (plain `chat()`) call answers, consumed in order — a separate list because a broken stream's fallback is a second, distinct request. */
     private readonly chatScript: ChatResult[] = [],
   ) {}
@@ -1265,55 +1268,126 @@ class StreamCapableProvider implements Provider {
     if (!step) throw new Error('StreamCapableProvider: chatStream() script esaurito');
     for (const chunk of step.chunks) yield { type: 'text_delta', text: chunk };
     if ('breaks' in step) throw new ProviderStreamError('rotto a metà', true);
+    // Il seghetto per misurare il *quando*: con questa promessa lo stream
+    // resta aperto dopo aver ceduto i chunk, così un test può guardare il sink
+    // mentre il turno è ancora in volo.
+    if (step.attendiPrimaDelDone) await step.attendiPrimaDelDone;
     yield { type: 'done', result: step.result };
   }
 }
 
 describe('agent loop · streaming (B11)', () => {
-  it('streams the final round\'s text to onDelta, in the chunks the provider yielded', async () => {
+  /** Solo il testo, nell'ordine in cui è arrivato. */
+  const testo = (d: TurnDelta[]): string[] => d.flatMap((x) => (x.type === 'text' ? [x.text] : []));
+
+  it("streams the answer's text as it forms, in the chunks the provider yielded", async () => {
     const provider = new StreamCapableProvider([{ chunks: ['ecco ', 'la ', 'risposta'], result: answer('ecco la risposta') }]);
     const { deps: d, store } = deps([], { provider });
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
-    expect(received).toEqual(['ecco ', 'la ', 'risposta']);
+    // I byte sono quelli del filo; i **confini** no, ed è il prezzo dichiarato
+    // del taglio dal vivo: lo spazio in coda a un chunk viene trattenuto
+    // finché il chunk dopo non dimostra che era interno, quindi esce attaccato
+    // a lui. A schermo è la stessa frase con uno spazio in ritardo di qualche
+    // millisecondo; ciò che non può succedere è che uno spazio *finale* esca.
+    expect(received).toEqual([
+      { type: 'text', text: 'ecco' },
+      { type: 'text', text: ' la' },
+      { type: 'text', text: ' risposta' },
+    ]);
+    expect(testo(received).join('')).toBe(result.text);
     expect(result).toMatchObject({ stopped: 'answered', text: 'ecco la risposta' });
     expect(provider.streamCalls).toBe(1);
     expect(provider.chatCalls).toBe(0);
   });
 
-  it('never streams a round that ends in a tool call — the model "thinking aloud" is not the answer', async () => {
+  /**
+   * Il test che il disegno precedente non poteva passare, ed è l'unico qui che
+   * guarda il *quando* invece del cosa.
+   *
+   * Fino al 28/08/2026 i chunk si accumulavano in un buffer e venivano
+   * riversati a `onDelta` solo dopo che il giro era dimostrato essere quello
+   * che risponde. Tutti gli altri test di questo blocco passavano lo stesso:
+   * l'ordine e i byte erano giusti, arrivavano solo tutti insieme alla fine.
+   * Misurato su uno schermo vero: una risposta da 2.278 token comparsa in
+   * blocco al termine di un turno da 46,7 s, con lo spinner che girava a vuoto
+   * fino a quel momento.
+   *
+   * Qui il provider tiene aperto lo stream finché il test non lo lascia
+   * andare: se il testo non è già sul sink mentre `runTurn` è ancora in volo,
+   * lo streaming non sta streammando.
+   */
+  it('and the surface has the text while the turn is still running, not after it', async () => {
+    let liberaIlDone = (): void => {};
+    const doneSbloccabile = new Promise<void>((r) => {
+      liberaIlDone = r;
+    });
     const provider = new StreamCapableProvider([
-      { chunks: ['sto per chiamare un tool...'], result: callTool('demo_read', { q: 1 }) },
+      { chunks: ['la prima metà'], result: answer('la prima metà e la seconda'), attendiPrimaDelDone: doneSbloccabile },
+    ]);
+    const { deps: d, store } = deps([], { provider });
+    const received: TurnDelta[] = [];
+    let finito = false;
+    const turno = runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) }).then((r) => {
+      finito = true;
+      return r;
+    });
+
+    // Un giro di event loop basta: il chunk è già stato ceduto, il `done` no.
+    await new Promise((r) => setImmediate(r));
+    expect(finito).toBe(false);
+    expect(testo(received)).toEqual(['la prima metà']);
+
+    liberaIlDone();
+    await turno;
+    expect(finito).toBe(true);
+  });
+
+  /**
+   * Non è una ritrattazione: quel testo il modello l'ha scritto davvero, e
+   * prima del 28/08/2026 non lo vedeva nessuno — né a schermo né nella
+   * sessione. Il confine dice cos'era, e sotto ci finisce la riga del tool.
+   */
+  it('shows a tool round\'s thinking aloud, then draws the line under it', async () => {
+    const provider = new StreamCapableProvider([
+      { chunks: ['guardo il file...'], result: callTool('demo_read', { q: 1 }) },
       { chunks: ['ecco il risultato'], result: answer('ecco il risultato') },
     ]);
     const { deps: d, store, calls } = deps([], { provider });
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
     expect(calls).toEqual(['demo_read:{"q":1}']);
-    // Only the second round's text ever reaches the surface. The first
-    // round's "sto per chiamare un tool..." is exactly the text this
-    // mechanism exists to withhold.
-    expect(received).toEqual(['ecco il risultato']);
-    expect(result.text).toBe('ecco il risultato');
+    expect(received).toEqual([
+      { type: 'text', text: 'guardo il file...' },
+      { type: 'boundary', reason: 'tool-call' },
+      { type: 'text', text: 'ecco il risultato' },
+    ]);
+    // L'invariante su cui una superficie può contare: il testo **dopo
+    // l'ultimo confine** è la risposta, byte per byte.
+    expect(dopoLUltimoConfine(received)).toBe(result.text);
   });
 
-  it('does not leak a completion-nudged round\'s draft — only the round that stands streams', async () => {
-    // Same trigger the non-streaming test above uses (a narrated call the
-    // turn never made), so this is the streaming twin of "nudges once when
-    // the answer narrates a call it never made" — proving the *nudged*
-    // round's chunks never reach a surface, which that test cannot see at
-    // all since it has no onDelta to check.
+  it("says a completion-nudged draft was superseded, instead of hiding the whole turn to avoid saying it", async () => {
+    // Stesso innesco del test non-streaming più sopra (una chiamata narrata
+    // che il turno non ha mai fatto), così questo ne è il gemello streaming.
     const provider = new StreamCapableProvider([
       { chunks: ['[Eseguo ', '`demo_write`] fatto'], result: answer('[Eseguo `demo_write`] fatto') },
       { chunks: ['scritto ', 'per davvero'], result: answer('scritto per davvero') },
     ]);
     const { deps: d, store } = deps([], { provider });
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
-    expect(received).toEqual(['scritto ', 'per davvero']);
+    expect(received).toEqual([
+      { type: 'text', text: '[Eseguo' },
+      { type: 'text', text: ' `demo_write`] fatto' },
+      { type: 'boundary', reason: 'superseded' },
+      { type: 'text', text: 'scritto' },
+      { type: 'text', text: ' per davvero' },
+    ]);
+    expect(dopoLUltimoConfine(received)).toBe(result.text);
     expect(result.text).toBe('scritto per davvero');
   });
 
@@ -1336,24 +1410,30 @@ describe('agent loop · streaming (B11)', () => {
       [answer('risposta di ripiego')],
     );
     const { deps: d, store } = deps([], { provider });
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
     expect(provider.streamCalls).toBe(1);
     expect(provider.chatCalls).toBe(1); // exactly one fallback — the whole point of ProviderStreamError
     expect(result.stopped).toBe('answered');
-    expect(result.text).toBe('risposta di ripiego');
-    // The broken attempt's partial text never reached the surface, and the
-    // fallback is not itself streamed — this round is delivered normally at
-    // the end, same as a turn with no sink at all. Never "half a draft".
-    expect(received).toEqual([]);
+    // Il pezzo di stesura rotta è stato mostrato, quindi va chiuso — e il
+    // ripiego, che non è streammato, arriva intero dietro al confine. Senza
+    // quest'ultimo pezzo la superficie resterebbe con mezza frase e basta.
+    expect(received).toEqual([
+      { type: 'text', text: 'parte rotta' },
+      { type: 'boundary', reason: 'superseded' },
+      { type: 'text', text: 'risposta di ripiego' },
+    ]);
+    expect(dopoLUltimoConfine(received)).toBe(result.text);
   });
 
   it('does not stream when the provider has no chatStream at all, even with a sink attached', async () => {
     const { deps: d, store } = deps([answer('ok senza streaming')]); // ScriptedProvider has no chatStream
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
+    // Nessun delta: un turno che non ha mai chiesto di streammare resta
+    // esattamente com'era, e la sua risposta passa da `result.text`.
     expect(received).toEqual([]);
     expect(result.text).toBe('ok senza streaming');
   });
@@ -1368,17 +1448,48 @@ describe('agent loop · streaming (B11)', () => {
       { chunks: ['  \n', 'ecco ', 'la risposta', '  ', '\n'], result: answer('ecco la risposta') },
     ]);
     const { deps: d, store } = deps([], { provider });
-    const received: string[] = [];
-    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta.text) });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
 
-    expect(received.join('')).toBe(result.text);
+    expect(testo(received).join('')).toBe(result.text);
     expect(result.text).toBe('ecco la risposta');
-    // Not collapsed into one chunk — internal shape survives, only the two
-    // edges were touched (the leading whitespace-only chunk dropped, the
-    // trailing whitespace-only chunk dropped, nothing in between rewritten).
-    expect(received).toEqual(['ecco ', 'la risposta']);
+    // Non collassato in un pezzo solo: la forma interna sopravvive. Il primo
+    // chunk, tutto spazio, è sparito; lo spazio fra le due parole è uscito
+    // insieme alla parola che l'ha dimostrato interno; i due spazi e l'a-capo
+    // finali non sono mai usciti, perché dopo di loro non è arrivato niente.
+    expect(testo(received)).toEqual(['ecco', ' la risposta']);
+  });
+
+  /**
+   * La metà del taglio bordi che un buffer si prendeva gratis e uno stream
+   * non può: dal vivo non esiste «tutta la stringa» su cui chiamare `.trim()`,
+   * quindi lo spazio in coda va **trattenuto** finché non arriva qualcosa che
+   * dimostri che era interno. Una riga vuota voluta dal modello deve uscire;
+   * i due spazi finali no, perché dopo di loro non arriva mai niente.
+   */
+  it('holds trailing whitespace until real text proves it was internal, and drops it when nothing follows', async () => {
+    const provider = new StreamCapableProvider([
+      { chunks: ['prima riga', '\n\n', 'seconda riga', '   '], result: answer('prima riga\n\nseconda riga') },
+    ]);
+    const { deps: d, store } = deps([], { provider });
+    const received: TurnDelta[] = [];
+    const result = await runTurn(d, { ...input(store), onDelta: (delta: TurnDelta) => received.push(delta) });
+
+    expect(testo(received).join('')).toBe(result.text);
+    // La riga vuota di mezzo è uscita — attaccata al pezzo che l'ha
+    // dimostrata interna, che è l'unico momento in cui si poteva saperlo.
+    expect(testo(received)).toEqual(['prima riga', '\n\nseconda riga']);
   });
 });
+
+/** Il testo dopo l'ultimo confine: quello che una superficie considera la risposta. */
+function dopoLUltimoConfine(deltas: TurnDelta[]): string {
+  const ultimo = deltas.map((d) => d.type).lastIndexOf('boundary');
+  return deltas
+    .slice(ultimo + 1)
+    .map((d) => (d.type === 'text' ? d.text : ''))
+    .join('');
+}
 
 /** Every event of one kind, narrowed — so a test can read `.ms`/`.capability`/etc without an `as`. */
 function byType<T extends TurnEvent['type']>(events: TurnEvent[], type: T): Extract<TurnEvent, { type: T }>[] {
