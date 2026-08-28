@@ -81,6 +81,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   memory_search: 'cerco in memoria',
   fs_read: 'leggo un file',
   fs_list: 'guardo una cartella',
+  fs_search: 'cerco nei file',
   fs_write: 'scrivo un file',
   document_read: 'leggo un documento',
   http_get: 'apro una pagina',
@@ -111,11 +112,16 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
  *
  * I nomi vengono dagli schemi veri (`agent/tools/*.ts`), letti, non ricordati.
  */
-const TOOL_SUBJECT: Readonly<Record<string, string>> = {
+const TOOL_SUBJECT: Readonly<Record<string, string | readonly string[]>> = {
   memory_search: 'query',
   web_search: 'query',
   fs_read: 'path',
   fs_list: 'path',
+  // Due campi, provati in quest'ordine: `fs_search` cerca dentro i file con
+  // `query`, oppure — quando non sai dove sta una cosa — i file stessi con
+  // `name`. Un solo campo lascerebbe muta metà delle chiamate, che è la metà
+  // in cui l'owner ha più bisogno di sapere cosa sta guardando.
+  fs_search: ['query', 'name'],
   fs_write: 'path',
   document_read: 'path',
   http_get: 'url',
@@ -138,7 +144,8 @@ const SOGGETTO_MASSIMO = 48;
 export function toolSubject(name: string, args: unknown): string {
   const campo = TOOL_SUBJECT[name];
   if (campo === undefined || args === null || typeof args !== 'object') return '';
-  const grezzo = (args as Record<string, unknown>)[campo];
+  const campi = typeof campo === 'string' ? [campo] : campo;
+  const grezzo = campi.map((c) => (args as Record<string, unknown>)[c]).find((v) => typeof v === 'string' && v !== '');
   if (typeof grezzo !== 'string' || grezzo === '') return '';
   // eslint-disable-next-line no-control-regex
   const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
