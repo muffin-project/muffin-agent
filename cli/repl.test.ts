@@ -201,9 +201,15 @@ describe('the REPL streams the final answer while it forms (B11)', () => {
       // The wire really did carry more than one delta — this is `wordChunks`'
       // own split (`evals/acceptance/provider.ts`), and each one arrived as
       // its own `process.stdout.write` call, not pre-joined upstream.
-      expect(written).toContain('ciao ');
-      expect(written).toContain('dal ');
-      expect(written).toContain('muffin ');
+      //
+      // Lo spazio è in testa e non in coda perché `edgeTrimmer` trattiene lo
+      // spazio finale di ogni pezzo finché il pezzo dopo non dimostra che era
+      // interno: è l'unico modo di fare `.trim()` su una stringa che si ha
+      // solo un pezzo per volta, ed è ciò che tiene vera la garanzia
+      // byte-identica qui sotto anche adesso che i delta escono dal vivo.
+      expect(written).toContain('ciao');
+      expect(written).toContain(' dal');
+      expect(written).toContain(' muffin');
       // Exactly once: a turn that streamed must not *also* print the
       // finished text at the end — that would be the same answer twice.
       const occurrences = written.join('').split('ciao dal muffin finto').length - 1;
