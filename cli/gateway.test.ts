@@ -18,7 +18,7 @@ import type { TurnLane } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
-import { cmdGatewayInstall, EXIT_NOT_ACTIVATED } from './gateway.js';
+import { cmdGatewayInstall, cmdGatewayStatus, EXIT_NOT_ACTIVATED } from './gateway.js';
 import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
@@ -1185,5 +1185,63 @@ describe('uno stop chiesto tiene giù il gateway', () => {
     const r = muffin(dir, ['gateway', 'start']);
     expect(r.err).toContain('supervisore');
     expect(r.err).toContain('muffin gateway install');
+  });
+});
+
+/**
+ * `muffin gateway status`, quando il gateway è giù.
+ *
+ * Misurato sulla macchina dell'owner il 28/08/2026, subito dopo un
+ * `gateway stop` riuscito: «nessun gateway attivo → `muffin gateway install`».
+ * Il rimedio è sbagliato due volte — è già installato, e installarlo di nuovo
+ * non lo riaccende. `doctor` la distinzione la faceva già da #217; questo è il
+ * comando che uno prova per primo, e non la faceva.
+ *
+ * Un rimedio sbagliato è peggio di nessun rimedio: si esegue.
+ */
+describe('status distingue «fermo» da «non c è»', () => {
+  const home = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-gwstatus-'));
+    runInit({ home: dir, apiKey: 'sk-mai-usata' });
+    return dir;
+  };
+
+  it('senza semaforo dice che non c è, e come installarlo', () => {
+    const dir = home();
+    const out: string[] = [];
+    const err: string[] = [];
+    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    try {
+      expect(cmdGatewayStatus(dir)).toBe(1);
+    } finally {
+      o.mockRestore();
+      e.mockRestore();
+    }
+    expect(out.join('')).toContain('nessun gateway attivo');
+    expect(err.join('')).toContain('gateway install');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('col semaforo dice che è fermo di proposito, e come riaccenderlo', () => {
+    const dir = home();
+    writeFileSync(paths(dir).gatewayStopped, `${new Date().toISOString()}\n`, 'utf8');
+    const out: string[] = [];
+    const err: string[] = [];
+    const o = vi.spyOn(process.stdout, 'write').mockImplementation((c) => (out.push(String(c)), true));
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation((c) => (err.push(String(c)), true));
+    try {
+      // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
+      // qualunque sia la ragione.
+      expect(cmdGatewayStatus(dir)).toBe(1);
+    } finally {
+      o.mockRestore();
+      e.mockRestore();
+    }
+    expect(out.join('')).toContain('fermo di proposito');
+    expect(err.join('')).toContain('gateway start');
+    // E soprattutto **non** il rimedio sbagliato.
+    expect(err.join('')).not.toContain('gateway install');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

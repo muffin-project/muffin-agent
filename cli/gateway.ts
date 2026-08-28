@@ -146,6 +146,20 @@ const REAL_INTERPRETER_PROBES: InterpreterProbes = {
 export function cmdGatewayStatus(home: string): number {
   const info = inspect(home);
   if (!info) {
+    // **Fermo di proposito non è «non c'è».** `doctor` questa distinzione la
+    // faceva già da #217; qui no, e questo è il comando che uno prova per
+    // primo. Il risultato, misurato sulla macchina dell'owner il 28/08/2026
+    // subito dopo un `gateway stop` riuscito: «nessun gateway attivo →
+    // `muffin gateway install`». Il rimedio è sbagliato due volte — è già
+    // installato, e installarlo di nuovo non lo riaccende. Un rimedio
+    // sbagliato è peggio di nessun rimedio: si esegue.
+    if (existsSync(paths(home).gatewayStopped)) {
+      process.stdout.write(`fermo di proposito (\`muffin gateway stop\`)\n`);
+      process.stderr.write(`→ \`muffin gateway start\` lo riaccende — resta giù anche dopo un riavvio\n`);
+      // Sempre 1: la domanda scriptabile è «è su?», e la risposta è no
+      // qualunque sia la ragione. Il perché sta nel testo, non nell'exit code.
+      return 1;
+    }
     process.stdout.write(`nessun gateway attivo\n`);
     process.stderr.write(`→ \`muffin gateway install\` per farlo partire da solo all'avvio\n`);
     // 1 and not 0: `muffin gateway status` is the scriptable "is it up", the
