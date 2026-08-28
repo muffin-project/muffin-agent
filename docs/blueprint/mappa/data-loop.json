@@ -72,7 +72,7 @@
       "n": 3,
       "id": "turn-starts",
       "title": "runTurn scrive il record, poi apre span e snapshot",
-      "file": "agent/loop.ts:425-475, 576-626",
+      "file": "agent/loop.ts:848-862, 1134",
       "what": "runTurn apre uno span 'muffin.turn' e scrive SUBITO la riga in `turns` (status running, modello pinnato, trascritto con le sole parole dell'owner, taint iniziale) — non dentro un try: una riga che non si puo' scrivere ferma il turno prima che accada qualsiasi cosa. Poi `drive` costruisce il PermissionSnapshot a partire dalla taint DELLA RIGA e calcola tenantClass (owner|group). `drive` e' lo stesso corpo per un turno fresco e per uno ripreso: cambia solo lo stato di partenza.",
       "taint": "letta dal record, mai riderivata dal principal: makeSnapshot parte da record.taint (loop.ts:594, 1742). Su un turno fresco vale 0 (owner/system) o 2 (member); su una ripresa vale la taint a cui quel turno era gia' salito",
       "branches": []
@@ -134,8 +134,8 @@
       "n": 8,
       "id": "chat-call",
       "title": "Chiamata provider.chat(), retry su errori di trasporto",
-      "file": "agent/loop.ts:374-443; agent/providers/anthropic.ts:42-110; agent/providers/openai-compat.ts:112-180",
-      "what": "Costruisce una ChatCall (system prompt, messaggi compattati, tool esposti, maxOutputTokens 4096, stream:false sempre, temperature/thinking condizionati dal profilo) e chiama provider.chat(). Un errore di trasporto retryable (429/5xx) fa backoff esponenziale con jitter e riprova fino a MAX_TRANSPORT_RETRIES=2; un errore retryable di tipo 'output' (JSON di tool call malformato) va invece nella cascata di recovery del profilo.",
+      "file": "agent/loop.ts:1405-1560; agent/providers/anthropic.ts:44-51; agent/providers/openai-compat.ts:225-262",
+      "what": "Costruisce una ChatCall (system prompt, messaggi compattati, tool esposti, maxOutputTokens 4096, temperature/thinking condizionati dal profilo, stream acceso quando c'e' un sink onDelta e il provider sa streammare) e chiama provider.chat(). Un errore di trasporto retryable (429/5xx) fa backoff esponenziale con jitter e riprova fino a MAX_TRANSPORT_RETRIES=2; un errore retryable di tipo 'output' (JSON di tool call malformato) va invece nella cascata di recovery del profilo.",
       "taint": "invariata dalla chiamata in se'",
       "branches": [
         {
@@ -146,12 +146,12 @@
         {
           "cond": "errore output retryable e resta una strategia di recovery",
           "goto": "iteration-loop-begins",
-          "note": "recover('malformed') accoda un turno correttivo, loop.ts:429-430"
+          "note": "recover('malformed') accoda un turno correttivo, loop.ts:1542"
         },
         {
           "cond": "errore di trasporto retryable e restano tentativi",
           "goto": "chat-call",
-          "note": "backoff esponenziale con jitter, loop.ts:431-440"
+          "note": "backoff esponenziale con jitter, loop.ts:1544-1550, retryDelayMs a loop.ts:3020"
         }
       ]
     },
