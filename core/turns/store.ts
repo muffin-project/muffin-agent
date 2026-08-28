@@ -621,8 +621,24 @@ export class TurnStore {
      * written: the atomicity that makes this claim safe is the `status IN
      * (...)` guard, exactly as before token existed.
      */
+    /**
+     * Prendere la riga, e **spegnere la barriera nello stesso atto**.
+     *
+     * `wake_at`/`wait_for` erano appiccicosi: nessuno li azzerava mai. Chi
+     * riprende il turno li legge per sapere *se* e *perché* è tornato — una
+     * riga che se li tiene per sempre racconterebbe «attesa finita» a ogni
+     * ripresa successiva, compresa quella dopo un crash che con l'attesa non
+     * c'entra niente.
+     *
+     * Azzerati qui e non prima perché `resumeTurn` legge la riga **e poi**
+     * la reclama: la lettura vede ancora la barriera, la scrittura la chiude.
+     * Una riga reclamata è `running`, e nessuna delle due query che leggono
+     * queste colonne (`due`, `armed`, `health`) guarda righe che non siano
+     * `waiting` — quindi qui non si toglie niente a nessuno.
+     */
     this.claimStmt = db.prepare(
-      `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token, updated_at = @now
+      `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token,
+                        wake_at = NULL, wait_for = NULL, updated_at = @now
        WHERE id = @id AND status IN ('runnable','waiting','interrupted')`,
     );
     /**
