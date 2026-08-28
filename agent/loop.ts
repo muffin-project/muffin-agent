@@ -25,6 +25,7 @@ import {
   type ChatCall,
   type ChatResult,
   type ContentBlock,
+  type AudioBlock,
   type ImageBlock,
   type Message,
   type Provider,
@@ -478,7 +479,19 @@ export type LoopDeps = {
  * diverge.
  */
 function primoMessaggio(input: TurnInput): ContentBlock[] {
-  return [...(input.images ?? []), { type: 'text', text: input.text }];
+  return [...media(input), { type: 'text', text: input.text }];
+}
+
+/**
+ * Ciò che viaggia **prima** del testo nel primo messaggio utente.
+ *
+ * Un posto solo che lo sappia. Quando c'erano solo le immagini la stessa riga
+ * era già scritta in due punti, e il commento accanto diceva che una riga
+ * duplicata che cresce è una riga che diverge — l'audio è esattamente la
+ * crescita che quel commento prevedeva.
+ */
+function media(input: { images?: ImageBlock[]; audios?: AudioBlock[] }): (ImageBlock | AudioBlock)[] {
+  return [...(input.images ?? []), ...(input.audios ?? [])];
 }
 
 export type TurnInput = {
@@ -517,6 +530,24 @@ export type TurnInput = {
    * leggere i byte.
    */
   images?: ImageBlock[];
+  /**
+   * Le note vocali che questo turno porta con sé, già caricate
+   * (`agent/audio.ts`) — e **solo** quando il modello accetta audio in
+   * ingresso.
+   *
+   * Chi riempie questo campo ha già fatto la domanda a cui risponde
+   * `agent/providers/modalita.ts`: se la risposta era no, qui non arriva
+   * niente, perché la nota vocale è diventata testo trascritto in casa
+   * (`core/audio/trascrivi.ts`) ed è entrata da `text` come qualunque altra
+   * parola. Il loop non rifà quella scelta: la vede già fatta.
+   *
+   * Viaggiano come le immagini, e per le stesse ragioni — nel primo messaggio
+   * utente, dentro il record, quindi sul disco. Il costo qui è più alto (una
+   * nota vocale è più grossa di una foto) e la conclusione è la stessa: un
+   * turno ripreso dopo un crash deve poter risentire ciò su cui stava
+   * ragionando, e una referenza a un file del vault non lo garantisce.
+   */
+  audios?: AudioBlock[];
   signal?: AbortSignal;
   /**
    * Mint the row under this identity instead of a fresh random one.
@@ -1115,6 +1146,11 @@ async function drive(
     // (misurato contro il modello vero il 28/08/2026). Passare dal record e'
     // anche cio' che fa sopravvivere l'immagine a una ripresa dopo un crash.
     ...(userImages(record.messages).length > 0 ? { images: userImages(record.messages) } : {}),
+    // Stessa strada delle immagini, e non per simmetria: e' la riga che quel
+    // commento qui sopra dice di non dimenticare. Un audio passato solo nel
+    // `TurnInput` di `runTurn` sparirebbe fra le due funzioni senza un errore,
+    // e il modello risponderebbe a una nota vocale che non ha mai sentito.
+    ...(userAudios(record.messages).length > 0 ? { audios: userAudios(record.messages) } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(record.replyTo === null ? {} : { replyTo: record.replyTo }),
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
@@ -2274,6 +2310,13 @@ function userImages(messages: Message[]): ImageBlock[] {
     .flatMap((m) => m.content.filter((b): b is ImageBlock => b.type === 'image'));
 }
 
+/** Gemella di `userImages`, stessa ragione: una nota vocale di due giri fa è ancora la cosa di cui si parla. */
+function userAudios(messages: Message[]): AudioBlock[] {
+  return messages
+    .filter((m) => m.role === 'user')
+    .flatMap((m) => m.content.filter((b): b is AudioBlock => b.type === 'audio'));
+}
+
 function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
@@ -2961,7 +3004,7 @@ function buildContext(
       // entrambi i provider raccomandano immagine-poi-testo, e questa e'
       // l'unica posizione che lo rispetta senza separare la domanda dal suo
       // contesto.
-      ...(input.images ?? []),
+      ...media(input),
       { type: 'text', text: input.text },
     ],
   });
