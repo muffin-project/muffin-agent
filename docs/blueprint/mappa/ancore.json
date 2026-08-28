@@ -831,32 +831,32 @@
   },
   "cli/gateway.ts:296": {
     "path": "cli/gateway.ts",
-    "line": 528,
+    "line": 542,
     "testo": "* The process. Invoked by the supervisor, and by `muffin gateway run` when the"
   },
   "cli/gateway.ts:297": {
     "path": "cli/gateway.ts",
-    "line": 529,
+    "line": 543,
     "testo": "* owner wants to watch it in a terminal."
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 627,
+    "line": 641,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
     "path": "cli/gateway.ts",
-    "line": 401,
+    "line": 415,
     "testo": "}"
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 656,
+    "line": 670,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 671,
+    "line": 685,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/init.ts:104": {
