@@ -265,7 +265,17 @@ export function thinkingCommand(
  * the owner is looking at an empty prompt must not leave the REPL looking hung.
  */
 export function makeReplCliWrite(
-  rl: { prompt: () => void },
+  /**
+   * Il riquadro dell'input: si toglie, si scrive al suo posto, si rimette.
+   *
+   * Era `{ prompt: () => void }`, cioè l'interfaccia di readline, ed è rimasta
+   * tale dopo che #218 ha tolto readline. Il risultato: la consegna si
+   * scriveva dove stava il cursore — **dentro** il riquadro — e poi ne
+   * compariva un secondo sotto. Visto su uno schermo vero il 28/08/2026, un
+   * avviso del consolidatore finito dentro la riga di input come se l'avesse
+   * battuto qualcuno. Ridisegnare non basta: prima bisogna togliere.
+   */
+  riquadro: { cancella: () => void; redraw: () => void },
   /**
    * Toglie l'attesa in corso prima di consegnare.
    *
@@ -279,12 +289,12 @@ export function makeReplCliWrite(
   return (text) => {
     try {
       clear();
+      riquadro.cancella();
       process.stdout.write(`\n⏰ ${text}\n`);
     } finally {
       // Nel `finally`, e non dopo la scrittura: una `write` che lancia (EPIPE)
-      // lascerebbe il REPL senza prompt e con l'aria di essere piantato. È la
-      // stessa ragione di prima; l'unica cosa cambiata è chi ridisegna.
-      rl.prompt();
+      // lascerebbe il REPL senza prompt e con l'aria di essere piantato.
+      riquadro.redraw();
     }
   };
 }
@@ -548,7 +558,12 @@ export async function runRepl(
   // printed. So the CLI surface is handed a prompt it resolves at call time; a
   // delivery that lands before the prompt exists simply does not redraw one.
   let redrawPrompt: () => void = () => {};
-  const surfaces = connectSurfaces(runtime, home, makeReplCliWrite({ prompt: () => redrawPrompt() }, () => status.clear()));
+  let cancellaPrompt: () => void = () => {};
+  const surfaces = connectSurfaces(
+    runtime,
+    home,
+    makeReplCliWrite({ cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() }, () => status.clear()),
+  );
   // M5-BIS B14: a file the model produces can now reach the owner as a real
   // attachment on whichever surface this turn is on, not only as a path cited
   // in text — the same registry `deliver` uses, one call later.
@@ -647,6 +662,7 @@ export async function runRepl(
   // Non fa niente quando non stiamo leggendo: un messaggio arrivato mentre il
   // modello risponde non deve far comparire un prompt che nessuno sta usando.
   redrawPrompt = () => textzone.redraw();
+  cancellaPrompt = () => textzone.cancella();
 
   // The terminal is the surface that *can* ask, so here the kernel's `ask`
   // verdict becomes a question instead of a refusal. The wording is the kernel's

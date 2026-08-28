@@ -320,8 +320,11 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
     runtime.close();
 
     const p = prompt(provider.seen[0]);
-    expect(p).toContain('## Adesso');
+    expect(p).toContain('## Questo turno');
     expect(p).toContain('un terminale');
+    // Modello e profilo: «non so quale modello mi esegue» è una risposta che
+    // Muffin dava e che non deve dare.
+    expect(p).toMatch(/Ti sta eseguendo: .+ \(profilo .+\)/);
     // L'anno corrente, quale che sia quando gira il test: la prova è che ci sia
     // una data vera, non che sia una data che ho scritto io.
     expect(p).toContain(String(new Date().getFullYear()));
@@ -351,8 +354,8 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
     const home = bootHome();
     const runtime = buildRuntime(home, workspace());
     try {
-      expect(runtime.deps.systemPrompts.owner).not.toContain('## Adesso');
-      expect(runtime.deps.systemPrompts.group).not.toContain('## Adesso');
+      expect(runtime.deps.systemPrompts.owner).not.toContain('## Questo turno');
+      expect(runtime.deps.systemPrompts.group).not.toContain('## Questo turno');
     } finally {
       runtime.close();
     }
