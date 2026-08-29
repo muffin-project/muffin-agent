@@ -509,7 +509,7 @@ describe('sys_inspect legge le fonti vere, non le sue', () => {
       const out = await tool!.handler({}, {
         tenant: 'host',
         principal: { kind: 'owner', connector: 'cli', externalId: 'test' },
-        turnId: 't', sessionId: 's', taint: () => 0, suspend: () => {}, replyChannel: null,
+        turnId: 't', sessionId: 's', taint: () => 0, intrinsicTaint: () => 0, suspend: () => {}, replyChannel: null,
       } as ToolContext);
 
       // Il modello vero di questa home, non una costante.

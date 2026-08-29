@@ -687,14 +687,12 @@ risposta che si limitava a esistere nella stessa sessione.
 
 ### Cosa NON copre
 
-- **`agent/tools/todo.ts`'s `ctx.taint()`** (il tier scritto su un nuovo item
-  di piano) resta `snapshot.currentTaint()` — il tetto, non l'intrinseco.
-  Stessa famiglia di difetto, canale diverso: un piano scritto mentre la
-  sessione eredita un tetto vecchio si stampa a quel tetto e lo perpetua
-  attraverso `planTaint` finché resta aperto. Trovato leggendo questo file
-  mentre si scriveva la riconciliazione, non chiuso qui — `ToolContext.taint`
-  è letto da ogni handler esistente e cambiarne il significato è un raggio
-  più ampio di quello che questa sessione ha in mandato.
+- ~~**`agent/tools/todo.ts`'s `ctx.taint()`** (il tier scritto su un nuovo item
+  di piano) resta `snapshot.currentTaint()` — il tetto, non l'intrinseco.~~
+  Chiuso il 29/08 — vedi §Chiusura sotto. Trovato leggendo questo file mentre
+  si scriveva la riconciliazione, non chiuso qui: `ToolContext.taint` è letto
+  da ogni handler esistente e cambiarne il significato era un raggio più ampio
+  di quello che quella sessione aveva in mandato.
 - **Il residuo teorico è dichiarato, non nascosto.** Una risposta di un turno
   che vede storia sporca *potrebbe* parafrasarla senza che nessun evento
   "intrinseco" lo segnali — `intrinsicTaint()` non guarda il contenuto, guarda
@@ -710,3 +708,51 @@ risposta che si limitava a esistere nella stessa sessione.
 `agent/session-history-taint.test.ts` — i quattro scenari del 17/08 restano
 verdi invariati (controllano `turns.taint`/`TurnResult.taint`, cioè il
 tetto); una quinta descrizione prova che la finestra torna a chiudersi.
+
+## Chiusura — 2026-08-29: il canale gemello che questa ADR aveva lasciato aperto
+
+Il `Cosa NON copre` della riconciliazione del 28/08 nominava il difetto e
+diceva perché non era stato chiuso lì: `ToolContext.taint` è letto da ogni
+handler registrato, e cambiarne il significato per tutti era un raggio più
+ampio del mandato di quella sessione. La domanda aperta, quindi, non era *se*
+correggere `agent/tools/todo.ts`, ma se farlo cambiando `ctx.taint()` per
+tutti o aggiungendo un secondo campo che solo `todo.ts` legge.
+
+**Grep di ogni chiamante, non supposizione.** `ctx.taint()` ha due soli siti
+in `agent/tools/*.ts`: questo file, e `agent/tools/inspect.ts` (`sys_inspect`,
+la riga `taint corrente: ${ctx.taint()}` del report diagnostico). Il secondo
+vuole esattamente il tetto — è un report su cosa il turno *può fare adesso*,
+la stessa domanda che `PermissionSnapshot.currentTaint()` risponde per il
+kernel — e cambiarlo a intrinseco lo renderebbe silenziosamente sbagliato per
+un turno seduto su una ceiling ereditata ma senza aver ancora fatto nulla di
+suo. Nessun terzo chiamante esiste. Quindi: seconda via, non riassegnazione
+della prima — lo stesso precedente che questa ADR ha già scelto per
+`PermissionSnapshot` stessa (`currentTaint` invariato, `intrinsicTaint`
+nuovo), applicato un livello sopra.
+
+**Il cambio.** `ToolContext` guadagna `intrinsicTaint: () => TrustTier`
+(`agent/loop.ts`), popolato da `snapshot.intrinsicTaint()` esattamente come
+`taint` legge `snapshot.currentTaint()`. `agent/tools/todo.ts` legge il nuovo
+campo al posto del vecchio per **entrambe** le azioni che scrivono un tier —
+`plan` e `set` condividono la stessa `const tier` letta una volta prima dello
+`switch`, e la nota di `set` è testo del modello tanto quanto il testo di
+`plan`: la stessa argomentazione di `core/turns/todo.ts` sul perché la riga
+porta un tier si applica a entrambe, non solo a chi crea la riga.
+`ctx.taint()` resta `currentTaint()` per ogni altro chiamante, invariato.
+
+**Cosa prova il test nuovo.** Un piano scritto in un turno la cui *ceiling* è
+sollevata solo da storia reiniettata (`raiseCeiling`, mai qualcosa che quel
+turno ha fatto lui) si stampa a tier 0, non al tetto ereditato — la riga letta
+direttamente dal `TodoStore`, non dedotta dal comportamento di un turno
+successivo. Il test gemello che la riconciliazione del 28/08 aveva già scritto
+in `agent/todo-wiring.test.ts` (`il turno che riceve il piano gira alla taint
+di chi lo ha scritto`) resta verde senza modifiche: lì il tool che legge la
+pagina tainted e la chiamata a `todo plan` sono nello **stesso** turno, quindi
+`raiseTaint` — non `raiseCeiling` — ha già alzato anche l'intrinseco prima che
+l'handler del piano lo legga. La protezione che quel test prova — un piano che
+*davvero* nasce da contenuto sporco resta marcato — non si tocca.
+
+### Riferimenti
+
+`agent/todo-plan-intrinsic-taint.test.ts` — il nuovo scenario, con lo stesso
+harness (`Scripted`, `runTurn`) di `session-history-taint.test.ts`.
