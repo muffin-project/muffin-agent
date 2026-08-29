@@ -138,15 +138,25 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
       // a tenant taken from `args` would let the model name someone else's.
       const { tenant, sessionId } = ctx;
       /**
-       * Read once per call, and it is the turn's taint **now**.
+       * Read once per call, and it is `ctx.intrinsicTaint()`, **not**
+       * `ctx.taint()` — the gap ADR-0044 §Riconciliazione 2026-08-28 named for
+       * this exact file and left open (`Cosa NON copre`).
        *
        * What goes into the row is not "how trusted is a todo" — it is how
        * trusted was the context that produced this sentence. A turn that had
        * fetched a page writes its plan at that page's tier, and the next turn
        * inherits it instead of being handed the sentence as the agent's own
-       * clean intention (ADR-0047).
+       * clean intention (ADR-0047). But a turn that merely *inherited* a
+       * ceiling — a tainted reply reinjected from session history, an open
+       * plan item written two turns ago — did not itself produce or observe
+       * anything: stamping the ceiling here would be the same ratchet the
+       * reconciliation closed for `historyTaint`, just through this table
+       * instead. A row stays open until `todo set ... done|blocked`, so a
+       * plan item written once at an inherited ceiling would keep re-raising
+       * `planTaint` for as long as the item stayed open — far longer than a
+       * message ever survives in the reinjection window.
        */
-      const tier = ctx.taint();
+      const tier = ctx.intrinsicTaint();
 
       switch (parsed.data.action) {
         case 'plan': {

@@ -81,6 +81,20 @@ export type ToolContext = {
    */
   taint: () => TrustTier;
   /**
+   * Come `taint`, ma il tetto tolto: cosa questo turno ha realmente prodotto o
+   * osservato, mai un tetto ereditato da una storia reiniettata o da un piano
+   * aperto (`PermissionSnapshot.intrinsicTaint`, ADR-0044 §Riconciliazione
+   * 2026-08-28).
+   *
+   * Esiste per un solo chiamante, `agent/tools/todo.ts`: una riga scritta in
+   * una tabella che sopravvive al turno non può stampare il tetto ereditato,
+   * o la finestra di reiniezione del taint non si richiude mai (esattamente
+   * il difetto che quella riconciliazione ha chiuso per `historyTaint`, qui
+   * per `planTaint`). Ogni altro handler resta su `taint()` — il tetto è
+   * ciò che un gate a metà turno deve vedere, non ciò che sta per scrivere.
+   */
+  intrinsicTaint: () => TrustTier;
+  /**
    * **Il file già risolto** che questa chiamata sta per toccare, quando il
    * kernel ha giudicato `draft` e il registro di undo ne ha appena preso la
    * copia. Assente per ogni altro verdetto.
@@ -1304,6 +1318,7 @@ async function drive(
     turnId: record.id,
     sessionId: input.session.id,
     taint: () => snapshot.currentTaint(),
+    intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
       barrier = spec;
     },
