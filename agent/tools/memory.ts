@@ -19,7 +19,7 @@ import type { ToolSpec } from '../providers/types.js';
  * have anticipated. Without it the only memory the model ever gets is whatever
  * the opening sentence happened to retrieve.
  *
- * It reads the tenant of the turn, never a tenant of its own choosing: the
+ * It reads the tenant of the turn, never from a tenant of its own choosing: the
  * argument list has no tenant field, deliberately, so no amount of clever
  * prompting can widen the scope.
  */
@@ -196,7 +196,7 @@ export async function searchMemory(
     ...(when === undefined ? {} : { asOf: when }),
     ...(surface !== undefined ? { surface } : {}),
     ...(since !== undefined ? { since } : {}),
-    ...(until !== undefined ? {} : { until }),
+    ...(until !== undefined ? { until } : {}),
     ...(around !== undefined ? { neighbours: around } : {}),
   });
 
