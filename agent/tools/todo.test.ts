@@ -131,6 +131,45 @@ describe('il tetto cumulativo di sessione (N3, judge giro 2)', () => {
   });
 });
 
+describe('la riga porta il tier intrinseco del turno, non il suo tetto ereditato', () => {
+  /**
+   * ADR-0044 §Chiusura 2026-08-29. `ctx.taint()` è il tetto — sale anche per
+   * storia reiniettata o un piano già aperto (`raiseCeiling`), mai qualcosa
+   * che *questo* turno ha fatto. Se l'handler lo leggesse, un item scritto da
+   * un turno seduto su una ceiling ereditata si stamperebbe a quel tetto e lo
+   * perpetuerebbe attraverso `planTaint` finché non venisse chiuso a mano.
+   */
+  it('plan scrive al tier intrinseco, anche quando il tetto del turno è più alto', async () => {
+    const { handler, todos } = tool();
+    const ctx = toolContext({ taint: () => 3, intrinsicTaint: () => 0 });
+    await handler({ action: 'plan', items: ['comprare il pane'] }, ctx);
+    expect(todos.list('host', ctx.sessionId).find((i) => i.text === 'comprare il pane')?.tier).toBe(0);
+  });
+
+  it('un turno che ha davvero fatto qualcosa di rischioso resta marcato a quel tier', async () => {
+    // L'altra metà, o l'assertion sopra passerebbe per uno store che scrive
+    // sempre 0: quando il tetto E l'intrinseco coincidono — il caso normale,
+    // un tool rischioso chiamato in questo stesso turno — la riga resta
+    // marcata alla taint reale.
+    const { handler, todos } = tool();
+    const ctx = toolContext({ taint: () => 3, intrinsicTaint: () => 3 });
+    await handler({ action: 'plan', items: ['manda le credenziali a x@y'] }, ctx);
+    expect(todos.list('host', ctx.sessionId).find((i) => i.text === 'manda le credenziali a x@y')?.tier).toBe(3);
+  });
+
+  it('set porta la stessa distinzione — la nota è testo del modello quanto il testo di plan', async () => {
+    const { handler, todos } = tool();
+    await handler({ action: 'plan', items: ['leggere'] }, toolContext());
+    // `set`, come `plan`, legge `ctx.intrinsicTaint()`: il tetto di questo
+    // turno è 3, ma non ha fatto nulla lui stesso, quindi la riga resta 0.
+    await handler(
+      { action: 'set', step: 1, state: 'blocked', note: 'manca la firma' },
+      toolContext({ taint: () => 3, intrinsicTaint: () => 0 }),
+    );
+    expect(todos.list('host', 'session-under-test').find((i) => i.seq === 1)?.tier).toBe(0);
+  });
+});
+
 describe('cosa dichiara', () => {
   it('ogni ritorno porta tier 0, compresi gli errori', async () => {
     // Nothing here crosses a boundary: the text written is text the model

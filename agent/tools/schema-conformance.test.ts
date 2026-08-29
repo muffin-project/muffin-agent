@@ -36,6 +36,7 @@ function ctx(): ToolContext {
     turnId: 'turno-di-prova',
     sessionId: 'sessione-di-prova',
     taint: () => 0,
+    intrinsicTaint: () => 0,
     suspend: () => {},
     replyChannel: null,
   };
