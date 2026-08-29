@@ -33,21 +33,23 @@ type TurnState = {
   touched: number;
 };
 
+type Thresholds = {
+  exactFailure: number;
+  sameToolFailure: number;
+  idempotentNoProgress: number;
+};
+
 export type ToolLoopGuardrailOptions = {
-  warnAfter?: Partial<{
-    exactFailure: number;
-    sameToolFailure: number;
-    idempotentNoProgress: number;
-  }>;
+  warnAfter?: Partial<Thresholds>;
   /** Bounds state even before a turn-end lifecycle hook is wired. */
   maxTrackedTurns?: number;
 };
 
-const DEFAULT_WARN_AFTER = {
+const DEFAULT_WARN_AFTER: Thresholds = {
   exactFailure: 2,
   sameToolFailure: 3,
   idempotentNoProgress: 2,
-} as const;
+};
 
 /**
  * Warning-first detector for a turn that is spending calls without changing
@@ -73,7 +75,7 @@ const DEFAULT_WARN_AFTER = {
 export class ToolLoopGuardrail {
   private readonly states = new Map<string, TurnState>();
   private tick = 0;
-  private readonly warnAfter: typeof DEFAULT_WARN_AFTER;
+  private readonly warnAfter: Thresholds;
   private readonly maxTrackedTurns: number;
 
   constructor(options: ToolLoopGuardrailOptions = {}) {
@@ -215,5 +217,6 @@ function positive(value: number | undefined, fallback: number): number {
  * private-data store.
  */
 function digest(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex').slice(0, 16);
+  const encoded = JSON.stringify(value ?? null) ?? String(value);
+  return createHash('sha256').update(encoded).digest('hex').slice(0, 16);
 }
