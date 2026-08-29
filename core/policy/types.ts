@@ -112,6 +112,27 @@ export type CapabilityDecl = {
    * is made now because it is the half that cannot be added cheaply later.
    */
   readonly rerunnable: boolean;
+  /**
+   * What a repeated successful result means for *progress*, when the capability
+   * can state it safely.
+   *
+   * Deliberately optional and deliberately **not inferred** from `risk`,
+   * `reversible` or `rerunnable`. Those fields answer authority/recovery
+   * questions; `fs.write` is the counterexample that makes the distinction
+   * load-bearing — it is rerunnable, but a second write is still a second
+   * effect, not evidence that the agent is merely rereading the same fact.
+   *
+   * `idempotent_read` means the call itself has no external effect and seeing
+   * the same normalized result again is evidence the model has learned nothing
+   * new. The tool-loop guardrail may warn on that pattern. Absence means “do
+   * not draw that conclusion”, which is the safe direction for a new/MCP tool.
+   *
+   * This metadata is not consulted by the policy kernel and never grants
+   * authority. It lives on the capability because that declaration is the
+   * stable, versioned statement about what a tool operation *is*; the guardrail
+   * is only a consumer.
+   */
+  readonly progress?: 'idempotent_read';
   /** Omitted when it equals the default for the risk class. */
   readonly maxTaint?: TrustTier;
   readonly resourceKind: Resource['kind'];
