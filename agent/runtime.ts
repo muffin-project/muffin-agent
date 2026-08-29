@@ -56,6 +56,8 @@ import {
   CONSOLIDATION_TENANT,
 } from '../core/memory/consolidator.js';
 import { lightLane } from './providers/light-lane.js';
+import { ToolLoopGuardrail } from './guardrails/tool-loop.js';
+import { withToolLoopGuardrail } from './guardrails/wrap-tool.js';
 
 /**
  * Assembly.
@@ -615,6 +617,16 @@ export function buildRuntime(
       ...(searchOn ? [searchCapability] : []),
     ].map((c) => [c.id, c]),
   );
+
+  // One guardrail instance per assembled runtime, shared by every built-in and
+  // every tool registered later through MCP. The wrapper sees only handler
+  // results: policy remains the mandatory gate in `runTool`, above it.
+  const toolLoopGuardrail = new ToolLoopGuardrail();
+  for (let i = 0; i < tools.length; i += 1) {
+    const tool = tools[i]!;
+    tools[i] = withToolLoopGuardrail(tool, capabilities.get(tool.capability), toolLoopGuardrail);
+  }
+
   const decide = createDecide({
     capabilities,
     // The line that makes `rot/policy.json` load-bearing. Delete it and the
@@ -698,42 +710,46 @@ export function buildRuntime(
    * di leggere `undefined`.
    */
   tools.push(
-    makeInspectTool({
-      config,
-      profile,
-      safeMode,
-      // Stesso import dinamico, stessa ragione: `describeBuild` sta in
-      // `cli/update.ts`, ed è la funzione che stampa la riga `build` di
-      // `muffin doctor` (#159). Una seconda lettura di git direbbe la stessa
-      // cosa fino al giorno che non la dice più.
-      build: async () => {
-        const { describeBuild } = await import('../cli/update.js');
-        const { fileURLToPath } = await import('node:url');
-        const { dirname } = await import('node:path');
-        return describeBuild(dirname(fileURLToPath(import.meta.url)));
-      },
-      tools,
-      capabilities,
-      promptBlocks,
-      /**
-       * La stessa funzione che esegue `muffin doctor`, importata al momento
-       * della chiamata.
-       *
-       * L'import è dinamico per non creare un arco statico `agent/` → `cli/`:
-       * in questo repo le dipendenze vanno nell'altro verso, e `cli/` importa
-       * già `agent/runtime.js` così (`cli/memory.ts`, `cli/vault.ts`). Resta
-       * comunque un debito di layering — `runDoctor` è un motore di verifica
-       * che vive in `cli/` perché lì è nato, non perché è il suo posto — ed è
-       * registrato come follow-up invece che nascosto.
-       *
-       * Iniettarla dal chiamante sarebbe stato peggio: un secondo posto da
-       * ricordare, e la stessa storia di `explicitCache` (due harness che
-       * dimenticarono il flag e pagarono pieno in silenzio).
-       */
-      doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
-      turns: () => turns.health({ windowMs: 0 }),
-      jobs: () => jobs.list(),
-    }),
+    withToolLoopGuardrail(
+      makeInspectTool({
+        config,
+        profile,
+        safeMode,
+        // Stesso import dinamico, stessa ragione: `describeBuild` sta in
+        // `cli/update.ts`, ed è la funzione che stampa la riga `build` di
+        // `muffin doctor` (#159). Una seconda lettura di git direbbe la stessa
+        // cosa fino al giorno che non la dice più.
+        build: async () => {
+          const { describeBuild } = await import('../cli/update.js');
+          const { fileURLToPath } = await import('node:url');
+          const { dirname } = await import('node:path');
+          return describeBuild(dirname(fileURLToPath(import.meta.url)));
+        },
+        tools,
+        capabilities,
+        promptBlocks,
+        /**
+         * La stessa funzione che esegue `muffin doctor`, importata al momento
+         * della chiamata.
+         *
+         * L'import è dinamico per non creare un arco statico `agent/` → `cli/`:
+         * in questo repo le dipendenze vanno nell'altro verso, e `cli/` importa
+         * già `agent/runtime.js` così (`cli/memory.ts`, `cli/vault.ts`). Resta
+         * comunque un debito di layering — `runDoctor` è un motore di verifica
+         * che vive in `cli/` perché lì è nato, non perché è il suo posto — ed è
+         * registrato come follow-up invece che nascosto.
+         *
+         * Iniettarla dal chiamante sarebbe stato peggio: un secondo posto da
+         * ricordare, e la stessa storia di `explicitCache` (due harness che
+         * dimenticarono il flag e pagarono pieno in silenzio).
+         */
+        doctor: async () => (await import('../cli/doctor.js')).runDoctor(home),
+        turns: () => turns.health({ windowMs: 0 }),
+        jobs: () => jobs.list(),
+      }),
+      inspectCapability,
+      toolLoopGuardrail,
+    ),
   );
 
   /**
@@ -782,7 +798,7 @@ export function buildRuntime(
     ],
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
-      tools.push(tool);
+      tools.push(withToolLoopGuardrail(tool, decl, toolLoopGuardrail));
     },
     onClose: (hook) => {
       closeHooks.push(hook);
@@ -881,4 +897,3 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
   runtime.onClose(() => attachment.close());
   return attachment.report;
 }
-
