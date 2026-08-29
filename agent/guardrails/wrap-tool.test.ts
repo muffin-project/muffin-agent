@@ -48,7 +48,8 @@ describe('withToolLoopGuardrail', () => {
   });
 
   it('does not infer idempotent-read semantics from rerunnable/reversible alone', async () => {
-    const withoutProgress: CapabilityDecl = { ...readDecl, id: 'test.effect', progress: undefined };
+    const { progress: _progress, ...plainDecl } = readDecl;
+    const withoutProgress: CapabilityDecl = { ...plainDecl, id: 'test.effect' };
     const wrapped = withToolLoopGuardrail(
       tool(() => ({ content: 'same receipt', tier: 0 })),
       withoutProgress,
