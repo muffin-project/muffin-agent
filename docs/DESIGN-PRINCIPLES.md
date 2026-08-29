@@ -180,6 +180,43 @@ At a phase transition, reread these principles whole. Change them when evidence
 shows the instincts are miscalibrated; do not let a principle become doctrine
 because it has an identifier.
 
+## P8 — Muffin owns agency; models own replaceable cognition
+
+Do not let the active model, provider, conversation or interface become the
+accidental owner of durable agent state.
+
+Muffin's continuity-bearing semantics must survive replacement of the cognitive
+engine. The model may reason, interpret, propose, plan and communicate; Muffin
+owns the durable identity of the relationship and the state required to continue
+responsibly across turns and runtimes.
+
+A proposed mechanism should therefore answer:
+
+1. **What disappears if the current model/provider/session disappears?**
+2. **Is that disposable cognition/context, or would losing it change what Muffin
+   knows, owes, has done or may do?**
+3. **Can a different model continue from bounded composed state rather than
+   replaying the effective lifetime transcript?**
+4. **Does a new surface/body reuse the same identity, Work, provenance,
+   authority and effect semantics, or fork another assistant?**
+
+Useful invariants are:
+
+- model replacement is a context switch, not an identity reset;
+- interface replacement is a transport switch, not a relationship reset;
+- process restart is runtime recovery, not amnesia;
+- untrusted information may change knowledge but must not silently expand
+  authority.
+
+This principle does **not** require a model router, MCP, distributed runtime or
+multi-model execution feature today. Those are possible implementations or
+acceptance-test surfaces. Do not build them merely to demonstrate the slogan.
+
+Likewise, "agency ownership" is not yet a proven market moat. Treat it as an
+architectural lens whose value must survive dogfood, provider evolution and
+simpler competing designs. The supporting synthesis and falsification test live
+in `docs/blueprint/research/agency-ownership-character-2026-08-29.md`.
+
 ## Applying the set
 
 A useful order is:
@@ -188,6 +225,7 @@ A useful order is:
 Does the problem exist?                   P6 / P2 existence
 Who should own the judgement?             P4
 Which personalisation/governance layer?   P3
+Does durable agency survive replacement?  P8
 Does cognition need special evidence?     P1 / P2 capability
 Can we observe whether it worked?         P5
 Has the project phase changed the cost?   P7
