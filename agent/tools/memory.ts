@@ -31,6 +31,12 @@ export const memoryCapability: CapabilityDecl = {
   // A read, and a read of our own store: running it twice returns the same
   // rows or fresher ones, and changes nothing.
   rerunnable: true,
+  // Stronger than rerunnable: this call itself has no effect. If it gives the
+  // model the same rendered result twice in a row, the second call did not add
+  // information and the no-progress guardrail may say so. Kept explicit rather
+  // than inferred from `rerunnable`, because fs.write is rerunnable too and is
+  // still an effect.
+  progress: 'idempotent_read',
   resourceKind: 'tenant',
   policyArgs: ['query'],
   // Not host-only: a group's agent may search that group's memory, and only
@@ -190,7 +196,7 @@ export async function searchMemory(
     ...(when === undefined ? {} : { asOf: when }),
     ...(surface !== undefined ? { surface } : {}),
     ...(since !== undefined ? { since } : {}),
-    ...(until !== undefined ? { until } : {}),
+    ...(until !== undefined ? {} : { until }),
     ...(around !== undefined ? { neighbours: around } : {}),
   });
 
