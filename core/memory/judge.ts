@@ -26,9 +26,24 @@ import type { Fact } from './store.js';
  *    invisible until someone asks the question it answered.
  */
 
+/**
+ * Human-readable explanation budget, not a validity boundary for the decision.
+ *
+ * Measured on the owner's database on 2026-08-29: the light model repeatedly
+ * returned a valid `verdict` + `confidence` with a `reasoning` longer than 600
+ * characters. Rejecting the whole object on that one presentational field made
+ * every one look like an unavailable judge and forced safe `coexist`, so the
+ * memory accumulated contradictions despite the judge having answered.
+ *
+ * We keep the bound because this string is persisted and printed, but enforce
+ * it in `normaliseVerdictJson` before schema validation. The decision-bearing
+ * fields stay strict and fail closed exactly as before.
+ */
+const REASONING_MAX = 600;
+
 const VERDICT_SHAPE = z.object({
   // Declared first on purpose — see above.
-  reasoning: z.string().min(1).max(600),
+  reasoning: z.string().min(1).max(REASONING_MAX),
   verdict: z.enum(['coexist', 'supersede', 'temporal_scope', 'review']),
   // Coerced rather than strict: a light model that writes `"0.9"` has given a
   // real answer, and throwing it away over a quoted number is indistinguishable
@@ -68,6 +83,12 @@ const VERDICT_KEYS: readonly (keyof z.infer<typeof VERDICT_SHAPE>)[] = [
  * already drops it without erroring, so nothing here needs to police
  * unknown fields.
  *
+ * `reasoning` is the one tolerated content shape as well as formatting shape:
+ * it is explanatory text, and the durable/terminal budget is 600 characters.
+ * Truncating it cannot turn an invalid decision into a valid one — `verdict`,
+ * `confidence` and `oldValidTo` are untouched — while rejecting the entire
+ * decision because its explanation ran long demonstrably did.
+ *
  * What this does **not** do is widen what counts as a valid verdict: an
  * unrecognised value still fails `VERDICT_SHAPE`'s enum after this runs, and
  * still comes out `coexist` at confidence 0 — a verdict the model invented
@@ -79,6 +100,9 @@ function normaliseVerdictJson(value: unknown): unknown {
   for (const [key, v] of Object.entries(value)) {
     const canonical = VERDICT_KEYS.find((k) => k.toLowerCase() === key.toLowerCase());
     normalised[canonical ?? key] = v;
+  }
+  if (typeof normalised.reasoning === 'string' && normalised.reasoning.length > REASONING_MAX) {
+    normalised.reasoning = `${normalised.reasoning.slice(0, REASONING_MAX - 1)}…`;
   }
   if (typeof normalised.verdict === 'string') {
     normalised.verdict = normalised.verdict.toLowerCase().trim();
