@@ -112,6 +112,29 @@ export type CapabilityDecl = {
    * is made now because it is the half that cannot be added cheaply later.
    */
   readonly rerunnable: boolean;
+  /**
+   * Rifare questa chiamata **con gli stessi argomenti** dà al modello qualcosa
+   * di nuovo?
+   *
+   * `'idempotent_read'` dichiara di no: una seconda lettura identica, nello
+   * stesso turno, restituisce quel che il modello ha già davanti. È l'unica
+   * cosa che autorizza il guardrail di `runTool` ad attaccare un avviso al
+   * risultato — e non fa altro: non nega, non approva, non tocca il tetto di
+   * taint né la decisione del kernel.
+   *
+   * **Opt-in, e mai dedotto da `rerunnable`.** Le due domande sembrano la
+   * stessa e non lo sono: `rerunnable` parla di *effetti* («è innocuo rifarla
+   * se nessuno sa se è andata»), questa di *informazione*. `sys.wait` è
+   * `rerunnable: true` (`agent/tools/wait.ts:104`) e una seconda attesa
+   * identica fa passare altro tempo, che è progresso; `fs.write` è
+   * `rerunnable: true` (`agent/tools/fs.ts:179`) e riscrivere gli stessi byte
+   * è un effetto, non una lettura. Dedurlo dall'altro campo avviserebbe su
+   * tutte e due.
+   *
+   * Assente significa «non dichiarato», che è anche il default giusto: un tool
+   * nuovo non eredita un avviso che nessuno ha pensato per lui.
+   */
+  readonly progress?: 'idempotent_read';
   /** Omitted when it equals the default for the risk class. */
   readonly maxTaint?: TrustTier;
   readonly resourceKind: Resource['kind'];

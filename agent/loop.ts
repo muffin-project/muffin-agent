@@ -758,8 +758,14 @@ export type TurnEvent =
    * mai su cosa: sette `memory_search` con sette query diverse stampavano sette
    * righe identiche («✓ cerco in memoria»), e a schermo si legge come un giro a
    * vuoto. Non lo era — misurato sul WAL il 28/08/2026, sette `args_digest`
-   * diversi, e nell'intero store non esiste una sola coppia (tool, args)
-   * ripetuta. Il difetto era la riga, non il loop.
+   * diversi. Il difetto era la riga, non il loop.
+   *
+   * La seconda meta di quella misura — «nell'intero store non esiste una sola
+   * coppia (tool, args) ripetuta» — **non vale piu**, ed e stata tolta invece
+   * che lasciata a dire di no a chi la rilegge. Sul `muffin.db` dell'owner il
+   * 30/08/2026 il turno a747ae67 (del 28/08 stesso) ne ha quattro, con
+   * risultati byte-identici. Il giro a vuoto esiste, ed e per quello che
+   * `runTool` guarda `identicalCallsDone`.
    *
    * Il loop li passa e basta: **quale** campo valga la pena mostrare, e come
    * accorciarlo, è una decisione di chi disegna — la stessa ragione per cui la
@@ -2986,6 +2992,33 @@ async function runTool(
    * world and an intent row for it would be a lie about what was attempted.
    */
   const decl = deps.capabilities?.get(capability);
+  /**
+   * Questo turno ha gia fatto questa identica chiamata?
+   *
+   * Letto **prima** di scrivere l'intento, cosi il conteggio non comprende la
+   * riga di adesso e il numero e «quante volte prima», non «quante in tutto».
+   *
+   * Il guasto, misurato sul `muffin.db` dell'owner il 30/08/2026: il turno
+   * a747ae67 (28/08) ha riletto gli stessi file con gli stessi argomenti e ha
+   * riavuto risultati byte-identici — 32850, 25537, 46795, 36162, due o tre
+   * volte ciascuno. Cinque letture ridondanti, ~141 KB reiniettati, 72 secondi,
+   * e 14 chiamate su un tetto di 15: il turno ha speso il proprio budget per
+   * rileggere cio che aveva gia.
+   *
+   * Nello stesso file, poco sopra, sta la misura del 28/08 che diceva
+   * l'opposto — «nell'intero store non esiste una sola coppia (tool, args)
+   * ripetuta». Era vera quando e stata scritta e non lo e piu: quel commento e
+   * stato corretto insieme a questa riga, perche una misura vecchia lasciata
+   * in piedi dice al prossimo che qui non c'e niente da guardare.
+   *
+   * Solo per le capability che lo dichiarano (`progress: 'idempotent_read'`), e
+   * l'avviso non fa altro che comparire: non nega, non approva, non tocca il
+   * taint. Vale come pavimento e non come soffitto — due chiamate quasi uguali
+   * (stessa intenzione, argomenti riscritti) passano indenni, ed e il limite
+   * noto di ogni confronto per uguaglianza esatta.
+   */
+  const giaFatte =
+    decl?.progress === 'idempotent_read' ? deps.turns.identicalCallsDone(ctx.turnId, call.name, args) : 0;
   const intentError = recordIntent(deps, ctx.turnId, span, {
     callId: call.id,
     tool: call.name,
@@ -3070,10 +3103,29 @@ async function runTool(
     } satisfies SessionMessage);
     span.end({ status: outcome.isError ? 'error' : 'ok' });
     emitToolEnd(outcome.isError === true);
+    if (giaFatte > 0 && outcome.isError !== true) {
+      span.setAttributes({ 'muffin.tool.repeated': giaFatte });
+    }
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: safeContent,
+      /**
+       * L'avviso viaggia con il risultato, e **solo** con il risultato.
+       *
+       * `recordOutcome` e `sessions.append` qui sopra hanno gia ricevuto
+       * `safeContent`: la riga durevole di `turn_tool_calls` e la sessione
+       * restano quello che il tool ha davvero detto. Un avviso scritto li
+       * dentro sarebbe testo che il tool non ha prodotto, in un registro il
+       * cui unico compito e dire cosa ha prodotto.
+       *
+       * Attaccato al risultato e non spedito come messaggio a parte perche un
+       * messaggio a parte non e trasportabile: sul percorso openai-compat il
+       * testo di un messaggio utente viene emesso **prima** dei suoi
+       * `tool_result` (`agent/providers/openai-compat.ts`), quindi finirebbe
+       * fra la chiamata dell'assistente e le sue risposte — che quel protocollo
+       * non ammette. Qui invece e dove il modello sta gia guardando.
+       */
+      content: giaFatte > 0 && outcome.isError !== true ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}` : safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
@@ -3119,6 +3171,21 @@ async function runTool(
  * does not satisfy that. So the failure is returned instead, and the caller
  * below refuses the call rather than guess which way is safe to fail.
  */
+/**
+ * L'avviso, in italiano e in una riga: e testo per il modello, non un log.
+ *
+ * Dice il numero perche «di nuovo» e «per la terza volta» chiedono due cose
+ * diverse, e nomina l'uscita — cambiare argomenti o rispondere — perche un
+ * avviso senza una via d'uscita e solo rumore in mezzo a un risultato.
+ */
+function avvisoRipetizione(tool: string, giaFatte: number): string {
+  const volte = giaFatte === 1 ? 'una volta' : `${giaFatte} volte`;
+  return (
+    `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti, ` +
+    `e la risposta e la stessa. Se ti serve altro cambia argomenti; altrimenti rispondi con quello che hai.]`
+  );
+}
+
 function recordIntent(
   deps: LoopDeps,
   turnId: string,

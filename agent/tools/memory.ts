@@ -31,6 +31,9 @@ export const memoryCapability: CapabilityDecl = {
   // A read, and a read of our own store: running it twice returns the same
   // rows or fresher ones, and changes nothing.
   rerunnable: true,
+  // Lo stesso motivo della riga sopra, detto per il guardrail: una seconda
+  // ricerca **identica** nello stesso turno non porta righe nuove.
+  progress: 'idempotent_read',
   resourceKind: 'tenant',
   policyArgs: ['query'],
   // Not host-only: a group's agent may search that group's memory, and only

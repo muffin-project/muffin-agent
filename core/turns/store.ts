@@ -987,6 +987,35 @@ export class TurnStore {
   }
 
   /**
+   * Quante volte questo turno ha **gia** fatto questa identica chiamata, con
+   * esito buono.
+   *
+   * Non tiene stato nuovo: legge le righe che il turno scrive comunque, con la
+   * stessa `argsDigest` che le ha scritte — quindi il confronto non puo
+   * divergere dalla scrittura, e non c'e una seconda nozione di «identica».
+   *
+   * **Durevole, e per questo sopravvive al resume.** Un contatore in memoria
+   * attorno all'invocazione si azzererebbe alla ripresa, e un turno che si
+   * sospende in mezzo al proprio giro a vuoto ricomincerebbe a contare da capo
+   * — cioe proprio il caso in cui il giro a vuoto e piu lungo.
+   *
+   * Solo le chiamate **finite bene**: una fallita e ripetuta e un'altra classe
+   * di guasto, e nel corpus dogfood del 30/08/2026 non se ne trova nemmeno una
+   * (10 errori in tutto lo store, zero ripetuti). Non si costruisce un
+   * rilevatore per un guasto che nessuno ha visto.
+   */
+  identicalCallsDone(turnId: string, tool: string, args: unknown): number {
+    const row = this.db
+      .prepare(
+        `SELECT count(*) AS n FROM turn_tool_calls
+         WHERE turn_id = ? AND tool = ? AND args_digest = ?
+           AND ended_at IS NOT NULL AND is_error = 0`,
+      )
+      .get(turnId, tool, argsDigest(args)) as { n: number };
+    return row.n;
+  }
+
+  /**
    * "It came back, and here is what it said." Written with the turn's taint in
    * one transaction, because a tier-3 result raises the taint of the turn and
    * the two facts must not be able to land separately: a crash between them
