@@ -29,6 +29,57 @@ describe('SaluteSuperfici — quanto dura un guasto, non solo che c e', () => {
     expect(s.stato()[0]?.da).toBe('2026-08-29T12:30:00.000Z');
   });
 
+  /**
+   * Il difetto che questo blocco uccide, trovato dal giudice sulla #260 e
+   * riprodotto sul binario vero: fra il momento in cui `connectSurfaces` fa
+   * partire il connettore e il primo `getMe` passano da qualche centesimo a
+   * **due minuti**. In quella finestra il registro era vuoto, e `doctor`
+   * leggeva l'assenza come «non e stata nemmeno tentata»: usciva 1 e diceva
+   * all'owner di controllare `surfaces.enabled` e riavviare un gateway sano —
+   * cioe di rifare partire l'handshake, che riproduce il sintomo.
+   */
+  it('avviata e non ancora viva non e ne connessa ne caduta', () => {
+    const s = new SaluteSuperfici();
+    s.inAvvio('telegram', t('2026-08-29T12:30:00Z'));
+    expect(s.stato()).toEqual([
+      { id: 'telegram', connessa: false, inAvvio: true, da: '2026-08-29T12:30:00.000Z', fallimentiDiFila: 0 },
+    ]);
+  });
+
+  it('registrare l avvio non riporta indietro chi sta gia parlando', () => {
+    const s = new SaluteSuperfici();
+    s.connessa('telegram', t('2026-08-29T12:30:00Z'));
+    s.inAvvio('telegram', t('2026-08-29T12:31:00Z'));
+    expect(s.stato()[0]).toMatchObject({ connessa: true, da: '2026-08-29T12:30:00.000Z' });
+  });
+
+  /**
+   * L'attesa non e' ancora un guasto, e sommarle gonfierebbe la durata proprio
+   * nel caso lento — cioe' quello in cui la soglia di `doctor` deve decidere.
+   */
+  it('il guasto che segue un avvio comincia quando fallisce, non quando e partito', () => {
+    const s = new SaluteSuperfici();
+    s.inAvvio('telegram', t('2026-08-29T12:30:00Z'));
+    s.caduta('telegram', 'TypeError (ECONNREFUSED)', t('2026-08-29T12:32:00Z'));
+    expect(s.stato()[0]).toMatchObject({
+      connessa: false,
+      da: '2026-08-29T12:32:00.000Z',
+      fallimentiDiFila: 1,
+    });
+    expect(s.stato()[0]?.inAvvio).toBeUndefined();
+  });
+
+  /**
+   * «Abilitata ma senza owner» non si ripara riavviando il gateway. Chi
+   * registra a volte sa il rimedio meglio di chi stampa, e senza questo campo
+   * la riga diceva la cosa giusta col consiglio sbagliato.
+   */
+  it('chi registra puo portare il rimedio, quando lo sa', () => {
+    const s = new SaluteSuperfici();
+    s.caduta('telegram', 'abilitata ma senza owner', t('2026-08-29T12:30:00Z'), '`muffin surface enable telegram`');
+    expect(s.stato()[0]?.rimedio).toBe('`muffin surface enable telegram`');
+  });
+
   it('un fallimento porta la causa e comincia a contare', () => {
     const s = new SaluteSuperfici();
     s.caduta('telegram', 'TypeError (ECONNRESET)', t('2026-08-29T17:08:00Z'));

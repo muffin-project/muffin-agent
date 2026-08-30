@@ -531,7 +531,7 @@ export function connectSurfaces(
       // surface has to be up to receive the code. What it must not do is treat
       // anyone as the owner while it waits.
       if (ownerUserId === undefined && tg?.pairing === undefined) {
-        salute.caduta('telegram', 'abilitata ma senza owner', adesso());
+        salute.caduta('telegram', 'abilitata ma senza owner', adesso(), '`muffin surface enable telegram`');
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
         const base = tg?.apiBase;
@@ -598,6 +598,11 @@ export function connectSurfaces(
         // Same process, background. A crash of the surface is reported and does
         // not take the REPL down: the terminal is the surface of last resort,
         // and it stays up when the others fall over.
+        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
+        // e il primo battito passano fino a due minuti se la rete e' lenta, e
+        // in quella finestra l'assenza di una riga non deve poter essere letta
+        // come «non e' stata nemmeno tentata».
+        salute.inAvvio('telegram', adesso());
         void connector.run().catch((error: unknown) => {
           const causa = error instanceof Error ? error.message : String(error);
           salute.caduta('telegram', causa, adesso());
@@ -634,7 +639,7 @@ export function connectSurfaces(
       const dc = runtime.config.surfaces.discord;
       const ownerUserId = dc?.ownerUserId;
       if (ownerUserId === undefined && dc?.pairing === undefined) {
-        salute.caduta('discord', 'abilitata ma senza owner', adesso());
+        salute.caduta('discord', 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
         lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
       } else {
         const api = new DiscordApi(token);
@@ -673,6 +678,11 @@ export function connectSurfaces(
           log: (line) => process.stderr.write(`\r${line}\n`),
         });
 
+        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
+        // e il primo battito passano fino a due minuti se la rete e' lenta, e
+        // in quella finestra l'assenza di una riga non deve poter essere letta
+        // come «non e' stata nemmeno tentata».
+        salute.inAvvio('discord', adesso());
         void connector.run().catch((error: unknown) => {
           const causa = error instanceof Error ? error.message : String(error);
           salute.caduta('discord', causa, adesso());

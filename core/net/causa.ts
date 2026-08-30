@@ -66,7 +66,12 @@ const IGNOTA = 'errore di rete';
 export function causaDiRete(error: unknown): string {
   if (!(error instanceof Error)) return IGNOTA;
 
-  const nome = FORMA_DI_NOME.test(error.name) ? error.name : IGNOTA;
+  // Letto **una volta**: `name` e' una proprieta' qualsiasi, e un getter che
+  // restituisce due valori diversi alle due letture farebbe passare il
+  // controllo a una stringa e stamparne un'altra. Niente che `fetch` produca
+  // ha questa forma, e non costa niente renderla impossibile qui.
+  const dichiarato = error.name;
+  const nome = FORMA_DI_NOME.test(dichiarato) ? dichiarato : IGNOTA;
 
   // `cause` e' `unknown` per contratto e puo' essere qualsiasi cosa: una
   // stringa, null, un oggetto senza `code`. Si legge difensivamente e si
