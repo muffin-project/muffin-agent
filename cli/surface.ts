@@ -493,8 +493,9 @@ export function connectSurfaces(
    * Chi sta rispondendo, adesso.
    *
    * Le righe qui sotto raccontano **l'avvio** e poi tacciono per sempre: e' il
-   * caso opposto quello che e' costato diciannove ore di silenzio all'owner —
-   * connessa all'avvio, morta alle 17:08, e nessuno che lo dicesse. Questo
+   * caso opposto quello che nessuno sapeva vedere — connessa all'avvio e poi
+   * caduta, con `doctor` che restava verde sia durante un blip sia durante
+   * un'interruzione, perche' guardava il processo e non la superficie. Questo
    * registro lo tengono aggiornato i connettori mentre girano, e il socket di
    * controllo lo serve a `doctor`.
    */

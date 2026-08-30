@@ -145,8 +145,9 @@ export class TelegramApi implements TelegramApiLike {
       //
       // `causaDiRete` dice la classe **e** il codice (`ECONNRESET`,
       // `ENOTFOUND`) accettando solo campi di una forma che un URL non puo'
-      // avere. Il solo `.name` costava 3187 righe `Telegram 0: TypeError` in
-      // diciannove ore senza mai dire cosa fosse rotto.
+      // avere. Il solo `.name` aveva prodotto 3187 righe `Telegram 0:
+      // TypeError` nell'arco di vita di un gateway, senza mai dire cosa fosse
+      // rotto — ne' se valesse la pena preoccuparsi.
       throw new TelegramError(0, causaDiRete(error));
     }
 

@@ -1206,7 +1206,7 @@ describe('MUFFIN_GUASTO_DOPO_MS — la sola manopola sulla soglia', () => {
   });
 });
 
-describe('quantoDura — un lampo e diciannove ore non si somigliano', () => {
+describe('quantoDura — un lampo e un guasto che dura non si somigliano', () => {
   const t0 = new Date('2026-08-30T12:00:00Z');
   const meno = (ms: number): string => new Date(t0.getTime() - ms).toISOString();
 
@@ -1230,12 +1230,13 @@ describe('quantoDura — un lampo e diciannove ore non si somigliano', () => {
 /**
  * Il difetto misurato il 30/08/2026 sulla macchina dell'owner.
  *
- * Telegram era abilitata e aveva portato 44 turni veri. Poi, alle 17:08 del 29,
- * il polling ha smesso e non e ripartito: diciannove ore, zero turni, e
- * `doctor` che stampava `gateway attivo · socket concorde` e `nessuna delivery
- * mancante`. Vere tutte e due, **e verdi perche non arrivava piu niente** —
- * una superficie che non riceve non produce turni, quindi non produce consegne,
- * quindi non ne mancano. Ogni indicatore guardava a valle del punto rotto.
+ * Telegram era abilitata e aveva portato 44 turni veri. Nell'arco di vita di un
+ * gateway il polling era fallito 3187 volte, e `doctor` stampava `gateway
+ * attivo · socket concorde` e `nessuna delivery mancante`. Vere tutte e due, e
+ * **cieche per costruzione**: una superficie che non riceve non produce turni,
+ * quindi non produce consegne, quindi non ne mancano. Quei numeri restano
+ * identici che il guasto duri cinque secondi o un giorno, ed e' proprio la
+ * differenza fra i due casi che serviva sapere.
  */
 describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
   const aperti: ControlServer[] = [];

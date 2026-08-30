@@ -8,9 +8,10 @@ import { startFakeTelegram } from '../telegram.js';
  * ## Il difetto, misurato
  *
  * Il 30/08/2026, sulla macchina dell'owner: Telegram abilitata, 44 turni veri
- * nel database, e dalle 17:08 del giorno prima il polling che falliva senza
- * interruzione — 3187 righe identiche in `gateway.err`, mentre
- * `api.telegram.org` rispondeva in 300ms. `muffin doctor` diceva:
+ * nel database, e 3187 fallimenti di polling registrati nell'arco di vita di un
+ * solo gateway — righe identiche in `gateway.err`, mentre `api.telegram.org`
+ * rispondeva in 326ms. Quante volte si sapeva; per quanto no, perche' quel file
+ * registra soltanto i fallimenti e non li data. `muffin doctor` diceva:
  *
  * ```text
  * ✓ gateway    attivo · pid 73344 · dal 29/08/26, 12:30 · in attesa · socket concorde
