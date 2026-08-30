@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
-import { makeEmbedder, OpenAICompatEmbedder } from './embed.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EmbedderUnavailable, makeEmbedder, OllamaEmbedder, OpenAICompatEmbedder } from './embed.js';
 
 describe('makeEmbedder — la scelta che il docstring prometteva da sempre', () => {
   const mai = () => {
@@ -99,5 +99,98 @@ describe('OpenAICompatEmbedder — la dimensione chiesta è la dimensione ricevu
     const base = await endpoint(1536);
     const e = new OpenAICompatEmbedder('sk-never-called', 'text-embedding-3-small', 512, base);
     await expect(e.embed(['ciao'])).rejects.toThrow(/openai-compat:text-embedding-3-small.*1536.*512/s);
+  });
+});
+
+/**
+ * Il difetto, misurato su questa macchina (Node v22.22.2, 30/08/2026): quando
+ * ollama e' giu', `fetch` fallisce con `name = "TypeError"` e
+ * `message = "fetch failed"` — la causa vera sta **solo** in `cause.code`:
+ *
+ * | fallimento | `error.name` | `error.message` | `cause.code` |
+ * |---|---|---|---|
+ * | ollama giu' (porta chiusa) | TypeError | `fetch failed` | `ECONNREFUSED` |
+ * | DNS inesistente | TypeError | `fetch failed` | `ENOTFOUND` |
+ * | URL malformato | TypeError | `Failed to parse URL from <url>` | `ERR_INVALID_URL` |
+ *
+ * `embed.ts` passava `error.message` a `EmbedderUnavailable`, cioe' consegnava
+ * `fetch failed` e buttava il codice. E' li' che la causa muore: chi legge
+ * — `doctor`, o la lista `strategies` del recall — non puo' piu' distinguere
+ * «ollama non e' avviato» da «la rete e' caduta», perche' a valle non c'e'
+ * piu' niente da distinguere.
+ *
+ * La seconda meta' e' la stessa garanzia di `causaDiRete`: `.message` puo'
+ * portare l'URL (riga tre della tabella), e `embedder.baseUrl` e' scelto
+ * dall'owner — `z.string().url()` accetta anche `https://utente:chiave@host`.
+ * La chiave `openai-compat` viaggia nell'header, non nel path, quindi qui non
+ * c'e' il segreto strutturale di Telegram; ma stampare `.message` era
+ * comunque il campo sbagliato, e smettere di stamparlo chiude anche quello.
+ */
+describe('EmbedderUnavailable — la causa arriva a chi legge, e l URL no', () => {
+  const CHIAVE = 'sk-segretissima-che-non-deve-apparire-mai';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const errorePorta = (codice: string): TypeError => {
+    const e = new TypeError('fetch failed');
+    (e as { cause?: unknown }).cause = Object.assign(new Error(`connect ${codice}`), { code: codice });
+    return e;
+  };
+
+  it('ollama giu: il codice arriva, invece di «fetch failed»', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw errorePorta('ECONNREFUSED');
+    });
+    const e = new OllamaEmbedder('qwen3-embedding:0.6b', 1024, 'http://127.0.0.1:11434');
+    await expect(e.embed(['x'])).rejects.toMatchObject({
+      name: 'EmbedderUnavailable',
+      causa: 'TypeError (ECONNREFUSED)',
+    });
+  });
+
+  it('la rete caduta non si confonde con ollama giu', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw errorePorta('ENOTFOUND');
+    });
+    const e = new OllamaEmbedder('qwen3-embedding:0.6b', 1024, 'http://127.0.0.1:11434');
+    await expect(e.embed(['x'])).rejects.toMatchObject({ causa: 'TypeError (ENOTFOUND)' });
+  });
+
+  it('openai-compat porta il codice come ollama', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw errorePorta('ECONNRESET');
+    });
+    const e = new OpenAICompatEmbedder(CHIAVE, 'text-embedding-3-small', 1536, 'https://api.esempio.test/v1');
+    await expect(e.embed(['x'])).rejects.toMatchObject({ causa: 'TypeError (ECONNRESET)' });
+  });
+
+  it('un URL malformato non esce dal messaggio, nemmeno con una chiave dentro', async () => {
+    // Il caso della riga tre: e' l unico in cui `fetch` mette l URL intero in
+    // `.message`. `baseUrl` lo scrive l owner, e lo schema accetta lo userinfo.
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError(`Failed to parse URL from https://utente:${CHIAVE}@host/embeddings`);
+    });
+    const e = new OpenAICompatEmbedder('k', 'm', 4, `https://utente:${CHIAVE}@host`);
+    await expect(e.embed(['x'])).rejects.toSatisfy(
+      (err: unknown) => err instanceof EmbedderUnavailable && !err.message.includes(CHIAVE) && !err.causa.includes(CHIAVE),
+    );
+  });
+
+  it('l id dell embedder resta nel messaggio: e cio che dice quale config e rotta', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw errorePorta('ECONNREFUSED');
+    });
+    const e = new OllamaEmbedder('un-modello-inventato', 7, 'http://127.0.0.1:11434');
+    await expect(e.embed(['x'])).rejects.toThrow(/un-modello-inventato/);
+  });
+
+  it('i fallimenti che non sono di rete tengono la loro causa parlante', async () => {
+    // `HTTP 404` e la dimensione sbagliata sono gia' cause precise: il campo
+    // `causa` le porta identiche, e non le riscrive in «errore di rete».
+    vi.stubGlobal('fetch', async () => new Response('{}', { status: 404 }));
+    const e = new OllamaEmbedder('m', 1024, 'http://127.0.0.1:11434');
+    await expect(e.embed(['x'])).rejects.toMatchObject({ causa: 'HTTP 404' });
   });
 });

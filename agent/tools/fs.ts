@@ -128,6 +128,10 @@ export const fsCapabilities: CapabilityDecl[] = [
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
+    // Misurato: il turno a747ae67 del 28/08/2026 ha riletto gli stessi file
+    // con gli stessi argomenti e ha riavuto risultati byte-identici — 5
+    // letture ridondanti, ~141 KB reiniettati, 14 chiamate su un tetto di 15.
+    progress: 'idempotent_read',
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,
@@ -153,6 +157,10 @@ export const fsCapabilities: CapabilityDecl[] = [
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
+    // Misurato: il turno a747ae67 del 28/08/2026 ha riletto gli stessi file
+    // con gli stessi argomenti e ha riavuto risultati byte-identici — 5
+    // letture ridondanti, ~141 KB reiniettati, 14 chiamate su un tetto di 15.
+    progress: 'idempotent_read',
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,
@@ -162,6 +170,10 @@ export const fsCapabilities: CapabilityDecl[] = [
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
+    // Misurato: il turno a747ae67 del 28/08/2026 ha riletto gli stessi file
+    // con gli stessi argomenti e ha riavuto risultati byte-identici — 5
+    // letture ridondanti, ~141 KB reiniettati, 14 chiamate su un tetto di 15.
+    progress: 'idempotent_read',
     resourceKind: 'path',
     policyArgs: ['path'],
     hostOnly: true,

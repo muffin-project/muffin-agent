@@ -1,4 +1,5 @@
 import type { TrustTier } from '../policy/types.js';
+import { EmbedderUnavailable } from './embed.js';
 import type { FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
@@ -54,6 +55,16 @@ export type RecallItem = {
   replacedBy?: { id: number; text: string };
   /** Present on episodes: which connector it was learned on. */
   surface?: string;
+  /**
+   * Present on episodes che hanno un lineage: il turno che le ha prodotte,
+   * cioe `TurnRecord.id` — lo stesso valore che la history porta come
+   * `traceId`. Assente su una riga scritta prima della colonna, e su un
+   * episodio che un turno non l ha avuto (vault, `observe-run`).
+   *
+   * Non e decorazione: e cio che permette a chi legge il risultato di dire
+   * «questo l ho gia davanti» senza confrontare il testo.
+   */
+  turnId?: string;
   /**
    * Set on an item that is here as *context* for another one, never as a
    * result of its own. Neighbours are attached after the cut and never enter
@@ -228,6 +239,26 @@ export type RecallOptions = {
    * match it exactly.
    */
   excludeEpisodeId?: number;
+  /**
+   * I turni gia presenti nella history limitata di questo turno.
+   *
+   * Il difetto che chiude, misurato sul database dell owner il 29/08/2026: la
+   * history riporta lo scambio corrente **e** il recall automatico lo ripesca,
+   * quindi il modello vede due volte quel che ha appena scritto e lo rilegge
+   * come conferma indipendente di sé stesso. `excludeEpisodeId` copriva una
+   * riga sola — quella dell owner appena scritta — e non l episodio dell agente
+   * dello stesso turno, ne gli scambi piu vecchi che la finestra riporta.
+   *
+   * Esclude **per lineage, mai per testo**: due frasi identiche in due turni
+   * diversi sono due prove diverse, e una dedup fuzzy le confonderebbe. Una
+   * riga con `turn_id` NULL non viene mai esclusa — non e provato che sia in
+   * history, e togliere per non-sapere e inventare precisione all indietro.
+   *
+   * I fatti restano fuori da questa esclusione anche quando derivano da un
+   * episodio escluso: un fatto e una credenza, non la copia di un messaggio, e
+   * il posto dove vive nel prompt e un altro.
+   */
+  excludeTurnIds?: readonly string[] | undefined;
   /**
    * Navigation over the evidence — the `(surface, date_range)` filter of
    * `02-ontologia.md` §9. Distinct from `asOf`, and the distinction is not
@@ -464,8 +495,11 @@ export async function recall(
   };
 
   // --- half one: exact words -------------------------------------------------
+  const escludi = options.excludeTurnIds ?? [];
+  const esclusiSet = new Set(escludi);
   const textHits = deps.store.searchEpisodes(tenantId, query, limit * 2, {
     includeSuperseded,
+    excludeTurnIds: escludi,
     surface: options.surface,
     since: options.since,
     until: options.until,
@@ -491,6 +525,7 @@ export async function recall(
       source: episodeSource(hit.id, hit.trustTier, hit.createdAt, hit.connector),
       score: 0,
       surface: hit.connector,
+      ...(hit.turnId === null ? {} : { turnId: hit.turnId }),
       // Retired evidence comes back only when the past was asked for, and it
       // arrives marked. An episode that was withdrawn or a vault note that has
       // since been edited is still true of *then*, and false of now; handing it
@@ -580,13 +615,32 @@ export async function recall(
           source: episodeSource(hit.sourceId, provenance.trustTier, provenance.createdAt, connector),
           score: 0,
           surface: connector,
+          ...(provenance.turnId == null ? {} : { turnId: provenance.turnId }),
           ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
       });
     } catch (error) {
       // A missing embedder degrades recall; it must never take the turn down,
       // and it must never pretend the semantic half ran.
-      strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);
+      //
+      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
+      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
+      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
+      // stessa parola per ollama giu', per il modello inesistente e per la
+      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
+      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
+      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
+      // una forma che non puo' portare l'URL dell'embedder.
+      //
+      // Il ramo `Error` non e' un residuo: questo `try` avvolge anche la
+      // lettura della provenienza, quindi un guasto dello store puo' finire
+      // qui. Per quello il nome della classe e' l'unica cosa vera che si
+      // possa dire — e va detta cosi', senza vestirlo da causa di rete.
+      strategies.push(
+        `vector-non-disponibile(${
+          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
+        })`,
+      );
     }
   } else {
     strategies.push('vector-non-configurato');
@@ -664,7 +718,27 @@ export async function recall(
   const fused = [...ranked.values()]
     .sort((a, b) => b.score - a.score)
     .map(({ item, score }) => ({ ...item, score }))
-    .filter((item) => !(item.kind === 'episode' && item.id === options.excludeEpisodeId));
+    .filter((item) => !(item.kind === 'episode' && item.id === options.excludeEpisodeId))
+    /**
+     * L esclusione per lineage, per le vie che non possono filtrare a monte.
+     *
+     * La meta testuale e il vicinato la applicano dentro la query, dove non
+     * spreca uno slot di `LIMIT`. La meta **semantica** non puo: `sqlite-vec`
+     * sceglie i suoi `k` dentro l indice, quindi un filtro aggiunto li sopra
+     * arriverebbe comunque dopo la scelta. Un check ripetuto nel ramo
+     * vettoriale sarebbe stato una riga che nessun test puo far morire —
+     * questa la copre gia, e provata (`agent/memory-lineage.test.ts`, «anche la
+     * porta semantica rispetta l esclusione»).
+     *
+     * Il limite che resta, detto e non nascosto: se tutti i `k` vicini
+     * semantici appartengono a turni esclusi, una riga buona piu lontana non
+     * arriva. Non e il guasto osservato — lo scambio corrente sono due righe
+     * contro `limit * 4` — e chiuderlo vorrebbe dire partizionare l indice.
+     *
+     * E anche la riga che toglie un episodio escluso dagli **anchor** del
+     * vicinato: gli anchor si scelgono da `kept`, cioe da qui in giu.
+     */
+    .filter((item) => !(item.kind === 'episode' && item.turnId !== undefined && esclusiSet.has(item.turnId)));
 
   // Rerank over a wider slice than we will keep: reordering the same eight
   // items it was already going to return buys nothing.
@@ -717,7 +791,7 @@ export async function recall(
     // `MAX_NEIGHBOUR_ANCHORS`.
     const anchors = kept.filter((item) => item.kind === 'episode').slice(0, MAX_NEIGHBOUR_ANCHORS);
     for (const anchor of anchors) {
-      for (const near of deps.store.episodeNeighbourhood(tenantId, anchor.id, k, includeSuperseded)) {
+      for (const near of deps.store.episodeNeighbourhood(tenantId, anchor.id, k, includeSuperseded, escludi)) {
         const key = `episode:${near.id}`;
         if (already.has(key) || near.id === options.excludeEpisodeId) continue;
         already.add(key);
@@ -731,6 +805,7 @@ export async function recall(
           score: 0,
           surface: near.connector,
           neighbourOf: anchor.id,
+          ...(near.turnId === null ? {} : { turnId: near.turnId }),
           ...(near.supersededAt === null ? {} : { expired: true }),
         });
       }

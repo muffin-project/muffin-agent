@@ -966,13 +966,19 @@ describe('muffin gateway run — la riga di supervisione', () => {
     // comunque — il vecchio ternario produce parole diverse su entrambe.
     const dir = home();
     const env = { XPC_SERVICE_NAME: LAUNCHD_LABEL };
-    // Il banner esce prima di `serve()`, quindi cinque secondi bastano; poi il
-    // gateway viene ucciso dal timeout, che è l'unico modo di fermare un
-    // processo che di mestiere non finisce.
-    const r = muffin(dir, ['gateway', 'run'], '', env, 5_000);
+    // Il timeout non misura quanto ci mette il banner: è l'unico modo di
+    // fermare un processo che di mestiere non finisce. Erano cinque secondi
+    // «perché il banner esce prima di `serve()`», e quel ragionamento reggeva
+    // solo su una macchina scarica: sotto il gate, con 213 file in parallelo,
+    // `node --import tsx` non arrivava nemmeno a `main.ts` in cinque secondi e
+    // il test cadeva su `r.err` **vuoto** — nessuna riga sbagliata, nessuna
+    // riga. Un rosso da CPU, non da codice. Venti secondi non rendono il test
+    // più permissivo: la stringa attesa resta identica, e se il banner non
+    // arriva affatto il vitest a sessanta lo dice comunque.
+    const r = muffin(dir, ['gateway', 'run'], '', env, 20_000);
 
     expect(r.err).toContain(`supervisione: ${describeSupervision({ ...process.env, ...env }, process.platform)}`);
-  }, 30_000);
+  }, 60_000);
 });
 
 /**

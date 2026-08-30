@@ -25,6 +25,7 @@ export function toolContext(over: Partial<ToolContext> = {}): ToolContext {
     sessionId: 'session-under-test',
     // Clean by default. A test about what a *tainted* turn writes passes its own.
     taint: () => 0,
+    intrinsicTaint: () => 0,
     suspend: () => {
       throw new Error('questo tool non dovrebbe sospendere il turno');
     },
