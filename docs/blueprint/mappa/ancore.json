@@ -811,12 +811,12 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 255,
+    "line": 309,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 372,
+    "line": 426,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -1196,7 +1196,7 @@
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 547,
+    "line": 548,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
@@ -1216,7 +1216,7 @@
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
-    "line": 141,
+    "line": 148,
     "testo": "};"
   },
   "connectors/telegram/connector.ts:153": {

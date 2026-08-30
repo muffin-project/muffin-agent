@@ -19,7 +19,15 @@ import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { runDoctor, sandboxOkDetail, quantoDura, type Check } from './doctor.js';
+import {
+  runDoctor,
+  sandboxOkDetail,
+  quantoDura,
+  guastoDopoMsDaEnv,
+  GUASTO_DOPO_MS,
+  AVVIO_TROPPO_LUNGO_MS,
+  type Check,
+} from './doctor.js';
 import { serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
 import { GatewayLock } from '../core/gateway/lock.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
@@ -1224,7 +1232,24 @@ describe('doctor dice quale commit sta girando', () => {
 });
 
 
-describe('quantoDura — un lampo e diciannove ore non si somigliano', () => {
+describe('MUFFIN_GUASTO_DOPO_MS — la sola manopola sulla soglia', () => {
+  it('e assente su tutto quello che un installazione vera imposterebbe', () => {
+    expect(guastoDopoMsDaEnv(undefined)).toBe(GUASTO_DOPO_MS);
+    expect(guastoDopoMsDaEnv('')).toBe(GUASTO_DOPO_MS);
+  });
+
+  it('un refuso nell ambiente non fa uscire doctor: resta il default', () => {
+    expect(guastoDopoMsDaEnv('non-un-numero')).toBe(GUASTO_DOPO_MS);
+    expect(guastoDopoMsDaEnv('0')).toBe(GUASTO_DOPO_MS);
+    expect(guastoDopoMsDaEnv('-1')).toBe(GUASTO_DOPO_MS);
+  });
+
+  it('e un valore vero passa', () => {
+    expect(guastoDopoMsDaEnv('1500')).toBe(1500);
+  });
+});
+
+describe('quantoDura — un lampo e un guasto che dura non si somigliano', () => {
   const t0 = new Date('2026-08-30T12:00:00Z');
   const meno = (ms: number): string => new Date(t0.getTime() - ms).toISOString();
 
@@ -1248,12 +1273,13 @@ describe('quantoDura — un lampo e diciannove ore non si somigliano', () => {
 /**
  * Il difetto misurato il 30/08/2026 sulla macchina dell'owner.
  *
- * Telegram era abilitata e aveva portato 44 turni veri. Poi, alle 17:08 del 29,
- * il polling ha smesso e non e ripartito: diciannove ore, zero turni, e
- * `doctor` che stampava `gateway attivo · socket concorde` e `nessuna delivery
- * mancante`. Vere tutte e due, **e verdi perche non arrivava piu niente** —
- * una superficie che non riceve non produce turni, quindi non produce consegne,
- * quindi non ne mancano. Ogni indicatore guardava a valle del punto rotto.
+ * Telegram era abilitata e aveva portato 44 turni veri. Nell'arco di vita di un
+ * gateway il polling era fallito 3187 volte, e `doctor` stampava `gateway
+ * attivo · socket concorde` e `nessuna delivery mancante`. Vere tutte e due, e
+ * **cieche per costruzione**: una superficie che non riceve non produce turni,
+ * quindi non produce consegne, quindi non ne mancano. Quei numeri restano
+ * identici che il guasto duri cinque secondi o un giorno, ed e' proprio la
+ * differenza fra i due casi che serviva sapere.
  */
 describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
   const aperti: ControlServer[] = [];
@@ -1339,6 +1365,116 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     const riga = report.checks.find((c) => c.name === 'superfici');
     expect(riga?.level).toBe('ok');
     expect(riga?.detail).toContain('telegram');
+    // Non «in ascolto»: la parola deve reggere per la superficie piu' debole,
+    // e per Discord `connessa` significa «ultimo READY/RESUMED senza chiusure
+    // da allora» — vero adesso a meno di circa due `heartbeat_interval`, che e'
+    // quanto il rilevamento zombie ci mette a chiudere un socket muto.
+    // «Connesse» e' quello che si sa; «in ascolto» prometterebbe l'istante.
+    expect(riga?.detail).not.toContain('in ascolto');
+  });
+
+  /**
+   * I due falsi positivi trovati dal giudice sulla #260, e il secondo li'
+   * riprodotto sul binario vero.
+   *
+   * Il primo: fra l'avvio del connettore e il primo `getMe` passano fino a due
+   * minuti, e in quella finestra `doctor` diceva «non e stata nemmeno
+   * tentata», usciva 1 e consigliava di riavviare — cioe' di rifare partire
+   * l'handshake. Il secondo: un `ECONNRESET` fra due long poll lascia la
+   * superficie caduta per i cinque secondi prima del tentativo dopo, e un
+   * `doctor` in quella finestra stampava un guasto.
+   *
+   * Un `!` su uno stato sano e' il modo piu' rapido per insegnare a scorrere
+   * oltre `doctor`: e' il difetto che questa slice esiste per chiudere, al
+   * contrario.
+   */
+  it('mentre aspetta il primo battito, tace', async () => {
+    const dir = conTelegram();
+    const inAvvio: StatoSuperficie = {
+      id: 'telegram',
+      connessa: false,
+      inAvvio: true,
+      da: new Date(Date.now() - 90_000).toISOString(),
+      fallimentiDiFila: 0,
+    };
+    await gatewayCheDice(dir, { superfici: [inAvvio] });
+
+    const report = await runDoctor(dir);
+    expect(report.checks.find((c) => c.name.startsWith('superfic'))).toBeUndefined();
+  });
+
+  /**
+   * Il terzo modo di stare zitti, e l'unico che non aveva un limite superiore.
+   * Una superficie che entra in avvio e non emette mai ne' `connessa` ne'
+   * `caduta` — un upgrade WebSocket che stalla, che Node non limita — resterebbe
+   * invisibile per sempre. «In avvio da tre ore» non e' un «non lo so» onesto.
+   */
+  it('ma un avvio che non finisce mai smette di essere un avvio', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, {
+      superfici: [
+        {
+          id: 'telegram',
+          connessa: false,
+          inAvvio: true,
+          da: new Date(Date.now() - AVVIO_TROPPO_LUNGO_MS - 1000).toISOString(),
+          fallimentiDiFila: 0,
+        } satisfies StatoSuperficie,
+      ],
+    });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('in avvio da');
+    // Non «riavvia»: riavviare rifa partire proprio l'handshake che non finisce.
+    expect(c?.remedy).toContain('primo piano');
+    expect(c?.remedy).not.toMatch(/^riavvia/);
+  });
+
+  it('un lampo fra due long poll non e un guasto', async () => {
+    const dir = conTelegram();
+    const lampo: StatoSuperficie = {
+      id: 'telegram',
+      connessa: false,
+      da: new Date(Date.now() - 3_000).toISOString(),
+      causa: 'Telegram 0: TypeError (ECONNRESET)',
+      fallimentiDiFila: 1,
+    };
+    await gatewayCheDice(dir, { superfici: [lampo] });
+
+    expect(await check(dir, 'superficie telegram')).toBeUndefined();
+  });
+
+  it('ma appena supera la soglia lo dice', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, { superfici: [caduta(GUASTO_DOPO_MS / 3_600_000 + 0.001)] });
+
+    expect((await check(dir, 'superficie telegram'))?.level).toBe('warn');
+  });
+
+  /**
+   * Una superficie senza owner non si ripara riavviando il gateway: si ripara
+   * con `surface enable`, che la riga d'avvio accanto dice gia'. Il rimedio
+   * sbagliato e' peggio di nessun rimedio.
+   */
+  it('e quando chi registra sa il rimedio, e quello che stampa', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, {
+      superfici: [
+        {
+          id: 'telegram',
+          connessa: false,
+          da: new Date(Date.now() - 3_600_000).toISOString(),
+          causa: 'abilitata ma senza owner',
+          rimedio: '`muffin surface enable telegram`',
+          fallimentiDiFila: 1,
+        } satisfies StatoSuperficie,
+      ],
+    });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.remedy).toBe('`muffin surface enable telegram`');
+    expect(c?.remedy).not.toContain('riavvia');
   });
 
   it('abilitata ma mai tentata non passa per sana', async () => {

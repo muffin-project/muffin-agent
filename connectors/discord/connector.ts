@@ -5,7 +5,7 @@ import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { DiscordApi, DiscordMessageSchema } from './api.js';
-import { DiscordGateway } from './gateway.js';
+import { DiscordGateway, type DiscordGatewayDeps } from './gateway.js';
 import { DiscordInbox } from './inbox.js';
 import { downloadToVault } from './media.js';
 import { startPresence } from './presence.js';
@@ -77,6 +77,13 @@ export type ConnectorDeps = {
   };
   /** Come per Telegram: dove si registra se questa superficie sta rispondendo. */
   salute?: { connessa: (id: string, ora: Date) => void; caduta: (id: string, causa: string, ora: Date) => void };
+  /**
+   * La stessa cucitura che `DiscordGateway` espone gia' ai suoi test, passata
+   * di qui perche' il ponte fra il socket e `salute` sta in questo file: senza,
+   * quelle quattro righe sarebbero l'unico anello della catena provato solo
+   * leggendolo. Assente in produzione, dove si costruisce un WebSocket vero.
+   */
+  wsFactory?: DiscordGatewayDeps['wsFactory'];
   config: DiscordConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -188,10 +195,13 @@ export class DiscordConnector {
   async run(signal?: AbortSignal): Promise<void> {
     const log = this.deps.log ?? (() => {});
     const me = await this.deps.api.me();
-    // Dopo che `me()` ha risposto, mai prima: e' la stessa disciplina della
-    // riga di `connectSurfaces` (N2, judge PR #42), che smise di dire
-    // «connessa» finche' Discord non aveva parlato.
-    this.deps.salute?.connessa('discord', new Date(this.now()));
+    // Nessuna registrazione di salute qui, e la mancanza e' la riparazione:
+    // `me()` che risponde prova che il token vale e che la rete c'e', **non**
+    // che arrivino i messaggi — quelli dipendono dal socket. Dirlo qui e'
+    // costato un ✓ verde su un Discord provatamente morto, perche' `run()` si
+    // risolve anche quando rinuncia (4004/4013/4014) e nessuno lo contraddiceva
+    // piu'. A dire «connessa» e' READY, sotto; `connectSurfaces` ha gia'
+    // dichiarato l'attesa prima di arrivare qui.
     log(`discord: connesso come @${me.username} (${me.id})`);
 
     // Anything left pending from a previous life comes first, before new work.
@@ -225,7 +235,15 @@ export class DiscordConnector {
         // whole pending set once per event.
         if (stored) void this.drain();
       },
+      ...(this.deps.wsFactory === undefined ? {} : { wsFactory: this.deps.wsFactory }),
       onLog: (line) => log(line),
+      // Il battito vero di questa superficie. La `connessa` qui sopra dice
+      // soltanto che `me()` ha risposto una volta; da qui in avanti a parlare
+      // e' il socket, che e' l'unica cosa che porta i messaggi.
+      onStato: (viva, causa) => {
+        if (viva) this.deps.salute?.connessa('discord', new Date(this.now()));
+        else this.deps.salute?.caduta('discord', causa ?? 'gateway giu', new Date(this.now()));
+      },
     });
 
     await this.gateway.run(signal);

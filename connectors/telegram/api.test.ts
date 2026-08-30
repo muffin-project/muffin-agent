@@ -76,7 +76,8 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
    * La cucitura: non basta che il token non esca, deve **uscire la causa**. Con
    * il solo `error.name` questi due casi passavano il controllo sul token e
    * lasciavano al diario la parola «TypeError» e nient'altro — che e'
-   * esattamente cio' che il gateway ha scritto 3187 volte in diciannove ore.
+   * esattamente cio' che il gateway ha scritto 3187 volte, senza che nessuna di
+   * quelle righe dicesse cosa fosse rotto.
    */
   it('call(): il codice della causa arriva fino all errore lanciato', async () => {
     const caduto = new TypeError('fetch failed');
