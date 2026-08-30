@@ -1046,22 +1046,22 @@
   },
   "cli/memory.ts:175": {
     "path": "cli/memory.ts",
-    "line": 177,
+    "line": 179,
     "testo": "// Printed before the early return, because a gap is the answer to a"
   },
   "cli/memory.ts:256": {
     "path": "cli/memory.ts",
-    "line": 288,
+    "line": 290,
     "testo": "total.skippedEmpty += report.skippedEmpty;"
   },
   "cli/memory.ts:28": {
     "path": "cli/memory.ts",
-    "line": 28,
+    "line": 30,
     "testo": "export const MEMORY_USAGE = `usage:"
   },
   "cli/memory.ts:326": {
     "path": "cli/memory.ts",
-    "line": 356,
+    "line": 358,
     "testo": "* `verbose` reveals the judge's raw response on a row it could not read"
   },
   "cli/observe.ts:67": {
