@@ -1,4 +1,5 @@
 import type { TrustTier } from '../policy/types.js';
+import { EmbedderUnavailable } from './embed.js';
 import type { FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
@@ -621,7 +622,25 @@ export async function recall(
     } catch (error) {
       // A missing embedder degrades recall; it must never take the turn down,
       // and it must never pretend the semantic half ran.
-      strategies.push(`vector-non-disponibile(${error instanceof Error ? error.name : 'errore'})`);
+      //
+      // La causa, non la classe. `error.name` sembrava dire qualcosa e non
+      // diceva niente: ogni guasto dell'embedder arriva qui gia' avvolto in
+      // `EmbedderUnavailable`, quindi quel nome era una **costante** — la
+      // stessa parola per ollama giu', per il modello inesistente e per la
+      // rete caduta, che sono i tre casi per cui uno guarda questa riga.
+      // `causa` e' il campo che li separa (`TypeError (ECONNREFUSED)`,
+      // `HTTP 404`, `dimensione 768, attesa 1024`), ed e' gia' costruito in
+      // una forma che non puo' portare l'URL dell'embedder.
+      //
+      // Il ramo `Error` non e' un residuo: questo `try` avvolge anche la
+      // lettura della provenienza, quindi un guasto dello store puo' finire
+      // qui. Per quello il nome della classe e' l'unica cosa vera che si
+      // possa dire — e va detta cosi', senza vestirlo da causa di rete.
+      strategies.push(
+        `vector-non-disponibile(${
+          error instanceof EmbedderUnavailable ? error.causa : error instanceof Error ? error.name : 'errore'
+        })`,
+      );
     }
   } else {
     strategies.push('vector-non-configurato');

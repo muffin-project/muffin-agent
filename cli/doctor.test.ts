@@ -1,6 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -958,6 +959,40 @@ describe("l'indice coerente non dice che l'embedder risponda", () => {
     expect(c?.detail).toContain('in sync');
     rmSync(dir, { recursive: true, force: true });
   });
+
+  /**
+   * Il posto dove l'owner legge davvero la causa. Il difetto era a monte —
+   * `embed.ts` passava `error.message` a `EmbedderUnavailable`, e quando
+   * ollama e' giu' quel messaggio e' la parola `fetch failed` e nient'altro:
+   * questa riga stampava «l'embedder non risponde (embedder "…" non
+   * disponibile: fetch failed)», che dice solo che qualcosa e' fallito.
+   *
+   * Niente `embedderProbe` e niente errore finto: la sonda vera, su una porta
+   * **davvero chiusa** — aperta e richiusa qui sopra, cosi' e' chiusa per
+   * costruzione e non per convenzione. E' la sola forma di questo test che
+   * misuri `ECONNREFUSED` invece di scriverlo. (La porta 1 dell'altro test
+   * non serve: `undici` la rifiuta come «bad port» prima di connettersi, e
+   * quel fallimento non ha `cause.code`.)
+   */
+  it('la riga vector index nomina la causa quando ollama e giu', async () => {
+    const dir = await conIndice();
+    const chiusa = createNetServer();
+    await new Promise<void>((r) => chiusa.listen(0, '127.0.0.1', () => r()));
+    const porta = (chiusa.address() as { port: number }).port;
+    await new Promise<void>((r) => chiusa.close(() => r()));
+
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.embedder = { kind: 'ollama', model: 'qwen3-embedding:0.6b', dimensions: 7, baseUrl: `http://127.0.0.1:${porta}` };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await checkWith(dir, 'vector index', {});
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('ECONNREFUSED');
+    // La riga resta quella che era: la causa si aggiunge, non sostituisce.
+    expect(c?.detail).toContain("l'embedder non risponde");
+    rmSync(dir, { recursive: true, force: true });
+  }, 15_000);
 
   it('avvisa quando i numeri tornano ma l embedder non risponde, e dice perché', async () => {
     const dir = await conIndice();
