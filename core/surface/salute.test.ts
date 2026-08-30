@@ -96,8 +96,9 @@ describe('SaluteSuperfici — quanto dura un guasto, non solo che c e', () => {
 
   /**
    * La distinzione che decide se questa riga vale la pena di essere letta: un
-   * lampo e un guasto di diciannove ore non devono somigliarsi. La durata la
-   * porta `da`, che resta quello del **primo** fallimento della serie.
+   * lampo e un guasto che dura non devono somigliarsi — ed e' la distinzione
+   * che `gateway.err` non poteva fare, contando i fallimenti senza datarli. La
+   * durata la porta `da`, che resta quello del **primo** della serie.
    */
   it('un guasto che dura tiene la sua data di inizio e conta i battiti', () => {
     const s = new SaluteSuperfici();

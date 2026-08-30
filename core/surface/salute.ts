@@ -2,19 +2,25 @@
  * Se una superficie **abilitata** stia rispondendo adesso, e da quando no.
  *
  * Il difetto da cui nasce, misurato sulla macchina dell'owner il 30/08/2026.
- * Telegram e Discord erano abilitate e avevano portato 47 turni veri. Poi, alle
- * 17:08 del 29, il polling ha smesso di funzionare e non e' piu' ripartito: 19
- * ore, zero turni su qualunque superficie, e `muffin doctor` che stampava
+ * Telegram e Discord erano abilitate e avevano portato 47 turni veri. Nell'arco
+ * di vita di una sola istanza del gateway il polling era fallito **3187 volte**,
+ * e la domanda che nessuno poteva rispondere era: e' una tempesta di blip o
+ * un'interruzione? `gateway.err` non lo dice — registra solo i fallimenti, senza
+ * timestamp, quindi conta *quanti* e mai *per quanto*. E `muffin doctor`
+ * stampava, in tutti e due i casi:
  *
  * ```text
  * ✓ gateway    attivo · pid 73344 · dal 29/08/26, 12:30 · in attesa · socket concorde
  * ✓ consegne   nessuna delivery mancante nelle ultime 24h
  * ```
  *
- * Tutte e due vere. **Verdi perche' non arrivava piu' niente**: una superficie
- * che non riceve non produce turni, quindi non produce consegne, quindi non ne
- * mancano. Ogni indicatore guardava a valle del punto in cui il sistema era
- * rotto, e piu' il guasto era completo piu' i numeri sembravano tranquilli.
+ * Tutte e due vere, e **cieche per costruzione**: una superficie che non riceve
+ * non produce turni, quindi non produce consegne, quindi non ne mancano. Piu' il
+ * guasto e' completo, piu' quei numeri sembrano tranquilli — e restano identici
+ * che duri cinque secondi o un giorno.
+ *
+ * Le due cose che mancavano sono esattamente le due che questo registro tiene:
+ * **quanti tentativi di fila** e **da quando**.
  *
  * `connectSurfaces` conosceva gia' meta' del problema — riporta la superficie
  * che *dovrebbe* essere su e non e' partita — ma solo all'avvio. Quello che

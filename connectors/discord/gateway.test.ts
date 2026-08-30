@@ -272,9 +272,10 @@ describe('stop()', () => {
  * su un 4004 (token revocato) o 4013/4014 (intent tolti): e' una scelta
  * dichiarata nell'intestazione di `run()`, e va bene per il tipo. Ma vuol dire
  * che il `.catch` di `connectSurfaces` non scatta mai su quel ramo, e la
- * superficie restava registrata «connessa» dalla stretta di mano d'avvio: 19 ore
- * di Discord muto e `muffin doctor` che stampava `✓ superfici discord —
- * connesse`. Verde perche' non arriva niente, sulla seconda superficie.
+ * superficie restava registrata «connessa» dalla stretta di mano d'avvio: un
+ * Discord muto quanto si vuole, e `muffin doctor` che stampa `✓ superfici
+ * discord — connesse` per tutta la vita del processo. Verde perche' non arriva
+ * niente, sulla seconda superficie.
  */
 describe('il socket dice se sta portando eventi, non solo cosa e successo', () => {
   it('READY e la prova che arrivano i messaggi', async () => {

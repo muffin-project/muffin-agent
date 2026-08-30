@@ -46,9 +46,9 @@ export type FakeTelegram = {
   deliver(update: FakeUpdate): void;
   /**
    * Fa cadere il long poll come cade davvero: la connessione accettata e poi
-   * distrutta, cioe' l'`ECONNRESET` che il gateway dell'owner ha incontrato
-   * 3187 volte fra il 29 e il 30/08. Non un 500: un 500 e' una risposta, e la
-   * classe di guasto da riprodurre e' quella in cui risposta non ce n'e'.
+   * distrutta: la classe di guasto che il gateway dell'owner ha incontrato 3187
+   * volte fra il 29 e il 30/08. Non un 500 — un 500 e' una risposta, e la classe
+   * da riprodurre e' quella in cui risposta non ce n'e'.
    */
   rompi(): void;
   /** E torna a rispondere. */

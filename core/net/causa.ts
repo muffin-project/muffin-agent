@@ -3,13 +3,21 @@
  * segreto.
  *
  * Il difetto da cui nasce, misurato sulla macchina dell'owner il 30/08/2026:
- * dalle 17:08 del giorno prima il gateway aveva scritto **3187 righe identiche**
- * `telegram: polling fallito (Telegram 0: TypeError)` e nient'altro, mentre
- * `api.telegram.org` rispondeva in 300ms. Diciannove ore di guasto continuo, e
- * la sola parola registrata era il nome della classe: «una fetch e' fallita».
- * Non si poteva distinguere DNS, connessione rifiutata, socket caduto e TLS,
- * cioe' non si poteva sapere se il rimedio fosse riavviare, aprire una porta o
- * aspettare.
+ * nell'arco di vita di una sola istanza del gateway (29/08 12:30 → 30/08 12:29)
+ * `gateway.err` aveva raccolto **3187 righe identiche** — `telegram: polling
+ * fallito (Telegram 0: TypeError)` — mentre `api.telegram.org` da quella
+ * macchina rispondeva in 326ms. La sola parola registrata era il nome della
+ * classe: «una fetch e' fallita». Non si poteva distinguere DNS, connessione
+ * rifiutata, socket caduto e TLS, cioe' non si poteva sapere se il rimedio
+ * fosse riavviare, aprire una porta o aspettare.
+ *
+ * Nota su cosa quelle righe **non** dicono, perche' la prima lettura ne aveva
+ * concluso troppo: un successo non scrive niente in quel file, e le righe non
+ * portano un timestamp. Tremilacentottantasette fallimenti dicono *quanti*, mai
+ * *per quanto* — la continuita' di un guasto non si legge in un diario di soli
+ * fallimenti. Ed e' la seconda meta' dello stesso problema: la prima e' che non
+ * si sa **cosa** sia rotto, la seconda che non si sa **da quanto** (vedi
+ * `core/surface/salute.ts`).
  *
  * La ragione per cui quel nome era da solo e' giusta, e resta: l'URL di Telegram
  * porta il **bot token nel path** (Discord lo mette in un header, Telegram no),

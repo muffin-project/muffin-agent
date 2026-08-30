@@ -92,8 +92,12 @@ export type DoctorOptions = {
  * merita di svegliare l'owner. Il battito ritenta ogni 5 secondi, quindi un
  * minuto sono gia' una dozzina di tentativi andati a vuoto — largo abbastanza
  * da non allarmare per un `ECONNRESET` fra due long poll, stretto abbastanza da
- * non lasciar passare in silenzio niente che l'owner chiamerebbe un guasto. Il
- * caso vero da cui nasce tutto questo durava diciannove ore.
+ * non lasciar passare in silenzio niente che l'owner chiamerebbe un guasto.
+ *
+ * La soglia esiste perche' il caso vero non si sapeva classificare: 3187
+ * fallimenti registrati e nessun modo di dire se fossero una tempesta di blip o
+ * un'interruzione, dato che `gateway.err` conta i fallimenti e non li data.
+ * `da` risponde a quella domanda, e questa costante decide dove sta il confine.
  */
 export const GUASTO_DOPO_MS = 60_000;
 
@@ -120,7 +124,7 @@ export function guastoDopoMsDaEnv(raw: string | undefined): number {
  * Da quanto dura uno stato, in parole.
  *
  * Serve a una distinzione sola, ed e quella che decide se la riga vale la pena
- * di essere letta: un lampo di rete e diciannove ore di silenzio non devono
+ * di essere letta: un lampo di rete e un guasto che dura non devono
  * somigliarsi. Grana grossa di proposito — «19 ore» dice tutto quello che
  * serve, «19 ore 3 minuti 12 secondi» chiede al lettore di fare la sottrazione.
  */
