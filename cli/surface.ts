@@ -32,6 +32,7 @@ import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
 import type { Approver } from '../agent/loop.js';
 import { escapeHtml } from '../connectors/telegram/render.js';
+import { SaluteSuperfici } from '../core/surface/salute.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -486,8 +487,20 @@ export function connectSurfaces(
    * la stessa cosa che vale già per `wait`.
    */
   onWork?: () => void,
-): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver } {
+): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver; salute: SaluteSuperfici } {
   const lines: string[] = [];
+  /**
+   * Chi sta rispondendo, adesso.
+   *
+   * Le righe qui sotto raccontano **l'avvio** e poi tacciono per sempre: e' il
+   * caso opposto quello che nessuno sapeva vedere — connessa all'avvio e poi
+   * caduta, con `doctor` che restava verde sia durante un blip sia durante
+   * un'interruzione, perche' guardava il processo e non la superficie. Questo
+   * registro lo tengono aggiornato i connettori mentre girano, e il socket di
+   * controllo lo serve a `doctor`.
+   */
+  const salute = new SaluteSuperfici();
+  const adesso = (): Date => new Date();
   const stops: (() => void)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
   /**
@@ -519,6 +532,7 @@ export function connectSurfaces(
       // surface has to be up to receive the code. What it must not do is treat
       // anyone as the owner while it waits.
       if (ownerUserId === undefined && tg?.pairing === undefined) {
+        salute.caduta('telegram', 'abilitata ma senza owner', adesso(), '`muffin surface enable telegram`');
         lines.push('telegram: abilitata ma senza owner — `muffin surface enable telegram`');
       } else {
         const base = tg?.apiBase;
@@ -547,6 +561,7 @@ export function connectSurfaces(
           // quindi non c'è niente da gestire quando tornano.
           ...(runtime.deps.approvals === undefined ? {} : { approvals: runtime.deps.approvals }),
           ...(onWork === undefined ? {} : { onWork }),
+          salute,
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
@@ -584,8 +599,15 @@ export function connectSurfaces(
         // Same process, background. A crash of the surface is reported and does
         // not take the REPL down: the terminal is the surface of last resort,
         // and it stays up when the others fall over.
+        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
+        // e il primo battito passano fino a due minuti se la rete e' lenta, e
+        // in quella finestra l'assenza di una riga non deve poter essere letta
+        // come «non e' stata nemmeno tentata».
+        salute.inAvvio('telegram', adesso());
         void connector.run().catch((error: unknown) => {
-          process.stderr.write(`\rtelegram: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
+          const causa = error instanceof Error ? error.message : String(error);
+          salute.caduta('telegram', causa, adesso());
+          process.stderr.write(`\rtelegram: caduta — ${causa}\n`);
         });
         stops.push(() => connector.stop());
         // The door for the lane. Registered next to the connector that owns it,
@@ -607,6 +629,14 @@ export function connectSurfaces(
         );
       }
     } catch (error) {
+      // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
+      // gateway» e un segreto che manca non si ripara riavviando.
+      salute.caduta(
+        'telegram',
+        `non parte — ${(error as ConfigError).message}`,
+        adesso(),
+        'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
+      );
       lines.push(`telegram: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
   }
@@ -617,6 +647,7 @@ export function connectSurfaces(
       const dc = runtime.config.surfaces.discord;
       const ownerUserId = dc?.ownerUserId;
       if (ownerUserId === undefined && dc?.pairing === undefined) {
+        salute.caduta('discord', 'abilitata ma senza owner', adesso(), '`muffin surface enable discord`');
         lines.push('discord: abilitata ma senza owner — `muffin surface enable discord`');
       } else {
         const api = new DiscordApi(token);
@@ -629,6 +660,7 @@ export function connectSurfaces(
           inbox,
           api,
           vault: discordVault(runtime, vaultRoot),
+          salute,
           config: {
             token,
             ...(ownerUserId === undefined ? {} : { ownerUserId }),
@@ -654,8 +686,15 @@ export function connectSurfaces(
           log: (line) => process.stderr.write(`\r${line}\n`),
         });
 
+        // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
+        // e il primo battito passano fino a due minuti se la rete e' lenta, e
+        // in quella finestra l'assenza di una riga non deve poter essere letta
+        // come «non e' stata nemmeno tentata».
+        salute.inAvvio('discord', adesso());
         void connector.run().catch((error: unknown) => {
-          process.stderr.write(`\rdiscord: caduta — ${error instanceof Error ? error.message : String(error)}\n`);
+          const causa = error instanceof Error ? error.message : String(error);
+          salute.caduta('discord', causa, adesso());
+          process.stderr.write(`\rdiscord: caduta — ${causa}\n`);
         });
         stops.push(() => connector.stop());
         surfaces.push(discordSurface(api, ownerUserId));
@@ -675,12 +714,21 @@ export function connectSurfaces(
         );
       }
     } catch (error) {
+      // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
+      // gateway» e un segreto che manca non si ripara riavviando.
+      salute.caduta(
+        'discord',
+        `non parte — ${(error as ConfigError).message}`,
+        adesso(),
+        'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
+      );
       lines.push(`discord: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
   }
 
   return {
     lines,
+    salute,
     stop: () => stops.forEach((s) => s()),
     registry: new SurfaceRegistry(surfaces),
     /**

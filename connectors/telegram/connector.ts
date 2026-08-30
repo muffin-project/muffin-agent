@@ -163,6 +163,14 @@ export type ConnectorDeps = {
    * su una riga sono la corsa che il claim esiste per arbitrare.
    */
   onWork?: () => void;
+  /**
+   * Dove si registra se questa superficie sta rispondendo, e da quando no.
+   *
+   * Opzionale perche' un test che gira il connettore non deve costruirne uno,
+   * e perche' il REPL non ha nessuno a cui raccontarlo: il socket di controllo
+   * che serve la risposta lo apre il gateway. Chi lo passa e' `connectSurfaces`.
+   */
+  salute?: { connessa: (id: string, ora: Date) => void; caduta: (id: string, causa: string, ora: Date) => void };
   config: TelegramConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -609,13 +617,14 @@ export class TelegramConnector {
       } catch (error) {
         if (shouldStop()) return;
         const wait = backoffMs(attempt);
-        log(
-          `telegram: connessione fallita (${error instanceof Error ? error.message : String(error)}) — riprovo fra ${Math.round(wait / 1000)}s`,
-        );
+        const causa = error instanceof Error ? error.message : String(error);
+        this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
+        log(`telegram: connessione fallita (${causa}) — riprovo fra ${Math.round(wait / 1000)}s`);
         await this.sleep(wait, signal);
       }
     }
     this.meId = me.id;
+    this.deps.salute?.connessa('telegram', new Date(this.now()));
     log(`telegram: connesso come @${me.username ?? me.id}`);
     await this.publishCommands(log);
 
@@ -629,18 +638,28 @@ export class TelegramConnector {
       // one. Same rule as `drain`'s own per-update `try` — report, continue.
       try {
         const updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset());
+        // Dopo la chiamata, non prima: un battito e' riuscito quando la
+        // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
+        // e' lavoro nostro, non la prova che Telegram risponde.
+        this.deps.salute?.connessa('telegram', new Date(this.now()));
         if (updates.length > 0) {
           const { stored, duplicates } = this.deps.inbox.accept(updates, this.now());
           if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
           if (stored > 0) await this.drain();
         }
       } catch (error) {
+        // Registrato prima di scegliere come dirlo: un 409 che dura e' un
+        // guasto quanto una rete che non risponde — due gateway sullo stesso
+        // token, e nessuno dei due riceve niente. E' la durata a distinguerlo
+        // dal 409 di mezzo secondo mentre il processo di prima se ne va.
+        const causa = error instanceof Error ? error.message : String(error);
+        this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
         if (error instanceof TelegramError && error.status === 409) {
           // Another poller holds the token — usually the previous process not
           // yet gone. Waiting is the correct move; racing it is not.
           log('telegram: 409, un altro getUpdates è attivo — attendo');
         } else {
-          log(`telegram: polling fallito (${error instanceof Error ? error.message : String(error)})`);
+          log(`telegram: polling fallito (${causa})`);
         }
         await this.sleep(5000, signal);
       }

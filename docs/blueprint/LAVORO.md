@@ -14,57 +14,66 @@ vista vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 **Il gate.** `npm run gate:local`: clone di HEAD **fuori** dal repository, `npm
 ci`, typecheck, build, suite, accettazione, e `gate-linux.sh` in Docker. Il
 verde si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». La CI di GitHub
-è rossa per **fatturazione** — i job muoiono in 2s senza eseguire niente.
+è rossa per **fatturazione**: i job muoiono in 2s senza eseguire niente, quindi
+il gate locale è l'unica prova.
 
-## Due PR, verdi, che aspettano un merge tuo
+## Il telefono ora dice quando smette
 
-Impilate: **#260 va mergiata per prima** (#261 usa `causaDiRete`, che esiste
-solo lì). **Non cancellare `slice/causa-di-rete` al merge**, o #261 si chiude a
-cascata.
+`surfaces.enabled = ["cli","telegram","discord"]`, owner id su entrambe: 44
+turni Telegram e 3 Discord nel db. Funziona, e da #260/#261 si sa **quando**
+smette di funzionare.
 
-- **#260** `LOCAL-GATE PASS @ a2d3572` — il log di Telegram dice la *causa*
-  (`cause.code`, mai `.message`: l'URL porta il token), e `doctor` guarda la
-  **superficie** invece del processo. Tre giri di judge, il terzo chiuso
-  dall'orchestratore per la regola anti-cerimonia.
-- **#261** `LOCAL-GATE PASS @ 1cbca48` — la stessa cosa per l'embedder:
-  `embed.ts` buttava `cause.code` e consegnava la parola `fetch failed`.
+Prima non si sapeva: in una sola vita del gateway `gateway.err` aveva raccolto
+**3187 righe identiche** — e quel file registra solo i fallimenti e non li data,
+quindi dice *quanti*, mai *per quanto*. **Non concluderne una durata:** il 30/08
+l'ho fatto e mi sono sbagliato, deducendo 19 ore di silenzio che non c'erano
+state.
 
-`integrazione/tre-slice` (note vocali/whisper, 68 commit indietro) è spinta su
-origin come checkpoint: non è una PR, non è morta.
+Cosa è chiuso: il log dice la **causa** (`cause.code`, mai `.message` — l'URL
+porta il token), sia per Telegram che per l'embedder; e `doctor` guarda la
+**superficie**, non il processo, con i tre silenzi limitati (connessa, caduta,
+in avvio da troppo).
 
 ## Le decisioni dell'owner
 
-**Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
+**Instradamento: deciso** — `routing.only: ["alibaba"]` con `dataCollection:
 "deny"`. Restano aperte: **`muffin rot harden`** (serve `sudo`; finché non è
-fatto `sys.shell` chiede *sempre* conferma) e **C8, note vocali** (se la tua
-voce esce di casa). Mancano **chiave Tavily** e **billing CI**.
+fatto `sys.shell` chiede *sempre* conferma) e **C8, note vocali** (whisper.cpp
+locale o API: se la tua voce esce di casa). Mancano **chiave Tavily** (senza,
+`web_search` non si registra) e **billing CI**.
 
-Il binario installato è `3ae9595` del 28/08: dietro a tutto il 30/08.
-`dev` è avanti a `main`; la promozione è una PR che mergi tu.
+`integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
+checkpoint: non è una PR, non è morta.
 
 ## Parcheggiato: come arriva una richiesta che non si fa adesso
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
-forma. In breve: **`jobs` non ha un tool**, per nessuno e a nessun taint (solo
-`muffin jobs add`), e il modello interrogato ha spiegato l'assenza come una
-policy di taint che non esiste. `wait` è stato chiamato **1** volta, `todo` 2, i
-7 todo sono fermi dal 27/08 e sono invisibili fuori dalla loro sessione. **44
-fatti attivi su 83** sono `asked_to`/`asks_to`: «dimmi solo: tre» sta nello
-stesso mucchio delle due richieste davvero pendenti. ANANAS non si recupera
-perché nessuna somiglianza trova un'istruzione che il messaggio dopo non nomina.
+forma, perché il tema tocca insieme work/todo, memoria, esposizione dei tool e
+person model.
+
+In breve: **`jobs` non ha un tool**, per nessuno e a nessun taint (solo `muffin
+jobs add`), e il modello interrogato ha spiegato l'assenza come una policy di
+taint che non esiste. `wait` è stato chiamato **1** volta, `todo` 2, i 7 todo
+sono fermi dal 27/08 e invisibili fuori dalla loro sessione. **44 fatti attivi
+su 83** sono `asked_to`/`asks_to`: «dimmi solo: tre» sta nello stesso mucchio
+delle due richieste davvero pendenti. ANANAS non si recupera perché nessuna
+somiglianza trova un'istruzione che il messaggio dopo non nomina — riparare
+Ollama non c'entra.
 
 Il tetto dei tool **non** è più il problema: `0d519cb` l'ha portato a 15 e
-`doctor` non stampa più niente. Quel reperto è morto — non ripartire da lì.
+`doctor` non stampa più niente. Quel reperto è morto: non ripartire da lì.
 
 ## Aperto, non bloccante
 
 **Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il kernel
 rifiuta alla chiamata e il modello impara per rifiuto — incluso il tetto di
-taint. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
+taint, per cui «leggi, calcola, scrivi» è rifiutato *sempre* senza che nessuno
+gli dica perché. Codex rende `<permission_profile>`, OpenClaw `## Authorized
+Senders`.
 
 **Altro:** community è solo una forma di stringa; `pricing.ts` sottostima 5
-famiglie su 8; socket v2; `recall.ts:624` avvolge anche la lettura della
-provenienza.
+famiglie su 8; socket v2; il `try` di `recall.ts` avvolge anche la lettura della
+provenienza, quindi un guasto dello store si traveste da causa di rete.
 
 **Truth maintenance:** M5-BIS possiede status Gate, PERCORSO §0 l'ordine.
 `STATE.md` è cronologia, non stato corrente.

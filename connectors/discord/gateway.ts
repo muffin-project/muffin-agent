@@ -83,6 +83,26 @@ export type DiscordGatewayDeps = {
   gatewayUrl: () => Promise<string>;
   onDispatch: (event: string, data: unknown, sequence: number) => void;
   onLog?: (line: string) => void;
+  /**
+   * Se il socket sta portando eventi, adesso.
+   *
+   * Separato da `onLog` perche' una riga di diario e una risposta a «questa
+   * superficie e' viva?» sono due cose diverse, e per Discord la differenza
+   * costava caro: `run()` **si risolve** sia quando si e' chiesto `stop()` sia
+   * quando rinuncia su un 4004 (token revocato) o 4013/4014 (intent tolti), per
+   * scelta dichiarata qui sopra. Chi guarda dall'esterno vede una promise che
+   * si chiude bene, quindi il `.catch` di `connectSurfaces` non scatta mai: la
+   * superficie restava registrata connessa dalla stretta di mano d'avvio, e
+   * `muffin doctor` stampava «connesse» per tutta la vita del processo mentre
+   * il connettore aveva gia' scritto nel diario di aver rinunciato. Stessa
+   * forma di verde-perche'-non-arriva-niente che questa slice esiste per
+   * togliere, sulla seconda superficie.
+   *
+   * Chiamata su READY/RESUMED e su ogni chiusura o fallimento — anche quelli da
+   * cui si riprova, perche' e' la **durata** a distinguere un blip da un
+   * guasto, e quella la misura chi legge.
+   */
+  onStato?: (connessa: boolean, causa?: string) => void;
   now?: () => Date;
   wsFactory?: (url: string) => WebSocketLike;
   sleep?: (ms: number) => Promise<void>;
@@ -156,12 +176,14 @@ export class DiscordGateway {
   private running = false;
   private stopRequested = false;
   private readonly log: (line: string) => void;
+  private readonly stato: (connessa: boolean, causa?: string) => void;
   private readonly now: () => Date;
   private readonly wsFactory: (url: string) => WebSocketLike;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: DiscordGatewayDeps) {
     this.log = deps.onLog ?? (() => {});
+    this.stato = deps.onStato ?? (() => {});
     this.now = deps.now ?? (() => new Date());
     this.wsFactory = deps.wsFactory ?? ((url) => new WebSocket(url) as unknown as WebSocketLike);
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -198,8 +220,13 @@ export class DiscordGateway {
 
         const action = nextAction(closeCode);
         this.log(`discord: gateway chiuso (${closeCode}) — ${action.why}`);
+        this.stato(false, `gateway chiuso (${closeCode}) — ${action.why}`);
         if (!action.reconnect) {
           this.log('discord: non riprovo — serve intervento (token, intent o config)');
+          // Il ramo che rende la promise indistinguibile da uno stop voluto.
+          // Chi legge deve poter distinguerli, e questa e' l'unica riga che
+          // glielo dice.
+          this.stato(false, `non riprovo — ${action.why} (serve intervento: token, intent o config)`);
           return;
         }
         if (!action.resume) {
@@ -208,7 +235,9 @@ export class DiscordGateway {
         }
       } catch (error) {
         if (this.stopRequested) return;
-        this.log(`discord: connessione fallita — ${error instanceof Error ? error.message : String(error)}`);
+        const causa = error instanceof Error ? error.message : String(error);
+        this.log(`discord: connessione fallita — ${causa}`);
+        this.stato(false, `connessione fallita — ${causa}`);
       }
 
       attempt += 1;
@@ -317,6 +346,7 @@ export class DiscordGateway {
             return;
           }
           case OP.DISPATCH: {
+            if (envelope.t === 'READY' || envelope.t === 'RESUMED') this.stato(true);
             if (envelope.t === 'READY') {
               const ready = envelope.d as { session_id?: string; resume_gateway_url?: string } | undefined;
               this.sessionId = ready?.session_id ?? this.sessionId;
