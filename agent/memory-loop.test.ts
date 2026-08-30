@@ -147,11 +147,16 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
 
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 
-const turn = (h: ReturnType<typeof harness>, text: string, principal: Principal = owner) => ({
+const turn = (
+  h: ReturnType<typeof harness>,
+  text: string,
+  principal: Principal = owner,
+  session = 's1',
+) => ({
   principal,
   tenant: principal.kind === 'member' ? principal.tenantId : 'host',
   surface: 'cli',
-  session: h.sessions.open('s1'),
+  session: h.sessions.open(session),
   text,
 });
 
@@ -171,7 +176,13 @@ describe('memory wired into the loop', () => {
   it('puts what it recalled in front of the model, labelled and delimited', async () => {
     const h = harness([answer('ok'), answer('è ZK-4417')]);
     await runTurn(h.deps, turn(h, 'il codice del deposito è ZK-4417'));
-    await runTurn(h.deps, turn(h, 'qual era il codice del deposito?'));
+    // Un altro thread, e non lo stesso: da quando gli episodi portano il turno
+    // che li ha scritti, un turno non ripesca cio che la propria history gia
+    // riporta parola per parola. Nello stesso thread questa domanda avrebbe la
+    // risposta davanti *senza* memoria, e il blocco MEMORIA_ resterebbe vuoto —
+    // che e il comportamento voluto, non un buco. Il caso «stesso thread, ma
+    // fuori dalla finestra» ha un test suo in `memory-lineage.test.ts`.
+    await runTurn(h.deps, turn(h, 'qual era il codice del deposito?', owner, 's2'));
 
     const shown = h.provider.seen.join('\n');
     expect(shown).toContain('MEMORIA_');
