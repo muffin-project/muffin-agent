@@ -843,6 +843,50 @@ export type TurnResult = {
 export const MAX_RESUMES = 3;
 
 /**
+ * Questa ripresa spende il budget, o no?
+ *
+ * `MAX_RESUMES` e un circuit breaker su una **recovery che continua a uccidere
+ * il processo**, non un tetto a quante volte un turno lungo puo legittimamente
+ * aspettare. `resumed` da solo non lo distingue: dice «questo turno era gia
+ * partito», che e vero tanto per un crash quanto per un `wait` andato a buon
+ * fine. Misurato in dogfood il 29/08/2026: un turno che aspetta quattro volte
+ * muore col messaggio dei crash, e all owner quel turno non e mai andato storto
+ * — ha solo aspettato lui.
+ *
+ * `wokenFromWait` e il discriminante, e viaggia gia fin qui per un altro
+ * motivo: la barriera (`waitFor`/`wakeAt`) e ancora sulla riga quando la si
+ * legge, perche e `claim` a spegnerla. Un timer e un'approvazione la scrivono
+ * entrambi, quindi copre tutte e due le sospensioni volute.
+ *
+ * **Il bound resta un bound**, ed e la parte da leggere due volte prima di
+ * toccarla: una riga uccisa mentre girava torna `interrupted`, senza barriera,
+ * quindi ogni recovery paga come prima e il contatore resta **monotono**
+ * attraverso i crash. E la ragione per cui questa e una regola qui e non un
+ * `resumes: 0` dentro `TurnStore.suspend` (la forma proposta in #241):
+ * azzerare a ogni sospensione riuscita cancella anche l'evidenza dei crash che
+ * stanno in mezzo, e un turno che alterna sospensione e crash non scatterebbe
+ * mai. `agent/resume-checkpoint-budget.test.ts` tiene ferme tutte e due le
+ * meta, e la seconda muore se si reintroduce quell'azzeramento.
+ *
+ * E la stessa semantica dei runtime di durable execution, dove il tetto ai
+ * tentativi conta i **fallimenti**: timer e signal sospendono senza consumarlo
+ * (Temporal, retry policies — "maximum number of execution attempts *in the
+ * presence of failures*").
+ *
+ * Perche non riusare `resumed` restringendolo: quel flag ha un secondo
+ * consumatore, la riparazione del transcript (`else if (options.resumed ===
+ * true)`), che ricuce un `tool_use` rimasto senza `tool_result` ed emette il
+ * rapporto di risveglio. Sono due domande diverse — «questo turno riparte» e
+ * «questa ripresa e sospetta» — e collassarle su un flag solo fa saltare la
+ * riparazione a ogni risveglio voluto. Provato: restringere `resumed` rende
+ * rossi cinque test fra `suspend-resume`, `approvazione-differita` e
+ * `lane-wiring`.
+ */
+export function spendeIlBudget(resumed: boolean, wokenFromWait: boolean): boolean {
+  return resumed && !wokenFromWait;
+}
+
+/**
  * `max(the principal's own tier, whatever content-taint the caller measured)`
  * — the one formula `enqueueTurn`, `runTurn` and the episode/session writes
  * inside `drive` all have to agree on. Before `TurnInput.contentTaint`
@@ -1061,6 +1105,7 @@ export async function resumeTurn(
    */
   const firstAttempt = existing.status === 'runnable' && !existing.counters.contextBuilt;
 
+
   const record = deps.turns.claim(turnId, process.pid, (deps.now ?? (() => new Date()))());
   if (record === null) {
     // Not an error: two lanes over one database is the normal case for the
@@ -1117,7 +1162,7 @@ export async function resumeTurn(
       [ATTR.turnId]: record.id,
       // What the counter will be after this attempt, so a trace of a first
       // execution reads 0 rather than claiming a resume that did not happen.
-      [ATTR.turnResume]: record.counters.resumes + (firstAttempt ? 0 : 1),
+      [ATTR.turnResume]: record.counters.resumes + (spendeIlBudget(!firstAttempt, wasWaiting) ? 1 : 0),
     },
     // A remote parent: the record's id *is* the trace id of the turn's first
     // span, so a resume is a child of the trace it belongs to rather than a
@@ -1281,7 +1326,9 @@ async function drive(
   let nudgedForCompletion = record.counters.nudgedForCompletion;
   let iterations = record.counters.iterations;
   let contextBuilt = record.counters.contextBuilt;
-  const resumes = record.counters.resumes + (options.resumed === true ? 1 : 0);
+  const resumes =
+    record.counters.resumes +
+    (spendeIlBudget(options.resumed === true, options.wokenFromWait === true) ? 1 : 0);
   const counters = (): TurnCounters => ({
     iterations,
     recoveriesUsed,

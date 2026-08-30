@@ -326,7 +326,13 @@ describe('B3 · un turno sospeso si risveglia dalla corsia del gateway', () => {
 
     expect(done.status).toBe('done');
     expect(done.delivery).toBe('sent');
-    expect(done.counters.resumes).toBe(1);
+    expect(done.counters.resumes).toBe(0);
+    // **Zero**, come la riga sopra e per la stessa ragione, scritta li dentro:
+    // questo risveglio e la scadenza di un `wait` che il turno ha chiesto lui.
+    // `MAX_RESUMES` conta le *recovery*, non le attese — un turno che aspetta
+    // quattro volte non e un crash loop, e prima di questa riga moriva col
+    // messaggio dei crash. Un risveglio dopo un crash continua a pagare: lo
+    // tiene fermo B5, qui sotto, che asserisce ancora 1.
   });
 });
 
