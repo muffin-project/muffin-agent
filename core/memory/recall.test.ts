@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import type { Embedder } from './embed.js';
+import { EmbedderUnavailable, type Embedder } from './embed.js';
 import { sweepDuplicates } from './maintenance.js';
 import { checkTemporalWindow, EVERY_INSTANT, MAX_CONTEXT_ITEMS, recall, recallTaint, renderForPrompt } from './recall.js';
 import { RERANK_MIN_CANDIDATES, type Reranker } from './rerank.js';
@@ -176,6 +176,68 @@ describe('recall', () => {
     const result = await recall({ store }, HOST, 'qualcosa');
     // Degrading is fine; degrading silently is not.
     expect(result.strategies).toContain('vector-non-configurato');
+  });
+
+  /**
+   * «Non ha girato» e «non ha girato *perche'*» sono due frasi diverse, e per
+   * anni questa riga ha detto solo la prima. La stringa registrata era
+   * `vector-non-disponibile(EmbedderUnavailable)` — una **costante**: ogni
+   * embedder che fallisce alza quella classe, quindi il nome non separava
+   * ollama giu' dal modello inesistente dalla rete caduta. Il nome della
+   * classe di `fetch` non c'entrava nemmeno: `embed.ts` aveva gia' avvolto
+   * l'errore molto prima di qui.
+   *
+   * Cio' che distingue i tre casi e' la causa che `EmbedderUnavailable`
+   * porta con se', e questo blocco e' l'unico posto che la stampa a chi
+   * guarda un turno.
+   */
+  it('dice quale guasto ha spento la meta semantica, non solo che e spenta', async () => {
+    const { store } = harness(false);
+    episode(store, 'qualcosa');
+    const spento = {
+      search: () => {
+        throw new EmbedderUnavailable('ollama:qwen3-embedding:0.6b', 'TypeError (ECONNREFUSED)');
+      },
+    } as unknown as VectorIndex;
+
+    const result = await recall({ store, vectors: spento }, HOST, 'qualcosa');
+    expect(result.strategies).toContain('vector-non-disponibile(TypeError (ECONNREFUSED))');
+    // Il caso opposto, quello che la costante rendeva indistinguibile.
+    const assente = {
+      search: () => {
+        throw new EmbedderUnavailable('ollama:qwen3-embedding:0.6b', 'HTTP 404');
+      },
+    } as unknown as VectorIndex;
+    const altro = await recall({ store, vectors: assente }, HOST, 'qualcosa');
+    expect(altro.strategies).toContain('vector-non-disponibile(HTTP 404)');
+  });
+
+  it('un guasto che non e dell embedder non si traveste da guasto di rete', async () => {
+    // Questo `try` avvolge anche la lettura della provenienza: un errore dello
+    // store finiva — e finisce — etichettato «vector-non-disponibile». Finche'
+    // e' cosi', almeno non deve raccontare una causa di rete che non c'e'.
+    const { store } = harness(false);
+    episode(store, 'qualcosa');
+    const rotto = {
+      search: () => {
+        throw new RangeError('indice fuori scala');
+      },
+    } as unknown as VectorIndex;
+    const result = await recall({ store, vectors: rotto }, HOST, 'qualcosa');
+    expect(result.strategies).toContain('vector-non-disponibile(RangeError)');
+
+    // E il caso che separa davvero questa scelta da `causaDiRete`: su
+    // qualcosa che non e' nemmeno un `Error`, `causaDiRete` risponde «errore
+    // di rete» — che per un guasto arrivato da questo `try` e' un'ipotesi,
+    // non una misura. Qui l'unica cosa vera e' che non si sa.
+    const assurdo = {
+      search: () => {
+        throw 'boom';
+      },
+    } as unknown as VectorIndex;
+    const ignoto = await recall({ store, vectors: assurdo }, HOST, 'qualcosa');
+    expect(ignoto.strategies).toContain('vector-non-disponibile(errore)');
+    expect(ignoto.strategies.join(' ')).not.toContain('errore di rete');
   });
 
   it('brings the facts about a named entity along', async () => {
