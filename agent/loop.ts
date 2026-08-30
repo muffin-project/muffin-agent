@@ -81,6 +81,20 @@ export type ToolContext = {
    */
   taint: () => TrustTier;
   /**
+   * Come `taint`, ma il tetto tolto: cosa questo turno ha realmente prodotto o
+   * osservato, mai un tetto ereditato da una storia reiniettata o da un piano
+   * aperto (`PermissionSnapshot.intrinsicTaint`, ADR-0044 §Riconciliazione
+   * 2026-08-28).
+   *
+   * Esiste per un solo chiamante, `agent/tools/todo.ts`: una riga scritta in
+   * una tabella che sopravvive al turno non può stampare il tetto ereditato,
+   * o la finestra di reiniezione del taint non si richiude mai (esattamente
+   * il difetto che quella riconciliazione ha chiuso per `historyTaint`, qui
+   * per `planTaint`). Ogni altro handler resta su `taint()` — il tetto è
+   * ciò che un gate a metà turno deve vedere, non ciò che sta per scrivere.
+   */
+  intrinsicTaint: () => TrustTier;
+  /**
    * **Il file già risolto** che questa chiamata sta per toccare, quando il
    * kernel ha giudicato `draft` e il registro di undo ne ha appena preso la
    * copia. Assente per ogni altro verdetto.
@@ -744,8 +758,14 @@ export type TurnEvent =
    * mai su cosa: sette `memory_search` con sette query diverse stampavano sette
    * righe identiche («✓ cerco in memoria»), e a schermo si legge come un giro a
    * vuoto. Non lo era — misurato sul WAL il 28/08/2026, sette `args_digest`
-   * diversi, e nell'intero store non esiste una sola coppia (tool, args)
-   * ripetuta. Il difetto era la riga, non il loop.
+   * diversi. Il difetto era la riga, non il loop.
+   *
+   * La seconda meta di quella misura — «nell'intero store non esiste una sola
+   * coppia (tool, args) ripetuta» — **non vale piu**, ed e stata tolta invece
+   * che lasciata a dire di no a chi la rilegge. Sul `muffin.db` dell'owner il
+   * 30/08/2026 il turno a747ae67 (del 28/08 stesso) ne ha quattro, con
+   * risultati byte-identici. Il giro a vuoto esiste, ed e per quello che
+   * `runTool` guarda `identicalCallsDone`.
    *
    * Il loop li passa e basta: **quale** campo valga la pena mostrare, e come
    * accorciarlo, è una decisione di chi disegna — la stessa ragione per cui la
@@ -827,6 +847,50 @@ export type TurnResult = {
  * not about the infrastructure.
  */
 export const MAX_RESUMES = 3;
+
+/**
+ * Questa ripresa spende il budget, o no?
+ *
+ * `MAX_RESUMES` e un circuit breaker su una **recovery che continua a uccidere
+ * il processo**, non un tetto a quante volte un turno lungo puo legittimamente
+ * aspettare. `resumed` da solo non lo distingue: dice «questo turno era gia
+ * partito», che e vero tanto per un crash quanto per un `wait` andato a buon
+ * fine. Misurato in dogfood il 29/08/2026: un turno che aspetta quattro volte
+ * muore col messaggio dei crash, e all owner quel turno non e mai andato storto
+ * — ha solo aspettato lui.
+ *
+ * `wokenFromWait` e il discriminante, e viaggia gia fin qui per un altro
+ * motivo: la barriera (`waitFor`/`wakeAt`) e ancora sulla riga quando la si
+ * legge, perche e `claim` a spegnerla. Un timer e un'approvazione la scrivono
+ * entrambi, quindi copre tutte e due le sospensioni volute.
+ *
+ * **Il bound resta un bound**, ed e la parte da leggere due volte prima di
+ * toccarla: una riga uccisa mentre girava torna `interrupted`, senza barriera,
+ * quindi ogni recovery paga come prima e il contatore resta **monotono**
+ * attraverso i crash. E la ragione per cui questa e una regola qui e non un
+ * `resumes: 0` dentro `TurnStore.suspend` (la forma proposta in #241):
+ * azzerare a ogni sospensione riuscita cancella anche l'evidenza dei crash che
+ * stanno in mezzo, e un turno che alterna sospensione e crash non scatterebbe
+ * mai. `agent/resume-checkpoint-budget.test.ts` tiene ferme tutte e due le
+ * meta, e la seconda muore se si reintroduce quell'azzeramento.
+ *
+ * E la stessa semantica dei runtime di durable execution, dove il tetto ai
+ * tentativi conta i **fallimenti**: timer e signal sospendono senza consumarlo
+ * (Temporal, retry policies — "maximum number of execution attempts *in the
+ * presence of failures*").
+ *
+ * Perche non riusare `resumed` restringendolo: quel flag ha un secondo
+ * consumatore, la riparazione del transcript (`else if (options.resumed ===
+ * true)`), che ricuce un `tool_use` rimasto senza `tool_result` ed emette il
+ * rapporto di risveglio. Sono due domande diverse — «questo turno riparte» e
+ * «questa ripresa e sospetta» — e collassarle su un flag solo fa saltare la
+ * riparazione a ogni risveglio voluto. Provato: restringere `resumed` rende
+ * rossi cinque test fra `suspend-resume`, `approvazione-differita` e
+ * `lane-wiring`.
+ */
+export function spendeIlBudget(resumed: boolean, wokenFromWait: boolean): boolean {
+  return resumed && !wokenFromWait;
+}
 
 /**
  * `max(the principal's own tier, whatever content-taint the caller measured)`
@@ -1047,6 +1111,7 @@ export async function resumeTurn(
    */
   const firstAttempt = existing.status === 'runnable' && !existing.counters.contextBuilt;
 
+
   const record = deps.turns.claim(turnId, process.pid, (deps.now ?? (() => new Date()))());
   if (record === null) {
     // Not an error: two lanes over one database is the normal case for the
@@ -1103,7 +1168,7 @@ export async function resumeTurn(
       [ATTR.turnId]: record.id,
       // What the counter will be after this attempt, so a trace of a first
       // execution reads 0 rather than claiming a resume that did not happen.
-      [ATTR.turnResume]: record.counters.resumes + (firstAttempt ? 0 : 1),
+      [ATTR.turnResume]: record.counters.resumes + (spendeIlBudget(!firstAttempt, wasWaiting) ? 1 : 0),
     },
     // A remote parent: the record's id *is* the trace id of the turn's first
     // span, so a resume is a child of the trace it belongs to rather than a
@@ -1267,7 +1332,9 @@ async function drive(
   let nudgedForCompletion = record.counters.nudgedForCompletion;
   let iterations = record.counters.iterations;
   let contextBuilt = record.counters.contextBuilt;
-  const resumes = record.counters.resumes + (options.resumed === true ? 1 : 0);
+  const resumes =
+    record.counters.resumes +
+    (spendeIlBudget(options.resumed === true, options.wokenFromWait === true) ? 1 : 0);
   const counters = (): TurnCounters => ({
     iterations,
     recoveriesUsed,
@@ -1304,6 +1371,7 @@ async function drive(
     turnId: record.id,
     sessionId: input.session.id,
     taint: () => snapshot.currentTaint(),
+    intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
       barrier = spec;
     },
@@ -1332,6 +1400,34 @@ async function drive(
   turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
 
   if (!contextBuilt) {
+    /**
+     * La finestra di history, letta **prima** del recall e non dopo.
+     *
+     * E lo stesso taglio che `buildContext` renderizza piu sotto — calcolato
+     * una volta sola perche i due non possano mai dissentire su cosa voglia
+     * dire "reinjected" (`agent/context/history-taint.ts`). Sale qui, e non
+     * cambia di contenuto salendo: la riga dell owner di questo turno viene
+     * appesa alla sessione piu sotto, quindi `spoken` non l ha mai vista.
+     *
+     * Cosa ci guadagna il recall: i `traceId` che questa finestra porta sono
+     * esattamente i turni che il modello ha gia davanti, e sono cio che il
+     * recall deve smettere di ripescare.
+     */
+    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
+    /**
+     * I turni gia nel contesto: quelli della finestra, piu **questo**.
+     *
+     * `record.id` e nell elenco perche gli episodi di questo turno sono gia
+     * scritti quando il recall gira — quello dell owner un attimo fa, e al
+     * resume anche quello dell agente. Ripescarli sarebbe far rileggere al
+     * modello cio che ha appena detto come se qualcun altro l avesse
+     * confermato.
+     */
+    const turniInContesto = [
+      record.id,
+      ...spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined),
+    ];
+
     // Evidence first: what was said is recorded before anything is generated, so
     // a crash mid-turn cannot lose the input that caused it.
     let currentEpisodeId: number | undefined;
@@ -1354,6 +1450,10 @@ async function drive(
         // content nobody at tier 0 actually said.
         trustTier: record.taint,
         createdAt: now().toISOString(),
+        // Il turno che l ha prodotto — lo stesso valore che la history porta
+        // come `traceId`, cosi "l ho gia davanti" e un confronto di identita e
+        // non di testo.
+        turnId: record.id,
       });
     }
 
@@ -1369,7 +1469,13 @@ async function drive(
           deps.memory.recall,
           input.tenant,
           input.text,
-          currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {},
+          {
+            excludeTurnIds: turniInContesto,
+            // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
+            // che non dipende dalla colonna nuova, quindi vale anche su una
+            // riga che il lineage non ce l ha.
+            ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
+          },
         );
         const inherited = recallTaint(result);
         snapshot.raiseTaint(inherited);
@@ -1438,7 +1544,6 @@ async function drive(
      * `check()` below — only the *stamp this turn leaves for the next one* no
      * longer inherits a tier this turn did not itself produce.
      */
-    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
     const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
 
@@ -1876,6 +1981,11 @@ async function drive(
              */
             trustTier: snapshot.intrinsicTaint(),
             createdAt: now().toISOString(),
+            // Lo stesso `record.id` della riga dell owner qui sopra: le due
+            // meta dello scambio portano un turno solo, che e la cosa che
+            // rende "questo scambio e gia davanti al modello" una domanda con
+            // risposta invece di un confronto di stringhe.
+            turnId: record.id,
           });
         }
         return finish(turn, 'answered', text, iterations, usage);
@@ -2882,6 +2992,33 @@ async function runTool(
    * world and an intent row for it would be a lie about what was attempted.
    */
   const decl = deps.capabilities?.get(capability);
+  /**
+   * Questo turno ha gia fatto questa identica chiamata?
+   *
+   * Letto **prima** di scrivere l'intento, cosi il conteggio non comprende la
+   * riga di adesso e il numero e «quante volte prima», non «quante in tutto».
+   *
+   * Il guasto, misurato sul `muffin.db` dell'owner il 30/08/2026: il turno
+   * a747ae67 (28/08) ha riletto gli stessi file con gli stessi argomenti e ha
+   * riavuto risultati byte-identici — 32850, 25537, 46795, 36162, due o tre
+   * volte ciascuno. Cinque letture ridondanti, ~141 KB reiniettati, 72 secondi,
+   * e 14 chiamate su un tetto di 15: il turno ha speso il proprio budget per
+   * rileggere cio che aveva gia.
+   *
+   * Nello stesso file, poco sopra, sta la misura del 28/08 che diceva
+   * l'opposto — «nell'intero store non esiste una sola coppia (tool, args)
+   * ripetuta». Era vera quando e stata scritta e non lo e piu: quel commento e
+   * stato corretto insieme a questa riga, perche una misura vecchia lasciata
+   * in piedi dice al prossimo che qui non c'e niente da guardare.
+   *
+   * Solo per le capability che lo dichiarano (`progress: 'idempotent_read'`), e
+   * l'avviso non fa altro che comparire: non nega, non approva, non tocca il
+   * taint. Vale come pavimento e non come soffitto — due chiamate quasi uguali
+   * (stessa intenzione, argomenti riscritti) passano indenni, ed e il limite
+   * noto di ogni confronto per uguaglianza esatta.
+   */
+  const giaFatte =
+    decl?.progress === 'idempotent_read' ? deps.turns.identicalCallsDone(ctx.turnId, call.name, args) : 0;
   const intentError = recordIntent(deps, ctx.turnId, span, {
     callId: call.id,
     tool: call.name,
@@ -2966,10 +3103,29 @@ async function runTool(
     } satisfies SessionMessage);
     span.end({ status: outcome.isError ? 'error' : 'ok' });
     emitToolEnd(outcome.isError === true);
+    if (giaFatte > 0 && outcome.isError !== true) {
+      span.setAttributes({ 'muffin.tool.repeated': giaFatte });
+    }
     return {
       type: 'tool_result',
       toolCallId: call.id,
-      content: safeContent,
+      /**
+       * L'avviso viaggia con il risultato, e **solo** con il risultato.
+       *
+       * `recordOutcome` e `sessions.append` qui sopra hanno gia ricevuto
+       * `safeContent`: la riga durevole di `turn_tool_calls` e la sessione
+       * restano quello che il tool ha davvero detto. Un avviso scritto li
+       * dentro sarebbe testo che il tool non ha prodotto, in un registro il
+       * cui unico compito e dire cosa ha prodotto.
+       *
+       * Attaccato al risultato e non spedito come messaggio a parte perche un
+       * messaggio a parte non e trasportabile: sul percorso openai-compat il
+       * testo di un messaggio utente viene emesso **prima** dei suoi
+       * `tool_result` (`agent/providers/openai-compat.ts`), quindi finirebbe
+       * fra la chiamata dell'assistente e le sue risposte — che quel protocollo
+       * non ammette. Qui invece e dove il modello sta gia guardando.
+       */
+      content: giaFatte > 0 && outcome.isError !== true ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}` : safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
@@ -3015,6 +3171,21 @@ async function runTool(
  * does not satisfy that. So the failure is returned instead, and the caller
  * below refuses the call rather than guess which way is safe to fail.
  */
+/**
+ * L'avviso, in italiano e in una riga: e testo per il modello, non un log.
+ *
+ * Dice il numero perche «di nuovo» e «per la terza volta» chiedono due cose
+ * diverse, e nomina l'uscita — cambiare argomenti o rispondere — perche un
+ * avviso senza una via d'uscita e solo rumore in mezzo a un risultato.
+ */
+function avvisoRipetizione(tool: string, giaFatte: number): string {
+  const volte = giaFatte === 1 ? 'una volta' : `${giaFatte} volte`;
+  return (
+    `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti, ` +
+    `e la risposta e la stessa. Se ti serve altro cambia argomenti; altrimenti rispondi con quello che hai.]`
+  );
+}
+
 function recordIntent(
   deps: LoopDeps,
   turnId: string,

@@ -1,4 +1,9 @@
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { escludiPerVitest } from './vitest.ignored.js';
+
+const QUI = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -6,35 +11,27 @@ export default defineConfig({
     // il file lì. Vedi `core/config/home-guard.ts` per le due volte in cui è
     // successo davvero.
     globalSetup: ['./vitest.home-guard.ts'],
-    // Agent worktrees live under .claude/worktrees with full checkouts of this
-    // repo: without the exclusion every suite runs twice and a stranger's
-    // in-progress branch fails or passes as if it were ours.
+    // La lista non è più scritta a mano: la deriva da ciò che Git ignora, e il
+    // perché — 945 file raccolti dove ce n'erano 201 — sta in
+    // `vitest.ignored.ts` insieme alla misura che l'ha motivata.
     //
-    // Scoped to worktrees, which is what the reason above actually describes.
-    // The pattern used to be `**/.claude/**`, which was wider than its own
-    // justification and had a cost: the hooks in `.claude/hooks/` could not be
-    // tested at all, so a cap added there shipped with no test and was wrong.
-    //
-    // `evals/acceptance/**/*.accept.ts` never matches vitest's own default
-    // include glob (`*.test.ts`/`*.spec.ts`) — the suffix was chosen so this
-    // exclude is redundant defence, not the only thing keeping the slow e2e
-    // suite off every `npm test`. It is listed anyway: a renamed file that
-    // drifted onto `.test.ts` should still be caught here rather than silently
-    // joining the fast suite and blowing the CI budget nobody would notice
-    // until the bill did. `vitest.acceptance.config.ts` is the separate,
-    // slower command (`npm run test:acceptance`) that runs these on purpose.
-    //
-    // `.gate-linux/` è il clone superficiale che `evals/acceptance/gate-linux.sh`
-    // lascia sul disco: `.gitignore` lo copre, vitest no. Misurato il
-    // 28/08/2026 — dopo una passata del gate la suite passava da 196 file a
-    // 396 e da 2587 test a 5174, cioè girava due volte, la seconda contro una
-    // copia congelata del codice. Un verde che vale metà di quello che dice è
-    // peggio di un rosso.
-    exclude: [
-      '**/node_modules/**',
-      '**/.claude/worktrees/**',
-      '**/.gate-linux/**',
-      'evals/acceptance/**/*.accept.ts',
-    ],
+    // Copriva `.claude/worktrees/` e `.gate-linux/` e non copriva `.releases/`
+    // (402 file) né `.codex/worktrees/` (342): entrambi invisibili a
+    // `git status`, entrambi letti da vitest. Una lista di nomi arriva sempre
+    // dopo l'albero che non conosceva ancora.
+    exclude: escludiPerVitest(QUI),
+    // Cinque secondi — il default — non sono una scadenza, sono una gara con
+    // la CPU. Sotto `gate:local` questa suite gira 213 file in parallelo e
+    // impiega ~1160s di tempo-test in ~235s di orologio: un test che apre uno
+    // SQLite vero e fa girare le migrazioni non ci mette cinque secondi di
+    // lavoro, ci mette cinque secondi di *attesa*. Tre corse consecutive dello
+    // stesso SHA hanno prodotto tre rossi diversi, sempre per scadenza e mai
+    // per un'asserzione — cioè il rumore esatto che rende un gate inutile,
+    // perché un rosso che cambia file a ogni corsa non si distingue da un
+    // difetto vero. Venti secondi non nascondono un test che si impianta
+    // davvero — lo dice comunque, quattro volte più tardi — e chi ha bisogno di
+    // una scadenza più stretta la passa come terzo argomento di `it`, dove è
+    // visibile accanto alla ragione.
+    testTimeout: 20_000,
   },
 });

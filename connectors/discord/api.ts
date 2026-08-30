@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { causaDiRete } from '../../core/net/causa.js';
 
 /**
  * The Discord HTTP API, over `fetch`, with no library between.
@@ -256,7 +257,7 @@ export class DiscordApi {
     try {
       response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     } catch (error) {
-      throw new Error(`download fallito: ${error instanceof Error ? error.name : 'errore'}`);
+      throw new Error(`download fallito: ${causaDiRete(error)}`);
     }
     if (!response.ok) throw new Error(`download fallito: HTTP ${response.status}`);
     const buffer = Buffer.from(await response.arrayBuffer());

@@ -21,7 +21,8 @@
     "test:acceptance": "vitest run --config vitest.acceptance.config.ts",
     "acceptance:report": "tsx evals/acceptance/report.ts",
     "prepare": "npm run compile",
-    "test:acceptance:linux": "evals/acceptance/gate-linux.sh . .gate-linux"
+    "test:acceptance:linux": "evals/acceptance/gate-linux.sh . .gate-linux",
+    "gate:local": "bash scripts/local-gate.sh"
   },
   "devDependencies": {
     "@grammyjs/types": "^4.0.0",
