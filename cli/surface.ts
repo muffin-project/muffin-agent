@@ -629,7 +629,14 @@ export function connectSurfaces(
         );
       }
     } catch (error) {
-      salute.caduta('telegram', `non parte — ${(error as ConfigError).message}`, adesso());
+      // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
+      // gateway» e un segreto che manca non si ripara riavviando.
+      salute.caduta(
+        'telegram',
+        `non parte — ${(error as ConfigError).message}`,
+        adesso(),
+        'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
+      );
       lines.push(`telegram: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
   }
@@ -707,7 +714,14 @@ export function connectSurfaces(
         );
       }
     } catch (error) {
-      salute.caduta('discord', `non parte — ${(error as ConfigError).message}`, adesso());
+      // Il rimedio esplicito, perche' quello di default direbbe «riavvia il
+      // gateway» e un segreto che manca non si ripara riavviando.
+      salute.caduta(
+        'discord',
+        `non parte — ${(error as ConfigError).message}`,
+        adesso(),
+        'non e la rete: risolvi cio che la causa nomina (di solito `muffin secret set`), poi riavvia il gateway',
+      );
       lines.push(`discord: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
   }

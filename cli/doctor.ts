@@ -102,6 +102,24 @@ export type DoctorOptions = {
 export const GUASTO_DOPO_MS = 60_000;
 
 /**
+ * Oltre quanto un avvio smette di essere un avvio.
+ *
+ * `inAvvio` e' un silenzio, ed era l'unico dei tre senza limite superiore: una
+ * superficie che entra in avvio e non emette mai ne' `connessa` ne' `caduta`
+ * resterebbe invisibile per sempre. Oggi i timeout di `fetch` la limitano quasi
+ * ovunque — Telegram ~131s (65s piu' un ritentativo di trasporto), Discord 30s
+ * per due chiamate — tranne un segmento: fra `gatewayUrl()` riuscita e HELLO,
+ * `connectOnce` si risolve solo su `close` o `error`, e il `WebSocket` di Node
+ * non impone un timeout di upgrade. Un handshake che stalla li' non produce
+ * nessuna riga, mai.
+ *
+ * Tre minuti stanno sopra ogni stretta di mano legittima e sotto qualunque cosa
+ * l'owner chiamerebbe «sta partendo». Il rimedio non e' riavviare — riavviare
+ * rifa' partire proprio l'handshake che non finisce: e' guardarlo.
+ */
+export const AVVIO_TROPPO_LUNGO_MS = 180_000;
+
+/**
  * L'unico modo per accorciare quella soglia senza toccare il sorgente.
  *
  * Stessa forma e stessa disciplina di `tickMsFromEnv` (`cli/gateway.ts`), e per
@@ -840,14 +858,15 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
        * Se le superfici **abilitate** stiano rispondendo, adesso.
        *
        * Il difetto che questa riga esiste per chiudere, misurato il 30/08/2026:
-       * Telegram era abilitata, aveva portato 44 turni veri, e dalle 17:08 del
-       * giorno prima il polling falliva ininterrottamente. `doctor` stampava
-       * `gateway attivo · socket concorde` e `nessuna delivery mancante`. Vere
-       * tutte e due, **e verdi perche' non arrivava piu' niente**: una
-       * superficie che non riceve non produce turni, quindi non produce
-       * consegne, quindi non ne mancano. Ogni indicatore guardava a valle del
-       * punto rotto, e piu' il guasto era completo piu' i numeri erano
-       * tranquilli.
+       * Telegram era abilitata e aveva portato 44 turni veri, e nell'arco di
+       * vita di una sola istanza del gateway il polling era fallito **3187
+       * volte**. `doctor` stampava `gateway attivo · socket concorde` e
+       * `nessuna delivery mancante`. Vere tutte e due, e **cieche per
+       * costruzione**: una superficie che non riceve non produce turni, quindi
+       * non produce consegne, quindi non ne mancano. Quei numeri restano
+       * identici che il guasto duri cinque secondi o un giorno — e nemmeno
+       * `gateway.err` sapeva dirlo, perche' registra solo i fallimenti e non li
+       * data: conta *quanti*, mai *per quanto*.
        *
        * Si chiede al gateway e non al database perche' «sta rispondendo
        * adesso» e' una domanda che non sopravvive al processo che la risponde:
@@ -876,7 +895,17 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
               vive.push(id);
             } else if (riga.inAvvio === true) {
               // Sta aspettando il primo battito. Non e' un guasto e non e' una
-              // conferma: e' l'unica risposta onesta, ed e' silenzio.
+              // conferma: finche' dura poco, l'unica risposta onesta e'
+              // silenzio. Ma «in avvio da tre ore» non e' un «non lo so»
+              // onesto — e' un guasto che ha trovato il modo di non dirsi.
+              if (Date.now() - new Date(riga.da).getTime() >= AVVIO_TROPPO_LUNGO_MS) {
+                warn(
+                  `superficie ${id}`,
+                  `in avvio da ${quantoDura(riga.da, new Date())}: non ha ancora ne risposto ne fallito, ` +
+                    `quindi non riceve niente e non lo dichiara nessuno`,
+                  '`muffin gateway run` in primo piano mostra a che punto si e fermata la stretta di mano — riavviare la rifa partire da capo',
+                );
+              }
             } else if (Date.now() - new Date(riga.da).getTime() >= guastoDopoMsDaEnv(process.env['MUFFIN_GUASTO_DOPO_MS'])) {
               warn(
                 `superficie ${id}`,
@@ -887,12 +916,16 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
               );
             }
           }
-          // «Connesse», non «in ascolto»: per Telegram l'ultimo battito e' di un
-          // attimo fa, per Discord l'unica prova e' la stretta di mano
-          // dell'avvio — il suo websocket si riconnette da solo per sempre e non
-          // fa mai rigettare `run()`, quindi un socket morto ma che ritenta
-          // resterebbe qui. Promettere «in ascolto» per tutte e due sarebbe di
-          // nuovo un verde piu' largo di cio' che si sa.
+          // «Connesse», non «in ascolto», perche' le due superfici invecchiano
+          // in modo diverso e la parola deve reggere per la piu' debole. Per
+          // Telegram `connessa` vuol dire un `getUpdates` riuscito da poco: il
+          // battito successivo la conferma o la ritira. Per Discord vuol dire
+          // l'ultimo READY/RESUMED senza chiusure da allora, che il rilevamento
+          // zombie di `startHeartbeat` limita a circa due `heartbeat_interval`
+          // — chiude il socket, e la chiusura passa da `stato(false)`. Nessuno
+          // dei due ✓ puo' invecchiare senza limite, ma «in ascolto» direbbe
+          // «adesso», e per Discord «adesso» ha una tolleranza di un minuto e
+          // mezzo.
           if (vive.length > 0) ok('superfici', `${vive.join(', ')} — connesse`);
         }
       }

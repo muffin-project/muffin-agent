@@ -18,7 +18,15 @@ import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { runDoctor, sandboxOkDetail, quantoDura, guastoDopoMsDaEnv, GUASTO_DOPO_MS, type Check } from './doctor.js';
+import {
+  runDoctor,
+  sandboxOkDetail,
+  quantoDura,
+  guastoDopoMsDaEnv,
+  GUASTO_DOPO_MS,
+  AVVIO_TROPPO_LUNGO_MS,
+  type Check,
+} from './doctor.js';
 import { serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
 import { GatewayLock } from '../core/gateway/lock.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
@@ -1322,11 +1330,11 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     const riga = report.checks.find((c) => c.name === 'superfici');
     expect(riga?.level).toBe('ok');
     expect(riga?.detail).toContain('telegram');
-    // Non «in ascolto»: per Discord l'unica prova e' la stretta di mano
-    // dell'avvio, e il suo websocket si riconnette da solo per sempre senza mai
-    // far rigettare `run()`. Un socket morto ma che ritenta resterebbe qui, e
-    // un ✓ che promette l'ascolto sarebbe di nuovo un verde piu' largo del
-    // fatto — la forma esatta che questa slice esiste per togliere.
+    // Non «in ascolto»: la parola deve reggere per la superficie piu' debole,
+    // e per Discord `connessa` significa «ultimo READY/RESUMED senza chiusure
+    // da allora» — vero adesso a meno di circa due `heartbeat_interval`, che e'
+    // quanto il rilevamento zombie ci mette a chiudere un socket muto.
+    // «Connesse» e' quello che si sa; «in ascolto» prometterebbe l'istante.
     expect(riga?.detail).not.toContain('in ascolto');
   });
 
@@ -1358,6 +1366,34 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
 
     const report = await runDoctor(dir);
     expect(report.checks.find((c) => c.name.startsWith('superfic'))).toBeUndefined();
+  });
+
+  /**
+   * Il terzo modo di stare zitti, e l'unico che non aveva un limite superiore.
+   * Una superficie che entra in avvio e non emette mai ne' `connessa` ne'
+   * `caduta` — un upgrade WebSocket che stalla, che Node non limita — resterebbe
+   * invisibile per sempre. «In avvio da tre ore» non e' un «non lo so» onesto.
+   */
+  it('ma un avvio che non finisce mai smette di essere un avvio', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, {
+      superfici: [
+        {
+          id: 'telegram',
+          connessa: false,
+          inAvvio: true,
+          da: new Date(Date.now() - AVVIO_TROPPO_LUNGO_MS - 1000).toISOString(),
+          fallimentiDiFila: 0,
+        } satisfies StatoSuperficie,
+      ],
+    });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('in avvio da');
+    // Non «riavvia»: riavviare rifa partire proprio l'handshake che non finisce.
+    expect(c?.remedy).toContain('primo piano');
+    expect(c?.remedy).not.toMatch(/^riavvia/);
   });
 
   it('un lampo fra due long poll non e un guasto', async () => {
