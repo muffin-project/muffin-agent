@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
  * e non scriveva mai. Sono le righe D2, D3 e D11 di M5-BIS, tenute ferme dalla
  * stessa mancanza.
  *
- * **Forma decisa dall'owner il 16/08** (M5-BIS §1, «via B»): copia del file
+ * **Forma decisa dall'owner il 16/08** (M5-BIS.md#il-modello-di-reversibilità--la-decisione-sotto-fswrite, «via B»): copia del file
  * prima della mutazione in `~/.muffin/undo/<turno>/`, e un undo che riallinea
  * il filesystem **e** il turno. Non una tabella: costa una migrazione in meno
  * su un database che accumula già dati veri, e una directory si guarda con

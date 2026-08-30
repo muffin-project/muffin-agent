@@ -30,7 +30,7 @@ import { DurableLock, pidAlive, type LockOutcome } from '../lock/durable.js';
  * every collision that can actually happen. Per-episode claiming would add a
  * status column, claim/release semantics on every row and a stale-processing
  * sweep (the old system's `recoverStaleProcessing`) to protect against a race
- * this codebase cannot produce. Smaller mechanism, per PRACTICES.md §5.
+ * this codebase cannot produce. Smaller mechanism, per PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate.
  *
  * The claim itself is `core/lock/durable.ts`, shared with the send lock and
  * the gateway lock (ADR-0035): a `BEGIN IMMEDIATE` transaction makes

@@ -645,7 +645,7 @@ export class TurnStore {
      * The write that suspends, and it releases the claim in the same statement.
      *
      * Same shape as `finish`: **one write advances the state**, which is
-     * ADR-0035 §1's property (`markRan` the only writer of `next_fire_at`)
+     * ADR-0035's property (`markRan` the only writer of `next_fire_at`)
      * applied here. A suspended row must not keep a pid, or the next boot would
      * reclaim it as interrupted the moment that process exits — turning every
      * `wait` that outlives its process into a reported crash. `claim_token`
@@ -935,7 +935,7 @@ export class TurnStore {
   /**
    * The single write that ends a turn — and it says nothing about delivery.
    *
-   * ADR-0035 §1 keeps a killed gateway from losing work by making `markRan` the
+   * ADR-0035 keeps a killed gateway from losing work by making `markRan` the
    * only writer of `next_fire_at`. This is the same property on this table: one
    * write moves the status, so a second writer added later cannot advance a
    * turn past an outcome nobody recorded.
@@ -1025,8 +1025,13 @@ export class TurnStore {
    * optional, so an omitted argument wrote a silent `NULL` and skipped the
    * taint bump below with no error anywhere. `ToolOutcome.tier` was already
    * required upstream (ADR-0044), but the guarantee lived in the caller, not
-   * in this method's type, which is exactly the gap ORCHESTRATION.md §15 warns
-   * about. Every real caller already passes it (`agent/loop.ts`'s success and
+   * in this method's type — exactly the gap named by the owner directive
+   * "repair at the root": stop at the level where the defect stops being
+   * representable, and "the type permits the wrong state" is one of those
+   * levels. That rule was dropped from `ORCHESTRATION.md` by the 2026-08-19
+   * documentation refactor and has no current home; it is still readable with
+   * `git show 451cd916:docs/ORCHESTRATION.md`.
+   * Every real caller already passes it (`agent/loop.ts`'s success and
    * throw paths both do); a future one that does not now fails `tsc` instead
    * of shipping an underestimated taint.
    */

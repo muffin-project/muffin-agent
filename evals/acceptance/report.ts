@@ -9,7 +9,7 @@ import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
 /**
  * The command M5-BIS.md's state is derived from, instead of asserted by hand.
  *
- * ORCHESTRATION.md §12: an inventory's fourth, forbidden answer is "we hadn't
+ * M5-BIS.md#la-regola-delle-quattro-risposte: an inventory's fourth, forbidden answer is "we hadn't
  * thought about it" — a row with no scenario is exactly that, silently. This
  * prints, for every row in the live inventory: a passing scenario, a scenario
  * that broke for real, a scenario still red on purpose (and why, and what
@@ -26,7 +26,7 @@ import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
  * `failureMessages` out of the JSON reporter's own output (verified against
  * the installed vitest 2.1.9 with a throwaway probe file: `failureMessages:
  * string[]` carries the thrown `Error`'s message, one entry per assertion)
- * rather than re-implementing pass/fail itself. Mandato DAY-1 §4.9 (P39): a
+ * rather than re-implementing pass/fail itself. MANDATO-DAY-1.md#day-1-ready (P39): a
  * scenario that is red is not automatically "fine" — it has to be red for
  * the reason the manifest names, or this report has to say so.
  *
@@ -447,7 +447,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
         break;
       case 'atteso-rosso':
         attesoRosso++;
-        // Mandato DAY-1 §4.9 (P39): a row this inventory calls `READY` —
+        // MANDATO-DAY-1.md#day-1-ready (P39): a row this inventory calls `READY` —
         // "implementata, cablata, provata, e il percorso reale ci arriva" —
         // cannot also carry a scenario that is still red on purpose. One of
         // the two statements is wrong, and the report has to say which
@@ -491,7 +491,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
    * Il ciclo qui sopra cammina l'inventario, quindi un file `.accept.ts` che non
    * passa dal manifest — `b-job-script`, oggi — non viene visitato: non stampato,
    * non contato, e **non fallisce il report anche quando è rosso**. Per chi
-   * legge questo report, che il mandato DAY-1 §4.9 tratta come il gate
+   * legge questo report, che il MANDATO-DAY-1.md#day-1-ready tratta come il gate
    * autoritativo, un rosso che non arriva qui è indistinguibile da uno scenario
    * mai esistito. È il buco che il judge di `slice/linux-la-macchina-che-conta`
    * ha nominato, ed è più vecchio di quella slice.

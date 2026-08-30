@@ -23,7 +23,7 @@ import type { ChatCall, ChatResult, Message, Provider } from './providers/types.
  *
  *  - **the runtime is released.** `runTurn` returns. If it instead awaited a
  *    timer, every assertion about the row would still pass and the process
- *    would be held for the length of the wait — the difference M5-BIS §2 calls
+ *    would be held for the length of the wait — the difference M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool calls
  *    the one between a Muffin that lives and a Muffin launched from a terminal.
  *  - **the taint comes off the row.** A resume that rebuilt it from the
  *    principal would restart at tier 0 a turn that had already read the web.

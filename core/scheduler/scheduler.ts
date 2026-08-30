@@ -465,7 +465,7 @@ export class Scheduler {
    * The end of a fire: record the delivery, advance the schedule, announce it.
    *
    * **The only caller of `markRan` in this class, and that is structural rather
-   * than tidy.** ADR-0035 §1 makes `markRan` the single writer of
+   * than tidy.** ADR-0035 makes `markRan` the single writer of
    * `next_fire_at`; this makes the delivery's outcome the single thing you have
    * to be holding in order to call it. A future branch that advances the
    * schedule without knowing whether the message arrived does not compile,

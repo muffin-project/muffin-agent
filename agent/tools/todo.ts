@@ -7,7 +7,7 @@ import type { ToolSpec } from '../providers/types.js';
 /**
  * `todo` — the plan, as rows the next turn can read.
  *
- * The operating model M5-BIS §2 asks for is `goal → plan → todo{…} → resume`,
+ * The operating model M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool asks for is `goal → plan → todo{…} → resume`,
  * and the piece that was missing is the middle one: something that carries
  * intent across a suspension, a crash, or simply the next message. The
  * transcript cannot do it — it is prose, it gets compacted, and re-deriving the

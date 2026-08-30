@@ -13,7 +13,7 @@ import { mapFiles, references, resolveRef } from './ancore.mjs';
  * superfici. È una **vista derivata**, cioè la forma di documentazione che
  * invecchia peggio — descrive ciò che cambia di più e sbaglia con autorevolezza.
  *
- * Questi test sono il meccanismo al posto del promemoria (ORCHESTRATION §14):
+ * Questi test sono il meccanismo al posto del promemoria (`README.md`, qui accanto):
  * ogni `file:riga` citato dalla mappa deve esistere e deve puntare ancora allo
  * stesso testo. Quando il codice si sposta, fallisce **la suite** — non
  * l'artefatto in silenzio, tre settimane dopo, davanti a chi lo legge per capire.

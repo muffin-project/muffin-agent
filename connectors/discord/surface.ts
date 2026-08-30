@@ -16,7 +16,7 @@ import { DISCORD_MAX, renderForDiscord } from './render.js';
  * idempotent ("if one already exists, it will be returned instead") and a
  * cached id would go stale the one time a DM channel is invalidated with no
  * way for this file to find out. `discord:<channelId>` names one explicitly
- * (ADR-0021 §4), sent to directly with no `openDm` round trip — it is already
+ * (ADR-0021), sent to directly with no `openDm` round trip — it is already
  * a channel id, not a user id to resolve one from.
  *
  * `maxUploadBytes`/`maxDownloadBytes` are not yet in this repo's own testing

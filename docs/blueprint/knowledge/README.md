@@ -56,21 +56,38 @@ il dettaglio, il volo dimenticato) — memoria solida dove la nostra è debole, 
 ridurre il carico cognitivo. Non copia l'oblio umano: lo **complementa**. È il
 valore stesso dell'assistente.
 
-## Indice (port in ondate — la routine settimanale ne prende uno per volta)
+## Indice
 
-| File | Tema | Stato port |
-|---|---|---|
-| `04-learn-from-absence.md` | Imparare dall'assenza/silenzio — §5 + `dream_phase_i.ts` I.6 | ✅ portato (esemplare) |
-| `03-observing-spine.md` | La spina osservante — Forma A/B, awareness-loop, decider 4-gate, P-I | ✅ portato |
-| `00-cognitive-bases.md` | `COGNITIVE_BASES.md` — antipattern→principio→mossa (8 sezioni) | ⏳ |
-| `01-understanding.md` | `UNDERSTANDING.md` — le 6+1 dimensioni; **la formula somma-pesata è superata**, le dimensioni no | ✅ portato |
-| `02-references.md` | Bibliografia annotata (~25 paper) — ri-verificare gli arXiv | ⏳ |
-| `05-person-model.md` | il modello della persona **e come si chiede** — le due metà dell'elicitazione, e l'anello mai chiuso | ✅ portato |
-| `06-graveyard.md` | Esperimenti morti col LORO razionale (NON ri-aggiungere) | ⏳ |
-| `07-common-ground.md` | Common ground / ToM annidata (io so, muffin sa cosa so…) — **infer-then-condition**; 2°-ordine NON validato (collo: coerenza cross-contesto) | ⏳ |
+Questa tabella elenca **ciò che esiste su disco**. Fino al 2026-08-30 ne
+elencava otto voci, quattro delle quali non erano mai state scritte: un indice
+che promette un file assente manda a vuoto chi lo segue e, peggio, lascia
+credere che il lavoro sia stato fatto.
 
-**Priorità**: `04` e `03` prima (il materiale che il blueprint NON ha e che l'owner
-nomina), poi il corpus cognitivo (`00`/`01`/`02`), poi `05`/`06`.
+| File | Tema |
+|---|---|
+| `01-understanding.md` | le 6+1 dimensioni del capire; **la formula somma-pesata è superata**, le dimensioni no |
+| `03-observing-spine.md` | la spina osservante — Forma A/B, awareness-loop, decider 4-gate |
+| `04-learn-from-absence.md` | imparare dall'assenza e dal silenzio |
+| `05-person-model.md` | il modello della persona **e come si chiede** — le due metà dell'elicitazione, e l'anello mai chiuso |
+
+## Cosa non è mai stato portato, e dove sta l'originale
+
+Quattro temi del corpus vecchio erano stati annunciati qui e non sono mai stati
+curati. Restano leggibili nella loro forma originale; non sono in questa
+cartella, e non vanno citati come se lo fossero.
+
+- **basi cognitive** — antipattern → principio → mossa di design:
+  `docs/foundations/COGNITIVE_BASES.md`.
+- **bibliografia annotata** — i paper che informano il disegno, con gli arXiv
+  ancora da riverificare: `docs/foundations/REFERENCES.md`.
+- **cimitero** — gli esperimenti morti col *loro* razionale. Le tre voci che
+  contano sono riassunte qui sotto; il resto vive nella storia del vecchio
+  repository.
+- **common ground / ToM annidata** — infer-then-condition; il secondo ordine non
+  è mai stato validato, e il collo era la coerenza cross-contesto.
+
+Che un tema sia qui e non nella tabella non lo declassa: dice che nessuno lo ha
+ancora ri-espresso come principio vivo, e che chi lo riprende parte dalla fonte.
 
 ## Cimitero rapido (dettaglio in `06-graveyard.md`) — NON ri-aggiungere
 

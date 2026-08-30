@@ -2151,7 +2151,7 @@ async function drive(
   /**
    * The turn releases the runtime. **Not** an ending — see `TurnStopped`.
    *
-   * The write is a single statement (`TurnStore.suspend`) for ADR-0035 §1's
+   * The write is a single statement (`TurnStore.suspend`) for ADR-0035's
    * reason, restated on this table: one write advances the state, so a second
    * writer added later cannot move a turn past a suspension nobody recorded.
    * A failure here is the one case that must **not** be swallowed the way a
@@ -3165,7 +3165,7 @@ async function runTool(
  * write actually costs here: with the handler left free to run anyway, a
  * missing intent row stopped meaning "never started" and started meaning
  * "started, but its own receipt did not survive" — for a non-rerunnable tool,
- * exactly the ambiguity this row exists to remove (ADR-0042 §6). MANDATO-DAY-1
+ * exactly the ambiguity this row exists to remove (ADR-0042). MANDATO-DAY-1
  * names this invariant 1, "EFFECT WAL": no side effect may start unless its
  * intent is durable first, and "I tried to record it and carried on anyway"
  * does not satisfy that. So the failure is returned instead, and the caller

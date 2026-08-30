@@ -14,7 +14,7 @@ import type { TurnEvent } from '../../agent/loop.js';
  * Reads through the public `startProgress`/`ProgressReporter` contract only —
  * the point of most of these is that they would go red if the *wiring* inside
  * `startProgress` were undone (drop the rate limit, drop the coalescing, drop
- * disable-on-failure), which is the PRACTICES §5 shape: assert the mechanism
+ * disable-on-failure), which is the PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate shape: assert the mechanism
  * is reached, not only that its pieces compile. The *composition* — that
  * `agent/loop.ts`'s real `onProgress` calls reach a real `TelegramConnector`'s
  * Telegram calls — is `streaming.test.ts`'s own "M5-BIS B13" describe block,

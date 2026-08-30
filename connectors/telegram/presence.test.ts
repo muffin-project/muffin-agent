@@ -12,7 +12,7 @@ import type { TelegramApiLike } from './api.js';
  * Reads through the public `startPresence`/`Presence` contract only — the
  * point of most of these is that they would go red if the *wiring* inside
  * `startPresence` were undone (drop the rate limit, drop the coalescing,
- * drop the heartbeat-silencing), which is the PRACTICES §5 shape: assert the
+ * drop the heartbeat-silencing), which is the PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate shape: assert the
  * mechanism is reached, not only that its pieces compile.
  */
 

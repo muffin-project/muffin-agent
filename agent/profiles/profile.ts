@@ -118,7 +118,7 @@ export const CONSERVATIVE: Profile = {
 const MAX_ITERATIONS_HARD_CAP = 40;
 
 /**
- * Parsed, not cast (PRACTICES §4) — and the history is why. `recovery` used to
+ * Parsed, not cast (PRACTICES.md#parse-at-boundaries-preserve-provenance) — and the history is why. `recovery` used to
  * be inert data: a typo added 1 to a counter and nothing else. Once the cascade
  * executed as declared, an unknown name became a TypeError thrown at the one
  * moment a turn was already failing — a latent bomb armed precisely when the
