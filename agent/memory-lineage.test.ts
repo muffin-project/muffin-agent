@@ -198,6 +198,20 @@ describe('recall — l esclusione per lineage', () => {
     expect(volte(secondo, 'ZK-4417')).toBe(1);
   });
 
+  it('non ripesca nemmeno la **risposta** dell agente dello stesso scambio', async () => {
+    // L altra meta dello scambio, e quella che `excludeEpisodeId` non copriva:
+    // l episodio finale dell agente. Qui la domanda del secondo turno pesca
+    // parole che stanno solo nella risposta del primo, non nella domanda —
+    // quindi se il lineage dell agente non c e, la frase rientra da MEMORIA_.
+    const h = harness([answer('il magazzino si trova a Sestu'), answer('a Sestu')]);
+    await runTurn(h.deps, turno(h, 'una domanda qualunque'));
+    await runTurn(h.deps, turno(h, 'dove si trova il magazzino?'));
+
+    const secondo = h.provider.prompts[1] ?? '';
+    // Una volta: nella history, come risposta dell assistente. Non due.
+    expect(volte(secondo, 'il magazzino si trova a Sestu')).toBe(1);
+  });
+
   it('uno scambio piu vecchio della finestra torna, e torna via memoria', async () => {
     // La meta che l esclusione non deve mangiare. La finestra reinietta gli
     // ultimi 40 messaggi (`MAX_HISTORY_TURNS`), cioe venti scambi: il primo
@@ -291,6 +305,36 @@ describe('recall — cosa l esclusione non deve toccare', () => {
     const ids = esito.items.filter((i) => i.kind === 'episode').map((i) => i.id);
     expect(ids).toContain(tenuto);
     expect(ids).not.toContain(escluso);
+  });
+
+  it('un vicino di un turno escluso non arriva, nemmeno da un anchor legittimo', async () => {
+    // La riga che questo test tiene viva: l esclusione passata a
+    // `episodeNeighbourhood`. Il filtro dopo la fusione non la copre — gli
+    // anchor si scelgono da `kept`, quindi un anchor **non** escluso puo
+    // trascinare dentro i propri vicini, che escluso lo sono. E il caso vero di
+    // una sessione lunga: un episodio fuori finestra fa da anchor e i suoi
+    // vicini in avanti sono la finestra corrente.
+    const h = harness([]);
+    const righe: [string, string][] = [
+      ['deposito, la riga vecchia', 'turno-vecchio'],
+      ['il vicino in avanti', 'turno-in-history'],
+      ['e il vicino dopo ancora', 'turno-in-history'],
+    ];
+    for (const [i, [contenuto, turnId]] of righe.entries()) {
+      h.store.addEpisode({
+        tenantId: 'host', connector: 'cli', threadKey: 's1', role: 'user', kind: 'message',
+        content: contenuto, trustTier: 0,
+        createdAt: `2026-08-0${i + 1}T10:00:00.000Z`, turnId,
+      });
+    }
+    const esito = await recall(h.recallDeps, 'host', 'deposito', {
+      neighbours: 2,
+      excludeTurnIds: ['turno-in-history'],
+    });
+    // L anchor c e: e di un turno che nessuno ha escluso.
+    expect(esito.items.map((i) => i.text)).toContain('deposito, la riga vecchia');
+    // I suoi vicini no: sono del turno che il modello ha gia davanti.
+    expect(esito.items.some((i) => i.neighbourOf !== undefined)).toBe(false);
   });
 
   it('un fatto derivato da un episodio escluso resta ripescabile', async () => {
