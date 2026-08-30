@@ -167,7 +167,14 @@ function world(
     crash: (turnId, patch) => {
       const row = turns.get(turnId)!;
       db.prepare(
-        `UPDATE turns SET status = 'interrupted', claimed_by = NULL, messages = @messages, counters = @counters
+        // `wait_for`/`wake_at` a NULL, e non e un dettaglio: in produzione una
+        // riga arriva a `interrupted` solo da `reclaim`, che agisce su una riga
+        // `running` — e una riga `running` la barriera non ce l'ha piu, perche
+        // `claim` la spegne appena la prende. Lasciarla qui costruiva uno stato
+        // che la produzione non sa produrre, e faceva leggere il crash come un
+        // risveglio voluto.
+        `UPDATE turns SET status = 'interrupted', claimed_by = NULL, wait_for = NULL, wake_at = NULL,
+                          messages = @messages, counters = @counters
          WHERE id = @id`,
       ).run({
         id: turnId,
@@ -290,8 +297,18 @@ describe('e poi torna', () => {
   });
 
   it('conta le riprese sulla riga, non nel processo che muore', async () => {
+    // Un **crash**, non un `wait`: il contatore conta le recovery, e provarlo
+    // con un risveglio voluto provava la cosa sbagliata. La riga di prima
+    // aspettava e poi asseriva 1, che e esattamente il difetto per cui un
+    // turno che aspetta quattro volte moriva col messaggio dei crash
+    // (`agent/resume-checkpoint-budget.test.ts`). Il titolo — dove vive il
+    // contatore — resta vero, e adesso e provato dal caso che lo riguarda.
     const w = world([call('wait', { seconds: 3600 }), answer('fatto')]);
     const first = await runTurn(w.deps, start(w));
+    expect(w.turns.get(first.turnId)?.counters.resumes).toBe(0);
+
+    // Il processo muore: la riga torna `interrupted`, senza barriera.
+    w.crash(first.turnId, {});
     await resumeTurn(w.deps, first.turnId);
     expect(w.turns.get(first.turnId)?.counters.resumes).toBe(1);
   });
