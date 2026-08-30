@@ -308,6 +308,47 @@ describe('gli indici', () => {
   });
 });
 
+describe('il router repository-wide', () => {
+  it('è importato davvero da CLAUDE.md, non solo nominato', () => {
+    // Claude Code legge `CLAUDE.md` e **non** legge `AGENTS.md`: l'unico modo
+    // perché il router entri nel contesto d'avvio è l'import `@path`.
+    //
+    // Fino al 2026-08-30 `CLAUDE.md` diceva «Follow `AGENTS.md` first» fra
+    // backtick. È testo, non un import — e il parser degli import salta
+    // deliberatamente i code span, quindi la riga più autorevole del repository
+    // era esattamente quella che non veniva caricata. Misurato in una sessione
+    // fresca: `/context` elencava i due `CLAUDE.md` e nessun `AGENTS.md`.
+    //
+    // Questo test guarda la forma che fa la differenza — `@` a inizio riga,
+    // fuori dai backtick — perché è invisibile a occhio in un diff di prosa.
+    const claude = readFileSync(join(REPO, 'CLAUDE.md'), 'utf8');
+
+    const fuoriDaiCodeSpan = claude
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`[^`\n]*`/g, '');
+    const importati = [...fuoriDaiCodeSpan.matchAll(/^@([^\s`]+)\s*$/gm)].map((m) => m[1]!);
+
+    expect(importati, 'CLAUDE.md non importa AGENTS.md con la primitive `@path`').toContain(
+      'AGENTS.md',
+    );
+    for (const target of importati) {
+      expect(existsSync(join(REPO, target)), `CLAUDE.md importa ${target}, che non esiste`).toBe(
+        true,
+      );
+    }
+  });
+
+  it('resta abbastanza piccolo da poter essere caricato sempre', () => {
+    // Il costo dichiarato dell'import: gli invarianti entrano in **ogni**
+    // sessione. Uno scambio conveniente solo finché il router resta un router.
+    // Senza questo limite, il modo normale in cui un file del genere cresce —
+    // una riga utile per volta — riporterebbe la tassa senza che nessuno decida
+    // di pagarla.
+    const parole = readFileSync(join(REPO, 'AGENTS.md'), 'utf8').trim().split(/\s+/).length;
+    expect(parole, `AGENTS.md ha ${parole} parole`).toBeLessThanOrEqual(450);
+  });
+});
+
 describe('i router', () => {
   it('non mandano a STATE.md per lo stato corrente', () => {
     // `STATE.md` è una lapide dal 2026-08-19. Un router che ci manda insegna a

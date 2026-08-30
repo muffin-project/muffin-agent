@@ -19,24 +19,18 @@ il gate locale è l'unica prova.
 
 ## Il telefono ora dice quando smette
 
-`surfaces.enabled = ["cli","telegram","discord"]`, owner id su entrambe: 44
-turni Telegram e 3 Discord nel db. Funziona, e da #260/#261 si sa **quando**
-smette di funzionare.
-
-Prima no: `gateway.err` registra solo i fallimenti e non li data, quindi dice
-*quanti*, mai *per quanto*. **Non concluderne una durata:** il 30/08 l'ho fatto
-e mi sono sbagliato, deducendo 19 ore di silenzio che non c'erano state.
-
-Chiuso: il log dice la **causa** (`cause.code`, mai `.message` — l'URL porta il
-token), per Telegram e per l'embedder; e `doctor` guarda la **superficie**, non
-il processo, con i tre silenzi tutti limitati.
+Chiuso da #260/#261: il log dice la **causa** (`cause.code`, mai `.message` —
+l'URL porta il token) e `doctor` guarda la **superficie**, non il processo.
+Resta la regola: `gateway.err` registra solo i fallimenti e non li data, quindi
+dice *quanti*, mai *per quanto*. **Non dedurne una durata** — il 30/08 l'ho
+fatto e ho sbagliato di 19 ore.
 
 ## Le decisioni dell'owner
 
 **Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
 "deny"`. Aperte: **`muffin rot harden`** (serve `sudo`; finché non è fatto
 `sys.shell` chiede *sempre* conferma) e **C8, note vocali** (se la tua voce
-esce di casa). Mancano **chiave Tavily** e **billing CI**.
+esce di casa). Manca la **chiave Tavily**.
 
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
@@ -47,17 +41,27 @@ checkpoint: non è una PR, non è morta.
 forma, perché il tema tocca insieme work/todo, memoria, esposizione dei tool e
 person model.
 
-In breve: **`jobs` non ha un tool**, per nessuno e a nessun taint (solo `muffin
-jobs add`), e il modello interrogato ha spiegato l'assenza come una policy di
-taint che non esiste. `wait` è stato chiamato **1** volta, `todo` 2, i 7 todo
-sono fermi dal 27/08 e invisibili fuori dalla loro sessione. **44 fatti attivi
-su 83** sono `asked_to`/`asks_to`: «dimmi solo: tre» sta nello stesso mucchio
-delle due richieste davvero pendenti. ANANAS non si recupera perché nessuna
-somiglianza trova un'istruzione che il messaggio dopo non nomina — riparare
-Ollama non c'entra.
+In breve: **`jobs` non ha un tool** (solo `muffin jobs add`); `wait` chiamato 1
+volta, `todo` 2, i 7 todo fermi dal 27/08 e invisibili fuori dalla sessione; 44
+fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto dei tool **non** è più il
+problema (`0d519cb`): non ripartire da lì.
 
-Il tetto dei tool **non** è più il problema: `0d519cb` l'ha portato a 15 e
-`doctor` non stampa più niente. Quel reperto è morto: non ripartire da lì.
+## STEP 0 — knowledge architecture
+
+Piano owner del 30/08: `docs/blueprint/` si dissolve in path che dichiarano il
+ruolo epistemico. Nove slice.
+
+**Decisione owner da far entrare, non ancora entrata.** La direttiva del 15/08
+«si ripara alla radice» è stata tolta da `ORCHESTRATION.md` il 19/08 senza
+riospitarla. Casa decisa: `PRACTICES.md` — dopo la migrazione
+`docs/engineering/PRACTICES.md` — e vi entra **quando una slice tocca quel
+file**, non da sola. Semantica da preservare: *repair at the lowest semantic
+layer that eliminates the class of failure, not at the widest layer you can
+plausibly redesign*. Scala `riga → funzione → contratto di modulo → tipo/schema
+→ confine architetturale`; si sale **solo** se una riparazione più locale
+lascerebbe la stessa classe di stato invalido rappresentabile o destinata a
+ripetersi. Non giustifica refactor laterali. Originale:
+`git show 451cd916:docs/ORCHESTRATION.md`.
 
 ## Aperto, non bloccante
 
