@@ -1,4 +1,5 @@
 import type { Message, Update, User } from '@grammyjs/types';
+import { causaDiRete } from '../../core/net/causa.js';
 
 /**
  * The Bot API, over `fetch`, with no library between.
@@ -135,17 +136,18 @@ export class TelegramApi implements TelegramApiLike {
         await sleep(1000);
         return this.request<T>(method, payload, retryTransport, retryRejected, 1);
       }
-      // `.name`, never `.message` — the same choice `media.ts` already makes
-      // and for the same reason: the URL this `fetch` just failed on carries
-      // the bot token (Telegram, unlike Discord, puts it in the path — see
-      // this file's own header comment), and `.name` ("TypeError",
-      // "AbortError") says what kind of failure this was without risking
-      // whatever a future runtime decides to put in `.message`. Probed
-      // 2026-08-17 against this Node's `fetch` (DNS failure, connection
-      // refused, timeout, malformed URL): `.message` never carried the URL
-      // today, but a promise about a dependency's *next* version is not one
-      // this file can keep, and the fix costs nothing.
-      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
+      // Mai `.message`, e non per prudenza astratta: l'URL su cui questa
+      // `fetch` e' appena fallita porta il bot token nel path (Telegram, a
+      // differenza di Discord, lo mette li' — vedi l'intestazione di questo
+      // file). La prova del 17/08 aveva concluso che `.message` non portava
+      // mai l'URL; il 30/08, ripetuta includendo il caso malformato, ha dato
+      // l'URL intero dentro `.message` su questo stesso Node.
+      //
+      // `causaDiRete` dice la classe **e** il codice (`ECONNRESET`,
+      // `ENOTFOUND`) accettando solo campi di una forma che un URL non puo'
+      // avere. Il solo `.name` costava 3187 righe `Telegram 0: TypeError` in
+      // diciannove ore senza mai dire cosa fosse rotto.
+      throw new TelegramError(0, causaDiRete(error));
     }
 
     let body:
@@ -193,7 +195,7 @@ export class TelegramApi implements TelegramApiLike {
       });
     } catch (error) {
       // Same reasoning as `call`'s catch: this URL carries the token too.
-      throw new TelegramError(0, error instanceof Error ? error.name : 'errore di rete');
+      throw new TelegramError(0, causaDiRete(error));
     }
     const payload = (await response.json()) as { ok: true; result: T } | { ok: false; description: string };
     if (!payload.ok) throw new TelegramError(response.status, payload.description);
