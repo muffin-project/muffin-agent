@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -56,7 +56,7 @@ function harness(script: ChatResult[]) {
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     now: () => new Date('2026-08-29T00:00:00.000Z'),
   };
-  return { deps, turns, db };
+  return { deps, turns, db, home };
 }
 
 describe('resume budget: un checkpoint durevole dimostra progresso', () => {
@@ -151,5 +151,70 @@ describe('resume budget: il bound resta un bound', () => {
     crash();
     const quarta = await resumeTurn(h.deps, first.turnId);
     expect('why' in quarta && quarta.why).toBe('exhausted');
+  });
+});
+
+
+describe('resume budget: la traccia dice quello che dice il contatore', () => {
+  /**
+   * `spendeIlBudget` e una funzione sola proprio perche le due letture non
+   * possano divergere — il contatore persistito e l'attributo di span. Ma
+   * «e una funzione sola» e una proprieta del codice di oggi: senza questo
+   * test, riscrivere l'attributo come una seconda espressione lascia la suite
+   * verde e la traccia dice «ripresa 1» su un turno a cui non e stato
+   * addebitato niente. E la deriva contro cui la docstring mette in guardia:
+   * qui c e la riga che la fa morire.
+   */
+  const spanDelTurno = (home: string): Record<string, unknown>[] =>
+    readdirSync(join(home, 'traces'))
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => readFileSync(join(home, 'traces', f), 'utf8').trim().split('\n'))
+      .filter((l) => l.trim() !== '')
+      .map((l) => JSON.parse(l) as { name?: string; attributes: Record<string, unknown> })
+      .filter((x) => x.name === 'muffin.turn')
+      .map((x) => x.attributes)
+      // Solo le riprese: il primo giro l attributo non ce l ha, perche a
+      // scriverlo e `resumeTurn` — un turno che parte non dichiara una ripresa
+      // che non e avvenuta.
+      .filter((a) => a['muffin.turn.resume'] !== undefined);
+
+  it('un risveglio voluto non compare come ripresa, ne nel contatore ne nello span', async () => {
+    const h = harness([wait('w1'), answer('fatto')]);
+    const first = await runTurn(h.deps, {
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('resume-traccia'),
+      text: 'aspetta e poi rispondi',
+    });
+    expect(first.stopped).toBe('suspended');
+    await resumeTurn(h.deps, first.turnId);
+
+    expect(h.turns.get(first.turnId)?.counters.resumes).toBe(0);
+    // La ripresa c e, e dichiara **zero**: e la stessa cosa che dice il
+    // contatore. Se le due letture tornassero a essere due espressioni, qui
+    // comparirebbe 1 con il contatore ancora a 0.
+    expect(spanDelTurno(h.home).map((a) => a['muffin.turn.resume'])).toEqual([0]);
+  });
+
+  it('un crash compare come ripresa in tutti e due', async () => {
+    const h = harness([wait('w1'), wait('w2'), answer('fatto')]);
+    const first = await runTurn(h.deps, {
+      principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('resume-traccia-crash'),
+      text: 'aspetta, poi muori',
+    });
+    h.db
+      .prepare(
+        `UPDATE turns SET status = 'interrupted', claimed_by = NULL, claim_token = NULL,
+                          wait_for = NULL, wake_at = NULL WHERE id = ?`,
+      )
+      .run(first.turnId);
+    await resumeTurn(h.deps, first.turnId);
+
+    expect(h.turns.get(first.turnId)?.counters.resumes).toBe(1);
+    expect(spanDelTurno(h.home).map((a) => a['muffin.turn.resume'])).toEqual([1]);
   });
 });
