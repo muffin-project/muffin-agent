@@ -27,19 +27,19 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
-`slice/procedure-al-momento-giusto` è spinta **senza PR**: `@AGENTS.md` in
-`CLAUDE.md`, `loop.md` ridotto a manutenzione, skill `riprendi`/`giudice`/
-`sfida`, tre rules e il test che le copre — è quel test che autorizza i nuovi
-`paths` di `strumenti.yml`. Locale 30/08: tsc pulito, `vitest run .claude` 68
-verdi. La PR è lavoro, non manutenzione: la sceglie `/riprendi`.
+Slice 3 integrata (#266, `1a0817a`): `loop.md` è manutenzione, non un manuale;
+skill `riprendi`/`sfida`/`giudice`; tre rules path-scoped. Due trappole misurate
+e scritte in `riprendi/SKILL.md`: un blocco di iniezione che **non riesce**
+annulla l'intera skill in silenzio, e la sintassi si esegue **anche dentro un
+code span**. Prossima: slice 4, archive sotto `history/` — prima l'inventario
+di non-collisione, poi il move.
 
 ## Parcheggiato: come arriva una richiesta che non si fa adesso
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
-forma. In breve: **`jobs` non ha un tool** (solo `muffin jobs add`); `wait` chiamato 1
-volta, `todo` 2, i 7 todo fermi dal 27/08 e invisibili fuori dalla sessione; 44
-fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto dei tool **non** è più il
-problema (`0d519cb`): non ripartire da lì.
+forma: **`jobs` non ha un tool**, i 7 todo sono fermi dal 27/08 e invisibili
+fuori dalla sessione, 44 fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto
+dei tool **non** è più il problema (`0d519cb`): non ripartire da lì.
 
 ## STEP 0 — knowledge architecture
 
