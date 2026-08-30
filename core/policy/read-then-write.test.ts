@@ -21,7 +21,7 @@ import { DISK_TIER } from '../../agent/tools/fs.js';
  * Non è una scoperta: sono tre righe di M5-BIS (D2 «`fs_write` non scrive mai
  * un file reale oggi», D3 «`muffin undo` non esiste», D11 «`draft` è ancora
  * ineseguibile da ogni percorso»), tutte e tre puntate sulla stessa slice
- * `undo-journal`, con la forma già decisa dall'owner il 16/08 (M5-BIS §1:
+ * `undo-journal`, con la forma già decisa dall'owner il 16/08 (M5-BIS.md#il-modello-di-reversibilità--la-decisione-sotto-fswrite:
  * journal per turno, copia prima della mutazione, undo che riallinea
  * filesystem **e** turno).
  *

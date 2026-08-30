@@ -122,7 +122,7 @@ describe('acceptance · B · continuità del runtime', () => {
 
         // What "un job che dice «inviato» è arrivato?" actually asks for, now
         // that `Deliver` returns a typed `DeliveryOutcome` and `settle` is
-        // `markRan`'s only caller (ADR-0035 §1, PR #42): not that the fire
+        // `markRan`'s only caller (ADR-0035, PR #42): not that the fire
         // stops advancing — a failed delivery must not put the job back on
         // the clock either, since the model has already been paid for and
         // re-firing would just double the spend to re-send `outcome.text` —
@@ -257,7 +257,7 @@ describe('acceptance · B · il turno sospendibile', () => {
             throw new Error(`il passo "${step}" non è nel contesto del secondo processo:\n${sent.transcript}`);
           }
         }
-        // The deterministic completion criterion travels with it — M5-BIS §2
+        // The deterministic completion criterion travels with it — M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool
         // asks for one, and this is the only place the model reads about it.
         if (!/nessun passo/.test(sent.transcript)) {
           throw new Error(`il criterio di completamento non è nel contesto:\n${sent.transcript}`);

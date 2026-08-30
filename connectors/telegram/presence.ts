@@ -33,7 +33,7 @@ const ACTION_RENEW_MS = 4_000;
 /**
  * The floor between two live draft/edit calls — B11, applied uniformly to
  * both transports. Not measured against the real Bot API: this environment
- * has no token to probe with, and PRACTICES §2's own rule for exactly that
+ * has no token to probe with, and PRACTICES.md#read-upstream-before-depending-on-upstream's own rule for exactly that
  * case is not to assume the number but to drop the dependency on it — so
  * this is the conservative value the slice's own brief specifies, not a
  * tuned one. Old Muffin's `telegram_draft.ts` used 2.5s for its own,

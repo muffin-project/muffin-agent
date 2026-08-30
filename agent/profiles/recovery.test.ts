@@ -5,7 +5,7 @@ import { recoveryStep } from './recovery.js';
 /**
  * The wiring — that production walks this list in the declared order — is
  * pinned through `runTurn` in `agent/loop.test.ts`, which is the test that
- * matters (PRACTICES §5). This file holds the cheaper property the wiring test
+ * matters (PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate). This file holds the cheaper property the wiring test
  * cannot state without becoming unreadable: that the four steps are four
  * different interventions rather than one nudge with four names, which is
  * exactly what the loop used to execute.

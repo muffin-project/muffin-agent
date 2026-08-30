@@ -372,7 +372,7 @@
         "adr": "ADR-0040",
         "file": "core/memory/maintenance.ts:212-226 (openContradictions), :286-305 (resolveContradiction); cli/memory.ts:256-311 (muffin memory review), :323-343 (muffin memory review keep <fact-id>)",
         "trigger": "not scheduled at all — read on demand by the owner; 'open' is derived (both facts of the pair still active), not a stored status, so a question closes itself the moment the conversation supersedes either fact.",
-        "cost": "spends nothing to read; answering costs one supersede() write and no model call — the owner decides, never the model (ADR-0032 §9 kept intact)."
+        "cost": "spends nothing to read; answering costs one supersede() write and no model call — the owner decides, never the model (ADR-0032 kept intact)."
       }
     ]
   },

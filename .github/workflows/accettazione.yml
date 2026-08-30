@@ -38,7 +38,7 @@
 # **secondo** gate del job, non solo un log informativo: fallisce anche su una
 # riga `READY` dell'inventario senza uno scenario, o con uno scenario ancora
 # `atteso-rosso` — "pronta" e "provata rossa apposta" non possono essere vere
-# insieme (mandato DAY-1 §4.9). Conseguenza nota, non silenziosa: oggi restano
+# insieme (MANDATO-DAY-1.md#day-1-ready). Conseguenza nota, non silenziosa: oggi restano
 # sette righe già `READY` senza scenario qui (B14, C2, C3, C6, C7, D4, D6 —
 # dettaglio in `docs/blueprint/M5-BIS.md`), che un'altra slice in corso
 # (`slice/triage-day1`) riclassifica; finché non è integrata questo step resta

@@ -292,7 +292,7 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
  * Two things it deliberately is not. It is **not a new store table**: the answer
  * lives in the facts, where the question lived. And it is **not the model
  * writing memory** — this is the owner deciding, by hand, on a row the pipeline
- * put in front of them, so it leaves ADR-0032 §9 (*"il contributo del modello al
+ * put in front of them, so it leaves ADR-0032 (*"il contributo del modello al
  * contenuto della memoria è zero, non indiretto"*) exactly where it was. The
  * open question about a `ricorda` tool that writes is a different question and
  * this does not touch it.

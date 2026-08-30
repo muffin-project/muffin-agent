@@ -1,6 +1,6 @@
 # Verifica automatica: typecheck + suite.
 #
-# Esiste per una ragione precisa, scritta in docs/ORCHESTRATION.md §3: «un
+# Esiste per una ragione precisa, scritta in docs/ORCHESTRATION.md#work-is-claim-oriented: «un
 # subagente che dice di aver fatto non è evidenza». Vale per gli umani quanto
 # per gli agenti — «i test passano» detto in una PR è un'affermazione, qui
 # diventa un fatto che qualcun altro ha eseguito.
@@ -194,7 +194,7 @@ jobs:
 # runner mentirebbe. Ma non compra ciò che il commit precedente diceva di
 # comprare, e questo blocco esiste perché quella frase non resti in piedi.
 #
-# Lezione, ed è la stessa di ORCHESTRATION.md §3 rivolta contro chi scrive:
+# Lezione, ed è la stessa di ORCHESTRATION.md#work-is-claim-oriented rivolta contro chi scrive:
 # ho letto un log invece di fidarmi della spunta — giusto — e poi ho creduto
 # alla mia prima spiegazione invece di verificarla. Il secondo passo vale
 # quanto il primo.

@@ -6,7 +6,7 @@ owns Git/PR mechanics. `JUDGE.md` owns independent CRITICAL review.
 
 The default is not ceremony. A practice applies when its trigger applies.
 
-## 1. Reconstruct reality before editing
+## Reconstruct reality before editing
 
 **Trigger:** every new task or resumed slice.
 
@@ -23,7 +23,7 @@ HEAD for mechanical facts.
 SessionStart injects `LAVORO.md` automatically through
 `.claude/hooks/inject-state.mjs`; it does not inject the old `STATE.md` chronicle.
 
-## 2. Read upstream before depending on upstream
+## Read upstream before depending on upstream
 
 **Trigger:** adding a dependency, using an unfamiliar external API, or relying on
 behaviour that is unstable or load-bearing.
@@ -40,7 +40,7 @@ the relied-on behaviour is security-, durability- or compatibility-critical.
 A new dependency must justify what it replaces and why the existing runtime or
 stdlib is insufficient.
 
-## 3. Prior art before durable shape
+## Prior art before durable shape
 
 **Trigger:** designing a public, durable, expensive-to-change or agent-facing
 shape: CLI, config/schema, file format, extension contract, workflow/harness,
@@ -61,7 +61,7 @@ then use prior art to challenge the proposed shape.
 Private reversible implementation details with a clear in-repo precedent do not
 need a literature review.
 
-## 4. Parse at boundaries; preserve provenance
+## Parse at boundaries; preserve provenance
 
 **Trigger:** untrusted or external data enters a process/domain.
 
@@ -72,7 +72,7 @@ For model-visible or effect-bearing data, preserve the attributes that policy or
 causality depends on: principal, tenant, provenance, taint, resource identity,
 call/turn identity and effect state. Do not reconstruct them later from text.
 
-## 5. Model judgement and deterministic contracts stay separate
+## Model judgement and deterministic contracts stay separate
 
 **Trigger:** about to encode a classifier, heuristic, ranking or decision in
 code.
@@ -88,7 +88,7 @@ transaction/migration semantics, secret boundaries and effect ordering.
 A hard-coded semantic classifier needs a measured reason to exist and a way to
 observe when it is wrong.
 
-## 6. Prove the claim, not the existence of code
+## Prove the claim, not the existence of code
 
 **Trigger:** implementing or fixing behaviour.
 
@@ -108,7 +108,7 @@ Then use the smallest evidence that can falsify the claim:
 Do not run a larger suite merely because it exists. Do not skip a production
 path merely because a unit test is green.
 
-## 7. Mechanise repeated or load-bearing rules
+## Mechanise repeated or load-bearing rules
 
 **Trigger:** the same mistake happens twice, or violating a rule would create a
 material failure.
@@ -125,7 +125,7 @@ local comment / explicit contract
 Mechanisms must themselves be tested against the failure they claim to prevent.
 A checker that only checks its own output is not an independent guarantee.
 
-## 8. Persist findings in the right home
+## Persist findings in the right home
 
 **Trigger:** a finding, decision or new evidence would otherwise live only in the
 conversation/session.
@@ -143,7 +143,7 @@ Use `docs/README.md` to choose the owner:
 
 Do not write the same fact into several homes "for consistency".
 
-## 9. Research is evidence, not authority
+## Research is evidence, not authority
 
 **Trigger:** committing external research/audit results.
 
@@ -159,7 +159,7 @@ A useful research artifact states:
 Use primary sources for technical contracts where available. Prefer a new dated
 snapshot over silently rewriting an old audit into apparent current truth.
 
-## 10. Pure Muffin and one owner's data are different layers
+## Pure Muffin and one owner's data are different layers
 
 **Trigger:** adding personality, defaults, examples, preferences or learned
 behaviour.
@@ -173,7 +173,7 @@ behaviour.
 A personal fact must not enter repository defaults. A product identity property
 must not depend on one owner teaching it after install.
 
-## 11. Keep operational context disposable
+## Keep operational context disposable
 
 `LAVORO.md` may contain the current objective, live PRs, blockers, owner decisions
 and next action. It must stay small enough to inject whole at SessionStart and be
@@ -182,7 +182,7 @@ safe to delete without losing product knowledge.
 Finished work moves out of the handoff. Git history, M5/ADR/evidence and current
 authority documents retain what matters.
 
-## 12. Documentation follows the claim
+## Documentation follows the claim
 
 Update only the authoritative home whose meaning changed, plus a derived view if
 it is genuinely generated/checked from that source.

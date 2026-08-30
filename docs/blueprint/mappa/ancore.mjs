@@ -13,7 +13,8 @@
  *   node docs/blueprint/mappa/ancore.mjs          # rigenera
  *   node docs/blueprint/mappa/ancore.mjs --check  # esce 1 se è cambiato
  *
- * ORCHESTRATION.md §14.
+ * La regola che questo script serve — una mappa è una vista derivata, e le
+ * viste derivate marciscono — sta in `README.md`, qui accanto.
  */
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

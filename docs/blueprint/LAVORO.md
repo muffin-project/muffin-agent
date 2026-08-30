@@ -69,5 +69,5 @@ taint. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
 famiglie su 8; socket v2; il `try` di `recall.ts` avvolge anche la lettura della
 provenienza, quindi un guasto dello store si traveste da causa di rete.
 
-**Truth maintenance:** M5-BIS possiede status Gate, PERCORSO §0 l'ordine.
+**Truth maintenance:** M5-BIS possiede status Gate, PERCORSO-CRITICO.md#ordine-corrente l'ordine.
 `STATE.md` è cronologia, non stato corrente.
