@@ -1347,6 +1347,34 @@ async function drive(
   turn.setAttributes({ 'muffin.context.class': turnClass, 'muffin.context.tools_exposed': exposed.length });
 
   if (!contextBuilt) {
+    /**
+     * La finestra di history, letta **prima** del recall e non dopo.
+     *
+     * E lo stesso taglio che `buildContext` renderizza piu sotto — calcolato
+     * una volta sola perche i due non possano mai dissentire su cosa voglia
+     * dire "reinjected" (`agent/context/history-taint.ts`). Sale qui, e non
+     * cambia di contenuto salendo: la riga dell owner di questo turno viene
+     * appesa alla sessione piu sotto, quindi `spoken` non l ha mai vista.
+     *
+     * Cosa ci guadagna il recall: i `traceId` che questa finestra porta sono
+     * esattamente i turni che il modello ha gia davanti, e sono cio che il
+     * recall deve smettere di ripescare.
+     */
+    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
+    /**
+     * I turni gia nel contesto: quelli della finestra, piu **questo**.
+     *
+     * `record.id` e nell elenco perche gli episodi di questo turno sono gia
+     * scritti quando il recall gira — quello dell owner un attimo fa, e al
+     * resume anche quello dell agente. Ripescarli sarebbe far rileggere al
+     * modello cio che ha appena detto come se qualcun altro l avesse
+     * confermato.
+     */
+    const turniInContesto = [
+      record.id,
+      ...spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined),
+    ];
+
     // Evidence first: what was said is recorded before anything is generated, so
     // a crash mid-turn cannot lose the input that caused it.
     let currentEpisodeId: number | undefined;
@@ -1369,6 +1397,10 @@ async function drive(
         // content nobody at tier 0 actually said.
         trustTier: record.taint,
         createdAt: now().toISOString(),
+        // Il turno che l ha prodotto — lo stesso valore che la history porta
+        // come `traceId`, cosi "l ho gia davanti" e un confronto di identita e
+        // non di testo.
+        turnId: record.id,
       });
     }
 
@@ -1384,7 +1416,13 @@ async function drive(
           deps.memory.recall,
           input.tenant,
           input.text,
-          currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {},
+          {
+            excludeTurnIds: turniInContesto,
+            // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
+            // che non dipende dalla colonna nuova, quindi vale anche su una
+            // riga che il lineage non ce l ha.
+            ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
+          },
         );
         const inherited = recallTaint(result);
         snapshot.raiseTaint(inherited);
@@ -1453,7 +1491,6 @@ async function drive(
      * `check()` below — only the *stamp this turn leaves for the next one* no
      * longer inherits a tier this turn did not itself produce.
      */
-    const spoken = reinjectedHistory(deps.sessions.read(input.session), MAX_HISTORY_TURNS);
     const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
 
@@ -1891,6 +1928,11 @@ async function drive(
              */
             trustTier: snapshot.intrinsicTaint(),
             createdAt: now().toISOString(),
+            // Lo stesso `record.id` della riga dell owner qui sopra: le due
+            // meta dello scambio portano un turno solo, che e la cosa che
+            // rende "questo scambio e gia davanti al modello" una domanda con
+            // risposta invece di un confronto di stringhe.
+            turnId: record.id,
           });
         }
         return finish(turn, 'answered', text, iterations, usage);
