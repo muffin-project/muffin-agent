@@ -43,7 +43,6 @@ si registra), **billing CI**.
 
 | PR | difetto reale a HEAD | esito |
 |---|---|---|
-| #244 no-progress | sì, il meccanismo non esiste | REBASE + 2 fix: non fa typecheck (`ToolContext.intrinsicTaint`), e `wrap-tool.ts:46` rilancia un `Error` nuovo che rompe `instanceof ApprovalRequired` (`loop.ts:1981`, `:2226`) |
 | #246 security A/B | in parte | REIMPLEMENT-SMALL: `evals/security/scenarios.ts:38-88` ridichiara le capability invece di importarle, quindi resta verde quando la produzione deriva |
 | #186 undo | — | SALVAGE, non merge: 141 commit indietro, 5 conflitti. Il lineage è rientrato con #253; l'undo/redo va valutato a parte |
 
@@ -53,10 +52,14 @@ Il non-committato trovato in `.codex/worktrees/pr186-orchestrator` è salvato in
 ## Aperto, non bloccante
 
 **Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il kernel rifiuta
-al momento della chiamata e il modello impara per rifiuto — incluso il tetto di
-taint, per cui «leggi, calcola, scrivi» è rifiutato *sempre* e nessuno gli dice
+alla chiamata e il modello impara per rifiuto — incluso il tetto di taint, per
+cui «leggi, calcola, scrivi» è rifiutato *sempre* senza che nessuno gli dica
 perché. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`. Va
-nella coda volatile, perché il taint cambia dentro il turno.
+nella coda volatile: il taint cambia dentro il turno.
+
+**Giro a vuoto, chiuso.** Rileggeva gli stessi file con gli stessi argomenti
+(turno a747ae67: 5 letture ridondanti su 14 chiamate). `runTool` avvisa e basta,
+contando su `turn_tool_calls` — quindi sopravvive al resume.
 
 **Poi:** memory health osservabile — embedder disponibile o no, modalità
 lexical/hybrid/vector, arretrato dei vettori, fallimenti del giudice. Il fallback
