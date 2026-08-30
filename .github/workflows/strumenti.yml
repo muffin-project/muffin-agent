@@ -103,9 +103,27 @@
 # `.claude/` entri qui da solo. Un elenco di nomi (`deleghe.mjs`,
 # `riconcilia.mjs`, …) sarebbe invecchiato nella direzione pericolosa: il primo
 # file nuovo sarebbe tornato invisibile, che è il difetto che questo file
-# esiste per chiudere. Restano fuori — di proposito, e sono senza test —
-# `.claude/commands/**`, `.claude/settings.json`, `.claude/loop.md`,
+# esiste per chiudere.
+#
+# ## La superficie nuova (2026-08-30): rules, skills e il prompt del loop
+#
+# `.claude/rules/**`, `.claude/skills/**` e `.claude/loop.md` entrano qui perché
+# da oggi **un test li copre** (`.claude/procedure.test.ts`), che è il criterio
+# di questo job: gira sui file di `.claude/` che un test copre. Includerli senza
+# quel test avrebbe fatto girare un job che non prova niente — la forma di verde
+# che questo repository ha già pagato una volta.
+#
+# Coprono un guasto che è per costruzione silenzioso: una skill col frontmatter
+# malformato non viene offerta, una rule con un glob morto non si carica mai, e
+# in entrambi i casi non succede niente di visibile. Si nota l'assenza di un
+# comando mesi dopo, e si dà la colpa al modello.
+#
+# Restano fuori — di proposito, e sono senza test — `.claude/settings.json`,
 # `.claude/deleghe/**` (digest rigenerati) e `.claude/worktrees/**`.
+# `.claude/commands/**` era elencato qui fra gli esclusi fino al 2026-08-30:
+# quella directory **non è mai esistita** in questo repository, e nominarla
+# suggeriva una superficie che nessuno aveva. I comandi personalizzati sono
+# comunque confluiti nelle skill.
 #
 # Il trigger ricalca `ci.yml`: `pull_request` più il push su `main` soltanto,
 # così un push su una slice non paga due run per la stessa verifica, e
@@ -118,6 +136,9 @@ on:
   pull_request:
     paths:
       - '.claude/hooks/**'
+      - '.claude/rules/**'
+      - '.claude/skills/**'
+      - '.claude/loop.md'
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'
@@ -125,6 +146,9 @@ on:
     branches: [main]
     paths:
       - '.claude/hooks/**'
+      - '.claude/rules/**'
+      - '.claude/skills/**'
+      - '.claude/loop.md'
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'

@@ -11,13 +11,25 @@ is the supported primitive that actually loads it.
 Everything below is what is true for Claude Code and for no other agent. The
 invariants live above; do not restate them here.
 
-## Zero-context continuation
+## Which surface carries which procedure
 
-A bare `/loop` runs `.claude/loop.md`.
+Four surfaces, four different moments. They are not interchangeable, and using
+one for another's job is how `.claude/loop.md` became a manual.
 
-That loop reconstructs observed repository and delegation state, selects the next
-claim, loads only the context that claim makes load-bearing, and verifies it
-according to `docs/ORCHESTRATION.md`.
+| Surface | Moment |
+|---|---|
+| `/riprendi` | one-shot: observe state, reconstruct, pick the next claim |
+| `/goal` | close **one** verifiable claim, turn after turn |
+| `/loop` (`.claude/loop.md`) | periodic session maintenance; it stops itself |
+| fresh session + `/giudice` | the independent CRITICAL review |
+
+A `/goal` condition must be an **executable check**, never a state described in
+prose: its judge is a small fast model, and prose is exactly what this repository
+already knows how to fool itself with.
+
+Project skills and path-scoped rules live in `.claude/skills/` and
+`.claude/rules/`. Their bodies invoke the authoritative document; they do not
+restate it.
 
 For current work use, in this order: observed Git/worktree/PR/check/delegation
 state; `docs/blueprint/LAVORO.md` as a compact handoff; then the ordering and
