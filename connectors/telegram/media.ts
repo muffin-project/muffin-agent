@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import type { Message } from '@grammyjs/types';
 import type { TelegramApiLike } from './api.js';
+import { causaDiRete } from '../../core/net/causa.js';
 
 /**
  * Files in and files out.
@@ -124,7 +125,7 @@ export async function downloadToVault(
   } catch (error) {
     // The URL carries the bot token. It never appears in an error, a log or a
     // trace — the message says what failed, not where it was fetched from.
-    throw new Error(`download fallito: ${error instanceof Error ? error.name : 'errore'}`);
+    throw new Error(`download fallito: ${causaDiRete(error)}`);
   }
   if (!response.ok) throw new Error(`download fallito: HTTP ${response.status}`);
 
