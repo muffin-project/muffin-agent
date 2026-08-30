@@ -39,11 +39,33 @@
 export type StatoSuperficie = {
   readonly id: string;
   readonly connessa: boolean;
+  /**
+   * Avviata, e non ha ancora detto niente.
+   *
+   * Non e' ne' viva ne' caduta, ed e' la distinzione che mancava: fra il
+   * momento in cui `connectSurfaces` fa partire il connettore e il momento in
+   * cui `getMe` risponde passa da qualche centesimo a **due minuti** (65s di
+   * timeout piu' un ritentativo di trasporto). In quella finestra l'assenza di
+   * una riga veniva letta come «non e' stata nemmeno tentata» e `doctor`
+   * diceva all'owner di controllare `surfaces.enabled` e riavviare un gateway
+   * sano — un consiglio che riproduce il sintomo, perche' riavviare rifa'
+   * partire l'handshake. La finestra e' larga esattamente quando la rete e'
+   * lenta, cioe' quando l'owner corre `doctor`.
+   */
+  readonly inAvvio?: boolean;
   /** Da quando dura **questo** stato, non da quando la superficie esiste. */
   readonly da: string;
   /** Solo quando non e' connessa: cosa ha detto l'ultimo fallimento. */
   readonly causa?: string;
-  /** Quanti battiti di fila sono falliti. Zero quando e' connessa. */
+  /**
+   * Cosa deve fare l'owner, quando chi registra lo sa meglio di `doctor`.
+   *
+   * «Abilitata ma senza owner» non si ripara riavviando il gateway: si ripara
+   * con `muffin surface enable`. Senza questo campo la riga diceva la cosa
+   * giusta col rimedio sbagliato, che e' peggio di non dirla.
+   */
+  readonly rimedio?: string;
+  /** Quanti battiti di fila sono falliti. Zero quando e' connessa o in avvio. */
   readonly fallimentiDiFila: number;
 };
 
@@ -64,6 +86,22 @@ export class SaluteSuperfici {
   }
 
   /**
+   * Tentata, adesso, in modo **sincrono**.
+   *
+   * Chiamata da `connectSurfaces` nel momento in cui fa partire il connettore,
+   * non dal connettore stesso: e' proprio l'attesa del primo battito che
+   * bisogna coprire, e un registro che si popola solo quando la rete risponde
+   * non copre il caso in cui la rete non risponde.
+   *
+   * Non sovrascrive niente: una superficie che sta gia' parlando non torna
+   * indietro perche' qualcuno l'ha registrata due volte.
+   */
+  inAvvio(id: string, ora: Date): void {
+    if (this.stati.has(id)) return;
+    this.stati.set(id, { id, connessa: false, inAvvio: true, da: ora.toISOString(), fallimentiDiFila: 0 });
+  }
+
+  /**
    * Un battito fallito.
    *
    * La causa dell'**ultimo** fallimento, non del primo: quando un guasto cambia
@@ -71,11 +109,20 @@ export class SaluteSuperfici {
    * cosa provare adesso. `da` resta quello del primo, perche' e' la durata a
    * distinguere un lampo da un guasto.
    */
-  caduta(id: string, causa: string, ora: Date): void {
+  caduta(id: string, causa: string, ora: Date, rimedio?: string): void {
     const prima = this.stati.get(id);
-    const daQuando = prima !== undefined && !prima.connessa ? prima.da : ora.toISOString();
-    const quanti = prima !== undefined && !prima.connessa ? prima.fallimentiDiFila + 1 : 1;
-    this.stati.set(id, { id, connessa: false, da: daQuando, causa, fallimentiDiFila: quanti });
+    // Un guasto che segue un avvio comincia adesso, non quando il connettore e'
+    // partito: `inAvvio` e' attesa, non ancora un guasto, e sommarli
+    // gonfierebbe la durata proprio nel caso lento.
+    const giaCaduta = prima !== undefined && !prima.connessa && prima.inAvvio !== true;
+    this.stati.set(id, {
+      id,
+      connessa: false,
+      da: giaCaduta ? prima.da : ora.toISOString(),
+      causa,
+      ...(rimedio === undefined ? {} : { rimedio }),
+      fallimentiDiFila: giaCaduta ? prima.fallimentiDiFila + 1 : 1,
+    });
   }
 
   /** Solo le superfici che qualcuno ha davvero provato a connettere. */
