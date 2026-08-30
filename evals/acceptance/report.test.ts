@@ -8,7 +8,7 @@ import type { ScenarioEntry } from './manifest.js';
  * acceptance suite — `report.ts`'s own module docstring explains why that
  * split exists. These tests build a synthetic inventory row, a synthetic
  * manifest entry and a synthetic vitest result by hand, so the two behaviours
- * mandato DAY-1 §4.9 (P39) asks for are each provable in milliseconds:
+ * MANDATO-DAY-1.md#day-1-ready (P39) asks for are each provable in milliseconds:
  *
  *  1. a row the inventory calls `READY` whose scenario is still `atteso-rosso`
  *     fails the report, named.
@@ -202,7 +202,7 @@ describe('outcomesOf — the one reading of vitest JSON, whether this script ran
  * affatto. `b-job-script` è esattamente quel caso. Prima di questi test, il suo
  * rosso — non il suo salto: il suo **rosso** — non produceva nessuna riga,
  * nessun contatore e nessun exit code: per chi legge il report che il mandato
- * DAY-1 §4.9 tratta come gate autoritativo, indistinguibile da uno scenario mai
+ * MANDATO-DAY-1.md#day-1-ready tratta come gate autoritativo, indistinguibile da uno scenario mai
  * scritto.
  */
 describe('summarize — ciò che vitest ha eseguito e nessuna riga rivendica', () => {

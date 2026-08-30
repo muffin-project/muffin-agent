@@ -4,13 +4,13 @@ import { notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from 
  * The one place that knows which surfaces exist, and the only caller of
  * `Surface.handles`.
  *
- * ADR-0021 §1: *"Tutte le surface abilitate sono connesse contemporaneamente.
+ * ADR-0021: *"Tutte le surface abilitate sono connesse contemporaneamente.
  * Nessuna è «il» canale"*. This is that registry, and it is what lets the
  * scheduler, the REPL and `muffin observe` stop each carrying their own opinion
  * about which channels are real — three opinions that had already disagreed.
  *
  * It is deliberately not a map keyed by surface id. A channel is allowed to
- * carry an address (`telegram:-1001234`, ADR-0021 §4) and only the surface knows
+ * carry an address (`telegram:-1001234`, ADR-0021) and only the surface knows
  * how to read its own; asking each in turn keeps that knowledge inside the
  * implementation instead of putting a parser here that would have to learn every
  * surface's addressing scheme — which is precisely the boundary the previous

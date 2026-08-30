@@ -896,7 +896,7 @@ describe('checkTemporalWindow', () => {
 
 describe('invariant: a retired fact never comes back looking active', () => {
   it('holds across every combination of asOf, surface, since/until and neighbours', async () => {
-    // The minimum measure PRACTICES §5 and the mandate both ask for: not one
+    // The minimum measure PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate and the mandate both ask for: not one
     // scenario, but a sweep over the parameter space, on both halves that can
     // return a fact (graph hop and semantic match).
     const { store, vectors } = harness();

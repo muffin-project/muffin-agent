@@ -48,7 +48,7 @@
  *    mistero: sta misurato nei transcript di quelle già fatte, e si legge prima
  *    di lanciarne quaranta invece che a metà.
  *
- * ORCHESTRATION.md §3 (un subagente che dice di aver fatto non è evidenza).
+ * ORCHESTRATION.md#work-is-claim-oriented (un subagente che dice di aver fatto non è evidenza).
  */
 import { execFileSync, execSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';

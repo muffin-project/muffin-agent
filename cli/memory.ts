@@ -441,7 +441,7 @@ export function cmdMemoryReview(home: string, verbose = false): number {
  * deletes — so the retired belief keeps `superseded_by` pointing here and
  * `muffin memory why` reads the decision back as a chain. The owner is deciding
  * by hand on a row the pipeline put in front of them, which is why this does not
- * touch the open ADR-0032 §9 question about the model writing memory: nothing
+ * touch the open ADR-0032 question about the model writing memory: nothing
  * here is the model.
  */
 export function cmdMemoryReviewKeep(home: string, factId: number): number {

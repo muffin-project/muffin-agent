@@ -157,7 +157,7 @@ describe('persona in the system prompt', () => {
   });
 
   it('keeps the owner name out of the pure-muffin files', () => {
-    // PRACTICES.md §9: persona.md and voice.md ship to every install and must
+    // PRACTICES.md#research-is-evidence-not-authority: persona.md and voice.md ship to every install and must
     // carry no fact about a specific owner. identity.md is this owner's own
     // pact — it lives in the Root of Trust exactly because it is personal —
     // and is allowed to name him (it does, at identity.md:86). This used to

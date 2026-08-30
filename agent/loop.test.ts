@@ -1200,7 +1200,7 @@ describe('the loop hands the model its own reasoning back', () => {
     // compactToolResults rewrites tool_result payloads in place. It walks every
     // block of every message, and a thinking block that came back edited is a
     // 400 — the one loud failure in this whole area. This is the test that says
-    // the two features were asked what they do to each other (PRACTICES §11).
+    // the two features were asked what they do to each other (PRACTICES.md#keep-operational-context-disposable).
     const big = 'x'.repeat(200_000);
     const provider = new ScriptedProvider([
       thinkThenCall('demo_big'),

@@ -565,7 +565,7 @@ export function buildRuntime(
   }
 
   /**
-   * The two runtime primitives (M5-BIS §2) — registered **last**, and the
+   * The two runtime primitives (M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
    * position is a decision rather than an accident of where the import landed.
    *
    * `profile.maxToolsExposed` truncates this list by registration order, and
