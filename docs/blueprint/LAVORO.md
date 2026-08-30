@@ -17,14 +17,6 @@ verde si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». La CI di GitHub
 è rossa per **fatturazione**: i job muoiono in 2s senza eseguire niente, quindi
 il gate locale è l'unica prova.
 
-## Il telefono ora dice quando smette
-
-Chiuso da #260/#261: il log dice la **causa** (`cause.code`, mai `.message` —
-l'URL porta il token) e `doctor` guarda la **superficie**, non il processo.
-Resta la regola: `gateway.err` registra solo i fallimenti e non li data, quindi
-dice *quanti*, mai *per quanto*. **Non dedurne una durata** — il 30/08 l'ho
-fatto e ho sbagliato di 19 ore.
-
 ## Le decisioni dell'owner
 
 **Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
@@ -35,21 +27,16 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
-`slice/procedure-al-momento-giusto` (3e94e8a) è spinta su origin **senza PR**:
-`@AGENTS.md` in `CLAUDE.md`, `.claude/loop.md` ridotto a manutenzione, le tre
-skill `riprendi`/`giudice`/`sfida`, tre rules path-scoped e
-`.claude/procedure.test.ts` che le copre (5 test) — è il test che autorizza
-`strumenti.yml` a includere quei `paths`. Locale al 30/08: `tsc --noEmit`
-pulito, `vitest run .claude` 7 file/68 test verdi. Aprire la PR è un lavoro,
-non manutenzione: la sceglie `/riprendi`.
+`slice/procedure-al-momento-giusto` è spinta **senza PR**: `@AGENTS.md` in
+`CLAUDE.md`, `loop.md` ridotto a manutenzione, skill `riprendi`/`giudice`/
+`sfida`, tre rules e il test che le copre — è quel test che autorizza i nuovi
+`paths` di `strumenti.yml`. Locale 30/08: tsc pulito, `vitest run .claude` 68
+verdi. La PR è lavoro, non manutenzione: la sceglie `/riprendi`.
 
 ## Parcheggiato: come arriva una richiesta che non si fa adesso
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
-forma, perché il tema tocca insieme work/todo, memoria, esposizione dei tool e
-person model.
-
-In breve: **`jobs` non ha un tool** (solo `muffin jobs add`); `wait` chiamato 1
+forma. In breve: **`jobs` non ha un tool** (solo `muffin jobs add`); `wait` chiamato 1
 volta, `todo` 2, i 7 todo fermi dal 27/08 e invisibili fuori dalla sessione; 44
 fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto dei tool **non** è più il
 problema (`0d519cb`): non ripartire da lì.
@@ -77,7 +64,9 @@ ripetersi. Non giustifica refactor laterali. Originale:
 rifiuta alla chiamata e il modello impara per rifiuto — incluso il tetto di
 taint. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
 
-**Altro:** community è solo una forma di stringa; `pricing.ts` sottostima 5
+**Altro:** `gateway.err` registra solo i fallimenti e non li data: dice
+*quanti*, mai *per quanto*, e il 30/08 dedurne una durata mi ha fatto sbagliare
+di 19 ore. Community è solo una forma di stringa; `pricing.ts` sottostima 5
 famiglie su 8; socket v2; il `try` di `recall.ts` avvolge anche la lettura della
 provenienza, quindi un guasto dello store si traveste da causa di rete.
 
