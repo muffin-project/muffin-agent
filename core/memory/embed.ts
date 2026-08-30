@@ -10,6 +10,8 @@
  * architectural one, and so tests never need a model running.
  */
 
+import { causaDiRete } from '../net/causa.js';
+
 export interface Embedder {
   readonly id: string;
   readonly dimensions: number;
@@ -31,9 +33,21 @@ const EMBED_TIMEOUT_MS = 30_000;
 export class EmbedderUnavailable extends Error {
   constructor(
     readonly embedderId: string,
-    cause: string,
+    /**
+     * Perche' non e' disponibile, in una riga, e come **campo** e non solo
+     * dentro il messaggio.
+     *
+     * Il campo esiste perche' chi legge a valle non deve rileggere una frase
+     * per estrarne la parte che gli serve. `recall` stampa una lista di
+     * etichette corte, non prosa: senza questo campo prendeva `error.name`,
+     * che qui vale sempre `EmbedderUnavailable` — una costante, identica per
+     * ollama giu', per il modello inesistente e per la rete caduta. Erano i
+     * tre casi che chi legge deve poter separare, ed erano esattamente i tre
+     * che quella stringa univa.
+     */
+    readonly causa: string,
   ) {
-    super(`embedder "${embedderId}" non disponibile: ${cause}`);
+    super(`embedder "${embedderId}" non disponibile: ${causa}`);
     this.name = 'EmbedderUnavailable';
   }
 }
@@ -68,7 +82,25 @@ export class OllamaEmbedder implements Embedder {
           signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
         });
       } catch (error) {
-        throw new EmbedderUnavailable(this.id, error instanceof Error ? error.message : String(error));
+        // `causaDiRete` e non `.message`, e la ragione e' misurata: quando
+        // ollama non gira, `fetch` alza `TypeError` con `message = "fetch
+        // failed"` e mette la causa vera solo in `cause.code`
+        // (`ECONNREFUSED`). Passare `.message` consegnava «fetch failed» a
+        // `doctor` e al recall, cioe' buttava qui l'unica parola che separa
+        // «ollama non e' avviato» da «la rete e' caduta» — e nessuno a valle
+        // poteva piu' recuperarla.
+        //
+        // E' anche il campo giusto per la stessa ragione di
+        // `connectors/telegram/api.ts`, benche' il rischio qui sia minore:
+        // Telegram porta il bot token nel path dell'URL, mentre la chiave
+        // `openai-compat` viaggia in un header e Ollama non ne ha nessuna.
+        // Ma `baseUrl` lo scrive l'owner e lo schema (`z.string().url()`)
+        // accetta anche `https://utente:chiave@host`, e su URL malformato
+        // `fetch` mette l'URL intero dentro `.message`. `causaDiRete` accetta
+        // un campo solo se ha una forma che un URL non puo' avere, quindi la
+        // domanda «questo baseUrl porta un segreto?» smette di dover avere
+        // una risposta.
+        throw new EmbedderUnavailable(this.id, causaDiRete(error));
       }
       if (!response.ok) throw new EmbedderUnavailable(this.id, `HTTP ${response.status}`);
       const body = (await response.json()) as { embedding?: number[] };
@@ -123,7 +155,10 @@ export class OpenAICompatEmbedder implements Embedder {
         signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });
     } catch (error) {
-      throw new EmbedderUnavailable(this.id, error instanceof Error ? error.message : String(error));
+      // Stessa scelta e stesse ragioni di `OllamaEmbedder`, e qui la seconda
+      // meta' pesa di piu': questo e' il caso in cui `baseUrl` punta davvero
+      // fuori dalla macchina.
+      throw new EmbedderUnavailable(this.id, causaDiRete(error));
     }
     if (!response.ok) throw new EmbedderUnavailable(this.id, `HTTP ${response.status}`);
     const body = (await response.json()) as { data?: { embedding: number[] }[] };
