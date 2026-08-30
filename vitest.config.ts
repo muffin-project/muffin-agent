@@ -20,5 +20,18 @@ export default defineConfig({
     // `git status`, entrambi letti da vitest. Una lista di nomi arriva sempre
     // dopo l'albero che non conosceva ancora.
     exclude: escludiPerVitest(QUI),
+    // Cinque secondi — il default — non sono una scadenza, sono una gara con
+    // la CPU. Sotto `gate:local` questa suite gira 213 file in parallelo e
+    // impiega ~1160s di tempo-test in ~235s di orologio: un test che apre uno
+    // SQLite vero e fa girare le migrazioni non ci mette cinque secondi di
+    // lavoro, ci mette cinque secondi di *attesa*. Tre corse consecutive dello
+    // stesso SHA hanno prodotto tre rossi diversi, sempre per scadenza e mai
+    // per un'asserzione — cioè il rumore esatto che rende un gate inutile,
+    // perché un rosso che cambia file a ogni corsa non si distingue da un
+    // difetto vero. Venti secondi non nascondono un test che si impianta
+    // davvero — lo dice comunque, quattro volte più tardi — e chi ha bisogno di
+    // una scadenza più stretta la passa come terzo argomento di `it`, dove è
+    // visibile accanto alla ragione.
+    testTimeout: 20_000,
   },
 });

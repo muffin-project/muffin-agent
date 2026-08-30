@@ -8,9 +8,10 @@ import { startFakeTelegram } from '../telegram.js';
  * ## Il difetto, misurato
  *
  * Il 30/08/2026, sulla macchina dell'owner: Telegram abilitata, 44 turni veri
- * nel database, e dalle 17:08 del giorno prima il polling che falliva senza
- * interruzione — 3187 righe identiche in `gateway.err`, mentre
- * `api.telegram.org` rispondeva in 300ms. `muffin doctor` diceva:
+ * nel database, e 3187 fallimenti di polling registrati nell'arco di vita di un
+ * solo gateway — righe identiche in `gateway.err`, mentre `api.telegram.org`
+ * rispondeva in 326ms. Quante volte si sapeva; per quanto no, perche' quel file
+ * registra soltanto i fallimenti e non li data. `muffin doctor` diceva:
  *
  * ```text
  * ✓ gateway    attivo · pid 73344 · dal 29/08/26, 12:30 · in attesa · socket concorde
@@ -62,15 +63,35 @@ describe('acceptance · una superficie che smette di rispondere non resta verde'
     'doctor la nomina, dice da quanto e con che causa, e torna a tacere quando riprende',
     async () => {
       const tg = await startFakeTelegram();
-      const inst = await install({ main: [], env: { MUFFIN_GATEWAY_TICK_MS: '300' } });
+      // La soglia vera e' un minuto (`GUASTO_DOPO_MS`): aspettarla davvero
+        // renderebbe questo scenario un minuto piu' lento, e uno scenario lento
+        // e' uno scenario che prima o poi qualcuno toglie. La manopola e'
+        // dichiarata in `cli/doctor.ts` e non esiste su nessuna installazione.
+        const inst = await install({ main: [], env: { MUFFIN_GATEWAY_TICK_MS: '300', MUFFIN_GUASTO_DOPO_MS: '1500' } });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-bot-token');
         if (tok.code !== 0) throw new Error(`secret set: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
         if (enable.code !== 0) throw new Error(`surface enable: exit ${enable.code}\n${enable.err}`);
 
+        // --- (0) la stretta di mano tarda, e in quella finestra `doctor` deve
+        //     **tacere**. Prima della riparazione diceva «abilitata, ma il
+        //     gateway non ne ha notizia: non e' stata nemmeno tentata», usciva
+        //     1 e consigliava di riavviare — cioe' di rifare partire proprio
+        //     l'handshake che stava aspettando. La finestra e' larga fino a due
+        //     minuti sulla rete vera, ed e' larga esattamente quando la rete e'
+        //     lenta: cioe' quando l'owner corre `doctor`.
+        tg.ritardaGetMe(6_000);
         const gateway = await inst.gateway();
         await gateway.waitFor(/muffin gateway/, 20_000);
+
+        //     Si guarda l'assenza della riga, non il codice d'uscita: su una
+        //     installazione appena creata `doctor` esce 1 lo stesso per altri
+        //     `!` legittimi (nessun supervisore, consolidamento mai girato), e
+        //     asserire lo zero proverebbe una cosa piu' larga della claim.
+        const durante = await inst.muffin(['doctor']);
+        expect(durante.out).not.toMatch(/superfic/);
+        tg.ritardaGetMe(0);
 
         // --- (a) mentre risponde, `doctor` non allarma e lo dice una volta.
         const sana = await finche(async () => {
@@ -79,7 +100,10 @@ describe('acceptance · una superficie che smette di rispondere non resta verde'
         }, 30_000);
         expect(sana.out).not.toMatch(/superficie telegram/);
 
-        // --- (b) il long poll cade, e continua a cadere.
+        // --- (b) il long poll cade, e continua a cadere. Un lampo non basta:
+        //     sotto la soglia `doctor` tace, perche' un `!` su un
+        //     `ECONNRESET` fra due long poll insegna a scorrere oltre
+        //     `doctor` — che e' questo difetto al contrario.
         tg.rompi();
 
         const rotta = await finche(async () => {

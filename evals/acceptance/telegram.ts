@@ -46,13 +46,23 @@ export type FakeTelegram = {
   deliver(update: FakeUpdate): void;
   /**
    * Fa cadere il long poll come cade davvero: la connessione accettata e poi
-   * distrutta, cioe' l'`ECONNRESET` che il gateway dell'owner ha incontrato
-   * 3187 volte fra il 29 e il 30/08. Non un 500: un 500 e' una risposta, e la
-   * classe di guasto da riprodurre e' quella in cui risposta non ce n'e'.
+   * distrutta: la classe di guasto che il gateway dell'owner ha incontrato 3187
+   * volte fra il 29 e il 30/08. Non un 500 — un 500 e' una risposta, e la classe
+   * da riprodurre e' quella in cui risposta non ce n'e'.
    */
   rompi(): void;
   /** E torna a rispondere. */
   ripara(): void;
+  /**
+   * Fa tardare la stretta di mano.
+   *
+   * Serve a coprire la finestra fra «il connettore e' partito» e «Telegram ha
+   * risposto», che sulla rete vera arriva a due minuti (65s di timeout piu' un
+   * ritentativo) ed e' larga esattamente quando la rete e' lenta — cioe' quando
+   * l'owner corre `doctor`. Senza una manopola, un test puo' solo sperare di
+   * infilarsi in una finestra di millisecondi.
+   */
+  ritardaGetMe(ms: number): void;
   /** Every outbound call, in order. */
   sent(): SentCall[];
   /** Only `sendMessage`, the ones a person would actually read. */
@@ -75,6 +85,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   const queue: FakeUpdate[] = [];
   const calls: SentCall[] = [];
   let guasto = false;
+  let ritardoGetMe = 0;
   let nextUpdateId = 1;
   let nextMessageId = 1000;
 
@@ -99,7 +110,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       };
 
       if (method === 'getMe') {
-        ok({ id: 42, is_bot: true, first_name: 'Muffin', username: 'muffin_test_bot' });
+        const rispondi = (): void => ok({ id: 42, is_bot: true, first_name: 'Muffin', username: 'muffin_test_bot' });
+        if (ritardoGetMe > 0) setTimeout(rispondi, ritardoGetMe);
+        else rispondi();
         return;
       }
 
@@ -157,6 +170,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
     },
     ripara: () => {
       guasto = false;
+    },
+    ritardaGetMe: (ms) => {
+      ritardoGetMe = ms;
     },
     sent: () => calls.slice(),
     messages: () =>
