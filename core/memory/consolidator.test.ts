@@ -14,7 +14,7 @@ import { IngestFailed, type IngestReport } from './ingest.js';
  *
  * `consolidation-wiring.test.ts` is the one that proves production reaches this
  * — through `runTurn` and into real facts. This file is the second half of
- * PRACTICES §5: once the wiring is proven, the timing rules get their own tests,
+ * PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate: once the wiring is proven, the timing rules get their own tests,
  * because "fires 20 s after the last turn" and "fires at the twelfth turn" are
  * not observable from a test that has to run a whole pipeline.
  */

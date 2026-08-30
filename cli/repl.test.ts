@@ -155,7 +155,7 @@ describe('a channel nothing serves', () => {
 
 /**
  * The real wiring, B11 — through `buildRuntime` and a fake SSE HTTP server,
- * not a substituted `Provider` object. PRACTICES §5: this is the test that
+ * not a substituted `Provider` object. PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate: this is the test that
  * fails without the wiring, and a hand-rolled `Provider.chatStream` fake
  * would not exercise `agent/providers/openai-compat.ts`'s own SSE parsing at
  * all — the seam this suite exists to prove is `runRepl` → `runTurn` → the

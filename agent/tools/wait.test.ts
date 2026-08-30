@@ -13,7 +13,7 @@ import { makeWaitTool, waitCapability } from './wait.js';
  * arms a barrier on the turn and comes back immediately; the loop honours the
  * barrier at its next suspension point, writes the row and returns to the
  * caller. A handler that slept would pass every assertion about its *output*
- * and be the exact thing M5-BIS §2 says is not a wait — so the assertion is on
+ * and be the exact thing M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool says is not a wait — so the assertion is on
  * the clock and on the barrier, not on the string.
  */
 

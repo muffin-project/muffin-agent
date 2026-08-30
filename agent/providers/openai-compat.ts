@@ -37,7 +37,7 @@ import {
  *    fine", and the difference is one request parameter away.
  *  - The OpenAI SDK's own types have no `reasoning` field on the response
  *    message (checked, v7.4.0), so turning it on is not a one-line change: it
- *    needs a schema at the boundary (PRACTICES §4) and it costs reasoning
+ *    needs a schema at the boundary (PRACTICES.md#parse-at-boundaries-preserve-provenance) and it costs reasoning
  *    tokens that are not being billed now. That is a decision with a price, so
  *    it is not smuggled into a correctness fix.
  *

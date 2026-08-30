@@ -24,7 +24,7 @@ export type Expectation =
        * The failure this row's `reason` predicts, checked against the error
        * `scenario()` actually catches — not merely "did it throw".
        *
-       * Mandato DAY-1 §4.9 (P39): `it.fails` alone marks a scenario `passed`
+       * MANDATO-DAY-1.md#day-1-ready (P39): `it.fails` alone marks a scenario `passed`
        * on *any* throw, so a scenario can keep reading "atteso-rosso, ragione
        * X" long after the code started throwing for reason Y — the reason
        * goes stale and nothing notices, which is exactly the shape D10 was
@@ -137,7 +137,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
   // Promoted (this slice): `Deliver` returns a typed `DeliveryOutcome` and
-  // `Scheduler.settle` is markRan's only caller (ADR-0035 §1, PR #42). The
+  // `Scheduler.settle` is markRan's only caller (ADR-0035, PR #42). The
   // fire still advances on a failed delivery — that stays true on purpose,
   // so the model is not re-billed to re-send text already sitting in
   // `outcome.text` — but the turn's own `delivery` column now records

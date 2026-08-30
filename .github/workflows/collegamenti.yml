@@ -1,0 +1,85 @@
+# I riferimenti fra documenti non hanno un compilatore, e questo repo ha già
+# pagato la loro assenza.
+#
+# ## Perché un job a parte
+#
+# `ci.yml` e `accettazione.yml` hanno entrambi `docs/**` in `paths-ignore`, per
+# la ragione scritta lì: una PR di soli documenti non esercita nulla che quelle
+# suite coprano, e pagarle costerebbe ~7 minuti per niente.
+#
+# La conseguenza, però, è che fino al 2026-08-30 **niente** verificava i
+# riferimenti — proprio sulle PR che li cambiano. È lo stesso punto cieco che
+# `strumenti.yml` ha chiuso per `.claude/`, con la stessa forma di rimedio: un
+# job che gira solo sui file che copre e costa quanto un `npm ci` più un test.
+#
+# Misurato al primo giro, non stimato: vedi il run di questa PR.
+#
+# ## Cosa copre, e cosa no
+#
+# `docs/collegamenti.test.ts` sorveglia il **materiale vivo** — prosa che
+# governa HEAD, codice, tooling, CI. ADR, evidence e history sono append-only e
+# datati: un `§N` scaduto lì dentro è un documento storico che cita com'era il
+# mondo allora, e correggerlo sarebbe riscrivere la storia.
+#
+# `paths` include i sorgenti perché la metà dei riferimenti vive nei commenti
+# del codice di prodotto: un filtro sui soli `docs/**` avrebbe lasciato fuori
+# proprio i file in cui il drift del 19/08 si è depositato.
+
+name: collegamenti
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'README.md'
+      - '.claude/**'
+      - '.github/workflows/**'
+      - 'agent/**'
+      - 'cli/**'
+      - 'core/**'
+      - 'connectors/**'
+      - 'evals/**'
+      - 'defaults/**'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'README.md'
+      - '.claude/**'
+      - '.github/workflows/**'
+      - 'agent/**'
+      - 'cli/**'
+      - 'core/**'
+      - 'connectors/**'
+      - 'evals/**'
+      - 'defaults/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  collegamenti:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Senza pipe, per la stessa ragione di `ci.yml`: `cmd | tail` riporta
+      # l'exit status di `tail`.
+      - name: i riferimenti risolvono
+        run: npx vitest run docs/collegamenti --reporter=dot

@@ -157,7 +157,7 @@ develops gluten and produces a tough, chewy crumb instead of a tender one.</p>
 
     it('reaches production extraction: an HTML page is reduced to its article, nav/banner/footer/script/style dropped', async () => {
       // No extractFn override — this is the real Defuddle+linkedom pipeline,
-      // proving the wiring reaches it (docs/PRACTICES.md §5), not a mock of it.
+      // proving the wiring reaches it (docs/PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate), not a mock of it.
       const { fetchFn } = fetchScript([
         new Response(ARTICLE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }),
       ]);

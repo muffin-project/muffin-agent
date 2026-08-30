@@ -34,7 +34,7 @@ vengono prima di allargare capability o architettura.
 5  journey integrate / battery finale quando una claim lo richiede
 ```
 
-### 1 · Chiudere la compensazione, non solo il restore
+### Chiudere la compensazione, non solo il restore
 
 La parte fisica esiste: per gli effect reversibili supportati, Muffin prende il
 checkpoint prima della mutazione e `muffin undo` può ripristinare il filesystem.
@@ -59,7 +59,7 @@ La slice viva è `slice/undo-riallinea-il-turno` / PR #186. Git decide se è anc
 aperta: non creare una seconda implementazione parallela. `M5-BIS.md` possiede lo
 stato D11.
 
-### 2 · Decidere il workflow locale read → write
+### Decidere il workflow locale read → write
 
 È già un failure osservato, quindi precede qualunque discussione astratta sulla
 breadth dei tool: leggere un file porta oggi il turno a taint 2 e la scrittura
@@ -85,7 +85,7 @@ La prova terminale è un percorso reale del tipo:
 
 non un test isolato del valore di taint.
 
-### 3 · Riconciliare il Gate prima di usare i conteggi per decidere
+### Riconciliare il Gate prima di usare i conteggi per decidere
 
 `M5-BIS.md` è l'unica authority degli status, ma alcuni suoi motivi sono rimasti
 indietro rispetto a HEAD. Prima di usare “N BLOCKER” come criterio operativo va
@@ -104,7 +104,7 @@ Casi già noti da verificare, non da aggiornare alla cieca:
 Questa riconciliazione non autorizza nuovi subsystem. Se una riga è rossa solo
 per evidence, la risposta è evidence.
 
-### 4 · Da qui ordina l'uso
+### Da qui ordina l'uso
 
 Durante il dogfood il segnale più forte è un fallback reale. Registrare almeno:
 

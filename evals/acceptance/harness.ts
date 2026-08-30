@@ -13,7 +13,7 @@ import { startFakeProvider, type FakeProvider, type FakeProviderOptions } from '
  * `MUFFIN_HOME`, and asserts what leaves it: stdout, stderr, the exit code, the
  * rows in the database. Nothing imports `runTurn` and hands it fakes — that
  * proves a function is correct and says nothing about whether Muffin works,
- * which is the distinction ORCHESTRATION.md §11 draws between "unit test" and
+ * which is the distinction ORCHESTRATION.md#anti-metric draws between "unit test" and
  * "cablaggio in produzione". The defect family this repo keeps paying for lives
  * exactly in the gap: a mechanism with green tests that no real path reaches.
  *

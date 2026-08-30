@@ -6,7 +6,7 @@ import { guardAttesoRosso, titoloDelSalto } from './scenario.js';
 
 /**
  * `guardAttesoRosso` is the mechanism that replaced plain `it.fails` (mandato
- * DAY-1 §4.9 / P39): an `atteso-rosso` scenario is only "correctly red" if it
+ * MANDATO-DAY-1.md#day-1-ready / P39): an `atteso-rosso` scenario is only "correctly red" if it
  * throws for the reason the manifest declares, not for any reason at all.
  * These tests drive it directly with a fake `fn`, so they run in milliseconds
  * and do not need a live vitest suite underneath them — the same reason

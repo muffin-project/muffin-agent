@@ -17,7 +17,7 @@
  * reason as the dependency guard: it cannot happen by reflex, and it shows up in
  * the transcript as something someone chose.
  *
- * Practice §6, second rung to fourth in one step — justified because the cost of
+ * PRACTICES.md#prove-the-claim-not-the-existence-of-code, second rung to fourth in one step — justified because the cost of
  * the mistake is invisible (a correct commit, on the wrong branch) and the cost
  * of the guard is a variable on the rare intentional case.
  *

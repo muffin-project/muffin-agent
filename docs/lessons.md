@@ -64,7 +64,7 @@ in the recorded array.
 
 **The generalisation, which is the reason this entry exists:** a unit test that
 constructs the input the mechanism wants is not evidence that anything ever
-constructs it. Practice §5 already says to test the wiring — this is the case
+constructs it. PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate already says to test the wiring — this is the case
 where *both* sides had wiring tests and the join between them had none. When two
 components each defer to the other, the test has to span the join.
 
@@ -794,7 +794,7 @@ inverted its own priority" — because showing the owner a real answer must neve
 be blocked by a decorative heartbeat failing. That design is correct. Its
 consequence, unexamined, is that a call which *always* fails looks identical to
 one that occasionally does: no error surfaces anywhere, `doctor` has no probe
-for it (there is no token to probe with in development, and PRACTICES §2's own
+for it (there is no token to probe with in development, and PRACTICES.md#read-upstream-before-depending-on-upstream's own
 rule for that case — do not assume, drop the dependency — was not applied
 here; it was assumed instead), and the docstring above the call read "the
 keepalive exists from day one," stated as if day one had ever worked.
@@ -1036,7 +1036,7 @@ proved red on the pre-fix code before the fix landed
 
 ## A swallowed intent write makes "not started" and "started" indistinguishable **(this build)**
 
-`agent/loop.ts`'s two-phase tool record (ADR-0042 §6) exists to turn a crash
+`agent/loop.ts`'s two-phase tool record (ADR-0042) exists to turn a crash
 mid-call into a fact instead of a guess: an intent row with no outcome row
 reads as "maybe done", and a non-rerunnable tool's resume refuses to repeat it
 for exactly that reason — the whole point of writing the intent row *before*
@@ -1066,10 +1066,14 @@ omitted it wrote a silent `NULL` and skipped the taint bump with no error anywhe
 (audit P05, BLOCKER,
 `docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md:153`) —
 even though `ToolOutcome.tier` was already required one level up (ADR-0044).
-The guarantee lived in the caller's discipline, not in the callee's type:
-ORCHESTRATION.md §15's exact shape of "the type permits the wrong state",
-where the fix is the same move it names — a form that fails on its own, not
-one that depends on someone remembering.
+The guarantee lived in the caller's discipline, not in the callee's type: the
+exact shape of "the type permits the wrong state", where the fix is the same
+move the rule names — a form that fails on its own, not one that depends on
+someone remembering. That rule came from the owner directive "repair at the
+root" (2026-08-15), which the 2026-08-19 documentation refactor removed from
+`ORCHESTRATION.md` without rehoming it; it is still readable with
+`git show 451cd916:docs/ORCHESTRATION.md`, and it currently has no
+authoritative home.
 
 *Found and fixed in `slice/wal-intent`, following the 2026-08-17 triage that
 named it the first item on Gate 1's critical path.*

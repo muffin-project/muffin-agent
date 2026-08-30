@@ -15,7 +15,7 @@ import { annunciaSalto } from './non-provabile.js';
  * marked as passed"). That primitive only answers "did it throw", and a
  * scenario the manifest calls "red because of X" can go on reading that way
  * long after the code starts throwing for an unrelated reason Y (mandato
- * DAY-1 §4.9 / P39 — the exact shape D10 was caught in by PR #28: its
+ * MANDATO-DAY-1.md#day-1-ready / P39 — the exact shape D10 was caught in by PR #28: its
  * `reason` named a branch that had already merged, and the scenario stayed
  * "passed" under `it.fails` because *something* still threw, just not the
  * thing the manifest described). So this now checks the failure itself

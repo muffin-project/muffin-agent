@@ -2,7 +2,7 @@
 /**
  * Genera `mappa.html` inlinando i dati estratti dal repo dentro il template.
  *
- * L'artefatto visivo non si disegna a mano (ORCHESTRATION §14): i dati stanno
+ * L'artefatto visivo non si disegna a mano (`README.md`, qui accanto): i dati stanno
  * in `docs/blueprint/mappa/*.json` con un'ancora `file:riga` per ogni voce, e
  * questo script li cuce dentro la pagina. Ridisegnare la mappa dopo un cambio
  * di codice è quindi rieseguire due comandi, non ricordarsi di una cosa.
