@@ -811,12 +811,12 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 291,
+    "line": 309,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 408,
+    "line": 426,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
