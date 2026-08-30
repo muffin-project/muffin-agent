@@ -41,6 +41,7 @@ function harness(over: { intents?: number } = {}) {
   const sockets: FakeSocket[] = [];
   const dispatches: { event: string; data: unknown; seq: number }[] = [];
   const logs: string[] = [];
+  const stati: { viva: boolean; causa?: string }[] = [];
   const sleeps: number[] = [];
   const gw = new DiscordGateway({
     token: 'tok',
@@ -48,6 +49,7 @@ function harness(over: { intents?: number } = {}) {
     gatewayUrl: async () => 'wss://gateway.discord.gg',
     onDispatch: (event, data, seq) => dispatches.push({ event, data, seq }),
     onLog: (l) => logs.push(l),
+    onStato: (viva, causa) => stati.push(causa === undefined ? { viva } : { viva, causa }),
     wsFactory: (_url) => {
       const s = new FakeSocket();
       sockets.push(s);
@@ -57,7 +59,7 @@ function harness(over: { intents?: number } = {}) {
       sleeps.push(ms);
     },
   });
-  return { gw, sockets, dispatches, logs, sleeps, latest: () => sockets[sockets.length - 1]! };
+  return { gw, sockets, dispatches, logs, stati, sleeps, latest: () => sockets[sockets.length - 1]! };
 }
 
 const HELLO = (interval: number) => ({ op: 10, d: { heartbeat_interval: interval } });
@@ -258,5 +260,62 @@ describe('stop()', () => {
     await run;
 
     expect(h.latest().closedWith).toEqual({ code: 1000, reason: 'stop' });
+  });
+});
+
+
+/**
+ * Il difetto trovato dal secondo giudice sulla #260, e la ragione per cui un
+ * `onLog` non basta.
+ *
+ * `run()` **si risolve** sia quando si e' chiesto `stop()` sia quando rinuncia
+ * su un 4004 (token revocato) o 4013/4014 (intent tolti): e' una scelta
+ * dichiarata nell'intestazione di `run()`, e va bene per il tipo. Ma vuol dire
+ * che il `.catch` di `connectSurfaces` non scatta mai su quel ramo, e la
+ * superficie restava registrata «connessa» dalla stretta di mano d'avvio: 19 ore
+ * di Discord muto e `muffin doctor` che stampava `✓ superfici discord —
+ * connesse`. Verde perche' non arriva niente, sulla seconda superficie.
+ */
+describe('il socket dice se sta portando eventi, non solo cosa e successo', () => {
+  it('READY e la prova che arrivano i messaggi', async () => {
+    const h = harness();
+    const run = h.gw.run();
+    await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+    h.latest().serverSends(HELLO(45_000));
+    h.latest().serverSends(READY('s1'));
+    await vi.waitFor(() => expect(h.stati).toContainEqual({ viva: true }));
+
+    h.gw.stop();
+    await run;
+  });
+
+  it('un token revocato (4004) registra la caduta, non il silenzio', async () => {
+    const h = harness();
+    const run = h.gw.run();
+    await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+    h.latest().serverSends(HELLO(45_000));
+    h.latest().close(4004, 'Authentication failed');
+    await run;
+
+    const cadute = h.stati.filter((s) => !s.viva);
+    expect(cadute.length).toBeGreaterThan(0);
+    // Deve distinguersi da uno stop voluto: e' l'unica riga che lo dice a chi
+    // guarda da fuori, visto che la promise si chiude bene in tutti e due i casi.
+    expect(cadute.some((s) => s.causa?.includes('non riprovo') === true)).toBe(true);
+    expect(h.stati.some((s) => s.viva)).toBe(false);
+  });
+
+  it('anche una chiusura da cui si riprova e una caduta: a distinguerla e la durata', async () => {
+    const h = harness();
+    const run = h.gw.run();
+    await vi.waitFor(() => expect(h.sockets.length).toBe(1));
+    h.latest().serverSends(HELLO(45_000));
+    h.latest().serverSends(READY('s1'));
+    await vi.waitFor(() => expect(h.stati).toContainEqual({ viva: true }));
+    h.latest().close(4000, 'unknown error');
+    await vi.waitFor(() => expect(h.stati.filter((s) => !s.viva).length).toBeGreaterThan(0));
+
+    h.gw.stop();
+    await run;
   });
 });

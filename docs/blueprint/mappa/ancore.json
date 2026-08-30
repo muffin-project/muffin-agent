@@ -1216,7 +1216,7 @@
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
-    "line": 141,
+    "line": 148,
     "testo": "};"
   },
   "connectors/telegram/connector.ts:153": {
