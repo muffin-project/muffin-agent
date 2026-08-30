@@ -75,6 +75,8 @@ export type ConnectorDeps = {
       documents: { path: string; outline: string }[];
     }>;
   };
+  /** Come per Telegram: dove si registra se questa superficie sta rispondendo. */
+  salute?: { connessa: (id: string, ora: Date) => void; caduta: (id: string, causa: string, ora: Date) => void };
   config: DiscordConfig;
   now?: () => Date;
   log?: (line: string) => void;
@@ -186,6 +188,10 @@ export class DiscordConnector {
   async run(signal?: AbortSignal): Promise<void> {
     const log = this.deps.log ?? (() => {});
     const me = await this.deps.api.me();
+    // Dopo che `me()` ha risposto, mai prima: e' la stessa disciplina della
+    // riga di `connectSurfaces` (N2, judge PR #42), che smise di dire
+    // «connessa» finche' Discord non aveva parlato.
+    this.deps.salute?.connessa('discord', new Date(this.now()));
     log(`discord: connesso come @${me.username} (${me.id})`);
 
     // Anything left pending from a previous life comes first, before new work.

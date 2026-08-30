@@ -26,6 +26,7 @@ import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
 import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
+import type { StatoSuperficie } from '../core/surface/salute.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -82,6 +83,26 @@ export type DoctorOptions = {
    */
   embedderProbe?: () => Promise<void>;
 };
+
+/**
+ * Da quanto dura uno stato, in parole.
+ *
+ * Serve a una distinzione sola, ed e quella che decide se la riga vale la pena
+ * di essere letta: un lampo di rete e diciannove ore di silenzio non devono
+ * somigliarsi. Grana grossa di proposito — «19 ore» dice tutto quello che
+ * serve, «19 ore 3 minuti 12 secondi» chiede al lettore di fare la sottrazione.
+ */
+export function quantoDura(daIso: string, ora: Date): string {
+  const inizio = new Date(daIso).getTime();
+  if (Number.isNaN(inizio)) return 'un tempo non registrato';
+  const secondi = Math.max(0, Math.round((ora.getTime() - inizio) / 1000));
+  if (secondi < 60) return 'meno di un minuto';
+  const minuti = Math.floor(secondi / 60);
+  if (minuti < 60) return `${String(minuti)} ${minuti === 1 ? 'minuto' : 'minuti'}`;
+  const ore = Math.floor(minuti / 60);
+  if (ore < 48) return `${String(ore)} ${ore === 1 ? 'ora' : 'ore'}`;
+  return `${String(Math.floor(ore / 24))} giorni`;
+}
 
 export async function runDoctor(home = paths().home, options: DoctorOptions = {}): Promise<DoctorReport> {
   const p = paths(home);
@@ -778,6 +799,58 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
             ? ' · socket concorde'
             : ` · socket risponde pid ${String(identita.pid)}, la riga dice ${gateway.pid}`;
       ok('gateway', `attivo · pid ${gateway.pid} · dal ${since} · ${gateway.status}${canale}`);
+
+      /**
+       * Se le superfici **abilitate** stiano rispondendo, adesso.
+       *
+       * Il difetto che questa riga esiste per chiudere, misurato il 30/08/2026:
+       * Telegram era abilitata, aveva portato 44 turni veri, e dalle 17:08 del
+       * giorno prima il polling falliva ininterrottamente. `doctor` stampava
+       * `gateway attivo · socket concorde` e `nessuna delivery mancante`. Vere
+       * tutte e due, **e verdi perche' non arrivava piu' niente**: una
+       * superficie che non riceve non produce turni, quindi non produce
+       * consegne, quindi non ne mancano. Ogni indicatore guardava a valle del
+       * punto rotto, e piu' il guasto era completo piu' i numeri erano
+       * tranquilli.
+       *
+       * Si chiede al gateway e non al database perche' «sta rispondendo
+       * adesso» e' una domanda che non sopravvive al processo che la risponde:
+       * una riga durevole lasciata da un gateway morto direbbe com'era il
+       * mondo l'ultima volta che qualcuno ha guardato — la stessa classe di
+       * bugia. Un silenzio non e' un guasto: un gateway avviato prima di
+       * questa versione non conosce il verbo, e le superfici salgono dopo il
+       * socket.
+       */
+      const abilitate = config.surfaces.enabled.filter((id) => id !== 'cli');
+      if (abilitate.length > 0) {
+        const risposta = (await askGateway(home, 'superfici')) as { superfici?: StatoSuperficie[] } | null;
+        const stato = risposta?.superfici;
+        if (stato !== undefined) {
+          const perId = new Map(stato.map((r) => [r.id, r]));
+          const vive: string[] = [];
+          for (const id of abilitate) {
+            const riga = perId.get(id);
+            if (riga === undefined) {
+              warn(
+                `superficie ${id}`,
+                'abilitata, ma il gateway non ne ha notizia: non e stata nemmeno tentata',
+                `controlla \`surfaces.enabled\` e riavvia il gateway`,
+              );
+            } else if (riga.connessa) {
+              vive.push(id);
+            } else {
+              const da = quantoDura(riga.da, new Date());
+              warn(
+                `superficie ${id}`,
+                `non risponde da ${da} (${String(riga.fallimentiDiFila)} tentativi di fila): ${riga.causa ?? 'causa non registrata'} — ` +
+                  `finche dura, quello che ti scrivono di li non arriva, e ne le consegne ne i turni lo dicono: restano verdi perche non arriva niente`,
+                'riavvia il gateway; se non basta, `muffin gateway run` in primo piano mostra ogni tentativo',
+              );
+            }
+          }
+          if (vive.length > 0) ok('superfici', `${vive.join(', ')} — connesse e in ascolto`);
+        }
+      }
     } else if (existsSync(paths(home).gatewayStopped)) {
       // Fermo **di proposito** non è un guasto, ed è la distinzione che decide
       // se questa riga vale la pena di essere letta. Un `!` giallo su uno stato

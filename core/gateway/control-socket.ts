@@ -206,7 +206,7 @@ async function ask(path: string, verb: string, timeoutMs: number): Promise<Contr
  * «questo canale non ha risposto», che su un gateway avviato prima di questa
  * versione è la risposta normale.
  */
-export async function askGateway(home: string, verb: 'identify' | 'status'): Promise<unknown | null> {
+export async function askGateway(home: string, verb: 'identify' | 'status' | 'superfici'): Promise<unknown | null> {
   const path = resolveSocketPath(home);
   if (!existsSync(path)) return null;
   try {
