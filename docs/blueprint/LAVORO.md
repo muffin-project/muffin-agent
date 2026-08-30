@@ -7,31 +7,34 @@ authority/data/effect. Non da questa lista.
 **Goal owner:** un agente *davvero usabile*, rivisto modulo per modulo, e tutto
 ciò che manca prima della VPS.
 
-**Come si trovano le cose.** Non leggendo il codice: pilotando il REPL in **tmux**
-(`capture-pane` rende lo schermo; `script` registra i byte), o misurando su
-tracce, WAL, `gateway.err` e il `muffin.db` vero — da lì sono nate tutte le
-slice del 30/08.
+**Come si trovano le cose.** Pilotando il REPL in **tmux**, o misurando su
+tracce, log e il `muffin.db` vero — mai con `cp` dei suoi tre file, che dà una
+vista vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 
 **Il gate.** `npm run gate:local`: clone di HEAD **fuori** dal repository, `npm
-ci`, typecheck, build, suite host, accettazione host, e `gate-linux.sh` in
-Docker. Il verde si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». Il
-clone serve perché a mano la suite raccoglieva 945 file su 201: `.releases/` e
-`.codex/worktrees/` sono invisibili a `git status` e non a vitest.
+ci`, typecheck, build, suite, accettazione, e `gate-linux.sh` in Docker. Il
+verde si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». Il clone serve
+perché a mano la suite raccoglieva 945 file su 201.
 
-## Il telefono è configurato, ed è muto
+## Il telefono è configurato, e nessuno sa se sta bene
 
 `surfaces.enabled = ["cli","telegram","discord"]`, owner id su entrambe: **44
-turni Telegram** (28-29/08) e 3 Discord sono nel db. Poi, dalle 17:08 del 29/08,
-zero turni su qualsiasi superficie e **3187 righe identiche** in `gateway.err`:
-`telegram: polling fallito (Telegram 0: TypeError)`. Da questa macchina
-`api.telegram.org` risponde in 300ms: non è la rete, è il poller morto.
+turni Telegram** e 3 Discord nel db, più due Telegram il 30/08. Funziona.
 
-Due difetti. Il log dice `error.name` e mai `.message` — scelta giusta, l'URL
-porta il token (`connectors/telegram/api.ts:148`) — ma butta anche `cause.code`,
-che è un simbolo (`UND_ERR_SOCKET`, `ECONNRESET`) e non può contenere un URL:
-19 ore di guasto senza una causa. E `doctor` stampa `gateway attivo · socket
-concorde` e `nessuna delivery mancante`: verde perché non arriva più niente.
-Nessun check guarda se una superficie **abilitata** è connessa.
+Non si può sapere **quando** smette. In una sola vita del gateway `gateway.err`
+ha raccolto **3187 righe identiche** — `telegram: polling fallito (Telegram 0:
+TypeError)` — mentre `api.telegram.org` risponde in 326ms. Quel file registra
+solo i fallimenti e non li data: dice *quanti*, mai *per quanto*.
+
+**Non concluderne una durata.** Il 30/08 l'ho fatto e mi sono sbagliato: da
+quelle righe più una copia incoerente del db avevo dedotto 19 ore di silenzio
+che non c'erano state.
+
+Due difetti veri, e sono quelli che #260 chiude: il log dice `error.name` e mai
+la causa (`connectors/telegram/api.ts:148` — l'URL porta il token, quindi
+`.message` è vietato, ma `cause.code` no); e `doctor` guardava il processo, non
+la superficie — `gateway attivo` e `nessuna delivery mancante` restano verdi
+**perché** non arriva niente.
 
 ## Le decisioni dell'owner
 

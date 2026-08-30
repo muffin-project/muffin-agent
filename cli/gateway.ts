@@ -32,6 +32,7 @@ import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { notDelivered } from '../core/surface/types.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
+import type { SaluteSuperfici } from '../core/surface/salute.js';
 
 /**
  * `muffin gateway` — the process that lives, and the three verbs around it.
@@ -635,6 +636,13 @@ export async function cmdGatewayRun(
    * recorded as undelivered instead of silently marked run.
    */
   let registry: SurfaceRegistry | null = null;
+  /**
+   * Assegnato dopo, letto pigramente dal socket: il canale di controllo si apre
+   * **prima** delle superfici di proposito (vedi `serveControlSocket` qui
+   * sotto), quindi la risposta deve leggere il registro nel momento in cui la
+   * domanda arriva, non nel momento in cui il gestore viene costruito.
+   */
+  let saluteSuperfici: SaluteSuperfici | null = null;
   const deliver: Deliver = async (channel, text) =>
     registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
 
@@ -789,6 +797,14 @@ export async function cmdGatewayRun(
           startedAt: avviatoAlle,
         };
       }
+      if (verb === 'superfici') {
+        // La domanda che nessuno sapeva fare: una superficie abilitata sta
+        // rispondendo adesso? Il gateway e' l'unico processo che lo sa, e la
+        // risposta non sopravvive a lui — per questo si chiede qui e non a una
+        // riga nel database. Prima che le superfici siano su, `null` dice
+        // «non ancora», che e' diverso da «nessuna».
+        return saluteSuperfici === null ? null : { superfici: saluteSuperfici.stato() };
+      }
       if (verb === 'status') {
         // Risposto dal processo stesso, race-free: e' la differenza fra questo
         // e leggere una riga che puo' essere sopravvissuta a chi l'ha scritta.
@@ -814,6 +830,7 @@ export async function cmdGatewayRun(
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
   registry = surfaces.registry;
+  saluteSuperfici = surfaces.salute;
   // M5-BIS B14, same as runRepl: a file the model produces during a job's
   // turn can reach the owner as a real attachment.
   attachSendFile(runtime, home, surfaces.registry);
