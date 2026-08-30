@@ -44,6 +44,15 @@ export type FakeTelegram = {
   url: string;
   /** Queue an inbound update; the next `getUpdates` returns it. */
   deliver(update: FakeUpdate): void;
+  /**
+   * Fa cadere il long poll come cade davvero: la connessione accettata e poi
+   * distrutta, cioe' l'`ECONNRESET` che il gateway dell'owner ha incontrato
+   * 3187 volte fra il 29 e il 30/08. Non un 500: un 500 e' una risposta, e la
+   * classe di guasto da riprodurre e' quella in cui risposta non ce n'e'.
+   */
+  rompi(): void;
+  /** E torna a rispondere. */
+  ripara(): void;
   /** Every outbound call, in order. */
   sent(): SentCall[];
   /** Only `sendMessage`, the ones a person would actually read. */
@@ -65,6 +74,7 @@ const HOLD_STEP_MS = 10;
 export async function startFakeTelegram(): Promise<FakeTelegram> {
   const queue: FakeUpdate[] = [];
   const calls: SentCall[] = [];
+  let guasto = false;
   let nextUpdateId = 1;
   let nextMessageId = 1000;
 
@@ -94,6 +104,10 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       }
 
       if (method === 'getUpdates') {
+        if (guasto) {
+          req.socket.destroy();
+          return;
+        }
         const start = Date.now();
         const drain = (): void => {
           if (queue.length > 0) {
@@ -137,6 +151,12 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
     url: `http://127.0.0.1:${port}`,
     deliver: (update) => {
       queue.push(update);
+    },
+    rompi: () => {
+      guasto = true;
+    },
+    ripara: () => {
+      guasto = false;
     },
     sent: () => calls.slice(),
     messages: () =>

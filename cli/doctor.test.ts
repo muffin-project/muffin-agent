@@ -18,7 +18,10 @@ import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
-import { runDoctor, sandboxOkDetail, type Check } from './doctor.js';
+import { runDoctor, sandboxOkDetail, quantoDura, type Check } from './doctor.js';
+import { serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
+import { GatewayLock } from '../core/gateway/lock.js';
+import type { StatoSuperficie } from '../core/surface/salute.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { MEMORY_SCHEMA } from '../core/memory/schema.js';
 import type { Embedder } from '../core/memory/embed.js';
@@ -1182,5 +1185,163 @@ describe('doctor dice quale commit sta girando', () => {
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('non so quale commit');
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+
+describe('quantoDura — un lampo e diciannove ore non si somigliano', () => {
+  const t0 = new Date('2026-08-30T12:00:00Z');
+  const meno = (ms: number): string => new Date(t0.getTime() - ms).toISOString();
+
+  it('sotto il minuto non finge una precisione', () => {
+    expect(quantoDura(meno(20_000), t0)).toBe('meno di un minuto');
+  });
+
+  it('minuti, ore e giorni, al singolare quando e uno', () => {
+    expect(quantoDura(meno(60_000), t0)).toBe('1 minuto');
+    expect(quantoDura(meno(25 * 60_000), t0)).toBe('25 minuti');
+    expect(quantoDura(meno(3_600_000), t0)).toBe('1 ora');
+    expect(quantoDura(meno(19 * 3_600_000), t0)).toBe('19 ore');
+    expect(quantoDura(meno(5 * 24 * 3_600_000), t0)).toBe('5 giorni');
+  });
+
+  it('una data illeggibile lo dice invece di stampare NaN', () => {
+    expect(quantoDura('non-una-data', t0)).toBe('un tempo non registrato');
+  });
+});
+
+/**
+ * Il difetto misurato il 30/08/2026 sulla macchina dell'owner.
+ *
+ * Telegram era abilitata e aveva portato 44 turni veri. Poi, alle 17:08 del 29,
+ * il polling ha smesso e non e ripartito: diciannove ore, zero turni, e
+ * `doctor` che stampava `gateway attivo · socket concorde` e `nessuna delivery
+ * mancante`. Vere tutte e due, **e verdi perche non arrivava piu niente** —
+ * una superficie che non riceve non produce turni, quindi non produce consegne,
+ * quindi non ne mancano. Ogni indicatore guardava a valle del punto rotto.
+ */
+describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
+  const aperti: ControlServer[] = [];
+  afterEach(async () => {
+    while (aperti.length > 0) await aperti.pop()?.close();
+  });
+
+  /** Una home con Telegram abilitata e un gateway vivo tenuto da questo processo. */
+  const conTelegram = (): string => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    const esito = new GatewayLock(db).claim(new Date(), 'in attesa', process.pid);
+    if (!('release' in esito)) throw new Error('la fixture non ha preso il lock');
+    db.close();
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = {
+      ...config.surfaces,
+      enabled: ['cli', 'telegram'],
+      telegram: { ownerUserId: 1, ownerChatId: 1 },
+    };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  const gatewayCheDice = async (dir: string, risposta: unknown): Promise<void> => {
+    aperti.push(
+      await serveControlSocket(dir, (verb) => {
+        if (verb === 'identify') {
+          return { protocol: 1, pid: process.pid, home: dir, codeSha: null, startedAt: new Date().toISOString() };
+        }
+        if (verb === 'superfici') return risposta;
+        return null;
+      }),
+    );
+  };
+
+  const caduta = (ore: number): StatoSuperficie => ({
+    id: 'telegram',
+    connessa: false,
+    da: new Date(Date.now() - ore * 3_600_000).toISOString(),
+    causa: 'Telegram 0: TypeError (ECONNRESET)',
+    fallimentiDiFila: 3187,
+  });
+
+  it('una superficie caduta si vede: da quanto, con che causa, quante volte', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, { superfici: [caduta(19)] });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('19 ore');
+    expect(c?.detail).toContain('ECONNRESET');
+    expect(c?.detail).toContain('3187');
+    expect(c?.remedy).toContain('gateway');
+  });
+
+  /**
+   * La riga che rende la prima una notizia e non rumore: dice **perche** gli
+   * altri indicatori restano verdi. Senza, l'owner legge il `!` e poi vede
+   * `consegne ✓` e conclude che il `!` esagera.
+   */
+  it('e dice perche le consegne e i turni non lo denunciano', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, { superfici: [caduta(19)] });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.detail).toContain('non arriva niente');
+  });
+
+  it('quando risponde, lo dice una volta e non allarma', async () => {
+    const dir = conTelegram();
+    const viva: StatoSuperficie = {
+      id: 'telegram',
+      connessa: true,
+      da: new Date(Date.now() - 3_600_000).toISOString(),
+      fallimentiDiFila: 0,
+    };
+    await gatewayCheDice(dir, { superfici: [viva] });
+
+    const report = await runDoctor(dir);
+    expect(report.checks.find((c) => c.name === 'superficie telegram')).toBeUndefined();
+    const riga = report.checks.find((c) => c.name === 'superfici');
+    expect(riga?.level).toBe('ok');
+    expect(riga?.detail).toContain('telegram');
+  });
+
+  it('abilitata ma mai tentata non passa per sana', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, { superfici: [] });
+
+    const c = await check(dir, 'superficie telegram');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('non ne ha notizia');
+  });
+
+  /**
+   * Un gateway avviato prima di questa versione non conosce il verbo, e le
+   * superfici salgono **dopo** il socket. In tutti e due i casi la risposta
+   * onesta e il silenzio: inventare un guasto da un «non lo so» sarebbe la
+   * stessa bugia al contrario.
+   */
+  it('un «non lo so» non diventa un guasto', async () => {
+    const dir = conTelegram();
+    await gatewayCheDice(dir, null);
+
+    const report = await runDoctor(dir);
+    expect(report.checks.find((c) => c.name.startsWith('superfic'))).toBeUndefined();
+  });
+
+  it('senza superfici oltre alla cli non chiede niente al gateway', async () => {
+    const dir = home();
+    const db = new DatabaseCtor(paths(dir).db);
+    new GatewayLock(db).claim(new Date(), 'in attesa', process.pid);
+    db.close();
+    let chiesto = false;
+    aperti.push(
+      await serveControlSocket(dir, (verb) => {
+        if (verb === 'superfici') chiesto = true;
+        return verb === 'identify' ? { protocol: 1, pid: process.pid, home: dir, codeSha: null, startedAt: '' } : null;
+      }),
+    );
+    await runDoctor(dir);
+    expect(chiesto).toBe(false);
   });
 });
