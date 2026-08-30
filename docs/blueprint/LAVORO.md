@@ -35,6 +35,14 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
+`slice/procedure-al-momento-giusto` (3e94e8a) è spinta su origin **senza PR**:
+`@AGENTS.md` in `CLAUDE.md`, `.claude/loop.md` ridotto a manutenzione, le tre
+skill `riprendi`/`giudice`/`sfida`, tre rules path-scoped e
+`.claude/procedure.test.ts` che le copre (5 test) — è il test che autorizza
+`strumenti.yml` a includere quei `paths`. Locale al 30/08: `tsc --noEmit`
+pulito, `vitest run .claude` 7 file/68 test verdi. Aprire la PR è un lavoro,
+non manutenzione: la sceglie `/riprendi`.
+
 ## Parcheggiato: come arriva una richiesta che non si fa adesso
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
