@@ -32,6 +32,13 @@ export type EpisodeInput = {
   vaultPath?: string;
   mediaMeta?: Record<string, unknown>;
   createdAt: string;
+  /**
+   * The turn that produced this episode — `TurnRecord.id`, which is also its
+   * `traceId`. Absent when the episode does not belong to one turn (vault
+   * ingestion, `observe-run`) or predates the column: NULL is an answer there,
+   * not a gap to fill by guessing.
+   */
+  turnId?: string;
 };
 
 export type Episode = EpisodeInput & { id: number; extractionV: number };
@@ -111,6 +118,8 @@ export type EpisodeHit = {
   connector: string;
   threadKey: string;
   supersededAt: string | null;
+  /** `episodes.turn_id`: NULL for rows written before the column, and for evidence no turn produced. */
+  turnId: string | null;
 };
 
 /**
@@ -131,6 +140,18 @@ export type EpisodeFilter = {
   /** ISO bounds on `created_at`, inclusive. */
   since?: string | undefined;
   until?: string | undefined;
+  /**
+   * Turni gia davanti al modello, da non ripescare.
+   *
+   * Filtra **dentro la query**, non dopo: una riga esclusa che passa la porta e
+   * viene tolta a valle ha comunque consumato uno slot di `LIMIT` e ha comunque
+   * pesato nella fusione. Il posto giusto e qui.
+   *
+   * `turn_id IS NULL` non e mai escluso: una riga senza lineage non e provato
+   * che sia in history, e togliere per non-sapere e la parte che
+   * `docs/blueprint/knowledge` chiama inventare precisione all'indietro.
+   */
+  excludeTurnIds?: readonly string[] | undefined;
 };
 
 export type ReviewItemInput = {
@@ -207,6 +228,9 @@ export class MemoryStore {
     // `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own
     // `ensureColumn` call exists to close (judge #106 giro 2).
     ensureColumn(db, 'facts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
+    // Nullable e senza default: un database esistente guadagna la colonna e non
+    // perde una riga, e nessuna riga storica riceve un turno che non ha avuto.
+    ensureColumn(db, 'episodes', 'turn_id', 'turn_id TEXT');
     // The pinned lookup runs on every recall call — every turn with memory
     // enabled — so it earns the same treatment `idx_facts_active` gives
     // `expired_at`. Placed after `ensureColumn`, never before: on a database
@@ -223,14 +247,15 @@ export class MemoryStore {
   addEpisode(input: EpisodeInput): number {
     const stmt = this.db.prepare(
       `INSERT INTO episodes (tenant_id, connector, thread_key, actor_id, role, kind, content,
-                             vault_path, media_meta, trust_tier, created_at, extraction_v)
+                             vault_path, media_meta, trust_tier, created_at, extraction_v, turn_id)
        VALUES (@tenantId, @connector, @threadKey, @actorId, @role, @kind, @content,
-               @vaultPath, @mediaMeta, @trustTier, @createdAt, 0)`,
+               @vaultPath, @mediaMeta, @trustTier, @createdAt, 0, @turnId)`,
     );
     const info = stmt.run({
       ...input,
       actorId: input.actorId ?? null,
       vaultPath: input.vaultPath ?? null,
+      turnId: input.turnId ?? null,
       mediaMeta: input.mediaMeta ? JSON.stringify(input.mediaMeta) : null,
     });
     return Number(info.lastInsertRowid);
@@ -242,12 +267,18 @@ export class MemoryStore {
       .prepare(
         `SELECT id, tenant_id AS tenantId, connector, thread_key AS threadKey, actor_id AS actorId,
                 role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
-                created_at AS createdAt, extraction_v AS extractionV
+                created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId
          FROM episodes
          WHERE tenant_id = ? AND extraction_v < ? AND content IS NOT NULL
          ORDER BY created_at LIMIT ?`,
       )
-      .all(tenantId, extractionV, limit) as Episode[];
+      .all(tenantId, extractionV, limit)
+      .map((riga) => {
+        // La colonna torna NULL da SQLite; il tipo dice assente — la stessa
+        // conversione che `episodeById` fa per `actor_id` e `vault_path`.
+        const { turnId, ...resto } = riga as Episode & { turnId: string | null };
+        return { ...resto, ...(turnId === null ? {} : { turnId }) };
+      }) as Episode[];
   }
 
   /**
@@ -738,13 +769,19 @@ export class MemoryStore {
   ): EpisodeHit[] {
     const cleaned = query.replace(/["'()]/g, ' ').trim();
     if (cleaned === '') return [];
+    // Interpolato e non legato perche SQLite non lega una lista: i valori
+    // restano parametri (`?`), solo il *numero* di segnaposto entra nel testo.
+    const esclusi = filter.excludeTurnIds ?? [];
+    const buco = esclusi.map(() => '?').join(',');
     return this.db
       .prepare(
         `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier,
-                e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt
+                e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt,
+                e.turn_id AS turnId
          FROM episodes_fts f
          JOIN episodes e ON e.id = f.rowid
          WHERE episodes_fts MATCH ? AND e.tenant_id = ?
+           ${esclusi.length === 0 ? '' : `AND (e.turn_id IS NULL OR e.turn_id NOT IN (${buco}))`}
            -- The other half of the history mode, and the one still missing.
            -- A vault note edited in June and a message withdrawn keep their old
            -- text on record precisely so "what did that note say in May" stays
@@ -761,6 +798,7 @@ export class MemoryStore {
       .all(
         cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR '),
         tenantId,
+        ...esclusi,
         filter.includeSuperseded ? 1 : 0,
         filter.surface ?? null,
         filter.surface ?? null,
@@ -798,17 +836,23 @@ export class MemoryStore {
     episodeId: number,
     k: number,
     includeSuperseded = false,
+    excludeTurnIds: readonly string[] = [],
   ): EpisodeHit[] {
     if (k <= 0) return [];
     const anchor = this.episodeWindow(tenantId, episodeId);
     if (!anchor) return [];
+    // Dentro la query e non a valle, per la stessa ragione della porta
+    // testuale: `k` righe escluse dopo sono `k` vicini che non arrivano.
+    const buco = excludeTurnIds.map(() => '?').join(',');
     const sql = (comparison: string, order: string): string =>
       `SELECT e.id, e.content, e.created_at AS createdAt, e.trust_tier AS trustTier,
-              e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt
+              e.connector, e.thread_key AS threadKey, e.superseded_at AS supersededAt,
+              e.turn_id AS turnId
        FROM episodes e
        WHERE e.tenant_id = ? AND e.connector = ? AND e.thread_key = ?
          AND e.content IS NOT NULL
          AND (? = 1 OR e.superseded_at IS NULL)
+         ${excludeTurnIds.length === 0 ? '' : `AND (e.turn_id IS NULL OR e.turn_id NOT IN (${buco}))`}
          -- Ordered by (created_at, id) rather than created_at alone: several
          -- episodes of one turn share a timestamp to the second, and a tie
          -- broken arbitrarily would let the same row land on both sides of the
@@ -823,6 +867,7 @@ export class MemoryStore {
           anchor.connector,
           anchor.threadKey,
           includeSuperseded ? 1 : 0,
+          ...excludeTurnIds,
           anchor.createdAt,
           episodeId,
           k,
@@ -1015,16 +1060,37 @@ export class MemoryStore {
     tenantId: string,
     kind: 'episode' | 'fact',
     sourceId: number,
-  ): { trustTier: TrustTier; createdAt: string; origin?: FactOrigin; connector?: string; supersededAt?: string | null } | null {
+  ): {
+    trustTier: TrustTier;
+    createdAt: string;
+    origin?: FactOrigin;
+    connector?: string;
+    supersededAt?: string | null;
+    /**
+     * Presente solo per un episodio. La meta semantica del recall legge da qui
+     * o da nessuna parte: l'indice vettoriale tiene testo e un id sorgente, e
+     * senza questa colonna la porta vettoriale non puo rispettare un'esclusione
+     * che quella testuale rispetta — cioe una garanzia che si legge assoluta e
+     * vale per una via su due.
+     */
+    turnId?: string | null;
+  } | null {
     const row =
       kind === 'episode'
         ? (this.db
             .prepare(
-              `SELECT trust_tier AS trustTier, created_at AS createdAt, connector, superseded_at AS supersededAt
+              `SELECT trust_tier AS trustTier, created_at AS createdAt, connector,
+                      superseded_at AS supersededAt, turn_id AS turnId
                FROM episodes WHERE tenant_id = ? AND id = ?`,
             )
             .get(tenantId, sourceId) as
-            | { trustTier: TrustTier; createdAt: string; connector: string; supersededAt: string | null }
+            | {
+                trustTier: TrustTier;
+                createdAt: string;
+                connector: string;
+                supersededAt: string | null;
+                turnId: string | null;
+              }
             | undefined)
         : // `origin` comes back here for the same reason `trust_tier` does: the
           // vector index stores text and a source id, so the semantic half of
@@ -1071,17 +1137,20 @@ export class MemoryStore {
       .prepare(
         `SELECT id, tenant_id AS tenantId, connector, thread_key AS threadKey, actor_id AS actorId,
                 role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
-                created_at AS createdAt, extraction_v AS extractionV
+                created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId
          FROM episodes WHERE tenant_id = ? AND id = ?`,
       )
-      .get(tenantId, id) as (Episode & { actorId: number | null; vaultPath: string | null }) | undefined;
+      .get(tenantId, id) as
+      | (Episode & { actorId: number | null; vaultPath: string | null; turnId: string | null })
+      | undefined;
     if (!row) return null;
     // The optional columns come back NULL from SQLite; the type says absent.
-    const { actorId, vaultPath, ...rest } = row;
+    const { actorId, vaultPath, turnId, ...rest } = row;
     return {
       ...rest,
       ...(actorId === null ? {} : { actorId }),
       ...(vaultPath === null ? {} : { vaultPath }),
+      ...(turnId === null ? {} : { turnId }),
     };
   }
 

@@ -38,6 +38,22 @@ CREATE TABLE IF NOT EXISTS episodes (
   trust_tier    INTEGER NOT NULL CHECK (trust_tier BETWEEN 0 AND 3),
   created_at    TEXT    NOT NULL,
   extraction_v  INTEGER NOT NULL DEFAULT 0,
+  -- Quale turno ha prodotto questo episodio: TurnRecord.id, che e anche il
+  -- traceId del turno (agent/loop.ts — "one identity, so what did it do is a
+  -- join").
+  --
+  -- Esiste per una sola domanda, e la domanda e di recall: questo episodio e
+  -- gia davanti al modello? La history limitata porta i propri traceId, e senza
+  -- questa colonna non c e modo di dire "l ho gia detto in questo turno" se non
+  -- confrontando il testo — cioe la dedup fuzzy che 02-ontologia rifiuta,
+  -- perche due frasi identiche in due turni diversi sono due prove diverse.
+  --
+  -- NULL e una risposta, non un buco. Le righe scritte prima di questa colonna
+  -- non hanno un turno esatto e non lo avranno mai: nessun backfill le riempie
+  -- per somiglianza di timestamp. Restano ripescabili, e nessuno gli attribuisce
+  -- una precisione che non hanno. NULL anche per gli episodi che un turno non lo
+  -- hanno avuto: quel che il vault ingerisce, quel che observe-run osserva.
+  turn_id       TEXT,
   -- Evidence is append-only, so nothing here is ever deleted. But a file in the
   -- vault can be edited and a message can be withdrawn, and the old text should
   -- stop coming back in recall while remaining on record. This is that line: it
