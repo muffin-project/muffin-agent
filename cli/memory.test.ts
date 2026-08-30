@@ -1,10 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../core/config/config.js';
 import { MemoryStore } from '../core/memory/store.js';
+import { VectorIndex } from '../core/memory/vectors.js';
 import { runInit } from './init.js';
 import {
   cmdMemoryPin,
@@ -472,5 +474,74 @@ describe('drenare l indice e progresso quanto estrarre', () => {
   it('il tetto sui giri vale comunque, anche mentre l indice si drena', () => {
     // Senza, un indice enorme trasformerebbe il comando in una nottata.
     expect(valeUnAltroGiro(giro(0, 200, 0), 8, 200)).toBe(false);
+  });
+});
+
+/**
+ * Una home con l'indice vettoriale **presente** e degli episodi che non ci sono
+ * ancora dentro. E la forma che conta: senza le tabelle dei vettori la riga dice
+ * gia «assente», e non e quel caso a essere fuorviante.
+ */
+function homeConIndiceIndietro(): string {
+  const home = mkdtempSync(join(tmpdir(), 'muffin-memory-indice-'));
+  const db = new DatabaseCtor(paths(home).db);
+  sqliteVec.load(db);
+  const store = new MemoryStore(db);
+  for (let i = 0; i < 3; i++) {
+    store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: `una cosa detta, la numero ${i}`,
+      trustTier: 0,
+      createdAt: '2026-08-13T10:00:00Z',
+    });
+  }
+  // Costruire l indice crea le sue tabelle e non indicizza niente: chunks
+  // esiste, ed e vuoto, mentre tre episodi aspettano.
+  new VectorIndex(db, { id: 'finto:v1', dimensions: 4, embed: async (t) => t.map(() => Float32Array.from([0, 0, 0, 0])) });
+  db.close();
+  return home;
+}
+
+describe("muffin memory stats — l'indice non puo dirsi in pari quando non lo e", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /**
+   * Il difetto, misurato sul `muffin.db` dell'owner il 30/08/2026: la riga
+   * diceva `285 chunk · 285 vettori` mentre **120 sorgenti** non avevano un
+   * vettore per l'embedder configurato, cioe erano fuori dal recall semantico.
+   * I due numeri confrontano l'indice con se stesso — dicono che quel che e
+   * gia indicizzato e coerente, mai se manca qualcosa. E la stessa forma che
+   * `core/memory/vectors.ts` chiama «vero e fuorviante»: `doctor` la evitava
+   * gia, `memory stats` no, ed e il comando che si legge per chiedere «la
+   * memoria sta bene?».
+   */
+  it('nomina le sorgenti che il recall semantico non vede, e dove guardare', () => {
+    const home = homeConIndiceIndietro();
+    const { out } = capture();
+
+    expect(cmdMemoryStats(home)).toBe(0);
+    const riga = out.join('').split('\n').find((r) => r.startsWith('indice vett.'));
+    expect(riga).toBeDefined();
+    // Ci sono episodi e nessun vettore: la riga deve dirlo, non tacere.
+    expect(riga).toMatch(/sorgenti senza vettore/);
+    expect(riga).toContain('fuori dal recall semantico');
+    // E deve mandare dove si scopre *perche*: la raggiungibilita dell embedder
+    // e una domanda di rete, e `memory stats` non la fa di nascosto.
+    expect(riga).toContain('muffin doctor');
+  });
+
+  it('non dice «in pari» sopra un arretrato', () => {
+    // La mutazione che questo test uccide: tornare a stampare i due numeri e
+    // basta. Senza questa riga, «285 chunk · 285 vettori» si legge come «tutto
+    // a posto» esattamente quando non lo e.
+    const home = homeConIndiceIndietro();
+    const { out } = capture();
+    cmdMemoryStats(home);
+    const riga = out.join('').split('\n').find((r) => r.startsWith('indice vett.')) ?? '';
+    expect(riga).not.toContain('in pari');
   });
 });

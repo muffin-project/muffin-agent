@@ -1,13 +1,15 @@
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { paths } from '../core/config/config.js';
+import { loadConfig, paths } from '../core/config/config.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
 import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
 import { resolveContradiction, reviewLine, reviewSummary } from '../core/memory/maintenance.js';
 import type { FactOrigin } from '../core/memory/schema.js';
+import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { MemoryStore, type Fact } from '../core/memory/store.js';
+import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import type { TrustTier } from '../core/policy/types.js';
 
 /**
@@ -519,6 +521,7 @@ export function cmdMemoryStats(home: string): number {
       s.span.from_ && s.span.to_ ? `${s.span.from_.slice(0, 10)} → ${s.span.to_.slice(0, 10)}` : 'vuota';
     const vectorRows = tableCount(db, 'chunks');
     const vectorIndexed = tableCount(db, 'chunks_vec');
+    const pendenti = sorgentiSenzaVettore(db, home);
     // `needsReview` alone was the whole read side of the register, and it counts
     // every row ever written — a number that only ever grows, on an append-only
     // table, is a number that stops being read within a week. What is *open* is
@@ -538,7 +541,7 @@ export function cmdMemoryStats(home: string): number {
         `fatti          ${s.activeFacts} attivi · ${s.retiredFacts} ritirati`,
         `da rivedere    ${reviewLine(review.open.length, review.errors.length, review.total)}`,
         `predicati      ${s.predicates} distinti`,
-        `indice vett.   ${vectorRows === null ? 'assente' : `${vectorRows} chunk · ${vectorIndexed ?? 0} vettori`}`,
+        `indice vett.   ${rigaIndice(vectorRows, vectorIndexed, pendenti)}`,
         `consolidam.    ${consolidationLine(db)}`,
         '',
         ...s.topPredicates.map((p) => `  ${String(p.n).padStart(4)}  ${p.predicate}`),
@@ -594,6 +597,80 @@ export function cmdMemoryCheck(home: string, json: boolean): number {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Quante sorgenti aspettano ancora un vettore, o `null` se non si puo dire.
+ *
+ * `null` e non 0: «non lo so» e «non ne manca nessuna» sono due frasi diverse, e
+ * scriverle uguali e il difetto che questa funzione esiste per non ripetere.
+ * Un database senza le tabelle della memoria, o una config illeggibile, cadono
+ * qui — non sono guasti che `memory stats` debba diagnosticare, ma non
+ * autorizzano nemmeno a dire «in pari».
+ *
+ * L'embedder si costruisce dalla config e non si assume: se la config dice
+ * `openai-compat` e questa riga contasse per Ollama, direbbe che manca tutto su
+ * una macchina sana. Non lo interroga — la raggiungibilita e una domanda di
+ * rete, e la fa `doctor`.
+ */
+function sorgentiSenzaVettore(db: DatabaseCtor.Database, home: string): number | null {
+  // Due guasti diversi, e solo il secondo autorizza il silenzio.
+  //
+  // Una config illeggibile non impedisce di contare: `doctor` in quel caso
+  // ricade sull'embedder di default (`quantiNonIndicizzatiSafe`), e questa e la
+  // seconda porta dello stesso meccanismo — se le due ricadessero in modo
+  // diverso, due comandi darebbero due numeri sullo stesso disco. Una config
+  // illeggibile ha gia il suo allarme, e non e questo.
+  let embedderId: string;
+  try {
+    const config = loadConfig(home, () => {});
+    // **Nessun segreto viene letto qui, ed e deliberato.** Serve solo l'`id`
+    // dell'embedder configurato, che e una funzione del modello e non della
+    // chiave (`openai-compat:${model}`, `core/memory/embed.ts`). Costruirlo con
+    // `readSecret` vorrebbe dire leggere la chiave API dell'owner per stampare
+    // un conteggio — un allargamento del confine dei segreti in cambio di
+    // niente, e `core/config/secret-boundary.test.ts` lo dice per nome: un
+    // chiamante nuovo di `readSecret` e una decisione, non una deriva.
+    //
+    // La stringa vuota al posto della chiave, e non una derivazione dell'`id`
+    // scritta a mano qui: cosi l'`id` continua a venire dal costruttore vero e
+    // non puo divergere da quello che l'indicizzazione usa davvero. L'oggetto
+    // che ne esce non e utilizzabile per embeddare, e nessuno lo usa: vive tre
+    // righe e restituisce un campo.
+    embedderId = makeEmbedder(config.embedder, () => '').id;
+  } catch {
+    embedderId = new OllamaEmbedder().id;
+  }
+  // Qui invece si tace: senza le tabelle della memoria la domanda non ha una
+  // risposta, e «non lo so» non si scrive «zero».
+  try {
+    return quantiNonIndicizzati(db, embedderId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * La riga dell'indice, che non deve poter leggersi «in pari» quando non lo e.
+ *
+ * Il difetto, misurato sul `muffin.db` dell'owner il 30/08/2026: la riga diceva
+ * `285 chunk · 285 vettori` mentre **120 sorgenti** non avevano un vettore per
+ * l'embedder configurato — cioe fuori dal recall semantico. I due numeri
+ * confrontano l'indice con se stesso: dicono che quel che e gia indicizzato e
+ * coerente, mai se manca qualcosa. E la stessa forma che `core/memory/vectors.ts`
+ * chiama «vero e fuorviante» e che `doctor` gia evita; qui non c'era, e
+ * `memory stats` e il comando che si legge per chiedere «la memoria sta bene?».
+ *
+ * `doctor` resta l'unico che sa dire se l'embedder **risponde**: quella e una
+ * domanda di rete, e un comando di statistiche non deve farla di nascosto.
+ * Questa riga ci manda, invece di tacere.
+ */
+function rigaIndice(chunk: number | null, vettori: number | null, pendenti: number | null): string {
+  if (chunk === null) return 'assente';
+  const base = `${chunk} chunk · ${vettori ?? 0} vettori`;
+  if (pendenti === null) return base;
+  if (pendenti === 0) return `${base}, in pari`;
+  return `${base} · ${pendenti} sorgenti senza vettore, fuori dal recall semantico — \`muffin doctor\``;
 }
 
 function tableCount(db: DatabaseCtor.Database, table: string): number | null {
