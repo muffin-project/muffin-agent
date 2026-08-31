@@ -152,15 +152,19 @@ uses it. A hint controls discoverability, not authority.
 
 ## Rebuild-era material
 
-`docs/blueprint/README.md` classifies the mixed-generation blueprint directory.
-The root 00–12 rebuild corpus, old threat model/roadmap/contracts, BRIEF,
-critique and contract validation are lineage/evidence, not current mechanics.
+The 00–12 rebuild corpus, the old threat model/roadmap/contracts, `BRIEF`,
+`critique/` and the contract validation were archived on 2026-08-31 to
+`docs/history/rebuild-2026/`. They are lineage/evidence, never current mechanics.
+The inherited foundations corpus went to `docs/history/foundations/legacy/`.
+`docs/history/README.md` carries the old path → current home map.
+
+`docs/blueprint/README.md` still classifies what remains in that directory: the
+live Gate status, the handoff, ADRs, research, knowledge and the generated map.
 
 `docs/blueprint/STATE.md` is now a tombstone; its full chronicle is preserved in
-`docs/history/rebuild-2026/STATE-chronicle.md`.
-
-Historical files are not being mass-moved while unresolved ADR/code references
-may point to their paths. Stable lineage is more valuable than folder aesthetics.
+`docs/history/rebuild-2026/STATE-chronicle.md`. Together with
+`docs/foundations/VISION.md` it is a deliberate compatibility redirect, kept at
+its old path until the slice that dissolves the legacy namespaces removes both.
 
 ## A change is complete when its authoritative home is not stale
 

@@ -55,8 +55,8 @@
   ],
   "taint": {
     "tiers": [
-      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)", "docs/blueprint/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
-      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/blueprint/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
+      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)", "docs/history/rebuild-2026/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
+      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/history/rebuild-2026/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
       { "tier": 2, "name": "gruppo/sconosciuti (group members) — e il disco", "sources": ["agent/loop.ts (principal.kind === 'member' ? 2 : 0, written into the record's taint column)", "agent/tools/fs.ts (DISK_TIER, ADR-0044)"], "meaning": "turn started by a non-owner group member, OR a turn that read from the local filesystem: `stat` cannot separate the owner's own note from a file a stranger sent, so an unprovenanced read lands in the same bucket as a stranger speaking" },
       { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint, which since ADR-0044 is called unconditionally because `tier` is a required field" }
     ],
@@ -70,7 +70,7 @@
     { "pattern": ".git/hooks (join(cwd,'.git','hooks'))", "file": "core/rot/guards.ts:76", "enforced": true, "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites" },
     { "pattern": "shell dotfiles — 9 named files (.zshrc/.zshenv/.zprofile/.zlogin/.bashrc/.bash_profile/.bash_login/.profile/.kshrc) + fish config", "file": "core/rot/guards.ts:47-57,77-79", "enforced": true, "note": "named individually rather than globbed, by design (guards.ts:41-46)" }
   ],
-  "denyPathsSummary": "5 of 5 mandatory categories from docs/blueprint/03-threat-model.md:69 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
+  "denyPathsSummary": "5 of 5 mandatory categories from docs/history/rebuild-2026/03-threat-model.md:69 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
   "surfaces": [
     {
       "name": "RoT / sigillo",
@@ -125,14 +125,14 @@
   "claimedVsReal": [
     {
       "claim": "DRAFT (act-notify-undo)",
-      "doc": "docs/blueprint/03-threat-model.md:30",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:30",
       "real": "kernel emits 'draft' for fs.write unconditionally; the loop refuses every draft outright — no act, no notify, no undo journal exists",
       "verdict": "BROKEN",
       "evidence": "core/policy/decide.ts:204-207; agent/loop.ts:777-791; core/policy/decide.test.ts:117"
     },
     {
-      "claim": "Shell / filesystem host / processi ... taint 2 -> ASK (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione) · taint 3 -> DENY. The row label still spans three capability families; the amended cell, its note (docs/blueprint/03-threat-model.md:51) and ADR-0044 §Revisione name only sys.shell ('tocca solo il soffitto di sys.shell ... non quella che legge').",
-      "doc": "docs/blueprint/03-threat-model.md:45; docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md:180",
+      "claim": "Shell / filesystem host / processi ... taint 2 -> ASK (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione) · taint 3 -> DENY. The row label still spans three capability families; the amended cell, its note (docs/history/rebuild-2026/03-threat-model.md:51) and ADR-0044 §Revisione name only sys.shell ('tocca solo il soffitto di sys.shell ... non quella che legge').",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:45; docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md:180",
       "real": "Measured 2026-08-16 by running createDecide() with the production declarations against the shipped matrix (defaults/rot/policy.json:4 == POLICY_FLOOR core/policy/matrix.ts:95: low 3 / medium 1 / high 1). sys.shell: maxTaint pinned to 2 (agent/tools/shell.ts:53) so taint 2 passes the ceiling check (core/policy/decide.ts:136-143) and lands in the high branch, which is ask unless hardened && owner && taint===0 (core/policy/decide.ts:208-213) — ASK for the owner, queued-ASK for system/agent (core/policy/decide.ts:197-199); taint 3 is deny/taint_exceeded. The shell half of the row now HOLDS. fs.read and fs.list: risk low, no maxTaint (agent/tools/fs.ts:105-121) -> ceiling 3 -> ALLOW at taint 2 AND 3, contradicting both cells — deliberate (ADR-0039; agent/tools/fs.ts:69-80: the read itself pays by tainting the turn to DISK_TIER=2, agent/tools/fs.ts:65). fs.write: medium, no maxTaint (agent/tools/fs.ts:123-124) -> ceiling 1 -> deny/taint_exceeded at 2 and 3, stricter than the row's ASK. sys.process.list pins maxTaint 1 (agent/tools/process.ts:24-28) and sys.process.kill is high with no maxTaint (agent/tools/process.ts:34-35) -> both deny/taint_exceeded at 2 and 3, stricter than ASK. All six are hostOnly, so a member@group principal gets deny/principal_forbidden before taint is read (core/policy/decide.ts:128-130): for groups the 'qualunque' column is DENY whatever the cell says. Net: one row, three families, three different behaviours at taint 2 (ASK / ALLOW / DENY) — the amendment fixed the sys.shell drift and left the reads over-claimed in both columns and writes/processes under-claimed at 2.",
       "verdict": "PARTIAL",
       "evidence": "agent/tools/shell.ts:45-53; agent/tools/fs.ts:65; agent/tools/fs.ts:69-80; agent/tools/fs.ts:105-124; agent/tools/process.ts:24-36; core/policy/decide.ts:128-130; core/policy/decide.ts:136-143; core/policy/decide.ts:197-199; core/policy/decide.ts:208-213; core/policy/matrix.ts:95; defaults/rot/policy.json:4"
@@ -146,42 +146,42 @@
     },
     {
       "claim": "Mandatory deny paths: RoT, config, secrets, .git/hooks, shell dotfiles",
-      "doc": "docs/blueprint/03-threat-model.md:69",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:69",
       "real": "all five categories present in one shared guard object and enforced at both the fs tool and the sandbox executor",
       "verdict": "HOLDS",
       "evidence": "core/rot/guards.ts:64-88; agent/tools/fs.ts:315-345; core/sandbox/executor.ts:117-120,136-140"
     },
     {
       "claim": "filesystem write-scope = workspace del turno + tmp di sessione",
-      "doc": "docs/blueprint/03-threat-model.md:68",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:68",
       "real": "write is scoped as claimed; read is explicitly NOT scoped beyond 2-3 RoT paths, per the test's own title",
       "verdict": "PARTIAL",
       "evidence": "core/sandbox/executor.test.ts:173; core/rot/guards.ts:81-87"
     },
     {
       "claim": "nessun dominio pre-concesso (no domain pre-granted)",
-      "doc": "docs/blueprint/03-threat-model.md:68",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:68",
       "real": "shipped egress.json allow list is empty",
       "verdict": "HOLDS",
       "evidence": "defaults/rot/egress.json:4"
     },
     {
       "claim": "secrets: mai mostrabili — né in log, né in trace, né in chat, da nessuna parte (rewritten 2026-08-17 per ADR-0048; superseded the narrower 'mai in chiaro nei trace' this row used to check)",
-      "doc": "docs/blueprint/03-threat-model.md:121; docs/blueprint/adr/0048-segreti-mai-mostrabili.md",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:121; docs/blueprint/adr/0048-segreti-mai-mostrabili.md",
       "real": "two distinct mechanisms, not one. (1) Structural, for a secret the backend actually knows: readSecret has a fixed, enumerated set of production callers (agent/runtime.ts, cli/surface.ts, cli/doctor.ts), none a tool handler, each resolving inline into the privileged sink that needs it and never storing the plaintext elsewhere — enumerated by a test that walks the whole source tree, not asserted. (2) Best-effort text redaction, for content that merely looks like a secret (a tool result, a thrown error): applied once, upstream, in agent/loop.ts's runTool, before the durable record, the session JSONL and turns.messages — verified by reading the actual DB row and the actual JSONL line, and by mutation. The session-transcript gap this row used to name (core/session/store.ts writing verbatim with no redaction anywhere upstream) is closed by (2). One declared residual: `muffin init --api-key` puts a fresh key in argv (ps aux, shell history) at the one entry point that still can — not fixed by this change, named in ADR-0048.",
       "verdict": "HOLDS",
       "evidence": "core/config/secret-boundary.test.ts; agent/loop.ts:2004,2044; core/tracing/redact.ts:90,110-121; agent/secret-redaction.test.ts; evals/acceptance/scenarios/e-cost.accept.ts (scenario E3); core/rot/guards.test.ts"
     },
     {
       "claim": "Sandbox non disponibile != silenziosamente unsandboxed",
-      "doc": "docs/blueprint/03-threat-model.md:70",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:70",
       "real": "when the probe fails, the shell tool is simply never registered (absent from the tool list) rather than the documented ALLOW-to-ASK step-down — stricter in outcome, different in mechanism",
       "verdict": "PARTIAL",
       "evidence": "agent/runtime.ts:301-304"
     },
     {
       "claim": "outward.* escluse del tutto da system@scheduler a qualunque taint",
-      "doc": "docs/blueprint/03-threat-model.md:53",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:53",
       "real": "forbiddenForSystem is checked only for principal.kind==='system', exactly as worded (not for 'agent'); matches literally, currently unexercised since no outward.* capability is registered",
       "verdict": "HOLDS",
       "evidence": "core/policy/decide.ts:132-134; core/policy/matrix.ts:99"
