@@ -12,10 +12,9 @@ tracce, log e il `muffin.db` vero — mai con `cp` dei suoi tre file, che dà un
 vista vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 
 **Il gate.** `npm run gate:local`: clone di HEAD **fuori** dal repository, `npm
-ci`, typecheck, build, suite, accettazione, e `gate-linux.sh` in Docker. Il
-verde si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». La CI di GitHub
-è rossa per **fatturazione**: i job muoiono in 2s senza eseguire niente, quindi
-il gate locale è l'unica prova.
+ci`, typecheck, build, suite, accettazione, `gate-linux.sh` in Docker. Il verde
+si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde»: la CI di GitHub è rossa
+per **fatturazione**, i job muoiono in 2s senza eseguire niente.
 
 ## Le decisioni dell'owner
 
@@ -27,24 +26,25 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
-Slice 3 e 4 integrate: skill e rules path-scoped; corpus rebuild e
-`foundations/` sotto `docs/history/`. `blueprint/STATE.md` e
-`foundations/VISION.md` restano **lapidi di compatibilità** fino alla slice che
-dissolve i namespace legacy. Prossima: slice 5, `adr/`→`decisions/`.
+Slice 3-5 integrate: skill e rules; storia sotto `docs/history/`; ADR in
+`docs/decisions/`, cognitivo in `docs/knowledge/`. `blueprint/STATE.md` e
+`foundations/VISION.md` restano **lapidi di compatibilità**. Prossima: slice 6,
+`M5-BIS`/`LAVORO`/`gate1` → `docs/work/`, l'unica con consumer funzionali veri:
+richiede il gate.
 
-Due trappole misurate, scritte dove sta il meccanismo e non qui:
-`riprendi/SKILL.md` (un blocco di iniezione che fallisce annulla la skill in
-silenzio) e `mappa/ancore.mjs` (spostare un file citato ri-chiava l'ancora e ne
-scarta il testo registrato).
+Tre trappole misurate, scritte dove sta il meccanismo: `riprendi/SKILL.md`,
+`mappa/ancore.mjs`, `rules/decisioni.md`. La terza è **F7**: logica eseguibile
+che vive solo nella prosa di una rule si rompe senza che nessun test se ne
+accorga — quel comando era cieco dal giorno in cui l'ho spedito.
 
-## Parcheggiato: come arriva una richiesta che non si fa adesso
+## Parcheggiato: le richieste differite
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
 forma: **`jobs` non ha un tool**, i 7 todo sono fermi dal 27/08 e invisibili
 fuori dalla sessione, 44 fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto
 dei tool **non** è più il problema (`0d519cb`): non ripartire da lì.
 
-## STEP 0 — decisione owner da far entrare, non ancora entrata
+## STEP 0 — decisione owner non ancora entrata
 
 La direttiva del 15/08
 «si ripara alla radice» è stata tolta da `ORCHESTRATION.md` il 19/08 senza
