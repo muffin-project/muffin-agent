@@ -380,22 +380,22 @@
     {
       "what": "Dream / compaction — profiles and digests, the derived plane's summarization layer",
       "why": "missing the consumer, not the producer: writing a compactor would mean paying model calls to fill a table that no read path queries. 'Prima il lettore, poi lo scrittore' (reader first, writer second).",
-      "evidence": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:247-251 ('Le tabelle profiles e digests hanno zero scrittori e zero lettori'); confirmed at the code level — core/memory/schema.ts:151-167 declares both tables and repo-wide search finds no INSERT/SELECT against either outside schema.ts itself."
+      "evidence": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:247-251 ('Le tabelle profiles e digests hanno zero scrittori e zero lettori'); confirmed at the code level — core/memory/schema.ts:151-167 declares both tables and repo-wide search finds no INSERT/SELECT against either outside schema.ts itself."
     },
     {
       "what": "Confidence decay",
       "why": "three independent, each-sufficient reasons: (1) no defensible decay rate exists in this corpus's research — the nearest number, LLM overconfidence of 15-27 points, is a constant calibration offset, not a time constant; (2) no reader — the only threshold on confidence anywhere is extract.ts:192 (>=0.4) applied once at write time, after that it is only ever displayed (`muffin memory why`); (3) decaying it would be a DELETE with extra steps — a belief that slides under a recall threshold becomes unrecoverable with no expired_at, no superseded_by, nothing `muffin memory why` can show, which is exactly what 'never delete a row' exists to prevent.",
-      "evidence": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:215-235"
+      "evidence": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:215-235"
     },
     {
       "what": "Expiry sweep (world-time closure on facts still believed true, plus entities.expired_at)",
       "why": "nothing to sweep yet: valid_to is written only by supersede() (called from judge verdicts and the duplicate sweep), never by addFact in the one production call site (reconcile). entities.expired_at has no writer at all. Building the sweep now would be a guard that can never fire.",
-      "evidence": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:237-245; cross-checked in code at core/memory/ingest.ts:323-345 (addFact call omits validTo) and core/memory/store.ts:38-56 (FactInput.validTo exists on the type but reconcile never sets it)"
+      "evidence": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:237-245; cross-checked in code at core/memory/ingest.ts:323-345 (addFact call omits validTo) and core/memory/store.ts:38-56 (FactInput.validTo exists on the type but reconcile never sets it)"
     },
     {
       "what": "Predicate merge proposals (the second half of the predicate-vocabulary audit)",
       "why": "detection is built (the predicate_vocabulary invariant, warning-only, fires past 80 distinct predicates) but proposing an actual merge needs a synonymy judgment — either a model call (breaks ADR-0040's 'maintenance spends nothing' rule) or a hand-written synonym list (the closed vocabulary ADR-0032 already rejected once). Left open, in roadmap.",
-      "evidence": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:253-260; detection half at core/memory/invariants.ts:43,110-118 (PREDICATE_VOCABULARY_THRESHOLD=80, calibrated on the old system's 43-predicate/329-edge graph where 26 of 43 were used exactly once)"
+      "evidence": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:253-260; detection half at core/memory/invariants.ts:43,110-118 (PREDICATE_VOCABULARY_THRESHOLD=80, calibrated on the old system's 43-predicate/329-edge graph where 26 of 43 were used exactly once)"
     },
     {
       "what": "Cross-connector identity linking (the identities table's proposed -> confirmed flow)",
@@ -405,7 +405,7 @@
     {
       "what": "`muffin run` headless does not consolidate live",
       "why": "the idle-debounce timer is deliberately `unref()`'d so a scriptable one-shot command exits immediately after answering instead of hanging around 20s to extract; episodes from a headless run stay pending by construction until the next long-lived process (gateway/REPL) drains them.",
-      "evidence": "core/memory/consolidator.ts:576-580 (timer.unref comment); restated as a known, unfixed limitation in docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:262-266"
+      "evidence": "core/memory/consolidator.ts:576-580 (timer.unref comment); restated as a known, unfixed limitation in docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:262-266"
     }
   ],
   "gaps": [
@@ -421,7 +421,7 @@
     },
     {
       "what": "entities.summary and entities.expired_at: declared columns, zero writers",
-      "evidence": "core/memory/store.ts:295-302 (upsertEntity's INSERT list is tenant_id, kind, name, recorded_at only — summary is absent); entities.expired_at confirmed unwritten in docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:241",
+      "evidence": "core/memory/store.ts:295-302 (upsertEntity's INSERT list is tenant_id, kind, name, recorded_at only — summary is absent); entities.expired_at confirmed unwritten in docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:241",
       "why_it_matters": "an entity can never be marked retired/merged, and the one column that could hold a short human-readable gloss of who/what an entity is (useful exactly where `muffin memory why` or recall shows a bare name) is dead weight in the schema."
     },
     {

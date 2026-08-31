@@ -7,7 +7,7 @@
  * layer would level everything down to the minimum common denominator exactly
  * where the differences matter: prompt caching, thinking budgets, long context.
  *
- * See docs/adr/0008.
+ * See docs/decisions/0008-provider-adapter-unico.md.
  */
 
 type Role = 'user' | 'assistant';

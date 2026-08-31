@@ -21,12 +21,31 @@ import { describe, expect, it } from 'vitest';
  * Questo test è il lock che il filesystem non dà: chi arriva secondo lo scopre
  * al merge, quando costa una rinumerazione, invece che alla prima citazione
  * ambigua.
+ *
+ * **Il corpus sorvegliato è `docs/`, e lo è per scelta.** Quando gli ADR
+ * stavano in `docs/blueprint/adr/`, `join(dir, '..')` cadeva su
+ * `docs/blueprint/`; spostandoli in `docs/decisions/` la stessa espressione
+ * sarebbe scivolata su tutto `docs/` **da sola**, e un allargamento che nessuno
+ * ha deciso è indistinguibile da un errore. Misurato prima di accettarlo
+ * (baseline 2026-08-31, non una quantità attesa né un invariante): il corpus
+ * vecchio citava 45 numeri, quello nuovo 52, e i fantasmi erano **zero** in
+ * entrambi. La garanzia diventa quindi più larga senza cambiare forma — *un ADR
+ * citato dal corpus `docs/` esiste* — ed è pinnata sotto, non dedotta.
  */
 
-const ADR = dirname(fileURLToPath(import.meta.url));
-const BLUEPRINT = join(ADR, '..');
+const DECISIONS = dirname(fileURLToPath(import.meta.url));
 
-const file = readdirSync(ADR).filter((f) => /^\d{4}-.*\.md$/.test(f));
+/**
+ * Pinnato: il corpus è `docs/`, non «la directory sopra questa». Se un giorno
+ * gli ADR si spostassero di nuovo, questo fallisce invece di seguire il move in
+ * silenzio verso un corpus che nessuno ha scelto.
+ */
+const CORPUS = join(DECISIONS, '..');
+if (!/(^|\/)docs$/.test(CORPUS)) {
+  throw new Error(`il corpus sorvegliato doveva essere docs/, non ${CORPUS}`);
+}
+
+const file = readdirSync(DECISIONS).filter((f) => /^\d{4}-.*\.md$/.test(f));
 
 describe('gli ADR', () => {
   it('non condividono un numero', () => {
@@ -46,7 +65,7 @@ describe('gli ADR', () => {
     // lì in poi il documento cita se stesso col numero di un altro.
     const storti: string[] = [];
     for (const f of file) {
-      const prima = readFileSync(join(ADR, f), 'utf8').split('\n')[0] ?? '';
+      const prima = readFileSync(join(DECISIONS, f), 'utf8').split('\n')[0] ?? '';
       const m = /ADR-(\d{4})/.exec(prima);
       if (!m) storti.push(`${f} — la prima riga non dichiara un numero`);
       else if (m[1] !== f.slice(0, 4)) storti.push(`${f} — il titolo dice ADR-${m[1]}`);
@@ -54,14 +73,14 @@ describe('gli ADR', () => {
     expect(storti).toEqual([]);
   });
 
-  it('esistono, quando il blueprint li cita', () => {
+  it('esistono, quando il corpus docs/ li cita', () => {
     // Il verso opposto: un riferimento a un ADR mai scritto. Costa quanto il
     // doppione, e si trova nello stesso momento — mai.
     const numeri = new Set(file.map((f) => f.slice(0, 4)));
     const citati = new Map<string, string>();
     const visita = (dir: string) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
-        if (e.name === 'adr' || e.name.startsWith('.')) continue;
+        if (e.name === 'decisions' || e.name.startsWith('.')) continue;
         const p = join(dir, e.name);
         if (e.isDirectory()) visita(p);
         else if (e.name.endsWith('.md') || e.name.endsWith('.json')) {
@@ -71,7 +90,7 @@ describe('gli ADR', () => {
         }
       }
     };
-    visita(BLUEPRINT);
+    visita(CORPUS);
     const fantasmi = [...citati.entries()]
       .filter(([n]) => !numeri.has(n))
       .map(([n, dove]) => `ADR-${n}, citato da ${dove}, non esiste`);

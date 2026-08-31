@@ -15,9 +15,6 @@ authority map start at `docs/README.md`.
 - `LAVORO.md` — compact disposable handoff; observed Git state wins.
 - `gate1/MANDATO-DAY-1.md` — DAY-1 exit condition.
 - `gate1/PERCORSO-CRITICO.md` — ordering/dependencies of remaining blockers.
-- `knowledge/` — curated cognitive problem/evidence corpus, loaded only for
-  relevant work; implementation status does not belong there.
-- `adr/` — decision history: why choices were made, not proof of current HEAD.
 - `research/` — dated evidence snapshots, never current authority by themselves.
 - `mappa/` — a derived view of the system, plus the anchoring mechanism that
   stops it from lying. Never authority.
@@ -28,6 +25,8 @@ authority map start at `docs/README.md`.
 |---|---|
 | `00`–`12`, `BRIEF.md`, `validazione-contratti.md` | `docs/history/rebuild-2026/` |
 | `critique/` | `docs/history/rebuild-2026/critique/` |
+| `adr/` | `docs/decisions/` — decisioni, non storia: append-only ma vive |
+| `knowledge/` | `docs/knowledge/` — il corpus cognitivo durevole |
 | `proposals/` | **removed** — the routine was never active; `docs/history/README.md` records the archaeological pointer and ties it to F4 |
 
 The move waited for a reverse-reference check that could prove semantic cleanup

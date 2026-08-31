@@ -29,7 +29,7 @@ unused manifest would be another source of drift.
 | How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
-| Why was an architectural choice made? | The relevant ADR in `docs/blueprint/adr/` |
+| Why was an architectural choice made? | The relevant ADR in `docs/decisions/` |
 | What makes DAY-1 true? | `docs/blueprint/gate1/MANDATO-DAY-1.md` |
 | Is a DAY-1 requirement currently satisfied? | `docs/blueprint/M5-BIS.md` |
 | In which order do remaining Gate blockers get attacked? | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
@@ -158,8 +158,10 @@ The 00–12 rebuild corpus, the old threat model/roadmap/contracts, `BRIEF`,
 The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 `docs/history/README.md` carries the old path → current home map.
 
-`docs/blueprint/README.md` still classifies what remains in that directory: the
-live Gate status, the handoff, ADRs, research, knowledge and the generated map.
+The architectural decisions moved to `docs/decisions/` and the durable cognitive
+corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
+name to be found. `docs/blueprint/README.md` still classifies what remains in that
+directory — the live Gate status, the handoff, research and the generated map.
 
 `docs/blueprint/STATE.md` is now a tombstone; its full chronicle is preserved in
 `docs/history/rebuild-2026/STATE-chronicle.md`. Together with

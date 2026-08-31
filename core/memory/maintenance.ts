@@ -37,7 +37,7 @@ import type { Fact, MemoryStore } from './store.js';
  * in the runtime, so every process that runs turns has one.
  *
  * What a clock-driven pass *would* be for is confidence decay, and that is
- * deliberately not built — see `docs/blueprint/adr/0040`.
+ * deliberately not built — see `docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md`.
  */
 
 /**

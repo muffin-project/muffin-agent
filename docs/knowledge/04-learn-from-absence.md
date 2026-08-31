@@ -2,7 +2,7 @@
 
 **Stato: VIVO — cablato nel vecchio Muffin (principio + codice + 2 layer di
 supporto), NON ancora nel design del blueprint nuovo** (compare solo come riga di
-inventario in `research/a1-inventario-codebase.md` §Dream cycle). Candidato #1 da
+inventario in `docs/blueprint/research/a1-inventario-codebase.md` §Dream cycle). Candidato #1 da
 portare avanti esplicitamente.
 
 ## Il principio (cognitivo)
@@ -68,4 +68,4 @@ notte, e forma-da-ipotesi obbligata dalla provenienza.
 `docs/history/foundations/legacy/UNDERSTANDING.md §5` · `src/memory/dream_phase_i.ts` (I.6) ·
 `src/memory/memory_patterns.ts` · `docs/pillars/memory/{04_patterns,09_observations,05_episodes}.md`
 · `src/pledge_pipeline.ts` · `docs/DECISIONS.md` (ADR-066) · postura anti-firehose:
-`docs/foundations/PRINCIPLES.md §P-I`, e nel blueprint `adr/0028-postura-di-proattivita.md`.
+`docs/foundations/PRINCIPLES.md §P-I`, e `docs/decisions/0028-postura-di-proattivita.md`.

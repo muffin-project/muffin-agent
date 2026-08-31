@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
  * output) lives here as data, never as `if (model === ...)` in the loop.
  *
  * That is what makes it scaffolding you can remove: when a model stops needing
- * the crutches, you delete a profile, not a code path. See docs/adr/0022 and
+ * the crutches, you delete a profile, not a code path. See
+ * docs/decisions/0022-un-processo-con-priorita-foreground.md and
  * the durable-vs-scaffolding split in the blueprint.
  */
 
