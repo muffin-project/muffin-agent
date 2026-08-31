@@ -206,6 +206,21 @@ function build({ riancora = false } = {}) {
       broken.push(`${ref} — ${r.reason}`);
       continue;
     }
+    // `prima.path !== r.path` butta via il testo registrato, ed e' giusto:
+    // se il riferimento ora risolve a un *altro* file, l'ancora vecchia non
+    // parlava di questo. Ma la stessa condizione scatta anche quando il file e'
+    // solo **stato spostato**, e li' butta via una memoria valida.
+    //
+    // Misurato il 2026-08-31 archiviando il corpus rebuild sotto `docs/history/`:
+    // 14 ancore hanno cambiato path, `precedenti` non le ha piu' riconosciute, e
+    // rigenerare le ha ri-ancorate a cio' che sta letteralmente a quella riga
+    // adesso — 5 al testo sbagliato, una a una riga vuota — con `mappa.test.ts`
+    // verde sopra una mappa che mentiva.
+    //
+    // Chi sposta un file citato dalla mappa deve quindi **rimappare `path` (e la
+    // chiave, se la porta) dentro `ancore.json` conservando `testo` e `line`**, e
+    // solo dopo rieseguire questo script: il follow qui sotto fa il resto. La
+    // prova che e' andata bene e' che ogni ancora conservi il testo che aveva.
     const prima = precedenti[ref];
     if (!prima || prima.path !== r.path || prima.testo === r.text) {
       anchors[ref] = { path: r.path, line: r.line, testo: r.text };

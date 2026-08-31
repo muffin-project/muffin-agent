@@ -197,7 +197,7 @@ export type TurnRecord = {
    * The turn's taint, as a column and never derived.
    *
    * The threat model scopes taint to the turn and raises it monotonically
-   * (`docs/blueprint/03-threat-model.md`). Today it lives in the closure of
+   * (`docs/history/rebuild-2026/03-threat-model.md`). Today it lives in the closure of
    * `makeSnapshot` (`agent/loop.ts`) and is recoverable from nothing else — so
    * a resume that rebuilt it from the principal would restart at tier 0 a turn
    * that had already read the web, which is the fetch-then-act pattern the

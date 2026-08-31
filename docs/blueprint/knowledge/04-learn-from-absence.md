@@ -8,7 +8,7 @@ portare avanti esplicitamente.
 ## Il principio (cognitivo)
 
 *"Ciò che qualcuno smette di dire è spesso più informativo di ciò che dice."*
-(`docs/foundations/UNDERSTANDING.md §5`). L'assenza non è mancanza di dato — **è**
+(`docs/history/foundations/legacy/UNDERSTANDING.md §5`). L'assenza non è mancanza di dato — **è**
 un dato. Un tema centrale che scompare segnala un evento narrativo (avoidance,
 risoluzione nascosta, tensione). Il cervello lo sa: la sorpresa di ciò-che-manca
 è prediction-error tanto quanto la sorpresa di ciò-che-arriva.
@@ -65,7 +65,7 @@ notte, e forma-da-ipotesi obbligata dalla provenienza.
 
 ## Fonti
 
-`docs/foundations/UNDERSTANDING.md §5` · `src/memory/dream_phase_i.ts` (I.6) ·
+`docs/history/foundations/legacy/UNDERSTANDING.md §5` · `src/memory/dream_phase_i.ts` (I.6) ·
 `src/memory/memory_patterns.ts` · `docs/pillars/memory/{04_patterns,09_observations,05_episodes}.md`
 · `src/pledge_pipeline.ts` · `docs/DECISIONS.md` (ADR-066) · postura anti-firehose:
 `docs/foundations/PRINCIPLES.md §P-I`, e nel blueprint `adr/0028-postura-di-proattivita.md`.
