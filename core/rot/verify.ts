@@ -21,7 +21,7 @@ import { join, relative, sep } from 'node:path';
  *                  agent, because the likeliest cause is the owner editing
  *                  identity.md by hand.
  *
- * See docs/adr/0003 (and its revision).
+ * See docs/decisions/0003-root-of-trust.md (and its revision).
  */
 
 export type RotMode = 'hardened' | 'single-user';

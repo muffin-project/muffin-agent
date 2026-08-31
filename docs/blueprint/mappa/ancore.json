@@ -346,22 +346,22 @@
   },
   "agent/profiles/profile.ts:118": {
     "path": "agent/profiles/profile.ts",
-    "line": 118,
+    "line": 119,
     "testo": "const MAX_ITERATIONS_HARD_CAP = 40;"
   },
   "agent/profiles/profile.ts:183": {
     "path": "agent/profiles/profile.ts",
-    "line": 183,
+    "line": 184,
     "testo": "export function selectProfile(model: string, profiles: Profile[]): Profile {"
   },
   "agent/profiles/profile.ts:92": {
     "path": "agent/profiles/profile.ts",
-    "line": 92,
+    "line": 93,
     "testo": "export const CONSERVATIVE: Profile = {"
   },
   "agent/profiles/profile.ts:97": {
     "path": "agent/profiles/profile.ts",
-    "line": 97,
+    "line": 98,
     "testo": "maxToolCallsPerTurn: 15,"
   },
   "agent/providers/anthropic.ts:26": {
@@ -1911,7 +1911,7 @@
   },
   "core/policy/types.ts:40": {
     "path": "core/policy/types.ts",
-    "line": 42,
+    "line": 43,
     "testo": "type Resource ="
   },
   "core/rot/budgets.ts:104": {
@@ -2229,45 +2229,45 @@
     "line": 7,
     "testo": "\"forbiddenForSystem\": [\"outward.send\", \"config.ratchet\"]"
   },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:215": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 215,
-    "testo": "**1. Il decadimento della confidenza: no, e non per prudenza.** Lo schema lo"
-  },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:237": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 237,
-    "testo": "**2. Una passata di scadenza: non ha niente da scadere, oggi.** ⬤ Verificato sul"
-  },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:241": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 241,
-    "testo": "rappresentabile**. Stessa cosa per `entities.expired_at`: nessuno scrive."
-  },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:247": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 247,
-    "testo": "**3. Dream / compattazione: no, perché manca il consumatore.** Le tabelle"
-  },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:253": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 253,
-    "testo": "**4. L'audit dei predicati: la metà che rileva c'è già, la metà che propone no.**"
-  },
-  "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:262": {
-    "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
-    "line": 262,
-    "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
-  },
-  "docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md:180": {
-    "path": "docs/blueprint/adr/0044-il-disco-non-ha-provenienza.md",
-    "line": 180,
-    "testo": "## Revisione — 2026-08-16"
-  },
   "docs/blueprint/M5-BIS.md:253": {
     "path": "docs/blueprint/M5-BIS.md",
     "line": 379,
     "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:215": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 215,
+    "testo": "**1. Il decadimento della confidenza: no, e non per prudenza.** Lo schema lo"
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:237": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 237,
+    "testo": "**2. Una passata di scadenza: non ha niente da scadere, oggi.** ⬤ Verificato sul"
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:241": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 241,
+    "testo": "rappresentabile**. Stessa cosa per `entities.expired_at`: nessuno scrive."
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:247": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 247,
+    "testo": "**3. Dream / compattazione: no, perché manca il consumatore.** Le tabelle"
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:253": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 253,
+    "testo": "**4. L'audit dei predicati: la metà che rileva c'è già, la metà che propone no.**"
+  },
+  "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:262": {
+    "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
+    "line": 262,
+    "testo": "**5. `muffin run` headless continua a non consolidare.** Limite dichiarato da"
+  },
+  "docs/decisions/0044-il-disco-non-ha-provenienza.md:180": {
+    "path": "docs/decisions/0044-il-disco-non-ha-provenienza.md",
+    "line": 180,
+    "testo": "## Revisione — 2026-08-16"
   },
   "docs/history/rebuild-2026/02-ontologia.md:139": {
     "path": "docs/history/rebuild-2026/02-ontologia.md",
@@ -2661,12 +2661,12 @@
   },
   "profile.ts:150": {
     "path": "agent/profiles/profile.ts",
-    "line": 150,
+    "line": 151,
     "testo": "export function loadProfiles(dir?: string, onProblem?: (line: string) => void): Profile[] {"
   },
   "profile.ts:197": {
     "path": "agent/profiles/profile.ts",
-    "line": 219,
+    "line": 220,
     "testo": "export function iterationCap(profile: Profile): number {"
   },
   "readers.ts:204": {
@@ -2901,32 +2901,32 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 115,
+    "line": 116,
     "testo": "*/"
   },
   "types.ts:11": {
     "path": "core/policy/types.ts",
-    "line": 13,
+    "line": 14,
     "testo": "export type Principal ="
   },
   "types.ts:27": {
     "path": "core/policy/types.ts",
-    "line": 29,
+    "line": 30,
     "testo": "export type TenantId = string;"
   },
   "types.ts:40": {
     "path": "core/policy/types.ts",
-    "line": 42,
+    "line": 43,
     "testo": "type Resource ="
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",
-    "line": 78,
+    "line": 79,
     "testo": "/** Already validated against the tool's input schema — never raw model output. */"
   },
   "types.ts:69": {
     "path": "core/policy/types.ts",
-    "line": 80,
+    "line": 81,
     "testo": "/** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */"
   },
   "updates.ts:81": {

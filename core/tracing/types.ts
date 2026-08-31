@@ -4,7 +4,7 @@
  * We adopt the OpenTelemetry GenAI semantic conventions as a *vocabulary*, not
  * as a dependency: every attribute in the `gen_ai.*` namespace means what the
  * spec says it means, but nothing here imports the OTel SDK. Rationale in
- * docs/adr/0010 — the conventions are still Development, the only consumer is
+ * docs/decisions/0010-standard-esterni.md — the conventions are still Development, the only consumer is
  * the owner reading local files, and the SDK would drag async context
  * propagation into a runtime that does not need it.
  *
