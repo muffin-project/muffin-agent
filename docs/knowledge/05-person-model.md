@@ -185,4 +185,4 @@ memory_semantic,memory_entities,memory_patterns,memory_dream,
 memory_notifications}.ts` · `src/cognition/belief_gaps.ts` · `src/dreamer.ts` ·
 `src/decider.ts` · `src/cli/install.ts` · `context/HEARTBEAT.md` ·
 `docs/pitches/done/cycle_7.md` · `docs/DECISIONS.md` · `muffin.dev.db`.
-Nel nuovo: `knowledge/{01-understanding,03-observing-spine,04-learn-from-absence}.md`.
+Nel nuovo: `docs/knowledge/{01-understanding,03-observing-spine,04-learn-from-absence}.md`.
