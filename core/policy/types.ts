@@ -4,7 +4,9 @@
  * This file is part of the Root of Trust (code tier): nothing at runtime writes
  * here, and changing it requires a build and a restart. See docs/adr/0003, 0013.
  *
- * Normative source: docs/blueprint/09-contratti-m0-m1.md §1 in the blueprint repo.
+ * Historical contract lineage:
+ * docs/history/rebuild-2026/09-contratti-m0-m1.md §1. The current executable
+ * authority is this file and the shipped schema/config, per docs/README.md.
  */
 
 /** Who is acting. Never inferred from message content — resolved before the loop. */

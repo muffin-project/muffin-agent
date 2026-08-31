@@ -27,12 +27,15 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
-Slice 3 integrata (#266, `1a0817a`): `loop.md` è manutenzione, non un manuale;
-skill `riprendi`/`sfida`/`giudice`; tre rules path-scoped. Due trappole misurate
-e scritte in `riprendi/SKILL.md`: un blocco di iniezione che **non riesce**
-annulla l'intera skill in silenzio, e la sintassi si esegue **anche dentro un
-code span**. Prossima: slice 4, archive sotto `history/` — prima l'inventario
-di non-collisione, poi il move.
+Slice 3 e 4 integrate: skill e rules path-scoped; corpus rebuild e
+`foundations/` sotto `docs/history/`. `blueprint/STATE.md` e
+`foundations/VISION.md` restano **lapidi di compatibilità** fino alla slice che
+dissolve i namespace legacy. Prossima: slice 5, `adr/`→`decisions/`.
+
+Due trappole misurate, scritte dove sta il meccanismo e non qui:
+`riprendi/SKILL.md` (un blocco di iniezione che fallisce annulla la skill in
+silenzio) e `mappa/ancore.mjs` (spostare un file citato ri-chiava l'ancora e ne
+scarta il testo registrato).
 
 ## Parcheggiato: come arriva una richiesta che non si fa adesso
 
@@ -41,12 +44,9 @@ forma: **`jobs` non ha un tool**, i 7 todo sono fermi dal 27/08 e invisibili
 fuori dalla sessione, 44 fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto
 dei tool **non** è più il problema (`0d519cb`): non ripartire da lì.
 
-## STEP 0 — knowledge architecture
+## STEP 0 — decisione owner da far entrare, non ancora entrata
 
-Piano owner del 30/08: `docs/blueprint/` si dissolve in path che dichiarano il
-ruolo epistemico. Nove slice.
-
-**Decisione owner da far entrare, non ancora entrata.** La direttiva del 15/08
+La direttiva del 15/08
 «si ripara alla radice» è stata tolta da `ORCHESTRATION.md` il 19/08 senza
 riospitarla. Casa decisa: `PRACTICES.md` — dopo la migrazione
 `docs/engineering/PRACTICES.md` — e vi entra **quando una slice tocca quel
@@ -70,5 +70,5 @@ di 19 ore. Community è solo una forma di stringa; `pricing.ts` sottostima 5
 famiglie su 8; socket v2; il `try` di `recall.ts` avvolge anche la lettura della
 provenienza, quindi un guasto dello store si traveste da causa di rete.
 
-**Truth maintenance:** M5-BIS possiede status Gate, PERCORSO-CRITICO.md#ordine-corrente l'ordine.
-`STATE.md` è cronologia, non stato corrente.
+**Truth maintenance:** M5-BIS possiede status Gate,
+PERCORSO-CRITICO.md#ordine-corrente l'ordine.

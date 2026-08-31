@@ -1,13 +1,13 @@
-# Blueprint lineage and live Gate
+# Blueprint: what is still here, and what left
 
-`docs/blueprint/` contains **two different generations of knowledge**. Do not
-infer authority from being in this directory.
+`docs/blueprint/` no longer holds two generations of knowledge. On 2026-08-31 the
+rebuild-era design corpus was archived; what remains is operational or reference
+material that still has a current role.
 
-For the current repository authority map start at `docs/README.md`.
+Do not infer authority from being in this directory. For the current repository
+authority map start at `docs/README.md`.
 
-## Live operational/current material
-
-These paths still have a current role:
+## What is still here
 
 - `M5-BIS.md` — **DAY-1 status inventory**. It is currently pending a dedicated
   evidence reconciliation; individual rows remain the inventory, but stale
@@ -19,38 +19,34 @@ These paths still have a current role:
   relevant work; implementation status does not belong there.
 - `adr/` — decision history: why choices were made, not proof of current HEAD.
 - `research/` — dated evidence snapshots, never current authority by themselves.
-- `proposals/` — proposals with no authority until a decision accepts them.
+- `mappa/` — a derived view of the system, plus the anchoring mechanism that
+  stops it from lying. Never authority.
 
-## Rebuild-era design corpus
+## What left, and where it went
 
-The following root documents are preserved because they contain the design
-lineage of the 2026 rebuild, but **they do not govern current mechanics or
-status**:
+| Was here | Now |
+|---|---|
+| `00`–`12`, `BRIEF.md`, `validazione-contratti.md` | `docs/history/rebuild-2026/` |
+| `critique/` | `docs/history/rebuild-2026/critique/` |
+| `proposals/` | **removed** — the routine was never active; `docs/history/README.md` records the archaeological pointer and ties it to F4 |
 
-```text
-00-findings.md
-01-verdetti.md
-02-ontologia.md
-03-threat-model.md
-04-roadmap.md
-05-testing-evals.md
-06-modelli.md
-07-durevole-vs-impalcatura.md
-08-assunzioni.md
-09-contratti-m0-m1.md
-10-risoluzioni-fase-c.md
-11-salvataggio-documentale.md
-12-casi-uso-primitive.md
-BRIEF.md
-validazione-contratti.md
-critique/
-```
+The move waited for a reverse-reference check that could prove semantic cleanup
+would not become broken lineage. That check was done on 2026-08-30: five of the
+corpus documents are cited by live code and by the architecture map, and their
+citations were updated in the same commit as the move.
 
-Use them when reconstructing why the rebuild took a shape or when testing whether
-a historical assumption still matters. Do **not** use them as a shortcut for
-what HEAD accepts today.
+The corpus was archived **whole**. Its value is that it records mistakes,
+alternatives and assumptions that disappeared from the current design; splitting
+it by citation count would have destroyed the thing that makes it readable.
 
-In particular:
+## `STATE.md`
+
+`STATE.md` is no longer a state source. Its accumulated chronicle was frozen at
+`docs/history/rebuild-2026/STATE-chronicle.md`; the path itself is now a small
+tombstone so old links fail safely toward the current authority map instead of
+feeding stale state to an agent.
+
+## Where current answers live
 
 - current architecture → `docs/ARCHITECTURE.md`;
 - current security → `docs/SECURITY.md`;
@@ -58,24 +54,7 @@ In particular:
 - current verification workflow → `docs/ORCHESTRATION.md`;
 - current Gate status → `M5-BIS.md`.
 
-The files remain at stable paths for now because ADRs/code/history cite them. A
-physical archive move is intentionally deferred until a reverse-reference check
-can prove it will not turn semantic cleanup into broken lineage.
-
-## STATE.md
-
-`STATE.md` is no longer a state source. Its accumulated chronicle was frozen at
-`docs/history/rebuild-2026/STATE-chronicle.md`; the path itself is now a small
-tombstone so old links fail safely toward the current authority map instead of
-feeding stale state to an agent.
-
-## Why this folder is not being deleted
-
-The rebuild corpus is valuable precisely because it records mistakes,
-alternatives and assumptions that disappeared from the current design. History
-has evidentiary value without having operational authority.
-
-The desired property is not "few files". It is:
+The desired property has not changed:
 
 > **a fresh agent can ignore history by default without losing the ability to
 > reconstruct it when a decision needs lineage.**

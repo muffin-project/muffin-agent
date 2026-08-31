@@ -6,7 +6,7 @@ erano scritte — una somma pesata `w1·…+w9·…` — non si porta avanti: ve
 §"La forma che non si porta" qui sotto, che è la parte da leggere se stai per
 toccare il ranking.
 
-Fonte: `docs/foundations/UNDERSTANDING.md` (già nel repo dopo il consolidamento
+Fonte: `docs/history/foundations/legacy/UNDERSTANDING.md` (già nel repo dopo il consolidamento
 ADR-0031). Curato 2026-08-09.
 
 ## Il principio
@@ -103,7 +103,7 @@ l'esenzione — ed è lì che questa dimensione ripaga davvero.
 
 ## Fonti
 
-`docs/foundations/UNDERSTANDING.md` · `foundations/INVARIANTS.md §I-6` ·
+`docs/history/foundations/legacy/UNDERSTANDING.md` · `docs/history/foundations/legacy/INVARIANTS.md §I-6` ·
 `research/memory-salience-and-fusion.md` · `knowledge/04-learn-from-absence.md` ·
 `knowledge/03-observing-spine.md` · Wang et al. (2025), *Nemori* (predict-calibrate)
-— arXiv da ri-verificare, vedi `foundations/REFERENCES.md`.
+— arXiv da ri-verificare, vedi `docs/history/foundations/legacy/REFERENCES.md`.

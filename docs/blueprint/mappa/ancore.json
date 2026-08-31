@@ -1,6 +1,6 @@
 {
   "03-threat-model.md:53": {
-    "path": "docs/blueprint/03-threat-model.md",
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
     "line": 54,
     "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
   },
@@ -1911,7 +1911,7 @@
   },
   "core/policy/types.ts:40": {
     "path": "core/policy/types.ts",
-    "line": 40,
+    "line": 42,
     "testo": "type Resource ="
   },
   "core/rot/budgets.ts:104": {
@@ -2229,71 +2229,6 @@
     "line": 7,
     "testo": "\"forbiddenForSystem\": [\"outward.send\", \"config.ratchet\"]"
   },
-  "docs/blueprint/02-ontologia.md:139": {
-    "path": "docs/blueprint/02-ontologia.md",
-    "line": 139,
-    "testo": "- **Identità cross-connector** (il problema della community): `identities` per-connector restano separate di default; il link a una `entity` persona avviene solo `proposed→confirmed` — proposta automatica su evidenza forte, conferma dell'owner o dell'interessato **tramite canale out-of-band** (codice generato su un canale e inserito sull'altro: una risposta \"sì sono io\" sul canale nuovo non è una conferma — C1-16). **In v1 la tabella e gli stati esistono ma il flusso non si costruisce** (C2-#2): con un solo connector remoto il merge cross-connector non può accadere; le colonne sono fondamenta strutturali, il flusso arriva col secondo connector. **Mai merge silenzioso**: l'evidenza dice che il falso-positivo di merge è il fallimento peggiore perché invisibile (A4 §9, \"Sakura Sushi\"). Se il sistema sbaglia un link confermato: `link_status` torna `unlinked`, i fatti restano attribuiti alle identità originarie (lo permettono `speaker_id` + provenienza — niente da \"smescolare\")."
-  },
-  "docs/blueprint/03-threat-model.md:121": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 121,
-    "testo": ""
-  },
-  "docs/blueprint/03-threat-model.md:21": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 21,
-    "testo": "- **Trust tier** (dal modello dati, 02 §5): 0 owner · 1 contatti confermati · 2 gruppo/sconosciuti · 3 web/tool-esterni. Il **taint del contesto** = max tier dei blocchi **fisicamente presenti nel context del turno** (messaggio + recall + tool output già ricevuti). Il taint **si propaga**: messaggio→fatto (il fatto eredita il tier), fatto→recall (l'etichetta viaggia), recall→azione (il kernel legge il taint prima di eseguire). Risposta alla domanda diretta del BRIEF: sì, serve il taint, ed è un campo persistito, non una convenzione di prompt. **Il filesystem locale non ha provenienza** (ADR-0044): `stat` non distingue `~/appunti.md` scritto dall'owner da `~/Downloads/fattura.pdf` arrivato da uno sconosciuto, quindi ciò che entra dal disco — `fs_read`, `fs_list`, lo stdout di `shell_run` — è **tier 2**; la tabella dei processi (`process_list`, solo `comm`) è tier 1, perché sceglierne il contenuto costa a un attaccante l'esecuzione di codice sull'host. Un risultato di tool fatto solo di parole del tool stesso è tier 0, **dichiarato** e non omesso: il campo è obbligatorio, così che «pulito» e «nessuno ha chiesto» non siano più lo stesso valore."
-  },
-  "docs/blueprint/03-threat-model.md:30": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 30,
-    "testo": "decide(principal, tenant, capability, resource, args, taint) →"
-  },
-  "docs/blueprint/03-threat-model.md:45": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 45,
-    "testo": "| Shell / filesystem host / processi | ALLOW per classe (HITL) | **ASK** (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione — vedi nota sotto) | **DENY** |"
-  },
-  "docs/blueprint/03-threat-model.md:51": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 52,
-    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
-  },
-  "docs/blueprint/03-threat-model.md:53": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 54,
-    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
-  },
-  "docs/blueprint/03-threat-model.md:68": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 69,
-    "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
-  },
-  "docs/blueprint/03-threat-model.md:69": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 70,
-    "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
-  },
-  "docs/blueprint/03-threat-model.md:70": {
-    "path": "docs/blueprint/03-threat-model.md",
-    "line": 71,
-    "testo": "- **Niente side-channel**: il codice dentro il sandbox non ha alcun canale verso i tool del loop — è codice+fs+rete proxata. Il confine di esecuzione è anche un confine di capability. *(Riferimento corretto 2026-08-11: Hermes #4146 era questa classe — sandbox→RPC→tool privilegiato — ma loro l'hanno chiusa TENENDO il canale e propagando l'approvazione giù per i thread (PR #34497); la PR che toglieva la capability fu rifiutata, e la classe si è riaperta due volte (#65592, #74078, aperte a agosto 2026). La nostra scelta è il ramo che loro hanno rifiutato, e la loro storia da allora è l'argomento per il nostro.)*"
-  },
-  "docs/blueprint/04-roadmap.md:210": {
-    "path": "docs/blueprint/04-roadmap.md",
-    "line": 210,
-    "testo": "`queue`/`steer` e il concetto di \"occupato\" (serve il protocollo client/server"
-  },
-  "docs/blueprint/04-roadmap.md:613": {
-    "path": "docs/blueprint/04-roadmap.md",
-    "line": 613,
-    "testo": "(`core/budget/budget.ts`), consultati dal kernel; il cap per-turno conta i"
-  },
-  "docs/blueprint/10-risoluzioni-fase-c.md:34": {
-    "path": "docs/blueprint/10-risoluzioni-fase-c.md",
-    "line": 34,
-    "testo": "- **#2 identities → tabella sì, state-machine no**: le colonne restano (fondamenta strutturali, costano zero), il flusso `proposed→confirmed` non si costruisce finché non esiste il secondo connector remoto."
-  },
   "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md:215": {
     "path": "docs/blueprint/adr/0040-la-manutenzione-e-guidata-dai-dati.md",
     "line": 215,
@@ -2333,6 +2268,71 @@
     "path": "docs/blueprint/M5-BIS.md",
     "line": 379,
     "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
+  },
+  "docs/history/rebuild-2026/02-ontologia.md:139": {
+    "path": "docs/history/rebuild-2026/02-ontologia.md",
+    "line": 139,
+    "testo": "- **Identità cross-connector** (il problema della community): `identities` per-connector restano separate di default; il link a una `entity` persona avviene solo `proposed→confirmed` — proposta automatica su evidenza forte, conferma dell'owner o dell'interessato **tramite canale out-of-band** (codice generato su un canale e inserito sull'altro: una risposta \"sì sono io\" sul canale nuovo non è una conferma — C1-16). **In v1 la tabella e gli stati esistono ma il flusso non si costruisce** (C2-#2): con un solo connector remoto il merge cross-connector non può accadere; le colonne sono fondamenta strutturali, il flusso arriva col secondo connector. **Mai merge silenzioso**: l'evidenza dice che il falso-positivo di merge è il fallimento peggiore perché invisibile (A4 §9, \"Sakura Sushi\"). Se il sistema sbaglia un link confermato: `link_status` torna `unlinked`, i fatti restano attribuiti alle identità originarie (lo permettono `speaker_id` + provenienza — niente da \"smescolare\")."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:121": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 121,
+    "testo": ""
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:21": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 21,
+    "testo": "- **Trust tier** (dal modello dati, 02 §5): 0 owner · 1 contatti confermati · 2 gruppo/sconosciuti · 3 web/tool-esterni. Il **taint del contesto** = max tier dei blocchi **fisicamente presenti nel context del turno** (messaggio + recall + tool output già ricevuti). Il taint **si propaga**: messaggio→fatto (il fatto eredita il tier), fatto→recall (l'etichetta viaggia), recall→azione (il kernel legge il taint prima di eseguire). Risposta alla domanda diretta del BRIEF: sì, serve il taint, ed è un campo persistito, non una convenzione di prompt. **Il filesystem locale non ha provenienza** (ADR-0044): `stat` non distingue `~/appunti.md` scritto dall'owner da `~/Downloads/fattura.pdf` arrivato da uno sconosciuto, quindi ciò che entra dal disco — `fs_read`, `fs_list`, lo stdout di `shell_run` — è **tier 2**; la tabella dei processi (`process_list`, solo `comm`) è tier 1, perché sceglierne il contenuto costa a un attaccante l'esecuzione di codice sull'host. Un risultato di tool fatto solo di parole del tool stesso è tier 0, **dichiarato** e non omesso: il campo è obbligatorio, così che «pulito» e «nessuno ha chiesto» non siano più lo stesso valore."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:30": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 30,
+    "testo": "decide(principal, tenant, capability, resource, args, taint) →"
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:45": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 45,
+    "testo": "| Shell / filesystem host / processi | ALLOW per classe (HITL) | **ASK** (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione — vedi nota sotto) | **DENY** |"
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:51": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 52,
+    "testo": "- **La riga shell/filesystem/processi a taint 2, emendata (owner, 2026-08-16).** `sys.shell` dichiarava nessun `maxTaint` proprio, quindi ereditava il soffitto di default per `high` risk (1): a taint 2 (`DISK_TIER`, ADR-0044) la riga era un `DENY — nessun percorso`, senza `ask`. L'owner ha scelto la contropartita che ADR-0044 offriva: `sys.shell` ora dichiara `maxTaint: 2` (`agent/tools/shell.ts`), quindi a taint 2 la decisione scende nel ramo `high`-risk invece di fermarsi al soffitto — e quel ramo resta `ask` ovunque non sia `hardened && owner && taint===0`, che un turno che ha letto qualcosa non è mai. Il risultato: *«leggi il file e poi lancia i test»* torna a essere completabile con un sì dell'owner, l'auto-allow resta irraggiungibile dopo una lettura, e l'egress (riga sopra) resta invariato — nessuna capability che *agisce senza chiedere* si è allargata, solo quella che *chiede* è tornata raggiungibile. A taint 3 la riga resta `DENY`: il soffitto si è alzato di un gradino, non è sparito. Dettaglio in ADR-0044 §revisione."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:53": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 54,
+    "testo": "- **`system@scheduler` e `agent@dev` non ereditano la colonna dell'owner** (correzione C1-8): sono principal a sé. Per loro, ogni capability che per l'owner sarebbe ASK/HITL diventa **ASK-in-coda** (l'azione si ferma e attende l'owner al suo rientro), **mai auto-ALLOW perché \"non c'è nessuno da chiedere\"**. Le capability `outward.*` e `config.ratchet` sono escluse del tutto da `system@scheduler` a qualunque taint. Il fail-safe è la direzione obbligata: un'automazione che si blocca è un fastidio, una che si auto-approva è una backdoor."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:68": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 69,
+    "testo": "- **Esecuzione sandboxata di default** per `shell`, `process` e ogni code-execution di `dev`: Seatbelt su macOS, bubblewrap (+socat, seccomp opzionale) su Linux — il modello Claude Code/sandbox-runtime, il più documentato del campo e già adottato dal Muffin attuale come dipendenza. Doppio layer indipendente: filesystem (write-scope = workspace del turno + tmp di sessione) e rete (**allow-only via proxy locale**: namespace di rete rimosso su Linux, sola-porta-proxy su macOS; nessun dominio pre-concesso)."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:69": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 70,
+    "testo": "- **Mandatory deny paths**: `~/.muffin/rot/`, config, secrets, `.git/hooks`, dotfile di shell — negati in scrittura SEMPRE, anche dentro un allow-write ampio (anti config-tampering; complementa i permessi OS del RoT)."
+  },
+  "docs/history/rebuild-2026/03-threat-model.md:70": {
+    "path": "docs/history/rebuild-2026/03-threat-model.md",
+    "line": 71,
+    "testo": "- **Niente side-channel**: il codice dentro il sandbox non ha alcun canale verso i tool del loop — è codice+fs+rete proxata. Il confine di esecuzione è anche un confine di capability. *(Riferimento corretto 2026-08-11: Hermes #4146 era questa classe — sandbox→RPC→tool privilegiato — ma loro l'hanno chiusa TENENDO il canale e propagando l'approvazione giù per i thread (PR #34497); la PR che toglieva la capability fu rifiutata, e la classe si è riaperta due volte (#65592, #74078, aperte a agosto 2026). La nostra scelta è il ramo che loro hanno rifiutato, e la loro storia da allora è l'argomento per il nostro.)*"
+  },
+  "docs/history/rebuild-2026/04-roadmap.md:210": {
+    "path": "docs/history/rebuild-2026/04-roadmap.md",
+    "line": 210,
+    "testo": "`queue`/`steer` e il concetto di \"occupato\" (serve il protocollo client/server"
+  },
+  "docs/history/rebuild-2026/04-roadmap.md:613": {
+    "path": "docs/history/rebuild-2026/04-roadmap.md",
+    "line": 613,
+    "testo": "(`core/budget/budget.ts`), consultati dal kernel; il cap per-turno conta i"
+  },
+  "docs/history/rebuild-2026/10-risoluzioni-fase-c.md:34": {
+    "path": "docs/history/rebuild-2026/10-risoluzioni-fase-c.md",
+    "line": 34,
+    "testo": "- **#2 identities → tabella sì, state-machine no**: le colonne restano (fondamenta strutturali, costano zero), il flusso `proposed→confirmed` non si costruisce finché non esiste il secondo connector remoto."
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",
@@ -2901,32 +2901,32 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 113,
+    "line": 115,
     "testo": "*/"
   },
   "types.ts:11": {
     "path": "core/policy/types.ts",
-    "line": 11,
+    "line": 13,
     "testo": "export type Principal ="
   },
   "types.ts:27": {
     "path": "core/policy/types.ts",
-    "line": 27,
+    "line": 29,
     "testo": "export type TenantId = string;"
   },
   "types.ts:40": {
     "path": "core/policy/types.ts",
-    "line": 40,
+    "line": 42,
     "testo": "type Resource ="
   },
   "types.ts:67": {
     "path": "core/policy/types.ts",
-    "line": 76,
+    "line": 78,
     "testo": "/** Already validated against the tool's input schema — never raw model output. */"
   },
   "types.ts:69": {
     "path": "core/policy/types.ts",
-    "line": 78,
+    "line": 80,
     "testo": "/** Recomputed at every call, never frozen for the turn (blueprint 03 §2). */"
   },
   "updates.ts:81": {

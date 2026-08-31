@@ -166,7 +166,7 @@ girati; sono carico cognitivo latente.
 
 ## ⚠️ Avvertenza sulla bibliografia
 
-`docs/foundations/REFERENCES.md` **nel nostro repo è byte-identico a quello
+`docs/history/foundations/legacy/REFERENCES.md` **nel nostro repo è byte-identico a quello
 vecchio** (verificato con `diff`): il consolidamento l'ha copiato verbatim. Il
 survey ha ri-controllato gli identificativi arXiv e il verdetto è: **gli id sono
 in gran parte reali, i metadati attorno spesso no** — titoli, autori, anni e nomi
