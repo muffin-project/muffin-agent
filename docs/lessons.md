@@ -799,8 +799,7 @@ rule for that case — do not assume, drop the dependency — was not applied
 here; it was assumed instead), and the docstring above the call read "the
 keepalive exists from day one," stated as if day one had ever worked.
 
-The claim was inherited, not verified: `docs/blueprint/adr/0025-transport-
-telegram.md` described `sendMessageDraft`'s contract from the old Muffin
+The claim was inherited, not verified: `docs/decisions/0025-transport-telegram.md` described `sendMessageDraft`'s contract from the old Muffin
 system's own history (its ADR-133/138) and was never checked against the
 current Bot API in this repository. The inherited fact carried the missing
 parameter along with it.

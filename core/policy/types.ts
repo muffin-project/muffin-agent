@@ -2,7 +2,8 @@
  * Policy kernel contracts.
  *
  * This file is part of the Root of Trust (code tier): nothing at runtime writes
- * here, and changing it requires a build and a restart. See docs/adr/0003, 0013.
+ * here, and changing it requires a build and a restart. See
+ * docs/decisions/0003-root-of-trust.md and docs/decisions/0013-kernel-permessi-unificato.md.
  *
  * Historical contract lineage:
  * docs/history/rebuild-2026/09-contratti-m0-m1.md §1. The current executable
