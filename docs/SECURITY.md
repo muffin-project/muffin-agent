@@ -7,7 +7,7 @@ particular DAY-1 journey currently holds lives in tests/evals and
 `docs/blueprint/M5-BIS.md`.
 
 The historical threat-model lineage remains in
-`docs/blueprint/03-threat-model.md` and related ADRs/audits. Those records explain
+`docs/history/rebuild-2026/03-threat-model.md` and related ADRs/audits. Those records explain
 how the model evolved; this page is the current map.
 
 A boundary can be architecturally decided before its runtime mechanism ships.

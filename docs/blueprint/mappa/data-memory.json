@@ -400,7 +400,7 @@
     {
       "what": "Cross-connector identity linking (the identities table's proposed -> confirmed flow)",
       "why": "the columns and states are built as structural foundation ('costano zero') but the actual linking flow is deliberately not built until a second remote connector exists to make cross-connector merging a real question — confirmation is required to go through an out-of-band channel (a code generated on one connector, entered on the other), never a same-channel 'yes that's me'.",
-      "evidence": "docs/blueprint/10-risoluzioni-fase-c.md:34 ('identities → tabella sì, state-machine no'); docs/blueprint/02-ontologia.md:139"
+      "evidence": "docs/history/rebuild-2026/10-risoluzioni-fase-c.md:34 ('identities → tabella sì, state-machine no'); docs/history/rebuild-2026/02-ontologia.md:139"
     },
     {
       "what": "`muffin run` headless does not consolidate live",

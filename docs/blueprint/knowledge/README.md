@@ -77,9 +77,9 @@ curati. Restano leggibili nella loro forma originale; non sono in questa
 cartella, e non vanno citati come se lo fossero.
 
 - **basi cognitive** — antipattern → principio → mossa di design:
-  `docs/foundations/COGNITIVE_BASES.md`.
+  `docs/history/foundations/legacy/COGNITIVE_BASES.md`.
 - **bibliografia annotata** — i paper che informano il disegno, con gli arXiv
-  ancora da riverificare: `docs/foundations/REFERENCES.md`.
+  ancora da riverificare: `docs/history/foundations/legacy/REFERENCES.md`.
 - **cimitero** — gli esperimenti morti col *loro* razionale. Le tre voci che
   contano sono riassunte qui sotto; il resto vive nella storia del vecchio
   repository.
