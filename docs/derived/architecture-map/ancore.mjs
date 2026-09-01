@@ -2,7 +2,7 @@
 /**
  * Rigenera `ancore.json` leggendo il codice puntato dalla mappa.
  *
- * La mappa (`docs/blueprint/mappa/*.json`) è una **vista derivata**: descrive la
+ * La mappa (`docs/derived/architecture-map/*.json`) è una **vista derivata**: descrive la
  * parte del sistema che cambia di più e non ha un compilatore che la corregga.
  * Il meccanismo che le impedisce di mentire non è un promemoria ma questo:
  * ogni riferimento `file:riga` che compare nella mappa viene risolto qui, e il
@@ -10,8 +10,8 @@
  * testo sia ancora lì — quando il codice si sposta, fallisce la suite.
  *
  * Uso:
- *   node docs/blueprint/mappa/ancore.mjs          # rigenera
- *   node docs/blueprint/mappa/ancore.mjs --check  # esce 1 se è cambiato
+ *   node docs/derived/architecture-map/ancore.mjs          # rigenera
+ *   node docs/derived/architecture-map/ancore.mjs --check  # esce 1 se è cambiato
  *
  * La regola che questo script serve — una mappa è una vista derivata, e le
  * viste derivate marciscono — sta in `README.md`, qui accanto.
@@ -266,7 +266,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       /* prima esecuzione */
     }
     if (current !== next) {
-      console.error('ancore.json non è aggiornato — esegui `node docs/blueprint/mappa/ancore.mjs`');
+      console.error('ancore.json non è aggiornato — esegui `node docs/derived/architecture-map/ancore.mjs`');
       process.exit(1);
     }
     console.log(`ancore.json aggiornato: ${Object.keys(anchors).length} ancore`);

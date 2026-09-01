@@ -187,7 +187,7 @@ authority documents retain what matters.
 Update only the authoritative home whose meaning changed, plus a derived view if
 it is genuinely generated/checked from that source.
 
-The architecture map under `docs/blueprint/mappa/` is a **derived editorial
+The architecture map under `docs/derived/architecture-map/` is a **derived editorial
 snapshot with verified anchors**, not executable truth. Its code citations can
 be checked mechanically; its prose can still age.
 

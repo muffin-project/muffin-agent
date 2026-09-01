@@ -8,7 +8,7 @@ import { mapFiles, references, resolveRef } from './ancore.mjs';
 /**
  * La mappa dell'architettura, tenuta onesta.
  *
- * `docs/blueprint/mappa/*.json` è la sorgente dell'artefatto visivo: descrive il
+ * `docs/derived/architecture-map/*.json` è la sorgente dell'artefatto visivo: descrive il
  * flusso di un messaggio, i tool, il kernel dei permessi, la memoria e le
  * superfici. È una **vista derivata**, cioè la forma di documentazione che
  * invecchia peggio — descrive ciò che cambia di più e sbaglia con autorevolezza.
