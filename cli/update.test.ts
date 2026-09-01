@@ -53,18 +53,37 @@ function realGit(args: string[], cwd: string): FakeResult {
 
 type Fixture = { remote: string; seed: string; installed: string };
 
-/** A bare "remote", a `seed` clone that pushes commits to it, and `installed` — the clone `runUpdate` treats as the running checkout, already at the first commit. */
+/**
+ * **`-b main` non e' cosmetico: senza, questo fixture prova la macchina di chi
+ * lo esegue.**
+ *
+ * `git init` prende il nome del primo ramo da `init.defaultBranch`, che e' una
+ * config *globale*. Sulla macchina dell'owner vale `main`, quindi il bare
+ * nasce con `HEAD -> refs/heads/main`, il clone lo trova e tutto funziona.
+ * Ovunque quella config non sia impostata — un runner CI, un container, una
+ * macchina nuova — il bare nasce con `HEAD -> refs/heads/master` mentre il
+ * seed spinge `main`: `git clone` avverte «remote HEAD refers to nonexistent
+ * ref, unable to checkout», lascia `installed` sul ramo `master` con il
+ * **working tree vuoto**, e `runUpdate` non trova niente da aggiornare.
+ *
+ * Misurato l'1/09/2026: 13 dei test di questo file erano verdi solo perche'
+ * chi li eseguiva aveva `init.defaultBranch=main`. Il ramo si dichiara qui, e
+ * la config di chi esegue smette di essere un ingrediente.
+ *
+ * A bare "remote", a `seed` clone that pushes commits to it, and `installed` —
+ * the clone `runUpdate` treats as the running checkout, already at the first
+ * commit.
+ */
 function makeFixture(): Fixture {
   const remote = dir('muffin-update-remote-');
-  sh('git', ['init', '-q', '--bare', remote], remote);
+  sh('git', ['init', '-q', '-b', 'main', '--bare', remote], remote);
   const seed = dir('muffin-update-seed-');
-  sh('git', ['init', '-q'], seed);
+  sh('git', ['init', '-q', '-b', 'main'], seed);
   sh('git', ['config', 'user.email', 't@t'], seed);
   sh('git', ['config', 'user.name', 't'], seed);
   writeFileSync(join(seed, 'version.txt'), 'v1\n');
   sh('git', ['add', '.'], seed);
   sh('git', ['commit', '-qm', 'v1'], seed);
-  sh('git', ['branch', '-M', 'main'], seed);
   sh('git', ['remote', 'add', 'origin', remote], seed);
   sh('git', ['push', '-q', '-u', 'origin', 'main'], seed);
 

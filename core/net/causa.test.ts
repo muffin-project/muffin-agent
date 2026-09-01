@@ -105,9 +105,33 @@ describe('la forma su cui si regge: i fallimenti veri di questo fetch', () => {
     expect(await causaDi(`http://127.0.0.1:${porta}/${TOKEN}/getUpdates`)).toBe('TypeError (ECONNREFUSED)');
   });
 
-  it('socket chiuso dall altro lato durante la richiesta: ECONNRESET', async () => {
+  /**
+   * **Il codice di questo caso dipende dal sistema operativo, e la produzione
+   * e' quello che non gira qui.**
+   *
+   * Misurato l'1/09/2026 con lo stesso identico server (`s.destroy()` appena
+   * connesso): macOS dice `ECONNRESET`, Linux dice `UND_ERR_SOCKET`. Non e' la
+   * versione di undici — su Linux escono `UND_ERR_SOCKET` con undici 6.21.2,
+   * 6.23.0 e 6.28.0 — e' la piattaforma: macOS fa arrivare il reset del kernel,
+   * Linux fa vincere il `SocketError` di undici.
+   *
+   * Questo test asseriva il valore di macOS, quindi su Linux — dove Muffin
+   * gira davvero — era rosso, e nessuno l'ha visto finche' la CI non ha
+   * ripreso a eseguire.
+   *
+   * La garanzia del modulo non e' «esce questa stringa»: e' che un socket
+   * caduto si distingua da una porta chiusa, da un DNS che non risolve e da un
+   * silenzio, e che il codice sia una forma che non puo' portare il token. Si
+   * asserisce quella, sull'insieme misurato, e non su una delle due meta'.
+   */
+  it('socket chiuso dall altro lato durante la richiesta: un codice di socket, quale lo dice il sistema', async () => {
     const porta = await ascolta(net.createServer((s) => s.destroy()));
-    expect(await causaDi(`http://127.0.0.1:${porta}/${TOKEN}/getUpdates`)).toBe('TypeError (ECONNRESET)');
+    const detto = await causaDi(`http://127.0.0.1:${porta}/${TOKEN}/getUpdates`);
+    expect(['TypeError (ECONNRESET)', 'TypeError (UND_ERR_SOCKET)']).toContain(detto);
+    // E resta distinguibile da tutti gli altri fallimenti veri: e' l'unica
+    // ragione per cui questo modulo esiste.
+    expect(detto).not.toBe('TypeError (ECONNREFUSED)');
+    expect(detto).not.toBe('TimeoutError');
   });
 
   it('nessuna risposta: il timeout si distingue gia dal nome', async () => {

@@ -669,11 +669,24 @@ function muffinTty(env: Record<string, string>, args: string[]): { code: number;
   const comando = SCRIPT_C_E
     ? `script -qec ${shq(argv.map(shq).join(' '))} /dev/null`
     : `script -q /dev/null ${argv.map(shq).join(' ')}`;
-  // `< /dev/null` non è cosmetico: dentro un worker di vitest lo stdin che
+  // Lo stdin dev'essere un **file vero**: dentro un worker di vitest quello che
   // `spawnSync` fornisce è un socket, e `script` (BSD) ci chiama sopra
-  // `tcgetattr` e muore prima di aprire il pty. Serve un descrittore vero, e
-  // fa anche da EOF immediato — che è precisamente il Ctrl+D sotto esame.
-  const r = spawnSync('sh', ['-c', `${comando} < /dev/null`], {
+  // `tcgetattr` e muore prima di aprire il pty.
+  //
+  // E dentro quel file c'è un `^D` (0x04), non il vuoto di `/dev/null`. Le due
+  // `script` divergono una seconda volta, e questa costava un'ora di CI:
+  // BSD chiude il pty quando il **suo** stdin finisce, util-linux no. Misurato
+  // l'1/09/2026 con util-linux 2.38.1, `< /dev/null` lascia il figlio in
+  // attesa per sempre — i due test di Ctrl+D morivano al timeout di 60s con
+  // `status = null`, cioè l'`exit -1` che questo file chiama «appeso».
+  //
+  // Il byte è anche la cosa più fedele delle due: il test dice «Ctrl+D su un
+  // terminale vero», e in raw mode readline sintetizza l'EOF proprio da quel
+  // carattere. `/dev/null` non era un Ctrl+D, era la sua conseguenza su una
+  // sola delle due piattaforme.
+  const ctrlD = join(mkdtempSync(join(tmpdir(), 'muffin-ctrl-d-')), 'eof');
+  writeFileSync(ctrlD, '\u0004');
+  const r = spawnSync('sh', ['-c', `${comando} < ${shq(ctrlD)}`], {
     env: { ...process.env, NO_COLOR: '1', ...env }, encoding: 'utf8', timeout: 60_000,
   });
   // Le sequenze di controllo del pty non sono il contenuto: togliere quelle e i
