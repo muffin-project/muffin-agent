@@ -14,7 +14,7 @@ Observe before trusting prose:
 
 1. current branch, diff and PR state;
 2. the executable source relevant to the claim;
-3. `docs/blueprint/LAVORO.md` for the operational handoff;
+3. `docs/work/handoff.md` for the operational handoff;
 4. `docs/README.md` to discover the authoritative document for the question.
 
 Observed Git/runtime state beats a stale handoff. Historical documents never beat
@@ -101,7 +101,7 @@ Then use the smallest evidence that can falsify the claim:
 - local logic -> unit;
 - cross-module contract -> integration;
 - "production reaches this" -> wiring test;
-- user-visible/Gate behaviour -> appropriate acceptance journey;
+- user-visible/DAY-1 behaviour -> appropriate acceptance journey;
 - a guard/cut prevents something -> mutation when load-bearing;
 - crash/concurrency/exactly-once -> relevant fault injection/matrix.
 
@@ -132,8 +132,8 @@ conversation/session.
 
 Use `docs/README.md` to choose the owner:
 
-- Gate requirement/status -> `M5-BIS.md`;
-- Gate ordering/dependency -> `gate1/PERCORSO-CRITICO.md`;
+- DAY-1 requirement/status -> `requirements-status.md`;
+- DAY-1 ordering/dependency -> `day1/critical-path.md`;
 - active work/handoff -> `LAVORO.md`;
 - durable architecture decision -> ADR;
 - current architecture/security/product promise -> its current authority doc;
@@ -179,7 +179,7 @@ must not depend on one owner teaching it after install.
 and next action. It must stay small enough to inject whole at SessionStart and be
 safe to delete without losing product knowledge.
 
-Finished work moves out of the handoff. Git history, M5/ADR/evidence and current
+Finished work moves out of the handoff. Git history, DAY-1 requirements/ADR/evidence and current
 authority documents retain what matters.
 
 ## Documentation follows the claim
@@ -192,5 +192,5 @@ snapshot with verified anchors**, not executable truth. Its code citations can
 be checked mechanically; its prose can still age.
 
 A docs-only change is not automatically harmless if it changes an instruction,
-Gate contract, security promise or generated consumer. Profile the claim, not the
+DAY-1 contract, security promise or generated consumer. Profile the claim, not the
 file extension.

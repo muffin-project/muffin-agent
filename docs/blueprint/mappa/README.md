@@ -10,7 +10,7 @@ For current authority start at `docs/README.md`:
 - literal mechanics → code/schema/shipped config;
 - current semantic architecture → `docs/ARCHITECTURE.md`;
 - current security boundaries → `docs/SECURITY.md`;
-- DAY-1 status → `docs/blueprint/M5-BIS.md`.
+- DAY-1 status → `docs/work/day1/requirements-status.md`.
 
 ## What is actually verified here
 

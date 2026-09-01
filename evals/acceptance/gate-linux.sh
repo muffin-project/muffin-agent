@@ -120,7 +120,7 @@ docker run --rm \
     $AS npx tsx -e "import(\"./core/sandbox/probe.js\").then((m)=>console.log(JSON.stringify(m.probeSandbox())))"
     echo "=== ACCETTAZIONE (non-root) ==="
     # Il secondo comando e il secondo gate, quello che il workflow tratta come
-    # autoritativo su M5-BIS. Finche non c-era, questo script provava la suite
+    # autoritativo sui requisiti DAY-1. Finche non c-era, questo script provava la suite
     # su Linux e non provava mai il report che ne decide il significato — cioe
     # proprio dove i due divergono: su Linux b-job-script si salta, e
     # classificare quel salto come dichiarato invece che come rosso e codice che

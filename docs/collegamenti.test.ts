@@ -121,6 +121,12 @@ const file = tuttiIFile(REPO)
  * trovata nel repo, non una convenzione desiderata: `PC` e `DAY-1` compaiono
  * decine di volte e ignorarli renderebbe il checker cieco proprio dove il
  * drift è più fitto.
+ *
+ * Alcuni sono **nomi storici**: `M5-BIS`, `MANDATO` e `PERCORSO` non compaiono
+ * più in nessun documento vivo dopo la migrazione del 2026-09-01, ma restano
+ * qui perché ADR, research e history li usano ancora, e quei documenti non si
+ * riscrivono. Toglierli renderebbe il checker cieco proprio sul materiale
+ * datato che cita per posizione. Non sono l'identità corrente di niente.
  */
 const ALIAS: Record<string, string> = {
   ORCHESTRATION: 'docs/ORCHESTRATION.md',
@@ -132,12 +138,12 @@ const ALIAS: Record<string, string> = {
   ROADMAP: 'docs/ROADMAP.md',
   SECURITY: 'docs/SECURITY.md',
   ARCHITECTURE: 'docs/ARCHITECTURE.md',
-  'M5-BIS': 'docs/blueprint/M5-BIS.md',
-  'DAY-1': 'docs/blueprint/gate1/MANDATO-DAY-1.md',
-  MANDATO: 'docs/blueprint/gate1/MANDATO-DAY-1.md',
-  PERCORSO: 'docs/blueprint/gate1/PERCORSO-CRITICO.md',
-  PC: 'docs/blueprint/gate1/PERCORSO-CRITICO.md',
-  LAVORO: 'docs/blueprint/LAVORO.md',
+  'DAY-1': 'docs/work/day1/readiness-criteria.md',
+  'M5-BIS': 'docs/work/day1/requirements-status.md',
+  MANDATO: 'docs/work/day1/readiness-criteria.md',
+  PERCORSO: 'docs/work/day1/critical-path.md',
+  PC: 'docs/work/day1/critical-path.md',
+  LAVORO: 'docs/work/handoff.md',
 };
 
 /** Un documento vivo cercato per nome file, quando non è fra gli alias. */

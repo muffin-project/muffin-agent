@@ -528,7 +528,7 @@ describe('sys_inspect legge le fonti vere, non le sue', () => {
 
 describe('un turno vero scrive un file vero, e si disfa', () => {
   /**
-   * La riga D2 di M5-BIS, provata dove poteva nascondersi.
+   * La il requisito DAY-1 D2, provata dove poteva nascondersi.
    *
    * `fs_write` è `medium` + `undoable`, quindi il kernel risponde `draft`, e
    * `draft` senza registro di undo rifiuta. Finché `buildRuntime` non passa il

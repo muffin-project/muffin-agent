@@ -1092,7 +1092,7 @@
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
     "line": 392,
-    "testo": "// M5-BIS B14: a file the model produces can now reach the owner as a real"
+    "testo": "// DAY-1 requirement B14: a file the model produces can now reach the owner as a real"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
@@ -2229,11 +2229,6 @@
     "line": 7,
     "testo": "\"forbiddenForSystem\": [\"outward.send\", \"config.ratchet\"]"
   },
-  "docs/blueprint/M5-BIS.md:253": {
-    "path": "docs/blueprint/M5-BIS.md",
-    "line": 379,
-    "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
-  },
   "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md:215": {
     "path": "docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md",
     "line": 215,
@@ -2333,6 +2328,11 @@
     "path": "docs/history/rebuild-2026/10-risoluzioni-fase-c.md",
     "line": 34,
     "testo": "- **#2 identities → tabella sì, state-machine no**: le colonne restano (fondamenta strutturali, costano zero), il flusso `proposed→confirmed` non si costruisce finché non esiste il secondo connector remoto."
+  },
+  "docs/work/day1/requirements-status.md:253": {
+    "path": "docs/work/day1/requirements-status.md",
+    "line": 379,
+    "testo": "> primitive esistenti — nessuna tabella nuova. `(surface, date_range)` e"
   },
   "executor.ts:112": {
     "path": "core/sandbox/executor.ts",

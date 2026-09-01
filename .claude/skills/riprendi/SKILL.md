@@ -33,7 +33,7 @@ gh pr list --state open
 
 ## Cosa farne
 
-1. **L'osservato vince sul handoff.** Leggi `docs/blueprint/LAVORO.md` e
+1. **L'osservato vince sul handoff.** Leggi `docs/work/handoff.md` e
    confrontalo con quanto sopra. Se diverge, correggi il handoff **prima** di
    scegliere il lavoro: una sessione nuova erediterebbe la bugia.
 2. **Chiudi prima ciò che è rotto.** Una review aperta, una delega morta, un

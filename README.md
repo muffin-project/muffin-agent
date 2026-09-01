@@ -136,9 +136,9 @@ personal agent yet.
 | Scheduling + proactive signals | **Working / experimental** |
 | Consumer onboarding | **Not yet** |
 
-The detailed Gate moves too quickly to duplicate here.
+The detailed DAY-1 state moves too quickly to duplicate here.
 
-[Current DAY-1 inventory →](docs/blueprint/M5-BIS.md)
+[Current DAY-1 inventory →](docs/work/day1/requirements-status.md)
 
 ## Try Muffin — developer preview
 

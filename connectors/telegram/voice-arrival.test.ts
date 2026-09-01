@@ -126,7 +126,7 @@ describe('il modello non ascolta: la voce diventa testo senza uscire di casa', (
   /**
    * **Recintata.** È la voce di chi ha mandato il messaggio passata per un
    * trascrittore: byte scelti da qualcun altro, che entrano come dati e mai
-   * come prosa. In un gruppo questa è esattamente la strada che M5-BIS B16
+   * come prosa. In un gruppo questa è esattamente la strada che DAY-1 requirement B16
    * esiste per chiudere, e una trascrizione sciolta nel prompt la riaprirebbe —
    * con l'aggravante che a voce si dice qualunque cosa senza lasciarla scritta.
    */

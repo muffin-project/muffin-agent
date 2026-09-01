@@ -354,7 +354,7 @@ export const paths = (home = muffinHome()) => ({
   /**
    * Le copie prese prima di una mutazione, una directory per turno.
    *
-   * Decisione owner del 16/08 (M5-BIS.md#il-modello-di-reversibilità--la-decisione-sotto-fswrite, via B): il journal vive nel
+   * Decisione owner del 16/08 (requirements-status.md#il-modello-di-reversibilità--la-decisione-sotto-fswrite, via B): il journal vive nel
    * filesystem sotto `~/.muffin/`, non in una tabella. Costa una migrazione in
    * meno su un database che sta gia accumulando dati veri, e la forma e
    * ispezionabile con `ls` il giorno che qualcosa va storto.

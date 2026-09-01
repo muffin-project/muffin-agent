@@ -1053,7 +1053,7 @@ crashed **intent** write, with the handler left free to run anyway, leaves
 *no row at all* — which a resume reads as "never started" and reruns. For a
 non-rerunnable tool (a message send, a shell command) that is the exact
 double-effect the two-phase record was built to prevent, produced by the
-mechanism meant to prevent it. `docs/blueprint/gate1/MANDATO-DAY-1.md` names
+mechanism meant to prevent it. `docs/work/day1/readiness-criteria.md` names
 this invariant 1, "EFFECT WAL", and states the failing shape verbatim:
 *"Provo a registrare l'intent e, se fallisce, continuo" NON soddisfa la
 proprietà* — which is a description of the code as it stood, not a

@@ -17,7 +17,7 @@ import type { ChatResult, Provider } from './providers/types.js';
  * Accettazione · **un processo vero viene ucciso a metà turno, e al riavvio il
  * turno riprende.**
  *
- * This is the bar M5-BIS B5 sets, and it is performed rather than simulated. A
+ * This is the bar DAY-1 requirement B5 sets, and it is performed rather than simulated. A
  * second node process boots the production `buildRuntime`, starts a real turn,
  * and is `SIGKILL`ed while a tool call is in flight — no `finally`, no cleanup,
  * no chance to write anything on the way out, which is what a laptop closing or

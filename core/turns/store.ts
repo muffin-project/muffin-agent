@@ -1095,7 +1095,7 @@ export class TurnStore {
   /**
    * Answers "did the thing I was told was sent actually go out".
    *
-   * The reader for M5-BIS B8. Before this, a job whose delivery failed was
+   * The reader for DAY-1 requirement B8. Before this, a job whose delivery failed was
    * indistinguishable from one that arrived: `markRan` advanced the schedule
    * either way and the only trace was a line on stderr that nobody was
    * necessarily reading. The scheduler now settles every fire onto the turn's

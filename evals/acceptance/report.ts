@@ -7,9 +7,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
 
 /**
- * The command M5-BIS.md's state is derived from, instead of asserted by hand.
+ * The command the DAY-1 requirements inventory's state is derived from, instead
+ * of asserted by hand.
  *
- * M5-BIS.md#la-regola-delle-quattro-risposte: an inventory's fourth, forbidden answer is "we hadn't
+ * requirements-status.md#la-regola-delle-quattro-risposte: an inventory's fourth, forbidden answer is "we hadn't
  * thought about it" — a row with no scenario is exactly that, silently. This
  * prints, for every row in the live inventory: a passing scenario, a scenario
  * that broke for real, a scenario still red on purpose (and why, and what
@@ -26,20 +27,20 @@ import { MANIFEST, promoteMarker, type ScenarioEntry } from './manifest.js';
  * `failureMessages` out of the JSON reporter's own output (verified against
  * the installed vitest 2.1.9 with a throwaway probe file: `failureMessages:
  * string[]` carries the thrown `Error`'s message, one entry per assertion)
- * rather than re-implementing pass/fail itself. MANDATO-DAY-1.md#day-1-ready (P39): a
+ * rather than re-implementing pass/fail itself. readiness-criteria.md#day-1-ready (P39): a
  * scenario that is red is not automatically "fine" — it has to be red for
  * the reason the manifest names, or this report has to say so.
  *
  * `parseInventory`/`runAcceptanceSuite` are the only functions here that
  * touch disk or spawn a process; everything downstream of them (`verdictFor`,
  * `summarize`) is pure, exported, and what `report.test.ts` drives directly
- * with synthetic rows and results — real M5-BIS.md text and a real vitest
+ * with synthetic rows and results — real inventory text and a real vitest
  * subprocess would make "does the gate fire" a ~60s integration test instead
  * of a millisecond one, for a question that does not need either.
  */
 
 const REPO = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
-const M5_BIS = join(REPO, 'docs', 'blueprint', 'M5-BIS.md');
+const DAY1_REQUIREMENTS = join(REPO, 'docs', 'work', 'day1', 'requirements-status.md');
 
 export type Stato = 'READY' | 'OUT' | 'BLOCKER' | '?';
 
@@ -47,12 +48,12 @@ export type InventoryRow = { id: string; area: string; question: string; stato: 
 
 /**
  * Reads the inventory tables directly from the live document — never a copy —
- * so the report is always about today's M5-BIS.md, not the one that existed
+ * so the report is always about today's inventory, not the one that existed
  * when this script was written. A row without a matching table line is a sign
  * the parser needs updating, not that the row does not exist.
  */
 function parseInventory(): InventoryRow[] {
-  const text = readFileSync(M5_BIS, 'utf8');
+  const text = readFileSync(DAY1_REQUIREMENTS, 'utf8');
   const rows: InventoryRow[] = [];
   for (const line of text.split('\n')) {
     const m = /^\|\s*([A-Z]\d{1,2})\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$/.exec(line);
@@ -66,7 +67,8 @@ function parseInventory(): InventoryRow[] {
     else continue; // not a data row (header, or a `|---|` separator)
     rows.push({ id, area, question, stato, rawStato });
   }
-  if (rows.length === 0) throw new Error(`nessuna riga trovata in ${M5_BIS} — il parser è disallineato dal formato`);
+  if (rows.length === 0)
+    throw new Error(`nessuna riga trovata in ${DAY1_REQUIREMENTS} — il parser è disallineato dal formato`);
   return rows;
 }
 
@@ -394,7 +396,7 @@ export type Summary = {
  * Cross-references the inventory against the manifest and a suite's results,
  * and decides pass/fail. Pure and synchronous on purpose — this is the whole
  * gate, and `report.test.ts` calls it directly with synthetic inputs rather
- * than through a real M5-BIS.md and a real vitest subprocess.
+ * than through a real inventory and a real vitest subprocess.
  */
 export function summarize(inventory: InventoryRow[], manifest: readonly ScenarioEntry[], results: Map<string, TestOutcome>): Summary {
   const byRow = new Map<string, ScenarioEntry[]>();
@@ -415,7 +417,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
    * A manifest entry whose row id does not exist in the live inventory.
    *
    * The loop below walks `inventory`, not `byRow` — so before this check
-   * existed, a typo'd id (`Z9`) or a row M5-BIS.md renumbered away from under
+   * existed, a typo'd id (`Z9`) or a row the inventory renumbered away from under
    * the manifest simply never got visited: not printed, not counted, exit
    * code untouched. The header still said "N scenari" (`manifest.length`
    * does not care), and the row it was supposed to prove looked exactly like
@@ -427,7 +429,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
   const orphanRows = [...byRow.keys()].filter((row) => !inventory.some((r) => r.id === row));
   for (const row of orphanRows) {
     lines.push(
-      `  ORFANO             ${row}  nel manifest ma non in M5-BIS.md — ${byRow
+      `  ORFANO             ${row}  nel manifest ma non nei requisiti DAY-1 — ${byRow
         .get(row)!
         .map((s) => s.title)
         .join('; ')}`,
@@ -447,7 +449,7 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
         break;
       case 'atteso-rosso':
         attesoRosso++;
-        // MANDATO-DAY-1.md#day-1-ready (P39): a row this inventory calls `READY` —
+        // readiness-criteria.md#day-1-ready (P39): a row this inventory calls `READY` —
         // "implementata, cablata, provata, e il percorso reale ci arriva" —
         // cannot also carry a scenario that is still red on purpose. One of
         // the two statements is wrong, and the report has to say which
@@ -491,12 +493,12 @@ export function summarize(inventory: InventoryRow[], manifest: readonly Scenario
    * Il ciclo qui sopra cammina l'inventario, quindi un file `.accept.ts` che non
    * passa dal manifest — `b-job-script`, oggi — non viene visitato: non stampato,
    * non contato, e **non fallisce il report anche quando è rosso**. Per chi
-   * legge questo report, che il MANDATO-DAY-1.md#day-1-ready tratta come il gate
+   * legge questo report, che il readiness-criteria.md#day-1-ready tratta come il gate
    * autoritativo, un rosso che non arriva qui è indistinguibile da uno scenario
    * mai esistito. È il buco che il judge di `slice/linux-la-macchina-che-conta`
    * ha nominato, ed è più vecchio di quella slice.
    *
-   * Non li promuovo a righe di Gate: non lo sono. Li dichiaro, e un loro
+   * Non li promuovo a requisiti DAY-1: non lo sono. Li dichiaro, e un loro
    * fallimento fa fallire il report come qualsiasi altro rosso.
    */
   /**
@@ -570,7 +572,9 @@ function main(): void {
   // actually runs, which is exactly the kind of stale count this report exists
   // to prevent elsewhere.
   const scenariReali = MANIFEST.filter((s) => s.expectation.kind !== 'provata-dal-meccanismo').length;
-  process.stdout.write(`Accettazione M5-BIS — ${inventory.length} righe, ${scenariReali} scenari\n\n`);
+  process.stdout.write(
+    `Accettazione requisiti DAY-1 — ${inventory.length} righe, ${scenariReali} scenari\n\n`,
+  );
   process.stdout.write(`${lines.join('\n')}\n\n`);
   process.stdout.write(
     `verde ${counts.verde} · atteso-rosso ${counts.attesoRosso} · rosso-inatteso ${counts.unexpectedRed} · ` +
@@ -595,7 +599,7 @@ function main(): void {
   );
 }
 
-// Only run the real thing (parse the live M5-BIS.md, spawn the real suite)
+// Only run the real thing (parse the live requirements inventory, spawn the real suite)
 // when this file is the process entrypoint — never on import. `report.test.ts`
 // imports `verdictFor`/`summarize` for their pure logic; without this guard
 // that import would trigger a ~60s subprocess spawn as a side effect of

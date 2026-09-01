@@ -6,7 +6,7 @@ not copy database columns, config literals or API signatures: executable code,
 schemas and shipped config own those mechanics.
 
 For why this shape exists, follow the linked ADRs. For whether a DAY-1 journey is
-currently proven, use `docs/blueprint/M5-BIS.md`.
+currently proven, use `docs/work/day1/requirements-status.md`.
 
 A semantic boundary described here may intentionally be ahead of its current
 mechanical implementation. When that is true, this document names the gap rather
@@ -131,7 +131,7 @@ are different claims.
 
 The architecture is deliberately conservative around uncertainty: after a
 crash, `not started`, `completed` and `possibly completed` must not collapse into
-one state. The reusable undo/reversal layer is still a Gate concern rather than
+one state. The reusable undo/reversal layer is still a DAY-1 concern rather than
 a claim made by this document.
 
 ### Authority
@@ -252,7 +252,7 @@ until a real consumer requires intent state independent of a turn.
 
 The current implementation is still predominantly text-shaped (`TurnInput.text`)
 and does not yet implement the final multimodal envelope or general surface
-assembler. DAY-1/Gate status for those capabilities remains owned by M5.
+assembler. DAY-1 status for those capabilities remains owned by `docs/work/day1/requirements-status.md`.
 
 ## 5. Work remains interactive while execution is busy
 
@@ -451,7 +451,7 @@ local leader election is explicitly not part of the current product phase.
 - Current policy literals — shipped Root-of-Trust config owns them.
 - Node transport choice or wire schemas — the first real implementation owns
   mechanics under ADR-0050's semantic/security contract.
-- Whether a DAY-1 capability is READY — `M5-BIS.md` owns status.
+- Whether a DAY-1 capability is READY — `requirements-status.md` owns status.
 - Why a historical decision was made — the relevant ADR owns that history.
 - Which PR is in flight — Git + `LAVORO.md` own operational state.
 

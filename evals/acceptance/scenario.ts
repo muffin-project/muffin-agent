@@ -3,19 +3,20 @@ import { entry, promoteMarker, type Expectation, type ScenarioEntry } from './ma
 import { annunciaSalto } from './non-provabile.js';
 
 /**
- * Registers an M5-BIS row's acceptance scenario as a real vitest test, using
+ * Registers a DAY-1 requirement's acceptance scenario as a real vitest test, using
  * the manifest entry as the single source of truth for row, title and the
  * outcome it is expected to have.
  *
  * A `verde` scenario runs as a plain `it`: if it breaks, the suite goes red for
  * a real reason and stays that way until someone looks at it.
  *
- * An `atteso-rosso` scenario asserts the behaviour M5-BIS says is still
+ * An `atteso-rosso` scenario asserts the behaviour the DAY-1 requirements
+ * inventory says is still
  * missing — and used to run under plain `it.fails` ("if the test fails, it is
  * marked as passed"). That primitive only answers "did it throw", and a
  * scenario the manifest calls "red because of X" can go on reading that way
  * long after the code starts throwing for an unrelated reason Y (mandato
- * MANDATO-DAY-1.md#day-1-ready / P39 — the exact shape D10 was caught in by PR #28: its
+ * readiness-criteria.md#day-1-ready / P39 — the exact shape D10 was caught in by PR #28: its
  * `reason` named a branch that had already merged, and the scenario stayed
  * "passed" under `it.fails` because *something* still threw, just not the
  * thing the manifest described). So this now checks the failure itself
@@ -58,7 +59,7 @@ export function titoloDelSalto(meta: ScenarioEntry, motivo: string, scrivi: (s: 
 }
 
 /**
- * Registers an M5-BIS row's acceptance scenario as a real vitest test — see the
+ * Registers a DAY-1 requirement's acceptance scenario as a real vitest test — see the
  * two comments above for `verde`/`atteso-rosso` and for `nonProvabileQui`.
  */
 export function scenario(

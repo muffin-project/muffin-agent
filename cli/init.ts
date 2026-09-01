@@ -48,7 +48,7 @@ export type InitOptions = {
 export type InitStep = { name: string; done: boolean; detail: string };
 
 /**
- * `--local`'s default and its explicit form (M5-BIS A9). Just a path — never a
+ * `--local`'s default and its explicit form (DAY-1 requirement A9). Just a path — never a
  * claim about whether it exists yet: `runInit` creates it below the same way
  * it creates a first-run home.
  */

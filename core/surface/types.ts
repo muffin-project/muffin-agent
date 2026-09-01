@@ -75,7 +75,7 @@ type SurfaceLimits = {
 };
 
 /**
- * How a surface can show an answer arriving — M5-BIS B11, and Hermes's own
+ * How a surface can show an answer arriving — DAY-1 requirement B11, and Hermes's own
  * finding stated as a conclusion (`research/hermes-documentazione.md` §3.8):
  * *"streaming is a capability of the surface, not a global flag"*. A boolean
  * on a config object would have to mean the same thing on a terminal and on
@@ -141,7 +141,7 @@ export interface Surface {
   deliver(channel: string, text: string): Promise<DeliveryOutcome>;
 
   /**
-   * Send a file to a channel this surface `handles` — M5-BIS B14, "un file
+   * Send a file to a channel this surface `handles` — DAY-1 requirement B14, "un file
    * prodotto arriva come allegato, o come percorso da copiare a mano?".
    *
    * **Required, not optional, on the same principle `Deliver` was rewritten

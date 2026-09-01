@@ -6,7 +6,7 @@ import { guardAttesoRosso, titoloDelSalto } from './scenario.js';
 
 /**
  * `guardAttesoRosso` is the mechanism that replaced plain `it.fails` (mandato
- * MANDATO-DAY-1.md#day-1-ready / P39): an `atteso-rosso` scenario is only "correctly red" if it
+ * readiness-criteria.md#day-1-ready / P39): an `atteso-rosso` scenario is only "correctly red" if it
  * throws for the reason the manifest declares, not for any reason at all.
  * These tests drive it directly with a fake `fn`, so they run in milliseconds
  * and do not need a live vitest suite underneath them — the same reason
@@ -45,7 +45,7 @@ describe('guardAttesoRosso — the atteso-rosso failure signature', () => {
 
   // The gap this closes: `it.fails` alone marked this "passed" too, which is
   // exactly how D10's stale reason (PR #28) went unnoticed — the scenario kept
-  // throwing, just not for the reason M5-BIS.md still named.
+  // throwing, just not for the reason requirements-status.md still named.
   it('rejects, naming the declared reason, when fn throws for a DIFFERENT reason than declared', async () => {
     await expect(
       guardAttesoRosso(

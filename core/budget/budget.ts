@@ -116,7 +116,7 @@ export class BudgetEngine {
    * talking to itself"*, and *"groups are the noisy ones"*. Applied to `host`
    * as well, the same number becomes a ceiling on the owner's own working day:
    * two dollars is roughly fifteen frontier turns, so the cap written to stop
-   * an echo loop would instead stop the owner by mid-morning — and Gate 1 is
+   * an echo loop would instead stop the owner by mid-morning — and DAY-1 is
    * measured in days of ordinary use. The monthly cap is the owner's ceiling.
    *
    * This is the one interpretive choice in wiring the cap up, so it is written

@@ -233,4 +233,4 @@ Has the project phase changed the cost?   P7
 
 Then use `ARCHITECTURE.md`, `SECURITY.md`, the relevant ADR and executable state
 to design the actual change. These principles do not own current implementation
-or Gate status.
+or DAY-1 status.
