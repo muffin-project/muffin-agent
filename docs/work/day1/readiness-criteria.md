@@ -1,4 +1,4 @@
-# Mandato DAY-1
+# Criteri di readiness DAY-1
 
 Questo documento possiede una sola domanda:
 
@@ -19,7 +19,7 @@ capability fondamentale già conoscibile che lo costringa a tornare al vecchio
 Muffin o a un altro agente general-purpose.
 
 Il goal non è completare una checklist, far passare una suite o chiudere un
-numero di PR. `M5-BIS.md` è l'inventario che rende falsificabile il goal; non è
+numero di PR. `requirements-status.md` è l'inventario che rende falsificabile il goal; non è
 il goal stesso.
 
 Questa generazione parte con **memoria nativa nuova** (ADR-0049). Non importare
@@ -31,7 +31,7 @@ generazione.
 
 Prima di iniziare il giorno 1 devono essere vere tutte queste proprietà:
 
-1. **Inventario personale chiuso.** `docs/blueprint/M5-BIS.md` non contiene
+1. **Inventario personale chiuso.** `docs/work/day1/requirements-status.md` non contiene
    alcun `BLOCKER` per la finestra dei quattordici giorni e nessuna domanda
    lasciata senza una classificazione esplicita. Una riga `OUT` deve avere una
    ragione concreta legata alla finestra, non alla difficoltà di implementarla.
@@ -47,8 +47,9 @@ Prima di iniziare il giorno 1 devono essere vere tutte queste proprietà:
    invalidato con evidence o accettato deliberatamente dall'owner dopo averne
    capito il costo.
 5. **Le fonti autorevoli concordano.** Codice/schema/config possiedono la
-   meccanica; `ARCHITECTURE.md` e `SECURITY.md` la semantica corrente; M5 lo stato
-   Gate. Se la prosa è sbagliata si corregge la prosa, non si implementa
+   meccanica; `ARCHITECTURE.md` e `SECURITY.md` la semantica corrente;
+   `requirements-status.md` lo stato dei requisiti. Se la prosa è sbagliata si
+   corregge la prosa, non si implementa
    ciecamente una promessa storica.
 6. **L'installazione dell'owner è la prova finale.** La build candidata viene
    realmente installata/aggiornata sull'installazione che sarà usata, non solo
@@ -57,7 +58,7 @@ Prima di iniziare il giorno 1 devono essere vere tutte queste proprietà:
 7. **Il sistema integrato viene giudicato come insieme.** Dopo le slice, un
    ultimo audit indipendente parte dal `dev` integrato e cerca una ragione
    concreta per cui l'owner uscirebbe da Muffin durante i quattordici giorni.
-8. **Domani non serve sviluppare prima di usare.** Quando il Gate chiude, il
+8. **Domani non serve sviluppare prima di usare.** Quando DAY-1 è raggiunto, il
    prossimo atto normale è usare Muffin, non implementare un requisito già
    noto.
 
@@ -69,20 +70,20 @@ rispondere a questa domanda:
 > **Se l'owner da oggi vive dentro Muffin per 14 giorni, quale problema concreto
 > già conoscibile lo farà uscire?**
 
-Se esiste una risposta che soddisfa il criterio Gate, DAY-1 non è raggiunto.
+Se esiste una risposta che soddisfa il criterio, DAY-1 non è raggiunto.
 
 ## Cosa questo mandato non possiede
 
-- **Status delle singole righe** → `docs/blueprint/M5-BIS.md`.
-- **Ordine dei blocker** → `docs/blueprint/gate1/PERCORSO-CRITICO.md`.
-- **Lavoro/PR correnti** → Git osservato + `docs/blueprint/LAVORO.md`.
+- **Status delle singole righe** → `docs/work/day1/requirements-status.md`.
+- **Ordine dei blocker** → `docs/work/day1/critical-path.md`.
+- **Lavoro/PR correnti** → Git osservato + `docs/work/handoff.md`.
 - **Come verificare FAST/STANDARD/CRITICAL** → `docs/ORCHESTRATION.md`.
 - **Security/architecture correnti** → `docs/SECURITY.md` e
   `docs/ARCHITECTURE.md`.
 - **Findings/audit storici** → research/history.
 
 Se una nuova lacuna viene scoperta e soddisfa il criterio dei quattordici giorni,
-entra in M5. «Non ci avevamo pensato» non è una ragione per rimandarla; non è
+entra nei requisiti DAY-1. «Non ci avevamo pensato» non è una ragione per rimandarla; non è
 nemmeno una ragione per gonfiare questo mandato con una nuova checklist.
 
 ## Il goal termina all'inizio, non alla fine, dei quattordici giorni

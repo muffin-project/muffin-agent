@@ -8,7 +8,7 @@ import type { ScenarioEntry } from './manifest.js';
  * acceptance suite — `report.ts`'s own module docstring explains why that
  * split exists. These tests build a synthetic inventory row, a synthetic
  * manifest entry and a synthetic vitest result by hand, so the two behaviours
- * MANDATO-DAY-1.md#day-1-ready (P39) asks for are each provable in milliseconds:
+ * readiness-criteria.md#day-1-ready (P39) asks for are each provable in milliseconds:
  *
  *  1. a row the inventory calls `READY` whose scenario is still `atteso-rosso`
  *     fails the report, named.
@@ -198,11 +198,11 @@ describe('outcomesOf — the one reading of vitest JSON, whether this script ran
 /**
  * Il buco che il judge di `slice/linux-la-macchina-che-conta` ha nominato, e
  * che è più vecchio di quella slice: `summarize` cammina l'inventario, quindi
- * un file `.accept.ts` che non registra una riga M5-BIS non viene visitato
+ * un file `.accept.ts` che non registra un requisito DAY-1 non viene visitato
  * affatto. `b-job-script` è esattamente quel caso. Prima di questi test, il suo
  * rosso — non il suo salto: il suo **rosso** — non produceva nessuna riga,
  * nessun contatore e nessun exit code: per chi legge il report che il mandato
- * MANDATO-DAY-1.md#day-1-ready tratta come gate autoritativo, indistinguibile da uno scenario mai
+ * readiness-criteria.md#day-1-ready tratta come gate autoritativo, indistinguibile da uno scenario mai
  * scritto.
  */
 describe('summarize — ciò che vitest ha eseguito e nessuna riga rivendica', () => {
@@ -238,7 +238,7 @@ describe('summarize — ciò che vitest ha eseguito e nessuna riga rivendica', (
 
   it('non ripete ciò che l\'inventario ha già raccontato', () => {
     // Senza questo, ogni scenario del manifest comparirebbe due volte: una
-    // come riga di Gate e una come «fuori inventario».
+    // come requisito DAY-1 e una come «fuori inventario».
     const scenario = verdeScenario('X1');
     const summary = summarize([ready('X1')], [scenario], outcomeFor(scenario, { status: 'passed', failureMessages: [] }));
 

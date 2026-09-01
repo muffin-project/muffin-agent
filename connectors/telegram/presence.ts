@@ -3,7 +3,7 @@ import { renderForTelegram } from './render.js';
 
 /**
  * Showing that something is happening, for as long as it happens — and, since
- * M5-BIS B11, showing the answer itself as it forms.
+ * DAY-1 requirement B11, showing the answer itself as it forms.
  *
  * This file started as one of the three traps recorded in ADR-0025: a
  * `sendMessageDraft` bubble that expires if nothing renews it, so the

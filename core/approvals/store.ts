@@ -14,7 +14,7 @@ import type { TrustTier } from '../policy/types.js';
  * conferma era usabile, e per l'owner questo vuol dire quasi tutto (`sys.shell`
  * chiede sempre finché `muffin rot harden` non è stato fatto).
  *
- * `M5-BIS` D12 lo nomina da mesi: *«resta la coda durevole degli ask
+ * DAY-1 requirement D12 lo nomina da mesi: *«resta la coda durevole degli ask
  * (`turn_outcome='ask'` persistito, nessun consumer lo rilegge)»*. Questa
  * tabella è quella coda, e ha un consumer.
  *

@@ -9,7 +9,7 @@ import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { sha256 } from '../core/rot/verify.js';
 
 /**
- * The `--local` guard (M5-BIS A9), in isolation from the CLI around it: a
+ * The `--local` guard (DAY-1 requirement A9), in isolation from the CLI around it: a
  * throwaway rehearsal home must never be able to land on, or under, the real
  * one — checked through symlinks and through directories that do not exist
  * yet, since the whole point of `--local` is a directory `muffin init` is

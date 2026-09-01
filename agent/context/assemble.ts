@@ -135,7 +135,7 @@ export function visibleTools<T extends { capability: CapabilityId }>(
  *    invitation to redo it. `done` rows stay in the table — nothing is deleted
  *    (`AGENTS.md` §I-8) — and `todo list` still shows them; what the turn is
  *    handed unasked is what is still owed.
- *  - **The completion criterion is stated, and it is deterministic.** M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool
+ *  - **The completion criterion is stated, and it is deterministic.** requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool
  *    asks for one: "finished" is *every item out of `pending`/`retry`*, decided
  *    by reading rows, not by the model declaring itself done. It is written
  *    here because this is the only place the model reads about the plan at all.

@@ -31,7 +31,7 @@ describe('reading a telegram update', () => {
   });
 
   it('keeps a caption apart from text, typed as what it is', () => {
-    // M5-BIS B16: a caption used to fall back into `.text` as if the sender had
+    // DAY-1 requirement B16: a caption used to fall back into `.text` as if the sender had
     // typed it as a separate line. It is the attachment's caption, not the
     // sender's own message, so it gets its own field — `composeTurnText`
     // fences it into the turn separately (`connector.ts`).

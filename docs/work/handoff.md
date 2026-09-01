@@ -1,4 +1,4 @@
-# Lavoro corrente
+# Handoff operativo
 
 **Regola di stop.** Il prossimo lavoro nasce da un failure osservato usando
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
@@ -26,31 +26,31 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
 checkpoint: non è una PR, non è morta.
 
-Slice 3-5 integrate: skill e rules; storia sotto `docs/history/`; ADR in
-`docs/decisions/`, cognitivo in `docs/knowledge/`. `blueprint/STATE.md` e
-`foundations/VISION.md` restano **lapidi di compatibilità**. Prossima: slice 6,
-`M5-BIS`/`LAVORO`/`gate1` → `docs/work/`, l'unica con consumer funzionali veri:
-richiede il gate.
+Slice 3-6 integrate: skill e rules; storia in `docs/history/`; ADR in
+`docs/decisions/`; cognitivo in `docs/knowledge/`; lavoro corrente in
+`docs/work/`, con nomi semantici e senza più `M5-BIS`, `gate1`, `Gate 1` nel
+materiale vivo. La regola di naming vive in `docs/README.md`.
+`blueprint/STATE.md` e `foundations/VISION.md` restano **lapidi di
+compatibilità**. Prossima: slice 7, `research/`→`evidence/`, `mappa/`→`generated/map/`.
 
-Tre trappole misurate, scritte dove sta il meccanismo: `riprendi/SKILL.md`,
-`mappa/ancore.mjs`, `rules/decisioni.md`. La terza è **F7**: logica eseguibile
-che vive solo nella prosa di una rule si rompe senza che nessun test se ne
-accorga — quel comando era cieco dal giorno in cui l'ho spedito.
+Tre trappole scritte dove sta il meccanismo: `riprendi/SKILL.md`,
+`mappa/ancore.mjs`, `rules/decisioni.md`. La terza è **F7**: la logica in prosa
+dentro una rule si rompe senza che nessun test se ne accorga.
 
 ## Parcheggiato: le richieste differite
 
 `docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
-forma: **`jobs` non ha un tool**, i 7 todo sono fermi dal 27/08 e invisibili
-fuori dalla sessione, 44 fatti attivi su 83 sono `asked_to`/`asks_to`. Il tetto
-dei tool **non** è più il problema (`0d519cb`): non ripartire da lì.
+forma: **`jobs` non ha un tool**, i 7 todo fermi dal 27/08 e invisibili fuori
+dalla sessione, 44 fatti attivi su 83 `asked_to`/`asks_to`. Il tetto dei tool
+**non** è più il problema (`0d519cb`).
 
-## STEP 0 — decisione owner non ancora entrata
+## F5 — decisione owner non ancora entrata
 
-La direttiva del 15/08
-«si ripara alla radice» è stata tolta da `ORCHESTRATION.md` il 19/08 senza
-riospitarla. Casa decisa: `PRACTICES.md` — dopo la migrazione
-`docs/engineering/PRACTICES.md` — e vi entra **quando una slice tocca quel
-file**, non da sola. Semantica da preservare: *repair at the lowest semantic
+La direttiva del 15/08 «si ripara alla radice» è stata tolta da
+`ORCHESTRATION.md` il 19/08 senza riospitarla. Casa decisa: `PRACTICES.md`.
+**Entra con una micro-slice semantica sua**: non entra automaticamente in una
+futura migrazione di `PRACTICES.md`, e una slice che sposta quel file non la
+porta con sé. Semantica da preservare: *repair at the lowest semantic
 layer that eliminates the class of failure, not at the widest layer you can
 plausibly redesign*. Scala `riga → funzione → contratto di modulo → tipo/schema
 → confine architetturale`; si sale **solo** se una riparazione più locale
@@ -65,10 +65,10 @@ rifiuta alla chiamata e il modello impara per rifiuto — incluso il tetto di
 taint. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
 
 **Altro:** `gateway.err` registra solo i fallimenti e non li data: dice
-*quanti*, mai *per quanto*, e il 30/08 dedurne una durata mi ha fatto sbagliare
-di 19 ore. Community è solo una forma di stringa; `pricing.ts` sottostima 5
+*quanti*, mai *per quanto* — dedurne una durata mi è costato 19 ore di errore. Community è solo una forma di stringa; `pricing.ts` sottostima 5
 famiglie su 8; socket v2; il `try` di `recall.ts` avvolge anche la lettura della
 provenienza, quindi un guasto dello store si traveste da causa di rete.
 
-**Truth maintenance:** M5-BIS possiede status Gate,
-PERCORSO-CRITICO.md#ordine-corrente l'ordine.
+**Truth maintenance:** `day1/requirements-status.md` possiede lo stato dei
+requisiti DAY-1,
+critical-path.md#ordine-corrente l'ordine.

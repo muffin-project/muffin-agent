@@ -4,7 +4,7 @@ import type { TelegramApiLike } from './api.js';
 import type { TurnEvent } from '../../agent/loop.js';
 
 /**
- * `startProgress` — M5-BIS B13. Rate limit, coalescing, no-op-on-unchanged,
+ * `startProgress` — DAY-1 requirement B13. Rate limit, coalescing, no-op-on-unchanged,
  * disable-on-failure and cleanup-on-stop, each against a fake `TelegramApiLike`
  * that records every call with the fake clock's own timestamp, the same shape
  * `presence.test.ts` uses for the sibling sink and for the same reason: a test
@@ -17,7 +17,7 @@ import type { TurnEvent } from '../../agent/loop.js';
  * disable-on-failure), which is the PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate shape: assert the mechanism
  * is reached, not only that its pieces compile. The *composition* — that
  * `agent/loop.ts`'s real `onProgress` calls reach a real `TelegramConnector`'s
- * Telegram calls — is `streaming.test.ts`'s own "M5-BIS B13" describe block,
+ * Telegram calls — is `streaming.test.ts`'s own "DAY-1 requirement B13" describe block,
  * not this file.
  */
 
@@ -77,7 +77,7 @@ const modelEvent = (stopReason: string): TurnEvent => ({
   stopReason,
 });
 
-describe('telegram progress · formatTelegramProgress (M5-BIS B13)', () => {
+describe('telegram progress · formatTelegramProgress (DAY-1 requirement B13)', () => {
   /**
    * Cosa sta facendo, e da quanto. Niente numero di giro.
    *
@@ -126,7 +126,7 @@ describe('telegram progress · formatTelegramProgress (M5-BIS B13)', () => {
   });
 });
 
-describe('telegram progress · startProgress (M5-BIS B13)', () => {
+describe('telegram progress · startProgress (DAY-1 requirement B13)', () => {
   it('creates the status message on the first event and rate-limits edits to >=3s apart', async () => {
     vi.useFakeTimers();
     try {

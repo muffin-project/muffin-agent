@@ -6,7 +6,7 @@ import type { TrustTier } from '../policy/types.js';
  *
  * The operating model is not `goal → turn → done` but
  * `goal → plan → todo{done|blocked|waiting|retry|pending} → resume`
- * (`docs/blueprint/M5-BIS.md` §2). Everything in that sentence except the plan
+ * (`docs/work/day1/requirements-status.md` §2). Everything in that sentence except the plan
  * already existed: a turn is a record, a suspended turn resumes. What was
  * missing is the thing that carries *intent* across a suspension — the list of
  * what is still owed.
@@ -32,7 +32,7 @@ import type { TrustTier } from '../policy/types.js';
  * ADR-0047 §3 records the cost of the sixth one, and when it stops being free.
  * Same trap as `episodes.kind` and `turns.status`: SQLite cannot alter a
  * `CHECK`, so a sixth state after day 1 of the fourteen costs a table rebuild.
- * The five come from M5-BIS verbatim, and there is deliberately **no**
+ * The five come from the DAY-1 requirements inventory verbatim, and there is deliberately **no**
  * "cancelled": an item that stopped mattering is `done` (it is finished with)
  * or `blocked` with the reason in its note (something stopped it). Adding a
  * state that means "never mind" would make the list a place where work

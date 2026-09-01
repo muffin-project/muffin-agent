@@ -8,7 +8,7 @@ context is a resource, and history is not startup context.
 
 - Reconstruct observed state first — Git, worktrees, open PRs and checks,
   delegation state. Do not infer current work from a nearby Markdown file.
-- `docs/blueprint/LAVORO.md` is a disposable handoff. Observed repository state
+- `docs/work/handoff.md` is a disposable handoff. Observed repository state
   wins when the two disagree.
 - A detailed document is not evidence that HEAD still implements its claim.
   Verify load-bearing current-state claims against code, config or runtime.

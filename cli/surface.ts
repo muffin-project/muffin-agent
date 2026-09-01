@@ -340,7 +340,7 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
  * gateway perde la domanda e il lavoro dietro.
  *
  * **Cosa mostra.** L'azione concreta e il taint del turno — i due fatti che
- * `M5-BIS` D12 chiede per non fare teatro: «approvi sys.shell?» non è una
+ * DAY-1 requirement D12 chiede per non fare teatro: «approvi sys.shell?» non è una
  * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
  * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
  * quello che è.
@@ -754,7 +754,7 @@ export function connectSurfaces(
 }
 
 /**
- * Registers `send_file` (M5-BIS B14) against the registry `connectSurfaces`
+ * Registers `send_file` (DAY-1 requirement B14) against the registry `connectSurfaces`
  * just built.
  *
  * Separate call, not folded into `connectSurfaces`, for the reason `attachMcp`

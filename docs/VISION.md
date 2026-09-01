@@ -3,7 +3,7 @@
 This document owns **where the product is trying to go**. `THESIS.md` owns why
 Muffin is worth building; `ARCHITECTURE.md` describes the current semantic shape;
 `COGNITIVE-DESIGN.md` owns falsifiable human/cognitive hypotheses;
-`M5-BIS.md` owns the immediate DAY-1 proof state.
+`requirements-status.md` owns the immediate DAY-1 proof state.
 
 The vision is allowed to be ahead of the runtime. When it is, it must say so
 instead of making a future capability sound current.

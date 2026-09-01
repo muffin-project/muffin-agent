@@ -1,7 +1,7 @@
 /**
  * The 17 character probes — data, not a framework.
  *
- * Owner mandate (M5-BIS, identity part 2): "un eval piccolo e utile, non una
+ * Owner mandate (DAY-1 requirement A2, identity part 2): "un eval piccolo e utile, non una
  * nuova infrastruttura enorme. Non valutare exact wording... valuta
  * proprietà." So every probe below is a plausible thing the owner would
  * actually say, plus the minimal real context it needs (seeded memory, a

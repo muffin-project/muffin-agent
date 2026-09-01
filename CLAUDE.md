@@ -32,7 +32,7 @@ Project skills and path-scoped rules live in `.claude/skills/` and
 restate it.
 
 For current work use, in this order: observed Git/worktree/PR/check/delegation
-state; `docs/blueprint/LAVORO.md` as a compact handoff; then the ordering and
+state; `docs/work/handoff.md` as a compact handoff; then the ordering and
 status authority for the current goal. `docs/blueprint/STATE.md` is a tombstone,
 not current state.
 

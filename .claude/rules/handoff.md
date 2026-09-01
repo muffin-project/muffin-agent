@@ -1,6 +1,6 @@
 ---
 paths:
-  - "docs/blueprint/LAVORO.md"
+  - "docs/work/handoff.md"
 ---
 
 # Il handoff ha un tetto, e sopra quello viene troncato

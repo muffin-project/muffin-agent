@@ -140,7 +140,7 @@ export type ToolContext = {
    * required field one file over: an omitted `tier` was a *silent* security
    * default (a tool that said nothing about provenance was read as spotless).
    * An omitted `replyChannel` has no default to be silent about — the one
-   * handler that reads it (`send_file`, M5-BIS B14) must branch on
+   * handler that reads it (`send_file`, DAY-1 requirement B14) must branch on
    * absence/`null` explicitly either way, and forcing the other dozen tool
    * handlers in this tree to state a channel they never touch would be noise
    * bolted onto call sites the field has nothing to say to.
@@ -576,7 +576,7 @@ export type TurnInput = {
    * `runTurn` and the episode/session writes inside `drive` — one number, so
    * a forwarded message cannot enter memory at the sender's tier from one of
    * those call sites while the turn itself starts higher from another
-   * (M5-BIS B16).
+   * (DAY-1 requirement B16).
    */
   contentTaint?: TrustTier;
   /**
@@ -649,7 +649,7 @@ export type TurnInput = {
    */
   replyChannel?: string | undefined;
   /**
-   * Where the *final* answer's text arrives while it is still forming — M5-BIS
+   * Where the *final* answer's text arrives while it is still forming — DAY-1
    * B11. Per-turn, not per-runtime: a REPL prints to its own stdout, a
    * Telegram chat edits its own draft, and a job with no live surface passes
    * nothing at all, which is also the default that keeps `stream: false` on
@@ -694,7 +694,7 @@ export type TurnInput = {
   /**
    * A fact about this turn's own progress, fired the moment it becomes true
    * — a round starting, a model call finishing, a tool call starting or
-   * ending. M5-BIS B13: a long turn saying it is alive *structurally*, not
+   * ending. DAY-1 requirement B13: a long turn saying it is alive *structurally*, not
    * cosmetically (`turns.updated_at` is the structural data B13 names as
    * already existing with no reader; this is the reader, and the
    * surface-facing half B13 was still missing).
@@ -1376,7 +1376,7 @@ async function drive(
       barrier = spec;
     },
     // `input.replyChannel` threaded through, per `ToolContext.replyChannel`'s
-    // own docstring: the one field `send_file` (M5-BIS B14) reads, absent
+    // own docstring: the one field `send_file` (DAY-1 requirement B14) reads, absent
     // everywhere else.
     replyChannel: input.replyChannel ?? null,
   };
@@ -1445,7 +1445,7 @@ async function drive(
         // reconstruct, so it is not carried). `record.taint` is the value
         // `enqueueTurn`/`runTurn` already computed with `initialTaint` at
         // creation — a forwarded message's episode is the exact "enters
-        // memory at the owner's tier" step the audit named (M5-BIS B16), and
+        // memory at the owner's tier" step the audit named (DAY-1 requirement B16), and
         // this is the row this slice exists to stop writing at tier 0 for
         // content nobody at tier 0 actually said.
         trustTier: record.taint,
@@ -1526,7 +1526,7 @@ async function drive(
     /**
      * The session transcript, and the taint that comes with it — same order,
      * same reason, one line down from the plan above (ADR-0044 §Revisione,
-     * "la history non lava la provenienza"; MANDATO-DAY-1 invariant 2).
+     * "la history non lava la provenienza"; a DAY-1 readiness invariant).
      *
      * `reinjectedHistory` is the same cut `buildContext` renders — computed
      * once here so the two can never disagree about what "reinjected" means
@@ -1555,7 +1555,7 @@ async function drive(
     // own reconstructed `input`, which never carries `contentTaint`.
     // `record.taint` is what `enqueueTurn`/`runTurn` already computed with
     // `initialTaint` at creation — never a literal 0 that would make a group
-    // turn's own user line, or a forwarded message's (M5-BIS B16), read as
+    // turn's own user line, or a forwarded message's (DAY-1 requirement B16), read as
     // clean once a later turn in the same conversation reinjects it
     // (`agent/context/history-taint.ts`, ADR-0044 §"la history non lava la
     // provenienza").
@@ -2771,7 +2771,7 @@ async function runTool(
        * `draft` significa «fallo, ma in modo reversibile, e dillo all'owner».
        * Per anni qui c'era un rifiuto, perché il registro di undo non esisteva:
        * il kernel emetteva un verdetto che nessuno implementava, e `fs_write`
-       * veniva offerto al modello senza mai scrivere (M5-BIS D2/D3/D11).
+       * veniva offerto al modello senza mai scrivere (DAY-1 requirement D2/D3/D11).
        *
        * Adesso il verdetto ha un'implementazione, e la sua forma è una sola
        * frase: **un checkpoint che non si può prendere è un effetto che non
@@ -2895,7 +2895,7 @@ async function runTool(
          *
          * Su una superficie a pulsanti l'id viaggia dentro il pulsante, quindi
          * deve esistere prima che il messaggio parta. Sul terminale, dove la
-         * risposta è immediata, la riga resta comunque come traccia: `M5-BIS`
+         * risposta è immediata, la riga resta comunque come traccia: i requisiti DAY-1
          * D12 chiede una coda durevole degli ask, e una coda che registra solo
          * le domande scomode non è la coda delle domande.
          */
@@ -3027,7 +3027,7 @@ async function runTool(
     args,
   });
   if (intentError !== null) {
-    // EFFECT WAL (MANDATO-DAY-1 invariant 1): the write above did not land, so
+    // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
     // the handler must not run — a missing intent row has to mean "never
     // started", never "started, but its own receipt got lost". No byte has
     // left this process for this call, so nothing raises taint, and there is
@@ -3165,8 +3165,8 @@ async function runTool(
  * write actually costs here: with the handler left free to run anyway, a
  * missing intent row stopped meaning "never started" and started meaning
  * "started, but its own receipt did not survive" — for a non-rerunnable tool,
- * exactly the ambiguity this row exists to remove (ADR-0042). MANDATO-DAY-1
- * names this invariant 1, "EFFECT WAL": no side effect may start unless its
+ * exactly the ambiguity this row exists to remove (ADR-0042). DAY-1 readiness
+ * names this property "EFFECT WAL": no side effect may start unless its
  * intent is durable first, and "I tried to record it and carried on anyway"
  * does not satisfy that. So the failure is returned instead, and the caller
  * below refuses the call rather than guess which way is safe to fail.

@@ -254,7 +254,7 @@ describe('acceptance · D · capability e sicurezza', () => {
           );
         }
 
-        // MANDATO-DAY-1 invariant 2, through the real binary: a second,
+        // Taint through session history, through the real binary: a second,
         // unrelated process on the SAME session, asked something that reads
         // nothing of its own. `agent/context/history-taint.ts` computes the
         // max tier of the reinjected session history (the first turn's own

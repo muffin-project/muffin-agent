@@ -9,7 +9,7 @@ Ogni giro, in quest'ordine, e solo questo:
 1. `node .claude/deleghe.mjs riprendi` — deleghe aperte, morte o parcheggiate.
    Una delega morta si parcheggia con stato riprendibile, non sparisce.
 2. `node .claude/riconcilia.mjs` — se il handoff descrive come vivo un lavoro
-   chiuso, correggi `docs/blueprint/LAVORO.md`, non il checker.
+   chiuso, correggi `docs/work/handoff.md`, non il checker.
 3. I check delle PR aperte. Un rosso che ha eseguito step è un difetto; un rosso
    a zero step non lo è.
 

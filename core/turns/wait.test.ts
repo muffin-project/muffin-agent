@@ -13,7 +13,7 @@ import {
  * The arithmetic of a wait, tested where it is pure.
  *
  * Nothing in this file sleeps, and that is not a testing convenience: it is the
- * property. `WAIT → persisti → RILASCIA → sveglia → riprendi` (M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool) means
+ * property. `WAIT → persisti → RILASCIA → sveglia → riprendi` (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) means
  * the vocabulary of a wait has to be decidable without a clock, a database or a
  * runtime — otherwise the only way to test "does it come back" is to wait for
  * it, which is exactly the shape (`await sleep()`) this primitive exists not to

@@ -30,10 +30,10 @@ unused manifest would be another source of drift.
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
 | Why was an architectural choice made? | The relevant ADR in `docs/decisions/` |
-| What makes DAY-1 true? | `docs/blueprint/gate1/MANDATO-DAY-1.md` |
-| Is a DAY-1 requirement currently satisfied? | `docs/blueprint/M5-BIS.md` |
-| In which order do remaining Gate blockers get attacked? | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
-| What work is active right now? | Observed Git/PR state first, then `docs/blueprint/LAVORO.md` as the handoff. |
+| What makes DAY-1 true? | `docs/work/day1/readiness-criteria.md` |
+| Is a DAY-1 requirement currently satisfied? | `docs/work/day1/requirements-status.md` |
+| In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
+| What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
 | What evidence informed a decision? | `docs/blueprint/research/`, audits and `docs/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
@@ -63,7 +63,7 @@ Muffin product idea.
 
 `ROADMAP.md` owns **phase placement only**. It does not own whether a DAY-1 row is
 READY/BLOCKER, the next implementation slice, or whether an item is already
-shipped. Those questions stay with M5, the critical path, Git and executable
+shipped. Those questions stay with the DAY-1 requirements, the critical path, Git and executable
 authority respectively.
 
 Scoped current design documents such as `EXTENSIONS.md` are loaded only when
@@ -132,6 +132,30 @@ implied: its anchor machinery verifies that cited source text still resolves,
 not that every surrounding editorial sentence is semantically current. See
 `docs/blueprint/mappa/README.md` before using it for exact mechanics.
 
+## A name is the first thing read
+
+> **Semantic name = primary identity. Opaque ID = optional stable handle.**
+>
+> A durable artifact or requirement must be understandable without decoding its
+> historical or ordinal identifier.
+
+A path and a filename are read before anything inside them, and they are read by
+people and agents who do not know this project's history. `M5-BIS.md`, `gate1/`
+and `MANDATO-DAY-1.md` failed that test: each needed a sentence of the form «X
+means Y» before it could be used, and that sentence is a cost paid on every
+read. If a name needs one, it is probably the wrong name.
+
+The rule reaches prose, not just filenames. A comment that says «requirement B5»
+and nothing else asks the reader to go look B5 up; the same comment that says
+what B5 *is* does not. The opaque id may stay where a machine needs a stable
+key — `manifest.ts` binds acceptance scenarios to `A1`…`E7`, and `report.ts`
+parses them back out of test titles — but it is never the whole of what a human
+sentence says.
+
+Historical identifiers remain in Git, `docs/history/` and dated records, where
+they are how those documents actually referred to things. They are not the
+canonical identity of anything current.
+
 ## Progressive disclosure
 
 Agents and humans should start with a map, not a manual.
@@ -142,7 +166,7 @@ Agents and humans should start with a map, not a manual.
 - `COGNITIVE-DESIGN.md` is loaded when a task proposes or evaluates a cognitive
   mechanism, person-model behaviour, memory salience/decay or proactivity claim.
 - `ROADMAP.md` is loaded when the question is when a deliberate deferral should
-  be reconsidered, not as a substitute for current Gate or Git state.
+  be reconsidered, not as a substitute for current DAY-1 or Git state.
 - Product strategy is not required to fix a runtime bug unless it changes the
   product claim being implemented.
 - Research and history are opt-in context, not startup context.
@@ -161,7 +185,7 @@ The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 The architectural decisions moved to `docs/decisions/` and the durable cognitive
 corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
 name to be found. `docs/blueprint/README.md` still classifies what remains in that
-directory — the live Gate status, the handoff, research and the generated map.
+directory — research and the generated map.
 
 `docs/blueprint/STATE.md` is now a tombstone; its full chronicle is preserved in
 `docs/history/rebuild-2026/STATE-chronicle.md`. Together with
