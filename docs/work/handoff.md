@@ -13,8 +13,10 @@ vista vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 
 **Il gate.** `npm run gate:local`: clone di HEAD **fuori** dal repository, `npm
 ci`, typecheck, build, suite, accettazione, `gate-linux.sh` in Docker. Il verde
-si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde»: la CI di GitHub è rossa
-per **fatturazione**, i job muoiono in 2s senza eseguire niente.
+si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». Dall'1/09 la CI di
+GitHub **esegue di nuovo** (prima moriva in 2s per fatturazione) ed è rossa su
+16 test in `cli/update.test.ts`, `cli/main.test.ts`, `core/net/causa.test.ts`,
+identici su `dev` nudo: firme Linux che `gate-linux.sh` non vede. **F11**.
 
 ## Le decisioni dell'owner
 
@@ -23,19 +25,17 @@ per **fatturazione**, i job muoiono in 2s senza eseguire niente.
 `sys.shell` chiede *sempre* conferma) e **C8, note vocali** (se la tua voce
 esce di casa). Manca la **chiave Tavily**.
 
-`integrazione/tre-slice` (note vocali/whisper) è spinta su origin come
-checkpoint: non è una PR, non è morta.
+`integrazione/tre-slice` (note vocali/whisper) è un checkpoint su origin: non è
+una PR, non è morta.
 
-Slice 3-6 integrate: skill e rules; storia in `docs/history/`; ADR in
-`docs/decisions/`; cognitivo in `docs/knowledge/`; lavoro corrente in
-`docs/work/`, con nomi semantici e senza più `M5-BIS`, `gate1`, `Gate 1` nel
-materiale vivo. La regola di naming vive in `docs/README.md`.
-`blueprint/STATE.md` e `foundations/VISION.md` restano **lapidi di
-compatibilità**. Prossima: slice 7, `research/`→`evidence/`, `mappa/`→`generated/map/`.
+Slice 3-6 integrate: `docs/{history,decisions,knowledge,work}/`, nomi semantici
+(regola in `docs/README.md`), niente più `M5-BIS`/`Gate 1` nel vivo.
+`blueprint/STATE.md` e `foundations/VISION.md` sono **lapidi**. Prossima: slice
+7, `research/`→`evidence/`, `mappa/`→`generated/map/`.
 
 Tre trappole scritte dove sta il meccanismo: `riprendi/SKILL.md`,
-`mappa/ancore.mjs`, `rules/decisioni.md`. La terza è **F7**: la logica in prosa
-dentro una rule si rompe senza che nessun test se ne accorga.
+`mappa/ancore.mjs`, `rules/decisioni.md`. **F7**: la logica in prosa dentro una
+rule si rompe senza che nessun test se ne accorga.
 
 ## Parcheggiato: le richieste differite
 
