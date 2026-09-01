@@ -2,7 +2,7 @@
 
 **Stato: VIVO — cablato nel vecchio Muffin (principio + codice + 2 layer di
 supporto), NON ancora nel design del blueprint nuovo** (compare solo come riga di
-inventario in `docs/blueprint/research/a1-inventario-codebase.md` §Dream cycle). Candidato #1 da
+inventario in `docs/evidence/stato-componenti-vecchio-muffin.md` §Dream cycle). Candidato #1 da
 portare avanti esplicitamente.
 
 ## Il principio (cognitivo)

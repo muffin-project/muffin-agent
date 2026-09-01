@@ -80,7 +80,7 @@ Se esiste una risposta che soddisfa il criterio, DAY-1 non è raggiunto.
 - **Come verificare FAST/STANDARD/CRITICAL** → `docs/ORCHESTRATION.md`.
 - **Security/architecture correnti** → `docs/SECURITY.md` e
   `docs/ARCHITECTURE.md`.
-- **Findings/audit storici** → research/history.
+- **Findings/audit storici** → `docs/evidence/` e `docs/history/`.
 
 Se una nuova lacuna viene scoperta e soddisfa il criterio dei quattordici giorni,
 entra nei requisiti DAY-1. «Non ci avevamo pensato» non è una ragione per rimandarla; non è

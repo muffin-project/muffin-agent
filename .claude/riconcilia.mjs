@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Verify one narrow property: LAVORO.md must not describe already-finished work
+ * Verify one narrow property: the handoff must not describe already-finished work
  * as live.
  *
  * Product/DAY-1 truth is intentionally out of scope. Requirement status requires evidence
@@ -65,7 +65,7 @@ export function riconcilia({ testo, statoPr, branchRemoti, branchLocali = [] }) 
     if (!stato) continue;
     if (stato.state !== 'OPEN') {
       const label = stato.state === 'MERGED' ? 'mergiata' : 'chiusa';
-      reperti.push(`#${numero} è ${label} ma LAVORO.md la descrive come lavoro live`);
+      reperti.push(`#${numero} è ${label} ma l'handoff la descrive come lavoro live`);
     }
   }
 

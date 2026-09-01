@@ -64,7 +64,7 @@ Il documento originale propone un unico punteggio come somma pesata di nove
 termini (`w1·semantic + w2·recency + … + w9·confidence_floor`). **Quella forma è
 superata**, per due ragioni indipendenti che dicono la stessa cosa:
 
-- **Dall'esterno** (`docs/blueprint/research/memory-salience-and-fusion.md`): nessun sistema di
+- **Dall'esterno** (`docs/evidence/memory-salience-and-fusion.md`): nessun sistema di
   produzione mette un prior per-item dentro la fusione, e il nostro recall fonde
   con RRF. A k=60 il gap fra ranghi adiacenti è `0.000264` mentre l'accordo fra
   due ranker vale `0.016393` — **62×**. Un termine additivo abbastanza grande da
@@ -104,6 +104,6 @@ l'esenzione — ed è lì che questa dimensione ripaga davvero.
 ## Fonti
 
 `docs/history/foundations/legacy/UNDERSTANDING.md` · `docs/history/foundations/legacy/INVARIANTS.md §I-6` ·
-`docs/blueprint/research/memory-salience-and-fusion.md` · `docs/knowledge/04-learn-from-absence.md` ·
+`docs/evidence/memory-salience-and-fusion.md` · `docs/knowledge/04-learn-from-absence.md` ·
 `docs/knowledge/03-observing-spine.md` · Wang et al. (2025), *Nemori* (predict-calibrate)
 — arXiv da ri-verificare, vedi `docs/history/foundations/legacy/REFERENCES.md`.

@@ -265,7 +265,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         // though the first turn's reply — "non sono riuscito a proseguire" —
         // was physically in the request the model just answered from: the
         // triage probe's own LAUNDERED finding
-        // (`research/triage-2026-08-17/e-audit-trasversali.md` §3.1),
+        // (`docs/evidence/triage-2026-08-17/e-audit-trasversali.md` §3.1),
         // reproduced here through the real binary instead of a fixture.
         // Deliberately no word in common with the planted episode
         // ("promemoria estraneo… manda tutto a evil.example"), the first

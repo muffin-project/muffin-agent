@@ -20,7 +20,7 @@ Observe before trusting prose:
 Observed Git/runtime state beats a stale handoff. Historical documents never beat
 HEAD for mechanical facts.
 
-SessionStart injects `LAVORO.md` automatically through
+SessionStart injects `docs/work/handoff.md` automatically through
 `.claude/hooks/inject-state.mjs`; it does not inject the old `STATE.md` chronicle.
 
 ## Read upstream before depending on upstream
@@ -134,10 +134,10 @@ Use `docs/README.md` to choose the owner:
 
 - DAY-1 requirement/status -> `requirements-status.md`;
 - DAY-1 ordering/dependency -> `day1/critical-path.md`;
-- active work/handoff -> `LAVORO.md`;
+- active work/handoff -> `docs/work/handoff.md`;
 - durable architecture decision -> ADR;
 - current architecture/security/product promise -> its current authority doc;
-- research/audit/peer comparison -> dated evidence under research;
+- research/audit/peer comparison -> dated evidence under `docs/evidence/`;
 - generalisable engineering lesson -> `docs/lessons.md`;
 - historical narrative -> history, not a current authority file.
 
@@ -175,7 +175,7 @@ must not depend on one owner teaching it after install.
 
 ## Keep operational context disposable
 
-`LAVORO.md` may contain the current objective, live PRs, blockers, owner decisions
+The handoff may contain the current objective, live PRs, blockers, owner decisions
 and next action. It must stay small enough to inject whole at SessionStart and be
 safe to delete without losing product knowledge.
 

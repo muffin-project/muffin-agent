@@ -22,7 +22,7 @@ import type { ToolSpec } from '../providers/types.js';
  * which is a malformed request the next provider call rejects. So the barrier
  * is honoured **between iterations**, after the batch completes: every call
  * gets its result, and the suspension happens at the point the design already
- * proved was clean (`research/turno-sospendibile.md` §T3, suspension point 1).
+ * proved was clean (`docs/evidence/turno-sospendibile.md` §T3, suspension point 1).
  *
  * It is also the semantics the prior art converged on independently: Hermes's
  * `/goal wait` is *a barrier on the next turn*, and ADR-0035 describes `steer`

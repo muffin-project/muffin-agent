@@ -7,7 +7,7 @@ import type { Principal, TrustTier } from '../policy/types.js';
 /**
  * A turn is a durable record with an identity, not a stack frame.
  *
- * That sentence is the whole design (`docs/blueprint/research/turno-sospendibile.md`),
+ * That sentence is the whole design (`docs/evidence/turno-sospendibile.md`),
  * and it is the substrate under three separate blockers: a connector that must
  * not block for minutes (B2), a `wait` primitive (B3) and a resume after a crash
  * (B5). None of those three is built here. What is built is the row they all
@@ -87,7 +87,7 @@ export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 
  * Declared here, in `core`, because it had grown **three** literal copies —
  * `TurnResult['stopped']`, `JobOutcome['stopped']` and this file's own
  * `TurnOutcome` — and the design that produced this table named the divergence
- * as this repo's typical defect (`research/turno-sospendibile.md` §Domanda 6,
+ * as this repo's typical defect (`docs/evidence/turno-sospendibile.md` §Domanda 6,
  * row 9). One reference each now; adding an arm reaches every consumer.
  */
 export type TurnStopped = TurnOutcome | 'suspended';
@@ -715,7 +715,7 @@ export class TurnStore {
    * executes it. `runTurn` staying synchronous was never the property anybody
    * wanted — the property was that the connector does not block, and a row
    * nobody claimed is how that is expressed durably instead of by dropping an
-   * `await` and hoping (`research/turno-sospendibile.md` §B2, the three
+   * `await` and hoping (`docs/evidence/turno-sospendibile.md` §B2, the three
    * guarantees a bare `void runTurn(...)` breaks).
    *
    * `claimed_by` is NULL, deliberately: a pid on a row nobody is executing
@@ -787,7 +787,7 @@ export class TurnStore {
    * precedent: a job with no stop condition keeps arriving, so the owner
    * notices it; a suspended turn with no deadline is *silent* — it holds a row
    * and its whole context and nothing ever says so
-   * (`research/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
+   * (`docs/evidence/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
    * even when an event barrier is also armed: whichever comes first wins, and
    * neither can be absent.
    *
@@ -848,7 +848,7 @@ export class TurnStore {
    *
    * The ceiling `wait` is refused above. Without one, a model that likes
    * waiting produces rows without a bottom and nobody reads a table
-   * (`research/turno-sospendibile.md` §Domanda 3, third stop condition).
+   * (`docs/evidence/turno-sospendibile.md` §Domanda 3, third stop condition).
    */
   countSuspended(tenant: string): number {
     return (this.suspendedCountStmt.get({ tenant }) as { n: number }).n;
@@ -1055,7 +1055,7 @@ export class TurnStore {
    * Rows claimed by a process that is gone, marked as what they are.
    *
    * Odysseus does the same thing at start-up and for the same reason
-   * (`docs/blueprint/research/b1-runtime-processo.md`): a row left `running` by
+   * (`docs/evidence/runtime-di-processo-nei-peer.md`): a row left `running` by
    * a dead process is `aborted`, not `error` — the task is not to blame for an
    * infrastructure event. The status change is guarded on `status = 'running'`
    * and only rows this call actually changed are returned, so two processes

@@ -193,7 +193,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | # | Area | Domanda DAY-1 | Stato |
 |---|---|---|---|
 | A1 | Boot | Muffin parte da solo e recupera lo stato? | READY — accettazione: gateway vero SIGKILLato a metà vita, un secondo processo lo sostituisce e riprende un turno sospeso (`wait`) più un job dovuto, ciascuno consegnato **una sola volta** (righe `turns`/`turns.delivery`/`jobs.last_run_at` provate, non assunte — mutation-testato: `markRan` disattivato a mano rifà partire il job all'infinito e lo scenario va rosso, `evals/acceptance/scenarios/a-lifecycle.accept.ts`), `muffin gateway status`/`doctor` sani prima e dopo, `SIGTERM` drena ed esce `EXIT_STOPPED`. Due gap chiusi con test: `TelegramConnector.run()` riprova `getMe()` con backoff invece di morire una volta sola quando la rete non è pronta al boot (`connectors/telegram/reconnect.test.ts`, rosso confermato pre-fix); `doctor` verifica il **supervisore** (unit/plist al suo posto + enable/linger su Linux o launchd su macOS), non solo il processo (`core/gateway/supervisor.ts`, mai `fail`, sempre un rimedio) — un `muffin gateway run` a mano ora si legge distinto da uno supervisionato. Reboot reale della macchina target = battery §10 di `day1/readiness-criteria.md`, non provato qui. ADR-0035 §Continuità appartiene a Muffin, non al pid. |
-| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 il contenuto non è più il gap: `identity.md` è testo reale dell'owner da c090dce, sigillata nel RoT, e raggiunge il system prompt reale — provato (`slice/identita` parte 1: `research/prompt-assembly-2026-08-17.md`, `muffin prompt show`, wiring test mutati rosso-prima, scenario di accettazione A2 verde contro il binario vero, `evals/acceptance/scenarios/a-lifecycle.accept.ts`). Resta BLOCKER: manca il character eval sui modelli DAY-1 (punto 6 mandato owner — non più «solo owner»: il contenuto è dato, la verifica no) → parte 2 di `slice/identita` |
+| A2 | Identity | Sa chi è e quali limiti ha? | BLOCKER 👤 il contenuto non è più il gap: `identity.md` è testo reale dell'owner da c090dce, sigillata nel RoT, e raggiunge il system prompt reale — provato (`slice/identita` parte 1: `docs/evidence/prompt-assembly-2026-08-17.md`, `muffin prompt show`, wiring test mutati rosso-prima, scenario di accettazione A2 verde contro il binario vero, `evals/acceptance/scenarios/a-lifecycle.accept.ts`). Resta BLOCKER: manca il character eval sui modelli DAY-1 (punto 6 mandato owner — non più «solo owner»: il contenuto è dato, la verifica no) → parte 2 di `slice/identita` |
 | A3 | Persona | Il comportamento è definito? | BLOCKER 👤 `persona.md`/`voice.md` sono testo reale dell'owner da c090dce e raggiungono il system prompt reale nell'ordine canonico (persona → identity → voice) — provato: scenario A3 verde, `muffin prompt show` byte-identico a quanto ricevuto davvero dal provider (`evals/acceptance/scenarios/a-lifecycle.accept.ts`). Resta BLOCKER: mancano character eval, cross-model e confronto col vecchio `Muffin.ai` (punti 6-8 mandato owner) → parte 2 di `slice/identita` |
 | A4 | Config | Si configura senza toccare il codice? | BLOCKER — solo scenario mancante: `muffin config` è read-only per disegno (ADR-0036, `cli/config.ts:7,22-37`), validazione zod rumorosa al caricamento (`core/config/config.ts:35-63`), ma nessuno scenario prova l'hand-edit di `config.json` + `muffin rot reseal` end-to-end → critical-path.md#da-qui-ordina-luso |
 | A5 | Doctor | Individua **davvero** i problemi? | READY — manomissione reale di `rot/policy.json`, `doctor` la rileva e nomina il file con un rimedio azionabile (`evals/acceptance/scenarios/a-lifecycle.accept.ts:56-94`, verde); ogni check esegue, non assume (`cli/doctor.ts:45-568`) |
@@ -227,7 +227,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 
 > 🧱 **«Substrato pronto» non è «chiuso», e le righe restano BLOCKER apposta.**
 > `slice/turno-record` (2026-08-15, **ADR-0042**, disegno in
-> `research/turno-sospendibile.md`) ha costruito quello che B2, B3 e B5 vogliono
+> `docs/evidence/turno-sospendibile.md`) ha costruito quello che B2, B3 e B5 vogliono
 > tutti e tre: **un turno è una riga durevole con un'identità** — `core/turns/`,
 > tabella `turns` — con modello pinnato, trascritto intero, **taint persistito**
 > (ricostruirlo dal principal era una scalata di privilegio) e **intento+esito
@@ -323,7 +323,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > multipart dei consumer reali, non un catalogo di metadata ipotetici.
 
 > 🔭 **Le righe col cannocchiale le ha trovate uno sguardo fuori** —
-> `research/hermes-documentazione.md` (2026-08-15), la documentazione intera di
+> `docs/evidence/hermes-documentazione.md` (2026-08-15), la documentazione intera di
 > Hermes Agent letta contro il nostro codice. Quel documento non aggiunge solo
 > righe: **cambia la forma del rimedio** di B2 (il turno non va reso asincrono
 > — serve un canale di progresso ortogonale), di B12 (`agent/context/compact.ts:90`
@@ -581,7 +581,7 @@ il modello che si dichiara finito: **finito = nessun passo `pending` o `retry`**
 e la frase è scritta nel contesto perché è l'unico posto dove il modello legge
 del piano.
 
-> 🔭 **Manca il decisore, non solo la primitiva** — `research/hermes-documentazione.md`
+> 🔭 **Manca il decisore, non solo la primitiva** — `docs/evidence/hermes-documentazione.md`
 > §2.1–2.3 e §3.3 (2026-08-15). Tre cose che questa sezione non diceva:
 >
 > **Chi decide il `wait`.** Non il modello dentro il turno — lì la decisione è

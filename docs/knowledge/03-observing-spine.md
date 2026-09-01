@@ -98,7 +98,7 @@ importanza ≠ frequenza · **primitive, non moduli a lato**.
 · `context/HEARTBEAT.md` · `src/memory/{memory_affect_signature,circadian}.ts` ·
 `docs/foundations/{UNDERSTANDING,VISION,THESIS}.md` · `docs/decisions/0028-postura-di-proattivita.md`
 · Pare-Bench (2026, arXiv:2604.00842, da `REFERENCES.md`)
-· `docs/blueprint/research/proattivita-quando-parlare.md` (sweep 2026-08-10: il cancello a due
+· `docs/evidence/proattivita-quando-parlare.md` (sweep 2026-08-10: il cancello a due
 stadi ha un precedente misurato in arXiv:2605.30152 — ma là lo Stadio-1 è un
 modello *appreso*, il nostro è deterministico, e la divergenza è deliberata;
 l'assenza-come-segnale non ha invece prior art trovata, quindi nessun benchmark

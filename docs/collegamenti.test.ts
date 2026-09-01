@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest';
  *
  * ## Cosa NON è sorvegliato, e perché non è un'eccezione
  *
- * ADR, research/evidence e history sono **append-only e datati**: non si
+ * ADR, evidence e history sono **append-only e datati**: non si
  * riscrivono per farli tornare. Un ADR con un `§N` scaduto è un documento
  * storico che cita com'era il mondo allora, e correggerlo sarebbe riscrivere
  * la storia — la cosa che `docs/README.md` vieta esplicitamente.
@@ -77,16 +77,26 @@ function tuttiIFile(dir: string, acc: string[] = []): string[] {
 /**
  * Archiviato = append-only o datato. Non governa HEAD, non si riscrive.
  *
- * L'elenco nomina sia i path attuali sia quelli verso cui la migrazione li
- * sposta, così una slice che fa `git mv` non deve anche modificare il checker
- * che la sorveglia — che è il modo in cui un controllo si ammorbidisce da solo
- * proprio nel commit in cui servirebbe.
+ * L'elenco nominava anche i path verso cui le migrazioni stavano andando, così
+ * una slice che fa `git mv` non doveva anche modificare il checker che la
+ * sorveglia — che è il modo in cui un controllo si ammorbidisce da solo proprio
+ * nel commit in cui servirebbe. Arrivate a destinazione, quelle voci si
+ * ritirano: `docs/blueprint/{adr,research,critique,proposals}/` non esiste più
+ * (slice 4, 5 e 7) e un ramo che non può classificare nessun file è solo un
+ * ramo che nessuno riesegue.
+ *
+ * **Il README di un corpus archiviato non è archiviato.** `docs/evidence/` è
+ * datato e append-only, ma il documento che dice *che cosa ci va e che cosa no*
+ * si edita, si rinumera e governa HEAD: è materiale current che abita una
+ * directory archiviata. Lasciarlo cadere in questa lista lo escluderebbe dal
+ * controllo dei link — un router non sorvegliato, che è esattamente il difetto
+ * contro cui questo file esiste.
  */
 const ARCHIVIATO = [
   /^docs\/history\//,
   /^docs\/foundations\//,
-  /^docs\/blueprint\/(adr|research|critique|proposals)\//,
-  /^docs\/(decisions|evidence)\//,
+  /^docs\/decisions\//,
+  /^docs\/evidence\/(?!README\.md$)/,
   /^docs\/blueprint\/(\d\d-|BRIEF|validazione-contratti|STATE|README)/,
 ];
 
