@@ -773,7 +773,7 @@ function riprendi() {
   // È la domanda a cui una sessione morta non saprebbe più rispondere.
   let inventario = '';
   try {
-    inventario = readFileSync(join(REPO, 'docs', 'blueprint', 'requirements-status.md'), 'utf8');
+    inventario = readFileSync(join(REPO, 'docs', 'work', 'day1', 'requirements-status.md'), 'utf8');
   } catch {
     /* niente inventario, niente scoperto */
   }

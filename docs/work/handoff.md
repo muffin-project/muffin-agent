@@ -2,14 +2,14 @@
 
 **Regola di stop.** Il prossimo lavoro nasce da un failure osservato usando
 Muffin, da una requirement owner, da una migrazione costosa o da un rischio su
-authority/data/effect. Non da questa lista.
+authority/data/effect — non da questa lista.
 
 **Goal owner:** un agente *davvero usabile*, rivisto modulo per modulo, e tutto
 ciò che manca prima della VPS.
 
 **Come si trovano le cose.** Pilotando il REPL in **tmux**, o misurando su
-tracce, log e il `muffin.db` vero — mai con `cp` dei tre file, che dà una vista
-vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
+tracce, log e il `muffin.db` vero — mai con `cp`, che dà una vista vecchia senza
+errore: `sqlite3 <db> ".backup <dest>"`.
 
 **Il gate sono i check di GitHub**, verdi dall'1/09/2026 (i 16 rossi riemersi
 erano test mai eseguiti su Linux, #272). Si gatta sulla *condizione* dei check,
@@ -21,22 +21,24 @@ accettazione, non la suite.
 
 **Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
 "deny"`. Aperte: **`muffin rot harden`** (serve `sudo`; finché non è fatto
-`sys.shell` chiede *sempre* conferma) e **C8, note vocali** (se la tua voce
-esce di casa). Manca la **chiave Tavily**.
+`sys.shell` chiede *sempre* conferma) e **C8, note vocali**. Manca la **chiave
+Tavily**.
 
 `integrazione/tre-slice` (note vocali/whisper) è un checkpoint su origin: non è
 una PR, non è morta.
 
-Slice 3-7 integrate: `docs/{history,decisions,knowledge,work,evidence}/`, nomi
-semantici (regola in `docs/README.md`); la mappa è in
-`docs/derived/architecture-map/` — **derived**, non generated. Una proposta non è
-evidence: sta in `docs/history/design-notes/`. `blueprint/` è ormai solo
-`STATE.md` e il suo router: la dissoluzione è il passo dopo, e deve guardare le
-compatibility tombstone.
+**STEP 0 chiuso.** `docs/{decisions,knowledge,work,evidence,derived,history}/`,
+nomi semantici (regola in `docs/README.md`); `blueprint/` e `foundations/` non
+esistono più. Una proposta non è evidence: sta in `history/design-notes/`.
+`lessons.md` è evidence *rolling* — ruolo e lifecycle sono assi diversi.
 
-Tre trappole scritte dove sta il meccanismo: `riprendi/SKILL.md`,
-`architecture-map/ancore.mjs`, `rules/decisioni.md`. **F7**: logica in prosa in
-una rule si rompe senza che un test se ne accorga.
+**Primo hardening della mappa, F17:** 135 citazioni `file:riga` nella prosa dei
+`data-*.json`, 94 a una riga vecchia. Il renderer ha già `ancore()` ma solo sul
+campo `rif` (`template.html:338`): usare ciò che c'è, non costruire altro.
+
+Trappole dove sta il meccanismo: `riprendi/SKILL.md`, `architecture-map/ancore.mjs`,
+`rules/decisioni.md` (**F7**). L'1/09 `deleghe.mjs` leggeva l'inventario a un path
+morto e stampava «0 su 0» invece di 31 BLOCKER: il `catch` non è una diagnosi.
 
 ## Parcheggiato: le richieste differite
 
@@ -48,16 +50,13 @@ più il problema (`0d519cb`).
 ## F5 — decisione owner non ancora entrata
 
 La direttiva del 15/08 «si ripara alla radice» è stata tolta da
-`ORCHESTRATION.md` il 19/08 senza riospitarla. Casa decisa: `PRACTICES.md`.
-**Entra con una micro-slice semantica sua**: non entra automaticamente in una
-futura migrazione di `PRACTICES.md`, e una slice che sposta quel file non la
-porta con sé. Semantica da preservare: *repair at the lowest semantic
-layer that eliminates the class of failure, not at the widest layer you can
-plausibly redesign*. Scala `riga → funzione → contratto di modulo → tipo/schema
-→ confine architetturale`; si sale **solo** se una riparazione più locale
-lascerebbe la stessa classe di stato invalido rappresentabile o destinata a
-ripetersi. Non giustifica refactor laterali. Originale:
-`git show 451cd916:docs/ORCHESTRATION.md`.
+`ORCHESTRATION.md` il 19/08 senza riospitarla. Casa decisa: `PRACTICES.md`, con
+una **micro-slice sua** — una slice che sposta quel file non la porta con sé.
+Semantica: *repair at the lowest semantic layer that eliminates the class of
+failure, not at the widest layer you can plausibly redesign*. Scala `riga →
+funzione → contratto di modulo → tipo/schema → confine architetturale`; si sale
+**solo** se una riparazione più locale lascerebbe la stessa classe di stato
+invalido rappresentabile. Originale: `git show 451cd916:docs/ORCHESTRATION.md`.
 
 ## Aperto, non bloccante
 

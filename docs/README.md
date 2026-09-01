@@ -35,7 +35,7 @@ unused manifest would be another source of drift.
 | In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
 | What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
-| What evidence informed a decision? | `docs/evidence/`, audits and `docs/lessons.md` |
+| What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
 | What does the architecture map show? | `docs/derived/architecture-map/`; a derived view, never an independent source of truth |
 
@@ -184,13 +184,17 @@ The inherited foundations corpus went to `docs/history/foundations/legacy/`.
 
 The architectural decisions moved to `docs/decisions/` and the durable cognitive
 corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
-name to be found. `docs/blueprint/README.md` still classifies what remains in that
-directory — research and the generated map.
+name to be found. The dated evidence went to `docs/evidence/`, the design lineage
+to `docs/history/design-notes/`, and the architecture map to
+`docs/derived/architecture-map/` — derived, not merely generated.
 
-`docs/blueprint/STATE.md` is now a tombstone; its full chronicle is preserved in
-`docs/history/rebuild-2026/STATE-chronicle.md`. Together with
-`docs/foundations/VISION.md` it is a deliberate compatibility redirect, kept at
-its old path until the slice that dissolves the legacy namespaces removes both.
+`docs/blueprint/` and `docs/foundations/` **no longer exist**. Both had shrunk to
+a single compatibility redirect, and on 2026-09-01 both were removed. The retired
+`docs/blueprint/STATE.md` chronicle is preserved byte-for-byte at
+`docs/history/rebuild-2026/STATE-chronicle.md`, and the inherited foundations are
+under `docs/history/foundations/`. A deleted path is not a lost path — Git keeps
+the rename, and `docs/history/README.md` carries the map. Nothing current points
+at either namespace, which is the condition that let them go.
 
 ## A change is complete when its authoritative home is not stale
 
