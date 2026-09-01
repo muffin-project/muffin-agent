@@ -215,7 +215,7 @@ acceptance-test surfaces. Do not build them merely to demonstrate the slogan.
 Likewise, "agency ownership" is not yet a proven market moat. Treat it as an
 architectural lens whose value must survive dogfood, provider evolution and
 simpler competing designs. The supporting synthesis and falsification test live
-in `docs/blueprint/research/agency-ownership-character-2026-08-29.md`.
+in `docs/evidence/agency-ownership-character-2026-08-29.md`.
 
 ## Applying the set
 

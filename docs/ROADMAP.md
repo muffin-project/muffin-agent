@@ -32,11 +32,11 @@ research only / consumer-triggered
 
 ### DAY-1 READY
 
-DAY-1 is intentionally not duplicated here. `day1/readiness-criteria.md` and the reconciled DAY-1 requirements decide what must exist before the fourteen-day window starts.
+DAY-1 is intentionally not duplicated here. `docs/work/day1/readiness-criteria.md` and the reconciled DAY-1 requirements decide what must exist before the fourteen-day window starts.
 
 Architecture work may expose a new DAY-1 candidate; that candidate enters the DAY-1 requirements rather than being silently implemented from this roadmap.
 
-Current architecture findings that must be reconciled into DAY-1 include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact Gate classification remains M5's job.
+Current architecture findings that must be reconciled into DAY-1 include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact DAY-1 classification belongs to `docs/work/day1/requirements-status.md`.
 
 ### 14-day owner dogfood
 

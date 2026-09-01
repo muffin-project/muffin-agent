@@ -9,15 +9,14 @@ authority map start at `docs/README.md`.
 
 ## What is still here
 
-- `requirements-status.md` — **DAY-1 status inventory**. It is currently pending a dedicated
-  evidence reconciliation; individual rows remain the inventory, but stale
-  global summaries must not be treated as fresh measurements.
-- `LAVORO.md` — compact disposable handoff; observed Git state wins.
-- `day1/readiness-criteria.md` — DAY-1 exit condition.
-- `day1/critical-path.md` — ordering/dependencies of remaining blockers.
-- `research/` — dated evidence snapshots, never current authority by themselves.
+Two things, and neither is authority:
+
+- `STATE.md` — a tombstone. See below.
 - `mappa/` — a derived view of the system, plus the anchoring mechanism that
-  stops it from lying. Never authority.
+  stops it from lying. It is a **derived subsystem**, not merely generated
+  output: editorial inputs, generators, checkers, templates and generated views
+  all live there together, which is why it has not been rehoused yet — that
+  needs a classification of its own.
 
 ## What left, and where it went
 
@@ -28,6 +27,9 @@ authority map start at `docs/README.md`.
 | `adr/` | `docs/decisions/` — decisioni, non storia: append-only ma vive |
 | `knowledge/` | `docs/knowledge/` — il corpus cognitivo durevole |
 | `proposals/` | **removed** — the routine was never active; `docs/history/README.md` records the archaeological pointer and ties it to F4 |
+| `M5-BIS.md`, `LAVORO.md`, `gate1/` | `docs/work/` — current work, under names that read without the history |
+| `research/` | `docs/evidence/` — what we observed, measured, compared or audited |
+| six design contracts inside `research/` | `docs/history/design-notes/` — design lineage: a proposal is a lifecycle state, not a document class |
 
 The move waited for a reverse-reference check that could prove semantic cleanup
 would not become broken lineage. That check was done on 2026-08-30: five of the

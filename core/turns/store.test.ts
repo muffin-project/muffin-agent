@@ -11,7 +11,7 @@ import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, readTurnHealth, ty
 /**
  * The row, and the four things it exists to hold that nothing else can.
  *
- * Each of these is a property the design (`research/turno-sospendibile.md`)
+ * Each of these is a property the design (`docs/evidence/turno-sospendibile.md`)
  * priced as expensive-if-wrong, and three of the four fail **silently** when
  * they are wrong — the pinned model, the persisted taint, and the difference
  * between a call that finished and one that may have. So they get assertions

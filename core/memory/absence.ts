@@ -65,7 +65,7 @@ import type Database from 'better-sqlite3';
  * numbers worked out by hand.
  *
  * **There is no prior art to calibrate against.** The research (2026-08-10, in
- * `research/proattivita-quando-parlare.md`) found no literature treating "a
+ * `docs/evidence/proattivita-quando-parlare.md`) found no literature treating "a
  * theme stops appearing" as a memory or retrieval signal: no benchmark against
  * which to measure this threshold. Hence the conservative posture — tight
  * alpha, absolute floor, low ceiling — which is a choice forced by the absence

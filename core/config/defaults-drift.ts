@@ -8,7 +8,7 @@ import { paths } from './config.js';
  * Drift between what `muffin init` copied into `~/.muffin` and what HEAD
  * ships in `defaults/` — the gap `muffin update` never closes on purpose
  * (`agent/context/assemble.ts`: `defaults/` exists to be edited by the
- * owner). See docs/blueprint/research/deriva-defaults-2026-08-26.md, the
+ * owner). See docs/evidence/deriva-defaults-2026-08-26.md, the
  * reperto that measured this on the owner's own machine: `persona.md`,
  * `voice.md` and `rot/identity.md` sat at their `init`-day content for
  * weeks, unnoticed, because nothing ever looked.

@@ -32,6 +32,33 @@ force archaeology for material that is still consulted.
   code and by the architecture map, which is why the corpus is readable here
   rather than only in Git.
 - `foundations/` — see below; two different materials, deliberately not merged.
+- `design-notes/` — dated design lineage. See below: it is the one family here
+  that is *not* a snapshot of the past, but the residue of proposals that have
+  since been decided elsewhere.
+
+## `design-notes/`: proposal is a lifecycle state, not a document class
+
+These six documents were written as forward-looking contracts — «do not add that
+column», «acceptance tests required before merge», «acceptance / kill criteria».
+That is instruction, not observation, so none of them belongs in
+`docs/evidence/`, which owns what we observed, measured, compared or audited.
+
+But a proposal is not a durable class of document either. Whatever stays live in
+one has a **current owner**; the dated artifact that argued for it is lineage.
+That is what these are, and who owns the live part:
+
+| Document | Live part owned by |
+|---|---|
+| `design-notes/memory-lineage-implementation-contract-2026-08-29.md` | shipped — PR #253 owns the result |
+| `design-notes/memory-composition-contract-2026-08-29.md` | promoted into current architecture / memory ownership |
+| `design-notes/background-work-contract-2026-08-29.md` | unimplemented — `docs/ROADMAP.md` owns the status |
+| `design-notes/local-agentic-runtime-2026-08-20.md` | open experiment — `docs/ROADMAP.md` owns local compute |
+| `design-notes/m3-caching-and-per-connector-timing.md` | ADR-0016 |
+| `design-notes/security-v2-eval-contract-2026-08-29.md` | `docs/SECURITY.md`, which records the hypothesis as unresolved and does **not** adopt it |
+
+Read one of these as a work list and you will build something whose live status
+is decided somewhere else. Their historical filenames are kept: under
+`docs/history/` an ordinal like `m3-` is legitimate.
 
 ## `foundations/`: two materials, one family
 
@@ -61,6 +88,8 @@ The 2026-08-31 archive moved these; Git preserves the renames, so
 | `docs/blueprint/critique/` | `docs/history/rebuild-2026/critique/` |
 | `docs/foundations/{COGNITIVE_BASES,INVARIANTS,REFERENCES,UNDERSTANDING,README}.md` | `docs/history/foundations/legacy/` |
 | `docs/blueprint/STATE.md` chronicle | `docs/history/rebuild-2026/STATE-chronicle.md` |
+| `docs/blueprint/research/` | `docs/evidence/` — fourteen files also lost a coordination ordinal; the map is in `docs/evidence/README.md` |
+| six design contracts inside `docs/blueprint/research/` | `docs/history/design-notes/` |
 
 Old references inside ADRs, research and other dated documents were **not**
 rewritten: they record what was true when they were written.

@@ -917,7 +917,7 @@ function initialTaint(input: TurnInput): TrustTier {
  * `runTurn`, and the design measured what that costs: a turn **in flight and
  * unrecorded**, invisible to the gateway's drain, outside the single model
  * lane, and with the inbox's at-least-once guarantee detached
- * (`research/turno-sospendibile.md` §B2). Every one of those three repairs is
+ * (`docs/evidence/turno-sospendibile.md` §B2). Every one of those three repairs is
  * "record the turn somewhere durable", so the row is the cure and not a
  * bookkeeping side-effect of it.
  *
@@ -3342,7 +3342,7 @@ function buildContext(
    * in `systemPrompts`, which is assembled once at boot and is the cacheable
    * prefix — a list that changes every turn would go in front of the stable
    * text and cost the warm prefix on every message, which is the mistake
-   * `research/m3-caching-and-per-connector-timing.md` records the peers
+   * `docs/history/design-notes/m3-caching-and-per-connector-timing.md` records the peers
    * avoiding. So it rides in the volatile tail, next to recalled memory, for
    * the same reason recall does.
    *

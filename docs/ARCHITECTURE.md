@@ -451,9 +451,10 @@ local leader election is explicitly not part of the current product phase.
 - Current policy literals — shipped Root-of-Trust config owns them.
 - Node transport choice or wire schemas — the first real implementation owns
   mechanics under ADR-0050's semantic/security contract.
-- Whether a DAY-1 capability is READY — `requirements-status.md` owns status.
+- Whether a DAY-1 capability is READY — `docs/work/day1/requirements-status.md`
+  owns status.
 - Why a historical decision was made — the relevant ADR owns that history.
-- Which PR is in flight — Git + `LAVORO.md` own operational state.
+- Which PR is in flight — Git + `docs/work/handoff.md` own operational state.
 
 When code and this document disagree on a mechanical detail, verify the code and
 fix this map if its **semantic claim** is wrong. Do not implement prose blindly.

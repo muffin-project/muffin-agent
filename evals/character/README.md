@@ -72,4 +72,4 @@ corsa con misure perse fa uscire il comando con stato diverso da zero.
   serve che Muffin sia già riconoscibile, non che la voce sia finita.
 - Un confronto con le risposte del **vecchio** Muffin: non ne abbiamo un corpus,
   e i suoi prompt non sono un golden output — il confronto qualitativo dei testi
-  sta in `docs/blueprint/research/muffin-vecchio-vs-nuovo-identita.md`.
+  sta in `docs/evidence/muffin-vecchio-vs-nuovo-identita.md`.

@@ -20,7 +20,7 @@ import type { ConnectorId, Principal, TenantId } from '../policy/types.js';
  * `docs/ORCHESTRATION.md` §14 names this exactly: *"Una firma che ritorna `void`
  * non può dire «non ho consegnato»"*. TypeScript has no checked exceptions, so
  * no function type can require an implementation to throw — the remedy has to be
- * the shape of the returned value (`research/tipi-contro-successo-falso.md`
+ * the shape of the returned value (`docs/evidence/tipi-contro-successo-falso.md`
  * §Forma A, which measured the cost of this change at 9 files before it was
  * made). `DeliveryOutcome` is that shape, and it follows the house idiom for
  * "what happened" that `LockOutcome`, `VerifyOutcome` and `PairingOutcome`
@@ -76,7 +76,7 @@ type SurfaceLimits = {
 
 /**
  * How a surface can show an answer arriving — DAY-1 requirement B11, and Hermes's own
- * finding stated as a conclusion (`research/hermes-documentazione.md` §3.8):
+ * finding stated as a conclusion (`docs/evidence/hermes-documentazione.md` §3.8):
  * *"streaming is a capability of the surface, not a global flag"*. A boolean
  * on a config object would have to mean the same thing on a terminal and on
  * Telegram, and it does not — a terminal writes to its own stdout, Telegram

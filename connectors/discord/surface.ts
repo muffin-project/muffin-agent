@@ -20,7 +20,7 @@ import { DISCORD_MAX, renderForDiscord } from './render.js';
  * a channel id, not a user id to resolve one from.
  *
  * `maxUploadBytes`/`maxDownloadBytes` are not yet in this repo's own testing
- * matrix — `research/m3-connector-capabilities-telegram-discord.md` reports
+ * matrix — `docs/evidence/capability-output-telegram-e-discord.md` reports
  * Discord's free-tier upload ceiling (10MB) and the 25 MiB request-size cap
  * from the platform's own docs, not from a probe against a live bot. Declared
  * as read, not measured; `deliverFile` still checks it before spending a
