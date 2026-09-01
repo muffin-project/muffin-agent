@@ -42,9 +42,17 @@
  * |---|---|---|
  * | DNS inesistente | TypeError | `ENOTFOUND` |
  * | connessione rifiutata | TypeError | `ECONNREFUSED` |
- * | socket caduto / TLS verso porta in chiaro | TypeError | `ECONNRESET` |
+ * | socket caduto | TypeError | `ECONNRESET` (macOS) / `UND_ERR_SOCKET` (Linux) |
+ * | TLS verso porta in chiaro | TypeError | `ECONNRESET` |
  * | URL malformato | TypeError | `ERR_INVALID_URL` |
  * | nessuna risposta | TimeoutError | assente |
+ *
+ * Le due righe del socket sono misurate l'1/09/2026 sullo stesso server, e la
+ * differenza e' la piattaforma, non la versione di undici: su Linux il codice
+ * e' `UND_ERR_SOCKET` con undici 6.21.2, 6.23.0 e 6.28.0. Vale la pena saperlo
+ * leggendo un `gateway.err`, perche' la produzione e' Linux: li' un socket
+ * caduto e un TLS verso una porta in chiaro sono **due codici diversi**,
+ * mentre su macOS collassano nello stesso.
  *
  * **La sicurezza qui non e' una promessa su undici: e' una forma imposta qui.**
  * Un campo entra solo se corrisponde a una forma che un URL non puo' avere —
