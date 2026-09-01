@@ -64,9 +64,25 @@ distinction is in how you should read a file, not in where it sits.
 | internal audit | this repository at a named commit | `core-architecture-audit-2026-08-18.md` |
 | runtime measurement | a real `~/.muffin`, database or trace | `cache-prompt-2026-08-26.md`, `dogfood-autonomia-2026-08-29.md` |
 | reconciliation | a repository pass already declared superseded | `riconciliazione-requisiti-day1-2026-08-22.md` |
+| rolling compendium | each entry to the observation that produced it | `lessons.md` |
 
 A dated filename is common here but is not a rule: many documents carry their
 date inside instead. Neither form makes a document more or less authoritative.
+
+### Role is not lifecycle
+
+`lessons.md` is the one file here that keeps growing, and that does not make it
+current authority. **An epistemic role and a lifecycle are different axes**: a
+scout is evidence and a snapshot; the lessons ledger is evidence and a rolling
+compendium. Being maintained over time is not the same claim as governing HEAD.
+
+The freshness rule above applies entry by entry, which is what makes the growth
+safe: each lesson stays faithful to the failure that produced it and is **not**
+rewritten to match HEAD. When a later observation corrects or extends an earlier
+one, it arrives as a **new entry** — the ledger gains a line, it does not lose
+one. The distinction is the same one this whole directory rests on: an
+observation is true of its moment, and a compendium of such observations is
+still a compendium of moments.
 
 ## Legacy names
 

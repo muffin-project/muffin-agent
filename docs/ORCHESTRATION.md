@@ -298,7 +298,7 @@ Update only the authoritative home whose meaning changed:
 | DAY-1 ordering/dependency | `docs/work/day1/critical-path.md` |
 | current WIP/next action | `docs/work/handoff.md` |
 | product destination | `docs/VISION.md` |
-| general engineering lesson | `docs/lessons.md` |
+| general engineering lesson | `docs/evidence/lessons.md` |
 | external/research evidence | dated `docs/evidence/` |
 | generated/visual view | regenerate/update the derived artifact if relevant |
 
