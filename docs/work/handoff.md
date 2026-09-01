@@ -8,15 +8,15 @@ authority/data/effect. Non da questa lista.
 ciò che manca prima della VPS.
 
 **Come si trovano le cose.** Pilotando il REPL in **tmux**, o misurando su
-tracce, log e il `muffin.db` vero — mai con `cp` dei suoi tre file, che dà una
-vista vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
+tracce, log e il `muffin.db` vero — mai con `cp` dei tre file, che dà una vista
+vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 
-**Il gate.** `npm run gate:local`: clone di HEAD **fuori** dal repository, `npm
-ci`, typecheck, build, suite, accettazione, `gate-linux.sh` in Docker. Il verde
-si scrive `LOCAL-GATE PASS @ <sha>`, **mai** «CI verde». Dall'1/09 la CI di
-GitHub **esegue di nuovo** (prima moriva in 2s per fatturazione) ed è rossa su
-16 test in `cli/update.test.ts`, `cli/main.test.ts`, `core/net/causa.test.ts`,
-identici su `dev` nudo: firme Linux che `gate-linux.sh` non vede. **F11**.
+**Il gate sono i check di GitHub**, verdi dall'1/09/2026: la CI esegue di nuovo
+dopo mesi in cui moriva in 2s per fatturazione, e i 16 rossi riemersi erano test
+mai eseguiti su Linux (#272). Il merge si gatta sulla *condizione* dei check,
+mai su una stampa. `npm run gate:local` è lo strumento locale e il ripiego se i
+crediti finiscono — non un secondo gate, e non un sostituto: la sua gamba Linux
+esegue solo `vitest.acceptance.config.ts`, non la suite.
 
 ## Le decisioni dell'owner
 
