@@ -22,7 +22,7 @@ import type { DiscordApi, DiscordAttachment } from './api.js';
  * No Bot-API-wide cap like Telegram's 20MB (attachments live on Discord's CDN,
  * not behind the same download endpoint). This is an operational ceiling, not
  * a platform one — set to the free-tier upload limit's rough order of
- * magnitude (`research/m3-connector-capabilities-telegram-discord.md`: 10MB
+ * magnitude (`docs/evidence/capability-output-telegram-e-discord.md`: 10MB
  * free / up to 500MB with boosts) plus headroom, so an ordinary attachment
  * never trips it while a runaway one still cannot exhaust the vault.
  */

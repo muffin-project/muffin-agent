@@ -383,7 +383,7 @@ must not be remotely mutable merely because the Home owns its own RoT.
 ## 13. Current known boundaries
 
 This section names architectural boundaries without assigning DAY-1 status; DAY-1
-status lives only in `requirements-status.md`.
+status lives only in `docs/work/day1/requirements-status.md`.
 
 - **Configured cloud provider receives model context.** There is no per-item
   local/cloud privacy policy yet.
@@ -401,6 +401,20 @@ status lives only in `requirements-status.md`.
 - **A security mechanism is not considered real merely because its module, ADR
   or unit tests exist.** Production wiring and failure-path evidence are
   required.
+- **Ambient context taint is the incumbent authority signal, and its precision
+  is an open question — not a settled one.** §4 and §5 use provenance tier both
+  as a property of data and, after taking the maximum over the context, as a
+  turn-wide authority input. Dogfood shows the cost: owner-directed work becomes
+  unreachable after reading disk or external content, even when that content did
+  not choose the action. A task/action-flow model — binding authority to *what
+  asked for an action* rather than to the highest tier merely present — is an
+  **unresolved hypothesis**. It may replace the incumbent only if a comparative
+  evaluation demonstrates better utility **without material security
+  regression**, and an ADR written before that comparison exists would be
+  deciding the question instead of answering it. Nothing in this document adopts
+  it: current semantics are exactly as §4 and §5 state them. The dated eval
+  design is lineage, in
+  `docs/history/design-notes/security-v2-eval-contract-2026-08-29.md`.
 
 ## 14. What this document does not own
 
@@ -409,8 +423,9 @@ status lives only in `requirements-status.md`.
 - Database columns — schema/migration code owns them.
 - Node transport/wire format — implementation may choose it only while
   preserving ADR-0050's contract.
-- Whether a specific DAY-1 requirement is READY — `requirements-status.md` owns status.
-- Historical findings or exploit transcripts — audits/research own evidence.
+- Whether a specific DAY-1 requirement is READY — `docs/work/day1/requirements-status.md`
+  owns status.
+- Historical findings or exploit transcripts — `docs/evidence/` owns them.
 - Why a decision changed — ADRs own the rationale/history.
 
 When a security promise changes, update this document. When only the mechanical

@@ -2,14 +2,14 @@
 
 > Creato 2026-08-09 dal survey del corpus vecchio (agente). **Perché esiste**: il
 > blueprint nuovo ha portato avanti la SOTA *ingegneristica* della memoria
-> (`docs/blueprint/research/a4-memoria.md`: Zep, Mem0, Letta, HippoRAG…) ma **non** il corpus
+> (`docs/evidence/sota-memoria-agenti.md`: Zep, Mem0, Letta, HippoRAG…) ma **non** il corpus
 > *cognitivo/neuroscientifico* né il **design della spina osservante**. Quelli
 > vivono solo nei doc del vecchio Muffin. Qui li curiamo per essere **pescabili
 > durante il building**.
 
 ## La distinzione (perché è una cartella a parte)
 
-- `docs/blueprint/research/` — *cosa fa la SOTA esterna oggi* (paper, competitor, standard).
+- `docs/evidence/` — *cosa fa la SOTA esterna oggi* (paper, competitor, standard).
 - `docs/decisions/` — *cosa abbiamo deciso* (append-only, datato).
 - `docs/knowledge/` (questa) — *cosa abbiamo capito noi e perché* — il corpus cognitivo
   accumulato, curato con **VIVO/SUPERATO** in testa a ogni voce e link alla fonte

@@ -17,7 +17,7 @@ import { httpCapability } from './tools/http.js';
 
 /**
  * "Session history does not launder taint", rewritten from the triage probe
- * (`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md` §3.1)
+ * (`docs/evidence/triage-2026-08-17/e-audit-trasversali.md` §3.1)
  * into a permanent test.
  *
  * The probe's own finding, reproduced here as (a) below: turn 1 (owner) calls

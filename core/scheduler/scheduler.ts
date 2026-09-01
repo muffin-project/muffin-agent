@@ -52,7 +52,7 @@ export type JobOutcome = {
    * had three literal copies — here, `TurnResult['stopped']` and the store's
    * own `TurnOutcome` — and the design that produced the turn record named the
    * divergence as this repo's typical defect *before* it happened
-   * (`research/turno-sospendibile.md` §Domanda 6). One reference means adding an
+   * (`docs/evidence/turno-sospendibile.md` §Domanda 6). One reference means adding an
    * arm reaches every consumer as a build error, which is how `suspended` got
    * an answer here at all instead of being silently treated as an ending.
    */

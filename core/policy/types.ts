@@ -107,7 +107,7 @@ export type CapabilityDecl = {
    * Required, not optional, and that is the point: a tool arriving without an
    * answer breaks the build instead of inheriting a default that is wrong half
    * the time. Adding this after five MCP servers are attached means auditing
-   * every one of them — the design (`research/turno-sospendibile.md` §Domanda 6)
+   * every one of them — the design (`docs/evidence/turno-sospendibile.md` §Domanda 6)
    * rates it among the two most expensive things to get wrong here.
    *
    * The consumer is a resume: a call with an intent row and no outcome row is

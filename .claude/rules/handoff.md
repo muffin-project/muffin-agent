@@ -5,7 +5,7 @@ paths:
 
 # Il handoff ha un tetto, e sopra quello viene troncato
 
-`LAVORO.md` non è un documento come gli altri: un hook `SessionStart`
+`docs/work/handoff.md` non è un documento come gli altri: un hook `SessionStart`
 (`.claude/hooks/inject-state.mjs`) lo inietta **intero** nel contesto d'avvio di
 ogni sessione.
 
@@ -27,6 +27,6 @@ Quindi, quando scrivi qui:
 - **misura in caratteri, non in byte** — l'hook conta `String.length`, e questo
   file è pieno di accenti e trattini lunghi.
 
-`LAVORO.md` è contesto operativo **sacrificabile**: deve essere possibile
+L'handoff è contesto operativo **sacrificabile**: deve essere possibile
 cancellarlo senza perdere conoscenza di prodotto. Una conoscenza durevole che
 finisce solo qui è nel posto sbagliato, non in un file da allargare.

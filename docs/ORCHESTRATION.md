@@ -299,7 +299,7 @@ Update only the authoritative home whose meaning changed:
 | current WIP/next action | `docs/work/handoff.md` |
 | product destination | `docs/VISION.md` |
 | general engineering lesson | `docs/lessons.md` |
-| external/research evidence | dated `docs/blueprint/research/` |
+| external/research evidence | dated `docs/evidence/` |
 | generated/visual view | regenerate/update the derived artifact if relevant |
 
 Do not update history merely so it reads like HEAD. Do not put DAY-1 counts in the

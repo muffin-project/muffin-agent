@@ -28,18 +28,19 @@ esce di casa). Manca la **chiave Tavily**.
 `integrazione/tre-slice` (note vocali/whisper) è un checkpoint su origin: non è
 una PR, non è morta.
 
-Slice 3-6 integrate: `docs/{history,decisions,knowledge,work}/`, nomi semantici
-(regola in `docs/README.md`), niente più `M5-BIS`/`Gate 1` nel vivo.
-`blueprint/STATE.md` e `foundations/VISION.md` sono **lapidi**. Prossima: slice
-7, `research/`→`evidence/`, `mappa/`→`generated/map/`.
+Slice 3-7 integrate: `docs/{history,decisions,knowledge,work,evidence}/`, nomi
+semantici (regola in `docs/README.md`); `blueprint/` è ormai `STATE.md` (lapide)
+e `mappa/`. Una proposta non è evidence: il lineage sta in
+`docs/history/design-notes/`. Prossima: la casa di `mappa/`, che è **derived**
+e vuole una classificazione sua prima del move.
 
 Tre trappole scritte dove sta il meccanismo: `riprendi/SKILL.md`,
-`mappa/ancore.mjs`, `rules/decisioni.md`. **F7**: la logica in prosa dentro una
-rule si rompe senza che nessun test se ne accorga.
+`mappa/ancore.mjs`, `rules/decisioni.md`. **F7**: logica in prosa dentro una rule
+si rompe senza che un test se ne accorga.
 
 ## Parcheggiato: le richieste differite
 
-`docs/blueprint/research/richieste-differite-2026-08-30.md` — misure, non una
+`docs/evidence/richieste-differite-2026-08-30.md` — misure, non una
 forma: **`jobs` non ha un tool**, i 7 todo fermi dal 27/08 e invisibili fuori
 dalla sessione, 44 fatti attivi su 83 `asked_to`/`asks_to`. Il tetto dei tool
 **non** è più il problema (`0d519cb`).

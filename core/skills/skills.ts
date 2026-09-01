@@ -8,11 +8,11 @@ import { fence } from '../memory/spotlight.js';
 /**
  * SKILL.md, the standard one — no format of our own (ADR-0010).
  *
- * Spec: agentskills.io (verified 2026-08-08, research/m3-b). Six frontmatter
- * fields; `name` must equal the parent directory; description is both what it
- * does and when to use it. Progressive disclosure: metadata always in context
- * (~100 tokens per skill), the body only when the model activates the skill by
- * reading it, bundled files only when touched.
+ * Spec: agentskills.io, 2026-08-08, read by `docs/evidence/spec-skill-md-e-shell-nei-peer.md`.
+ * Six frontmatter fields; `name` must equal the parent directory; description is
+ * both what it does and when to use it. Progressive disclosure: metadata always
+ * in context (~100 tokens per skill), the body only when the model activates the
+ * skill by reading it, bundled files only when touched.
  *
  * One deliberate divergence from Claude Code's CLI behaviour: a malformed
  * skill there loads silently with empty metadata, diagnosable only with
