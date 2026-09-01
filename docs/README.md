@@ -35,7 +35,7 @@ unused manifest would be another source of drift.
 | In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
 | What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
-| What evidence informed a decision? | `docs/blueprint/research/`, audits and `docs/lessons.md` |
+| What evidence informed a decision? | `docs/evidence/`, audits and `docs/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
 | What does the architecture map show? | `docs/blueprint/mappa/`; a derived view, never an independent source of truth |
 
@@ -114,7 +114,7 @@ sound.
 
 ## Operational state
 
-Operational state is deliberately small and disposable. `LAVORO.md` may name the
+Operational state is deliberately small and disposable. `docs/work/handoff.md` may name the
 current objective, live PR/slice, immediate blockers, owner decisions and next
 action. It must be possible to delete it without losing product knowledge.
 

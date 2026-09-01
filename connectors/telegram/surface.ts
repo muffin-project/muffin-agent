@@ -46,7 +46,7 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
     maxMessageChars: TELEGRAM_MAX,
     // sendDocument's ceiling on the public Bot API. Photos are 10MB but a
     // document is how anything that must survive byte-for-byte goes out
-    // (`research/m3-connector-capabilities-telegram-discord.md`: sendPhoto
+    // (`docs/evidence/capability-output-telegram-e-discord.md`: sendPhoto
     // always recompresses to JPEG), so the document limit is the honest one.
     maxUploadBytes: 50 * 1024 * 1024,
     maxDownloadBytes: MAX_DOWNLOAD_BYTES,

@@ -103,7 +103,7 @@ copiabile. Da noi c'è anche un vincolo più duro — il REPL funziona su una pi
 e gli acceptance test lo guidano senza TTY.
 
 **Niente framework, per ora.** La valutazione sta in
-`docs/blueprint/research/tui-2026-08-27.md`. In breve: quasi tutto ciò che fa
+`docs/evidence/tui-2026-08-27.md`. In breve: quasi tutto ciò che fa
 sembrare una CLI «una schermata» si ottiene con le regole qui sopra, e ciò che
 resta — un input multilinea con editing decente — è una voce di spesa che va
 decisa per sé, non presa di contrabbando dentro l'estetica.

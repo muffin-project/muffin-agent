@@ -132,7 +132,7 @@ that can. Do not settle an empirical question by prose.
 
 ## 3. Research artifacts and source of truth
 
-Durable research goes under `docs/blueprint/research/` as **dated evidence**.
+Durable research goes under `docs/evidence/` as **dated evidence**.
 It should include:
 
 - question/decision it was commissioned to change;

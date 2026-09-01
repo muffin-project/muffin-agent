@@ -32,7 +32,7 @@ import type { Fact, MemoryStore } from './store.js';
  * not, a review row is open or it is settled. Nothing in this schema changes
  * because a day passed. A nightly cron would therefore be a timer with nothing
  * that depends on time — and the twelve systems surveyed in
- * `research/consolidamento-due-meccanismi.md` include **zero** that run a pure
+ * `docs/evidence/consolidamento-due-meccanismi.md` include **zero** that run a pure
  * nightly cron. The trigger stays where ADR-0038 put it: the same trailing edge,
  * in the runtime, so every process that runs turns has one.
  *
@@ -52,7 +52,7 @@ import type { Fact, MemoryStore } from './store.js';
  *    while retiring wrongly is neither.
  *  - No stemming, no stopword removal, no article stripping. "Cagliari" and "a
  *    Cagliari" stay two beliefs here. That pair is exactly the drift
- *    `research/consolidamento-due-meccanismi.md` names, and folding it away is a
+ *    `docs/evidence/consolidamento-due-meccanismi.md` names, and folding it away is a
  *    similarity threshold wearing a normalisation costume — the same decision,
  *    with the calibration hidden instead of stated.
  *  - No embedding, no cosine, and therefore **no threshold**. The old system's

@@ -336,7 +336,7 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // because `muffin update` should overwrite it (`defaults/` exists to be
   // edited by the owner, agent/context/assemble.ts), but because nothing
   // before this told the owner their copy had fallen behind. Measured on the
-  // owner's own machine (docs/blueprint/research/deriva-defaults-2026-08-26.md):
+  // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
   // persona.md, voice.md and rot/identity.md sat at their `init`-day content
   // for weeks — the assembled prompt was half the size HEAD ships — and
   // nothing anywhere said so. See defaultsDriftCheck below for the two

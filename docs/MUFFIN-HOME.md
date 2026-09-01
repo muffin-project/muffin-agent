@@ -149,7 +149,7 @@ When work depends on the installed agent:
 4. inspect only the relevant state class (config, DB rows, trace, process, RoT);
 5. correlate runtime evidence with the production code path on the same/current
    commit;
-6. record only durable, privacy-safe evidence in `docs/blueprint/research/`;
+6. record only durable, privacy-safe evidence in `docs/evidence/`;
 7. propose a repair in code/migration/tooling rather than an undocumented manual
    edit whenever the defect can recur.
 
