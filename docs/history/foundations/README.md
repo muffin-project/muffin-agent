@@ -20,5 +20,7 @@ for today.
 
 For current authority start at `docs/README.md`.
 
-`docs/foundations/VISION.md` is **not** part of this corpus: it stays at its old
-path as a compatibility tombstone for older references.
+`docs/foundations/` no longer exists. The redirect that lived at
+`docs/foundations/VISION.md` was removed on 2026-09-01, once nothing current
+pointed at it; the current north star is `docs/VISION.md`. Neither that redirect
+nor `docs/VISION.md` is part of this corpus.

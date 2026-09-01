@@ -138,7 +138,7 @@ Use `docs/README.md` to choose the owner:
 - durable architecture decision -> ADR;
 - current architecture/security/product promise -> its current authority doc;
 - research/audit/peer comparison -> dated evidence under `docs/evidence/`;
-- generalisable engineering lesson -> `docs/lessons.md`;
+- generalisable engineering lesson -> `docs/evidence/lessons.md`;
 - historical narrative -> history, not a current authority file.
 
 Do not write the same fact into several homes "for consistency".

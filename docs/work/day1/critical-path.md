@@ -183,4 +183,4 @@ La loro eventuale fase è `ROADMAP.md`.
 Aggiorna questo file solo quando cambia una **dipendenza, causa radice o ordine**.
 Non copiarci stato macchina, conteggi, dettagli di una PR chiusa o cronaca di una
 riparazione. Git/PR possiede il lavoro vivo; `requirements-status.md` lo stato; ROADMAP la fase;
-`docs/history/` e `docs/lessons.md` il passato e ciò che abbiamo imparato.
+`docs/history/` e `docs/evidence/lessons.md` il passato e ciò che abbiamo imparato.
