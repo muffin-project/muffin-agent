@@ -37,7 +37,7 @@ unused manifest would be another source of drift.
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
 | What evidence informed a decision? | `docs/evidence/`, audits and `docs/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
-| What does the architecture map show? | `docs/blueprint/mappa/`; a derived view, never an independent source of truth |
+| What does the architecture map show? | `docs/derived/architecture-map/`; a derived view, never an independent source of truth |
 
 There is no universal "Markdown beats code" or "latest file wins" rule. Authority
 is **typed by question**.
@@ -130,7 +130,7 @@ copy that can drift.
 The current architecture map has a narrower guarantee than its old wording
 implied: its anchor machinery verifies that cited source text still resolves,
 not that every surrounding editorial sentence is semantically current. See
-`docs/blueprint/mappa/README.md` before using it for exact mechanics.
+`docs/derived/architecture-map/README.md` before using it for exact mechanics.
 
 ## A name is the first thing read
 

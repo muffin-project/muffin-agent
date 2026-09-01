@@ -10,7 +10,7 @@ import { memorySearchSpec, searchMemory } from './memory.js';
  * tells it those arguments exist. Nothing proved that door stays open. Removing
  * a key here does not fail a single functional test elsewhere: `searchMemory`
  * still reads `raw.as_of` regardless of what the schema declares, because the
- * schema is prompt-facing, not a runtime guard. Only `docs/blueprint/mappa`'s
+ * schema is prompt-facing, not a runtime guard. Only `docs/derived/architecture-map`'s
  * anchor check noticed — a markdown file staying in sync, not a guarantee about
  * behaviour.
  */

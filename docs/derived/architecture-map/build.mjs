@@ -3,12 +3,12 @@
  * Genera `mappa.html` inlinando i dati estratti dal repo dentro il template.
  *
  * L'artefatto visivo non si disegna a mano (`README.md`, qui accanto): i dati stanno
- * in `docs/blueprint/mappa/*.json` con un'ancora `file:riga` per ogni voce, e
+ * in `docs/derived/architecture-map/*.json` con un'ancora `file:riga` per ogni voce, e
  * questo script li cuce dentro la pagina. Ridisegnare la mappa dopo un cambio
  * di codice è quindi rieseguire due comandi, non ricordarsi di una cosa.
  *
- *   node docs/blueprint/mappa/ancore.mjs   # riverifica le ancore
- *   node docs/blueprint/mappa/build.mjs    # rigenera la pagina
+ *   node docs/derived/architecture-map/ancore.mjs   # riverifica le ancore
+ *   node docs/derived/architecture-map/build.mjs    # rigenera la pagina
  *
  * Inlining e non fetch: la pagina pubblicata gira sotto una CSP che blocca ogni
  * richiesta di rete, e da `file://` un fetch fallirebbe comunque.

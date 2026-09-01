@@ -9,14 +9,9 @@ authority map start at `docs/README.md`.
 
 ## What is still here
 
-Two things, and neither is authority:
+One thing, and it is not authority: `STATE.md`, a tombstone. See below.
 
-- `STATE.md` — a tombstone. See below.
-- `mappa/` — a derived view of the system, plus the anchoring mechanism that
-  stops it from lying. It is a **derived subsystem**, not merely generated
-  output: editorial inputs, generators, checkers, templates and generated views
-  all live there together, which is why it has not been rehoused yet — that
-  needs a classification of its own.
+This README stays only as long as the old paths need a router.
 
 ## What left, and where it went
 
@@ -30,6 +25,7 @@ Two things, and neither is authority:
 | `M5-BIS.md`, `LAVORO.md`, `gate1/` | `docs/work/` — current work, under names that read without the history |
 | `research/` | `docs/evidence/` — what we observed, measured, compared or audited |
 | six design contracts inside `research/` | `docs/history/design-notes/` — design lineage: a proposal is a lifecycle state, not a document class |
+| `mappa/` | `docs/derived/architecture-map/` — a **derived** subsystem, not merely generated output: editorial inputs, generators, checkers, template and generated views are one thing |
 
 The move waited for a reverse-reference check that could prove semantic cleanup
 would not become broken lineage. That check was done on 2026-08-30: five of the
