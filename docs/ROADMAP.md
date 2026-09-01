@@ -4,11 +4,11 @@ This document owns one question only:
 
 > **If a capability or architectural idea is deliberately not required now, in which product phase should it be reconsidered?**
 
-It does **not** own implementation status, Gate truth, architecture or sequencing of current work.
+It does **not** own implementation status, DAY-1 truth, architecture or sequencing of current work.
 
-- DAY-1 status belongs to `docs/blueprint/M5-BIS.md`.
-- Remaining Gate order belongs to `docs/blueprint/gate1/PERCORSO-CRITICO.md`.
-- Current work belongs to observed Git/PR state + `docs/blueprint/LAVORO.md`.
+- DAY-1 status belongs to `docs/work/day1/requirements-status.md`.
+- Remaining DAY-1 order belongs to `docs/work/day1/critical-path.md`.
+- Current work belongs to observed Git/PR state + `docs/work/handoff.md`.
 - Semantic shape belongs to `docs/ARCHITECTURE.md` / `docs/SECURITY.md` and ADRs.
 - Public/community strategy belongs to `docs/OPEN-SOURCE-STRATEGY.md`.
 
@@ -32,11 +32,11 @@ research only / consumer-triggered
 
 ### DAY-1 READY
 
-DAY-1 is intentionally not duplicated here. `MANDATO-DAY-1.md` and the reconciled M5 inventory decide what must exist before the fourteen-day window starts.
+DAY-1 is intentionally not duplicated here. `day1/readiness-criteria.md` and the reconciled DAY-1 requirements decide what must exist before the fourteen-day window starts.
 
-Architecture work may expose a new DAY-1 candidate; that candidate enters M5 rather than being silently implemented from this roadmap.
+Architecture work may expose a new DAY-1 candidate; that candidate enters the DAY-1 requirements rather than being silently implemented from this roadmap.
 
-Current architecture findings that must be reconciled into the Gate include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact Gate classification remains M5's job.
+Current architecture findings that must be reconciled into DAY-1 include the owner-required **smart Telegram interaction**: surface-aware event composition, multipart/multimodal input (including multiple files/images and voice), and continued ingress while current work is running. The exact Gate classification remains M5's job.
 
 ### 14-day owner dogfood
 
@@ -98,7 +98,7 @@ ADR-0051 owns the architecture: many producers, one semantic writer.
 
 When the product needs explicit `remember` / agent-intentional memory, implement a durable proposal path into canonical reconciliation rather than direct writes to active Beliefs.
 
-This can be promoted into DAY-1 if reconciliation of M5 shows that inability to intentionally remember a fact would force a fallback during the dogfood window.
+This can be promoted into DAY-1 if reconciliation of the DAY-1 requirements shows that inability to intentionally remember a fact would force a fallback during the dogfood window.
 
 ### Home migration / Capsule v0
 
@@ -144,7 +144,7 @@ Revisit together rather than as unrelated polish:
 - visible context-pressure signal if real sessions show it changes behaviour usefully;
 - structured long-running progress if placeholder/streaming proves insufficient.
 
-Current Gate lineage: M5 B12, B13, C9. Dogfood decides which of these are product needs versus unnecessary machinery.
+Current DAY-1 lineage: requirements B12, B13, C9. Dogfood decides which of these are product needs versus unnecessary machinery.
 
 ### Proactivity beyond explicit jobs
 
@@ -183,7 +183,7 @@ Before community/third-party code is presented as meaningfully isolated, add the
 
 ### MCP hot lifecycle
 
-Hot revocation/removal may be promoted here if MCP is a supported public extension path. Gate 1 currently accepts restart-based removal because the supervisor makes restart an explicit lifecycle operation.
+Hot revocation/removal may be promoted here if MCP is a supported public extension path. DAY-1 currently accepts restart-based removal because the supervisor makes restart an explicit lifecycle operation.
 
 ### Discord completion
 
@@ -269,6 +269,6 @@ new hardware/product experiment
 or explicit owner decision
 ```
 
-When an item becomes DAY-1 relevant, add/reclassify it in M5. When it becomes active work, Git + `LAVORO.md` own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
+When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, Git + `docs/work/handoff.md` own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
 
 This file never says that something is implemented merely because its phase has arrived.

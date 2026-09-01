@@ -50,7 +50,7 @@ export const waitCapability: CapabilityDecl = {
    * something real afterwards: it holds a row and its whole context, and every
    * resume re-sends the prefix — a turn that waits ten times pays ten prefixes,
    * and the per-turn budget that would measure that does not exist yet
-   * (`M5-BIS.md` E1). Rated for what it commits to, not for what it does.
+   * (DAY-1 requirement E1). Rated for what it commits to, not for what it does.
    */
   risk: 'medium',
   /**

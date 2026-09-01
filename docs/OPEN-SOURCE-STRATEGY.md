@@ -6,7 +6,7 @@ below already exists.
 
 `THESIS.md` owns why Muffin exists. `VISION.md` owns the product destination.
 `ARCHITECTURE.md` owns the current semantic runtime shape. `EXTENSIONS.md` owns
-the extension/capability design direction. DAY-1 status remains in M5.
+the extension/capability design direction. DAY-1 status remains in `docs/work/day1/requirements-status.md`.
 
 ## 1. Owner-run is the default product
 
@@ -302,7 +302,7 @@ leaving `llms.txt` teaching an old architecture after the code has moved on.
 
 Installer GUI, canonical capsule, marketplace, capability manifests, public
 community governance, Telegram managed provisioning and external-data importers
-are product direction. They enter the current Gate only if the owner would
+are product direction. They enter the current DAY-1 requirements only if the owner would
 otherwise be unable to start the fourteen-day dogfood window.
 
 The first roadmap after DAY-1 should be driven by observed direct-interface

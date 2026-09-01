@@ -44,8 +44,8 @@ Observed Git/worktree/PR/check/delegation state is part of observation. A handof
 file is not allowed to override reality.
 
 For DAY-1, the deliverable is selected from
-`docs/blueprint/gate1/PERCORSO-CRITICO.md` and the relevant rows of
-`docs/blueprint/M5-BIS.md`. A PR is an execution/checkpoint vehicle, not the
+`docs/work/day1/critical-path.md` and the relevant rows of
+`docs/work/day1/requirements-status.md`. A PR is an execution/checkpoint vehicle, not the
 product's state machine.
 
 ## Decision boundaries
@@ -196,7 +196,7 @@ Evidence follows the claim:
 - bug/fix → reproduce or red-before;
 - local logic → unit;
 - cross-module boundary → integration;
-- user-facing/Gate behaviour → appropriate acceptance;
+- user-facing/DAY-1 behaviour → appropriate acceptance;
 - type/API/build surface → build/typecheck;
 - failure path → only when the change introduces/modifies a material failure;
 - mutation → only when the claim is specifically that a guard/wiring prevents
@@ -294,15 +294,15 @@ Update only the authoritative home whose meaning changed:
 | current architecture semantics | `docs/ARCHITECTURE.md` |
 | current security promise | `docs/SECURITY.md` |
 | durable architectural decision/rationale | ADR |
-| DAY-1 row/status/evidence | `docs/blueprint/M5-BIS.md` |
-| DAY-1 ordering/dependency | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
-| current WIP/next action | `docs/blueprint/LAVORO.md` |
+| DAY-1 row/status/evidence | `docs/work/day1/requirements-status.md` |
+| DAY-1 ordering/dependency | `docs/work/day1/critical-path.md` |
+| current WIP/next action | `docs/work/handoff.md` |
 | product destination | `docs/VISION.md` |
 | general engineering lesson | `docs/lessons.md` |
 | external/research evidence | dated `docs/blueprint/research/` |
 | generated/visual view | regenerate/update the derived artifact if relevant |
 
-Do not update history merely so it reads like HEAD. Do not put Gate counts in the
+Do not update history merely so it reads like HEAD. Do not put DAY-1 counts in the
 handoff or critical path. Do not put PR chronology in architecture/ADR. A current
 finding that has no authoritative home is a signal to choose one, not to copy it
 into several files.
@@ -319,7 +319,7 @@ Integration mechanics live in `BRANCHING.md`.
 After integration:
 
 1. observe the resulting Git/runtime state;
-2. update M5 only if Gate status/evidence changed;
+2. update the DAY-1 requirements only if status/evidence changed;
 3. update critical path only if order/dependency changed;
 4. keep LAVORO as the smallest useful next-session handoff;
 5. regenerate relevant derived views;

@@ -359,7 +359,7 @@ describe('when the record cannot be written', () => {
 
 describe('EFFECT WAL: an intent that cannot be written never reaches the handler', () => {
   /**
-   * MANDATO-DAY-1 invariant 1. Stubbed with `vi.spyOn` rather than closing the
+   * The DAY-1 EFFECT WAL invariant. Stubbed with `vi.spyOn` rather than closing the
    * database (as the block above does): only `startToolCall` fails here, so
    * the assertion is about the gate itself and not a side effect of the whole
    * store going away. The block above already proves the DB-wide case; this

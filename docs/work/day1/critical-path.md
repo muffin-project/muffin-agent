@@ -1,8 +1,8 @@
-# Percorso critico verso il dogfood
+# Percorso critico DAY-1
 
-Questo file possiede **ordine e dipendenze**, non lo stato. Lo stato Gate vive
-solo in `../M5-BIS.md`; il lavoro vivo in Git + `../LAVORO.md`; le deliberate
-deferral in `../../ROADMAP.md`.
+Questo file possiede **ordine e dipendenze**, non lo stato. Lo stato dei
+requisiti vive solo in `docs/work/day1/requirements-status.md`; il lavoro vivo in
+Git + `docs/work/handoff.md`; le deliberate deferral in `docs/ROADMAP.md`.
 
 La regola è: una cosa compare qui soltanto se **deve precederne un'altra**. Se è
 solo un finding, un follow-up o una feature desiderabile, non è percorso
@@ -10,10 +10,10 @@ critico.
 
 ## Fase corrente
 
-La milestone **RETURN TO OWNER è conclusa**. L'installazione reale è stata
-eseguita e la promozione `dev → main` è avvenuta il 27/08. Non sono più “il
-prossimo passo”. La cronaca delle slice chiuse resta in Git/PR e nella history,
-non in questo file.
+La milestone **RETURN TO OWNER è conclusa**: l'installazione reale è stata
+eseguita e non è più “il prossimo passo”. La cronaca delle slice chiuse e delle
+promozioni resta in Git/PR e nella history, non in questo file — la regola di
+manutenzione in fondo lo dice, e una data copiata qui era già sbagliata.
 
 Il progetto è nella convergenza immediatamente precedente/al principio del
 **dogfood reale**: abbastanza vicino all'uso da far ordinare il lavoro ai
@@ -27,7 +27,7 @@ vengono prima di allargare capability o architettura.
         ↓
 2  read → transform → local write / taint
         ↓
-3  riconciliazione Gate contro HEAD
+3  riconciliazione dei requisiti DAY-1 contro HEAD
         ↓
 4  dogfood reale e backlog guidato dai fallback
         ↓
@@ -55,9 +55,11 @@ corrente, ma non deve nemmeno cancellare il fatto storico che l'effetto è
 avvenuto ed è stato poi annullato. È una **compensating transaction / Saga**,
 non un rollback che riscrive il passato.
 
-La slice viva è `slice/undo-riallinea-il-turno` / PR #186. Git decide se è ancora
-aperta: non creare una seconda implementazione parallela. `M5-BIS.md` possiede lo
-stato D11.
+Osservato il 2026-09-01: **PR #186 è chiusa senza merge**; il branch
+`slice/undo-riallinea-il-turno` esiste e contiene 6 commit non antenati di `dev`.
+Il destino e l'equivalenza di quel lavoro **non sono stabiliti qui**. Non creare
+una seconda implementazione finché non viene riconciliato.
+`requirements-status.md` possiede lo stato D11.
 
 ### Decidere il workflow locale read → write
 
@@ -85,9 +87,9 @@ La prova terminale è un percorso reale del tipo:
 
 non un test isolato del valore di taint.
 
-### Riconciliare il Gate prima di usare i conteggi per decidere
+### Riconciliare i requisiti DAY-1 prima di usare i conteggi per decidere
 
-`M5-BIS.md` è l'unica authority degli status, ma alcuni suoi motivi sono rimasti
+`requirements-status.md` è l'unica authority degli status, ma alcuni suoi motivi sono rimasti
 indietro rispetto a HEAD. Prima di usare “N BLOCKER” come criterio operativo va
 riletto riga per riga contro codice, acceptance e PR correnti.
 
@@ -120,10 +122,10 @@ Durante il dogfood il segnale più forte è un fallback reale. Registrare almeno
 Un dolore ripetuto può promuovere un item da ROADMAP o riordinare un BLOCKER.
 Senza evidence nuova, l'ordine non si espande.
 
-## Cluster Gate quando diventano il prossimo problema
+## Cluster DAY-1 quando diventano il prossimo problema
 
 Questi cluster preservano dipendenze utili, ma **non sono uno sprint pre-caricato**.
-Lo stato di ogni riga resta in M5.
+Lo stato di ogni riga resta in `requirements-status.md`.
 
 ### Effects / Authority
 
@@ -180,5 +182,5 @@ La loro eventuale fase è `ROADMAP.md`.
 
 Aggiorna questo file solo quando cambia una **dipendenza, causa radice o ordine**.
 Non copiarci stato macchina, conteggi, dettagli di una PR chiusa o cronaca di una
-riparazione. Git/PR possiede il lavoro vivo; M5 lo stato; ROADMAP la fase;
+riparazione. Git/PR possiede il lavoro vivo; `requirements-status.md` lo stato; ROADMAP la fase;
 `docs/history/` e `docs/lessons.md` il passato e ciò che abbiamo imparato.

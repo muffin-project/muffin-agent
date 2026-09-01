@@ -257,7 +257,7 @@ describe('acceptance · B · il turno sospendibile', () => {
             throw new Error(`il passo "${step}" non è nel contesto del secondo processo:\n${sent.transcript}`);
           }
         }
-        // The deterministic completion criterion travels with it — M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool
+        // The deterministic completion criterion travels with it — requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool
         // asks for one, and this is the only place the model reads about it.
         if (!/nessun passo/.test(sent.transcript)) {
           throw new Error(`il criterio di completamento non è nel contesto:\n${sent.transcript}`);

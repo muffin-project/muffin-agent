@@ -30,7 +30,7 @@ import type { ChatResult, Provider } from './providers/types.js';
  * La terza risposta è `asked`: la domanda parte, il turno si **sospende su una
  * barriera persistita**, e riprende quando la risposta arriva — anche se nel
  * frattempo il processo è morto. È il meccanismo di `wait` (ADR-0047) applicato
- * a una domanda invece che a un'attesa, ed è il consumer che `M5-BIS` D12
+ * a una domanda invece che a un'attesa, ed è il consumer che DAY-1 requirement D12
  * chiede da mesi per la coda durevole degli ask.
  */
 

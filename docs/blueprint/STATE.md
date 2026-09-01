@@ -11,9 +11,9 @@ For current information:
 
 - repository authority map → `docs/README.md`;
 - observed work → Git/PR/delegation state;
-- compact handoff → `docs/blueprint/LAVORO.md`;
-- DAY-1 status → `docs/blueprint/M5-BIS.md`;
-- blocker ordering → `docs/blueprint/gate1/PERCORSO-CRITICO.md`;
+- compact handoff → `docs/work/handoff.md`;
+- DAY-1 status → `docs/work/day1/requirements-status.md`;
+- blocker ordering → `docs/work/day1/critical-path.md`;
 - current architecture → `docs/ARCHITECTURE.md`;
 - current security → `docs/SECURITY.md`.
 

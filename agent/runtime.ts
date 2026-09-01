@@ -565,7 +565,7 @@ export function buildRuntime(
   }
 
   /**
-   * The two runtime primitives (M5-BIS.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
+   * The two runtime primitives (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool) — registered **last**, and the
    * position is a decision rather than an accident of where the import landed.
    *
    * `profile.maxToolsExposed` truncates this list by registration order, and
@@ -801,7 +801,7 @@ export function buildRuntime(
       capabilities,
       // Il registro di undo: senza questa riga `fs_write` è offerto al modello e
       // non scrive mai, perché il kernel giudica `draft` e `draft` senza copia
-      // rifiuta (M5-BIS D2/D3/D11). Il difetto era esattamente qui — un verdetto
+      // rifiuta (DAY-1 requirement D2/D3/D11). Il difetto era esattamente qui — un verdetto
       // del kernel senza implementazione a valle — quindi la cucitura ha un test
       // suo in `runtime.test.ts`, non solo il ramo nel loop.
       undo: new UndoJournal(p.undo),

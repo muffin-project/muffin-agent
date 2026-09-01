@@ -67,7 +67,7 @@ export type SendOptions = {
 /**
  * The subset of `TelegramApi` every caller actually uses — extracted so a
  * test can hand `presence.ts`/`connector.ts` a fake that records calls and
- * timing (M5-BIS B11) without instantiating the real class, which `private
+ * timing (DAY-1 requirement B11) without instantiating the real class, which `private
  * readonly token` would otherwise make impossible: TypeScript's structural
  * typing treats private members as nominal, so a plain object literal can
  * never satisfy `TelegramApi` itself, only an interface like this one.
@@ -300,7 +300,7 @@ export class TelegramApi implements TelegramApiLike {
   }
 
   /**
-   * The ephemeral draft bubble — M5-BIS B11. Bot API 9.3 (2025-12-31,
+   * The ephemeral draft bubble — DAY-1 requirement B11. Bot API 9.3 (2025-12-31,
    * business bots only), opened to every bot in 9.5 (2026-03-01) —
    * verified against the official changelog and reference,
    * platform.claude's Context7 mirror of core.telegram.org/bots/api,

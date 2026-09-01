@@ -773,7 +773,7 @@ function riprendi() {
   // È la domanda a cui una sessione morta non saprebbe più rispondere.
   let inventario = '';
   try {
-    inventario = readFileSync(join(REPO, 'docs', 'blueprint', 'M5-BIS.md'), 'utf8');
+    inventario = readFileSync(join(REPO, 'docs', 'blueprint', 'requirements-status.md'), 'utf8');
   } catch {
     /* niente inventario, niente scoperto */
   }
@@ -786,7 +786,7 @@ function riprendi() {
   const scoperte = bloccanti.filter((b) => !new RegExp(`\\b${b.id}\\b`).test(testoDeleghe));
   console.log(`\n═══ BLOCCANTI SENZA DELEGA (${scoperte.length} su ${bloccanti.length}) ═══`);
   for (const b of scoperte) console.log(`  ${b.id.padEnd(4)} ${b.area.padEnd(16)} ${b.stato}`);
-  console.log('\nStato del lavoro: docs/blueprint/LAVORO.md · Inventario: docs/blueprint/M5-BIS.md');
+  console.log('\nHandoff: docs/work/handoff.md · Requisiti DAY-1: docs/work/day1/requirements-status.md');
   console.log('Recupero di una delega morta: node .claude/deleghe.mjs raccogli <id>\n');
 }
 

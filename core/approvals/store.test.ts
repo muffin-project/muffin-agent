@@ -77,7 +77,7 @@ describe('la risposta vale per quello che l owner ha letto', () => {
   /**
    * Il pulsante mostrava *quel* comando. Un sì che valesse per qualunque altro
    * comando della stessa capability sarebbe teatro — che è esattamente ciò che
-   * `M5-BIS` D12 dice di non fare: «un'approvazione il cui soggetto è
+   * DAY-1 requirement D12 dice di non fare: «un'approvazione il cui soggetto è
    * invisibile».
    */
   it('un altro comando non è quel comando', () => {

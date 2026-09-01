@@ -831,7 +831,7 @@ export async function cmdGatewayRun(
   // claim; from here on a due job reaches whatever is actually connected.
   registry = surfaces.registry;
   saluteSuperfici = surfaces.salute;
-  // M5-BIS B14, same as runRepl: a file the model produces during a job's
+  // DAY-1 requirement B14, same as runRepl: a file the model produces during a job's
   // turn can reach the owner as a real attachment.
   attachSendFile(runtime, home, surfaces.registry);
   let mcpLines: string[] = [];
@@ -873,7 +873,7 @@ export async function cmdGatewayRun(
  * wrote *"consegna remota da cablare"* to stderr and **returned normally**. A
  * normal return meant "delivered", so `markRan` advanced the schedule and the
  * job reported success — model paid, next fire moved, message never sent, and
- * nothing anywhere saying so. It is riga B8 of `docs/blueprint/M5-BIS.md` and
+ * nothing anywhere saying so. It is riga B8 of `docs/work/day1/requirements-status.md` and
  * it survived three separate reviews because nothing about a `Promise<void>`
  * looks wrong.
  *
