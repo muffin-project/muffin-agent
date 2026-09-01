@@ -64,7 +64,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
   scenario(
     'A1',
     async () => {
-      // Owner directive (M5-BIS A1, this slice's mandate): continuity belongs
+      // Owner directive (DAY-1 requirement A1, this slice's mandate): continuity belongs
       // to Muffin, not to the gateway's pid. The property this proves: a real
       // gateway process, SIGKILLed, is replaced by a second one that resumes
       // a suspended turn and fires a due job — each exactly once — with
@@ -223,7 +223,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
  *
  * One install, one real `muffin run` against the fake provider, one real
  * `muffin prompt show` — shared across both rows in `beforeAll` because they
- * are two readings of the *same* evidence (M5-BIS: A2 "sa chi è e quali
+ * are two readings of the *same* evidence (DAY-1 requirement A2 "sa chi è e quali
  * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is
  * `persona.md`'s), not two independent turns. Every marker is read from the
  * files this install actually wrote under `inst.home` — never from
@@ -401,7 +401,8 @@ describe('acceptance · A · doctor, backup', () => {
   scenario(
     'A9',
     async () => {
-      // A9 (M5-BIS, direttiva owner 16/08): `muffin init --local <dir>` deve
+      // Requisito DAY-1 A9 — setup locale pulito di prova (direttiva owner
+      // 16/08): `muffin init --local <dir>` deve
       // riusare un segreto persistito attraverso la stessa catena che
       // `locateSecret` già percorre (ADR-0039 decisione 2) — mai copiarlo nella
       // home nuova — e non deve mai poter atterrare sulla home reale, o dentro

@@ -180,7 +180,7 @@ export class DiscordApi {
   }
 
   /**
-   * Sends a file, as multipart — the M5-BIS B14 half of this API.
+   * Sends a file, as multipart — the DAY-1 requirement B14 half of this API.
    *
    * `payload_json` is Discord's documented way to carry the JSON body
    * alongside binary parts in the same request; `call` cannot be reused as-is

@@ -4,7 +4,7 @@ This document owns Muffin's **current security model and promises**. It describe
 what the system is trying to make true at its trust boundaries. Exact literals,
 allowlists and schemas live in shipped configuration and code; proof that a
 particular DAY-1 journey currently holds lives in tests/evals and
-`docs/blueprint/M5-BIS.md`.
+`docs/work/day1/requirements-status.md`.
 
 The historical threat-model lineage remains in
 `docs/history/rebuild-2026/03-threat-model.md` and related ADRs/audits. Those records explain
@@ -332,7 +332,7 @@ and proven:
 > **A third-party local MCP server is part of the trusted computing base.**
 
 For DAY-1, either only explicitly trusted MCP servers should be used or MCP should
-be treated as unavailable where the Gate requires stronger containment.
+be treated as unavailable where DAY-1 requires stronger containment.
 
 The future extension model should make authority explicit: filesystem roots,
 network destinations, secret references and capabilities should be declared and
@@ -382,8 +382,8 @@ must not be remotely mutable merely because the Home owns its own RoT.
 
 ## 13. Current known boundaries
 
-This section names architectural boundaries without assigning Gate status; Gate
-status lives only in `M5-BIS.md`.
+This section names architectural boundaries without assigning DAY-1 status; DAY-1
+status lives only in `requirements-status.md`.
 
 - **Configured cloud provider receives model context.** There is no per-item
   local/cloud privacy policy yet.
@@ -397,7 +397,7 @@ status lives only in `M5-BIS.md`.
 - **Unknown credentials pasted as arbitrary text are best-effort redacted, not
   structurally knowable.** Known stored secrets have the stronger boundary.
 - **Reversible effect/undo semantics are not claimed here until the reusable
-  journal path is implemented and Gate-proven.**
+  journal path is implemented and DAY-1-proven.**
 - **A security mechanism is not considered real merely because its module, ADR
   or unit tests exist.** Production wiring and failure-path evidence are
   required.
@@ -409,7 +409,7 @@ status lives only in `M5-BIS.md`.
 - Database columns — schema/migration code owns them.
 - Node transport/wire format — implementation may choose it only while
   preserving ADR-0050's contract.
-- Whether a specific Gate row is READY — `M5-BIS.md` owns status.
+- Whether a specific DAY-1 requirement is READY — `requirements-status.md` owns status.
 - Historical findings or exploit transcripts — audits/research own evidence.
 - Why a decision changed — ADRs own the rationale/history.
 

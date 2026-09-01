@@ -43,7 +43,7 @@ export type RecordedRequest = {
   tools: string[];
   /** Everything the model was shown, as one string. The usual assertion target. */
   transcript: string;
-  /** Whether this call asked for SSE (M5-BIS B11) — the ground truth for "did streaming actually turn on", not an assumption from the answer arriving correctly (which a non-streaming fallback would also produce). */
+  /** Whether this call asked for SSE (DAY-1 requirement B11) — the ground truth for "did streaming actually turn on", not an assumption from the answer arriving correctly (which a non-streaming fallback would also produce). */
   stream: boolean;
 };
 

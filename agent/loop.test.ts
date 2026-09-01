@@ -581,7 +581,7 @@ describe('agent loop', () => {
     // Il ramo `draft` esiste perché il kernel distingue «fallo» da «fallo in
     // modo che si possa disfare». Per un anno la distinzione non aveva
     // implementazione e il loop rifiutava: `fs_write` era offerto al modello e
-    // non scriveva mai (M5-BIS D2/D3/D11). Questi test tengono ferma la forma
+    // non scriveva mai (DAY-1 requirement D2/D3/D11). Questi test tengono ferma la forma
     // che la sostituisce, e la sua unica frase: **un checkpoint che non si può
     // prendere è un effetto che non deve avvenire.**
     const undoable: CapabilityDecl[] = [
@@ -1745,7 +1745,7 @@ describe('agent loop · progress (B13)', () => {
  * di undo non esiste. Detto senza attenuanti: **`fs_write` non scrive un file,
  * a nessun taint, e il modello se lo vede offerto lo stesso.**
  *
- * Sono tre righe di M5-BIS (D2, D3, D11) puntate su una slice sola, con la
+ * Sono tre requisiti DAY-1 (D2, D3, D11) puntate su una slice sola, con la
  * forma già decisa dall'owner il 16/08 (§1: journal per turno, copia prima
  * della mutazione, undo che riallinea filesystem e turno). Ma il ramo nel loop
  * non aveva **nessun test** — cercando `draft_unavailable` in tutto l'albero si

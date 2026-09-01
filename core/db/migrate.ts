@@ -14,7 +14,7 @@ import { join } from 'node:path';
  * five-value CHECK a new kind cannot join), reshaping columns, splitting a
  * table. Those need an ordered, versioned, run-once path — and the moment the
  * owner's installation accumulates real tenure, "reinstall" stops being a
- * migration strategy (RETURN TO OWNER, M5-BIS §Milestone).
+ * migration strategy (RETURN TO OWNER, requirements-status.md §Milestone).
  *
  * Shape salvaged from the old Muffin's `src/db/init.ts`, which carried 79
  * tables for four months on this pattern: a `schema_version` table stamped

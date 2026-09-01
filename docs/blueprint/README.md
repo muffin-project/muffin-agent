@@ -9,12 +9,12 @@ authority map start at `docs/README.md`.
 
 ## What is still here
 
-- `M5-BIS.md` — **DAY-1 status inventory**. It is currently pending a dedicated
+- `requirements-status.md` — **DAY-1 status inventory**. It is currently pending a dedicated
   evidence reconciliation; individual rows remain the inventory, but stale
   global summaries must not be treated as fresh measurements.
 - `LAVORO.md` — compact disposable handoff; observed Git state wins.
-- `gate1/MANDATO-DAY-1.md` — DAY-1 exit condition.
-- `gate1/PERCORSO-CRITICO.md` — ordering/dependencies of remaining blockers.
+- `day1/readiness-criteria.md` — DAY-1 exit condition.
+- `day1/critical-path.md` — ordering/dependencies of remaining blockers.
 - `research/` — dated evidence snapshots, never current authority by themselves.
 - `mappa/` — a derived view of the system, plus the anchoring mechanism that
   stops it from lying. Never authority.
@@ -51,7 +51,7 @@ feeding stale state to an agent.
 - current security → `docs/SECURITY.md`;
 - literal schemas/config/contracts → executable code/schema/shipped config;
 - current verification workflow → `docs/ORCHESTRATION.md`;
-- current Gate status → `M5-BIS.md`.
+- current DAY-1 status → `docs/work/day1/requirements-status.md`.
 
 The desired property has not changed:
 

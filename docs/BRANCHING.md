@@ -82,10 +82,10 @@ composition of changes since the previous promotion.
 
 ## Current-state reconciliation is part of integration
 
-After an integration that changes active work, Gate status or ordering:
+After an integration that changes active work, DAY-1 status or ordering:
 
-- update the authoritative Gate row only if its evidence/status changed;
-- update `PERCORSO-CRITICO.md` only if ordering/dependency changed;
+- update the authoritative DAY-1 requirement only if its evidence/status changed;
+- update `critical-path.md` only if ordering/dependency changed;
 - update `LAVORO.md` when live work/next action changed;
 - do not update the retired `STATE.md` chronicle.
 

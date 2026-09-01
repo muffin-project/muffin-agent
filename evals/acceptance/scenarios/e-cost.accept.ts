@@ -11,14 +11,15 @@ import { scenario } from '../scenario.js';
  *
  * E1 and E2 prove the mechanism that exists today — the **global** monthly
  * cap and the owner-facing spend readout — not the per-job cap E1's row is
- * actually missing (M5-BIS: "il per-job non esiste"). A green scenario here
+ * actually missing (DAY-1 requirement E1, cap globale e per-job: "il per-job
+ * non esiste"). A green scenario here
  * documents that the cap which does exist really stops a turn before it
  * spends; it does not promote E1 to READY, and this suite does not touch that
  * row's text on the strength of it.
  *
  * E5 proves a narrower thing than its own question ("ogni fallimento
  * importante è esplicito e recuperabile?") asks in full, which is why the row
- * stays `?` in M5-BIS.md rather than moving to READY on the strength of one
+ * stays `?` in requirements-status.md rather than moving to READY on the strength of one
  * scenario — see the PR this landed in. What it does prove, through the real
  * binary and a scripted-broken light model, never a mock of `judge.ts`: when
  * the contradiction judge answers in a shape the schema cannot read, the
@@ -99,7 +100,7 @@ describe('acceptance · E · economia e osservabilità', () => {
           throw new Error(`/spend mostra $0 dopo un turno che ha speso — non sta leggendo la spesa reale: ${repl.err}`);
         }
 
-        // M5-BIS's E2 asks "so quanto costa una giornata?", not "so quanto
+        // DAY-1 requirement E2 asks "so quanto costa una giornata?", not "so quanto
         // costa il mese?" -- tenantTodayUsd('host') existed in
         // core/budget/budget.ts with no caller: the per-tenant-daily gate
         // excludes the owner outright, so nothing ever read the number back.

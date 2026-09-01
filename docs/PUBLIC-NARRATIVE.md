@@ -287,7 +287,7 @@ status legible.
 
 ## 7. Timing
 
-Do not chase every private-Gate edit across public sites in real time.
+Do not chase every private DAY-1 edit across public sites in real time.
 
 Preferred sequence:
 

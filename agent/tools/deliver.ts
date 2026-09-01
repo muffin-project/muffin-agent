@@ -7,7 +7,7 @@ import type { ToolSpec } from '../providers/types.js';
 import { PathDenied, resolveInScope, type FsScope } from './fs.js';
 
 /**
- * M5-BIS B14 — a file the agent produced arrives as an attachment, not as a
+ * DAY-1 requirement B14 — a file the agent produced arrives as an attachment, not as a
  * path the owner has to go copy by hand.
  *
  * `connectors/telegram/media.ts`'s `sendDocument` said it plainly: *"Its

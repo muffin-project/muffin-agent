@@ -1,5 +1,5 @@
 /**
- * Which `M5-BIS.md` row each acceptance scenario proves, and what outcome it
+ * Which `requirements-status.md` row each acceptance scenario proves, and what outcome it
  * is expected to have today — independent of vitest on purpose.
  *
  * `report.ts` reads this list to cross-reference against the inventory
@@ -24,7 +24,7 @@ export type Expectation =
        * The failure this row's `reason` predicts, checked against the error
        * `scenario()` actually catches — not merely "did it throw".
        *
-       * MANDATO-DAY-1.md#day-1-ready (P39): `it.fails` alone marks a scenario `passed`
+       * readiness-criteria.md#day-1-ready (P39): `it.fails` alone marks a scenario `passed`
        * on *any* throw, so a scenario can keep reading "atteso-rosso, ragione
        * X" long after the code started throwing for reason Y — the reason
        * goes stale and nothing notices, which is exactly the shape D10 was
@@ -53,7 +53,7 @@ export type Expectation =
     };
 
 export type ScenarioEntry = {
-  /** An M5-BIS row id, e.g. 'A1', 'B8'. */
+  /** A DAY-1 requirement id, e.g. 'A1', 'B8'. */
   row: string;
   /** Full `it()` title — starts with `row` so the report can parse it back out. */
   title: string;
@@ -232,7 +232,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // turn's `taint` is 3 and its `messages` carry the tool_result naming
   // `resource_denied` for the `http_get` call; no row for it in
   // `turn_tool_calls` at all, confirming PR #28's own finding.
-  // Extended (slice/session-taint, MANDATO-DAY-1 invariant 2): a second,
+  // Extended (slice/session-taint, taint through session history): a second,
   // same-session run that reads nothing of its own still inherits taint 3
   // from the first turn's reply, reinjected as history — the triage probe's
   // "LAUNDERED" finding, closed and pinned to the real binary.
@@ -244,7 +244,8 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Narrower than E3's own question ("posso ricostruire cosa è successo?") —
-  // it does not promote the row past the acceptance-scenario gap M5-BIS
+  // it does not promote the row past the acceptance-scenario gap the DAY-1
+  // requirements inventory
   // still names for it. What it proves is the P34-2 half ADR-0048 closes: a
   // tool result that happens to contain a secret-shaped string never reaches
   // `turn_tool_calls.content` in the clear, through the real binary and a
@@ -264,7 +265,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'la suite di accettazione non può avere uno scenario di sé stessa: ogni riga verde di questo manifest è già la prova che i test sono reali',
   ),
   // Narrower than E5's own question — see the scenario's own docstring in
-  // e-cost.accept.ts. The row stays `?` in M5-BIS.md; only one failure class
+  // e-cost.accept.ts. The row stays `?` in requirements-status.md; only one failure class
   // (the contradiction judge) is proven explicit-and-explained here.
   verde('E5', 'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim'),
 ] as const;
