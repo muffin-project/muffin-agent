@@ -26,7 +26,7 @@ becomes design lineage and moves to `docs/history/design-notes/`. There is no
 permanent proposals layer in this repository, and `docs/blueprint/proposals/` was
 removed in 2026-08 precisely because the routine it implied never ran.
 
-Also not here: generated or derived views (`docs/blueprint/mappa/`), product
+Also not here: generated or derived views (`docs/derived/architecture-map/`), product
 vision, and operational state.
 
 ## Freshness: evidence is faithful to the observation, not to HEAD
