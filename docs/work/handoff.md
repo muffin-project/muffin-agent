@@ -11,12 +11,11 @@ ciò che manca prima della VPS.
 tracce, log e il `muffin.db` vero — mai con `cp` dei tre file, che dà una vista
 vecchia senza errore: `sqlite3 <db> ".backup <dest>"`.
 
-**Il gate sono i check di GitHub**, verdi dall'1/09/2026: la CI esegue di nuovo
-dopo mesi in cui moriva in 2s per fatturazione, e i 16 rossi riemersi erano test
-mai eseguiti su Linux (#272). Il merge si gatta sulla *condizione* dei check,
-mai su una stampa. `npm run gate:local` è lo strumento locale e il ripiego se i
-crediti finiscono — non un secondo gate, e non un sostituto: la sua gamba Linux
-esegue solo `vitest.acceptance.config.ts`, non la suite.
+**Il gate sono i check di GitHub**, verdi dall'1/09/2026 (i 16 rossi riemersi
+erano test mai eseguiti su Linux, #272). Si gatta sulla *condizione* dei check,
+mai su una stampa. `gate:local` è lo strumento locale e il ripiego se i crediti
+finiscono — non un sostituto: la sua gamba Linux esegue solo la config di
+accettazione, non la suite.
 
 ## Le decisioni dell'owner
 
@@ -29,21 +28,22 @@ esce di casa). Manca la **chiave Tavily**.
 una PR, non è morta.
 
 Slice 3-7 integrate: `docs/{history,decisions,knowledge,work,evidence}/`, nomi
-semantici (regola in `docs/README.md`); `blueprint/` è ormai `STATE.md` (lapide)
-e `mappa/`. Una proposta non è evidence: il lineage sta in
-`docs/history/design-notes/`. Prossima: la casa di `mappa/`, che è **derived**
-e vuole una classificazione sua prima del move.
+semantici (regola in `docs/README.md`); la mappa è in
+`docs/derived/architecture-map/` — **derived**, non generated. Una proposta non è
+evidence: sta in `docs/history/design-notes/`. `blueprint/` è ormai solo
+`STATE.md` e il suo router: la dissoluzione è il passo dopo, e deve guardare le
+compatibility tombstone.
 
 Tre trappole scritte dove sta il meccanismo: `riprendi/SKILL.md`,
-`mappa/ancore.mjs`, `rules/decisioni.md`. **F7**: logica in prosa dentro una rule
-si rompe senza che un test se ne accorga.
+`architecture-map/ancore.mjs`, `rules/decisioni.md`. **F7**: logica in prosa in
+una rule si rompe senza che un test se ne accorga.
 
 ## Parcheggiato: le richieste differite
 
-`docs/evidence/richieste-differite-2026-08-30.md` — misure, non una
-forma: **`jobs` non ha un tool**, i 7 todo fermi dal 27/08 e invisibili fuori
-dalla sessione, 44 fatti attivi su 83 `asked_to`/`asks_to`. Il tetto dei tool
-**non** è più il problema (`0d519cb`).
+`docs/evidence/richieste-differite-2026-08-30.md` — misure, non una forma:
+**`jobs` non ha un tool**, i 7 todo fermi dal 27/08 e invisibili fuori dalla
+sessione, 44 fatti attivi su 83 `asked_to`/`asks_to`. Il tetto dei tool **non** è
+più il problema (`0d519cb`).
 
 ## F5 — decisione owner non ancora entrata
 

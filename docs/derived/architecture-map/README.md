@@ -53,9 +53,9 @@ When a change intentionally alters something represented in the map:
 1. update the authoritative source first;
 2. update the relevant editorial map entry only if the visual explanation still
    adds value;
-3. run `node docs/blueprint/mappa/ancore.mjs`;
+3. run `node docs/derived/architecture-map/ancore.mjs`;
 4. review any **changed-text** warning instead of blindly re-anchoring;
-5. run `node docs/blueprint/mappa/build.mjs` and the map tests.
+5. run `node docs/derived/architecture-map/build.mjs` and the map tests.
 
 A successful anchor regeneration does not certify the prose around the anchor.
 
