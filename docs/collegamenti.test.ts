@@ -81,9 +81,10 @@ function tuttiIFile(dir: string, acc: string[] = []): string[] {
  * una slice che fa `git mv` non doveva anche modificare il checker che la
  * sorveglia — che è il modo in cui un controllo si ammorbidisce da solo proprio
  * nel commit in cui servirebbe. Arrivate a destinazione, quelle voci si
- * ritirano: `docs/blueprint/{adr,research,critique,proposals}/` non esiste più
- * (slice 4, 5 e 7) e un ramo che non può classificare nessun file è solo un
- * ramo che nessuno riesegue.
+ * ritirano, e l'1/09/2026 si sono ritirate tutte: `docs/blueprint/` e
+ * `docs/foundations/` **non esistono più**, quindi i loro rami non possono
+ * classificare nessun file. Un ramo con corpus zero non è compatibilità, è un
+ * ramo che nessuno riesegue — e la compatibilità non ha più file da tenere.
  *
  * **Il README di un corpus archiviato non è archiviato.** `docs/evidence/` è
  * datato e append-only, ma il documento che dice *che cosa ci va e che cosa no*
@@ -94,10 +95,8 @@ function tuttiIFile(dir: string, acc: string[] = []): string[] {
  */
 const ARCHIVIATO = [
   /^docs\/history\//,
-  /^docs\/foundations\//,
   /^docs\/decisions\//,
   /^docs\/evidence\/(?!README\.md$)/,
-  /^docs\/blueprint\/(\d\d-|BRIEF|validazione-contratti|STATE|README)/,
 ];
 
 /** Materiale vivo: prosa che governa HEAD, codice, tooling e CI. */
@@ -166,10 +165,11 @@ function risolviDocumento(nome: string): string | null {
   if (ALIAS[pulito]) return ALIAS[pulito];
   const adr = /^ADR-(\d{4})$/.exec(pulito);
   if (adr) {
-    const dir = ['docs/decisions', 'docs/blueprint/adr'].find((d) => existsSync(join(REPO, d)));
-    if (!dir) return null;
-    const f = readdirSync(join(REPO, dir)).find((x) => x.startsWith(adr[1]!));
-    return f ? `${dir}/${f}` : null;
+    // Una sola casa: `docs/blueprint/adr/` è sparita nella slice 5 e la
+    // directory intera nella 9, quindi il fallback non poteva più trovare
+    // niente.
+    const f = readdirSync(join(REPO, 'docs/decisions')).find((x) => x.startsWith(adr[1]!));
+    return f ? `docs/decisions/${f}` : null;
   }
   return null;
 }

@@ -33,8 +33,7 @@ restate it.
 
 For current work use, in this order: observed Git/worktree/PR/check/delegation
 state; `docs/work/handoff.md` as a compact handoff; then the ordering and
-status authority for the current goal. `docs/blueprint/STATE.md` is a tombstone,
-not current state.
+status authority for the current goal.
 
 ## Verification profile
 

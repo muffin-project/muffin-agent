@@ -74,8 +74,9 @@ is decided somewhere else. Their historical filenames are kept: under
 Neither governs HEAD. Nothing here was extracted, promoted or rewritten when it
 was archived.
 
-`docs/foundations/VISION.md` deliberately stays at its old path as a
-compatibility tombstone; it is not part of this corpus.
+The redirect that used to sit at `docs/foundations/VISION.md` is gone: the
+current north star is `docs/VISION.md`, and it was removed on 2026-09-01 with the
+rest of the legacy namespace.
 
 ## Old path → current home
 
@@ -88,6 +89,22 @@ The 2026-08-31 archive moved these; Git preserves the renames, so
 | `docs/blueprint/critique/` | `docs/history/rebuild-2026/critique/` |
 | `docs/foundations/{COGNITIVE_BASES,INVARIANTS,REFERENCES,UNDERSTANDING,README}.md` | `docs/history/foundations/legacy/` |
 | `docs/blueprint/STATE.md` chronicle | `docs/history/rebuild-2026/STATE-chronicle.md` |
+| `docs/lessons.md` | `docs/evidence/lessons.md` — evidence with a rolling lifecycle |
+
+## The two compatibility tombstones are retired
+
+`docs/blueprint/STATE.md` and `docs/foundations/VISION.md` were kept at their old
+paths as fail-safe redirects until the namespaces around them dissolved. That
+happened on 2026-09-01, and both were removed with the directories.
+
+Nothing was lost and nothing replaced them. Git keeps every rename, the STATE
+chronicle is under `rebuild-2026/`, the inherited foundations are under
+`foundations/legacy/`, and the table above is the map. **There is no current
+legacy namespace left**: the condition for deleting a redirect was that no
+current locator depended on it, and that was measured before, not asserted after.
+
+Historical documents still name `docs/blueprint/STATE.md` and the old foundations
+paths. They are recording their own world and were not rewritten.
 | `docs/blueprint/research/` | `docs/evidence/` — fourteen files also lost a coordination ordinal; the map is in `docs/evidence/README.md` |
 | six design contracts inside `docs/blueprint/research/` | `docs/history/design-notes/` |
 
