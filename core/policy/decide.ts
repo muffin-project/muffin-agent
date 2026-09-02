@@ -30,18 +30,13 @@ export type PolicyContext = {
    * Tests pass `POLICY_FLOOR`, which is those same constants under their own
    * name; production that forgets does not compile.
    *
-   * On `defaultMaxTaint`: it is the ceiling for declarations that state no
-   * `maxTaint` of their own, and a declaration's own value is authoritative in
-   * **both** directions — it may narrow the default and it may widen it. That
-   * is not an oversight. The threat model's taint-2/3 row reads "solo read-only
-   * su allowlist pubblica": having read a web page, the agent may read another
-   * one, which is why `sys.http` is medium risk (default ceiling 1) and
-   * deliberately declares 3. What the ceiling exists to stop is a tainted
-   * context reaching a capability that *acts*, and those pin a low ceiling
-   * explicitly (`sys.process` and the skill reader both pin 1). Widening is a
-   * deliberate, reviewable act per capability, not an accident the type system
-   * prevents: a declaration that widens without a comment saying why is the
-   * thing to catch in review.
+   * On the ceiling: it comes from `matrix.rows[decl.effect]`, and a
+   * declaration's own `maxTaint` may only narrow it (ADR-0053). The paragraph
+   * that stood here until 2026-09-02 described the opposite arrangement — a
+   * class default a declaration could widen in both directions — and that
+   * arrangement is exactly what let the kernel and the threat model's printed
+   * matrix disagree, one capability at a time, for a month. `defaultMaxTaint`
+   * is still on `PolicyMatrix` and is read by nothing here.
    */
   matrix: PolicyMatrix;
   /**

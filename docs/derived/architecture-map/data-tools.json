@@ -195,7 +195,7 @@
       "maxTaint": null,
       "file": "agent/tools/fs.ts:62-69",
       "hasTool": true,
-      "note": "1:1 with fs_read. No maxTaint declared -> inherits defaultMaxTaint.low = 3 (core/policy/matrix.ts:95), deliberately not pinned so an owner who lowers policy.json's low ceiling is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
+      "note": "1:1 with fs_read. No maxTaint declared -> the ceiling is the 'context' effect row's, 3 (ROW_FLOOR, core/policy/matrix.ts; it was defaultMaxTaint.low, also 3, until ADR-0053), deliberately not pinned so an owner who tightens that row in policy.json is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
     },
     {
       "id": "fs.list",
@@ -258,7 +258,7 @@
       "maxTaint": 3,
       "file": "agent/tools/http.ts:30-39",
       "hasTool": true,
-      "note": "1:1 with http_get. Ceiling explicitly widened to 3 above the medium default of 1, reasoned about at length in decide.ts:32-43 (a tainted turn may still read another public page)."
+      "note": "1:1 with http_get. Ceiling 3 from the 'egress' effect row, whose columns the threat model gives to the allowlist and to paramsMaxTaint rather than to a taint ceiling (ADR-0053). Until then it was a maxTaint: 3 pinned on the declaration to widen the medium class default of 1 — a tainted turn may still read another public page — which is the per-capability widening that ADR-0053 removed."
     },
     {
       "id": "sys.search",

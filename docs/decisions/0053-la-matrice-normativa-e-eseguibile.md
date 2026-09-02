@@ -94,10 +94,14 @@ Le righe, e la loro fonte:
 | `config` | nessuna capability oggi | 0 · 1 | riga *Scrittura config/voice* |
 | `rot` | nessuna: `neverAtRuntime` rifiuta prima | 0 · mai | riga *Root of Trust* |
 
-### Le tre celle che cambiano, per nome
+### Le celle che cambiano, per nome
 
-Ogni altra capability risponde esattamente come prima, e il test lo verifica
-cella per cella.
+Sono **tre capability e quattro celle**: `surface.send_file` cambia a taint 2 e
+anche a taint 3. Ogni altra capability risponde esattamente come prima, a ogni
+taint, e il test lo verifica cella per cella — per l'owner, in modalità
+`hardened`, con allowlist aperta e budget capiente. Gli altri principal, la safe
+mode e il ramo fuori allowlist restano asseriti in `decide.test.ts`, dove già
+erano.
 
 | capability | prima, a taint 2 | ora | perché |
 |---|---|---|---|
@@ -106,11 +110,21 @@ cella per cella.
 | `surface.send_file` | `deny` | `allow` | consegna sul canale di origine, non a un destinatario nuovo: riga *Reply*, ALLOW a ogni colonna |
 
 `surface.send_file` a taint 3 diventa raggiungibile, ed è la conseguenza da
-dichiarare: una pagina avvelenata può far arrivare all'owner un allegato che non
-ha chiesto. Va nella stessa chat dove il testo della risposta — che può già
-ricopiare il contenuto di quel file — arriva senza nessun gate. Il rischio è la
-visibilità di un file all'owner, non un'esfiltrazione: la riga *Outward*, quella
-dei destinatari nuovi, resta DENY a taint 2 e 3.
+dichiarare: una pagina avvelenata può far arrivare un allegato che nessuno ha
+chiesto. Il destinatario non è scelto dal modello — l'handler consegna su
+`ctx.replyChannel` e lo schema degli argomenti non ha un campo destinatario —
+quindi in un turno di conversazione l'allegato arriva nella stessa chat dove il
+testo della risposta, che può già ricopiare il contenuto di quel file, arriva
+senza nessun gate.
+
+**Il confine è più largo di «la chat dell'owner», e va detto.** Su un turno
+dello scheduler `ctx.replyChannel` è `job.channel` (`agent/scheduler-run.ts`), e
+`hostOnly` esclude i `member` ma non i principal `system`/`agent`; il vault è
+una directory condivisa fra tenant, come `deliver.ts` dichiara nel proprio
+docstring («owner-only is the honest boundary until it is» chiuso). Se un job
+possa oggi nascere con un canale non dell'owner non è stato stabilito: è un
+follow-up aperto, non una proprietà provata. La riga *Outward*, quella dei
+destinatari **nuovi** scelti per la chiamata, resta DENY a taint 2 e 3.
 
 ## Alternative scartate
 
@@ -162,9 +176,13 @@ di una riga sono policy e stanno nel file, dove possono solo stringere.
 ## Come si falsifica
 
 `core/policy/effect-rows.test.ts` asserisce ogni cella di ogni dichiarazione
-spedita contro la tabella stampata. Va rosso se qualcuno sposta una riga nel
-documento senza spostarla nel codice, se una dichiarazione appunta un `maxTaint`
-che contraddice la sua riga, o se una capability nuova arriva senza riga.
+spedita contro la tabella stampata, per l'owner in modalità `hardened`. Va rosso
+se qualcuno sposta una riga nel documento senza spostarla nel codice, se una
+dichiarazione appunta un `maxTaint` che contraddice la sua riga, se una delle
+due strette deliberate (`skill.read`, `sys.process.list`) sparisce, o se una
+capability esportata da `agent/tools/` non entra nell'elenco. Il clamp del file
+sigillato è provato in `core/policy/matrix.test.ts`: stringe, non allarga,
+ignora una riga che non conosce, e su un file illeggibile torna al pavimento.
 `evals/acceptance/scenarios/b-parita-superfici.accept.ts` tiene la misura sul
 binario: il giro `leggi → scrivi` deve restare identico su tutte le superfici.
 

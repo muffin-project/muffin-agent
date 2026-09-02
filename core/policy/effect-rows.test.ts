@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from './decide.js';
 import { POLICY_FLOOR } from './matrix.js';
@@ -34,7 +37,15 @@ import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
  * This file is the guard that makes that drift impossible to repeat: every
  * shipped declaration names its row, and every cell of the matrix is asserted
  * against the kernel's own answer. Move a row in the document without moving
- * the table here, or pin a `maxTaint` that contradicts a row, and this goes red.
+ * the table here, pin a `maxTaint` that contradicts a row, drop one of the two
+ * deliberate tightenings, or ship a capability this file has never heard of,
+ * and it goes red.
+ *
+ * **What it does not cover**, stated because a guard that is trusted further
+ * than it reaches is worse than none: `decisionAt` asks as the owner, hardened,
+ * with the allowlist open and the budget fine. Non-owner principals, safe mode,
+ * the non-hardened auto-allow and the off-allowlist branch are asserted in
+ * `decide.test.ts`, not here.
  */
 
 const OWNER: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
@@ -147,7 +158,71 @@ describe('la matrice normativa è eseguibile', () => {
     },
   );
 
-  it('le tre celle che questa slice cambia, per nome', () => {
+  /**
+   * La riga sopra è un oracolo, quindi il ciclo parametrizzato non può vedere
+   * una dichiarazione che *contraddice* la propria riga: `Math.min` la assorbe
+   * in silenzio, esattamente come fa il kernel. Questo è il rifiuto a voce
+   * alta che `types.ts` e ADR-0053 promettono — misurato mancante da un
+   * giudice indipendente il 02/09, che ha pinnato `fs.write` a 3 e ha visto
+   * 19 test su 19 restare verdi.
+   */
+  it('nessuna dichiarazione appunta un `maxTaint` più largo della propria riga', () => {
+    const larghe = ALL.filter((d) => d.maxTaint !== undefined && d.maxTaint > MATRICE[d.effect].denyAbove).map(
+      (d) => `${d.id}: maxTaint ${String(d.maxTaint)} > riga ${d.effect} (${MATRICE[d.effect].denyAbove})`,
+    );
+    expect(larghe).toEqual([]);
+  });
+
+  /**
+   * Le due strette deliberate, nominate. Sono l'unica cosa che tiene
+   * `skill.read` e `sys.process.list` sotto la loro riga, e un giro di pulizia
+   * che togliesse quei `maxTaint` come «ridondanti» — proprio ciò che questa
+   * slice ha fatto a `sys.http`, `sys.search`, `turn.wait` e `sys.shell` —
+   * porterebbe entrambe da 1 a 3 senza che nient'altro nella suite lo dica.
+   */
+  it('le strette esplicite restano esplicite', () => {
+    expect(skillCapability.maxTaint).toBe(1);
+    expect(processCapabilities.find((d) => d.id === 'sys.process.list')?.maxTaint).toBe(1);
+  });
+
+  /**
+   * L'elenco `ALL` è scritto a mano, quindi una capability nuova in un file
+   * nuovo sarebbe invisibile a tutto ciò che sta sopra. Questo la rende
+   * visibile: il rosso arriva quando una dichiarazione esportata da
+   * `agent/tools/` non è stata aggiunta qui.
+   */
+  it('ogni dichiarazione esportata da agent/tools è in questo elenco', () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'tools');
+    const esportate: string[] = [];
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
+      const src = readFileSync(join(dir, file), 'utf8');
+      for (const m of src.matchAll(/export (?:const|function) (\w+)[^\n]*CapabilityDecl/g)) {
+        esportate.push(`${file}:${m[1] ?? ''}`);
+      }
+    }
+    // Una per file di tool che ne dichiara: se ne compare una nuova, va
+    // aggiunta a `ALL` sopra, e allora questo elenco torna a coincidere.
+    expect(esportate.sort()).toEqual(
+      [
+        'deliver.ts:sendFileCapability',
+        'document.ts:documentCapability',
+        'fs.ts:fsCapabilities',
+        'http.ts:httpCapability',
+        'inspect.ts:inspectCapability',
+        'mcp.ts:mcpCapabilityFor',
+        'memory.ts:memoryCapability',
+        'process.ts:processCapabilities',
+        'search.ts:searchCapability',
+        'shell.ts:shellCapability',
+        'skill.ts:skillCapability',
+        'todo.ts:todoCapability',
+        'wait.ts:waitCapability',
+      ].sort(),
+    );
+  });
+
+  it('le tre capability che questa slice cambia, per nome', () => {
     const write = fsCapabilities.find((d) => d.id === 'fs.write');
     const kill = processCapabilities.find((d) => d.id === 'sys.process.kill');
     if (!write || !kill) throw new Error('dichiarazione mancante');

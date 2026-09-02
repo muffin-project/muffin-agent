@@ -67,11 +67,17 @@ export type PolicyMatrix = {
    */
   readonly rows: Readonly<Record<EffectRow, RowPolicy>>;
   /**
-   * Ceiling by risk class. **No longer the taint ceiling** — `rows` owns that.
-   * Kept because the sealed file may still carry it and because a home sealed
-   * before ADR-0053 must not be bricked by an upgrade; it is now only a floor
-   * the row cannot be looser than, so an old file that tightened a class still
-   * tightens.
+   * Ceiling by risk class. **Inert since ADR-0053: nothing reads it as a
+   * ceiling.** `rows` owns that, and `decide.ts` never touches this field.
+   *
+   * It is still parsed, still merged with the same downward clamp, and still
+   * shown by `muffin config --all`, because a home sealed before ADR-0053 must
+   * keep parsing and because this inventory answers "which file holds this
+   * value", not "which value won". Do not read the two facts as one: an owner
+   * who had **tightened** a class in a resealed `policy.json` loses that
+   * tightening here, silently, and that residual is declared in ADR-0053
+   * §Conseguenze. A tightening written today goes in `rows`, which is the
+   * vocabulary the kernel reads.
    */
   readonly defaultMaxTaint: Readonly<Record<RiskClass, TrustTier>>;
   /**
@@ -155,8 +161,16 @@ export type PolicyMatrix = {
  * trust diverged", and `doctor` names the fallback in the same breath.
  */
 /**
- * The printed matrix, transcribed. Each entry cites the row it comes from; the
- * cell-by-cell assertion lives in `core/policy/effect-rows.test.ts`.
+ * The printed matrix, transcribed — with one honest exception. Each entry cites
+ * the row it comes from, and the cell-by-cell assertion lives in
+ * `core/policy/effect-rows.test.ts`.
+ *
+ * `context` and `external` are **not** transcriptions: the document prints no
+ * "reads" row, and MCP lives in prose (`docs/SECURITY.md` §10) rather than in
+ * the table. `context` follows ADR-0044's own summary that reading is not
+ * acting — a turn that read from disk still reads and answers — and `external`
+ * keeps exactly the ceiling those capabilities already had. Both are argued in
+ * ADR-0053 rather than quoted, and neither changed any behaviour.
  */
 export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
   /** Reading is not acting: ADR-0044's own summary — a turn that read from disk still reads and answers. */

@@ -451,8 +451,8 @@
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 439,
-    "testo": "// `fs.read` is low risk with no `maxTaint`, so its ceiling is"
+    "line": 327,
+    "testo": "*"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
@@ -526,37 +526,37 @@
   },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
-    "line": 109,
+    "line": 110,
     "testo": "* read an injected file was still at taint 0 and the off-allowlist host came"
   },
   "agent/tools/fs.ts:145": {
     "path": "agent/tools/fs.ts",
-    "line": 185,
+    "line": 188,
     "testo": "id: 'fs.write',"
   },
   "agent/tools/fs.ts:182": {
     "path": "agent/tools/fs.ts",
-    "line": 182,
+    "line": 185,
     "testo": "hostOnly: true,"
   },
   "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 370,
+    "line": 373,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 789,
+    "line": 792,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
-    "line": 789,
+    "line": 792,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:571": {
     "path": "agent/tools/fs.ts",
-    "line": 868,
+    "line": 871,
     "testo": "resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),"
   },
   "agent/tools/fs.ts:62": {
@@ -586,12 +586,12 @@
   },
   "agent/tools/fs.ts:89": {
     "path": "agent/tools/fs.ts",
-    "line": 90,
-    "testo": "* `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —"
+    "line": 89,
+    "testo": "/**"
   },
   "agent/tools/fs.ts:99": {
     "path": "agent/tools/fs.ts",
-    "line": 100,
+    "line": 101,
     "testo": "* every read taints the turn to `DISK_TIER`, which is what a turn that has"
   },
   "agent/tools/http.ts:116": {
@@ -1786,102 +1786,102 @@
   },
   "core/policy/decide.ts:103": {
     "path": "core/policy/decide.ts",
-    "line": 104,
+    "line": 99,
     "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
   },
   "core/policy/decide.ts:111": {
     "path": "core/policy/decide.ts",
-    "line": 112,
+    "line": 107,
     "testo": "if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {"
   },
   "core/policy/decide.ts:119": {
     "path": "core/policy/decide.ts",
-    "line": 120,
+    "line": 115,
     "testo": "// Guard against a caller assembling an incoherent request."
   },
   "core/policy/decide.ts:127": {
     "path": "core/policy/decide.ts",
-    "line": 128,
+    "line": 123,
     "testo": "// rule below behind a wrong refusal."
   },
   "core/policy/decide.ts:128": {
     "path": "core/policy/decide.ts",
-    "line": 129,
+    "line": 124,
     "testo": "if (decl.hostOnly && principal.kind === 'member') {"
   },
   "core/policy/decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 133,
+    "line": 128,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "core/policy/decide.ts:137": {
     "path": "core/policy/decide.ts",
-    "line": 137,
+    "line": 132,
     "testo": "// The ceiling comes from the capability's **effect row** — where the bytes"
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 154,
+    "line": 149,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 158,
+    "line": 153,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 237,
+    "line": 232,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 244,
+    "line": 239,
     "testo": "switch (decl.risk) {"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 247,
+    "line": 242,
     "testo": "case 'medium':"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 251,
+    "line": 246,
     "testo": "case 'high':"
   },
   "core/policy/decide.ts:91": {
     "path": "core/policy/decide.ts",
-    "line": 92,
+    "line": 87,
     "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/decide.ts:92": {
     "path": "core/policy/decide.ts",
-    "line": 93,
+    "line": 88,
     "testo": "return function decide(req: DecisionRequest): Decision {"
   },
   "core/policy/decide.ts:95": {
     "path": "core/policy/decide.ts",
-    "line": 96,
+    "line": 91,
     "testo": "const decl = ctx.capabilities.get(capability);"
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
-    "line": 257,
+    "line": 271,
     "testo": "/** The stricter of the two, always — the file's only direction is down. */"
   },
   "core/policy/matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 187,
+    "line": 201,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "core/policy/matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 189,
+    "line": 203,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "core/policy/matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 194,
+    "line": 208,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "core/policy/types.ts:40": {
@@ -2091,32 +2091,32 @@
   },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
-    "line": 121,
+    "line": 116,
     "testo": "const expected = tenantOf(principal);"
   },
   "decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 133,
+    "line": 128,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 154,
+    "line": 149,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 158,
+    "line": 153,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 164,
+    "line": 159,
     "testo": "if (decl.resourceKind === 'url') {"
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 191,
+    "line": 186,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "decide.ts:20": {
@@ -2126,47 +2126,42 @@
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 248,
+    "line": 243,
     "testo": "return decl.reversible === 'undoable'"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 249,
+    "line": 244,
     "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
-  },
-  "decide.ts:32": {
-    "path": "core/policy/decide.ts",
-    "line": 33,
-    "testo": "* On `defaultMaxTaint`: it is the ceiling for declarations that state no"
   },
   "decide.ts:45": {
     "path": "core/policy/decide.ts",
-    "line": 46,
+    "line": 41,
     "testo": "matrix: PolicyMatrix;"
   },
   "decide.ts:55": {
     "path": "core/policy/decide.ts",
-    "line": 56,
+    "line": 51,
     "testo": "budgetExhausted: (tenant: string) => boolean;"
   },
   "decide.ts:60": {
     "path": "core/policy/decide.ts",
-    "line": 61,
+    "line": 56,
     "testo": "hardened: boolean;"
   },
   "decide.ts:67": {
     "path": "core/policy/decide.ts",
-    "line": 68,
+    "line": 63,
     "testo": "safeMode?: boolean;"
   },
   "decide.ts:74": {
     "path": "core/policy/decide.ts",
-    "line": 75,
+    "line": 70,
     "testo": "egressAllowed?: (host: string) => boolean;"
   },
   "decide.ts:96": {
     "path": "core/policy/decide.ts",
-    "line": 97,
+    "line": 92,
     "testo": "if (!decl) {"
   },
   "defaults/rot/budgets.json:4": {
@@ -2346,7 +2341,7 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 312,
+    "line": 315,
     "testo": "const parent = dirname(current);"
   },
   "fs.ts:7": {
@@ -2516,17 +2511,17 @@
   },
   "matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 187,
+    "line": 201,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 189,
+    "line": 203,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 194,
+    "line": 208,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "mcp.ts:102": {
