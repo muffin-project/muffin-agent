@@ -23,16 +23,22 @@ vengono prima di allargare capability o architettura.
 ## Ordine corrente
 
 ```text
-1  undo semantico
+1  decisione owner: il soffitto di fs.write dopo una lettura
         ↓
-2  read → transform → local write / taint
+2  undo semantico (l'altra metà di D11, raggiungibile solo dopo 1)
         ↓
-3  riconciliazione dei requisiti DAY-1 contro HEAD
+3  prerequisiti reali sulla macchina dell'owner, detti da doctor prima
+   che servano (note vocali: whisper.cpp, ffmpeg, modello)
         ↓
 4  dogfood reale e backlog guidato dai fallback
         ↓
 5  journey integrate / battery finale quando una claim lo richiede
 ```
+
+L'ordine 1 → 2 si è invertito il 02/09 per una misura, non per gusto: sul
+database dell'owner `fs.write` non è mai stata eseguita, e la metà di undo che
+riallinea il turno ripara un percorso che oggi nessun turno raggiunge. Prima si
+apre la porta, poi si ripara ciò che c'è dietro.
 
 ### Chiudere la compensazione, non solo il restore
 
@@ -55,13 +61,30 @@ corrente, ma non deve nemmeno cancellare il fatto storico che l'effetto è
 avvenuto ed è stato poi annullato. È una **compensating transaction / Saga**,
 non un rollback che riscrive il passato.
 
-Osservato il 2026-09-01: **PR #186 è chiusa senza merge**; il branch
-`slice/undo-riallinea-il-turno` esiste e contiene 6 commit non antenati di `dev`.
-Il destino e l'equivalenza di quel lavoro **non sono stabiliti qui**. Non creare
-una seconda implementazione finché non viene riconciliato.
+PR #186 è chiusa senza merge (30/08, SALVAGE: miniera, non rebase) e il ramo
+`slice/undo-riallinea-il-turno` resta. Quella metà si reimplementa su HEAD
+**dopo** il punto 1, perché oggi ripara un percorso che nessun turno raggiunge.
 `requirements-status.md` possiede lo stato D11.
 
 ### Decidere il workflow locale read → write
+
+**È un bivio dell'owner, e il 02/09 è istruito.** `sys.shell` è `high` con
+`maxTaint: 2` (revisione ADR-0044 del 16/08): dopo una lettura è un ASK.
+`fs.write` è `medium` + `undoable` con il soffitto di classe 1: dopo una
+lettura è un DENY. Quindi oggi, in un turno che ha letto un file, l'unico modo
+di scriverne un altro è la shell — la porta **senza** checkpoint e senza undo —
+mentre la porta con il journal è chiusa. Il sink è lo stesso (il disco dentro
+lo scope), ma la porta sicura è quella negata. ADR-0044 §«Reversibilità» dice
+già dove si interviene: il soffitto della capability che agisce, non il tier
+della lettura.
+
+Le opzioni restano dell'owner (confine di sicurezza): alzare `fs.write` a
+`maxTaint: 2` lasciando `draft` automatico anche a taint 2; alzarlo a 2 ma con
+`draft` solo a taint 0 e ASK sopra — parità con la shell, più il checkpoint;
+oppure lasciare tutto com'è. La raccomandazione e le conseguenze stanno nel
+handoff finché l'owner non decide; poi la decisione entra come emendamento di
+ADR-0044 e in `agent/tools/fs.ts`, con il costo dichiarato come test come per
+la shell.
 
 È già un failure osservato, quindi precede qualunque discussione astratta sulla
 breadth dei tool: leggere un file porta oggi il turno a taint 2 e la scrittura
@@ -87,24 +110,15 @@ La prova terminale è un percorso reale del tipo:
 
 non un test isolato del valore di taint.
 
-### Riconciliare i requisiti DAY-1 prima di usare i conteggi per decidere
+### I requisiti sono riconciliati; le righe di sola evidence si chiudono per journey
 
-`requirements-status.md` è l'unica authority degli status, ma alcuni suoi motivi sono rimasti
-indietro rispetto a HEAD. Prima di usare “N BLOCKER” come criterio operativo va
-riletto riga per riga contro codice, acceptance e PR correnti.
-
-Casi già noti da verificare, non da aggiornare alla cieca:
-
-- **A2/A3**: il character eval esiste ora e non perde più misure; resta da
-  classificare cosa significano i fail e quale evidence manca davvero;
-- **E7**: il vecchio motivo “`sys_inspect` è oltre il cap 10” non vale più dopo
-  il passaggio del profilo a 14 tool;
-- **D11**: dipende dallo stato effettivo della slice di undo semantico;
-- conteggi e testo introduttivo devono essere ricalcolati dalle 55 righe, non
-  modificati per differenza mentale.
-
-Questa riconciliazione non autorizza nuovi subsystem. Se una riga è rossa solo
-per evidence, la risposta è evidence.
+La rilettura riga per riga contro HEAD è stata fatta il 02/09 e vive nel
+banner datato di `requirements-status.md`. Quello che ne esce come dipendenza:
+diciassette righe aspettano soltanto uno scenario di accettazione sul binario
+vero, e vanno chiuse per **journey reale** (lifecycle/install/backup ·
+memoria/documenti · shell/processi · Telegram · tracing), non una PR per riga —
+lo stesso scenario può chiudere più righe se attraversa gli stessi confini.
+Una riga rossa solo per evidence riceve evidence, mai un subsystem.
 
 ### Da qui ordina l'uso
 
