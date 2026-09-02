@@ -89,6 +89,27 @@ prima che l'owner scriva — misurato sulla sessione Telegram reale, 17 messaggi
 tier-2 su 40 — e la sessione Telegram è una per chat, quindi solo `/new` la
 pulisce. La CLI lo evita solo perché ogni `muffin` apre una sessione nuova.
 
+**Misurato il 02/09, prima di toccare qualunque soffitto**
+(`evals/acceptance/scenarios/b-parita-superfici.accept.ts`, binario vero): a
+parità di principal, tenant, history e richiesta, `leggi dati.txt` → `scrivi
+esito.txt` decide **identico** su CLI, REPL e Telegram — taint 2,
+`taint_exceeded`, file non scritto. Non c'è nessuna divergenza
+superficie/kernel: la sola variabile è la sessione, e infatti la stessa CLI
+con una sessione nuova al secondo turno scrive a taint 0. Il finding si
+enuncia così:
+
+> *Surface-specific session lifetime → different context → different ambient taint.*
+
+Ma la stessa misura chiude anche la domanda successiva, ed è la ragione per
+cui il bivio resta: `leggi → scrivi` **dentro un turno solo, su una sessione
+appena aperta e senza un byte di history**, è ugualmente `taint_exceeded`. Il
+taint sale dentro il turno alla lettura (`DISK_TIER` = 2) e il soffitto della
+capability che scrive è 1. Quindi nessuna riforma di *quale* conversazione
+viene reiniettata — una `Conversation` distinta dalla `Surface`, per dire —
+può aprire questo percorso: cambierebbe il taint **ambiente**, non quello che
+la lettura stessa produce. La vita della sessione spiega perché la CLI
+sembrava sana e Telegram no; non spiega il fallimento. Il soffitto sì.
+
 Le opzioni restano dell'owner (confine di sicurezza):
 
 | opzione | cosa cambia | costo |
