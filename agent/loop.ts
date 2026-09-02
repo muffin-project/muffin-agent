@@ -222,6 +222,15 @@ export type ApprovalRequest = {
    */
   resource?: string | undefined;
   /**
+   * What the call does, in the model's own words — `shell_run`'s
+   * `description` argument (03/09/2026, owner: «mi piacerebbe un riassunto
+   * testuale che dice cosa fa quel comando»). Same mechanism as Claude
+   * Code's `Bash` tool: a schema field the model fills, shown above the
+   * command it is asking to run. Absent when the tool has no such field, or
+   * a scripted call left it out. Model-written: surfaces escape it.
+   */
+  description?: string | undefined;
+  /**
    * The turn's taint when the ask fired — "why am I being asked" is half of
    * the answer. 0 = owner speaking directly; higher tiers mean untrusted
    * content has already entered the turn, so the surface should say so.
@@ -2604,20 +2613,36 @@ function assertNever(x: never): never {
 }
 
 /**
- * Render a tool call's arguments as the one-line subject of an approval —
+ * Render a tool call's arguments as the subject of an approval —
  * `command: rm -rf /tmp/x · cwd: /tmp` — for capabilities whose kernel
  * resource is `none`. Flat key: value pairs, no prose: the owner is deciding,
- * not reading. Capped because an argument can be a whole file body, and a
- * question that scrolls is a question nobody reads to the end of.
+ * not reading.
+ *
+ * **Not capped.** Until 03/09/2026 this cut at 220 characters, on the
+ * reasoning that "a question that scrolls is a question nobody reads to the
+ * end of". The owner read one: a long command arrived truncated in the very
+ * message that asked whether to run it, and the answer to «non voglio mai
+ * testo tagliato, anche quando chiede cosa fare con un comando» is that the
+ * thing being approved is shown whole. Where it goes is the surface's
+ * problem — `cli/surface.ts` splits an over-long ASK across messages, the
+ * terminal just prints — and hiding the tail here would have made both
+ * surfaces lie the same way. `description` is left out: it has a field of
+ * its own on `ApprovalRequest` and is shown above, not inside, the command.
  */
 function summarizeCallArgs(args: unknown): string | undefined {
   if (args === null || typeof args !== 'object') return undefined;
   const parts = Object.entries(args as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .filter(([k, v]) => k !== 'description' && v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
   if (parts.length === 0) return undefined;
-  const joined = parts.join(' · ');
-  return joined.length > 220 ? `${joined.slice(0, 219)}…` : joined;
+  return parts.join(' · ');
+}
+
+/** The model's one-line account of what a call does, when the tool has that field. */
+function descriptionOf(args: unknown): string | undefined {
+  if (args === null || typeof args !== 'object') return undefined;
+  const d = (args as Record<string, unknown>)['description'];
+  return typeof d === 'string' && d.trim() !== '' ? d.trim() : undefined;
 }
 
 /**
@@ -2877,6 +2902,7 @@ async function runTool(
         ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
           ? { resource: resource.value }
           : { resource: summarizeCallArgs(call.args) }),
+        ...(descriptionOf(call.args) === undefined ? {} : { description: descriptionOf(call.args) }),
         taint: snapshot.currentTaint(),
       };
       const nega = (): ContentBlock => {
