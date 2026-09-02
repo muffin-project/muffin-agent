@@ -142,6 +142,13 @@ on:
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'
+      # Il handoff è letto dall'hook SessionStart dentro un budget di 4 000
+      # caratteri (`inject-state.mjs`), e `inject-state.test.ts` prova che il
+      # file vero ci sta. Misurato il 02/09/2026: una PR di soli documenti lo ha
+      # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
+      # promozione dev → main è andata rossa qui. Il job che possiede il test
+      # possiede anche il file che il test legge.
+      - 'docs/work/handoff.md'
   push:
     branches: [main]
     paths:
@@ -152,6 +159,13 @@ on:
       - '.claude/*.mjs'
       - '.claude/*.test.ts'
       - '.claude/**/*.test.ts'
+      # Il handoff è letto dall'hook SessionStart dentro un budget di 4 000
+      # caratteri (`inject-state.mjs`), e `inject-state.test.ts` prova che il
+      # file vero ci sta. Misurato il 02/09/2026: una PR di soli documenti lo ha
+      # portato a 6 467 byte, è passata verde (nessun job la guardava) e la
+      # promozione dev → main è andata rossa qui. Il job che possiede il test
+      # possiede anche il file che il test legge.
+      - 'docs/work/handoff.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
