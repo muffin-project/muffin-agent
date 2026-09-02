@@ -15,63 +15,52 @@ GitHub**, sulla *condizione*, mai su una stampa; `gate:local` è il ripiego.
 
 **Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
 "deny"`. Aperte da prima: **`muffin rot harden`** (serve `sudo`; finché non è
-fatto `sys.shell` chiede *sempre* conferma) e la **chiave Tavily**. **C8 note
-vocali: il meccanismo è su `dev` e la macchina è pronta** (whisper.cpp, ffmpeg e
-`ggml-base.bin` installati il 02/09; `doctor` ha la riga `note vocali`, verde
-sull'installazione; una frase sintetizzata con `say` è tornata testo corretto).
+fatto `sys.shell` chiede *sempre* conferma) e la **chiave Tavily**. C8 note
+vocali: meccanismo su `dev`, macchina pronta, `doctor` verde.
 
-## Il bivio n. 1 è chiuso: ADR-0053
+## Il 03/09: il dogfood ha bocciato le superfici
 
-Non scegliendo un soffitto. La matrice normativa del threat model è una tabella
-per **riga di effetto**, dà a `fs.write` la riga che a taint 2 dice `ASK`, e il
-kernel non la eseguiva: decideva da classe di rischio più un numero appuntato a
-mano, e l'emendamento del 16/08 aveva spostato quella cella per `sys.shell`
-sola. Ora il soffitto viene dalla riga, `core/policy/effect-rows.test.ts`
-asserisce ogni cella, e tre celle cambiano: `fs.write` e `sys.process.kill`
-passano da `deny` ad `ask` a taint 2, `surface.send_file` va nella riga *reply*.
-Memo: `docs/evidence/decision-memo-taint-2026-09-02.md`.
+Memo `docs/evidence/dogfood-superfici-2026-09-03.md` — **non ripensare quello
+che c'è scritto.** B11/B13 tornano BLOCKER: il finto provider e il finto Bot
+API provavano il meccanismo, non la forma. Decisioni: **Telegram** una bolla
+per segmento (nuovo messaggio solo quando il modello riparla dopo dei tool;
+passi appesi e mai cancellati; mai testo tagliato; ASK intero; `description`
+su `shell_run`). **CLI** scroll region DECSTBM, casella e stato in fondo, mai
+in cima (costa lo scrollback). **ADR-0054**: messaggio a turno vivo → coda con
+conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
+riceve sempre (oggi `drain()` attende il turno). **Test end-to-end veri**:
+corsia reale in locale con modello e Bot API veri (chiave mai stampata),
+accanto al finto. Ordine: critical-path.md#ordine-corrente punto 2 (a→d).
 
-Resta aperto il resto della domanda — se il taint **ambientale** sia il segnale
-giusto (`SECURITY.md` §13). Si chiude con l'eval comparativo: adapter B e
-corpus avversariale in `evals/security/`. Righe e colonne sono domande diverse.
+**Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
+`@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
+`string-width` è l'unica piccola che chiude un difetto (larghezza CJK).
+
+## ADR-0053 chiuso, colonne aperte
+
+Il soffitto viene dalla riga di effetto; `effect-rows.test.ts` asserisce ogni
+cella. Resta se il taint **ambientale** sia il segnale giusto (`SECURITY.md`
+§13): eval comparativo, adapter B + corpus avversariale in `evals/security/`.
 
 ## Bivio owner n. 2: un tool `jobs` per il modello
 
-Oggi i job nascono solo da `muffin jobs add`; «scrivimi tra 5 minuti» passa da
-`turn.wait` (funziona su Telegram, provato il 29/08). Un job creato da un turno
-tainted è un'iniezione differita: serve una forma prima di costruirlo. Non DAY-1.
+Un job creato da un turno tainted è un'iniezione differita: serve una forma
+prima di costruirlo. Non DAY-1.
 
-**Azioni owner senza codice:** chiave Tavily + `rot/egress.json` (oggi Muffin
-non ha nessun accesso web: 0 `web_search`, 0 `http_get` in 165 turni) ·
-`muffin rot harden` · togliere `discord` da `surfaces.enabled` finché flappa.
-
-## Il 02/09
-
-Quindici PR su `dev` (#277–#295). Inventario **36 READY · 14 BLOCKER · 6
-OUT**, da rifare dopo ADR-0053. `dev → main` (#289, `dd38d40`) e `muffin update`
-eseguiti: build `dd38d40`, `doctor` senza `fail`.
-
-**Ledger di studio:** `docs/evidence/design-study-ledger-2026-09-02.md`,
-evidence datata, non authority — si legge quando il dominio entra nel lavoro.
-
-**Parcheggiato:** `docs/evidence/richieste-differite-2026-08-30.md` — misure
-(7 todo fermi fuori sessione, 44 fatti `asked_to` su 83), non una forma.
+**Azioni owner senza codice:** chiave Tavily + `rot/egress.json` ·
+`muffin rot harden` · togliere `discord` da `surfaces.enabled` finché flappa ·
+mergiare #296 (`dev → main`, check verdi) e `muffin update`.
 
 ## Aperto, non bloccante
 
-**Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il modello
-impara per rifiuto. Codex rende `<permission_profile>`, OpenClaw
-`## Authorized Senders`.
+**Prossimo grosso:** dichiarare i **permessi** nel prompt (Codex
+`<permission_profile>`, OpenClaw `## Authorized Senders`).
 
-**Harness:** il finto Bot API (`evals/acceptance/telegram.ts`) non serve
-`getFile`: B10 (immagini) e C8 (nota vocale) restano senza scenario per questo,
-non per il prodotto. Le run di accettazione durano ora ~5 minuti: il tetto del
-job è 10.
+**Harness:** il finto Bot API non serve `getFile` (B10, C8 senza scenario).
+Accettazione ~5 min, tetto 10.
 
-**Altro:** `gateway.err` non data le righe (19 ore di errore, una volta);
-`pricing.ts` sottostima 5 famiglie su 8; il `try` di `recall.ts` avvolge anche
-la provenienza, così un guasto dello store sembra rete.
+**Altro:** `gateway.err` non data le righe; `pricing.ts` sottostima 5
+famiglie su 8; il `try` di `recall.ts` avvolge anche la provenienza.
 
-**Truth maintenance:** `day1/requirements-status.md` possiede lo stato dei
-requisiti DAY-1,
+**Truth maintenance:** `day1/requirements-status.md` possiede lo stato,
 critical-path.md#ordine-corrente l'ordine.
