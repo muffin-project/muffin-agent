@@ -414,7 +414,10 @@ status lives only in `docs/work/day1/requirements-status.md`.
   deciding the question instead of answering it. Nothing in this document adopts
   it: current semantics are exactly as §4 and §5 state them. The dated eval
   design is lineage, in
-  `docs/history/design-notes/security-v2-eval-contract-2026-08-29.md`.
+  `docs/history/design-notes/security-v2-eval-contract-2026-08-29.md`; the
+  2026-09-02 measurement of what the incumbent actually gates — including the
+  sink asymmetry between `fs.write`, `surface.send_file` and a plain reply — is
+  in `docs/evidence/decision-memo-taint-2026-09-02.md`.
 
 ## 14. What this document does not own
 
