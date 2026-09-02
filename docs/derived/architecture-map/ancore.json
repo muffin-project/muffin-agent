@@ -36,22 +36,22 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1692,
+    "line": 1716,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1787,
+    "line": 1811,
     "testo": "// model at all."
   },
   "agent/loop.ts:1405": {
     "path": "agent/loop.ts",
-    "line": 1617,
+    "line": 1641,
     "testo": "// with it — the transcript, the taint it has climbed to, and how much of"
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 2412,
+    "line": 2436,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
@@ -61,37 +61,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 2724,
+    "line": 2748,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2749,
+    "line": 2773,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3074,
+    "line": 3098,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3138,
+    "line": 3162,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 2769,
+    "line": 2793,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3250,
+    "line": 3274,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3254,
+    "line": 3278,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -211,12 +211,12 @@
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 963,
+    "line": 987,
     "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 968,
+    "line": 992,
     "testo": "[ATTR.tenant]: input.tenant,"
   },
   "agent/loop.ts:56": {
@@ -226,12 +226,12 @@
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 1009,
+    "line": 1033,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 1042,
+    "line": 1066,
     "testo": "why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished';"
   },
   "agent/loop.ts:62": {
@@ -241,22 +241,22 @@
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 1185,
+    "line": 1209,
     "testo": "const detail ="
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 1228,
+    "line": 1252,
     "testo": "options: {"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1286,
+    "line": 1310,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1309,
+    "line": 1333,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "agent/loop.ts:792": {
@@ -266,42 +266,42 @@
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 1330,
+    "line": 1354,
     "testo": "let transportRetriesLeft = record.counters.transportRetriesLeft;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 1339,
+    "line": 1363,
     "testo": "iterations,"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 1351,
+    "line": 1375,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 1353,
+    "line": 1377,
     "testo": "* `null` until a handler asks. See `ToolContext.suspend` for why it is armed"
   },
   "agent/loop.ts:848": {
     "path": "agent/loop.ts",
-    "line": 972,
+    "line": 996,
     "testo": "// `SimpleTracer.start` takes `traceId = parent?.traceId ?? id(16)` — handing"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1434,
+    "line": 1458,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1523,
+    "line": 1547,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1574,
+    "line": 1598,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -1186,17 +1186,17 @@
   },
   "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 460,
+    "line": 472,
     "testo": "* never arrived even on a home where Telegram was connected and answering"
   },
   "cli/surface.ts:295": {
     "path": "cli/surface.ts",
-    "line": 464,
+    "line": 476,
     "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 548,
+    "line": 560,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
@@ -2416,17 +2416,17 @@
   },
   "loop.ts:1542": {
     "path": "agent/loop.ts",
-    "line": 1754,
+    "line": 1778,
     "testo": "input.onDelta({ type: 'text', text: out });"
   },
   "loop.ts:1544": {
     "path": "agent/loop.ts",
-    "line": 1756,
+    "line": 1780,
     "testo": "} catch (error) {"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2483,
+    "line": 2507,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2436,7 +2436,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3402,
+    "line": 3426,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
@@ -2481,7 +2481,7 @@
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 1009,
+    "line": 1033,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "loop.ts:577": {
@@ -2491,7 +2491,7 @@
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 1041,
+    "line": 1065,
     "testo": "turnId: string;"
   },
   "loop.ts:602": {
@@ -2501,22 +2501,22 @@
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 1254,
+    "line": 1278,
     "testo": "* holding whatever REPL or Telegram chat asked the *previous* attempt to"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 1257,
+    "line": 1281,
     "testo": "* to suspend."
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1286,
+    "line": 1310,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1309,
+    "line": 1333,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "loop.ts:792": {
@@ -2526,12 +2526,12 @@
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 1340,
+    "line": 1364,
     "testo": "recoveriesUsed,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 1377,
+    "line": 1401,
     "testo": "},"
   },
   "maintenance.ts:21": {
