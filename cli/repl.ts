@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { makeTextzone } from './textzone.js';
+import { makeFondo } from './fondo.js';
 import { intestazione } from './riquadro.js';
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
@@ -472,11 +473,39 @@ export async function runRepl(
    * I due non leggono mai insieme: `approve` gira **dentro** un turno, cioè
    * mentre la textzone non sta leggendo niente.
    */
+  /**
+   * Il fondo fisso (`cli/fondo.ts`): la casella sta nelle ultime righe, la
+   * risposta scorre sopra. Attivo solo su un terminale che dichiara la sua
+   * altezza; altrove — una pipe, `script`, i test — il riquadro vive in
+   * fondo allo scrollback come prima. Le sequenze di posizionamento vanno su
+   * **stderr**, così stdout resta i byte della risposta e basta (B11).
+   */
+  const fondo = makeFondo({
+    write: (s) => process.stderr.write(s),
+    get rows() {
+      return process.stdout.rows;
+    },
+    get columns() {
+      return process.stdout.columns;
+    },
+    isTTY: process.stdout.isTTY === true && process.stderr.isTTY === true,
+  });
+  // Su un terminale, sempre: uscire lasciando i margini di scorrimento
+  // impostati lascia la shell con tre righe che non scorrono più.
+  process.on('exit', () => fondo.chiudi());
+
   const textzone = makeTextzone({
     input: (opts.stdin ?? process.stdin) as NodeJS.ReadStream,
     output: process.stdout,
     historyFile: join(home, 'repl-history'),
     comandi: COMANDI,
+    fondo,
+  });
+  // Lo schermo è cambiato: i margini vanno rimessi sulle righe nuove e il
+  // riquadro ridisegnato, che si stia leggendo o no.
+  process.stdout.on('resize', () => {
+    fondo.ridimensiona();
+    textzone.redraw();
   });
   // Dopo una scrittura fuori banda — un messaggio consegnato da una superficie
   // mentre stavi scrivendo — il prompt e ciò che avevi già digitato tornano al
@@ -818,6 +847,9 @@ export async function runRepl(
     // the database under it goes away.
     surfaces.stop();
     runtime.close();
+    // I margini tornano com'erano e il cursore scende sotto il riquadro,
+    // che resta nello scrollback come l'ultima cosa scritta.
+    fondo.chiudi();
   }
 
   process.stderr.write(`\nciao.\n`);
