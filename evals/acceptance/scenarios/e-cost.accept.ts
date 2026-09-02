@@ -1,8 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
-import { install } from '../harness.js';
+import { install, type Run } from '../harness.js';
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
 
@@ -239,13 +239,34 @@ describe('acceptance · E · economia e osservabilità', () => {
    * covers at the unit level. The owner's own file, planted on disk exactly
    * as `fs_read` would find one it did not write, is the realistic case this
    * slice exists for: a key pasted into a note, read back later.
+   *
+   * Extended (slice/journey-lifecycle): the row's own question is broader
+   * than secret redaction ("posso ricostruire cosa è successo?"), and
+   * `report.ts`'s manifest is 1:1 with a row (`verdictFor`'s own comment: "one
+   * scenario per row today"), so the second half lands in this same function
+   * rather than a second `scenario('E3', …)` that would just make `chiaviEsito`
+   * ambiguous. Two turns run in the same install, each with a distinct,
+   * unambiguous tool call (`fs_read` for the first, `fs_list` for the
+   * second), and `muffin trace turn <id>`/`muffin trace grep` are asked to
+   * reconstruct the SECOND one by the id it printed for itself. The
+   * assertion that actually matters is not "the command found something" —
+   * `trace tail` alone would pass that trivially — it is that the
+   * reconstruction is scoped to the one turn asked for: the first turn's
+   * tool never shows up in it, and the id the turn printed for itself is
+   * what the CLI accepts back (dogfood, 26/08/2026: the printed id and the
+   * accepted id used to be compared under different rules).
    */
   scenario(
     'E3',
     async () => {
       const SECRET = 'sk-ant-FINTA-CHIAVE-ACCETTAZIONE-1234567890';
       const inst = await install({
-        main: [{ tool: { name: 'fs_read', args: { path: 'appunti.txt' } } }, { text: 'letto' }],
+        main: [
+          { tool: { name: 'fs_read', args: { path: 'appunti.txt' } } },
+          { text: 'letto' },
+          { tool: { name: 'fs_list', args: { path: 'una-sottocartella' } } },
+          { text: 'elencato' },
+        ],
       });
       try {
         writeFileSync(join(inst.workspace, 'appunti.txt'), `password: "${SECRET}"\naltro testo innocuo\n`);
@@ -275,6 +296,49 @@ describe('acceptance · E · economia e osservabilità', () => {
         );
         if (turnRow.messages.includes(SECRET)) {
           throw new Error('turns.messages porta la chiave in chiaro');
+        }
+
+        // --- reconstruction: an arbitrary (second) turn, found again by its
+        //     own printed id, and only that turn's evidence ------------------
+        mkdirSync(join(inst.workspace, 'una-sottocartella'), { recursive: true });
+        const second = await inst.muffin(['run', '--timeout', '20', 'elenca il contenuto di una-sottocartella']);
+        if (second.code !== 0) throw new Error(`il secondo turno non completa: exit ${second.code}\n${second.err}`);
+
+        const traceIdOf = (run: Run): string => {
+          const m = /trace ([0-9a-f]+)/.exec(run.err);
+          if (!m) throw new Error(`nessun trace id nell'output del turno: ${JSON.stringify(run.err)}`);
+          return m[1]!;
+        };
+        const traceA = traceIdOf(r);
+        const traceB = traceIdOf(second);
+        if (traceA === traceB) throw new Error('i due turni condividono lo stesso trace id — fixture inutile');
+
+        // `trace turn <id>` — the id the SECOND turn printed for itself.
+        const turnB = await inst.muffin(['trace', 'turn', traceB]);
+        if (turnB.code !== 0) throw new Error(`muffin trace turn ${traceB}: exit ${turnB.code}\n${turnB.out}${turnB.err}`);
+        if (!turnB.out.includes('fs_list')) {
+          throw new Error(`\`trace turn\` non ricostruisce la tool call del secondo turno (fs_list): ${turnB.out}`);
+        }
+        if (turnB.out.includes('fs_read')) {
+          throw new Error(`\`trace turn\` del secondo turno include anche lo step del primo (fs_read) — non isola il turno chiesto: ${turnB.out}`);
+        }
+
+        // The same isolation, the other direction — proves it is not an
+        // accident of which turn happened to run last.
+        const turnA = await inst.muffin(['trace', 'turn', traceA]);
+        if (turnA.code !== 0) throw new Error(`muffin trace turn ${traceA}: exit ${turnA.code}\n${turnA.out}${turnA.err}`);
+        if (!turnA.out.includes('fs_read')) throw new Error(`\`trace turn\` non ricostruisce la tool call del primo turno (fs_read): ${turnA.out}`);
+        if (turnA.out.includes('fs_list')) {
+          throw new Error(`\`trace turn\` del primo turno include anche lo step del secondo (fs_list): ${turnA.out}`);
+        }
+
+        // `trace grep PATTERN` — the other reconstruction path the row names,
+        // searched by content rather than by id.
+        const grepped = await inst.muffin(['trace', 'grep', 'fs_list']);
+        if (grepped.code !== 0) throw new Error(`muffin trace grep fs_list: exit ${grepped.code}\n${grepped.out}${grepped.err}`);
+        if (!grepped.out.includes('fs_list')) throw new Error(`\`trace grep fs_list\` non trova lo span atteso: ${grepped.out}`);
+        if (grepped.out.includes('fs_read')) {
+          throw new Error(`\`trace grep fs_list\` ha trovato anche uno span del primo turno: ${grepped.out}`);
         }
       } finally {
         await inst.cleanup();
