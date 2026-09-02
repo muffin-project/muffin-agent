@@ -131,7 +131,27 @@ type Body = {
   messages?: unknown;
   tools?: unknown;
   stream?: unknown;
+  /** `/embeddings` only (`OpenAICompatEmbedder`'s body). */
+  input?: unknown;
+  dimensions?: unknown;
 };
+
+/**
+ * Small and deterministic, not semantic: nothing in the acceptance suite
+ * asserts on embedding *similarity*, only on whether indexing runs at all
+ * without a real Ollama — so a stable hash-derived vector per text is
+ * sufficient and repeatable across runs.
+ */
+function deterministicVector(text: string, dims: number): number[] {
+  let seed = 0;
+  for (let i = 0; i < text.length; i++) seed = (Math.imul(seed, 31) + text.charCodeAt(i)) >>> 0;
+  const out: number[] = [];
+  for (let i = 0; i < dims; i++) {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    out.push((seed % 2000) / 1000 - 1);
+  }
+  return out;
+}
 
 /**
  * Splits `text` into word-sized pieces, each keeping its own trailing
@@ -215,6 +235,27 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
         res.end(JSON.stringify({ error: { message: 'body non JSON' } }));
         return;
       }
+
+      // `/embeddings` — `core/memory/embed.ts`'s `OpenAICompatEmbedder`, not a
+      // chat turn: no `messages`, so `record()` below would file it as a
+      // bodyless "main" call and corrupt every scenario that counts
+      // `provider.main()`. Answered here, before `record`, and never pushed
+      // to `requests` — a scenario that needs the embedder reachable points
+      // `config.embedder` at this same `baseUrl` (see C3's own fixture) and
+      // never has to see this branch at all otherwise.
+      if (req.url?.endsWith('/embeddings')) {
+        const inputs = Array.isArray(body.input) ? body.input : typeof body.input === 'string' ? [body.input] : [];
+        const dims = typeof body.dimensions === 'number' && body.dimensions > 0 ? body.dimensions : 8;
+        const data = inputs.map((text, index) => ({
+          object: 'embedding',
+          index,
+          embedding: deterministicVector(String(text), dims),
+        }));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', model: String(body.model ?? ''), data }));
+        return;
+      }
+
       const entry = record(body);
       requests.push(entry);
 

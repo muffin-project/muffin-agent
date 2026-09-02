@@ -1350,3 +1350,22 @@ kills another; removing the row-id check kills a third. The
 general form: **a valid domain value cannot double as the silent sentinel for
 "I do not know the value."** Unavailable needs its own representation, or it
 will be reported as whatever the empty case looks like.
+## A docs-only PR can turn `dev` red in a job that never ran on it **(this build)**
+
+`ci.yml` and `accettazione.yml` skip `docs/**` by `paths-ignore`, so the
+reconciliation PR of 2026-09-02 — seven rows and a dated banner in
+`docs/work/day1/requirements-status.md` — ran only `collegamenti` and merged
+green. The derived architecture map cites that file by line
+(`docs/derived/architecture-map/ancore.json`), and `mappa.test.ts` — which
+runs in `verifica` — checks that every anchor still points at the text it
+was written for. The banner moved the cited row from line 253 to 379. Nothing
+ran that test on the PR; the next two PRs that touched code ran it and went
+red on a line they had not touched.
+
+This is finding F6 (CI verifier ownership / path filtering gap) observed,
+not argued: the guard exists, the trigger does not reach it. The repair at
+the lowest layer is to run the map test where the docs trigger already runs
+— `collegamenti.yml` fires on `docs/**` and already runs
+`docs/collegamenti`; it now runs `docs/derived/architecture-map` too. Not a
+new workflow, not a wider `paths` filter: the job that owns "docs changed"
+also owns "docs anchors still resolve".

@@ -27,6 +27,8 @@ import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/default
 import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
+import { audioAccettato } from '../agent/providers/modalita.js';
+import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -82,6 +84,14 @@ export type DoctorOptions = {
    * «l'embedder non risponde», con il messaggio che l'owner leggerà.
    */
   embedderProbe?: () => Promise<void>;
+  /**
+   * Test-only: the two probes of the `note vocali` check — whether the
+   * configured model accepts audio (a question to the provider, see
+   * `agent/providers/modalita.ts`) and the PATH the transcription binaries
+   * are looked up in. A test that let the real PATH answer would be proving
+   * the developer's machine, not the product.
+   */
+  voce?: { accettaAudio?: () => Promise<boolean>; path?: string };
 };
 
 /**
@@ -1026,6 +1036,62 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     );
   }
 
+  // Le note vocali: il modello le ascolta, oppure whisper.cpp le legge in
+  // casa — `core/audio/voce.ts` sceglie a runtime, e fino a qui il primo
+  // momento in cui l'owner scopriva che il secondo ramo non era pronto era la
+  // prima nota vocale, con il rimedio stampato a cose fatte. Misurato il
+  // 02/09/2026 sull'installazione dell'owner: `qwen/qwen3.8-27b` dichiara
+  // `["text","image","video"]`, `whisper-cli` e `ffmpeg` assenti, nessun
+  // modello, e questo report tutto verde.
+  //
+  // Stesse fonti del runtime, non una copia: `audioAccettato` è la funzione
+  // che `decidiVoce` chiama, e i prerequisiti sono letti dalla stessa config
+  // e dallo stesso default di percorso che `voceFor` (`cli/surface.ts`) passa
+  // a `trascrivi`. A tempo, come la sonda dell'embedder: un provider che
+  // accetta la connessione e non risponde non deve tenere `doctor` appeso, e
+  // «non ha risposto» prende il ramo che il runtime prenderebbe — trascrivere
+  // in casa — perché è l'unico che non manda niente fuori.
+  //
+  // Solo quando una superficie che porta voce è abilitata: le note vocali
+  // arrivano da Telegram e Discord, non dal terminale. Su un'installazione
+  // con la sola CLI questa riga sarebbe un avviso su un problema che non
+  // può presentarsi — e A10 (`e2e-giro-owner.accept.ts`) lo ha misurato
+  // subito: «WARN non dichiarato» su una home appena inizializzata.
+  const modello = config.models.main;
+  const superficiVocali = config.surfaces.enabled.filter((id) => id === 'telegram' || id === 'discord');
+  const ascolta =
+    superficiVocali.length === 0 ? false : await probeAudio(options.voce?.accettaAudio, config.provider.baseUrl, modello);
+  if (superficiVocali.length === 0) {
+    ok('note vocali', 'nessuna superficie vocale abilitata (telegram, discord): niente da preparare');
+  } else if (ascolta) {
+    ok('note vocali', `${modello} accetta audio: le note vocali vanno al modello`);
+  } else {
+    const audio = config.audio;
+    const prerequisiti = prerequisitiTrascrizione(
+      {
+        whisperModel: audio?.whisperModel ?? p.whisperModel,
+        ...(audio?.whisperBin === undefined ? {} : { whisperBin: audio.whisperBin }),
+        ...(audio?.ffmpegBin === undefined ? {} : { ffmpegBin: audio.ffmpegBin }),
+      },
+      options.voce?.path,
+    );
+    const mancanti = prerequisiti.filter((x): x is Extract<Prerequisito, { ok: false }> => !x.ok);
+    if (mancanti.length === 0) {
+      ok(
+        'note vocali',
+        `${modello} non accetta audio: si trascrive in casa — ` +
+          prerequisiti.map((x) => (x.ok ? `${x.cosa} ${x.dove}` : x.cosa)).join(' · '),
+      );
+    } else {
+      warn(
+        'note vocali',
+        `${modello} non accetta audio e la trascrizione in casa non è pronta: ` +
+          `${mancanti.map((x) => x.why).join(' · ')} — la prima nota vocale fallirebbe`,
+        mancanti.map((x) => x.rimedio).join('\n  → '),
+      );
+    }
+  }
+
   // Was `statSync(p.home)` with the result assigned and voided — the remains of
   // a disk-space check that was never written, which made the failure branch
   // unreachable and the check a decoration.
@@ -1197,6 +1263,35 @@ const EMBEDDER_PROBE_MS = 1_500;
  * due posti diversi, e la riga che li appiattisce in "non disponibile" è la
  * stessa che ha tenuto ferma la corsia della memoria per due giorni.
  */
+/**
+ * Il modello configurato accetta audio in ingresso? Con un tetto, perché
+ * `audioAccettato` non ne ha uno suo: nel gateway una nota vocale può
+ * aspettare, `doctor` no.
+ */
+export const AUDIO_PROBE_MS = 5_000;
+
+async function probeAudio(
+  override: (() => Promise<boolean>) | undefined,
+  baseUrl: string | undefined,
+  model: string,
+): Promise<boolean> {
+  const run = override ?? (() => audioAccettato(baseUrl, model));
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), AUDIO_PROBE_MS);
+        timer.unref();
+      }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function probeEmbedder(
   override?: () => Promise<void>,
   embedder?: Embedder,
