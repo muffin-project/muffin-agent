@@ -51,13 +51,16 @@ import type { RegisteredTool } from '../loop.js';
  */
 export const searchCapability: CapabilityDecl = {
   id: 'sys.search',
+  effect: 'egress',
   risk: 'medium',
   reversible: 'yes',
   // Safe to repeat, and not free to repeat: a second query is a second billed
   // request. That is money, not correctness, and this field answers the
   // correctness question — the cost of a resume is the budget's problem.
   rerunnable: true,
-  maxTaint: 3,
+  // Same as `sys.http`: the ceiling is the `egress` row's, and this row's
+  // columns are owned by `paramsMaxTaint` — the gate that reads the bytes
+  // actually leaving, rather than the tier of everything present.
   resourceKind: 'query',
   policyArgs: ['query'],
   hostOnly: true,

@@ -23,16 +23,27 @@ vengono prima di allargare capability o architettura.
 ## Ordine corrente
 
 ```text
-0  dogfood reale — parte subito, in parallelo, con la shell come porta di scrittura
+0  dogfood reale — parte subito, in parallelo
         ↓
-1  eval di sicurezza: adapter B + corpus avversariale sul binario + scene di sink
+1  le righe: il soffitto viene dalla riga di effetto (ADR-0053) — fatto
         ↓
-2  la decisione sul segnale di autorità (qui torna l'A/B/C, o muore)
+2  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
         ↓
-3  undo semantico (l'altra metà di D11, raggiungibile solo dopo 2)
+3  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
         ↓
-4  battery finale e revisione indipendente del dev integrato
+4  undo semantico (l'altra metà di D11)
+        ↓
+5  battery finale e revisione indipendente del dev integrato
 ```
+
+Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
+**riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa
+eseguibile: la matrice normativa era prosa, il kernel decideva da una classe di
+rischio più un numero appuntato a mano, e le due erano divergiute su una cella
+che il documento chiamava `ASK` da un mese. La **colonna** è il taint
+ambientale, ed è l'ipotesi non falsificata di `docs/SECURITY.md` §13: si chiude
+con l'eval comparativo, non con una decisione scritta prima. Le righe
+sopravvivono a qualunque risposta l'eval dia.
 
 I prerequisiti vocali sono sulla macchina dell'owner dal 02/09 e `doctor` li
 controlla; la promozione `dev → main` e `muffin update` sono stati eseguiti lo
@@ -77,12 +88,14 @@ PR #186 è chiusa senza merge (30/08, SALVAGE: miniera, non rebase) e il ramo
 
 ### Decidere il workflow locale read → write
 
-**SOSPESO il 02/09, dopo la misura.** Le opzioni qui sotto restano scritte
-perché la decisione tornerà, ma non si sceglie ora: la memo
-`docs/evidence/decision-memo-taint-2026-09-02.md` mostra che A/B/C sono varianti
-della candidate «tieni lo scalare ambientale e sposta il numero», e che
-l'incumbent è un'ipotesi con una barra di falsificazione già scritta
-(`docs/SECURITY.md:404-417`). Prima l'eval comparativo, poi la scelta.
+**CHIUSO il 02/09 da ADR-0053, e non scegliendo fra A, B e C.** Le tre opzioni
+erano varianti della stessa forma — tieni lo scalare, sposta il numero — cioè
+la forma che aveva prodotto il guasto. La memo
+`docs/evidence/decision-memo-taint-2026-09-02.md` ha misurato che il gate più
+stretto stava sulla porta più innocua; la ricostruzione ha poi trovato la causa
+a monte: la matrice normativa dà a `fs.write` una riga che a taint 2 dice `ASK`,
+e il kernel non eseguiva quella tabella. Ora la esegue, e la cella non è stata
+scelta: era già scritta. Il testo qui sotto resta come storia della decisione.
 
 **Il bivio, come era istruito il 02/09.** `sys.shell` è `high` con
 `maxTaint: 2` (revisione ADR-0044 del 16/08): dopo una lettura è un ASK.

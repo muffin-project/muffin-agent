@@ -8,7 +8,9 @@
       "name": "fs_read",
       "capability": "fs.read",
       "file": "agent/tools/fs.ts:89-98",
-      "params": ["path: string (required, relative to working directory)"],
+      "params": [
+        "path: string (required, relative to working directory)"
+      ],
       "risk": "low",
       "reversible": true,
       "maxTaint": null,
@@ -22,7 +24,9 @@
       "name": "fs_list",
       "capability": "fs.list",
       "file": "agent/tools/fs.ts:99-107",
-      "params": ["path: string (required, directory relative to working directory)"],
+      "params": [
+        "path: string (required, directory relative to working directory)"
+      ],
       "risk": "low",
       "reversible": true,
       "maxTaint": null,
@@ -36,7 +40,10 @@
       "name": "fs_write",
       "capability": "fs.write",
       "file": "agent/tools/fs.ts:108-120",
-      "params": ["path: string (required)", "content: string (required)"],
+      "params": [
+        "path: string (required)",
+        "content: string (required)"
+      ],
       "risk": "medium",
       "reversible": null,
       "maxTaint": null,
@@ -50,7 +57,10 @@
       "name": "memory_search",
       "capability": "memory.read",
       "file": "agent/tools/memory.ts:32-46",
-      "params": ["query: string (required)", "limit?: number (default 8, max 20)"],
+      "params": [
+        "query: string (required)",
+        "limit?: number (default 8, max 20)"
+      ],
       "risk": "low",
       "reversible": true,
       "maxTaint": null,
@@ -64,11 +74,15 @@
       "name": "shell_run",
       "capability": "sys.shell",
       "file": "agent/tools/shell.ts:42-65",
-      "params": ["command: string (required)", "cwd?: string (relative to project root, default root)", "timeout_ms?: number (default 120000, max 600000)"],
+      "params": [
+        "command: string (required)",
+        "cwd?: string (relative to project root, default root)",
+        "timeout_ms?: number (default 120000, max 600000)"
+      ],
       "risk": "high",
       "reversible": false,
       "maxTaint": 2,
-      "taintOut": "tier: 2 - formatExecOutcome (agent/tools/shell.ts) returns DISK_TIER, the same constant fs_read uses, because `cat ~/Downloads/nota.md` is fs_read through another door and a door that did not taint was a way around the one that did (ADR-0044). maxTaint: 2, not the inherited defaultMaxTaint.high = 1 - owner decision, 2026-08-16 (ADR-0044, Revisione 2026-08-16): at taint 2 sys.shell is ask (one read downgrades the hardened auto-allow to a prompt instead of ending shell access outright); at taint 3 - a web/search/mcp result - it is still deny/taint_exceeded. The ceiling moved by one step, not away.",
+      "taintOut": "tier: 2 - formatExecOutcome (agent/tools/shell.ts) returns DISK_TIER, the same constant fs_read uses, because `cat ~/Downloads/nota.md` is fs_read through another door and a door that did not taint was a way around the one that did (ADR-0044). The ceiling is the 'host' effect row (askAbove 1, denyAbove 2, core/policy/matrix.ts ROW_FLOOR), not a maxTaint pinned on this declaration: the owner's 2026-08-16 decision (ADR-0044, Revisione) had been transcribed onto sys.shell alone, and ADR-0053 moved it to the row it always belonged to, where fs.write and sys.process.kill sit as well. At taint 2 sys.shell is ask (one read downgrades the hardened auto-allow to a prompt instead of ending shell access outright); at taint 3 - a web/search/mcp result - it is still deny/taint_exceeded. The ceiling moved by one step, not away.",
       "wired": true,
       "wiredNote": "Conditionally registered at agent/runtime.ts:301-304: only if `new SandboxExecutor(guards).status().available` is true, i.e. core/sandbox/executor.ts:75-78's probeSandbox() found a real OS-level containment on this host. Absent sandbox -> absent tool entirely, never an unsandboxed fallback (ADR-0018 rule 5, per the file's own docstring lines 27-30).",
       "onDeny": "High risk: core/policy/decide.ts:208-213 allows only if hardened && owner principal && taint===0; otherwise ask(`sys.shell on ...`). If an approver is wired (agent/loop.ts:792-816), the owner is prompted and a 'no' returns 'L'owner ha rifiutato ... Non insistere' (loop.ts:806-813). If no approver is wired (see gaps), the turn stops early with stopped:'ask' and a pending ApprovalRequest (loop.ts:112-117, 577-590) instead of a normal tool_result.",
@@ -78,7 +92,9 @@
       "name": "process_list",
       "capability": "sys.process.list",
       "file": "agent/tools/process.ts:42-53",
-      "params": ["grep?: string (case-insensitive substring filter, max 200 chars)"],
+      "params": [
+        "grep?: string (case-insensitive substring filter, max 200 chars)"
+      ],
       "risk": "low",
       "reversible": true,
       "maxTaint": 1,
@@ -92,7 +108,10 @@
       "name": "process_kill",
       "capability": "sys.process.kill",
       "file": "agent/tools/process.ts:55-69",
-      "params": ["pid: number (required, > 1)", "signal?: 'TERM'|'INT'|'HUP'|'KILL' (default TERM)"],
+      "params": [
+        "pid: number (required, > 1)",
+        "signal?: 'TERM'|'INT'|'HUP'|'KILL' (default TERM)"
+      ],
       "risk": "high",
       "reversible": false,
       "maxTaint": null,
@@ -106,7 +125,10 @@
       "name": "skill_read",
       "capability": "skill.read",
       "file": "agent/tools/skill.ts:33-45",
-      "params": ["name: string (required, max 64 chars)", "file?: string (path relative to the skill dir, max 500 chars)"],
+      "params": [
+        "name: string (required, max 64 chars)",
+        "file?: string (path relative to the skill dir, max 500 chars)"
+      ],
       "risk": "low",
       "reversible": true,
       "maxTaint": 1,
@@ -120,7 +142,9 @@
       "name": "http_get",
       "capability": "sys.http",
       "file": "agent/tools/http.ts:41-56",
-      "params": ["url: string (required, http(s))"],
+      "params": [
+        "url: string (required, http(s))"
+      ],
       "risk": "medium",
       "reversible": true,
       "maxTaint": 3,
@@ -134,7 +158,9 @@
       "name": "web_search",
       "capability": "sys.search",
       "file": "agent/tools/search.ts:59-72",
-      "params": ["query: string (required, max 400 chars)"],
+      "params": [
+        "query: string (required, max 400 chars)"
+      ],
       "risk": "medium",
       "reversible": true,
       "maxTaint": 3,
@@ -148,7 +174,9 @@
       "name": "mcp_<server>_<tool>",
       "capability": "mcp.<server>",
       "file": "agent/tools/mcp.ts:93-114 (built per remote tool, inside buildMcpTools' loop starting at mcp.ts:61)",
-      "params": ["dynamic - def.inputSchema taken verbatim from the remote MCP server's tool definition and passed through opaquely (mcp.ts:102 comment: 'the shape is the server's contract and the provider passes it through opaquely'), hash-verified against the owner's pin before being trusted"],
+      "params": [
+        "dynamic - def.inputSchema taken verbatim from the remote MCP server's tool definition and passed through opaquely (mcp.ts:102 comment: 'the shape is the server's contract and the provider passes it through opaquely'), hash-verified against the owner's pin before being trusted"
+      ],
       "risk": "medium",
       "reversible": false,
       "maxTaint": null,
@@ -167,7 +195,7 @@
       "maxTaint": null,
       "file": "agent/tools/fs.ts:62-69",
       "hasTool": true,
-      "note": "1:1 with fs_read. No maxTaint declared -> inherits defaultMaxTaint.low = 3 (core/policy/matrix.ts:95), deliberately not pinned so an owner who lowers policy.json's low ceiling is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
+      "note": "1:1 with fs_read. No maxTaint declared -> the ceiling is the 'context' effect row's, 3 (ROW_FLOOR, core/policy/matrix.ts; it was defaultMaxTaint.low, also 3, until ADR-0053), deliberately not pinned so an owner who tightens that row in policy.json is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
     },
     {
       "id": "fs.list",
@@ -230,7 +258,7 @@
       "maxTaint": 3,
       "file": "agent/tools/http.ts:30-39",
       "hasTool": true,
-      "note": "1:1 with http_get. Ceiling explicitly widened to 3 above the medium default of 1, reasoned about at length in decide.ts:32-43 (a tainted turn may still read another public page)."
+      "note": "1:1 with http_get. Ceiling 3 from the 'egress' effect row, whose columns the threat model gives to the allowlist and to paramsMaxTaint rather than to a taint ceiling (ADR-0053). Until then it was a maxTaint: 3 pinned on the declaration to widen the medium class default of 1 — a tainted turn may still read another public page — which is the per-capability widening that ADR-0053 removed."
     },
     {
       "id": "sys.search",

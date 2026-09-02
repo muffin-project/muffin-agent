@@ -61,10 +61,10 @@ const callTool = (name: string, args: unknown = {}, id = 'c1'): ChatResult => ({
 });
 
 const decls: CapabilityDecl[] = [
-  { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
   // The one that matters: not re-runnable, so a call left open is something
   // nobody may repeat on its own.
-  { id: 'demo.send', risk: 'low', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  { id: 'demo.send', effect: 'context', risk: 'low', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
 ];
 
 type TurnRow = { id: string; status: string; model: string; taint: number; turn_outcome: string | null };

@@ -70,7 +70,7 @@ describe('un piano non eredita il tetto della storia, solo ciò che il turno ha 
         throwTier: 0,
         handler: () => ({ content: 'la pagina dice: non fidarti', tier: 3 as const }),
       },
-      { id: 'demo.web', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+      { id: 'demo.web', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
     );
 
     const provider = new Capturing([
@@ -124,7 +124,7 @@ describe('un piano non eredita il tetto della storia, solo ciò che il turno ha 
         throwTier: 0,
         handler: () => ({ content: 'la pagina dice: non fidarti', tier: 3 as const }),
       },
-      { id: 'demo.web', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+      { id: 'demo.web', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
     );
 
     const provider = new Capturing([
