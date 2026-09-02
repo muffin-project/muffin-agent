@@ -243,13 +243,18 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
     }
   });
 
-  it('never sends the tool round\'s "thinking aloud" text — only the final answer becomes durable output', async () => {
+  it('keeps the tool round\'s "thinking aloud" text in a transcript message of its own, and the answer stays a separate durable send', async () => {
     const finalText = 'Ecco cosa ho trovato.';
     // A name the model invented — deliberately not registered. `runTool`
     // (`agent/loop.ts`) answers an unknown tool with a `tool_result` telling
     // the model so, never a throw, which is exactly what this scenario
     // needs: a real tool round that resolves on its own, without this test
     // having to reach into the connector to register one.
+    //
+    // Until 03/09/2026 this test asserted the opposite — that the preamble
+    // never reached the surface. The owner asked for it («non voglio perdere
+    // gli step»); the guarantee that survives is that it never becomes *the
+    // answer*: the durable delivery is the final text alone.
     const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ecco ', 'cosa ho trovato.'], finalText);
     const { api, calls } = recordingApi();
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
@@ -258,8 +263,13 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
       await deliver(connector, [groupMsg(2)]);
 
       const sent = calls.filter((c) => c.method === 'sendMessage');
-      expect(sent.map((e) => e.text ?? '').join('\n')).not.toContain('lascia che controlli');
-      expect(sent.map((e) => e.text)).toEqual([finalText]);
+      expect(sent.map((e) => e.text)).toEqual([expect.stringContaining('lascia che controlli'), finalText]);
+      // An unknown tool never emits `tool_start` (`agent/loop.ts#runTool`),
+      // so the transcript here is the words alone; the step line under them
+      // is `transcript.test.ts`'s and the acceptance B13's job. What this
+      // wiring test proves: the words reached a real message, and nothing
+      // deleted it.
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }
@@ -293,8 +303,8 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
   });
 });
 
-describe('a turn reports its own progress and cleans it up before the real answer (DAY-1 requirement B13)', () => {
-  it('creates one status line, then deletes it strictly before the durable answer is sent', async () => {
+describe('the transcript of a turn stays above the answer (DAY-1 requirement B13, the owner\'s shape)', () => {
+  it('a turn with no tool call produces no transcript message at all — only the answer', async () => {
     const finalText = 'Fatto, eccolo.';
     const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);
     const { api, calls } = recordingApi();
@@ -302,54 +312,42 @@ describe('a turn reports its own progress and cleans it up before the real answe
 
     try {
       await deliver(connector, [privateMsg(30)]);
-
-      const methods = calls.map((c) => c.method);
-      const progressLine = calls.find((c) => c.method === 'sendMessage' && c.text !== finalText);
-      const cleanup = calls.find((c) => c.method === 'deleteMessage');
-      const answer = calls.find((c) => c.method === 'sendMessage' && c.text === finalText);
-
-      // Reads as `formatTelegramProgress` (progress.ts), not as anything the
-      // model wrote — proves `onProgress` reached the real Bot API calls, not
-      // only `progress.test.ts`'s own direct-call unit coverage.
-      expect(progressLine?.text).toMatch(/^.+ · \d+s$/);
-      // Removed, not edited into the answer — same message id, then gone.
-      expect(cleanup?.messageId).toBe(progressLine?.messageId);
-      // Never left orphaned above the reply (brief, rule 4): the cleanup is
-      // strictly before the real answer in call order, not merely present
-      // somewhere in the list of calls.
-      expect(methods.indexOf('deleteMessage')).toBeLessThan(methods.lastIndexOf('sendMessage'));
-      expect(answer).toBeDefined();
+      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
+      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }
   });
 
-  it('reports progress in groups too — unlike the presence draft, this is not private-chat-only', async () => {
+  it('in a group too the transcript is a real message, sent strictly before the durable answer', async () => {
     const finalText = 'Ecco.';
-    const provider = streamingProviderWithRealGap(['Ec', 'co.'], finalText);
+    const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ec', 'co.'], finalText);
     const { api, calls } = recordingApi();
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
 
     try {
       await deliver(connector, [groupMsg(31)]);
-
-      const progressLine = calls.find((c) => c.method === 'sendMessage' && c.text !== finalText);
-      expect(progressLine?.text).toMatch(/^.+ · \d+s$/);
-      expect(calls.some((c) => c.method === 'deleteMessage' && c.messageId === progressLine?.messageId)).toBe(true);
+      const sends = calls.filter((c) => c.method === 'sendMessage');
+      expect(sends.map((c) => c.text)).toEqual([expect.stringContaining('lascia che controlli'), finalText]);
+      // The last touch on the transcript (its closing edit, if any) lands
+      // before the answer goes out: `connector.ts` awaits `transcript.stop()`
+      // ahead of `deliverTo`.
+      const lastTranscriptTouch = calls.map((c) => c.messageId).lastIndexOf(sends[0]!.messageId);
+      expect(lastTranscriptTouch).toBeLessThan(calls.indexOf(sends[1]!));
     } finally {
       runtime.close();
     }
   });
 
-  it('swallows a Bot API failure creating the status line — the turn still delivers the real answer (rule 5)', async () => {
+  it('swallows a Bot API failure creating the transcript — the turn still delivers the real answer (rule 5)', async () => {
     const finalText = 'Va bene comunque.';
-    const provider = streamingProviderWithRealGap(['Va bene ', 'comunque.'], finalText);
+    const provider = streamingProviderWithToolCall('tool_non_registrato', ['Va bene ', 'comunque.'], finalText);
     const { api: baseApi, calls } = recordingApi();
     let sendAttempts = 0;
-    // The first `sendMessage` a turn ever makes is always `progress.ts`
-    // creating the status line (before any real answer exists to send) —
-    // failing exactly that one attempt is what proves rule 5 without needing
-    // to reach into `progress.ts`'s own internals.
+    // The first `sendMessage` a tool turn ever makes is the transcript
+    // (before any real answer exists to send) — failing exactly that one
+    // proves rule 5 without reaching into `transcript.ts`'s internals.
     const failingApi: TelegramApiLike = {
       ...baseApi,
       sendMessage: async (chatId, html, options) => {
@@ -363,11 +361,9 @@ describe('a turn reports its own progress and cleans it up before the real answe
     try {
       await deliver(connector, [privateMsg(32)]);
 
-      expect(sendAttempts).toBe(2); // the failed status line, then the real answer
+      expect(sendAttempts).toBe(2); // the failed transcript, then the real answer
       expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
-      // Disabled after its one failure (`progress.ts`), so it never attempts
-      // to clean up a status message that was never created.
-      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
     } finally {
       runtime.close();
     }
