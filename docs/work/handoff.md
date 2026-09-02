@@ -20,16 +20,20 @@ vocali: il meccanismo è su `dev` e la macchina è pronta** (whisper.cpp, ffmpeg
 `ggml-base.bin` installati il 02/09; `doctor` ha la riga `note vocali`, verde
 sull'installazione; una frase sintetizzata con `say` è tornata testo corretto).
 
-## Bivio owner n. 1: SOSPESO — prima l'eval, poi il soffitto
+## Il bivio n. 1 è chiuso: ADR-0053
 
-Su Telegram il turno parte a taint 2 (history reiniettata) e `fs.write`,
-`send_file`, `skill.read` sono DENY secchi. Ma il 02/09 la misura ha spostato la
-domanda: le tre superfici decidono identico, `leggi → scrivi` in un turno solo è
-`taint_exceeded` anche senza history, e il gate più stretto sta sulla porta più
-innocua mentre la risposta in chat e la scrittura di memoria non passano dal
-kernel. A/B/C sono varianti di «sposta il numero»: sospesi.
-Memo: `docs/evidence/decision-memo-taint-2026-09-02.md`. Prossimo artefatto: il
-terzo adapter in `evals/security/` e un corpus avversariale sul binario.
+Non scegliendo un soffitto. La matrice normativa del threat model è una tabella
+per **riga di effetto**, dà a `fs.write` la riga che a taint 2 dice `ASK`, e il
+kernel non la eseguiva: decideva da classe di rischio più un numero appuntato a
+mano, e l'emendamento del 16/08 aveva spostato quella cella per `sys.shell`
+sola. Ora il soffitto viene dalla riga, `core/policy/effect-rows.test.ts`
+asserisce ogni cella, e tre celle cambiano: `fs.write` e `sys.process.kill`
+passano da `deny` ad `ask` a taint 2, `surface.send_file` va nella riga *reply*.
+Memo: `docs/evidence/decision-memo-taint-2026-09-02.md`.
+
+Resta aperto il resto della domanda — se il taint **ambientale** sia il segnale
+giusto (`SECURITY.md` §13). Si chiude con l'eval comparativo: adapter B e
+corpus avversariale in `evals/security/`. Righe e colonne sono domande diverse.
 
 ## Bivio owner n. 2: un tool `jobs` per il modello
 
@@ -43,11 +47,9 @@ non ha nessun accesso web: 0 `web_search`, 0 `http_get` in 165 turni) ·
 
 ## Il 02/09
 
-Quattordici PR su `dev` (#277–#293). Inventario **36 READY · 14 BLOCKER · 6
-OUT**. Revisione indipendente: **NOT READY**, e dopo la memo la ragione ha un
-altro nome — il segnale di autorità è un'ipotesi non falsificata, e il gate non
-è proporzionato al sink. `dev → main` (#289, `dd38d40`) e `muffin update`
-eseguiti: build `dd38d40`, gateway riavviato, `doctor` senza `fail`.
+Quindici PR su `dev` (#277–#295). Inventario **36 READY · 14 BLOCKER · 6
+OUT**, da rifare dopo ADR-0053. `dev → main` (#289, `dd38d40`) e `muffin update`
+eseguiti: build `dd38d40`, `doctor` senza `fail`.
 
 **Ledger di studio:** `docs/evidence/design-study-ledger-2026-09-02.md`,
 evidence datata, non authority — si legge quando il dominio entra nel lavoro.
@@ -57,9 +59,9 @@ evidence datata, non authority — si legge quando il dominio entra nel lavoro.
 
 ## Aperto, non bloccante
 
-**Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il kernel
-rifiuta alla chiamata e il modello impara per rifiuto — incluso il tetto di
-taint. Codex rende `<permission_profile>`, OpenClaw `## Authorized Senders`.
+**Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il modello
+impara per rifiuto. Codex rende `<permission_profile>`, OpenClaw
+`## Authorized Senders`.
 
 **Harness:** il finto Bot API (`evals/acceptance/telegram.ts`) non serve
 `getFile`: B10 (immagini) e C8 (nota vocale) restano senza scenario per questo,

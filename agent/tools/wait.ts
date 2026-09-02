@@ -45,6 +45,7 @@ const CLEAN: 0 = 0;
 
 export const waitCapability: CapabilityDecl = {
   id: 'turn.wait',
+  effect: 'context',
   /**
    * `medium`, not `low`. A wait costs nothing at the moment it is armed and
    * something real afterwards: it holds a row and its whole context, and every
@@ -79,8 +80,14 @@ export const waitCapability: CapabilityDecl = {
    * what the call *commits* (a row, a context, a resumed prefix nothing meters
    * yet). Taint ceiling and risk class are two axes and this tool sits at
    * different points on each. See ADR-0047.
+   *
+   * Since ADR-0053 the three bullets above are not this capability's private
+   * argument any more: they are the definition of the `context` row (bytes
+   * enter the turn, nothing leaves, nothing on the host changes), declared on
+   * the line below. The pin is gone because the row says it for everything
+   * shaped like this, which is the point — one capability at a time is how the
+   * kernel and the printed matrix drifted apart.
    */
-  maxTaint: 3,
   /**
    * `'yes'`: nothing landed in the world, and the barrier can be cleared by
    * finishing the turn. There is no state outside our own database to undo.

@@ -29,6 +29,7 @@ const CLEAN: 0 = 0;
 
 export const todoCapability: CapabilityDecl = {
   id: 'turn.todo',
+  effect: 'context',
   /**
    * `low`. It writes to a table of our own, scoped to the caller's tenant and
    * session by the handler rather than by an argument, and nothing downstream

@@ -62,6 +62,7 @@ class Scripted implements Provider {
 /** Una lettura idempotente e una che non dichiara niente, per il confronto. */
 const LETTURA: CapabilityDecl = {
   id: 'fs.read',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,
