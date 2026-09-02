@@ -1294,3 +1294,54 @@ And such a check needs to prove it looked. The first version could be neutered
 into skipping every tool and stayed green; it now counts what it examined and
 names the tools the defect came from. That is the second time in two days a
 guard's own no-op was the surviving mutation.
+
+## An unreadable source that becomes an empty collection is a false-success channel **(this build)**
+
+`.claude/deleghe.mjs riprendi` ends its briefing with the DAY-1 blockers that no
+delegation names — the one question a dead session can no longer answer. It read
+the inventory from `docs/blueprint/requirements-status.md`, a path that **never
+existed**: the rename slice had moved `M5-BIS.md` to `docs/work/day1/` under a
+new name, and this reader took the new name at the old directory. The read threw
+`ENOENT`; the `catch` around it set the text to `''`; the regex over `''` matched
+nothing; and the briefing printed, for every fresh session from that day on:
+
+```
+═══ BLOCCANTI SENZA DELEGA (0 su 0) ═══
+```
+
+The real inventory had **31 BLOCKER rows, 14 of them without a delegation**.
+Found on 2026-09-01 while measuring consumers before deleting the namespace, not
+by anything that watches the briefing.
+
+**Why no test saw it.** The fixture in `deleghe.test.ts` had no inventory at all.
+Every `riprendi` test therefore ran through the failure branch, and `0 su 0` was
+the suite's *normal* output — the tests had institutionalised the failure mode
+as the baseline. There was nothing for a test to compare against, because
+"nothing to do" is a well-formed answer.
+
+**The defect is a representation, not a `catch`.** `[]` is a legitimate domain
+state here: an inventory with no blockers prints exactly that line. The moment
+the same value also stands for "I could not read the source", success and
+degradation become the same bytes, and no audit of the output can separate them.
+The same script had already learnt this four sections above, for GitHub — a
+`gh` failure that became `''` manufactured *positive* state (every branch
+actionable), and the fix was a separate `SCONOSCIUTE` section. One hundred and
+thirty lines later the file read did the mirror image and manufactured
+*negative* state (nothing uncovered). A lesson learnt for one source does not
+transfer to the next unless the value itself refuses the ambiguity.
+
+The path was only the first door. The regex is the second: change the table's
+columns and a valid, readable file also yields `[]`. The reader now recognises
+the header it can parse before it counts anything.
+
+**Instead:** the reader returns `{ bloccanti }` or `{ errore }`, never an empty
+list for a failed read; `riprendi` prints `INVENTARIO DAY-1 NON DISPONIBILE`
+with the cause and exits non-zero without truncating the rest of the briefing —
+the file belongs to the repository, so its absence is damaged state, not weather.
+The fixture carries a small inventory at the canonical path, and the tests are
+the four states told apart through the real command: `2 su 3`, `0 su 0` from a
+table with no blockers, absent, and present-but-unrecognised. Restoring
+`catch → []` kills one test; removing the header check kills another. The
+general form: **a valid domain value cannot double as the silent sentinel for
+"I do not know the value."** Unavailable needs its own representation, or it
+will be reported as whatever the empty case looks like.

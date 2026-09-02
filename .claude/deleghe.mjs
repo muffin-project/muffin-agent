@@ -620,6 +620,37 @@ function preventivo(n, { modello, tetto, tipo }) {
   console.log('Registra ogni delega prima che parta: node .claude/deleghe.mjs registra <id> <slug> "<cosa>"\n');
 }
 
+const INVENTARIO_DAY1 = 'docs/work/day1/requirements-status.md';
+
+/**
+ * Le righe BLOCKER dell'inventario DAY-1, oppure il motivo per cui non si sa.
+ *
+ * Tre esiti, e i primi due non si confondono col terzo: `{ bloccanti: [...] }`
+ * (ce ne sono), `{ bloccanti: [] }` (l'inventario c'è e non ne ha), oppure
+ * `{ errore }` — file assente, illeggibile, o senza la tabella a quattro
+ * colonne che questo parser sa leggere. Quest'ultimo caso è la deriva gemella
+ * del path sbagliato: se qualcuno cambia le colonne, la regex sotto prende
+ * zero righe da un file valido, e senza il controllo dell'header quello zero
+ * sarebbe di nuovo indistinguibile da «nessun bloccante».
+ */
+function inventarioDay1() {
+  let testo;
+  try {
+    testo = readFileSync(join(REPO, INVENTARIO_DAY1), 'utf8');
+  } catch (e) {
+    return { errore: e.code ?? String(e) };
+  }
+  if (!/^\|\s*#\s*\|\s*Area\s*\|[^|]*\|\s*Stato\s*\|\s*$/m.test(testo)) {
+    return { errore: 'tabella `| # | Area | … | Stato |` non riconosciuta: il parser è più vecchio del file' };
+  }
+  const bloccanti = [...testo.matchAll(/^\|\s*([A-E]\d+)\s*\|([^|]*)\|([^|]*)\|\s*(BLOCKER[^|]*)\|/gm)].map((m) => ({
+    id: m[1],
+    area: m[2].trim(),
+    stato: m[4].trim(),
+  }));
+  return { bloccanti };
+}
+
 /**
  * Il quadro con cui una sessione NUOVA riprende senza rifare niente.
  *
@@ -771,22 +802,25 @@ function riprendi() {
 
   // Cosa manca: le righe bloccanti dell'inventario che nessuna delega nomina.
   // È la domanda a cui una sessione morta non saprebbe più rispondere.
-  let inventario = '';
-  try {
-    inventario = readFileSync(join(REPO, 'docs', 'work', 'day1', 'requirements-status.md'), 'utf8');
-  } catch {
-    /* niente inventario, niente scoperto */
+  const inv = inventarioDay1();
+  if (inv.errore) {
+    // Un inventario che non si legge non è un inventario vuoto. Fino al
+    // 2026-09-01 il read failure diventava `''`, quindi `[]`, quindi
+    // `0 su 0`: la stessa riga che un inventario davvero senza bloccanti
+    // avrebbe stampato — mentre quello vero ne aveva 31, 14 senza delega.
+    // Come `diagnosi`, esce ≠ 0 senza troncare il briefing: il file è del
+    // repo, il guasto non si risolve da solo, e un cancello deve poterlo
+    // leggere senza interpretare la prosa.
+    console.log(`\n═══ INVENTARIO DAY-1 NON DISPONIBILE — i bloccanti senza delega sono sconosciuti ═══`);
+    console.log(`  ${INVENTARIO_DAY1}: ${inv.errore}`);
+    process.exitCode = 1;
+  } else {
+    const testoDeleghe = reg.map((v) => `${v.slug} ${v.cosa ?? ''}`).join(' ');
+    const scoperte = inv.bloccanti.filter((b) => !new RegExp(`\\b${b.id}\\b`).test(testoDeleghe));
+    console.log(`\n═══ BLOCCANTI SENZA DELEGA (${scoperte.length} su ${inv.bloccanti.length}) ═══`);
+    for (const b of scoperte) console.log(`  ${b.id.padEnd(4)} ${b.area.padEnd(16)} ${b.stato}`);
   }
-  const bloccanti = [...inventario.matchAll(/^\|\s*([A-E]\d+)\s*\|([^|]*)\|([^|]*)\|\s*(BLOCKER[^|]*)\|/gm)].map((m) => ({
-    id: m[1],
-    area: m[2].trim(),
-    stato: m[4].trim(),
-  }));
-  const testoDeleghe = reg.map((v) => `${v.slug} ${v.cosa ?? ''}`).join(' ');
-  const scoperte = bloccanti.filter((b) => !new RegExp(`\\b${b.id}\\b`).test(testoDeleghe));
-  console.log(`\n═══ BLOCCANTI SENZA DELEGA (${scoperte.length} su ${bloccanti.length}) ═══`);
-  for (const b of scoperte) console.log(`  ${b.id.padEnd(4)} ${b.area.padEnd(16)} ${b.stato}`);
-  console.log('\nHandoff: docs/work/handoff.md · Requisiti DAY-1: docs/work/day1/requirements-status.md');
+  console.log(`\nHandoff: docs/work/handoff.md · Requisiti DAY-1: ${INVENTARIO_DAY1}`);
   console.log('Recupero di una delega morta: node .claude/deleghe.mjs raccogli <id>\n');
 }
 
