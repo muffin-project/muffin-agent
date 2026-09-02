@@ -23,11 +23,13 @@ vengono prima di allargare capability o architettura.
 ## Ordine corrente
 
 ```text
-1  decisione owner: il soffitto di fs.write dopo una lettura
+0  dogfood reale — parte subito, in parallelo, con la shell come porta di scrittura
         ↓
-2  undo semantico (l'altra metà di D11, raggiungibile solo dopo 1)
+1  eval di sicurezza: adapter B + corpus avversariale sul binario + scene di sink
         ↓
-3  dogfood reale e backlog guidato dai fallback
+2  la decisione sul segnale di autorità (qui torna l'A/B/C, o muore)
+        ↓
+3  undo semantico (l'altra metà di D11, raggiungibile solo dopo 2)
         ↓
 4  battery finale e revisione indipendente del dev integrato
 ```
@@ -36,10 +38,16 @@ I prerequisiti vocali sono sulla macchina dell'owner dal 02/09 e `doctor` li
 controlla; la promozione `dev → main` e `muffin update` sono stati eseguiti lo
 stesso giorno (build installata `dd38d40`): non sono più passi.
 
-L'ordine 1 → 2 si è invertito il 02/09 per una misura, non per gusto: sul
-database dell'owner `fs.write` non è mai stata eseguita, e la metà di undo che
-riallinea il turno ripara un percorso che oggi nessun turno raggiunge. Prima si
-apre la porta, poi si ripara ciò che c'è dietro.
+L'ordine è cambiato di nuovo il 02/09, e stavolta la causa è più a monte: il
+soffitto di `fs.write` non è più il primo passo perché **non è chiaro che sia il
+difetto**. La memo di decisione
+(`docs/evidence/decision-memo-taint-2026-09-02.md`) misura che il gate più
+stretto sta sulla porta più innocua — la scrittura locale reversibile con
+journal — mentre la risposta in chat e la scrittura di memoria non passano
+affatto dal kernel. Finché l'eval non dice se il segnale di autorità è
+sbagliato o solo tarato male, spostare un numero sarebbe rispondere prima di
+aver misurato. La metà di undo di D11 resta dietro quella decisione per la
+ragione di prima: ripara un percorso che oggi nessun turno raggiunge.
 
 ### Chiudere la compensazione, non solo il restore
 
@@ -69,7 +77,14 @@ PR #186 è chiusa senza merge (30/08, SALVAGE: miniera, non rebase) e il ramo
 
 ### Decidere il workflow locale read → write
 
-**È un bivio dell'owner, e il 02/09 è istruito.** `sys.shell` è `high` con
+**SOSPESO il 02/09, dopo la misura.** Le opzioni qui sotto restano scritte
+perché la decisione tornerà, ma non si sceglie ora: la memo
+`docs/evidence/decision-memo-taint-2026-09-02.md` mostra che A/B/C sono varianti
+della candidate «tieni lo scalare ambientale e sposta il numero», e che
+l'incumbent è un'ipotesi con una barra di falsificazione già scritta
+(`docs/SECURITY.md:404-417`). Prima l'eval comparativo, poi la scelta.
+
+**Il bivio, come era istruito il 02/09.** `sys.shell` è `high` con
 `maxTaint: 2` (revisione ADR-0044 del 16/08): dopo una lettura è un ASK.
 `fs.write` è `medium` + `undoable` con il soffitto di classe 1: dopo una
 lettura è un DENY. Quindi oggi, in un turno che ha letto un file, l'unico modo

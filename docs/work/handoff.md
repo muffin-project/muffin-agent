@@ -20,15 +20,16 @@ vocali: il meccanismo è su `dev` e la macchina è pronta** (whisper.cpp, ffmpeg
 `ggml-base.bin` installati il 02/09; `doctor` ha la riga `note vocali`, verde
 sull'installazione; una frase sintetizzata con `say` è tornata testo corretto).
 
-## Bivio owner n. 1: il soffitto delle capability `medium` a taint 2
+## Bivio owner n. 1: SOSPESO — prima l'eval, poi il soffitto
 
 Su Telegram il turno parte a taint 2 (history reiniettata) e `fs.write`,
-`send_file`, `skill.read`, `process.list` sono DENY secchi; solo `/new` pulisce.
-Misurato: le tre superfici decidono **identico** a parità di history, e
-`leggi → scrivi` in un turno solo è `taint_exceeded` anche senza history: la
-vita della sessione non è la causa, il soffitto sì.
-Opzioni A/B/C e raccomandazione (**B, sull'intera classe**) in
-critical-path.md#decidere-il-workflow-locale-read--write. Decisione minima: A, B o C.
+`send_file`, `skill.read` sono DENY secchi. Ma il 02/09 la misura ha spostato la
+domanda: le tre superfici decidono identico, `leggi → scrivi` in un turno solo è
+`taint_exceeded` anche senza history, e il gate più stretto sta sulla porta più
+innocua mentre la risposta in chat e la scrittura di memoria non passano dal
+kernel. A/B/C sono varianti di «sposta il numero»: sospesi.
+Memo: `docs/evidence/decision-memo-taint-2026-09-02.md`. Prossimo artefatto: il
+terzo adapter in `evals/security/` e un corpus avversariale sul binario.
 
 ## Bivio owner n. 2: un tool `jobs` per il modello
 
@@ -42,13 +43,11 @@ non ha nessun accesso web: 0 `web_search`, 0 `http_get` in 165 turni) ·
 
 ## Il 02/09
 
-Dodici PR su `dev` (#277–#288): ledger, F5, riconciliazione, `doctor` note
-vocali, «un tool che non c'è non è una policy», F6, quattro journey, tetto
-accettazione, stato.
-Inventario **36 READY · 14 BLOCKER · 6 OUT**. Revisione indipendente del `dev`
-integrato: **NOT READY** per il bivio n. 1. Promozione `dev → main` fatta
-(#289, `dd38d40`) e `muffin update` eseguito sull'installazione reale: build
-`dd38d40`, gateway riavviato da launchd, `doctor` senza `fail`.
+Quattordici PR su `dev` (#277–#293). Inventario **36 READY · 14 BLOCKER · 6
+OUT**. Revisione indipendente: **NOT READY**, e dopo la memo la ragione ha un
+altro nome — il segnale di autorità è un'ipotesi non falsificata, e il gate non
+è proporzionato al sink. `dev → main` (#289, `dd38d40`) e `muffin update`
+eseguiti: build `dd38d40`, gateway riavviato, `doctor` senza `fail`.
 
 **Ledger di studio:** `docs/evidence/design-study-ledger-2026-09-02.md`,
 evidence datata, non authority — si legge quando il dominio entra nel lavoro.
