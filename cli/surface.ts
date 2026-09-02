@@ -311,6 +311,18 @@ export function cmdSurfaceDisable(home: string, id: string): number {
  * risponderebbe non-ok, cioè «non so»: si trascrive in casa, che è il ramo
  * conservativo.
  */
+/**
+ * A gateway log line carries its time.
+ *
+ * `gateway.err` recorded only failures and never dated them: it said *how
+ * many* times Telegram polling failed, never *for how long* — and deducing a
+ * duration from that file cost nineteen hours of misdiagnosis once (handoff,
+ * 2026-08-30). One prefix, one place, for every surface that logs here.
+ */
+export function rigaDiLog(line: string): void {
+  process.stderr.write(`\r${new Date().toISOString()} ${line}\n`);
+}
+
 function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
   const audio = runtime.config.audio;
   const modello = audio?.whisperModel ?? paths(home).whisperModel;
@@ -588,7 +600,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: (line) => process.stderr.write(`\r${line}\n`),
+          log: rigaDiLog,
         });
 
         // Registrato prima di far partire il connettore: un turno che chiede
@@ -683,7 +695,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: (line) => process.stderr.write(`\r${line}\n`),
+          log: rigaDiLog,
         });
 
         // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
