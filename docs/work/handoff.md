@@ -40,6 +40,14 @@ Trappole dove sta il meccanismo: `riprendi/SKILL.md`, `architecture-map/ancore.m
 `rules/decisioni.md` (**F7**). `riprendi` ora esce ≠0 se l'inventario DAY-1 non
 si legge: «0 su 0» era il path morto, non i bloccanti (lesson del 2/09).
 
+## Il ledger di studio è congelato
+
+`docs/evidence/design-study-ledger-2026-09-02.md` è lo snapshot datato del
+reasoning di design fatto fino al 2/09: challenge set, invarianti candidate,
+alternative scartate, domande aperte. È evidence, non authority: si legge
+quando il dominio entra nel lavoro, e una sua voce non si implementa perché è
+lì.
+
 ## Parcheggiato: le richieste differite
 
 `docs/evidence/richieste-differite-2026-08-30.md` — misure, non una forma:
