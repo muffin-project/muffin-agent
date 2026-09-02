@@ -1518,15 +1518,32 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
 });
 
 describe('doctor says whether a voice note would be understood, before the first one arrives', () => {
-  it('is ok, naming the model, when the configured model accepts audio', async () => {
+  // Voice notes arrive from Telegram/Discord: the row only has something to
+  // say once such a surface is enabled. `runInit` enables the CLI alone.
+  const conTelegram = (dir: string): string => {
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = { ...config.surfaces, enabled: ['cli', 'telegram'] };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  it('says there is nothing to prepare when no voice-carrying surface is enabled', async () => {
     const dir = home();
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/nessuna superficie vocale/);
+  });
+
+  it('is ok, naming the model, when the configured model accepts audio', async () => {
+    const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => true } });
     expect(c?.level).toBe('ok');
     expect(c?.detail).toMatch(/accetta audio/);
   });
 
   it('warns, naming each missing prerequisite with its command, when the model does not listen and nothing is installed', async () => {
-    const dir = home();
+    const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
     expect(c?.level).toBe('warn');
     expect(c?.detail).toMatch(/ffmpeg non è installato/);
@@ -1539,7 +1556,7 @@ describe('doctor says whether a voice note would be understood, before the first
   });
 
   it('is ok, naming the local transcription, when the binaries and the model are there', async () => {
-    const dir = home();
+    const dir = conTelegram(home());
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     writeFileSync(join(bin, 'ffmpeg'), '');
@@ -1553,7 +1570,7 @@ describe('doctor says whether a voice note would be understood, before the first
   });
 
   it('takes the transcription branch when the probe fails, like the runtime does', async () => {
-    const dir = home();
+    const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', {
       voce: {
         accettaAudio: async () => {
