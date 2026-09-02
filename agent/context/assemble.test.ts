@@ -125,6 +125,12 @@ describe('the owner-class prompt does not move', () => {
    * tolto dall'intestazione. Pin precedente:
    * `81f2e880260f50e2621affa008bb64980e8d4dff10981a37535513f57be986ed`.
    *
+   * Ri-fissato 2026-09-02 (`slice/un-tool-che-non-ce-non-e-una-policy`): una
+   * regola in più in `WORK_RULES`, dalla misura dell'episodio 310 del database
+   * dell'owner — il modello aveva spiegato un tool che non esiste come una
+   * policy di taint. Ordine di assemblaggio invariato. Pin precedente:
+   * `dfc6b43c667cdac8341b30ac54591e15ffc8657db9c271334aadb5e921f82e97`.
+   *
    * Ri-fissato 2026-08-28 (`slice/prompt-senza-eco`): `persona.md` è passato da
    * 7.528 a 4.629 byte. Non è una potatura estetica — è la conseguenza di una
    * cosa che si vede solo guardando i blocchi **insieme**: `identity.md` spedisce
@@ -157,7 +163,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'dfc6b43c667cdac8341b30ac54591e15ffc8657db9c271334aadb5e921f82e97';
+    'ac57a24adb0fa04428a72c9b6ba363e54f341db829835854a9faa51897fd41a7';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un

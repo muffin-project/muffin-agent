@@ -193,6 +193,26 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'job-fires: a real SIGKILL between binding a fire and creating its turn, and another between the turn finishing and settlement, both recover to exactly one delivered turn — the model called exactly once',
   ),
   verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
+  // New (slice/journey-capability): B6 was BLOCKER only for a missing
+  // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
+  // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
+  // was never proven is `agent/tools/http.ts` wired to the real binary. A
+  // completed 503-then-200 round trip through a local fake server turns out
+  // to be unreachable from this harness: `addressVeto`
+  // (`core/net/egress.ts#isForbiddenAddress`, called on every hop) refuses
+  // every address a subprocess-local test can bind a listener to — loopback,
+  // all of RFC1918, CGNAT, link-local, multicast/reserved and their IPv6
+  // equivalents — independent of the allowlist. Same class of gap the
+  // manifest already accepts for D7's tavily happy path. Does not promote the
+  // row past `?`: what this proves instead, on the real binary, is that the
+  // SSRF floor holds even past an explicit allowlist entry, that the refusal
+  // is never retried (bounded, not a silent retry loop on a dead target), and
+  // that the refusal travels the ordinary `tier: 0` result path rather than
+  // an exception.
+  verde(
+    'B6',
+    'retry boundary: an explicitly allowlisted loopback host is still refused by the address floor — never reaches the network, and the refusal is recorded once, not retried',
+  ),
   // Promoted (this slice): `Deliver` returns a typed `DeliveryOutcome` and
   // `Scheduler.settle` is markRan's only caller (ADR-0035, PR #42). The
   // fire still advances on a failed delivery — that stays true on purpose,
@@ -226,6 +246,28 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'D1',
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
+  ),
+  // New (slice/journey-capability): the row was BLOCKER only for a missing
+  // scenario. shell_run is registered only when the sandbox probe held on
+  // this host (agent/runtime.ts), and sys.shell is `high` risk — single-user
+  // (the only mode `install()` builds) always asks, and headless `muffin run`
+  // has no approval channel. The honest boundary this scenario proves: the
+  // tool is offered (sandbox proven live), and the resulting ASK shows the
+  // exact command and cwd — not that the command executes end to end, which
+  // stays the unit suite's and the CI gate's proof.
+  verde(
+    'D4',
+    'shell: a scripted shell_run is only ever offered after a live sandbox probe, and the resulting ASK shows the real command and cwd',
+  ),
+  // New (slice/journey-capability): same shape as D4 for sys.process.kill —
+  // process_list/process_kill act on the host's real process table, not a
+  // sandbox. list proves pid+command name reach the model with no argv
+  // leaked (PS_ARGV asks for comm, never args); kill proves the pid reaches
+  // the ASK, never the real signal — sys.process.kill is `high` risk, same
+  // single-user/no-channel boundary as D4.
+  verde(
+    'D5',
+    'process: a real long-lived child is listed by pid and command name with no argv leaked, and killing it stops on the same headless ASK boundary as shell',
   ),
   // Riscritto (slice/undo-journal): asseriva che il file NON atterrasse, che
   // era vero e non era la domanda della riga. `draft` senza registro di undo
@@ -331,6 +373,16 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // e-cost.accept.ts. The row stays `?` in requirements-status.md; only one failure class
   // (the contradiction judge) is proven explicit-and-explained here.
   verde('E5', 'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim'),
+  // New (slice/journey-capability): the row was BLOCKER only for a missing
+  // scenario — the mechanism (sys_inspect, #176) already read from the same
+  // authoritative sources as `doctor`/`prompt show`. Proves the acceptance
+  // criterion the row itself states: asking twice, with a real condition
+  // (the main model) changed in between through `muffin model main`, must
+  // show the new state and not repeat the old one.
+  verde(
+    'E7',
+    "self-inspection: sys_inspect answers with this instance's live config, and after a real `muffin model main` change the second answer reflects it instead of repeating the first",
+  ),
 ] as const;
 
 export function entry(row: string): ScenarioEntry {

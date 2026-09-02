@@ -346,4 +346,92 @@ describe('acceptance · E · economia e osservabilità', () => {
     },
     20_000,
   );
+
+  /**
+   * E7 — self-inspection: distingue architettura/progetto da stato live
+   * dell'istanza, o recita design decaduto?
+   *
+   * `sys_inspect` (`agent/tools/inspect.ts`) è atterrato (#176) e legge dalle
+   * stesse fonti autorevoli di `doctor`/`prompt show` — mai una seconda
+   * risposta ricalcolata. Il gap che rendeva la riga BLOCKER non era il
+   * meccanismo (quello ha 21 chiamate reali nel `muffin.db` dell'owner), era
+   * l'assenza di uno scenario di accettazione: nessuno aveva mai chiesto,
+   * attraverso il binario reale, "recita ancora lo stato vecchio dopo che una
+   * condizione reale è cambiata?" — che è esattamente la domanda con cui la
+   * riga stessa chiude l'acceptance criteria.
+   *
+   * La condizione fatta cambiare qui è il modello main (`muffin model main
+   * <slug>`): con un endpoint fuori catalogo (il provider finto lo è sempre)
+   * `cmdModel` scrive lo slug senza poterlo verificare — nessuna chiamata di
+   * rete, nessuna approvazione, la scelta più economica e deterministica fra
+   * le condizioni che il report nomina esplicitamente ("modello ... in uso").
+   */
+  scenario(
+    'E7',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'sys_inspect', args: {} } },
+          { text: 'ecco lo stato di questa istanza' },
+          { tool: { name: 'sys_inspect', args: {} } },
+          { text: 'ecco lo stato aggiornato' },
+        ],
+      });
+      try {
+        const first = await inst.muffin(['run', '--timeout', '20', 'spiegami tecnicamente come funzioni e cosa stai usando adesso']);
+        if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
+
+        // Il tool_result di sys_inspect viaggia dentro la SECONDA richiesta al
+        // modello finto (la prima è quella che ha chiesto sys_inspect).
+        const beforeCalls = inst.provider.main();
+        if (beforeCalls.length < 2) {
+          throw new Error(`atteso un secondo giro dopo sys_inspect, chiamate: ${beforeCalls.length}`);
+        }
+        const before = beforeCalls[1]!.transcript;
+        if (!before.includes('modello: anthropic/claude-sonnet-5 (main)')) {
+          throw new Error(`il report non nomina il modello main iniziale, letto dalla config reale:\n${before}`);
+        }
+        if (!before.includes('root of trust: single-user, integro')) {
+          throw new Error(`il report non nomina lo stato live del root of trust:\n${before}`);
+        }
+        if (!before.includes('sys_inspect')) {
+          throw new Error(`il report non elenca sys_inspect fra le capability esposte a questo turno:\n${before}`);
+        }
+
+        // La condizione reale cambia: nessuna finzione, `muffin model` scrive
+        // davvero config.json (cli/model.ts, ramo "endpoint fuori dal
+        // catalogo" — il provider finto non è mai in nessun catalogo noto).
+        const cambiato = await inst.muffin(['model', 'main', 'test-model-e7-live']);
+        if (cambiato.code !== 0) {
+          throw new Error(`muffin model main: exit ${cambiato.code}\nout: ${cambiato.out}\nerr: ${cambiato.err}`);
+        }
+        if (!cambiato.out.includes('test-model-e7-live')) {
+          throw new Error(`muffin model non conferma la scrittura: ${JSON.stringify(cambiato.out)}`);
+        }
+
+        const second = await inst.muffin(['run', '--timeout', '20', 'spiegami di nuovo tecnicamente cosa stai usando adesso']);
+        if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
+
+        const afterCalls = inst.provider.main();
+        if (afterCalls.length < 4) {
+          throw new Error(`atteso un quarto giro dopo il secondo sys_inspect, chiamate: ${afterCalls.length}`);
+        }
+        const after = afterCalls[3]!.transcript;
+        // Design ≠ stato live è esattamente il punto della riga: se
+        // `sys_inspect` leggesse da qualcosa di cacheato o dal system prompt
+        // invece che da `sources.config` fresco a ogni chiamata, questa
+        // asserzione lo scoprirebbe qui, non a mano sull'installazione
+        // dell'owner.
+        if (!after.includes('modello: test-model-e7-live (main)')) {
+          throw new Error(`il report NON riflette il cambio di modello reale — recita ancora lo stato vecchio:\n${after}`);
+        }
+        if (after.includes('anthropic/claude-sonnet-5')) {
+          throw new Error(`il report ripete ancora il modello iniziale dopo il cambio: BROKEN, non distingue design da live:\n${after}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
 });
