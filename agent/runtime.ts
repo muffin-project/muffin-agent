@@ -161,6 +161,17 @@ export type Runtime = {
   close(): void;
 };
 
+/**
+ * Same parse `cli/gateway.ts#tickMsFromEnv` uses, for the same reason: a
+ * test-only timing knob that is a silent no-op on anything but a positive
+ * finite number, never a thrown error over a malformed env var.
+ */
+function msFromEnv(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 export function buildRuntime(
   home = paths().home,
   cwd = process.cwd(),
@@ -644,6 +655,17 @@ export function buildRuntime(
   const approvals = new ApprovalStore(db);
 
   /**
+   * Test-only override of the trailing-edge debounce, a no-op unless a
+   * scenario sets the env var — same precedent as `MUFFIN_GATEWAY_TICK_MS`
+   * (`cli/gateway.ts`) and `MUFFIN_JOB_FIRES_STALL_*` (`agent/scheduler-run.ts`).
+   * `CONSOLIDATION_IDLE_MS` is 20s, correct for a real conversation and far
+   * too long for a scenario that has to prove the trailing edge fires at all
+   * without either sleeping 20s or asserting nothing. Never set outside
+   * `evals/acceptance`.
+   */
+  const memoryIdleMsOverride = msFromEnv(process.env['MUFFIN_MEMORY_IDLE_MS']);
+
+  /**
    * The thing that makes memory fill itself (ADR-0038).
    *
    * Built here and not in the gateway, deliberately: turns happen in whichever
@@ -655,6 +677,7 @@ export function buildRuntime(
    */
   const consolidation = new Consolidator({
     db,
+    ...(memoryIdleMsOverride === undefined ? {} : { idleMs: memoryIdleMsOverride }),
     budgetExhausted: () => budget.exhausted(),
     ingest: (limit) =>
       ingestPending(
