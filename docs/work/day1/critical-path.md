@@ -81,13 +81,32 @@ lo scope), ma la porta sicura è quella negata. ADR-0044 §«Reversibilità» di
 già dove si interviene: il soffitto della capability che agisce, non il tier
 della lettura.
 
-Le opzioni restano dell'owner (confine di sicurezza): alzare `fs.write` a
-`maxTaint: 2` lasciando `draft` automatico anche a taint 2; alzarlo a 2 ma con
-`draft` solo a taint 0 e ASK sopra — parità con la shell, più il checkpoint;
-oppure lasciare tutto com'è. La raccomandazione e le conseguenze stanno nel
-handoff finché l'owner non decide; poi la decisione entra come emendamento di
-ADR-0044 e in `agent/tools/fs.ts`, con il costo dichiarato come test come per
-la shell.
+**La classe è più larga di `fs.write`, e su Telegram è permanente** (revisione
+indipendente del 02/09): a taint 2 sono DENY secchi tutte le capability
+`medium` senza `maxTaint` proprio — `fs.write`, `surface.send_file`,
+`skill.read` (`maxTaint: 1`), `sys.process.list` — e ogni URL fuori allowlist.
+Il taint non nasce solo dalla lettura del turno: la history reiniettata
+(finestra di 40 messaggi, `agent/context/history-taint.ts`) porta il turno a 2
+prima che l'owner scriva — misurato sulla sessione Telegram reale, 17 messaggi
+tier-2 su 40 — e la sessione Telegram è una per chat, quindi solo `/new` la
+pulisce. La CLI lo evita solo perché ogni `muffin` apre una sessione nuova.
+
+Le opzioni restano dell'owner (confine di sicurezza):
+
+| opzione | cosa cambia | costo |
+|---|---|---|
+| A. `maxTaint: 2` sulla classe, `draft` automatico anche a taint 2 | scrive/invia senza chiedere, con checkpoint+undo dove c'è | un file letto può far scrivere un altro file nello scope senza che l'owner lo veda (es. `.git/hooks/`) |
+| B. `maxTaint: 2` sulla classe, `draft`/`allow` solo a taint 0, ASK sopra | parità con la shell più il checkpoint: l'ASK mostra path/byte, poi scrive revocabile | un ASK in più per ogni write/invio in un turno a taint 2 |
+| C. lasciare com'è | niente | read→write resta nella shell senza undo; `send_file` e le skill restano chiusi su Telegram; D11 irraggiungibile |
+
+**Raccomandazione: B**, sull'intera classe e non su `fs.write` sola: è il
+precedente di ADR-0044 per la shell applicato alle porte che hanno il journal;
+l'egress non si tocca (`sys.http` fuori allowlist resta DENY a taint ≥ 2) e la
+monotonicità della provenienza resta. Entra come emendamento di ADR-0044 e del
+threat model (`03` §3, riga «filesystem host · taint 2 · DENY»), in
+`agent/tools/*.ts` e in `decide.ts`, con il costo dichiarato come test (come
+`shell.test.ts` §«il costo»), profilo CRITICAL. Nel dato niente diventa
+irreversibile. **La decisione minima: A, B o C.**
 
 È già un failure osservato, quindi precede qualunque discussione astratta sulla
 breadth dei tool: leggere un file porta oggi il turno a taint 2 e la scrittura
