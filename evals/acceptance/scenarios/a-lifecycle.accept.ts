@@ -625,8 +625,15 @@ describe('acceptance · A6 · update: backup before swap', () => {
           writeFileSync(join(seedDir, 'dist', 'core', 'db', 'migrate.js'), `export function currentSchemaVersion(){ return ${schemaVersion}; }\n`);
         };
 
-        git(['init', '-q', '--bare', originDir], root);
-        git(['init', '-q', seedDir], root);
+        // `--initial-branch=main` on both, and it is not cosmetic: the seed
+        // pushes to `refs/heads/main`, and a clone checks out whatever HEAD the
+        // bare origin points at. With the developer's global config masked
+        // (`GIT_CONFIG_GLOBAL=/dev/null`) that HEAD is git's own default —
+        // `master` on CI's git — a branch nobody pushed, so the clone's HEAD is
+        // unborn and `rev-parse HEAD` exits 128. Green on a laptop whose git
+        // defaults to `main`, red on Linux: the class `lessons.md` already names.
+        git(['init', '-q', '--bare', '--initial-branch=main', originDir], root);
+        git(['init', '-q', '--initial-branch=main', seedDir], root);
         writeFileSync(join(seedDir, 'package.json'), JSON.stringify({ name: 'scratch', version: '1.0.0', type: 'module' }));
         writeFileSync(
           join(seedDir, 'package-lock.json'),
