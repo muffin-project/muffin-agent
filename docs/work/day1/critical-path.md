@@ -27,14 +27,24 @@ vengono prima di allargare capability o architettura.
         ↓
 1  le righe: il soffitto viene dalla riga di effetto (ADR-0053) — fatto
         ↓
-2  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
+2  le superfici che il dogfood ha bocciato (memo dogfood-superfici 03/09):
+   2a Telegram: una bolla per segmento, ASK intero, `description` su shell_run
+   2b CLI: scroll region, casella e stato in fondo
+   2c input mentre un turno è vivo: coda, /steer, /stop, /pause, /resume (ADR-0054)
+   2d la corsia end-to-end REALE (modello e Bot API veri, in locale)
         ↓
-3  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
+3  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
         ↓
-4  undo semantico (l'altra metà di D11)
+4  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
         ↓
-5  battery finale e revisione indipendente del dev integrato
+5  undo semantico (l'altra metà di D11)
+        ↓
+6  battery finale e revisione indipendente del dev integrato
 ```
+
+Il punto 2 precede le porte perché è ciò che rende il dogfood **sopportabile**:
+senza, l'owner torna al vecchio agente prima che il punto 3 serva a qualcuno.
+2d va costruita con 2a e non dopo: è la prova che 2a e 2b chiedono.
 
 Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
 **riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa
