@@ -1516,3 +1516,52 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     expect(chiesto).toBe(false);
   });
 });
+
+describe('doctor says whether a voice note would be understood, before the first one arrives', () => {
+  it('is ok, naming the model, when the configured model accepts audio', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => true } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/accetta audio/);
+  });
+
+  it('warns, naming each missing prerequisite with its command, when the model does not listen and nothing is installed', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toMatch(/ffmpeg non è installato/);
+    expect(c?.detail).toMatch(/whisper\.cpp non è installato/);
+    expect(c?.detail).toMatch(/modello whisper/);
+    expect(c?.detail).toMatch(/la prima nota vocale fallirebbe/);
+    expect(c?.remedy).toContain('brew install ffmpeg');
+    expect(c?.remedy).toContain('brew install whisper-cpp');
+    expect(c?.remedy).toContain('ggml-base.bin');
+  });
+
+  it('is ok, naming the local transcription, when the binaries and the model are there', async () => {
+    const dir = home();
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    mkdirSync(join(dir, 'models'));
+    writeFileSync(join(dir, 'models', 'ggml-base.bin'), '');
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: bin } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/si trascrive in casa/);
+    expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
+  });
+
+  it('takes the transcription branch when the probe fails, like the runtime does', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'note vocali', {
+      voce: {
+        accettaAudio: async () => {
+          throw new Error('rete giù');
+        },
+        path: join(dir, 'vuota'),
+      },
+    });
+    expect(c?.level).toBe('warn');
+  });
+});
