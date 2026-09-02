@@ -52,6 +52,7 @@ const toolCall = (name: string): ChatResult => ({
 
 const decl: CapabilityDecl = {
   id: 'demo.read',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,

@@ -78,6 +78,7 @@ const answer = (text: string): ChatResult => ({
 
 const decl = (id: string): CapabilityDecl => ({
   id,
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,

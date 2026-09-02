@@ -26,7 +26,7 @@
   },
   "agent/loop.test.ts:527": {
     "path": "agent/loop.test.ts",
-    "line": 541,
+    "line": 545,
     "testo": "// And a no is a no: the tool does not run, and the model is told not to push."
   },
   "agent/loop.ts:102": {
@@ -524,60 +524,45 @@
     "line": 75,
     "testo": "text:"
   },
-  "agent/tools/fs.ts:105": {
-    "path": "agent/tools/fs.ts",
-    "line": 106,
-    "testo": "* separately gated — off-allowlist above taint 1 is DENY, never ask\"*. True"
-  },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
     "line": 109,
     "testo": "* read an injected file was still at taint 0 and the off-allowlist host came"
   },
-  "agent/tools/fs.ts:123": {
-    "path": "agent/tools/fs.ts",
-    "line": 124,
-    "testo": "* one legitimate direction is tightening (`core/policy/matrix.ts`)."
-  },
   "agent/tools/fs.ts:145": {
     "path": "agent/tools/fs.ts",
-    "line": 182,
+    "line": 185,
     "testo": "id: 'fs.write',"
+  },
+  "agent/tools/fs.ts:182": {
+    "path": "agent/tools/fs.ts",
+    "line": 182,
+    "testo": "hostOnly: true,"
   },
   "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 366,
+    "line": 370,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 785,
+    "line": 789,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
-    "line": 785,
+    "line": 789,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:571": {
     "path": "agent/tools/fs.ts",
-    "line": 864,
+    "line": 868,
     "testo": "resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),"
   },
   "agent/tools/fs.ts:62": {
     "path": "agent/tools/fs.ts",
     "line": 63,
     "testo": "* destination and wait for a tired yes. The whole chain closes at 2 and nowhere"
-  },
-  "agent/tools/fs.ts:65": {
-    "path": "agent/tools/fs.ts",
-    "line": 66,
-    "testo": "* leaves nothing to say about something genuinely worse — and it would put the"
-  },
-  "agent/tools/fs.ts:69": {
-    "path": "agent/tools/fs.ts",
-    "line": 70,
-    "testo": "* tempting one: it is a rule you evade by *moving a file*, and it buys less"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
@@ -594,6 +579,11 @@
     "line": 80,
     "testo": "* moment anything wrote it inside the home."
   },
+  "agent/tools/fs.ts:86": {
+    "path": "agent/tools/fs.ts",
+    "line": 86,
+    "testo": "export const DISK_TIER: TrustTier = 2;"
+  },
   "agent/tools/fs.ts:89": {
     "path": "agent/tools/fs.ts",
     "line": 90,
@@ -606,12 +596,12 @@
   },
   "agent/tools/http.ts:116": {
     "path": "agent/tools/http.ts",
-    "line": 142,
+    "line": 146,
     "testo": "if (hop > 0 && !hostAllowed(current.hostname, policy)) {"
   },
   "agent/tools/http.ts:192": {
     "path": "agent/tools/http.ts",
-    "line": 228,
+    "line": 232,
     "testo": "return isForbiddenAddress(literal) ? `address not routable from here: ${literal}` : null;"
   },
   "agent/tools/http.ts:22": {
@@ -626,52 +616,52 @@
   },
   "agent/tools/http.ts:41": {
     "path": "agent/tools/http.ts",
-    "line": 49,
+    "line": 53,
     "testo": "hostOnly: false,"
   },
   "agent/tools/mcp.ts:104": {
     "path": "agent/tools/mcp.ts",
-    "line": 104,
+    "line": 111,
     "testo": "description: fenced.block,"
   },
   "agent/tools/mcp.ts:118": {
     "path": "agent/tools/mcp.ts",
-    "line": 118,
+    "line": 125,
     "testo": "// door; `throwTier: 3` is the declared ceiling for whatever this"
   },
   "agent/tools/mcp.ts:24": {
     "path": "agent/tools/mcp.ts",
     "line": 24,
-    "testo": "* That ceiling is INHERITED from the class default, not pinned here, and the"
+    "testo": "* That ceiling used to be INHERITED from the class default, and the sentence"
   },
   "agent/tools/mcp.ts:30": {
     "path": "agent/tools/mcp.ts",
-    "line": 30,
+    "line": 32,
     "testo": "export function mcpCapabilityFor(server: string): CapabilityDecl {"
   },
   "agent/tools/mcp.ts:54": {
     "path": "agent/tools/mcp.ts",
-    "line": 54,
+    "line": 61,
     "testo": "/** Injectable for tests. */"
   },
   "agent/tools/mcp.ts:71": {
     "path": "agent/tools/mcp.ts",
-    "line": 71,
+    "line": 78,
     "testo": "const detail = error instanceof Error ? error.message : String(error);"
   },
   "agent/tools/mcp.ts:93": {
     "path": "agent/tools/mcp.ts",
-    "line": 93,
+    "line": 100,
     "testo": "}"
   },
   "agent/tools/memory.ts:112": {
     "path": "agent/tools/memory.ts",
-    "line": 115,
+    "line": 116,
     "testo": "export async function searchMemory("
   },
   "agent/tools/memory.ts:145": {
     "path": "agent/tools/memory.ts",
-    "line": 148,
+    "line": 149,
     "testo": "return { content: 'memory_search: \"around\" deve essere un numero.', isError: true, tier: 0 };"
   },
   "agent/tools/memory.ts:21": {
@@ -691,12 +681,12 @@
   },
   "agent/tools/memory.ts:32": {
     "path": "agent/tools/memory.ts",
-    "line": 32,
+    "line": 33,
     "testo": "// rows or fresher ones, and changes nothing."
   },
   "agent/tools/memory.ts:90": {
     "path": "agent/tools/memory.ts",
-    "line": 93,
+    "line": 94,
     "testo": "type: 'number',"
   },
   "agent/tools/process.ts:23": {
@@ -704,34 +694,29 @@
     "line": 23,
     "testo": "{"
   },
-  "agent/tools/process.ts:24": {
-    "path": "agent/tools/process.ts",
-    "line": 24,
-    "testo": "id: 'sys.process.list',"
-  },
   "agent/tools/process.ts:28": {
     "path": "agent/tools/process.ts",
-    "line": 28,
+    "line": 29,
     "testo": "maxTaint: 1,"
   },
   "agent/tools/process.ts:32": {
     "path": "agent/tools/process.ts",
-    "line": 32,
+    "line": 33,
     "testo": "},"
   },
   "agent/tools/process.ts:34": {
     "path": "agent/tools/process.ts",
-    "line": 34,
+    "line": 35,
     "testo": "id: 'sys.process.kill',"
   },
   "agent/tools/process.ts:42": {
     "path": "agent/tools/process.ts",
-    "line": 42,
+    "line": 44,
     "testo": "policyArgs: ['pid', 'signal'],"
   },
   "agent/tools/process.ts:55": {
     "path": "agent/tools/process.ts",
-    "line": 55,
+    "line": 57,
     "testo": "grep: { type: 'string', description: 'Case-insensitive substring filter on the line' },"
   },
   "agent/tools/search.ts:48": {
@@ -741,12 +726,12 @@
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 63,
+    "line": 66,
     "testo": "hostOnly: true,"
   },
   "agent/tools/shell.ts:106": {
     "path": "agent/tools/shell.ts",
-    "line": 106,
+    "line": 107,
     "testo": "// `child.on('error', …)`, Node's own spawn-failure text (e.g. ENOENT on the"
   },
   "agent/tools/shell.ts:32": {
@@ -754,29 +739,24 @@
     "line": 32,
     "testo": "*/"
   },
+  "agent/tools/shell.ts:34": {
+    "path": "agent/tools/shell.ts",
+    "line": 34,
+    "testo": "id: 'sys.shell',"
+  },
   "agent/tools/shell.ts:36": {
     "path": "agent/tools/shell.ts",
-    "line": 36,
+    "line": 37,
     "testo": "reversible: 'no',"
   },
   "agent/tools/shell.ts:42": {
     "path": "agent/tools/shell.ts",
-    "line": 42,
+    "line": 43,
     "testo": "policyArgs: ['command'],"
-  },
-  "agent/tools/shell.ts:45": {
-    "path": "agent/tools/shell.ts",
-    "line": 45,
-    "testo": "// Owner decision, 2026-08-16 (ADR-0044 §revisione; PR #28): pinned to 2,"
-  },
-  "agent/tools/shell.ts:53": {
-    "path": "agent/tools/shell.ts",
-    "line": 53,
-    "testo": "maxTaint: 2,"
   },
   "agent/tools/skill.ts:114": {
     "path": "agent/tools/skill.ts",
-    "line": 114,
+    "line": 115,
     "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
   },
   "agent/tools/skill.ts:22": {
@@ -786,12 +766,12 @@
   },
   "agent/tools/skill.ts:33": {
     "path": "agent/tools/skill.ts",
-    "line": 33,
+    "line": 34,
     "testo": "const skillSpec: ToolSpec = {"
   },
   "agent/tools/skill.ts:70": {
     "path": "agent/tools/skill.ts",
-    "line": 70,
+    "line": 71,
     "testo": "handler: (args) => {"
   },
   "agent/turn-lane.ts:47": {
@@ -811,12 +791,12 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 319,
+    "line": 327,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 436,
+    "line": 444,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -1801,7 +1781,7 @@
   },
   "core/policy/decide.test.ts:117": {
     "path": "core/policy/decide.test.ts",
-    "line": 118,
+    "line": 122,
     "testo": "expect(kernel()(req(owner, 'host', 'fs.write', 0))).toMatchObject({ effect: 'draft' });"
   },
   "core/policy/decide.ts:103": {
@@ -1834,44 +1814,39 @@
     "line": 133,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
-  "core/policy/decide.ts:136": {
+  "core/policy/decide.ts:137": {
     "path": "core/policy/decide.ts",
     "line": 137,
-    "testo": "const ceiling = decl.maxTaint ?? ctx.matrix.defaultMaxTaint[decl.risk];"
+    "testo": "// The ceiling comes from the capability's **effect row** — where the bytes"
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 146,
+    "line": 154,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 150,
+    "line": 158,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 229,
+    "line": 237,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
-  },
-  "core/policy/decide.ts:197": {
-    "path": "core/policy/decide.ts",
-    "line": 231,
-    "testo": "if (principal.kind === 'system' || principal.kind === 'agent') {"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 235,
+    "line": 244,
     "testo": "switch (decl.risk) {"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 238,
+    "line": 247,
     "testo": "case 'medium':"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 242,
+    "line": 251,
     "testo": "case 'high':"
   },
   "core/policy/decide.ts:91": {
@@ -1891,22 +1866,22 @@
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
-    "line": 197,
+    "line": 257,
     "testo": "/** The stricter of the two, always — the file's only direction is down. */"
   },
   "core/policy/matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
+    "line": 187,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "core/policy/matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 129,
+    "line": 189,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "core/policy/matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 134,
+    "line": 194,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "core/policy/types.ts:40": {
@@ -2126,22 +2101,22 @@
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 146,
+    "line": 154,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 150,
+    "line": 158,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 156,
+    "line": 164,
     "testo": "if (decl.resourceKind === 'url') {"
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 183,
+    "line": 191,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "decide.ts:20": {
@@ -2151,12 +2126,12 @@
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 239,
+    "line": 248,
     "testo": "return decl.reversible === 'undoable'"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 240,
+    "line": 249,
     "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
   },
   "decide.ts:32": {
@@ -2371,7 +2346,7 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 308,
+    "line": 312,
     "testo": "const parent = dirname(current);"
   },
   "fs.ts:7": {
@@ -2541,27 +2516,27 @@
   },
   "matrix.ts:94": {
     "path": "core/policy/matrix.ts",
-    "line": 128,
+    "line": 187,
     "testo": "export const POLICY_FLOOR: PolicyMatrix = {"
   },
   "matrix.ts:95": {
     "path": "core/policy/matrix.ts",
-    "line": 129,
+    "line": 189,
     "testo": "defaultMaxTaint: { low: 3, medium: 1, high: 1 },"
   },
   "matrix.ts:99": {
     "path": "core/policy/matrix.ts",
-    "line": 134,
+    "line": 194,
     "testo": "forbiddenForSystem: new Set<CapabilityId>(['outward.send', 'outward.*', 'config.ratchet']),"
   },
   "mcp.ts:102": {
     "path": "agent/tools/mcp.ts",
-    "line": 102,
+    "line": 109,
     "testo": "spec: {"
   },
   "mcp.ts:106": {
     "path": "agent/tools/mcp.ts",
-    "line": 106,
+    "line": 113,
     "testo": "// server's contract and the provider passes it through opaquely."
   },
   "mcp.ts:20": {
@@ -2571,27 +2546,27 @@
   },
   "mcp.ts:37": {
     "path": "agent/tools/mcp.ts",
-    "line": 37,
+    "line": 44,
     "testo": "// become a per-server option later without the server telling us: a"
   },
   "mcp.ts:61": {
     "path": "agent/tools/mcp.ts",
-    "line": 61,
+    "line": 68,
     "testo": "const tools: RegisteredTool[] = [];"
   },
   "mcp.ts:71": {
     "path": "agent/tools/mcp.ts",
-    "line": 71,
+    "line": 78,
     "testo": "const detail = error instanceof Error ? error.message : String(error);"
   },
   "mcp.ts:74": {
     "path": "agent/tools/mcp.ts",
-    "line": 74,
+    "line": 81,
     "testo": "}"
   },
   "mcp.ts:91": {
     "path": "agent/tools/mcp.ts",
-    "line": 91,
+    "line": 98,
     "testo": "await connection.close().catch(() => {});"
   },
   "memory.ts:25": {
@@ -2601,12 +2576,12 @@
   },
   "memory.ts:29": {
     "path": "agent/tools/memory.ts",
-    "line": 29,
+    "line": 30,
     "testo": "risk: 'low',"
   },
   "memory.ts:48": {
     "path": "agent/tools/memory.ts",
-    "line": 51,
+    "line": 52,
     "testo": "* kept every retired belief on purpose had no path by which any of them could"
   },
   "presence.ts:238": {
@@ -2646,7 +2621,7 @@
   },
   "process.ts:146": {
     "path": "agent/tools/process.ts",
-    "line": 146,
+    "line": 148,
     "testo": "// on the host, which is a different game and a lost one."
   },
   "process.ts:18": {
@@ -2656,7 +2631,7 @@
   },
   "process.ts:27": {
     "path": "agent/tools/process.ts",
-    "line": 27,
+    "line": 28,
     "testo": "rerunnable: true,"
   },
   "profile.ts:150": {
@@ -2826,27 +2801,27 @@
   },
   "search.ts:61": {
     "path": "agent/tools/search.ts",
-    "line": 61,
+    "line": 64,
     "testo": "resourceKind: 'query',"
   },
   "search.ts:63": {
     "path": "agent/tools/search.ts",
-    "line": 63,
+    "line": 66,
     "testo": "hostOnly: true,"
   },
   "skill.ts:114": {
     "path": "agent/tools/skill.ts",
-    "line": 114,
+    "line": 115,
     "testo": "// `tier: 1`, which this file's own docstring has claimed since it was"
   },
   "skill.ts:127": {
     "path": "agent/tools/skill.ts",
-    "line": 127,
+    "line": 128,
     "testo": "return { content: content.toString('utf8'), tier: 1 };"
   },
   "skill.ts:70": {
     "path": "agent/tools/skill.ts",
-    "line": 70,
+    "line": 71,
     "testo": "handler: (args) => {"
   },
   "store.ts:116": {
@@ -2901,7 +2876,7 @@
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
-    "line": 116,
+    "line": 112,
     "testo": "*/"
   },
   "types.ts:11": {

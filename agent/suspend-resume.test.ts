@@ -68,6 +68,9 @@ const NOW = () => new Date('2026-08-16T10:00:00.000Z');
 /** A tool that says it dragged the web in, so the taint has somewhere to climb to. */
 const webCapability: CapabilityDecl = {
   id: 'net.http',
+  effect: 'context',
+  // era il default della classe: la riga 'context' non lo eredita più
+  maxTaint: 1,
   risk: 'medium',
   reversible: 'yes',
   rerunnable: true,
@@ -79,6 +82,7 @@ const webCapability: CapabilityDecl = {
 /** A tool that must never be repeated. The whole point of `rerunnable: false`. */
 const sendCapability: CapabilityDecl = {
   id: 'outward.send',
+  effect: 'context',
   risk: 'low',
   reversible: 'no',
   rerunnable: false,
