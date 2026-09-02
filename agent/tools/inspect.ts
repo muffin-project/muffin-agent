@@ -14,7 +14,7 @@ import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
  *
- * M5-BIS E7, lacuna aggiunta dall'owner il 17/08. Prima di questo file il
+ * DAY-1 requirement E7, lacuna aggiunta dall'owner il 17/08. Prima di questo file il
  * modello poteva soltanto recitare ciò che il prompt dice o indovinare: alla
  * domanda «che modello usi?» rispondeva con quello scritto nel testo che gli è
  * stato dato mesi fa, che è una risposta plausibile e scollegata dalla

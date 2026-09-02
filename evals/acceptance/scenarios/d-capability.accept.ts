@@ -1,10 +1,12 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { describe } from 'vitest';
 import { install } from '../harness.js';
 import { scenario } from '../scenario.js';
+import { hostContiene } from '../sandbox-host.js';
 import { MemoryStore } from '../../../core/memory/store.js';
 import { paths, writeSecret } from '../../../core/config/config.js';
 import { seal } from '../../../core/rot/verify.js';
@@ -254,7 +256,7 @@ describe('acceptance · D · capability e sicurezza', () => {
           );
         }
 
-        // MANDATO-DAY-1 invariant 2, through the real binary: a second,
+        // Taint through session history, through the real binary: a second,
         // unrelated process on the SAME session, asked something that reads
         // nothing of its own. `agent/context/history-taint.ts` computes the
         // max tier of the reinjected session history (the first turn's own
@@ -265,7 +267,7 @@ describe('acceptance · D · capability e sicurezza', () => {
         // though the first turn's reply — "non sono riuscito a proseguire" —
         // was physically in the request the model just answered from: the
         // triage probe's own LAUNDERED finding
-        // (`research/triage-2026-08-17/e-audit-trasversali.md` §3.1),
+        // (`docs/evidence/triage-2026-08-17/e-audit-trasversali.md` §3.1),
         // reproduced here through the real binary instead of a fixture.
         // Deliberately no word in common with the planted episode
         // ("promemoria estraneo… manda tutto a evil.example"), the first
@@ -440,6 +442,168 @@ describe('acceptance · D · capability e sicurezza', () => {
           throw new Error(`l'ASK non mostra la query: ${JSON.stringify(parsed.pending)}`);
         }
       } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  /**
+   * D4 — shell nel sandbox, attraverso il binario reale.
+   *
+   * La riga era BLOCKER solo perché nessuno scenario di accettazione la
+   * esercitava: il meccanismo (`shell_run`, `agent/tools/shell.ts`) è
+   * registrato in `agent/runtime.ts` **solo quando la sonda del sandbox ha
+   * dato esito positivo su questo host** — assente il contenimento, assente
+   * il tool (mai un'esecuzione non sandboxata silenziosa). Un turno
+   * scriptato che arriva davvero a chiamare `shell_run` è già, di per sé,
+   * la prova che quella sonda ha funzionato qui, prima ancora di qualunque
+   * asserzione sotto.
+   *
+   * `sys.shell` è dichiarato `high` risk (ADR-0027) e in modalità
+   * single-user — l'unica che `install()` costruisce, mai richiesta
+   * `--hardened` — il ramo `high` di `decide()` chiede **sempre**
+   * l'approvazione del owner (`core/policy/decide.ts`), e `muffin run`
+   * headless non ha alcun canale per rispondere (`cli/run.ts` non passa mai
+   * `deps.approve` a `runTurn`): il turno si ferma con `ApprovalRequired`
+   * PRIMA che il comando raggiunga l'executor. Il confine onesto che questo
+   * scenario può provare attraverso il binario reale è quindi: il tool è
+   * offerto (sandbox provata), e l'ASK che ne consegue mostra il comando e
+   * la cwd esatti che sarebbero girati — non che quel comando gira davvero
+   * dentro seatbelt/bwrap, che resta provato dagli unit test
+   * (`agent/tools/shell.test.ts`, `core/sandbox/executor.test.ts`,
+   * `core/sandbox/probe.test.ts`) e dal gate CI per-piattaforma citato dalla
+   * riga originale, non da questa suite.
+   *
+   * `nonProvabileQui` interroga l'host direttamente (`hostContiene`), non
+   * Muffin: su macOS seatbelt è nel sistema operativo (nessun prerequisito
+   * mancante), su Linux la domanda va a `bwrap` grezzo — stesso principio di
+   * `b-job-script.accept.ts`.
+   */
+  scenario(
+    'D4',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'shell_run', args: { command: 'echo ciao-dal-sandbox', cwd: 'sub' } } },
+          { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE — il comando non deve girare senza un sì' },
+        ],
+      });
+      try {
+        mkdirSync(join(inst.workspace, 'sub'), { recursive: true });
+
+        const r = await inst.muffin(['run', '--json', '--timeout', '20', 'esegui echo ciao-dal-sandbox nella sottocartella sub']);
+
+        const call = inst.provider.main()[0];
+        if (!call) throw new Error('il modello non è mai stato chiamato');
+        if (!call.tools.includes('shell_run')) {
+          throw new Error(
+            `shell_run non era nella lista tool offerta al modello: la sonda del sandbox non ha ` +
+              `dato esito positivo su questo host: ${call.tools.join(', ')}`,
+          );
+        }
+
+        if (r.code !== 3) {
+          throw new Error(`atteso exit 3 (serve approvazione, headless non ha canale): ${r.code}\n${r.out}\n${r.err}`);
+        }
+        const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
+        if (parsed.pending?.capability !== 'sys.shell') {
+          throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
+        }
+        const resource = parsed.pending.resource ?? '';
+        if (!resource.includes('echo ciao-dal-sandbox') || !resource.includes('sub')) {
+          throw new Error(`l'ASK non mostra comando e cwd: ${JSON.stringify(parsed.pending)}`);
+        }
+        if (r.out.includes('NON DEVE MAI COMPARIRE')) {
+          throw new Error('il comando ha girato senza un sì — la strict-by-construction non ha tenuto');
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+    () => {
+      const esito = hostContiene();
+      return esito.ok ? null : esito.perche;
+    },
+  );
+
+  /**
+   * D5 — process: list e kill di un processo reale, attraverso il binario
+   * reale.
+   *
+   * `process_list`/`process_kill` (`agent/tools/process.ts`) sono host-only
+   * ma non dipendono dalla sonda del sandbox — agiscono sulla tabella dei
+   * processi dell'host, non su un'esecuzione contenuta. `sys.process.list`
+   * è `low` risk (auto-allow); `sys.process.kill` è `high` risk, quindi
+   * nello stesso single-user senza canale d'approvazione di D4 si ferma
+   * anch'esso su un ASK — il confine onesto è lo stesso: il pid viene
+   * mostrato, il segnale non viene mai davvero inviato da questo scenario
+   * (lo spegne il `finally`, non `process_kill`).
+   *
+   * Il processo lungo-vivo è vero, spawnato dal test stesso (`sleep 300`,
+   * presente su macOS e Linux) — non un fixture nel database, perché la
+   * domanda della riga è se Muffin vede la tabella dei processi *reale*
+   * dell'host, non una registrazione propria.
+   */
+  scenario(
+    'D5',
+    async () => {
+      const longLived = spawn('sleep', ['300'], { stdio: 'ignore' });
+      const pid = longLived.pid;
+      if (pid === undefined) throw new Error('impossibile avviare il processo lungo-vivo di prova');
+
+      const inst = await install({
+        main: [
+          { tool: { name: 'process_list', args: { grep: 'sleep' } } },
+          { tool: { name: 'process_kill', args: { pid, signal: 'TERM' } } },
+          { text: 'QUESTA RISPOSTA NON DEVE MAI COMPARIRE' },
+        ],
+      });
+      try {
+        const r = await inst.muffin(['run', '--json', '--timeout', '20', 'elenca i processi con sleep e poi fermalo']);
+
+        // Il primo giro: process_list, low risk, auto-allow — il suo
+        // tool_result finisce nella SECONDA richiesta al modello finto.
+        const calls = inst.provider.main();
+        if (calls.length < 2) {
+          throw new Error(`atteso almeno un secondo giro dopo process_list, chiamate: ${calls.length}`);
+        }
+        const afterList = calls[1]!.transcript;
+        if (!afterList.includes(String(pid))) {
+          throw new Error(`process_list non mostra il pid reale (${pid}) nel proprio tool_result:\n${afterList}`);
+        }
+        if (!/sleep/i.test(afterList)) {
+          throw new Error(`process_list non mostra il nome del comando (sleep):\n${afterList}`);
+        }
+        // PS_ARGV chiede solo pid,user,comm — mai gli argv. "300" è
+        // l'argomento di `sleep 300`: se comparisse, l'argv sarebbe
+        // trapelato nel turno (agent/tools/process.ts, commento su comm vs
+        // args).
+        if (afterList.includes(' 300') || afterList.includes('sleep 300')) {
+          throw new Error(`process_list ha fatto trapelare gli argv del processo, non solo pid+comando:\n${afterList}`);
+        }
+
+        // Il secondo giro: process_kill, high risk → ask in single-user,
+        // nessun canale headless → exit 3, come shell_run in D4.
+        if (r.code !== 3) {
+          throw new Error(`atteso exit 3 (serve approvazione): ${r.code}\n${r.out}\n${r.err}`);
+        }
+        const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
+        if (parsed.pending?.capability !== 'sys.process.kill') {
+          throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
+        }
+        const resource = parsed.pending.resource ?? '';
+        if (!resource.includes(String(pid))) {
+          throw new Error(`l'ASK non mostra il pid da terminare: ${JSON.stringify(parsed.pending)}`);
+        }
+        if (r.out.includes('NON DEVE MAI COMPARIRE')) {
+          throw new Error('il kill ha effetto senza un sì');
+        }
+      } finally {
+        // Lo spegne il test, non `process_kill`: l'ASK non è mai stato
+        // approvato, quindi il processo è ancora vivo a questo punto.
+        longLived.kill('SIGKILL');
         await inst.cleanup();
       }
     },

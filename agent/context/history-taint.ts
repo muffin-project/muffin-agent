@@ -7,7 +7,7 @@ import type { SessionMessage } from '../../core/session/store.js';
  * `SessionStore` is Evidence (ADR-0045 §Revisione 17/08) and `buildContext`
  * reads it straight into a later turn's request, as text. Read alone, that is
  * the seam that ADR revision names: a transcript used directly as Context with
- * no tier travelling alongside it. MANDATO-DAY-1 invariant 2 states the
+ * no tier travelling alongside it. The DAY-1 readiness invariant states the
  * property this file exists to hold: *"qualunque byte fisicamente presente nel
  * nuovo context conserva il massimo trust tier delle fonti da cui deriva. Una
  * sessione/transcript non è una lavanderia del taint."*
@@ -89,8 +89,8 @@ export type ReinjectedHistory = {
  * history — only `user`/`assistant` text), and the cut keeps only the most
  * recent `maxTurns` of what remains: a message old enough to be cut is not
  * physically in the request, so `historyTaint` over `kept` must not see it
- * either (MANDATO-DAY-1 invariant 2 is scoped to what is reinjected, not to
- * the session's whole past).
+ * either (the invariant is scoped to what is reinjected, not to the
+ * session's whole past).
  */
 export function reinjectedHistory(history: readonly SessionMessage[], maxTurns: number): ReinjectedHistory {
   const spoken = history.filter((m) => m.role === 'user' || m.role === 'assistant');

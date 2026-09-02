@@ -1,8 +1,22 @@
 import DatabaseCtor from 'better-sqlite3';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, cpSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe } from 'vitest';
+import { runUpdate } from '../../../cli/update.js';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { install, type Install, type Run } from '../harness.js';
 import type { RecordedRequest } from '../provider.js';
@@ -64,7 +78,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
   scenario(
     'A1',
     async () => {
-      // Owner directive (M5-BIS A1, this slice's mandate): continuity belongs
+      // Owner directive (DAY-1 requirement A1, this slice's mandate): continuity belongs
       // to Muffin, not to the gateway's pid. The property this proves: a real
       // gateway process, SIGKILLed, is replaced by a second one that resumes
       // a suspended turn and fires a due job — each exactly once — with
@@ -223,7 +237,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
  *
  * One install, one real `muffin run` against the fake provider, one real
  * `muffin prompt show` — shared across both rows in `beforeAll` because they
- * are two readings of the *same* evidence (M5-BIS: A2 "sa chi è e quali
+ * are two readings of the *same* evidence (DAY-1 requirement A2 "sa chi è e quali
  * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is
  * `persona.md`'s), not two independent turns. Every marker is read from the
  * files this install actually wrote under `inst.home` — never from
@@ -363,10 +377,29 @@ describe('acceptance · A · doctor, backup', () => {
     30_000,
   );
 
+  // Riscritto (slice/journey-lifecycle, riconciliazione 02/09). La versione
+  // precedente provava che una `cpSync` grezza della home sopravvive — vera,
+  // ma non è la domanda della riga: DAY-1 requirement A8 chiede se *la memoria si
+  // salva e si ripristina*, cioè se i verbi `muffin backup`/`muffin restore`
+  // (`cli/backup.ts`) funzionano, non se il filesystem sa copiare una
+  // directory. `cpSync` non esercita `VACUUM INTO`, `quick_check`, il rifiuto
+  // col gateway vivo o il backup-di-cortesia prima del restore — tutte cose
+  // che *A8-min* (RETURN S2) ha già chiuso a livello di meccanismo
+  // (`cli/backup.test.ts`) e che qui vanno provate sul binario reale: i due
+  // comandi, non una copia di file al loro posto. Il contenuto scritto *dopo*
+  // il backup deve sparire dal restore (prova che sostituisce, non
+  // aggiunge), e il file di backup e la copia-di-cortesia messa da parte dal
+  // restore devono esistere per davvero sul disco, non solo comparire in una
+  // riga di stdout.
   scenario(
     'A8',
     async () => {
-      const inst = await install({ main: [{ text: 'segnato: il tuo numero preferito è 42' }] });
+      const inst = await install({
+        main: [
+          { text: 'segnato: il tuo numero fortunato è 42' },
+          { text: 'segnato: la tua squadra del cuore è il Milan' },
+        ],
+      });
       try {
         const said = await inst.muffin(['run', '--timeout', '20', 'il mio numero fortunato è 42, ricordatelo']);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
@@ -376,20 +409,55 @@ describe('acceptance · A · doctor, backup', () => {
           throw new Error(`prima del backup la ricerca non trova già il contenuto — la fixture è rotta:\n${before.out}`);
         }
 
-        // The backup an owner can actually take today: the whole data root.
-        // AGENTS.md is explicit that everything lives under one directory —
-        // this scenario is what proves that claim rather than assuming it, by
-        // discarding the original entirely and restoring only from the copy.
-        const backupDir = `${inst.home}-backup`;
-        cpSync(inst.home, backupDir, { recursive: true });
-        rmSync(inst.home, { recursive: true, force: true });
-        cpSync(backupDir, inst.home, { recursive: true });
-        rmSync(backupDir, { recursive: true, force: true });
+        // `muffin backup` — the real verb, not a directory copy.
+        const backup = await inst.muffin(['backup']);
+        if (backup.code !== 0) throw new Error(`muffin backup: exit ${backup.code}\n${backup.out}${backup.err}`);
+        const backupMatch = /backup: (\S+) \(/.exec(backup.out);
+        if (!backupMatch) throw new Error(`l'output di \`muffin backup\` non nomina il file prodotto: ${JSON.stringify(backup.out)}`);
+        const backupFile = backupMatch[1]!;
+        if (!existsSync(backupFile)) {
+          throw new Error(`\`muffin backup\` dice di aver scritto ${backupFile}, ma il file non esiste sul disco`);
+        }
+        if (!backup.out.includes('quick_check ok')) {
+          throw new Error(`\`muffin backup\` non dichiara il quick_check sul file prodotto: ${JSON.stringify(backup.out)}`);
+        }
 
+        // Written AFTER the backup — the property this proves is that
+        // restore *replaces*, not merges: this must vanish once restored.
+        const said2 = await inst.muffin(['run', '--timeout', '20', 'la mia squadra del cuore è il Milan, ricordatelo']);
+        if (said2.code !== 0) throw new Error(`secondo turno: exit ${said2.code}\n${said2.err}`);
+        const midway = await inst.muffin(['memory', 'search', 'Milan']);
+        if (midway.code !== 0 || !midway.out.includes('Milan')) {
+          throw new Error(`prima del restore la ricerca non trova il contenuto scritto dopo il backup — la fixture è rotta:\n${midway.out}`);
+        }
+
+        // `muffin restore <file> --yes` — the real verb.
+        const restore = await inst.muffin(['restore', backupFile, '--yes']);
+        if (restore.code !== 0) throw new Error(`muffin restore: exit ${restore.code}\n${restore.out}${restore.err}`);
+        if (!restore.out.includes('ripristinato')) {
+          throw new Error(`l'output di \`muffin restore\` non conferma il ripristino: ${JSON.stringify(restore.out)}`);
+        }
+        // The courtesy copy `restoreFrom` sets aside before overwriting —
+        // real file, not a claim.
+        const asideMatch = /db precedente messo da parte: (\S+)/.exec(restore.out);
+        if (!asideMatch) {
+          throw new Error(`\`muffin restore\` non dichiara la copia messa da parte del db corrente: ${JSON.stringify(restore.out)}`);
+        }
+        if (!existsSync(asideMatch[1]!)) {
+          throw new Error(`la copia-di-cortesia dichiarata (${asideMatch[1]}) non esiste sul disco`);
+        }
+
+        // After restore: the pre-backup content is back...
         const after = await inst.muffin(['memory', 'search', 'numero fortunato']);
         if (after.code !== 0) throw new Error(`dopo il ripristino la ricerca fallisce: exit ${after.code}\n${after.err}`);
         if (!after.out.includes('42')) {
-          throw new Error(`dopo il ripristino il contenuto non si ritrova più:\n${after.out}`);
+          throw new Error(`dopo il ripristino il contenuto ante-backup non si ritrova più:\n${after.out}`);
+        }
+        // ...and the post-backup content is genuinely gone — restore replaced
+        // the database, it did not merge into it.
+        const afterMilan = await inst.muffin(['memory', 'search', 'Milan']);
+        if (afterMilan.out.includes('Milan')) {
+          throw new Error(`dopo il ripristino il contenuto scritto DOPO il backup si trova ancora — il restore ha aggiunto, non sostituito:\n${afterMilan.out}`);
         }
       } finally {
         await inst.cleanup();
@@ -401,7 +469,8 @@ describe('acceptance · A · doctor, backup', () => {
   scenario(
     'A9',
     async () => {
-      // A9 (M5-BIS, direttiva owner 16/08): `muffin init --local <dir>` deve
+      // Requisito DAY-1 A9 — setup locale pulito di prova (direttiva owner
+      // 16/08): `muffin init --local <dir>` deve
       // riusare un segreto persistito attraverso la stessa catena che
       // `locateSecret` già percorre (ADR-0039 decisione 2) — mai copiarlo nella
       // home nuova — e non deve mai poter atterrare sulla home reale, o dentro
@@ -463,6 +532,491 @@ describe('acceptance · A · doctor, backup', () => {
         // tentativo rifiutato in (e).
         if (hashDir(inst.home) !== beforeHash) {
           throw new Error(`la home reale (${inst.home}) è cambiata dopo init --local`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+});
+
+/**
+ * A6 · update: a validated backup is taken before anything is swapped, and
+ * data written before the update survives it.
+ *
+ * `cmdUpdate` (`cli/update.ts`) parses argv and calls `runUpdate` with no
+ * overrides — `runUpdate` is the whole mechanism. Spawning `muffin update`
+ * as a real child process, the way every other scenario in this file spawns
+ * `muffin`, is not available here without an owner-machine side effect:
+ * `findCheckoutRoot`'s own docstring says it deliberately walks to the git
+ * checkout's **main worktree** (`git worktree list --porcelain`, first
+ * line) rather than the worktree this process happens to run in, and
+ * `defaultBindirs()` is `~/.local/bin`, `/opt/homebrew/bin`,
+ * `/usr/local/bin` — the real ones on this machine. Even `--dry-run` still
+ * runs a real `git fetch origin` against that real checkout before it stops.
+ * `cmdUpdate` exposes no flag to redirect either, so a spawned `muffin
+ * update` from inside this suite would write into the actual repository
+ * this agent is running from and could re-point real launcher symlinks —
+ * exactly the kind of owner-state mutation this suite's whole isolation
+ * model (`harness.ts`'s own docstring: `MUFFIN_HOME`, `XDG_CONFIG_HOME`, a
+ * scratch `cwd`) exists to prevent, and that isolation does not reach these
+ * two inputs at all.
+ *
+ * What runs here instead is `runUpdate` itself — imported directly, the
+ * exact function `cmdUpdate` calls — redirected at only the two inputs its
+ * own doc comments already name as the test seam (`moduleDir`: "Tests point
+ * this at a fake checkout"; `bindirs`: "tests point this at a throwaway
+ * directory"). Nothing else is faked: `git` is the real default runner
+ * (real `spawnSync('git', …)`) against a real, throwaway checkout+origin
+ * built with real git commands below; `npmCi` is the real default (`npm
+ * ci`) against a real `package.json`+`package-lock.json` with zero
+ * dependencies, so it is fast and makes no network call; `smokeTest` is the
+ * real default (`node <release>/dist/cli/main.js --help`) against a real
+ * committed script that exits 0; `readNewSchemaVersion` is the real default,
+ * spawning node to import a real committed `dist/core/db/migrate.js`;
+ * `backup` is the real `backupNow`, against the real, populated
+ * `$MUFFIN_HOME` this same file's `install()` builds with the real spawned
+ * binary. The one thing this scenario cannot exercise is `cmdUpdate`'s own
+ * argv parsing and its interactive restart prompt — both are a thin, untyped
+ * layer with no logic of their own, unlike the mechanism underneath.
+ */
+describe('acceptance · A6 · update: backup before swap', () => {
+  scenario(
+    'A6',
+    async () => {
+      const inst = await install({ main: [{ text: 'segnato: 42' }] });
+      try {
+        const said = await inst.muffin(['run', '--timeout', '20', 'il mio numero fortunato è 42, ricordatelo']);
+        if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
+        const before = await inst.muffin(['memory', 'search', 'numero fortunato']);
+        if (before.code !== 0 || !before.out.includes('42')) {
+          throw new Error(`prima dell'update la ricerca non trova già il contenuto — fixture rotta:\n${before.out}`);
+        }
+
+        // --- a real, throwaway git checkout + a real, throwaway "origin" ---
+        const root = mkdtempSync(join(tmpdir(), 'muffin-a6-'));
+        const originDir = join(root, 'origin.git');
+        const seedDir = join(root, 'seed');
+        const checkoutRoot = join(root, 'checkout');
+        const bindir = join(root, 'bin');
+        mkdirSync(bindir, { recursive: true });
+
+        // Never the developer's own global git config (hooks, signing) —
+        // only this scratch repo's own commits, with identity passed
+        // explicitly per call.
+        const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+        const git = (args: string[], cwd: string): void => {
+          const r = spawnSync('git', args, { cwd, env: gitEnv, encoding: 'utf8' });
+          if (r.status !== 0) throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
+        };
+        const gitOut = (args: string[], cwd: string): string => {
+          const r = spawnSync('git', args, { cwd, env: gitEnv, encoding: 'utf8' });
+          if (r.status !== 0) throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
+          return r.stdout.trim();
+        };
+        const commit = (msg: string): void =>
+          git(['-c', 'user.name=acceptance', '-c', 'user.email=acceptance@test.local', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg], seedDir);
+
+        const writeSeedRelease = (helpLine: string, schemaVersion: number): void => {
+          mkdirSync(join(seedDir, 'dist', 'cli'), { recursive: true });
+          mkdirSync(join(seedDir, 'dist', 'core', 'db'), { recursive: true });
+          writeFileSync(join(seedDir, 'dist', 'cli', 'main.js'), `process.stdout.write(${JSON.stringify(helpLine)});\nprocess.exit(0);\n`);
+          writeFileSync(join(seedDir, 'dist', 'core', 'db', 'migrate.js'), `export function currentSchemaVersion(){ return ${schemaVersion}; }\n`);
+        };
+
+        // `--initial-branch=main` on both, and it is not cosmetic: the seed
+        // pushes to `refs/heads/main`, and a clone checks out whatever HEAD the
+        // bare origin points at. With the developer's global config masked
+        // (`GIT_CONFIG_GLOBAL=/dev/null`) that HEAD is git's own default —
+        // `master` on CI's git — a branch nobody pushed, so the clone's HEAD is
+        // unborn and `rev-parse HEAD` exits 128. Green on a laptop whose git
+        // defaults to `main`, red on Linux: the class `lessons.md` already names.
+        git(['init', '-q', '--bare', '--initial-branch=main', originDir], root);
+        git(['init', '-q', '--initial-branch=main', seedDir], root);
+        writeFileSync(join(seedDir, 'package.json'), JSON.stringify({ name: 'scratch', version: '1.0.0', type: 'module' }));
+        writeFileSync(
+          join(seedDir, 'package-lock.json'),
+          JSON.stringify({ name: 'scratch', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'scratch', version: '1.0.0' } } }),
+        );
+        writeSeedRelease('scratch v1 --help\n', 2);
+        git(['add', '-A'], seedDir);
+        commit('v1');
+        git(['remote', 'add', 'origin', originDir], seedDir);
+        git(['push', '-q', 'origin', 'HEAD:refs/heads/main'], seedDir);
+
+        git(['clone', '-q', originDir, checkoutRoot], root);
+        const oldSha = gitOut(['rev-parse', 'HEAD'], checkoutRoot);
+
+        // Advance "origin" past the checkout — real work for `update` to do.
+        writeSeedRelease('scratch v2 --help\n', 3);
+        git(['add', '-A'], seedDir);
+        commit('v2 — schema v3');
+        git(['push', '-q', 'origin', 'HEAD:refs/heads/main'], seedDir);
+        const newSha = gitOut(['rev-parse', 'HEAD'], seedDir);
+        if (newSha === oldSha) throw new Error('fixture rotta: origin non è avanzato oltre il checkout');
+
+        // A launcher, in the scratch bindir, pointing at the OLD release —
+        // exactly what `findOwnedLaunchers` looks for, so the flip is real
+        // and observable instead of the "nessun launcher" branch.
+        const launcherPath = join(bindir, 'muffin');
+        symlinkSync(join(checkoutRoot, 'dist', 'cli', 'main.js'), launcherPath);
+
+        // --- the mechanism itself, real defaults, redirected at the two ----
+        //     seams its own comments name for tests.
+        const result = runUpdate({ moduleDir: checkoutRoot, home: inst.home, bindirs: [bindir] });
+        if (result.code !== 0) {
+          throw new Error(`runUpdate non è uscito 0:\n${JSON.stringify(result.steps, null, 2)}`);
+        }
+
+        const idx = (name: string): number => result.steps.findIndex((s) => s.name === name);
+        const iBackup = idx('backup');
+        const iFlip = idx('flip');
+        if (iBackup === -1 || iFlip === -1) {
+          throw new Error(`passi attesi mancanti fra quelli reali: ${JSON.stringify(result.steps.map((s) => s.name))}`);
+        }
+        // The property A6 asks for, checked as an order rather than assumed:
+        // the backup happens BEFORE the swap, not after and not never.
+        if (iBackup > iFlip) {
+          throw new Error(`'backup' viene dopo 'flip' invece che prima: ${JSON.stringify(result.steps.map((s) => s.name))}`);
+        }
+        const backupStep = result.steps[iBackup]!;
+        if (!backupStep.done) throw new Error(`il passo di backup non è riuscito: ${backupStep.detail}`);
+
+        const backupMatch = /^(\S+) \(/.exec(backupStep.detail);
+        if (!backupMatch) throw new Error(`il passo 'backup' non nomina il file prodotto: ${backupStep.detail}`);
+        const backupFile = backupMatch[1]!;
+        if (!existsSync(backupFile)) throw new Error(`il backup dichiarato non esiste sul disco: ${backupFile}`);
+
+        // Validated independently of the mechanism's own claim — a real
+        // sqlite file, quick_check ok, carrying the content written before
+        // the update.
+        const backupDb = new DatabaseCtor(backupFile, { readonly: true });
+        try {
+          const check = backupDb.pragma('quick_check', { simple: true });
+          if (check !== 'ok') throw new Error(`quick_check sul backup: ${String(check)}`);
+          const row = backupDb.prepare(`SELECT content FROM episodes WHERE content LIKE '%42%' LIMIT 1`).get();
+          if (!row) throw new Error('il backup non porta il contenuto scritto prima dell\'update');
+        } finally {
+          backupDb.close();
+        }
+
+        // The swap itself is real: a fresh git worktree at the new commit,
+        // and the launcher now resolves into it.
+        const releaseStep = result.steps[idx('release')]!;
+        const releaseMatch = /worktree creato in (\S+)/.exec(releaseStep.detail);
+        if (!releaseMatch) throw new Error(`il passo 'release' non nomina la directory creata: ${releaseStep.detail}`);
+        const releaseDir = releaseMatch[1]!;
+        const releaseHead = gitOut(['rev-parse', 'HEAD'], releaseDir);
+        if (releaseHead !== newSha) throw new Error(`il worktree della release non è al commit nuovo: ${releaseHead}, atteso ${newSha}`);
+
+        const flipTarget = readlinkSync(launcherPath);
+        const expectedEntry = join(releaseDir, 'dist', 'cli', 'main.js');
+        if (flipTarget !== expectedEntry) {
+          throw new Error(`il launcher non punta alla release nuova dopo il flip: ${flipTarget}, atteso ${expectedEntry}`);
+        }
+
+        // `defaultReadNewSchemaVersion` really spawned node and imported the
+        // release's own compiled migrate.js — not the version this test
+        // process itself has loaded.
+        const schemaStep = result.steps[idx('schema')]!;
+        if (!/v3/.test(schemaStep.detail)) {
+          throw new Error(`il passo 'schema' non ha letto v3 dalla release compilata: ${schemaStep.detail}`);
+        }
+
+        // The live database was never touched directly by `update` — it was
+        // only backed up. Proven on the real binary, same $MUFFIN_HOME,
+        // spawned again: the content written before the update is still
+        // there after it.
+        const after = await inst.muffin(['memory', 'search', 'numero fortunato']);
+        if (after.code !== 0 || !after.out.includes('42')) {
+          throw new Error(`dopo l'update il contenuto scritto prima non si trova più:\n${after.out}`);
+        }
+
+        rmSync(root, { recursive: true, force: true });
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+/**
+ * A4 · config: `cli/config.ts` is read-only by design (ADR-0036) — the
+ * terminal does exactly two things to the installation, the secret and
+ * `muffin rot reseal`, and everything else (models, surfaces, language, job
+ * text) is a hand-edit of `config.json` that must take effect on its own,
+ * with no reseal needed, because `config.json` is explicitly the file
+ * ADR-0036 keeps OUT of the seal. This scenario proves both halves of that
+ * split are real, not merely documented: an unsealed knob (`models.main`)
+ * changes what the real binary sends to the provider the moment the file is
+ * saved, and a sealed knob (`rot/budgets.json`) changes what the real binary
+ * *does* even before `muffin rot reseal` — reseal is what makes `doctor`
+ * stop calling it tampering, never a precondition for the value binding.
+ * `muffin config --json` is read after each edit as the owner-facing witness
+ * ADR-0036 built for exactly this question ("cosa posso regolare, e dove").
+ */
+describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
+  scenario(
+    'A4',
+    async () => {
+      const inst = await install({
+        main: [{ text: 'ciao dal modello di partenza' }, { text: 'ciao dal modello cambiato a mano' }],
+      });
+      try {
+        // --- (a) baseline: models.main as `muffin init` wrote it ------------
+        const configPath = join(inst.home, 'config.json');
+        const baseline = JSON.parse(readFileSync(configPath, 'utf8')) as { models: { main: string } };
+        const originalModel = baseline.models.main;
+
+        const first = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+        if (first.code !== 0) throw new Error(`turno iniziale: exit ${first.code}\n${first.err}`);
+        const firstModelSent = inst.provider.main().at(-1)?.model;
+        if (firstModelSent !== originalModel) {
+          throw new Error(`il provider finto ha ricevuto model=${firstModelSent}, atteso il valore di config.json (${originalModel}) — fixture rotta`);
+        }
+
+        // --- (b) hand-edit config.json — a real, unsealed knob ---------------
+        const EDITED_MODEL = 'acceptance-a4-modello-a-mano';
+        const edited = { ...baseline, models: { ...baseline.models, main: EDITED_MODEL } };
+        writeFileSync(configPath, JSON.stringify(edited, null, 2));
+
+        const knobsAfterEdit = await inst.muffin(['config', '--json']);
+        if (knobsAfterEdit.code !== 0) throw new Error(`muffin config --json: exit ${knobsAfterEdit.code}\n${knobsAfterEdit.err}`);
+        const knobs = JSON.parse(knobsAfterEdit.out) as Array<{ key: string; value: string; sealed: boolean }>;
+        const mainKnob = knobs.find((k) => k.key === 'models.main');
+        if (!mainKnob) throw new Error(`muffin config --json non elenca models.main: ${knobsAfterEdit.out}`);
+        if (mainKnob.value !== EDITED_MODEL) {
+          throw new Error(`muffin config --json mostra ancora il vecchio valore dopo l'hand-edit: ${JSON.stringify(mainKnob)}`);
+        }
+        if (mainKnob.sealed !== false) {
+          throw new Error(`models.main risulta sigillato — non dovrebbe: ADR-0036 lo tiene fuori dal Root of Trust`);
+        }
+
+        // The edited value is what the BINARY actually uses next — not just
+        // what a reader of config.json would show. No `rot reseal` in
+        // between: an unsealed knob must not need one.
+        const second = await inst.muffin(['run', '--timeout', '20', 'ciao di nuovo']);
+        if (second.code !== 0) throw new Error(`turno dopo l'hand-edit: exit ${second.code}\n${second.err}`);
+        const secondModelSent = inst.provider.main().at(-1)?.model;
+        if (secondModelSent !== EDITED_MODEL) {
+          throw new Error(`il provider finto ha ricevuto model=${secondModelSent}, atteso il valore hand-editato (${EDITED_MODEL})`);
+        }
+        const doctorAfterUnsealedEdit = await inst.muffin(['doctor']);
+        if (doctorAfterUnsealedEdit.code === 2) {
+          throw new Error(`doctor va in fail per un hand-edit di un file esplicitamente NON sigillato:\n${doctorAfterUnsealedEdit.out}`);
+        }
+        if (/root of trust/i.test(doctorAfterUnsealedEdit.out) && !/✓ root of trust\s/.test(doctorAfterUnsealedEdit.out)) {
+          throw new Error(`doctor segnala il root of trust come compromesso per un edit di config.json, che non ne fa parte:\n${doctorAfterUnsealedEdit.out}`);
+        }
+
+        // --- (c) hand-edit a SEALED file — takes effect immediately, but ----
+        //         `doctor` calls it tampering until `muffin rot reseal` runs.
+        const budgetsPath = join(inst.home, 'rot', 'budgets.json');
+        const budgetsBefore = JSON.parse(readFileSync(budgetsPath, 'utf8')) as { monthlyUsd: number };
+        const originalCap = budgetsBefore.monthlyUsd;
+        const budgetsTampered = { ...budgetsBefore, monthlyUsd: 0 };
+        writeFileSync(budgetsPath, JSON.stringify(budgetsTampered, null, 2));
+
+        // Binds immediately — no reseal needed for the VALUE to take effect
+        // (ADR-0036's own worked example: "con il tetto sigillato a 0 il
+        // turno si ferma"). This is what tells apart "the seal enforces a
+        // real cap" from "the seal is decorative and the real cap is
+        // somewhere unsealed can reach".
+        const stoppedByCap = await inst.muffin(['run', '--timeout', '20', 'un turno qualsiasi']);
+        if (stoppedByCap.code !== 4) {
+          throw new Error(`atteso exit 4 (budget) col tetto azzerato a mano, ricevuto ${stoppedByCap.code}\n${stoppedByCap.out}${stoppedByCap.err}`);
+        }
+
+        const doctorBeforeReseal = await inst.muffin(['doctor']);
+        if (doctorBeforeReseal.code === 0) {
+          throw new Error(`doctor non si accorge dell'hand-edit di un file sigillato:\n${doctorBeforeReseal.out}`);
+        }
+        if (!/root of trust/.test(doctorBeforeReseal.out) || !/budgets\.json/.test(doctorBeforeReseal.out)) {
+          throw new Error(`doctor non nomina il file sigillato manomesso:\n${doctorBeforeReseal.out}`);
+        }
+
+        // --- (d) `muffin rot reseal` — the real terminal command ------------
+        const reseal = await inst.muffin(['rot', 'reseal']);
+        if (reseal.code !== 0) throw new Error(`muffin rot reseal: exit ${reseal.code}\n${reseal.out}${reseal.err}`);
+        if (!/resealed \d+ files/.test(reseal.out)) {
+          throw new Error(`muffin rot reseal non conferma quanti file ha risigillato: ${JSON.stringify(reseal.out)}`);
+        }
+
+        const doctorAfterReseal = await inst.muffin(['doctor']);
+        if (!/✓ root of trust\s/.test(doctorAfterReseal.out)) {
+          throw new Error(`doctor resta in fail sul root of trust dopo \`muffin rot reseal\`:\n${doctorAfterReseal.out}`);
+        }
+
+        const knobsAfterReseal = await inst.muffin(['config', '--json']);
+        const budgetKnob = (JSON.parse(knobsAfterReseal.out) as Array<{ key: string; value: string; sealed: boolean; source: string }>).find(
+          (k) => k.key === 'budgets.monthlyUsd',
+        );
+        if (!budgetKnob) throw new Error(`muffin config --json non elenca budgets.monthlyUsd: ${knobsAfterReseal.out}`);
+        if (budgetKnob.sealed !== true) throw new Error(`budgets.monthlyUsd non risulta sigillato: ${JSON.stringify(budgetKnob)}`);
+        if (budgetKnob.value !== '0') {
+          throw new Error(`dopo il reseal muffin config --json non mostra il valore hand-editato (0): ${JSON.stringify(budgetKnob)}`);
+        }
+        if (budgetKnob.value === String(originalCap)) {
+          throw new Error(`fixture inutile: il valore originale e quello editato coincidono (${originalCap})`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+});
+
+/**
+ * A7 · migration: a real, additive migration runs against real, populated
+ * data via the real binary — not a fresh install that was simply *born*
+ * already at the target shape.
+ *
+ * `muffin init` calls `stampFresh` (`core/db/migrate.ts`), which stamps
+ * every migration's version WITHOUT running its `up()` — correct for a fresh
+ * install, and exactly why `install()` alone never exercises the migration
+ * this row asks about. This scenario rewinds a real, populated database back
+ * to "before migration v3" (deleting only the stamp, the way a real
+ * pre-v3 install would simply never have had it — never touching the data
+ * migration v3 itself would later change) and lets the real binary discover
+ * the pending migration on its own next boot, the same path `agent/
+ * runtime.ts`'s `migrate(db, …)` runs on every command that builds a
+ * runtime. `rebuildTable`'s CHECK-widening escape hatch (`core/db/
+ * migrate.ts`) is proven at the unit level (RETURN S2) but is not reachable
+ * here: `MIGRATIONS` today holds only additive `ALTER TABLE`/backfill
+ * entries (v2, v3), no migration in the array calls `rebuildTable` — so
+ * there is nothing for an acceptance scenario to exercise there yet, and
+ * this scenario proves what IS reachable (v3's real backfill, on real data,
+ * through the real binary) rather than fabricating a CHECK-widening
+ * migration that does not exist in production code.
+ */
+describe('acceptance · A7 · migration: additive migration on populated data, and the old-code guard', () => {
+  scenario(
+    'A7',
+    async () => {
+      const inst = await install({ main: [{ text: 'ciao' }] });
+      try {
+        const said = await inst.muffin(['run', '--timeout', '20', 'ciao']);
+        if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
+
+        const dbFile = join(inst.home, 'muffin.db');
+        const now = new Date().toISOString();
+        // A fact written the way a pre-v3 install actually would have: BEFORE
+        // migration 3 existed, `MemoryStore`'s own write path did not pin
+        // identity facts either (`core/memory/ingest.ts`'s
+        // `BOOTSTRAP_IDENTITY_PREDICATES` pinning at write time landed in the
+        // SAME slice as the migration) — so writing this through today's real
+        // ingest pipeline would already arrive pinned, proving nothing about
+        // the migration. Inserted directly instead, at exactly the shape
+        // `MEMORY_SCHEMA` requires, `pinned = 0` on purpose: this is the row
+        // migration v3's backfill exists to find.
+        let factId: number;
+        {
+          const seed = new DatabaseCtor(dbFile);
+          try {
+            const episodeId = (seed.prepare(`SELECT id FROM episodes ORDER BY id DESC LIMIT 1`).get() as { id: number } | undefined)?.id;
+            if (!episodeId) throw new Error('fixture rotta: nessun episodio da cui appendere la fact');
+            const entityId = seed
+              .prepare(`INSERT INTO entities (tenant_id, kind, name, recorded_at) VALUES ('host', 'person', 'owner', ?)`)
+              .run(now).lastInsertRowid as number;
+            factId = seed
+              .prepare(
+                `INSERT INTO facts (tenant_id, subject_id, predicate, object_value, recorded_at, episode_id, trust_tier, confidence, origin, extraction_v, pinned)
+                 VALUES ('host', ?, 'works_as', 'giardiniere', ?, ?, 0, 0.9, 'said', 1, 0)`,
+              )
+              .run(entityId, now, episodeId).lastInsertRowid as number;
+          } finally {
+            seed.close();
+          }
+        }
+
+        const before = inst.db((db) => ({
+          schemaV: (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v,
+          fact: db.prepare(`SELECT pinned, tenant_id, trust_tier, origin FROM facts WHERE id = ?`).get(factId) as
+            | { pinned: number; tenant_id: string; trust_tier: number; origin: string }
+            | undefined,
+          factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
+          entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
+        }));
+        if (!before.fact) throw new Error('fixture rotta: la fact appena inserita non si trova');
+        if (before.fact.pinned !== 0) throw new Error(`fixture inutile: la fact è già pinned prima della migrazione (${before.fact.pinned})`);
+        if (before.fact.tenant_id !== 'host' || before.fact.trust_tier !== 0 || before.fact.origin !== 'said') {
+          throw new Error(`fixture non soddisfa i criteri del backfill di v3: ${JSON.stringify(before.fact)}`);
+        }
+        if (before.schemaV < 3) throw new Error(`fixture rotta: un'installazione fresca dovrebbe già essere a schema v3, trovato v${before.schemaV}`);
+
+        // --- rewind: this install "has never run migration 3" --------------
+        //     Only the stamp goes away — the real, populated data stays
+        //     exactly as a pre-v3 install would actually have had it.
+        {
+          const rewind = new DatabaseCtor(dbFile);
+          try {
+            rewind.prepare(`DELETE FROM schema_version WHERE version = 3`).run();
+          } finally {
+            rewind.close();
+          }
+        }
+        const rewoundV = inst.db((db) => (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v);
+        if (rewoundV !== 2) throw new Error(`il rewind dello schema_version non ha funzionato: v${rewoundV}`);
+
+        // --- the real binary, migrating real populated data on its own boot -
+        // Not asserted to find the fact via recall: it was inserted directly,
+        // never embedded, so a miss here says nothing about the migration.
+        // What matters is that `buildRuntime` (and inside it, `migrate()`)
+        // completes without throwing — "nessun risultato" (1) is a fine
+        // outcome, a crash is not.
+        const migrated = await inst.muffin(['memory', 'search', 'giardiniere']);
+        if (migrated.code !== 0 && migrated.code !== 1) {
+          throw new Error(`muffin memory search dopo la migrazione: exit ${migrated.code}\n${migrated.out}${migrated.err}`);
+        }
+
+        const after = inst.db((db) => ({
+          schemaV: (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v,
+          desc: db.prepare(`SELECT description FROM schema_version WHERE version = 3`).get() as { description: string } | undefined,
+          fact: db.prepare(`SELECT pinned FROM facts WHERE id = ?`).get(factId) as { pinned: number } | undefined,
+          factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
+          entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
+        }));
+        if (after.schemaV !== 3) throw new Error(`schema non è tornato a v3 dopo il boot: v${after.schemaV}`);
+        if (after.desc?.description.includes('fresh install')) {
+          throw new Error(`la riga di schema_version resta timbrata "fresh install" — la migrazione non è stata rieseguita per davvero: ${after.desc.description}`);
+        }
+        // Rows intact — the property an additive migration must have.
+        if (after.factCount !== before.factCount) throw new Error(`righe facts cambiate: ${before.factCount} prima, ${after.factCount} dopo`);
+        if (after.entityCount !== before.entityCount) throw new Error(`righe entities cambiate: ${before.entityCount} prima, ${after.entityCount} dopo`);
+        // The constraint the migration exists for is now active: the owner's
+        // identity fact is pinned, unconditionally in context from now on —
+        // not merely "the column exists", which a stamp-only fresh install
+        // would also show.
+        if (after.fact?.pinned !== 1) throw new Error(`la migrazione non ha pinnato la fact attesa: ${JSON.stringify(after.fact)}`);
+
+        // --- old code, newer data: SchemaAheadError, through the real binary
+        {
+          const bump = new DatabaseCtor(dbFile);
+          try {
+            bump
+              .prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (99, 'finto — dal futuro', ?)`)
+              .run(new Date().toISOString());
+          } finally {
+            bump.close();
+          }
+        }
+        const ahead = await inst.muffin(['memory', 'search', 'giardiniere']);
+        if (ahead.code === 0) {
+          throw new Error(`il binario ha girato contro uno schema più avanti di sé senza rifiutare (exit ${ahead.code})`);
+        }
+        if (!/schema v99/.test(ahead.err) || !/più vecchio dei dati/.test(ahead.err)) {
+          throw new Error(`il rifiuto non nomina lo schema avanti o la ragione: ${JSON.stringify(ahead.err)}`);
+        }
+        // Refused before writing anything — the data is exactly as it was.
+        const untouched = inst.db((db) => ({
+          factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
+          entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
+        }));
+        if (untouched.factCount !== after.factCount || untouched.entityCount !== after.entityCount) {
+          throw new Error(`il rifiuto ha comunque cambiato le righe: prima ${JSON.stringify(after)}, dopo ${JSON.stringify(untouched)}`);
         }
       } finally {
         await inst.cleanup();

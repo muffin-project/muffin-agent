@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Verify one narrow property: LAVORO.md must not describe already-finished work
+ * Verify one narrow property: the handoff must not describe already-finished work
  * as live.
  *
- * Product/Gate truth is intentionally out of scope. M5 status requires evidence
+ * Product/DAY-1 truth is intentionally out of scope. Requirement status requires evidence
  * and PERCORSO ordering requires reasoning; a regex checker would only create a
  * false second authority for those questions.
  *
@@ -18,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const LAVORO = 'docs/blueprint/LAVORO.md';
+const LAVORO = 'docs/work/handoff.md';
 
 export function righeLogiche(testo) {
   const out = [];
@@ -65,7 +65,7 @@ export function riconcilia({ testo, statoPr, branchRemoti, branchLocali = [] }) 
     if (!stato) continue;
     if (stato.state !== 'OPEN') {
       const label = stato.state === 'MERGED' ? 'mergiata' : 'chiusa';
-      reperti.push(`#${numero} è ${label} ma LAVORO.md la descrive come lavoro live`);
+      reperti.push(`#${numero} è ${label} ma l'handoff la descrive come lavoro live`);
     }
   }
 
@@ -154,7 +154,7 @@ function main() {
   process.stdout.write(
     `handoff NON riconciliato (${reperti.length}):\n${reperti.map((r) => `  · ${r}`).join('\n')}\n`,
   );
-  process.stderr.write(`\n→ aggiorna ${LAVORO}; non correggere M5/PERCORSO per far tacere questo checker\n`);
+  process.stderr.write(`\n→ aggiorna ${LAVORO}; non correggere i requisiti DAY-1 o il percorso critico per far tacere questo checker\n`);
   process.exit(1);
 }
 

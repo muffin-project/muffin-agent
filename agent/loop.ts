@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { recall, recallTaint, renderForPrompt, type RecallDeps } from '../core/memory/recall.js';
 import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
-import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
+import type { CapabilityDecl, CapabilityId, Decision, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
 import type { UndoJournal } from '../core/undo/journal.js';
@@ -140,7 +140,7 @@ export type ToolContext = {
    * required field one file over: an omitted `tier` was a *silent* security
    * default (a tool that said nothing about provenance was read as spotless).
    * An omitted `replyChannel` has no default to be silent about — the one
-   * handler that reads it (`send_file`, M5-BIS B14) must branch on
+   * handler that reads it (`send_file`, DAY-1 requirement B14) must branch on
    * absence/`null` explicitly either way, and forcing the other dozen tool
    * handlers in this tree to state a channel they never touch would be noise
    * bolted onto call sites the field has nothing to say to.
@@ -576,7 +576,7 @@ export type TurnInput = {
    * `runTurn` and the episode/session writes inside `drive` — one number, so
    * a forwarded message cannot enter memory at the sender's tier from one of
    * those call sites while the turn itself starts higher from another
-   * (M5-BIS B16).
+   * (DAY-1 requirement B16).
    */
   contentTaint?: TrustTier;
   /**
@@ -649,7 +649,7 @@ export type TurnInput = {
    */
   replyChannel?: string | undefined;
   /**
-   * Where the *final* answer's text arrives while it is still forming — M5-BIS
+   * Where the *final* answer's text arrives while it is still forming — DAY-1
    * B11. Per-turn, not per-runtime: a REPL prints to its own stdout, a
    * Telegram chat edits its own draft, and a job with no live surface passes
    * nothing at all, which is also the default that keeps `stream: false` on
@@ -694,7 +694,7 @@ export type TurnInput = {
   /**
    * A fact about this turn's own progress, fired the moment it becomes true
    * — a round starting, a model call finishing, a tool call starting or
-   * ending. M5-BIS B13: a long turn saying it is alive *structurally*, not
+   * ending. DAY-1 requirement B13: a long turn saying it is alive *structurally*, not
    * cosmetically (`turns.updated_at` is the structural data B13 names as
    * already existing with no reader; this is the reader, and the
    * surface-facing half B13 was still missing).
@@ -917,7 +917,7 @@ function initialTaint(input: TurnInput): TrustTier {
  * `runTurn`, and the design measured what that costs: a turn **in flight and
  * unrecorded**, invisible to the gateway's drain, outside the single model
  * lane, and with the inbox's at-least-once guarantee detached
- * (`research/turno-sospendibile.md` §B2). Every one of those three repairs is
+ * (`docs/evidence/turno-sospendibile.md` §B2). Every one of those three repairs is
  * "record the turn somewhere durable", so the row is the cure and not a
  * bookkeeping side-effect of it.
  *
@@ -958,6 +958,30 @@ function freshCounters(): TurnCounters {
     resumes: 0,
     contextBuilt: false,
   };
+}
+
+/**
+ * The sentence the model reads when the kernel refuses.
+ *
+ * Until 2026-09-02 every refusal said the same thing — «serve una decisione
+ * dell'owner» — and for `taint_exceeded` that sentence is false: no approval
+ * exists at runtime for a ceiling the turn's taint has already crossed, and
+ * the owner cannot grant one. The dogfood review of 2026-08-29
+ * (`docs/evidence/dogfood-autonomia-2026-08-29.md` §9, item 1) ordered this
+ * first, and the owner's database shows the price of leaving it: episode 310,
+ * where the model explained a refusal as «è la policy, non un bug» and sent
+ * the owner to look for a setting that does not exist. A refusal names its
+ * cause, says what would change it, and never promises a permission.
+ */
+export function denyText(decision: Extract<Decision, { effect: 'deny' }>): string {
+  if (decision.code === 'taint_exceeded') {
+    return (
+      `Rifiutato dal kernel dei permessi (taint_exceeded): ${decision.detail ?? 'il taint del turno supera il soffitto'}. ` +
+      "Nessuna approvazione lo sblocca in questo turno: non chiedere all'owner un permesso che non esiste. " +
+      'Dillo, e se serve davvero spiega che una conversazione nuova riparte con il contesto pulito.'
+    );
+  }
+  return `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`;
 }
 
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
@@ -1376,7 +1400,7 @@ async function drive(
       barrier = spec;
     },
     // `input.replyChannel` threaded through, per `ToolContext.replyChannel`'s
-    // own docstring: the one field `send_file` (M5-BIS B14) reads, absent
+    // own docstring: the one field `send_file` (DAY-1 requirement B14) reads, absent
     // everywhere else.
     replyChannel: input.replyChannel ?? null,
   };
@@ -1445,7 +1469,7 @@ async function drive(
         // reconstruct, so it is not carried). `record.taint` is the value
         // `enqueueTurn`/`runTurn` already computed with `initialTaint` at
         // creation — a forwarded message's episode is the exact "enters
-        // memory at the owner's tier" step the audit named (M5-BIS B16), and
+        // memory at the owner's tier" step the audit named (DAY-1 requirement B16), and
         // this is the row this slice exists to stop writing at tier 0 for
         // content nobody at tier 0 actually said.
         trustTier: record.taint,
@@ -1526,7 +1550,7 @@ async function drive(
     /**
      * The session transcript, and the taint that comes with it — same order,
      * same reason, one line down from the plan above (ADR-0044 §Revisione,
-     * "la history non lava la provenienza"; MANDATO-DAY-1 invariant 2).
+     * "la history non lava la provenienza"; a DAY-1 readiness invariant).
      *
      * `reinjectedHistory` is the same cut `buildContext` renders — computed
      * once here so the two can never disagree about what "reinjected" means
@@ -1555,7 +1579,7 @@ async function drive(
     // own reconstructed `input`, which never carries `contentTaint`.
     // `record.taint` is what `enqueueTurn`/`runTurn` already computed with
     // `initialTaint` at creation — never a literal 0 that would make a group
-    // turn's own user line, or a forwarded message's (M5-BIS B16), read as
+    // turn's own user line, or a forwarded message's (DAY-1 requirement B16), read as
     // clean once a later turn in the same conversation reinjects it
     // (`agent/context/history-taint.ts`, ADR-0044 §"la history non lava la
     // provenienza").
@@ -2151,7 +2175,7 @@ async function drive(
   /**
    * The turn releases the runtime. **Not** an ending — see `TurnStopped`.
    *
-   * The write is a single statement (`TurnStore.suspend`) for ADR-0035 §1's
+   * The write is a single statement (`TurnStore.suspend`) for ADR-0035's
    * reason, restated on this table: one write advances the state, so a second
    * writer added later cannot move a turn past a suspension nobody recorded.
    * A failure here is the one case that must **not** be swallowed the way a
@@ -2763,7 +2787,7 @@ async function runTool(
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
+        content: denyText(decision),
         isError: true,
       };
     case 'draft': {
@@ -2771,7 +2795,7 @@ async function runTool(
        * `draft` significa «fallo, ma in modo reversibile, e dillo all'owner».
        * Per anni qui c'era un rifiuto, perché il registro di undo non esisteva:
        * il kernel emetteva un verdetto che nessuno implementava, e `fs_write`
-       * veniva offerto al modello senza mai scrivere (M5-BIS D2/D3/D11).
+       * veniva offerto al modello senza mai scrivere (DAY-1 requirement D2/D3/D11).
        *
        * Adesso il verdetto ha un'implementazione, e la sua forma è una sola
        * frase: **un checkpoint che non si può prendere è un effetto che non
@@ -2895,7 +2919,7 @@ async function runTool(
          *
          * Su una superficie a pulsanti l'id viaggia dentro il pulsante, quindi
          * deve esistere prima che il messaggio parta. Sul terminale, dove la
-         * risposta è immediata, la riga resta comunque come traccia: `M5-BIS`
+         * risposta è immediata, la riga resta comunque come traccia: i requisiti DAY-1
          * D12 chiede una coda durevole degli ask, e una coda che registra solo
          * le domande scomode non è la coda delle domande.
          */
@@ -3027,7 +3051,7 @@ async function runTool(
     args,
   });
   if (intentError !== null) {
-    // EFFECT WAL (MANDATO-DAY-1 invariant 1): the write above did not land, so
+    // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
     // the handler must not run — a missing intent row has to mean "never
     // started", never "started, but its own receipt got lost". No byte has
     // left this process for this call, so nothing raises taint, and there is
@@ -3165,8 +3189,8 @@ async function runTool(
  * write actually costs here: with the handler left free to run anyway, a
  * missing intent row stopped meaning "never started" and started meaning
  * "started, but its own receipt did not survive" — for a non-rerunnable tool,
- * exactly the ambiguity this row exists to remove (ADR-0042 §6). MANDATO-DAY-1
- * names this invariant 1, "EFFECT WAL": no side effect may start unless its
+ * exactly the ambiguity this row exists to remove (ADR-0042). DAY-1 readiness
+ * names this property "EFFECT WAL": no side effect may start unless its
  * intent is durable first, and "I tried to record it and carried on anyway"
  * does not satisfy that. So the failure is returned instead, and the caller
  * below refuses the call rather than guess which way is safe to fail.
@@ -3342,7 +3366,7 @@ function buildContext(
    * in `systemPrompts`, which is assembled once at boot and is the cacheable
    * prefix — a list that changes every turn would go in front of the stable
    * text and cost the warm prefix on every message, which is the mistake
-   * `research/m3-caching-and-per-connector-timing.md` records the peers
+   * `docs/history/design-notes/m3-caching-and-per-connector-timing.md` records the peers
    * avoiding. So it rides in the volatile tail, next to recalled memory, for
    * the same reason recall does.
    *

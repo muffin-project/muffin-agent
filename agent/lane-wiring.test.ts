@@ -386,7 +386,7 @@ describe('B5 · un turno interrotto viene ripreso dalla corsia', () => {
     g.close();
     runtime.close();
 
-    // This is the line M5-BIS B5 asks for: it died in the middle, and it
+    // This is the line DAY-1 requirement B5 asks for: it died in the middle, and it
     // resumed — with the answer reaching the surface the row named.
     expect(delivered.map((d) => d.text)).toEqual(['alle 9:42']);
 

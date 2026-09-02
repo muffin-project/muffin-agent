@@ -6,7 +6,7 @@
  * `docs/README.md`. SessionStart only needs the small piece that is otherwise
  * easiest to lose across a fresh session or compaction: what work is live now.
  *
- * `docs/blueprint/LAVORO.md` is deliberately non-authoritative and disposable.
+ * `docs/work/handoff.md` is deliberately non-authoritative and disposable.
  * Observed Git/PR state wins when the two disagree.
  *
  * Fail-soft by design. SessionStart cannot usefully block because a handoff is
@@ -14,17 +14,17 @@
  */
 import { readFileSync } from 'node:fs';
 
-const WORK = new URL('../../docs/blueprint/LAVORO.md', import.meta.url);
+const WORK = new URL('../../docs/work/handoff.md', import.meta.url);
 
 // Claude Code permits a larger hook payload, but the repository chooses a much
 // smaller local budget so bootstrap context cannot quietly become a manual.
 const MAX_CONTEXT = 4_000;
 const PREAMBLE =
-  'Operational handoff from docs/blueprint/LAVORO.md. It is not product ' +
+  'Operational handoff from docs/work/handoff.md. It is not product ' +
   'authority; observed Git/PR state wins. Use docs/README.md to discover ' +
   'deeper context only when the task requires it.\n\n';
 const CUT_MARKER =
-  '\n\n[…handoff truncated: read docs/blueprint/LAVORO.md before choosing work]';
+  '\n\n[…handoff truncated: read docs/work/handoff.md before choosing work]';
 
 let work;
 try {

@@ -1,5 +1,5 @@
 /**
- * Which `M5-BIS.md` row each acceptance scenario proves, and what outcome it
+ * Which `requirements-status.md` row each acceptance scenario proves, and what outcome it
  * is expected to have today — independent of vitest on purpose.
  *
  * `report.ts` reads this list to cross-reference against the inventory
@@ -24,7 +24,7 @@ export type Expectation =
        * The failure this row's `reason` predicts, checked against the error
        * `scenario()` actually catches — not merely "did it throw".
        *
-       * Mandato DAY-1 §4.9 (P39): `it.fails` alone marks a scenario `passed`
+       * readiness-criteria.md#day-1-ready (P39): `it.fails` alone marks a scenario `passed`
        * on *any* throw, so a scenario can keep reading "atteso-rosso, ragione
        * X" long after the code started throwing for reason Y — the reason
        * goes stale and nothing notices, which is exactly the shape D10 was
@@ -53,7 +53,7 @@ export type Expectation =
     };
 
 export type ScenarioEntry = {
-  /** An M5-BIS row id, e.g. 'A1', 'B8'. */
+  /** A DAY-1 requirement id, e.g. 'A1', 'B8'. */
   row: string;
   /** Full `it()` title — starts with `row` so the report can parse it back out. */
   title: string;
@@ -98,7 +98,64 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'persona: the installed persona.md/voice.md reach the real system prompt in canonical order (persona, identity, voice), and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
   ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
-  verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
+  // New (slice/journey-lifecycle): the row was BLOCKER only for a missing
+  // scenario — `muffin config` is read-only by design (ADR-0036,
+  // `cli/config.ts:7,22-37`) and the mechanism (`listConfigKnobs`, `muffin
+  // rot reseal`) already existed. Proves both halves of ADR-0036's split on
+  // the real binary: an unsealed knob (`models.main` in `config.json`)
+  // changes what the provider actually receives with no reseal in between,
+  // and a sealed knob (`rot/budgets.json`) changes what the binary *does*
+  // (a hand-edited cap of 0 stops a turn) before `muffin rot reseal`, which
+  // is what stops `doctor` from calling the edit tampering — never a
+  // precondition for the value binding.
+  verde(
+    'A4',
+    'config: an unsealed knob (config.json) binds with no reseal, a sealed knob (rot/budgets.json) binds before reseal too, and `muffin rot reseal` is what clears doctor — all three witnessed by the real binary and `muffin config --json`',
+  ),
+  // New (slice/journey-lifecycle): `muffin update` (`cli/update.ts`) exists
+  // (9f56484, 26/08) but had no acceptance scenario. `cmdUpdate` gives a
+  // spawned `muffin update` no way to point at anything other than the real
+  // git checkout (`findCheckoutRoot`'s own docstring walks to the MAIN
+  // worktree) and the real system bin directories — running it as a real
+  // child process from this suite would mutate the actual repository this
+  // agent runs from. So this exercises `runUpdate` — the exact function
+  // `cmdUpdate` calls with only argv-parsing on top — redirected at only the
+  // two inputs its own doc comments name as the test seam (`moduleDir`,
+  // `bindirs`); `git`, `npmCi`, `smokeTest`, `readNewSchemaVersion` and
+  // `backup` are all the real defaults, running for real against a real
+  // throwaway checkout+origin, and `backup` runs against the real, populated
+  // `$MUFFIN_HOME` the real spawned binary built earlier in the same
+  // scenario. Does not exercise `cmdUpdate`'s own argv parsing or its
+  // interactive restart prompt, which carry no logic of their own.
+  verde(
+    'A6',
+    'update: a validated backup is taken before the launcher swap, and content written before the update is still there after — the real mechanism, redirected only at the checkout root and the bindirs',
+  ),
+  // New (slice/journey-lifecycle): `rebuildTable`/`SchemaAheadError` were
+  // proven at the unit level (RETURN S2); the acceptance gap was that no
+  // scenario ran the real binary against a real, POPULATED database with a
+  // migration actually pending — `install()` alone stamps every migration
+  // fresh (`stampFresh`) and never runs an `up()`. Rewinds a real database's
+  // `schema_version` stamp (never its data) to simulate a pre-migration
+  // install, lets the real binary discover and run the pending migration on
+  // its own next boot, and asserts rows survive, the migration's own
+  // backfill actually took effect (not just "the column exists"), and a
+  // database stamped ahead of the code's own version is refused before
+  // anything is written. `MIGRATIONS` today has no `rebuildTable`-based
+  // entry (only additive `ALTER TABLE`), so the CHECK-widening escape hatch
+  // stays unreached by this scenario — see its own comment.
+  verde(
+    'A7',
+    "migration: a real additive migration runs against a real populated database on the binary's own boot, rows survive and the migration's backfill is actually active, and a database stamped ahead of the code refuses before writing",
+  ),
+  // Riscritto (slice/journey-lifecycle, riconciliazione 02/09): la versione
+  // precedente copiava la home con `cpSync` — provava il filesystem, non i
+  // verbi. Ora esercita `muffin backup`/`muffin restore` (`cli/backup.ts`)
+  // per davvero: il file di backup dichiarato esiste ed è quick_check-ato
+  // indipendentemente, il contenuto scritto DOPO il backup sparisce dal
+  // restore (sostituisce, non aggiunge) e la copia-di-cortesia che
+  // `restoreFrom` mette da parte esiste sul disco.
+  verde('A8', 'backup: `muffin backup` and `muffin restore` — a real snapshot, replacing (not merging) the live database, memory findable after'),
   verde(
     'A9',
     'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
@@ -136,8 +193,47 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'job-fires: a real SIGKILL between binding a fire and creating its turn, and another between the turn finishing and settlement, both recover to exactly one delivered turn — the model called exactly once',
   ),
   verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
+  // New (slice/journey-telegram): B13/B14/D12 were BLOCKER only for lack of a
+  // scenario that drives the mechanism over the real Telegram surface — the
+  // rows' own text names each mechanism as already in HEAD. This is that
+  // missing proof, against a fake Bot API server (`evals/acceptance/
+  // telegram.ts`) and a real `muffin gateway`, alongside B1's own Telegram
+  // half (a plain, unmanifested scenario — see `b-telegram-journey.accept.ts`'s
+  // own docstring for why that one does not register here).
+  verde(
+    'B13',
+    'progress telegram: a scripted multi-round turn produces one status message, edited in place (never a second one), throttled, and replaced by the real answer',
+  ),
+  verde(
+    'B14',
+    'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
+  ),
+  verde(
+    'D12',
+    'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
+  ),
+  // New (slice/journey-capability): B6 was BLOCKER only for a missing
+  // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
+  // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
+  // was never proven is `agent/tools/http.ts` wired to the real binary. A
+  // completed 503-then-200 round trip through a local fake server turns out
+  // to be unreachable from this harness: `addressVeto`
+  // (`core/net/egress.ts#isForbiddenAddress`, called on every hop) refuses
+  // every address a subprocess-local test can bind a listener to — loopback,
+  // all of RFC1918, CGNAT, link-local, multicast/reserved and their IPv6
+  // equivalents — independent of the allowlist. Same class of gap the
+  // manifest already accepts for D7's tavily happy path. Does not promote the
+  // row past `?`: what this proves instead, on the real binary, is that the
+  // SSRF floor holds even past an explicit allowlist entry, that the refusal
+  // is never retried (bounded, not a silent retry loop on a dead target), and
+  // that the refusal travels the ordinary `tier: 0` result path rather than
+  // an exception.
+  verde(
+    'B6',
+    'retry boundary: an explicitly allowlisted loopback host is still refused by the address floor — never reaches the network, and the refusal is recorded once, not retried',
+  ),
   // Promoted (this slice): `Deliver` returns a typed `DeliveryOutcome` and
-  // `Scheduler.settle` is markRan's only caller (ADR-0035 §1, PR #42). The
+  // `Scheduler.settle` is markRan's only caller (ADR-0035, PR #42). The
   // fire still advances on a failed delivery — that stays true on purpose,
   // so the model is not re-billed to re-send text already sitting in
   // `outcome.text` — but the turn's own `delivery` column now records
@@ -151,6 +247,26 @@ export const MANIFEST: readonly ScenarioEntry[] = [
       'turn keeps `failed:<why>`, and `doctor` names it',
   ),
   verde('C1', 'memory write: something said in one turn is shown to the model recalling a later one'),
+  // New (slice/journey-memoria). C2's row named the exact gap: extraction is
+  // wired at turn end (`agent/runtime.ts`'s `onTurnEnd`) but nothing had ever
+  // driven it through the real binary. `muffin run` cannot demonstrate this —
+  // its trailing-edge timer is unref'd and `runtime.close()` disarms it in
+  // the same tick the turn finishes — so this drives a real job through a
+  // real gateway subprocess and never calls `muffin memory extract`.
+  verde(
+    'C2',
+    "extraction: a real gateway process, with nothing calling `muffin memory extract`, produces a fact from a turn's own words within the trailing-edge debounce",
+  ),
+  // New (slice/journey-memoria). C3's row named three things together: a
+  // backlog bigger than one page fully drains, an exact-duplicate pair only
+  // `sweepDuplicates` can catch gets caught, and `muffin memory review`
+  // shows a contradiction the judge left open — all through one
+  // `muffin memory extract` and one `muffin memory review`, both real
+  // processes.
+  verde(
+    'C3',
+    'consolidation: a 27-episode backlog drains fully in one `memory extract`, an exact-duplicate pair only the sweep can catch is retired, and `memory review` shows the contradiction the judge left open',
+  ),
   // Promoted (this slice): the retrieval gap the old reason described is
   // real (vector search never sees a fact inserted straight through
   // `store.addFact`, and `searchEpisodes` never returns facts at all) — but
@@ -166,9 +282,49 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
   ),
+  // New (slice/journey-memoria). C6's row asked for the temporal graph
+  // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
+  // as the one parameter both the CLI and the `memory_search` tool take,
+  // proven through both surfaces with the exact "Anna until August, Bruno
+  // after" shape `factsAsOf`'s own docstring reasons through.
+  verde(
+    'C6',
+    'temporal graph: "who was X in May" answers correctly through --as-of on the CLI and through a real turn calling the memory_search tool with as_of',
+  ),
+  // New (slice/journey-memoria). C7's row named the gap precisely:
+  // `connectors/telegram/document-arrival.test.ts` proves attachment→vault→
+  // reindex→episode in-process, and the fake Telegram serves no file
+  // downloads — so this drives the path that is reachable from the CLI,
+  // `muffin vault add`, with a real (byte-built) PDF and a real scan.
+  verde(
+    'C7',
+    "documents: a real PDF's text reaches an episode and is findable by search, and a scanned PDF with no text layer fails explicitly instead of indexing empty",
+  ),
   verde(
     'D1',
     'file read: a symlink inside the workspace cannot walk fs_read past the real scope, real path or real deny-list',
+  ),
+  // New (slice/journey-capability): the row was BLOCKER only for a missing
+  // scenario. shell_run is registered only when the sandbox probe held on
+  // this host (agent/runtime.ts), and sys.shell is `high` risk — single-user
+  // (the only mode `install()` builds) always asks, and headless `muffin run`
+  // has no approval channel. The honest boundary this scenario proves: the
+  // tool is offered (sandbox proven live), and the resulting ASK shows the
+  // exact command and cwd — not that the command executes end to end, which
+  // stays the unit suite's and the CI gate's proof.
+  verde(
+    'D4',
+    'shell: a scripted shell_run is only ever offered after a live sandbox probe, and the resulting ASK shows the real command and cwd',
+  ),
+  // New (slice/journey-capability): same shape as D4 for sys.process.kill —
+  // process_list/process_kill act on the host's real process table, not a
+  // sandbox. list proves pid+command name reach the model with no argv
+  // leaked (PS_ARGV asks for comm, never args); kill proves the pid reaches
+  // the ASK, never the real signal — sys.process.kill is `high` risk, same
+  // single-user/no-channel boundary as D4.
+  verde(
+    'D5',
+    'process: a real long-lived child is listed by pid and command name with no argv leaked, and killing it stops on the same headless ASK boundary as shell',
   ),
   // Riscritto (slice/undo-journal): asseriva che il file NON atterrasse, che
   // era vero e non era la domanda della riga. `draft` senza registro di undo
@@ -232,7 +388,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // turn's `taint` is 3 and its `messages` carry the tool_result naming
   // `resource_denied` for the `http_get` call; no row for it in
   // `turn_tool_calls` at all, confirming PR #28's own finding.
-  // Extended (slice/session-taint, MANDATO-DAY-1 invariant 2): a second,
+  // Extended (slice/session-taint, taint through session history): a second,
   // same-session run that reads nothing of its own still inherits taint 3
   // from the first turn's reply, reinjected as history — the triage probe's
   // "LAUNDERED" finding, closed and pinned to the real binary.
@@ -243,13 +399,20 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
-  // Narrower than E3's own question ("posso ricostruire cosa è successo?") —
-  // it does not promote the row past the acceptance-scenario gap M5-BIS
-  // still names for it. What it proves is the P34-2 half ADR-0048 closes: a
-  // tool result that happens to contain a secret-shaped string never reaches
-  // `turn_tool_calls.content` in the clear, through the real binary and a
-  // real home database, not a unit-level fake.
-  verde('E3', 'tracing: a tool result that looks like a secret is redacted before it reaches the durable record'),
+  // Extended (slice/journey-lifecycle): still narrower than E3's own full
+  // question in one respect (it does not exercise every span shape the row
+  // could name), but now covers both halves the row's BLOCKER text asked
+  // for: the P34-2 secret-redaction half ADR-0048 closes (a tool result that
+  // happens to contain a secret-shaped string never reaches
+  // `turn_tool_calls.content` in the clear) AND reconstructing an arbitrary
+  // turn via `muffin trace turn <id>`/`muffin trace grep` — asserted as
+  // isolation (the reconstruction of turn B never shows turn A's tool call,
+  // and vice versa), not merely "the command printed something". One
+  // scenario, not two: `report.ts`'s manifest is 1:1 per row.
+  verde(
+    'E3',
+    'tracing: a tool result that looks like a secret is redacted before it reaches the durable record, and an arbitrary turn is reconstructed — and only that turn — via `trace turn`/`trace grep`',
+  ),
   // E4 is this suite's own row ("acceptance test reali, non solo unit?") —
   // giving it a scenario would mean the acceptance mechanism registering a
   // test of itself, which proves nothing a passing suite does not already
@@ -264,9 +427,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'la suite di accettazione non può avere uno scenario di sé stessa: ogni riga verde di questo manifest è già la prova che i test sono reali',
   ),
   // Narrower than E5's own question — see the scenario's own docstring in
-  // e-cost.accept.ts. The row stays `?` in M5-BIS.md; only one failure class
+  // e-cost.accept.ts. The row stays `?` in requirements-status.md; only one failure class
   // (the contradiction judge) is proven explicit-and-explained here.
   verde('E5', 'judge failure: an unreadable judge answer is explained on `muffin memory review`, not repeated verbatim'),
+  // New (slice/journey-capability): the row was BLOCKER only for a missing
+  // scenario — the mechanism (sys_inspect, #176) already read from the same
+  // authoritative sources as `doctor`/`prompt show`. Proves the acceptance
+  // criterion the row itself states: asking twice, with a real condition
+  // (the main model) changed in between through `muffin model main`, must
+  // show the new state and not repeat the old one.
+  verde(
+    'E7',
+    "self-inspection: sys_inspect answers with this instance's live config, and after a real `muffin model main` change the second answer reflects it instead of repeating the first",
+  ),
 ] as const;
 
 export function entry(row: string): ScenarioEntry {

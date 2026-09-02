@@ -14,7 +14,7 @@ import type {
  *
  * Every capability request passes through here — tools, scheduled jobs, the
  * dev capability, rendering. A capability without a declaration does not exist
- * for the runtime. See docs/adr/0013.
+ * for the runtime. See docs/decisions/0013-kernel-permessi-unificato.md.
  */
 
 export type PolicyContext = {
@@ -56,7 +56,7 @@ export type PolicyContext = {
   budgetExhausted: (tenant: string) => boolean;
   /**
    * In single-user mode the Root of Trust is detection, not prevention, so
-   * shell can never be a silent allow. See docs/adr/0003 (revision).
+   * shell can never be a silent allow. See docs/decisions/0003-root-of-trust.md (revision).
    */
   hardened: boolean;
   /**
@@ -241,7 +241,7 @@ export function createDecide(ctx: PolicyContext): Decide {
           : { effect: 'allow' };
       case 'high':
         // Without OS-level prevention of RoT tampering, a high-risk capability
-        // is never a silent allow — see docs/adr/0003 (revision).
+        // is never a silent allow — see docs/decisions/0003-root-of-trust.md (revision).
         return ctx.hardened && isOwnerPrincipal(principal) && taint === 0
           ? { effect: 'allow' }
           : ask(describe(capability, resource));

@@ -23,7 +23,7 @@ import type { CapabilityId, RiskClass, TrustTier } from './types.js';
  * from whatever was on disk at the microsecond it ran (ADR-0013).
  */
 
-/** 0..3 as a schema, so the parse and the type cannot drift (PRACTICES §4). */
+/** 0..3 as a schema, so the parse and the type cannot drift (PRACTICES.md#parse-at-boundaries-preserve-provenance). */
 const Tier = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
 
 const PolicyFileSchema = z.object({

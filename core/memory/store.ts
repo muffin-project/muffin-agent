@@ -149,7 +149,7 @@ export type EpisodeFilter = {
    *
    * `turn_id IS NULL` non e mai escluso: una riga senza lineage non e provato
    * che sia in history, e togliere per non-sapere e la parte che
-   * `docs/blueprint/knowledge` chiama inventare precisione all'indietro.
+   * `docs/knowledge/` chiama inventare precisione all'indietro.
    */
   excludeTurnIds?: readonly string[] | undefined;
 };
@@ -517,7 +517,7 @@ export class MemoryStore {
    * Importance now acts where it belongs — on **membership**, bounded, in
    * `recall.ts` — never on rank. That is the shape the research and the
    * cognitive corpus independently arrived at: *l'importanza protegge, non
-   * spinge*. See `docs/blueprint/research/memory-salience-and-fusion.md` and
+   * spinge*. See `docs/evidence/memory-salience-and-fusion.md` and
    * `knowledge/01-understanding.md`.
    */
   activeFacts(tenantId: string, subjectId: number, predicate?: string): Fact[] {

@@ -35,7 +35,7 @@ import { UpdateInbox } from './updates.js';
  * `streamText` directly across fake-clock time, independent of how
  * `loop.ts` happens to call it today.
  *
- * **M5-BIS B13 lives here too**, same reasoning: `progress.test.ts` drives
+ * **DAY-1 requirement B13 lives here too**, same reasoning: `progress.test.ts` drives
  * `startProgress` directly and proves the throttle/coalescing/disable-on-
  * failure mechanics; the two scenarios below prove the *composition* —
  * `onProgress` actually reaches `TelegramConnector`'s real Telegram calls,
@@ -136,7 +136,7 @@ function streamingProviderWithToolCall(toolName: string, chunks: string[], final
 
 /**
  * Same one-round shape as `streamingProvider`, plus one real macrotask gap
- * before it resolves — see the file docstring's "M5-BIS B13" paragraph for
+ * before it resolves — see the file docstring's "DAY-1 requirement B13" paragraph for
  * why the B13 scenarios need this and the B11 ones above do not. 20ms is
  * comfortably past Node's own 1ms floor for a `setTimeout(fn, 0)`, so this is
  * margin, not a tuned value.
@@ -280,7 +280,7 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
       expect(liveDrafts.length).toBeGreaterThanOrEqual(1);
       expect(liveDrafts[liveDrafts.length - 1]!.text).toBe(finalText);
 
-      // The draft never persists on its own (M5-BIS B11 research finding,
+      // The draft never persists on its own (DAY-1 requirement B11 research finding,
       // api.ts#sendMessageDraft): the real answer always arrives as a
       // proper sendMessage, never an edit of the ephemeral preview.
       const sent = calls.filter((c) => c.method === 'sendMessage');
@@ -293,7 +293,7 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
   });
 });
 
-describe('a turn reports its own progress and cleans it up before the real answer (M5-BIS B13)', () => {
+describe('a turn reports its own progress and cleans it up before the real answer (DAY-1 requirement B13)', () => {
   it('creates one status line, then deletes it strictly before the durable answer is sent', async () => {
     const finalText = 'Fatto, eccolo.';
     const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);

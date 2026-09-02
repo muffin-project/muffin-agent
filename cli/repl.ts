@@ -389,7 +389,7 @@ export async function runRepl(
     home,
     makeReplCliWrite({ cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() }, () => status.clear()),
   );
-  // M5-BIS B14: a file the model produces can now reach the owner as a real
+  // DAY-1 requirement B14: a file the model produces can now reach the owner as a real
   // attachment on whichever surface this turn is on, not only as a path cited
   // in text — the same registry `deliver` uses, one call later.
   attachSendFile(runtime, home, surfaces.registry);

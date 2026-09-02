@@ -38,7 +38,7 @@ export type ConfigKnob = {
  *
  * The alternative was walking `ConfigSchema` itself to enumerate every
  * *possible* leaf, set or not. Probed directly against the installed zod
- * 4.4.3 (PRACTICES §2): the shape is reachable (`schema.shape`, recursing on
+ * 4.4.3 (PRACTICES.md#read-upstream-before-depending-on-upstream): the shape is reachable (`schema.shape`, recursing on
  * `._zod.def.type`), but only through `_zod`, an underscored internal with no
  * precedent anywhere in this codebase (`grep -rn "_zod\\." --include=*.ts`
  * outside this file returns nothing) and no guarantee across a zod patch

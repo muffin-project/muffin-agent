@@ -7,7 +7,7 @@ import type { Principal, TrustTier } from '../policy/types.js';
 /**
  * A turn is a durable record with an identity, not a stack frame.
  *
- * That sentence is the whole design (`docs/blueprint/research/turno-sospendibile.md`),
+ * That sentence is the whole design (`docs/evidence/turno-sospendibile.md`),
  * and it is the substrate under three separate blockers: a connector that must
  * not block for minutes (B2), a `wait` primitive (B3) and a resume after a crash
  * (B5). None of those three is built here. What is built is the row they all
@@ -87,7 +87,7 @@ export type TurnOutcome = 'answered' | 'cap' | 'budget' | 'aborted' | 'error' | 
  * Declared here, in `core`, because it had grown **three** literal copies —
  * `TurnResult['stopped']`, `JobOutcome['stopped']` and this file's own
  * `TurnOutcome` — and the design that produced this table named the divergence
- * as this repo's typical defect (`research/turno-sospendibile.md` §Domanda 6,
+ * as this repo's typical defect (`docs/evidence/turno-sospendibile.md` §Domanda 6,
  * row 9). One reference each now; adding an arm reaches every consumer.
  */
 export type TurnStopped = TurnOutcome | 'suspended';
@@ -197,7 +197,7 @@ export type TurnRecord = {
    * The turn's taint, as a column and never derived.
    *
    * The threat model scopes taint to the turn and raises it monotonically
-   * (`docs/blueprint/03-threat-model.md`). Today it lives in the closure of
+   * (`docs/history/rebuild-2026/03-threat-model.md`). Today it lives in the closure of
    * `makeSnapshot` (`agent/loop.ts`) and is recoverable from nothing else — so
    * a resume that rebuilt it from the principal would restart at tier 0 a turn
    * that had already read the web, which is the fetch-then-act pattern the
@@ -645,7 +645,7 @@ export class TurnStore {
      * The write that suspends, and it releases the claim in the same statement.
      *
      * Same shape as `finish`: **one write advances the state**, which is
-     * ADR-0035 §1's property (`markRan` the only writer of `next_fire_at`)
+     * ADR-0035's property (`markRan` the only writer of `next_fire_at`)
      * applied here. A suspended row must not keep a pid, or the next boot would
      * reclaim it as interrupted the moment that process exits — turning every
      * `wait` that outlives its process into a reported crash. `claim_token`
@@ -715,7 +715,7 @@ export class TurnStore {
    * executes it. `runTurn` staying synchronous was never the property anybody
    * wanted — the property was that the connector does not block, and a row
    * nobody claimed is how that is expressed durably instead of by dropping an
-   * `await` and hoping (`research/turno-sospendibile.md` §B2, the three
+   * `await` and hoping (`docs/evidence/turno-sospendibile.md` §B2, the three
    * guarantees a bare `void runTurn(...)` breaks).
    *
    * `claimed_by` is NULL, deliberately: a pid on a row nobody is executing
@@ -787,7 +787,7 @@ export class TurnStore {
    * precedent: a job with no stop condition keeps arriving, so the owner
    * notices it; a suspended turn with no deadline is *silent* — it holds a row
    * and its whole context and nothing ever says so
-   * (`research/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
+   * (`docs/evidence/turno-sospendibile.md` §Domanda 3). The deadline is the backstop
    * even when an event barrier is also armed: whichever comes first wins, and
    * neither can be absent.
    *
@@ -848,7 +848,7 @@ export class TurnStore {
    *
    * The ceiling `wait` is refused above. Without one, a model that likes
    * waiting produces rows without a bottom and nobody reads a table
-   * (`research/turno-sospendibile.md` §Domanda 3, third stop condition).
+   * (`docs/evidence/turno-sospendibile.md` §Domanda 3, third stop condition).
    */
   countSuspended(tenant: string): number {
     return (this.suspendedCountStmt.get({ tenant }) as { n: number }).n;
@@ -935,7 +935,7 @@ export class TurnStore {
   /**
    * The single write that ends a turn — and it says nothing about delivery.
    *
-   * ADR-0035 §1 keeps a killed gateway from losing work by making `markRan` the
+   * ADR-0035 keeps a killed gateway from losing work by making `markRan` the
    * only writer of `next_fire_at`. This is the same property on this table: one
    * write moves the status, so a second writer added later cannot advance a
    * turn past an outcome nobody recorded.
@@ -1025,8 +1025,13 @@ export class TurnStore {
    * optional, so an omitted argument wrote a silent `NULL` and skipped the
    * taint bump below with no error anywhere. `ToolOutcome.tier` was already
    * required upstream (ADR-0044), but the guarantee lived in the caller, not
-   * in this method's type, which is exactly the gap ORCHESTRATION.md §15 warns
-   * about. Every real caller already passes it (`agent/loop.ts`'s success and
+   * in this method's type — exactly the gap named by the owner directive
+   * "repair at the root": stop at the level where the defect stops being
+   * representable, and "the type permits the wrong state" is one of those
+   * levels. That rule was dropped from `ORCHESTRATION.md` by the 2026-08-19
+   * documentation refactor and has no current home; it is still readable with
+   * `git show 451cd916:docs/ORCHESTRATION.md`.
+   * Every real caller already passes it (`agent/loop.ts`'s success and
    * throw paths both do); a future one that does not now fails `tsc` instead
    * of shipping an underestimated taint.
    */
@@ -1050,7 +1055,7 @@ export class TurnStore {
    * Rows claimed by a process that is gone, marked as what they are.
    *
    * Odysseus does the same thing at start-up and for the same reason
-   * (`docs/blueprint/research/b1-runtime-processo.md`): a row left `running` by
+   * (`docs/evidence/runtime-di-processo-nei-peer.md`): a row left `running` by
    * a dead process is `aborted`, not `error` — the task is not to blame for an
    * infrastructure event. The status change is guarded on `status = 'running'`
    * and only rows this call actually changed are returned, so two processes
@@ -1090,7 +1095,7 @@ export class TurnStore {
   /**
    * Answers "did the thing I was told was sent actually go out".
    *
-   * The reader for M5-BIS B8. Before this, a job whose delivery failed was
+   * The reader for DAY-1 requirement B8. Before this, a job whose delivery failed was
    * indistinguishable from one that arrived: `markRan` advanced the schedule
    * either way and the only trace was a line on stderr that nobody was
    * necessarily reading. The scheduler now settles every fire onto the turn's

@@ -7,7 +7,7 @@
  * layer would level everything down to the minimum common denominator exactly
  * where the differences matter: prompt caching, thinking budgets, long context.
  *
- * See docs/adr/0008.
+ * See docs/decisions/0008-provider-adapter-unico.md.
  */
 
 type Role = 'user' | 'assistant';
@@ -346,7 +346,7 @@ export type StreamEvent =
  * this worth another attempt at the same request", and retrying the same
  * streamed request is exactly the wrong remedy for a broken *transport* — the
  * caller's answer is a single, one-time fallback to `chat()` (non-streaming),
- * per docs/blueprint/M5-BIS.md B11. A distinct class is what lets the loop
+ * per docs/work/day1/requirements-status.md B11. A distinct class is what lets the loop
  * tell "the SSE framing failed" apart from "the server said 429" without
  * inspecting a string.
  */

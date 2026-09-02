@@ -80,7 +80,7 @@ import { randomUUID } from 'node:crypto';
  * precisely, but reading another process's start time has no portable, cheap
  * answer in Node without a native module or a subprocess spawned on every
  * check (`ps -o lstart=` on macOS, `/proc/<pid>/stat` on Linux, neither on
- * Windows) — exactly the missing-dependency shape PRACTICES.md §2 says to cut
+ * Windows) — exactly the missing-dependency shape PRACTICES.md#read-upstream-before-depending-on-upstream says to cut
  * loose rather than presume. A holder-local random id sidesteps the question
  * entirely: it does not need to know anything about the OS, and it is exactly
  * as strong a proof of "the same acquisition" as a monotonic generation

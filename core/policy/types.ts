@@ -2,9 +2,12 @@
  * Policy kernel contracts.
  *
  * This file is part of the Root of Trust (code tier): nothing at runtime writes
- * here, and changing it requires a build and a restart. See docs/adr/0003, 0013.
+ * here, and changing it requires a build and a restart. See
+ * docs/decisions/0003-root-of-trust.md and docs/decisions/0013-kernel-permessi-unificato.md.
  *
- * Normative source: docs/blueprint/09-contratti-m0-m1.md §1 in the blueprint repo.
+ * Historical contract lineage:
+ * docs/history/rebuild-2026/09-contratti-m0-m1.md §1. The current executable
+ * authority is this file and the shipped schema/config, per docs/README.md.
  */
 
 /** Who is acting. Never inferred from message content — resolved before the loop. */
@@ -104,7 +107,7 @@ export type CapabilityDecl = {
    * Required, not optional, and that is the point: a tool arriving without an
    * answer breaks the build instead of inheriting a default that is wrong half
    * the time. Adding this after five MCP servers are attached means auditing
-   * every one of them — the design (`research/turno-sospendibile.md` §Domanda 6)
+   * every one of them — the design (`docs/evidence/turno-sospendibile.md` §Domanda 6)
    * rates it among the two most expensive things to get wrong here.
    *
    * The consumer is a resume: a call with an intent row and no outcome row is

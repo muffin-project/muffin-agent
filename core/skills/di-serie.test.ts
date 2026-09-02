@@ -16,7 +16,7 @@ import { paths } from '../config/config.js';
  * L'effetto non è «una funzione in meno»: `skillsPromptSection` torna stringa
  * vuota quando la lista è vuota, quindi il modello non sentiva mai la parola
  * «skill» e `skill_read` restava un tool che non poteva leggere niente —
- * offerto, e senza oggetto. È la riga D9 di M5-BIS.
+ * offerto, e senza oggetto. È il requisito DAY-1 D9.
  *
  * Questo file prova la cosa che nessun test unitario poteva provare: che quelle
  * che spediamo *davvero* si caricano. Una skill di serie con un `name` che non

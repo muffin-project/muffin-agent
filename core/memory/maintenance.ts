@@ -32,12 +32,12 @@ import type { Fact, MemoryStore } from './store.js';
  * not, a review row is open or it is settled. Nothing in this schema changes
  * because a day passed. A nightly cron would therefore be a timer with nothing
  * that depends on time — and the twelve systems surveyed in
- * `research/consolidamento-due-meccanismi.md` include **zero** that run a pure
+ * `docs/evidence/consolidamento-due-meccanismi.md` include **zero** that run a pure
  * nightly cron. The trigger stays where ADR-0038 put it: the same trailing edge,
  * in the runtime, so every process that runs turns has one.
  *
  * What a clock-driven pass *would* be for is confidence decay, and that is
- * deliberately not built — see `docs/blueprint/adr/0040`.
+ * deliberately not built — see `docs/decisions/0040-la-manutenzione-e-guidata-dai-dati.md`.
  */
 
 /**
@@ -52,7 +52,7 @@ import type { Fact, MemoryStore } from './store.js';
  *    while retiring wrongly is neither.
  *  - No stemming, no stopword removal, no article stripping. "Cagliari" and "a
  *    Cagliari" stay two beliefs here. That pair is exactly the drift
- *    `research/consolidamento-due-meccanismi.md` names, and folding it away is a
+ *    `docs/evidence/consolidamento-due-meccanismi.md` names, and folding it away is a
  *    similarity threshold wearing a normalisation costume — the same decision,
  *    with the calibration hidden instead of stated.
  *  - No embedding, no cosine, and therefore **no threshold**. The old system's
@@ -292,7 +292,7 @@ export function errorGroups(store: MemoryStore, tenantId: string, limit = 20): E
  * Two things it deliberately is not. It is **not a new store table**: the answer
  * lives in the facts, where the question lived. And it is **not the model
  * writing memory** — this is the owner deciding, by hand, on a row the pipeline
- * put in front of them, so it leaves ADR-0032 §9 (*"il contributo del modello al
+ * put in front of them, so it leaves ADR-0032 (*"il contributo del modello al
  * contenuto della memoria è zero, non indiretto"*) exactly where it was. The
  * open question about a `ricorda` tool that writes is a different question and
  * this does not touch it.

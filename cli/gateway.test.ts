@@ -260,7 +260,7 @@ describe('two schedulers must never run', () => {
  * itself). Nothing exercised whether `cmdGatewayRun` threads
  * `runtime.deps.turns.delivered` into the `Scheduler` it builds, or the
  * `SurfaceRegistry` from `connectSurfaces` into the `deliver` the scheduler
- * calls — the exact wiring `docs/blueprint/M5-BIS.md` B8 is about. Checked by
+ * calls — the exact wiring `docs/work/day1/requirements-status.md` B8 is about. Checked by
  * hand first: commenting out the `recordDelivery` argument in `cli/gateway.ts`
  * left every other test in this file and in `core/gateway/service.test.ts`
  * green.
@@ -336,7 +336,7 @@ describe("cmdGatewayRun's own assembly", () => {
   });
 
   /**
-   * M5-BIS B14's wiring, the same standard as B8 just above: checked by hand
+   * DAY-1 requirement B14's wiring, the same standard as B8 just above: checked by hand
    * first — commenting out `attachSendFile(runtime, home, surfaces.registry)`
    * in both `cli/gateway.ts` and `cli/repl.ts` left the entire suite green,
    * `send_file`'s own unit tests included (they drive `makeSendFileTool`

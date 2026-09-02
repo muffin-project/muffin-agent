@@ -1,0 +1,470 @@
+{
+  "entrypoints": [
+    {
+      "surface": "CLI REPL",
+      "fn": "runRepl",
+      "file": "cli/repl.ts:100",
+      "note": "One session per launch; reads a line from stdin, wraps it in an AbortController, calls runTurn. DAY-1 requirement B11: on a TTY (or unless --no-stream), attaches onDelta and writes the answer to stdout as it forms; otherwise prints result.text once, at the end — either way the same bytes."
+    },
+    {
+      "surface": "muffin run",
+      "fn": "runHeadless",
+      "file": "cli/run.ts:26",
+      "note": "Headless single turn: stdout carries only the answer, stderr carries warnings/spend, exit code encodes TurnResult.stopped (0/1/3/4/5)."
+    },
+    {
+      "surface": "Telegram",
+      "fn": "TelegramConnector.run / .handle",
+      "file": "connectors/telegram/connector.ts:198",
+      "note": "Retries getMe() with capped, jittered backoff until connected or stopped (A1, ADR-0035 Emendamento №3 — a boot-time network gap used to kill this surface for the process's whole life). Then polls getUpdates, durably stores each batch before advancing the offset, then drains pending updates one at a time through handle() -> runTurn."
+    },
+    {
+      "surface": "scheduler",
+      "fn": "makeJobRunner",
+      "file": "agent/scheduler-run.ts:42",
+      "note": "A due cron job runs as {kind:'system',source:'scheduler'} on the host tenant, fresh session per fire, through the same runTurn."
+    },
+    {
+      "surface": "scheduler",
+      "fn": "makeAbsenceComposer",
+      "file": "agent/observe-run.ts:51",
+      "note": "Stage 2 of an inferred absence nudge: writes a goal naming the entity and the statistics, runs it through runTurn with memory disabled for that call, hands back {text, record} so the episode is only persisted after delivery succeeds."
+    },
+    {
+      "surface": "corsia dei turni",
+      "fn": "TurnLane.tick / makeLaneRunner",
+      "file": "core/turns/lane.ts:86; agent/turn-lane.ts:47; core/gateway/service.ts:252",
+      "note": "L'unico ingresso che non parte da un messaggio: batte sul tick del gateway (30s), valuta le barriere a evento dei turni sospesi, poi prende UNA riga da TurnStore.due — registrata da una superficie e mai eseguita (B2), sospesa e scaduta (B3), o lasciata da un processo morto (B5) — e la passa a resumeTurn. Non consegna: l'indirizzo e' il replyTo sulla riga, e la porta e' quella della superficie connessa (cli/surface.ts, connectSurfaces().deliver)."
+    }
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "id": "message-arrives",
+      "title": "Surface receives raw message",
+      "file": "connectors/telegram/connector.ts:198-253; cli/repl.ts:255-257",
+      "what": "La CLI legge una riga da stdin (rl.question). Telegram fa polling di getUpdates, scrive ogni batch nell'inbox SQLite in una transazione e SOLO DOPO avanza l'offset (updates.ts:81-106) — perche' Telegram non re-invia mai un update confermato. Poi drena i pending uno alla volta.",
+      "taint": "non ancora assegnato — deciso al passo successivo da chi sta parlando",
+      "branches": [
+        {
+          "cond": "Telegram: l'update non e' testo/allegato riconoscibile (parseUpdate torna null)",
+          "goto": "exit",
+          "note": "marcato processato e scartato in silenzio, connectors/telegram/connector.ts:223-227 — non raggiunge mai runTurn"
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "id": "identity-resolved",
+      "title": "Principal e tenant risolti",
+      "file": "connectors/telegram/connector.ts:153-163; core/surface/types.ts (identify); cli/repl.ts:289; cli/run.ts:66",
+      "what": "Chi parla decide il tenant, mai il contenuto del messaggio. Telegram mappa il mittente a owner (chat privata + id utente combaciante) o a member di un tenant per-gruppo (principalFor, che ora e' un adapter sottile sulla regola condivisa `identify` in core/surface/types.ts — la stessa che una seconda superficie deve chiamare per non poter rispondere diversamente sulla stessa domanda). La CLI usa sempre {kind:'owner', connector:'cli', externalId:'local'}. Lo scheduler usa {kind:'system', source:'scheduler'}.",
+      "taint": "fissa la base della taint del turno: owner/system=0, member=2 — scritta nella colonna `taint` del record alla creazione e da li' letta a ogni ripresa",
+      "branches": [
+        {
+          "cond": "Telegram: installazione non ancora accoppiata e il messaggio sembra un codice di pairing",
+          "goto": "exit",
+          "note": "consumato da tryPair, non arriva mai a runTurn — connectors/telegram/connector.ts:255-288"
+        }
+      ]
+    },
+    {
+      "n": 3,
+      "id": "turn-starts",
+      "title": "runTurn scrive il record, poi apre span e snapshot",
+      "file": "agent/loop.ts:848-862, 1134",
+      "what": "runTurn apre uno span 'muffin.turn' e scrive SUBITO la riga in `turns` (status running, modello pinnato, trascritto con le sole parole dell'owner, taint iniziale) — non dentro un try: una riga che non si puo' scrivere ferma il turno prima che accada qualsiasi cosa. Poi `drive` costruisce il PermissionSnapshot a partire dalla taint DELLA RIGA e calcola tenantClass (owner|group). `drive` e' lo stesso corpo per un turno fresco e per uno ripreso: cambia solo lo stato di partenza.",
+      "taint": "letta dal record, mai riderivata dal principal: makeSnapshot parte da record.taint (loop.ts:594, 1742). Su un turno fresco vale 0 (owner/system) o 2 (member); su una ripresa vale la taint a cui quel turno era gia' salito",
+      "branches": []
+    },
+    {
+      "n": 4,
+      "id": "episode-recorded",
+      "title": "Le parole dell'utente registrate prima del modello",
+      "file": "agent/loop.ts:271-283",
+      "what": "Se la memoria e' configurata, il testo grezzo del turno viene scritto come episodio (trustTier 0 o 2) PRIMA di qualsiasi chiamata al modello, cosi' un crash a meta' turno non perde mai l'input che lo ha causato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
+      "taint": "0 (owner) o 2 (member), da episode.trustTier",
+      "branches": []
+    },
+    {
+      "n": 5,
+      "id": "recall",
+      "title": "Il recupero di memoria gira e puo' alzare la taint",
+      "file": "agent/loop.ts:289-314; core/memory/recall.ts:369-643",
+      "what": "recall() fonde full-text search, ricerca vettoriale e un hop sul grafo delle entita' (quest'ultimo su tre selettori — ora, storia, o un istante passato via asOf — mai un quarto), limitato a 8 elementi di default (recall.ts:375), poi eventualmente re-ranka e attacca il vicinato in coda. Ogni elemento e' reso in massimo 400 caratteri nel prompt (recall.ts:675), recintato come contesto a bassa autorita'; una domanda temporale a cui il grafo non arriva rientra come lacuna esplicita, mai come il presente. La sua taint viene fusa nello snapshot con raiseTaint: un fatto piantato da uno sconosciuto mesi fa alza la taint di questo turno esattamente come se avesse appena parlato. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
+      "taint": "puo' salire fino al trustTier massimo tra gli elementi recuperati (0-3) — loop.ts:299-300",
+      "branches": [
+        {
+          "cond": "recall lancia un'eccezione",
+          "goto": "context-assembled",
+          "note": "l'errore viene inghiottito — un turno senza memoria e' peggio, un turno che si rifiuta di partire e' rotto (loop.ts:309-313)"
+        }
+      ]
+    },
+    {
+      "n": 6,
+      "id": "context-assembled",
+      "title": "Tool filtrati, prompt e storia assemblati",
+      "file": "agent/loop.ts:316-334, 888-931; agent/context/assemble.ts:107-192",
+      "what": "I tool sono filtrati per principal/capabilities (visibleTools) e poi tagliati a profile.maxToolsExposed. buildContext prende gli ultimi 40 messaggi user/assistant della sessione (MAX_HISTORY_TURNS), annuncia un troncamento se ne sono stati scartati di piu' vecchi, e accoda memoria recuperata + il nuovo messaggio all'ultimo turno utente. Il system prompt e' la stringa owner o group pre-costruita al boot, scelta da tenantClass. Gira solo se `counters.contextBuilt` e' falso: il preambolo non e' idempotente (episodio, recall, riga di sessione), quindi una ripresa lo salta e riparte dal trascritto registrato invece di ricostruirlo (agent/loop.ts:720).",
+      "taint": "invariata qui — questo passo decide COSA viene mostrato, non quanto e' tainted",
+      "branches": []
+    },
+    {
+      "n": 7,
+      "id": "iteration-loop-begins",
+      "title": "Guardie per-iterazione e compattazione",
+      "file": "agent/loop.ts:351-372",
+      "what": "Ogni passaggio del ciclo controlla prima budgetExhausted(tenant) e l'abort signal, poi ripulisce i payload dei risultati-tool piu' vecchi oltre un budget di 60.000 caratteri (TOOL_RESULT_BUDGET_CHARS) — mantenendo intatte le coppie tool_use/tool_result ed esentando i risultati di errore e i tool marcati keepResult (es. memory.search).",
+      "taint": "invariata",
+      "branches": [
+        {
+          "cond": "budget esaurito",
+          "goto": "exit",
+          "note": "stopped:'budget' — loop.ts:352-354"
+        },
+        {
+          "cond": "AbortSignal gia' scattato",
+          "goto": "exit",
+          "note": "stopped:'aborted' — loop.ts:355-357"
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "id": "chat-call",
+      "title": "Chiamata provider.chat(), retry su errori di trasporto",
+      "file": "agent/loop.ts:1405-1560; agent/providers/anthropic.ts:44-51; agent/providers/openai-compat.ts:225-262",
+      "what": "Costruisce una ChatCall (system prompt, messaggi compattati, tool esposti, maxOutputTokens 4096, temperature/thinking condizionati dal profilo, stream acceso quando c'e' un sink onDelta e il provider sa streammare) e chiama provider.chat(). Un errore di trasporto retryable (429/5xx) fa backoff esponenziale con jitter e riprova fino a MAX_TRANSPORT_RETRIES=2; un errore retryable di tipo 'output' (JSON di tool call malformato) va invece nella cascata di recovery del profilo.",
+      "taint": "invariata dalla chiamata in se'",
+      "branches": [
+        {
+          "cond": "errore non-retryable, o retry di trasporto esauriti",
+          "goto": "exit",
+          "note": "l'errore viene rilanciato, catturato dal try/catch esterno (loop.ts:602-611) — il turno termina con un'eccezione, non con un TurnResult"
+        },
+        {
+          "cond": "errore output retryable e resta una strategia di recovery",
+          "goto": "iteration-loop-begins",
+          "note": "recover('malformed') accoda un turno correttivo, loop.ts:1542"
+        },
+        {
+          "cond": "errore di trasporto retryable e restano tentativi",
+          "goto": "chat-call",
+          "note": "backoff esponenziale con jitter, loop.ts:1544-1550, retryDelayMs a loop.ts:3020"
+        }
+      ]
+    },
+    {
+      "n": 9,
+      "id": "empty-response-recovery",
+      "title": "Turno vuoto innesca recovery o errore",
+      "file": "agent/loop.ts:482-486",
+      "what": "Se il modello non ha restituito ne' testo ne' tool call, viene consultata la cascata di recovery del profilo (recover('empty')); se la cascata e' esaurita, il turno termina in errore invece di presentare il silenzio come una risposta.",
+      "taint": "n/a",
+      "branches": [
+        {
+          "cond": "resta una strategia di recovery",
+          "goto": "iteration-loop-begins",
+          "note": "accoda un nudge correttivo e ritenta — loop.ts:484"
+        },
+        {
+          "cond": "cascata esaurita",
+          "goto": "exit",
+          "note": "stopped:'error' — loop.ts:485"
+        }
+      ]
+    },
+    {
+      "n": 10,
+      "id": "completion-check",
+      "title": "Nessun tool call: il cancello di completamento prima di rispondere",
+      "file": "agent/loop.ts:488-540; agent/completion.ts:58-84",
+      "what": "Quando il modello non chiama nessun tool, checkCompletion() cerca nomi di tool citati nella risposta ma mai chiamati in questo turno (un controllo deterministico, non un giudice LLM — l'ablation misura -31 punti su GAIA senza questo check). Il primo fallimento riceve esattamente un nudge che nomina i tool; un secondo fallimento resta com'e' ed e' solo registrato in trace, mai riscritto.",
+      "taint": "n/a",
+      "branches": [
+        {
+          "cond": "completamento fallito e nessun nudge ancora usato",
+          "goto": "iteration-loop-begins",
+          "note": "accoda completionNudge(), continue — loop.ts:508-515"
+        },
+        {
+          "cond": "completamento ok, oppure gia' nudged una volta",
+          "goto": "exit",
+          "note": "stopped:'answered' — risposta accodata a sessione+memoria, loop.ts:521-540"
+        }
+      ]
+    },
+    {
+      "n": 11,
+      "id": "tool-calls-recorded",
+      "title": "Turno assistant (thinking+testo+tool_use) ecoeggiato",
+      "file": "agent/loop.ts:543-565",
+      "what": "Quando il modello chiede dei tool, il suo turno — prima i blocchi di ragionamento, non modificati, poi il testo, poi i blocchi tool_use — viene scritto nel transcript PRIMA dei risultati, cosi' un crash tra i due lascia comunque un record che si spiega da solo. I blocchi di thinking sono portati byte-identici, secondo il contratto Anthropic 'thinking with tool use'.",
+      "taint": "n/a",
+      "branches": []
+    },
+    {
+      "n": 12,
+      "id": "policy-decision",
+      "title": "Ogni tool call passa dal kernel dei permessi",
+      "file": "agent/loop.ts:696-821; core/policy/decide.ts:91-215",
+      "what": "Per ogni tool call, la resource che il kernel vede e' derivata dalla dichiarazione stessa della capability (resourceKind/policyArgs), mai indovinata dai nomi degli argomenti. decide() ritorna allow, deny, draft o ask. 'deny' torna un tool_result di errore col codice del kernel. 'draft' e' SEMPRE rifiutato oggi — il registro di undo non esiste, quindi una capability a rischio medio 'undoable' che il kernel intendeva eseguire in modo reversibile torna invece un errore che dice al modello di non riprovare. 'ask' chiama deps.approve se la superficie ne ha uno; altrimenti lancia ApprovalRequired.",
+      "taint": "controllata contro snapshot.currentTaint() al momento della decisione — loop.ts:744",
+      "branches": [
+        {
+          "cond": "deny",
+          "goto": "tool-loop-continues",
+          "note": "tool_result di errore col codice del kernel, loop.ts:769-776 — il modello puo' ritentare con qualcos'altro"
+        },
+        {
+          "cond": "draft",
+          "goto": "tool-loop-continues",
+          "note": "SEMPRE un errore oggi — 'draft_unavailable', loop.ts:777-791"
+        },
+        {
+          "cond": "ask, e deps.approve e' presente",
+          "goto": "tool-loop-continues",
+          "note": "attende la risposta del terminale; deny->tool_result di errore, allow->prosegue all'esecuzione, loop.ts:792-816"
+        },
+        {
+          "cond": "ask, e deps.approve e' assente",
+          "goto": "exit",
+          "note": "ApprovalRequired lanciato -> catturato in loop.ts:577-588 -> stopped:'ask', pending porta la richiesta"
+        }
+      ]
+    },
+    {
+      "n": 13,
+      "id": "tool-executes",
+      "title": "Handler eseguito, risultato accodato, il loop riparte",
+      "file": "agent/loop.ts:1753",
+      "what": "Su allow (o ask approvato), l'handler del tool gira con un ToolContext preso dal turno reale (mai cablato alla registrazione): tenant, principal, turnId, sessionId, taint(), suspend e replyChannel; il suo esito alza sempre la taint dello snapshot con outcome.tier, che ogni tool DEVE dichiarare (campo obbligatorio, ADR-0044) — mai piu' un tool che tace sulla provenienza letto come pulito. Il risultato viene accodato al log della sessione e alla lista tool_result del turno. Dopo che tutte le chiamate del batch sono finite, i risultati vengono accodati come un unico messaggio utente e il loop itera di nuovo.",
+      "taint": "sale sempre a outcome.tier: 3 web/mcp, 2 disco (fs_read, fs_list, stdout di shell_run), 1 process_list e skill_read, 0 quando il risultato sono parole del tool",
+      "branches": [
+        {
+          "cond": "AbortSignal scatta tra una tool call e l'altra dentro un batch",
+          "goto": "exit",
+          "note": "stopped:'aborted' — controllato prima di ogni chiamata, loop.ts:574; i tool gia' eseguiti in questo batch mantengono i loro effetti reali e sono loggati nella sessione, ma il transcript in-memory del turno non riceve mai il batch di risultati accumulato"
+        },
+        {
+          "cond": "l'handler lancia un'eccezione",
+          "goto": "tool-loop-continues",
+          "note": "catturata, restituita come tool_result di errore — un tool che fallisce e' informazione per il modello, non un crash per il turno, loop.ts:842-846"
+        },
+        {
+          "cond": "l'handler chiama ctx.suspend (solo `wait`)",
+          "goto": "turn-suspends",
+          "note": "la barriera e' ARMATA, non eseguita: il batch finisce e ogni tool_use riceve il suo tool_result, poi la sospensione avviene fra un'iterazione e l'altra — agent/loop.ts:819"
+        }
+      ]
+    },
+    {
+      "n": 14,
+      "id": "turn-suspends",
+      "title": "Il turno si sospende e RILASCIA il runtime",
+      "file": "agent/loop.ts:819, 1161-1209; core/turns/wait.ts; agent/tools/wait.ts",
+      "what": "Punto di sospensione 1: nulla e' in volo. Lo stato (trascritto, taint, contatori) va su disco con una sola UPDATE che porta la riga a `waiting`, scrive `wake_at`/`wait_for` e RILASCIA la rivendicazione; poi runTurn RITORNA con stopped:'suspended'. E' questa la meta' che distingue un wait da un `await sleep()`: il processo non tiene niente mentre la scadenza scorre. La scadenza e' obbligatoria (min 60s, max 7 giorni) e il tetto e' 8 turni sospesi per tenant.",
+      "taint": "salvata sulla riga com'e' adesso, e riletta da li' alla ripresa — mai riderivata dal principal",
+      "branches": [
+        {
+          "cond": "la UPDATE non passa (riga non piu' `running`, database chiuso)",
+          "goto": "turn-finishes",
+          "note": "non si sospende comunque: nessuno lo sveglierebbe. Chiude il turno dicendolo — agent/loop.ts:1088"
+        }
+      ]
+    },
+    {
+      "n": 15,
+      "id": "lane-resumes",
+      "title": "La corsia riprende la riga: scadenza, evento, o processo morto",
+      "file": "core/turns/lane.ts:86-140; agent/loop.ts:503-563, 1240-1315",
+      "what": "TurnLane.tick valuta le barriere a evento (process_exit) e sveglia in anticipo chi le ha soddisfatte, poi prende una riga da `due` e chiama resumeTurn: claim atomico (una sola corsia la prende), tre rifiuti espliciti — modello diverso (ADR-0037: le firme di thinking appartengono al modello che le ha prodotte), tre riprese gia' spese, turno gia' chiuso — e infine `reconcile`, che ripara un trascritto lasciato con un tool_use senza risposta usando le due righe di turn_tool_calls: esito registrato -> rigiocato; intento senza esito -> `rerunnable` decide, e dove dice no il turno riparte DICHIARANDO che la chiamata puo' essere avvenuta.",
+      "taint": "ripristinata dalla colonna della riga — ricostruirla dal principal farebbe ripartire pulito un turno che aveva gia' letto il web",
+      "branches": [
+        {
+          "cond": "il modello configurato non e' quello pinnato sulla riga",
+          "goto": "exit",
+          "note": "rifiuto esplicito e riga chiusa: riprovare a ogni boot sarebbe il fallimento silenzioso che il record esiste per non produrre — agent/loop.ts:538"
+        },
+        {
+          "cond": "un'altra corsia ha gia' preso la riga",
+          "goto": "exit",
+          "note": "non e' un errore: due processi su un database e' il caso normale per i secondi in cui REPL e gateway si sovrappongono, e chi perde non ha niente da fare"
+        }
+      ]
+    },
+    {
+      "n": 16,
+      "id": "iteration-cap",
+      "title": "Tetto raggiunto senza chiudere",
+      "file": "agent/loop.ts:595-601; agent/profiles/profile.ts:118, 197-199",
+      "what": "Se il ciclo `while (iterations < cap)` esce senza un return precedente, il turno si ferma da solo: cap = min(profile.maxToolCallsPerTurn, MAX_ITERATIONS_HARD_CAP=40) — 15 per consumer-local/CONSERVATIVE, 30 per frontier. La risposta dice all'owner di restringere il compito; niente qui ritenta automaticamente.",
+      "taint": "n/a",
+      "branches": []
+    },
+    {
+      "n": 17,
+      "id": "turn-finishes",
+      "title": "finish(): span chiuso, lane di memoria notificata",
+      "file": "agent/loop.ts:1653-1707; agent/runtime.ts:619",
+      "what": "finish() marca stop reason e conteggio iterazioni sullo span di trace, lo chiude, poi chiama onTurnEnd in modo sincrono e non-bloccante — cablato in produzione a consolidation.notify(tenant), che arma il timer della lane di estrazione memoria. Scatta su ogni fine turno, incluso 'error' e 'aborted', perche' le parole dell'owner erano gia' state registrate prima ancora di chiedere qualcosa al modello.",
+      "taint": "n/a",
+      "branches": []
+    },
+    {
+      "n": 18,
+      "id": "reply-delivered",
+      "title": "La superficie rende e invia la risposta",
+      "file": "cli/repl.ts:288-299; cli/run.ts:63-94; connectors/telegram/connector.ts:307-330; agent/scheduler-run.ts:42-55; agent/turn-lane.ts; cli/surface.ts (connectSurfaces)",
+      "what": "La CLI REPL stampa result.text su stdout e una riga di stato su stderr se non e' 'answered'. `muffin run` stampa su stdout/stderr e mappa result.stopped su un exit code (0/1/3/4/5). Telegram ferma la presenza effimera, congela in `telegram_delivery_parts` le parti HTML prodotte da renderForTelegram e le invia in ordine: ogni parte ha un claim first-writer-wins; `sent` salta il prefisso gia' confermato, `rejected` puo' essere ritentato, `possibly_sent` ferma il suffisso e non torna mai automaticamente a pending. Un job schedulato passa invece il suo TurnResult a jobOutcomeFromTurn, che diventa una chiamata Deliver — Deliver ora ritorna un DeliveryOutcome (core/surface/types.ts) invece di Promise<void>: ogni canale passa dallo stesso SurfaceRegistry (cli/surface.ts, connectSurfaces), che risponde {delivered:true} solo se una superficie reale lo gestisce e {delivered:false, why} altrimenti — mai un'eccezione silenziosa ne' un log che nessuno legge; Scheduler.settle scrive quell'esito sulla riga del turno prima di markRan. Un turno che la CORSIA ha finito non ha pero' nessuno stack a cui tornare: per quello l'indirizzo resta il `replyTo` opaco scritto sulla riga quando il turno e' iniziato (una seconda via di consegna, apposta separata da SurfaceRegistry — un job non ha un messaggio a cui rispondere, un turno ripreso si'), e la porta e' quella della superficie connessa in QUESTO processo (connectSurfaces().deliver; TelegramConnector.deliverTo valida da se' la forma del proprio indirizzo). Un turno chiuso con del testo e NESSUN indirizzo sulla riga emette un LaneEvent `undeliverable` — scritto anche sulla riga (`delivery = 'undeliverable'`) cosi' che doctor e il prossimo boot lo vedano — invece di essere scartato in silenzio.",
+      "taint": "n/a",
+      "branches": [
+        {
+          "cond": "nessuna superficie del registro gestisce il canale (es. un indirizzo scritto male, o una superficie disabilitata)",
+          "goto": "exit",
+          "note": "SurfaceRegistry.deliver ritorna {delivered:false, why} con l'elenco delle superfici connesse — core/surface/registry.ts; Scheduler.settle scrive l'esito sulla riga del turno prima di markRan (core/scheduler/scheduler.ts:458)"
+        }
+      ]
+    }
+  ],
+  "toolCallCycle": {
+    "maxIterations": "profile-dipendente, tetto duro 40 (MAX_ITERATIONS_HARD_CAP, agent/profiles/profile.ts:118); cap effettivo = min(profile.maxToolCallsPerTurn, 40) via iterationCap() (profile.ts:197-199), consultato una volta per turno in agent/loop.ts:338. Profili shippati: consumer-local=15 (agent/profiles/consumer-local.json:6), frontier=30 (agent/profiles/frontier.json:13), fallback CONSERVATIVE=15 (agent/profiles/profile.ts:97)",
+    "howDecided": "selectProfile(config.models.main, profiles) confronta l'id del modello configurato coi pattern glob `match` di ogni profilo, primo che combacia vince, altrimenti CONSERVATIVE (agent/profiles/profile.ts:183-188). loadProfiles() legge ogni *.json in agent/profiles/ al boot, scartando (e segnalando in bootLines) qualsiasi file che non passi ProfileSchema (profile.ts:150-181)",
+    "whatEndsTheLoop": [
+      "'answered': zero tool call in questa iterazione E checkCompletion passa (o e' gia' stato nudged una volta) — agent/loop.ts:540, agent/completion.ts:58-65",
+      "'cap': iterations raggiunge il cap del profilo senza un return precedente — agent/loop.ts:595-601",
+      "'budget': budgetExhausted(tenant) vero all'inizio di un'iterazione — agent/loop.ts:352-354",
+      "'aborted': input.signal.aborted, controllato all'inizio di ogni iterazione e di nuovo tra una tool call e l'altra — agent/loop.ts:355-357, 574",
+      "'error': turno vuoto con la cascata di recovery esaurita (loop.ts:485), OPPURE un ProviderError rilanciato che e' non-retryable o ha esaurito MAX_TRANSPORT_RETRIES=2 (loop.ts:442, catturato dal try/catch esterno a 602-611 e rilanciato al chiamante — non torna un TurnResult, il turno lancia un'eccezione)",
+      "'ask': una tool call risolve al verdetto 'ask' del kernel su una superficie senza deps.approve — ApprovalRequired lanciato, catturato in loop.ts:577-588"
+    ]
+  },
+  "streaming": {
+    "declared": "agent/providers/types.ts:107 (campo `stream: boolean` su ChatCall) + StreamEvent/ProviderStreamError/Provider.chatStream (stesso file)",
+    "consumed": "agent/loop.ts:1027 (`stream: Boolean(input.onDelta && deps.provider.chatStream)`) -> drainStream() legge Provider.chatStream() quando presente; agent/providers/anthropic.ts:76 e agent/providers/openai-compat.ts:173 implementano chatStream() sull'SDK ufficiale (stream:true), non SSE fatto a mano. cli/repl.ts:100 (runRepl) attacca TurnInput.onDelta quando process.stdout.isTTY (o --no-stream lo forza off) e stampa i delta man mano; connectors/telegram/connector.ts:354 fa lo stesso verso presence.streamText (connectors/telegram/presence.ts). core/surface/types.ts (Surface.streaming: StreamingCapability) dichiara la capacita' per surface, non un flag globale.",
+    "verdict": "DAY-1 requirement B11 chiuso su CLI/REPL e sulle chat private Telegram (slice/streaming): adapter, loop, superficie, test del cablaggio con provider SSE finto via buildRuntime reale (cli/repl.test.ts, connectors/telegram/streaming.test.ts). Un burst, non un flusso token-per-token: agent/loop.ts bufferizza tutto un giro e lo rilascia in un colpo solo a `done` senza tool call (mai un punto prima e' conoscibile — vedi TurnInput.onDelta), quindi un singolo giro produce tipicamente UN aggiornamento dal vivo in privato, non molti scaglionati nel tempo. Nei gruppi il placeholder materiale e' stato rimosso: la Bot API non offre idempotency key per recuperare in sicurezza un send accettato con risposta persa; resta `typing` effimero e la risposta finale durable. `muffin run` (headless) resta non-streaming per scelta, come prima. Discord resta OFF (B17, fuori scope)."
+  },
+  "context": {
+    "assembleFn": "agent/loop.ts:1771-1830 (buildContext, per-turno); agent/context/assemble.ts:125-192 (buildSystemPromptBlocks + renderSystemPrompts, una volta al boot)",
+    "blocks": [
+      {
+        "name": "system prompt (classe owner|group)",
+        "source": "agent/context/assemble.ts:125-192, assemblato al boot da agent/runtime.ts:494-498",
+        "budget": null
+      },
+      {
+        "name": "storia della sessione precedente",
+        "source": "agent/loop.ts:889-901 (sessions.read + slice)",
+        "budget": "ultimi 40 messaggi user/assistant, non 40 scambi — MAX_HISTORY_TURNS, agent/loop.ts:62"
+      },
+      {
+        "name": "memoria recuperata (recall)",
+        "source": "core/memory/recall.ts:369-643, invocato da agent/loop.ts:289-314",
+        "budget": "8 elementi di default (recall.ts:375), ognuno troncato a 400 caratteri nel rendering (recall.ts:675)"
+      },
+      {
+        "name": "messaggio utente corrente",
+        "source": "agent/loop.ts:925-929",
+        "budget": null
+      },
+      {
+        "name": "definizioni dei tool esposti",
+        "source": "agent/loop.ts:320-323 (visibleTools + slice); agent/context/assemble.ts:107-115",
+        "budget": "profile.maxToolsExposed — 10 per consumer-local/CONSERVATIVE, 24 per frontier (agent/profiles/*.json)"
+      },
+      {
+        "name": "risultati dei tool accumulati tra le iterazioni",
+        "source": "agent/loop.ts:363-372 (compactToolResults); agent/context/compact.ts:58-117",
+        "budget": "60.000 caratteri (TOOL_RESULT_BUDGET_CHARS, agent/loop.ts:56), i piu' vecchi ripuliti per primi, errori e tool con keepResult esenti"
+      }
+    ],
+    "totalBudget": "Nessun tetto combinato: maxOutputTokens e' fisso a 4096 (agent/loop.ts:379); la dimensione totale della richiesta e' limitata solo indirettamente dalla somma dei budget per-blocco sopra (turni di storia, elementi di recall, budget dei risultati-tool) piu' quello che il context window del provider impone da solo. Nessun codice in agent/ misura token/caratteri totali del prompt prima di inviarlo."
+  },
+  "profiles": [
+    {
+      "name": "consumer-local",
+      "model": "*gemma*, *qwen3*, *gpt-oss*, *mistral-small*, *glm-* (match glob)",
+      "thinking": "off",
+      "file": "agent/profiles/consumer-local.json:1-11"
+    },
+    {
+      "name": "frontier",
+      "model": "*claude-sonnet-5*, *claude-opus-5*, *claude-fable-5*, *claude-opus-4-7*, *claude-opus-4-8*, gpt-5* (match glob)",
+      "thinking": "adaptive",
+      "file": "agent/profiles/frontier.json:1-21"
+    },
+    {
+      "name": "conservative (fallback in codice, non JSON)",
+      "model": "* (qualsiasi id non matchato da nessun altro profilo)",
+      "thinking": "off",
+      "file": "agent/profiles/profile.ts:92-115"
+    }
+  ],
+  "providers": [
+    {
+      "name": "anthropic",
+      "file": "agent/providers/anthropic.ts:26",
+      "wired": true
+    },
+    {
+      "name": "openai-compat (Ollama, llama.cpp, vLLM, OpenRouter, DeepSeek e la maggior parte del cloud, stesso wire dialect)",
+      "file": "agent/providers/openai-compat.ts:91",
+      "wired": true
+    }
+  ],
+  "failurePaths": [
+    {
+      "what": "Il processo muore tra la scrittura dell'episodio pre-loop e finish()",
+      "consequence": "L'input dell'owner/member sopravvive (scritto come episodio tier-0/2 prima di chiamare il modello), ma nessuna risposta assistant viene mai accodata a sessione o memoria, e niente viene consegnato alla superficie — l'ultimo turno registrato della conversazione resta il messaggio dell'umano. DA slice/turno-sospeso: la riga resta e viene marcata `interrupted` al boot successivo (TurnStore.reclaim), e la corsia del gateway la riprende — con `rerunnable` a decidere cosa si rifa' e cosa viene dichiarato «forse avvenuto», e un tetto di 3 riprese perche' un turno che uccide il processo non venga riprovato a ogni boot.",
+      "evidence": "agent/loop.ts:271-283 (episodio scritto per primo); agent/loop.ts:521-539 (append di episodio/sessione assistant raggiunto solo sul percorso 'answered', appena prima di finish)"
+    },
+    {
+      "what": "Il provider esaurisce i retry di trasporto (429/5xx persistenti oltre MAX_TRANSPORT_RETRIES=2)",
+      "consequence": "Il ProviderError viene rilanciato fuori da runTurn per intero (non torna come TurnResult). Ogni superficie lo gestisce diversamente: cli/repl.ts stampa 'errore: ...' e tiene viva la REPL; cli/run.ts ritorna exit code 1; il drain() del connector Telegram lo cattura per-update, chiama markFailed e lascia l'update pending per un retry al prossimo poll o riavvio.",
+      "evidence": "agent/loop.ts:428-442 (retry poi rethrow); cli/repl.ts:300-301; cli/run.ts:73-75; connectors/telegram/connector.ts:230-239"
+    },
+    {
+      "what": "Verdetto 'ask' raggiunto su una superficie/processo senza approvatore cablato",
+      "consequence": "ApprovalRequired viene lanciato dentro runTool e trasformato in stopped:'ask' con la richiesta pending allegata. Per un job schedulato diventa un testo di avviso in coda per l'owner ('In coda per te: ...'); per Telegram sotto il processo gateway (cli/gateway.ts non imposta mai deps.approve, letto per intero) e' un vicolo cieco — chi ha chiesto vede solo il testo di rifiuto del kernel e non ha modo di concederla da remoto.",
+      "evidence": "agent/loop.ts:792-816, 577-588; agent/scheduler-run.ts:31-39; cli/gateway.ts (cmdGatewayRun, nessuna assegnazione a .approve in tutta la funzione)"
+    },
+    {
+      "what": "Ctrl+C durante un batch di tool call (solo REPL)",
+      "consequence": "Le tool call gia' eseguite nel batch corrente mantengono i loro effetti reali (una fs_write e' davvero avvenuta) e sono loggate nel session store da runTool stesso, ma il turno ritorna subito con stopped:'aborted' prima di accodare il batch di risultati accumulato all'array messages del turno — quindi nulla del punto di interruzione sopravvive in un turno successivo tranne cio' che recall riesce a ripescare da sessione/memoria.",
+      "evidence": "agent/loop.ts:574 (controllo abort dentro il for delle tool call), 592 (append del batch che un return anticipato salta), 826-834 (append alla sessione avviene dentro runTool, per ogni chiamata)"
+    },
+    {
+      "what": "CHIUSO (era: consegna remota non implementata per nessun canale tranne 'cli'). Un job su un canale non gestito da nessuna superficie del registro ora produce {delivered:false, why} — mai un'eccezione, mai un log muto — e markRan avanza SOLO dopo che Scheduler.settle ha scritto l'esito sulla riga del turno.",
+      "consequence": "Resta un buco reale e diverso: Discord non e' ancora una superficie del registro (DAY-1 requirement B15/B16), quindi un job con channel='discord:<id>' oggi ritorna {delivered:false, why:'nessuna superficie serve...'} finche' connectors/discord/ non e' cablato in cli/surface.ts — visibile, non silenzioso, ma comunque non consegnato.",
+      "evidence": "core/surface/registry.ts (SurfaceRegistry.deliver); core/scheduler/scheduler.ts:458 (settle), :491 (il suo markRan); cli/surface.ts:199 (connectSurfaces costruisce il registry da cio' che e' davvero abilitato)"
+    }
+  ],
+  "gaps": [
+    {
+      "what": "Il verdetto 'draft' del kernel dei permessi (capability a rischio medio, reversibili) e' prodotto da decide() ma SEMPRE rifiutato dal loop — il registro di undo non esiste ancora, quindi ogni capability dichiarata risk:'medium'+reversible:'undoable' e' oggi completamente non funzionante: ogni chiamata torna un errore che dice al modello di non riprovare, senza alcun percorso per riuscire mai finche' non viene costruito un registro di undo.",
+      "evidence": "agent/loop.ts:777-791 (case 'draft' -> sempre span error 'draft_unavailable'); core/policy/decide.ts:204-207 (dove 'draft' viene prodotto per decl.reversible === 'undoable')",
+      "why_it_matters": "un'intera classe di rischio che il matrix del kernel chiama 'media, reversibile' e' silenziosamente morta all'ultimo miglio — il verdetto e' dichiarato e prodotto, ma nessuno lo esegue"
+    },
+    {
+      "what": "CHIUSO per testo (Deliver ora ritorna DeliveryOutcome, core/surface/types.ts) — resta aperto per allegati: SurfaceRegistry.deliverFile esiste ma nessun tool di produzione lo chiama ancora (DAY-1 requirement B14), quindi un file scritto nel vault raggiunge l'owner solo come percorso citato nel testo, non come allegato vero.",
+      "evidence": "core/surface/types.ts (Surface.deliverFile); connectors/telegram/media.ts sendDocument scritto e testato ma senza chiamante di produzione finche' agent/tools/deliver.ts non e' cablato",
+      "why_it_matters": "un report o un grafico che il modello produce nel vault non arriva mai come file su Telegram/Discord — l'owner deve andare a leggerlo sul filesystem, il che non funziona affatto da remoto"
+    },
+    {
+      "what": "ApprovalRequest non porta ne' tenant ne' principal ne' surface, e LoopDeps (l'oggetto che porta `approve`) e' condiviso per riferimento tra REPL e Telegram: cli/surface.ts costruisce TelegramConnector con `loop: runtime.deps` PRIMA che repl.ts assegni `runtime.deps.approve` — ma essendo lo stesso oggetto in memoria, l'assegnazione successiva vale anche per Telegram.",
+      "evidence": "agent/loop.ts:102-107 (ApprovalRequest: solo capability/prompt/resource); cli/repl.ts:157-164 (assegna runtime.deps.approve); cli/surface.ts:233-234 (TelegramConnector costruito con loop: runtime.deps, stesso oggetto); connectors/telegram/connector.ts:307 (runTurn(this.deps.loop, ...) usa quell'oggetto condiviso)",
+      "why_it_matters": "quando REPL e Telegram girano nello stesso processo (il modo normale documentato, ADR-0022), un 'ask' sollevato da un membro anonimo di un gruppo Telegram viene silenziosamente risposto da chi e' seduto al terminale dell'owner, e il prompt mostra solo capability e resource — mai chi ha chiesto o da dove"
+    },
+    {
+      "what": "Il processo gateway (cli/gateway.ts, cmdGatewayRun) non imposta mai deps.approve in tutta la funzione — a differenza della REPL.",
+      "evidence": "cli/gateway.ts (funzione cmdGatewayRun, letta per intero: nessuna assegnazione a .approve); confronto con cli/repl.ts:157-164",
+      "why_it_matters": "sotto il gateway supervisionato — la modalita' che ADR-0035 vuole proprio per far girare i job senza una finestra aperta — ogni verdetto 'ask' su ogni superficie, Telegram incluso, e' un vicolo cieco incondizionato: il turno si ferma e dice cosa serviva, ma niente puo' mai concederlo da remoto"
+    },
+    {
+      "what": "Le chiamate a runTurn dal connector Telegram non passano mai un AbortSignal, a differenza di cli/repl.ts e cli/run.ts che passano entrambe `signal: controller.signal`.",
+      "evidence": "connectors/telegram/connector.ts:307-315 (l'oggetto passato a runTurn non ha la chiave signal); cli/repl.ts:286-295 e cli/run.ts:65-72 (entrambe includono signal)",
+      "why_it_matters": "un turno innescato da Telegram non puo' mai essere cancellato una volta partito — non esiste un equivalente del Ctrl+C della REPL su quella superficie"
+    }
+  ]
+}

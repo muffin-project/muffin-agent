@@ -215,7 +215,7 @@ export type ModelChoice = { readonly label: string; readonly main: string; reado
  * OpenRouter family presets (slice/init-interroga, 2026-08-2x). Qwen is first
  * because it is the owner's actual install: `qwen/qwen3.8-27b` main, `qwen/qwen3.7-flash`
  * light — verified live on OpenRouter 2026-08-15
- * (docs/blueprint/research/modelli-agosto-2026.md §"Comparison table"). Before
+ * (docs/evidence/modelli-agosto-2026.md §"Comparison table"). Before
  * this the compiled default for any openai-compat key was
  * `anthropic/claude-sonnet-5`, which meant a hand-typed --model flag on every
  * install of exactly this shape.
@@ -234,9 +234,9 @@ export type ModelChoice = { readonly label: string; readonly main: string; reado
  * Gemma pairs the incumbent `google/gemma-4-26b-a4b-it` as light — reasoning
  * OFF by default, the one candidate in that table that is, which matters
  * because reasoning-on measurably regressed this exact model's tool-calling in
- * production (docs/blueprint/research/a1-inventario-codebase.md) — with the
+ * production (docs/evidence/stato-componenti-vecchio-muffin.md) — with the
  * larger dense `google/gemma-4-31b-it` as main; both verified on OpenRouter's
- * own catalogue (docs/blueprint/research/b2-modelli-openrouter-multimodale.md).
+ * own catalogue (docs/evidence/catalogo-openrouter-e-multimodale.md).
  */
 export const OPENROUTER_MODEL_FAMILIES: readonly ModelChoice[] = [
   { label: 'Qwen', main: 'qwen/qwen3.8-27b', light: 'qwen/qwen3.7-flash' },

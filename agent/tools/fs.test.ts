@@ -30,7 +30,7 @@ import {
  * Whether this process actually gets `EACCES` from a directory missing its
  * `+x` bit, rather than assumed from `process.getuid`. Root, and some CI
  * filesystems, ignore the bit entirely — probing once, synchronously, is
- * PRACTICES §5's "reproduce first" applied to an assumption about permission
+ * PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate's "reproduce first" applied to an assumption about permission
  * bits instead of application logic.
  */
 function probeEaccesOnUntraversableDir(): boolean {

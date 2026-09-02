@@ -11,7 +11,7 @@ import { MAX_ZIP_ENTRY_BYTES, NotAZip, readZipEntry } from './zip.js';
  * the two ways a document can *look* acquired and not be:
  *
  *  - **cut on the way in** — page one indexed, seventy-nine dropped, and
- *    nothing anywhere saying so. `M5-BIS.md` C7 was `BLOCKER — nessun parser`;
+ *    nothing anywhere saying so. DAY-1 requirement C7 was `BLOCKER — nessun parser`;
  *    the failure that replaces a missing parser with a bad one is worse,
  *    because the row would read `READY`.
  *  - **empty and called success** — a scanned PDF parses, reports its pages,

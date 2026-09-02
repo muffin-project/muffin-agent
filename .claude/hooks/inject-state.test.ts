@@ -10,10 +10,10 @@ const MAX = 4_000;
 
 function homeWithWork(content: string): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-handoff-'));
-  mkdirSync(join(home, 'docs', 'blueprint'), { recursive: true });
+  mkdirSync(join(home, 'docs', 'work'), { recursive: true });
   mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
   cpSync(HOOK, join(home, '.claude', 'hooks', 'inject-state.mjs'));
-  writeFileSync(join(home, 'docs', 'blueprint', 'LAVORO.md'), content);
+  writeFileSync(join(home, 'docs', 'work', 'handoff.md'), content);
   return home;
 }
 
@@ -28,8 +28,8 @@ const contextOf = (stdout: string): string =>
   JSON.parse(stdout).hookSpecificOutput.additionalContext as string;
 
 describe('SessionStart operational handoff', () => {
-  it('injects LAVORO directly and labels it non-authoritative', () => {
-    const stdout = run(homeWithWork('# Lavoro corrente\n\n**Goal:** DAY-1 READY\n'));
+  it('injects the handoff directly and labels it non-authoritative', () => {
+    const stdout = run(homeWithWork('# Handoff operativo\n\n**Goal:** DAY-1 READY\n'));
     const parsed = JSON.parse(stdout);
     expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
     expect(contextOf(stdout)).toContain('**Goal:** DAY-1 READY');
@@ -37,7 +37,7 @@ describe('SessionStart operational handoff', () => {
   });
 
   it('does not depend on STATE.md existing or carrying a marker', () => {
-    const home = homeWithWork('# Lavoro corrente\n\nwork survives without STATE\n');
+    const home = homeWithWork('# Handoff operativo\n\nwork survives without STATE\n');
     expect(contextOf(run(home))).toContain('work survives without STATE');
   });
 
@@ -47,11 +47,11 @@ describe('SessionStart operational handoff', () => {
     expect(context).toMatch(/handoff truncated/);
   });
 
-  it('injects the real LAVORO whole while it stays inside the local budget', () => {
+  it('injects the real handoff whole while it stays inside the local budget', () => {
     const context = contextOf(
       execFileSync('node', [HOOK], { input: '{}', encoding: 'utf8' }),
     );
-    expect(context).toContain('# Lavoro corrente');
+    expect(context).toContain('# Handoff operativo');
     expect(context).not.toMatch(/handoff truncated/);
     expect(context.length).toBeLessThanOrEqual(MAX);
   });

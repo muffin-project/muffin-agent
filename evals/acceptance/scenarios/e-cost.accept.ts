@@ -1,8 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
-import { install } from '../harness.js';
+import { install, type Run } from '../harness.js';
 import { extraction } from '../provider.js';
 import { scenario } from '../scenario.js';
 
@@ -11,14 +11,15 @@ import { scenario } from '../scenario.js';
  *
  * E1 and E2 prove the mechanism that exists today — the **global** monthly
  * cap and the owner-facing spend readout — not the per-job cap E1's row is
- * actually missing (M5-BIS: "il per-job non esiste"). A green scenario here
+ * actually missing (DAY-1 requirement E1, cap globale e per-job: "il per-job
+ * non esiste"). A green scenario here
  * documents that the cap which does exist really stops a turn before it
  * spends; it does not promote E1 to READY, and this suite does not touch that
  * row's text on the strength of it.
  *
  * E5 proves a narrower thing than its own question ("ogni fallimento
  * importante è esplicito e recuperabile?") asks in full, which is why the row
- * stays `?` in M5-BIS.md rather than moving to READY on the strength of one
+ * stays `?` in requirements-status.md rather than moving to READY on the strength of one
  * scenario — see the PR this landed in. What it does prove, through the real
  * binary and a scripted-broken light model, never a mock of `judge.ts`: when
  * the contradiction judge answers in a shape the schema cannot read, the
@@ -99,7 +100,7 @@ describe('acceptance · E · economia e osservabilità', () => {
           throw new Error(`/spend mostra $0 dopo un turno che ha speso — non sta leggendo la spesa reale: ${repl.err}`);
         }
 
-        // M5-BIS's E2 asks "so quanto costa una giornata?", not "so quanto
+        // DAY-1 requirement E2 asks "so quanto costa una giornata?", not "so quanto
         // costa il mese?" -- tenantTodayUsd('host') existed in
         // core/budget/budget.ts with no caller: the per-tenant-daily gate
         // excludes the owner outright, so nothing ever read the number back.
@@ -238,13 +239,34 @@ describe('acceptance · E · economia e osservabilità', () => {
    * covers at the unit level. The owner's own file, planted on disk exactly
    * as `fs_read` would find one it did not write, is the realistic case this
    * slice exists for: a key pasted into a note, read back later.
+   *
+   * Extended (slice/journey-lifecycle): the row's own question is broader
+   * than secret redaction ("posso ricostruire cosa è successo?"), and
+   * `report.ts`'s manifest is 1:1 with a row (`verdictFor`'s own comment: "one
+   * scenario per row today"), so the second half lands in this same function
+   * rather than a second `scenario('E3', …)` that would just make `chiaviEsito`
+   * ambiguous. Two turns run in the same install, each with a distinct,
+   * unambiguous tool call (`fs_read` for the first, `fs_list` for the
+   * second), and `muffin trace turn <id>`/`muffin trace grep` are asked to
+   * reconstruct the SECOND one by the id it printed for itself. The
+   * assertion that actually matters is not "the command found something" —
+   * `trace tail` alone would pass that trivially — it is that the
+   * reconstruction is scoped to the one turn asked for: the first turn's
+   * tool never shows up in it, and the id the turn printed for itself is
+   * what the CLI accepts back (dogfood, 26/08/2026: the printed id and the
+   * accepted id used to be compared under different rules).
    */
   scenario(
     'E3',
     async () => {
       const SECRET = 'sk-ant-FINTA-CHIAVE-ACCETTAZIONE-1234567890';
       const inst = await install({
-        main: [{ tool: { name: 'fs_read', args: { path: 'appunti.txt' } } }, { text: 'letto' }],
+        main: [
+          { tool: { name: 'fs_read', args: { path: 'appunti.txt' } } },
+          { text: 'letto' },
+          { tool: { name: 'fs_list', args: { path: 'una-sottocartella' } } },
+          { text: 'elencato' },
+        ],
       });
       try {
         writeFileSync(join(inst.workspace, 'appunti.txt'), `password: "${SECRET}"\naltro testo innocuo\n`);
@@ -275,10 +297,141 @@ describe('acceptance · E · economia e osservabilità', () => {
         if (turnRow.messages.includes(SECRET)) {
           throw new Error('turns.messages porta la chiave in chiaro');
         }
+
+        // --- reconstruction: an arbitrary (second) turn, found again by its
+        //     own printed id, and only that turn's evidence ------------------
+        mkdirSync(join(inst.workspace, 'una-sottocartella'), { recursive: true });
+        const second = await inst.muffin(['run', '--timeout', '20', 'elenca il contenuto di una-sottocartella']);
+        if (second.code !== 0) throw new Error(`il secondo turno non completa: exit ${second.code}\n${second.err}`);
+
+        const traceIdOf = (run: Run): string => {
+          const m = /trace ([0-9a-f]+)/.exec(run.err);
+          if (!m) throw new Error(`nessun trace id nell'output del turno: ${JSON.stringify(run.err)}`);
+          return m[1]!;
+        };
+        const traceA = traceIdOf(r);
+        const traceB = traceIdOf(second);
+        if (traceA === traceB) throw new Error('i due turni condividono lo stesso trace id — fixture inutile');
+
+        // `trace turn <id>` — the id the SECOND turn printed for itself.
+        const turnB = await inst.muffin(['trace', 'turn', traceB]);
+        if (turnB.code !== 0) throw new Error(`muffin trace turn ${traceB}: exit ${turnB.code}\n${turnB.out}${turnB.err}`);
+        if (!turnB.out.includes('fs_list')) {
+          throw new Error(`\`trace turn\` non ricostruisce la tool call del secondo turno (fs_list): ${turnB.out}`);
+        }
+        if (turnB.out.includes('fs_read')) {
+          throw new Error(`\`trace turn\` del secondo turno include anche lo step del primo (fs_read) — non isola il turno chiesto: ${turnB.out}`);
+        }
+
+        // The same isolation, the other direction — proves it is not an
+        // accident of which turn happened to run last.
+        const turnA = await inst.muffin(['trace', 'turn', traceA]);
+        if (turnA.code !== 0) throw new Error(`muffin trace turn ${traceA}: exit ${turnA.code}\n${turnA.out}${turnA.err}`);
+        if (!turnA.out.includes('fs_read')) throw new Error(`\`trace turn\` non ricostruisce la tool call del primo turno (fs_read): ${turnA.out}`);
+        if (turnA.out.includes('fs_list')) {
+          throw new Error(`\`trace turn\` del primo turno include anche lo step del secondo (fs_list): ${turnA.out}`);
+        }
+
+        // `trace grep PATTERN` — the other reconstruction path the row names,
+        // searched by content rather than by id.
+        const grepped = await inst.muffin(['trace', 'grep', 'fs_list']);
+        if (grepped.code !== 0) throw new Error(`muffin trace grep fs_list: exit ${grepped.code}\n${grepped.out}${grepped.err}`);
+        if (!grepped.out.includes('fs_list')) throw new Error(`\`trace grep fs_list\` non trova lo span atteso: ${grepped.out}`);
+        if (grepped.out.includes('fs_read')) {
+          throw new Error(`\`trace grep fs_list\` ha trovato anche uno span del primo turno: ${grepped.out}`);
+        }
       } finally {
         await inst.cleanup();
       }
     },
     20_000,
+  );
+
+  /**
+   * E7 — self-inspection: distingue architettura/progetto da stato live
+   * dell'istanza, o recita design decaduto?
+   *
+   * `sys_inspect` (`agent/tools/inspect.ts`) è atterrato (#176) e legge dalle
+   * stesse fonti autorevoli di `doctor`/`prompt show` — mai una seconda
+   * risposta ricalcolata. Il gap che rendeva la riga BLOCKER non era il
+   * meccanismo (quello ha 21 chiamate reali nel `muffin.db` dell'owner), era
+   * l'assenza di uno scenario di accettazione: nessuno aveva mai chiesto,
+   * attraverso il binario reale, "recita ancora lo stato vecchio dopo che una
+   * condizione reale è cambiata?" — che è esattamente la domanda con cui la
+   * riga stessa chiude l'acceptance criteria.
+   *
+   * La condizione fatta cambiare qui è il modello main (`muffin model main
+   * <slug>`): con un endpoint fuori catalogo (il provider finto lo è sempre)
+   * `cmdModel` scrive lo slug senza poterlo verificare — nessuna chiamata di
+   * rete, nessuna approvazione, la scelta più economica e deterministica fra
+   * le condizioni che il report nomina esplicitamente ("modello ... in uso").
+   */
+  scenario(
+    'E7',
+    async () => {
+      const inst = await install({
+        main: [
+          { tool: { name: 'sys_inspect', args: {} } },
+          { text: 'ecco lo stato di questa istanza' },
+          { tool: { name: 'sys_inspect', args: {} } },
+          { text: 'ecco lo stato aggiornato' },
+        ],
+      });
+      try {
+        const first = await inst.muffin(['run', '--timeout', '20', 'spiegami tecnicamente come funzioni e cosa stai usando adesso']);
+        if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
+
+        // Il tool_result di sys_inspect viaggia dentro la SECONDA richiesta al
+        // modello finto (la prima è quella che ha chiesto sys_inspect).
+        const beforeCalls = inst.provider.main();
+        if (beforeCalls.length < 2) {
+          throw new Error(`atteso un secondo giro dopo sys_inspect, chiamate: ${beforeCalls.length}`);
+        }
+        const before = beforeCalls[1]!.transcript;
+        if (!before.includes('modello: anthropic/claude-sonnet-5 (main)')) {
+          throw new Error(`il report non nomina il modello main iniziale, letto dalla config reale:\n${before}`);
+        }
+        if (!before.includes('root of trust: single-user, integro')) {
+          throw new Error(`il report non nomina lo stato live del root of trust:\n${before}`);
+        }
+        if (!before.includes('sys_inspect')) {
+          throw new Error(`il report non elenca sys_inspect fra le capability esposte a questo turno:\n${before}`);
+        }
+
+        // La condizione reale cambia: nessuna finzione, `muffin model` scrive
+        // davvero config.json (cli/model.ts, ramo "endpoint fuori dal
+        // catalogo" — il provider finto non è mai in nessun catalogo noto).
+        const cambiato = await inst.muffin(['model', 'main', 'test-model-e7-live']);
+        if (cambiato.code !== 0) {
+          throw new Error(`muffin model main: exit ${cambiato.code}\nout: ${cambiato.out}\nerr: ${cambiato.err}`);
+        }
+        if (!cambiato.out.includes('test-model-e7-live')) {
+          throw new Error(`muffin model non conferma la scrittura: ${JSON.stringify(cambiato.out)}`);
+        }
+
+        const second = await inst.muffin(['run', '--timeout', '20', 'spiegami di nuovo tecnicamente cosa stai usando adesso']);
+        if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
+
+        const afterCalls = inst.provider.main();
+        if (afterCalls.length < 4) {
+          throw new Error(`atteso un quarto giro dopo il secondo sys_inspect, chiamate: ${afterCalls.length}`);
+        }
+        const after = afterCalls[3]!.transcript;
+        // Design ≠ stato live è esattamente il punto della riga: se
+        // `sys_inspect` leggesse da qualcosa di cacheato o dal system prompt
+        // invece che da `sources.config` fresco a ogni chiamata, questa
+        // asserzione lo scoprirebbe qui, non a mano sull'installazione
+        // dell'owner.
+        if (!after.includes('modello: test-model-e7-live (main)')) {
+          throw new Error(`il report NON riflette il cambio di modello reale — recita ancora lo stato vecchio:\n${after}`);
+        }
+        if (after.includes('anthropic/claude-sonnet-5')) {
+          throw new Error(`il report ripete ancora il modello iniziale dopo il cambio: BROKEN, non distingue design da live:\n${after}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
   );
 });

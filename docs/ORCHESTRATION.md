@@ -12,7 +12,7 @@ The question is not "which checks exist?" but:
 
 > **What is the minimum evidence that could falsify this claim?**
 
-## 1. The control loop
+## The control loop
 
 Work is a control loop, not a TODO loop:
 
@@ -44,11 +44,11 @@ Observed Git/worktree/PR/check/delegation state is part of observation. A handof
 file is not allowed to override reality.
 
 For DAY-1, the deliverable is selected from
-`docs/blueprint/gate1/PERCORSO-CRITICO.md` and the relevant rows of
-`docs/blueprint/M5-BIS.md`. A PR is an execution/checkpoint vehicle, not the
+`docs/work/day1/critical-path.md` and the relevant rows of
+`docs/work/day1/requirements-status.md`. A PR is an execution/checkpoint vehicle, not the
 product's state machine.
 
-## 2. Decision boundaries
+## Decision boundaries
 
 The orchestrator should not ask the owner to make routine implementation choices,
 and should not silently make decisions whose cost belongs to the owner.
@@ -66,7 +66,7 @@ and should not silently make decisions whose cost belongs to the owner.
 Stopping does not mean asking "what do you want?". It means doing the analysis
 first: options, trade-offs, recommendation, and the exact decision required.
 
-## 3. Work is claim-oriented
+## Work is claim-oriented
 
 A slice should make one coherent falsifiable claim. FAST maintenance items may be
 clustered when they remain independently readable; STANDARD/CRITICAL work should
@@ -80,7 +80,7 @@ A draft PR is useful once scope and the primary decision are stable. Commit
 coherent checkpoints before a long experiment can become the only place the work
 exists.
 
-## 4. Delegation is a context tool, not the default
+## Delegation is a context tool, not the default
 
 The orchestrator works directly when the task is local and clear.
 
@@ -131,7 +131,7 @@ slices that move cited lines — which is most of them. Resolve by rerunning
 cheaper for the orchestrator to do once at merge time than for each worker to
 attempt against a moving base.
 
-## 5. Research budget
+## Research budget
 
 Research is commissioned to change a decision, not to make the process look
 thorough.
@@ -156,7 +156,7 @@ Research belongs in dated evidence documents when it has durable value. Current
 architecture/product/security decisions belong in their authoritative homes,
 not in the research report.
 
-## 6. Verification profiles
+## Verification profiles
 
 Choose the profile **before implementation** and record it in the PR. Diff size
 does not choose the profile; the guarantee does.
@@ -196,7 +196,7 @@ Evidence follows the claim:
 - bug/fix → reproduce or red-before;
 - local logic → unit;
 - cross-module boundary → integration;
-- user-facing/Gate behaviour → appropriate acceptance;
+- user-facing/DAY-1 behaviour → appropriate acceptance;
 - type/API/build surface → build/typecheck;
 - failure path → only when the change introduces/modifies a material failure;
 - mutation → only when the claim is specifically that a guard/wiring prevents
@@ -239,7 +239,7 @@ Required evidence is strong **for that guarantee**, not for the entire product:
 
 CRITICAL is not permission to run every test type ritualistically.
 
-## 7. Profile escalation and evidence reuse
+## Profile escalation and evidence reuse
 
 Profiles may escalate when a hidden risk boundary appears:
 
@@ -265,7 +265,7 @@ Repeat evidence when:
 Merging `dev` invalidates only evidence materially affected by that change, not
 the entire epistemic history of the PR.
 
-## 8. Scope firewall
+## Scope firewall
 
 A finding enters the current slice only if it:
 
@@ -282,7 +282,7 @@ Otherwise record it as FOLLOW-UP/debt/evidence and finish the current claim.
 Repeated instances of the same failure form justify investigating a shared
 primitive. One instance does not automatically justify a new framework.
 
-## 9. Repository state and knowledge budget
+## Repository state and knowledge budget
 
 Repository knowledge follows `docs/README.md`.
 
@@ -294,20 +294,20 @@ Update only the authoritative home whose meaning changed:
 | current architecture semantics | `docs/ARCHITECTURE.md` |
 | current security promise | `docs/SECURITY.md` |
 | durable architectural decision/rationale | ADR |
-| DAY-1 row/status/evidence | `docs/blueprint/M5-BIS.md` |
-| DAY-1 ordering/dependency | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
-| current WIP/next action | `docs/blueprint/LAVORO.md` |
+| DAY-1 row/status/evidence | `docs/work/day1/requirements-status.md` |
+| DAY-1 ordering/dependency | `docs/work/day1/critical-path.md` |
+| current WIP/next action | `docs/work/handoff.md` |
 | product destination | `docs/VISION.md` |
-| general engineering lesson | `docs/lessons.md` |
-| external/research evidence | dated `docs/blueprint/research/` |
+| general engineering lesson | `docs/evidence/lessons.md` |
+| external/research evidence | dated `docs/evidence/` |
 | generated/visual view | regenerate/update the derived artifact if relevant |
 
-Do not update history merely so it reads like HEAD. Do not put Gate counts in the
+Do not update history merely so it reads like HEAD. Do not put DAY-1 counts in the
 handoff or critical path. Do not put PR chronology in architecture/ADR. A current
 finding that has no authoritative home is a signal to choose one, not to copy it
 into several files.
 
-## 10. Integration and stopping
+## Integration and stopping
 
 A claim is closed when:
 
@@ -319,7 +319,7 @@ Integration mechanics live in `BRANCHING.md`.
 After integration:
 
 1. observe the resulting Git/runtime state;
-2. update M5 only if Gate status/evidence changed;
+2. update the DAY-1 requirements only if status/evidence changed;
 3. update critical path only if order/dependency changed;
 4. keep LAVORO as the smallest useful next-session handoff;
 5. regenerate relevant derived views;
@@ -329,7 +329,7 @@ For a multi-slice goal (notably DAY-1), individual green PRs do not replace an
 integrated final check. The final reviewer asks whether the **assembled system**
 still satisfies the goal.
 
-## 11. Anti-metric
+## Anti-metric
 
 > **Judge the workflow by material errors caught per unit of time/context, not by
 > the number of proofs, agents, documents or review rounds produced.**

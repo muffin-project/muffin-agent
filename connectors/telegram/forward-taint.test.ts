@@ -16,7 +16,7 @@ import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
 
 /**
- * M5-BIS B16 minimum (PC 1.4, audit P14): a message the owner *forwards* is
+ * DAY-1 requirement B16 minimum (PC 1.4, audit P14): a message the owner *forwards* is
  * not a message the owner *wrote*. Before this file, `parseUpdate` read
  * `message.text ?? message.caption` and never looked at `forward_origin` —
  * so a stranger's words, relayed through the owner's own chat, entered the
@@ -292,7 +292,7 @@ describe('parseUpdate / composeTurnText — the parser and the composer in isola
   });
 
   it('does not change who the owner is: a forward from the owner is still the owner principal', () => {
-    // M5-BIS B16's own boundary: content taint is not identity. `principalFor`
+    // DAY-1 requirement B16's own boundary: content taint is not identity. `principalFor`
     // reads only `fromId`/`chatId`/`isPrivate` off `Incoming`, none of which
     // `forwarded` touches.
     const parsed = parseUpdate(forwardedHostile(9))!;

@@ -523,7 +523,7 @@ export async function runEval(
 
       const runtime = buildRuntime(home, workspace);
       // This eval measures character, not memory consolidation — a different
-      // question (ORCHESTRATION.md §8). Left armed, `onTurnEnd` notifies on every
+      // question (ORCHESTRATION.md#scope-firewall). Left armed, `onTurnEnd` notifies on every
       // probe turn and the ceiling (12) trips mid-run, firing a real light-lane
       // extraction batch in the background: it races `runtime.close()` (caught as
       // "consolidamento: fallito — database connection is not open" on stderr)

@@ -16,8 +16,8 @@ import type { ChatResult, Provider } from './providers/types.js';
 import { httpCapability } from './tools/http.js';
 
 /**
- * MANDATO-DAY-1 invariant 2, rewritten from the triage probe
- * (`docs/blueprint/research/triage-2026-08-17/e-audit-trasversali.md` §3.1)
+ * "Session history does not launder taint", rewritten from the triage probe
+ * (`docs/evidence/triage-2026-08-17/e-audit-trasversali.md` §3.1)
  * into a permanent test.
  *
  * The probe's own finding, reproduced here as (a) below: turn 1 (owner) calls
