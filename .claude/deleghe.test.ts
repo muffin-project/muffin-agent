@@ -443,4 +443,17 @@ describe('the DAY-1 inventory behind BLOCCANTI SENZA DELEGA', () => {
     expect(r.out).toContain('tabella');
     expect(r.code).not.toBe(0);
   });
+
+  it('a status row whose id the parser cannot read is not silently dropped', () => {
+    // Trovata dal judge della PR #276: header giusto, ma un id fuori da
+    // `[A-E]\d+` cadeva fuori dalla regex delle righe e il conteggio scendeva
+    // senza dirlo — con un solo bloccante, di nuovo `0 su 0`.
+    const f = fixture();
+    writeFileSync(join(f.repo, INVENTARIO), inventario(['| F1 | Extra | domanda? | BLOCKER — fuori alfabeto |']));
+    const r = run(f, 'riprendi');
+    expect(r.out).not.toContain('0 su 0');
+    expect(r.out).toContain('INVENTARIO DAY-1 NON DISPONIBILE');
+    expect(r.out).toContain('F1');
+    expect(r.code).not.toBe(0);
+  });
 });

@@ -1332,7 +1332,11 @@ transfer to the next unless the value itself refuses the ambiguity.
 
 The path was only the first door. The regex is the second: change the table's
 columns and a valid, readable file also yields `[]`. The reader now recognises
-the header it can parse before it counts anything.
+the header it can parse before it counts anything. The independent review of
+the fix found a third: a status row whose id falls outside the `[A-E]\d+` the
+row regex expects (`F1`, `a1`) simply drops out of the count, and with one
+blocker that is `0 su 0` again — so a row the parser cannot read is now an
+error too, not a smaller number.
 
 **Instead:** the reader returns `{ bloccanti }` or `{ errore }`, never an empty
 list for a failed read; `riprendi` prints `INVENTARIO DAY-1 NON DISPONIBILE`
@@ -1340,8 +1344,9 @@ with the cause and exits non-zero without truncating the rest of the briefing �
 the file belongs to the repository, so its absence is damaged state, not weather.
 The fixture carries a small inventory at the canonical path, and the tests are
 the four states told apart through the real command: `2 su 3`, `0 su 0` from a
-table with no blockers, absent, and present-but-unrecognised. Restoring
-`catch → []` kills one test; removing the header check kills another. The
+table with no blockers, absent, present-but-unrecognised, and a row the parser
+cannot read. Restoring `catch → []` kills one test; removing the header check
+kills another; removing the row-id check kills a third. The
 general form: **a valid domain value cannot double as the silent sentinel for
 "I do not know the value."** Unavailable needs its own representation, or it
 will be reported as whatever the empty case looks like.
