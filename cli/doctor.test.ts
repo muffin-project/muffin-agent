@@ -1516,3 +1516,69 @@ describe('doctor guarda se una superficie abilitata sta rispondendo', () => {
     expect(chiesto).toBe(false);
   });
 });
+
+describe('doctor says whether a voice note would be understood, before the first one arrives', () => {
+  // Voice notes arrive from Telegram/Discord: the row only has something to
+  // say once such a surface is enabled. `runInit` enables the CLI alone.
+  const conTelegram = (dir: string): string => {
+    const file = join(paths(dir).home, 'config.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as { surfaces: Record<string, unknown> };
+    config.surfaces = { ...config.surfaces, enabled: ['cli', 'telegram'] };
+    writeFileSync(file, JSON.stringify(config, null, 2));
+    return dir;
+  };
+
+  it('says there is nothing to prepare when no voice-carrying surface is enabled', async () => {
+    const dir = home();
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/nessuna superficie vocale/);
+  });
+
+  it('is ok, naming the model, when the configured model accepts audio', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => true } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/accetta audio/);
+  });
+
+  it('warns, naming each missing prerequisite with its command, when the model does not listen and nothing is installed', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: join(dir, 'vuota') } });
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toMatch(/ffmpeg non è installato/);
+    expect(c?.detail).toMatch(/whisper\.cpp non è installato/);
+    expect(c?.detail).toMatch(/modello whisper/);
+    expect(c?.detail).toMatch(/la prima nota vocale fallirebbe/);
+    expect(c?.remedy).toContain('brew install ffmpeg');
+    expect(c?.remedy).toContain('brew install whisper-cpp');
+    expect(c?.remedy).toContain('ggml-base.bin');
+  });
+
+  it('is ok, naming the local transcription, when the binaries and the model are there', async () => {
+    const dir = conTelegram(home());
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    mkdirSync(join(dir, 'models'));
+    writeFileSync(join(dir, 'models', 'ggml-base.bin'), '');
+    const c = await checkWith(dir, 'note vocali', { voce: { accettaAudio: async () => false, path: bin } });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/si trascrive in casa/);
+    expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
+  });
+
+  it('takes the transcription branch when the probe fails, like the runtime does', async () => {
+    const dir = conTelegram(home());
+    const c = await checkWith(dir, 'note vocali', {
+      voce: {
+        accettaAudio: async () => {
+          throw new Error('rete giù');
+        },
+        path: join(dir, 'vuota'),
+      },
+    });
+    expect(c?.level).toBe('warn');
+  });
+});
