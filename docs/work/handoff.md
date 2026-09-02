@@ -37,8 +37,8 @@ esistono più. Una proposta non è evidence: sta in `history/design-notes/`.
 campo `rif` (`template.html:338`): usare ciò che c'è, non costruire altro.
 
 Trappole dove sta il meccanismo: `riprendi/SKILL.md`, `architecture-map/ancore.mjs`,
-`rules/decisioni.md` (**F7**). L'1/09 `deleghe.mjs` leggeva l'inventario a un path
-morto e stampava «0 su 0» invece di 31 BLOCKER: il `catch` non è una diagnosi.
+`rules/decisioni.md` (**F7**). `riprendi` ora esce ≠0 se l'inventario DAY-1 non
+si legge: «0 su 0» era il path morto, non i bloccanti (lesson del 2/09).
 
 ## Parcheggiato: le richieste differite
 
