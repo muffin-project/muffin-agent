@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/config.js';
-import type { CapabilityId, RiskClass, TrustTier } from './types.js';
+import type { CapabilityId, EffectRow, RiskClass, TrustTier } from './types.js';
 
 /**
  * The permission matrix, read from the root of trust — the first real reader of
@@ -40,10 +40,39 @@ const PolicyFileSchema = z.object({
   paramsMaxTaint: Tier.optional(),
   neverAtRuntime: z.array(z.string().min(1)).optional(),
   forbiddenForSystem: z.array(z.string().min(1)).optional(),
+  /**
+   * The normative matrix's own rows. Partial, like `defaultMaxTaint`: a file
+   * that wants to tighten one row says so and inherits the rest, and — same
+   * clamp, same reason — it may only tighten.
+   */
+  rows: z.record(z.string(), z.object({ askAbove: Tier.optional(), denyAbove: Tier.optional() })).optional(),
 });
 
+/**
+ * One row of the threat model's matrix, as two thresholds over the taint
+ * columns: above `askAbove` nothing on this row may be unattended (an `allow`
+ * or a `draft` becomes an `ask`), above `denyAbove` the row is out of reach.
+ * `3` means the matrix leaves that column to the risk class and the other
+ * gates; `-1` means never, at any taint.
+ */
+export type RowPolicy = { readonly askAbove: TrustTier; readonly denyAbove: number };
+
 export type PolicyMatrix = {
-  /** Ceiling by risk class, for declarations that state no `maxTaint` of their own. */
+  /**
+   * The ceiling and the unattended-floor **by effect row** — where the bytes
+   * land — which is how `docs/history/rebuild-2026/03-threat-model.md` §3 has
+   * always printed it. This replaced `defaultMaxTaint[risk]` as the ceiling in
+   * ADR-0053, after the two were measured to disagree on a row the document
+   * calls `ASK` and the kernel answered `deny`.
+   */
+  readonly rows: Readonly<Record<EffectRow, RowPolicy>>;
+  /**
+   * Ceiling by risk class. **No longer the taint ceiling** — `rows` owns that.
+   * Kept because the sealed file may still carry it and because a home sealed
+   * before ADR-0053 must not be bricked by an upgrade; it is now only a floor
+   * the row cannot be looser than, so an old file that tightened a class still
+   * tightens.
+   */
   readonly defaultMaxTaint: Readonly<Record<RiskClass, TrustTier>>;
   /**
    * Ceiling for model-chosen bytes riding out in a resource the model
@@ -125,7 +154,38 @@ export type PolicyMatrix = {
  * "low-risk capabilities, in a home that is already shouting that its root of
  * trust diverged", and `doctor` names the fallback in the same breath.
  */
+/**
+ * The printed matrix, transcribed. Each entry cites the row it comes from; the
+ * cell-by-cell assertion lives in `core/policy/effect-rows.test.ts`.
+ */
+export const ROW_FLOOR: Readonly<Record<EffectRow, RowPolicy>> = {
+  /** Reading is not acting: ADR-0044's own summary — a turn that read from disk still reads and answers. */
+  context: { askAbove: 3, denyAbove: 3 },
+  /** "Shell / filesystem host / processi": ALLOW per classe (HITL) · **ASK** · DENY. */
+  host: { askAbove: 1, denyAbove: 2 },
+  /** "Reply sul canale di origine": ALLOW · ALLOW · ALLOW. */
+  reply: { askAbove: 3, denyAbove: 3 },
+  /** "Egress rete": the allowlist and `paramsMaxTaint` own these columns, not this row. */
+  egress: { askAbove: 3, denyAbove: 3 },
+  /** "Scrittura memoria": ALLOW · ALLOW nel tenant, tier ereditato · ALLOW, tier 3. */
+  memory: { askAbove: 3, denyAbove: 3 },
+  /**
+   * Third-party code and services outside the allowlist model. The one row the
+   * document does not print: MCP is covered in prose (`docs/SECURITY.md` §10),
+   * and this keeps the number those capabilities already had rather than
+   * inventing a widening nobody reviewed.
+   */
+  external: { askAbove: 1, denyAbove: 1 },
+  /** "Outward (mail, messaggi a terzi, pubblicazione)": DRAFT di default · DENY · DENY. */
+  outward: { askAbove: 0, denyAbove: 1 },
+  /** "Scrittura config/voice (cricchetto)": ALLOW solo via ratchet-API · DENY · DENY. */
+  config: { askAbove: 0, denyAbove: 1 },
+  /** "Root of Trust: DENY a runtime per chiunque" — `neverAtRuntime` refuses it first; this is the belt. */
+  rot: { askAbove: 0, denyAbove: -1 },
+};
+
 export const POLICY_FLOOR: PolicyMatrix = {
+  rows: ROW_FLOOR,
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
   paramsMaxTaint: 2,
   /** No principal may ever exercise these at runtime, whatever the taint. */
@@ -199,8 +259,30 @@ function tighter(fromFile: TrustTier | undefined, floor: TrustTier): TrustTier {
   return fromFile !== undefined && fromFile < floor ? fromFile : floor;
 }
 
+/**
+ * Same direction as `tighter`, applied to a row: the file may lower a
+ * threshold, never raise one. An unknown row name in the file is ignored
+ * rather than added — a row the code does not know cannot gate anything, and
+ * inventing one from a sealed file would be the file granting itself a
+ * vocabulary the kernel never reviewed.
+ */
+function tighterRows(
+  fromFile: Record<string, { askAbove?: TrustTier | undefined; denyAbove?: TrustTier | undefined }> | undefined,
+): Readonly<Record<EffectRow, RowPolicy>> {
+  const out = {} as Record<EffectRow, RowPolicy>;
+  for (const [name, floor] of Object.entries(ROW_FLOOR) as Array<[EffectRow, RowPolicy]>) {
+    const said = fromFile?.[name];
+    out[name] = {
+      askAbove: tighter(said?.askAbove, floor.askAbove),
+      denyAbove: said?.denyAbove !== undefined && said.denyAbove < floor.denyAbove ? said.denyAbove : floor.denyAbove,
+    };
+  }
+  return out;
+}
+
 function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
   return {
+    rows: tighterRows(file.rows),
     // Clamped DOWNWARD, symmetric with the union below: the file may lower a
     // ceiling, never raise one. The first version left it unclamped, reasoning
     // that declarations already override in both directions — true, and a

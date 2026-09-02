@@ -125,6 +125,7 @@ export const fsCapabilities: CapabilityDecl[] = [
    */
   {
     id: 'fs.read',
+    effect: 'context',
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
@@ -154,6 +155,7 @@ export const fsCapabilities: CapabilityDecl[] = [
    */
   {
     id: 'fs.search',
+    effect: 'context',
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
@@ -167,6 +169,7 @@ export const fsCapabilities: CapabilityDecl[] = [
   },
   {
     id: 'fs.list',
+    effect: 'context',
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
@@ -180,6 +183,7 @@ export const fsCapabilities: CapabilityDecl[] = [
   },
   {
     id: 'fs.write',
+    effect: 'host',
     risk: 'medium',
     reversible: 'undoable',
     // The row that proves the two axes are independent: this write is NOT

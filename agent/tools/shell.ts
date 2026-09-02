@@ -32,6 +32,7 @@ import { DISK_TIER } from './fs.js';
  */
 export const shellCapability: CapabilityDecl = {
   id: 'sys.shell',
+  effect: 'host',
   risk: 'high',
   reversible: 'no',
   // A command is an arbitrary program: it may have sent something, moved
@@ -42,15 +43,15 @@ export const shellCapability: CapabilityDecl = {
   policyArgs: ['command'],
   hostOnly: true,
   timeoutMs: EXEC_MAX_TIMEOUT_MS,
-  // Owner decision, 2026-08-16 (ADR-0044 §revisione; PR #28): pinned to 2,
-  // widened from the inherited `defaultMaxTaint.high` = 1. `DISK_TIER` is 2, so
-  // this is the difference between "a read ends the turn's shell access" and "a
-  // read still lets the owner be ASKED for it". The high-risk branch below still
-  // requires `taint === 0` for the hardened auto-allow, so nothing here reopens
-  // the auto-allow path — only the ask path survives a read. A turn at taint 3
-  // (a web/search/mcp result, or a second read) is still `taint_exceeded`: this
-  // widens the ceiling by exactly one step, not to the top of the scale.
-  maxTaint: 2,
+  // The pin that used to live here is gone, and nothing about this capability
+  // changed: `maxTaint: 2` was the owner's 2026-08-16 decision (ADR-0044
+  // §revisione) transcribed onto one declaration, and `effect: 'host'` above
+  // now says the same thing where the whole row can read it — "ALLOW per
+  // classe · ASK · DENY", the cell the threat model already printed. The
+  // difference is that `fs.write` and `sys.process.kill` sit on that row too
+  // and never got the transcription, which is the drift ADR-0053 repairs. The
+  // hardened auto-allow still requires `taint === 0`, so a read still ends the
+  // silent path and leaves only the ask; taint 3 is still out of reach.
 };
 
 const shellSpec: ToolSpec = {

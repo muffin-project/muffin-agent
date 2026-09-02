@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 export const processCapabilities: CapabilityDecl[] = [
   {
     id: 'sys.process.list',
+    effect: 'context',
     risk: 'low',
     reversible: 'yes',
     rerunnable: true,
@@ -32,6 +33,7 @@ export const processCapabilities: CapabilityDecl[] = [
   },
   {
     id: 'sys.process.kill',
+    effect: 'host',
     risk: 'high',
     reversible: 'no',
     // A pid is not a stable name. Between the call that may have landed and the

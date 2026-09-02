@@ -21,6 +21,7 @@ import type { RegisteredTool } from '../loop.js';
  */
 export const skillCapability: CapabilityDecl = {
   id: 'skill.read',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,

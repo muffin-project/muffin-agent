@@ -59,6 +59,32 @@ import { DISK_TIER } from '../../agent/tools/fs.js';
  * nell'altra**: il comportamento corrente è pinnato qui, con la misura
  * accanto. Il giorno che qualcuno alza `defaultMaxTaint.medium` o abbassa
  * `DISK_TIER`, questo test lo dice e chiede di scriverlo nella decisione.
+ *
+ * ## Aggiornamento 2026-09-02 — la decisione è stata scritta (ADR-0053)
+ *
+ * Il giorno è arrivato, e non spostando un numero: il `deny` qui sopra non era
+ * una scelta, era una **trascrizione mancata**. La matrice normativa
+ * (`03-threat-model.md` §3) dà a `fs.write` la riga *Shell / filesystem host /
+ * processi*, e quella riga a taint 2 dice `ASK`. L'emendamento owner del
+ * 16/08 aveva spostato quella cella per `sys.shell` sola, appuntandole
+ * `maxTaint: 2` addosso; `fs.write` — stessa riga, stesso disco, e l'unica
+ * delle due con checkpoint e `undo` — ha continuato a ereditare il default di
+ * classe. Due porte allo stesso sink, chiusa la più sicura.
+ *
+ * Quindi il kernel ora prende il soffitto dalla **riga di effetto** e non dalla
+ * classe di rischio, e questo file pinna la cella nuova: `ask`, non `deny`, e
+ * non perché un eval fosse rosso — perché il documento lo diceva già.
+ *
+ * Le due letture che il paragrafo sopra chiamava «entrambe difendibili» restano
+ * tali, e la loro sede è un'altra: se il *taint ambientale* sia il segnale
+ * giusto è la domanda aperta di `docs/SECURITY.md` §13, che si chiude con un
+ * eval comparativo e non con questa ADR. Qui cambiano le righe, non le colonne.
+ *
+ * Nota su una frase invecchiata qui sopra: «`fs_write` non scrive un file in
+ * nessun caso» era vero quando questo file è nato e non lo è più — il journal
+ * di undo è arrivato, e D2/D3 lo provano sul binario vero
+ * (`evals/acceptance/scenarios/d-capability.accept.ts`: il file c'è, e
+ * `muffin undo` lo toglie).
  */
 const decls = new Map<string, CapabilityDecl>(fsCapabilities.map((c) => [c.id, c]));
 // `hardened: false` è lo stato vero dell'installazione dell'owner: `rot/` ha
@@ -83,18 +109,30 @@ describe('leggere un file spegne la scrittura per il resto del turno', () => {
     expect(chiedi(1).effect).toBe('draft');
   });
 
-  it('dopo un `fs_read` no, ed è un deny, non una domanda', () => {
+  it('dopo un `fs_read` è una domanda, non un rifiuto (ADR-0053)', () => {
     // Il numero non è scelto qui: è quello che `fs_read` produce davvero.
     expect(DISK_TIER).toBe(2);
     const d = chiedi(DISK_TIER as 2);
+    expect(d.effect).toBe('ask');
+    // E la domanda dice cosa sta approvando: il percorso, non solo il nome
+    // della capability — il gap che ADR-0044 §revisione aveva dichiarato.
+    expect(d.effect === 'ask' && d.ask.prompt).toContain('/w/out.txt');
+  });
+
+  it('a taint 3 resta un rifiuto: la riga si è alzata di un gradino, non è sparita', () => {
+    const d = chiedi(3);
     expect(d.effect).toBe('deny');
     expect(d.effect === 'deny' && d.code).toBe('taint_exceeded');
   });
 
-  it('il tetto che lo decide è 1, e sta nel floor — non in una riga di fs.ts', () => {
-    // Se qualcuno lo alza per far passare un eval, questo test lo nomina.
-    expect(POLICY_FLOOR.defaultMaxTaint.medium).toBe(1);
-    expect(decls.get('fs.write')?.risk).toBe('medium');
+  it("il tetto che lo decide è la riga di effetto, non la classe di rischio", () => {
+    // Se qualcuno riporta il soffitto su un numero appuntato sulla singola
+    // capability, questo test lo nomina: è la forma che ha prodotto la deriva.
+    expect(decls.get('fs.write')?.effect).toBe('host');
     expect(decls.get('fs.write')?.maxTaint).toBeUndefined();
+    expect(POLICY_FLOOR.rows.host).toEqual({ askAbove: 1, denyAbove: 2 });
+    // La classe di rischio resta `medium` e continua a decidere altro — se la
+    // scrittura sia un `draft` o un `allow` — ma non il soffitto.
+    expect(decls.get('fs.write')?.risk).toBe('medium');
   });
 });

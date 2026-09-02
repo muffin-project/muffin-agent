@@ -86,7 +86,8 @@ const callTool = (name: string, args: unknown): ChatResult => ({
 const decls: CapabilityDecl[] = [
   ...fsCapabilities,
   memoryCapability,
-  { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'demo.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
 ];
 
 function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
