@@ -24,7 +24,10 @@ sull'installazione; una frase sintetizzata con `say` è tornata testo corretto).
 
 Su Telegram il turno parte a taint 2 (history reiniettata) e `fs.write`,
 `send_file`, `skill.read`, `process.list` sono DENY secchi; solo `/new` pulisce.
-Opzioni A/B/C, misure e raccomandazione (**B, sull'intera classe**) in
+Misurato: le tre superfici decidono **identico** a parità di history, e
+`leggi → scrivi` in un turno solo è `taint_exceeded` anche senza history: la
+vita della sessione non è la causa, il soffitto sì.
+Opzioni A/B/C e raccomandazione (**B, sull'intera classe**) in
 critical-path.md#decidere-il-workflow-locale-read--write. Decisione minima: A, B o C.
 
 ## Bivio owner n. 2: un tool `jobs` per il modello
@@ -39,9 +42,9 @@ non ha nessun accesso web: 0 `web_search`, 0 `http_get` in 165 turni) ·
 
 ## Il 02/09
 
-Dodici PR su `dev`: ledger (#277), F5 (#278), riconciliazione (#279), `doctor`
-note vocali (#280), regola «un tool che non c'è non è una policy» (#281), F6
-(#282), quattro journey (#283–#286), tetto accettazione (#287), stato (#288).
+Dodici PR su `dev` (#277–#288): ledger, F5, riconciliazione, `doctor` note
+vocali, «un tool che non c'è non è una policy», F6, quattro journey, tetto
+accettazione, stato.
 Inventario **36 READY · 14 BLOCKER · 6 OUT**. Revisione indipendente del `dev`
 integrato: **NOT READY** per il bivio n. 1. Promozione `dev → main` fatta
 (#289, `dd38d40`) e `muffin update` eseguito sull'installazione reale: build
@@ -51,7 +54,7 @@ integrato: **NOT READY** per il bivio n. 1. Promozione `dev → main` fatta
 evidence datata, non authority — si legge quando il dominio entra nel lavoro.
 
 **Parcheggiato:** `docs/evidence/richieste-differite-2026-08-30.md` — misure
-(7 todo fermi e invisibili fuori sessione, 44 fatti `asked_to` su 83), non una forma.
+(7 todo fermi fuori sessione, 44 fatti `asked_to` su 83), non una forma.
 
 ## Aperto, non bloccante
 
