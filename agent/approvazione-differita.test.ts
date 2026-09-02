@@ -60,6 +60,7 @@ const risposta = (text: string): ChatResult => ({ text, toolCalls: [], stopReaso
 /** La forma di `sys.shell`: rischio alto, nessuna risorsa del kernel. */
 const probeAct: CapabilityDecl = {
   id: 'probe.act',
+  effect: 'context',
   risk: 'high',
   reversible: 'no',
   rerunnable: false,

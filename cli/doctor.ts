@@ -279,11 +279,19 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // the owner which one answered — and the difference is whether their edits to
   // `rot/policy.json` mean anything.
   const matrix = loadPolicyMatrix(home);
-  const taint = matrix.defaultMaxTaint;
+  // The rows, not `defaultMaxTaint`: since ADR-0053 the ceiling comes from the
+  // capability's effect row, and printing the class defaults here would name a
+  // number that no longer decides anything — the exact shape of invisible fact
+  // this check exists to remove. Three rows are shown because they are the ones
+  // an owner meets: the host row is the ask they will see after a read, and the
+  // other two are the refusals.
+  const rows = matrix.rows;
   if (matrix.source === 'sealed') {
     ok(
       'policy matrix',
-      `rot/policy.json — taint max low ${taint.low} / medium ${taint.medium} / high ${taint.high}, ${matrix.neverAtRuntime.size} mai a runtime, ${matrix.forbiddenForSystem.size} vietate agli autonomi`,
+      `rot/policy.json — righe di effetto: host chiede sopra taint ${rows.host.askAbove} e nega sopra ${rows.host.denyAbove}, ` +
+        `esterni (MCP) negano sopra ${rows.external.denyAbove}, outward nega sopra ${rows.outward.denyAbove}; ` +
+        `${matrix.neverAtRuntime.size} mai a runtime, ${matrix.forbiddenForSystem.size} vietate agli autonomi`,
     );
   } else {
     warn(

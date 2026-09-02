@@ -21,15 +21,22 @@ import type { RegisteredTool } from '../loop.js';
  * taint ceiling 1 — a turn already carrying untrusted content cannot reach
  * out through a third-party server at all.
  *
- * That ceiling is INHERITED from the class default, not pinned here, and the
- * sentence above is only true because `policy.json` may lower the default and
- * never raise it (`core/policy/matrix.ts`, `tighter`). A judge measured the
- * version where it could: `{"medium":3}` in a resealed file made this a silent
- * `allow` at taint 3. If that clamp ever goes, pin `maxTaint: 1` here.
+ * That ceiling used to be INHERITED from the class default, and the sentence
+ * above was only true because `policy.json` may lower the default and never
+ * raise it (`core/policy/matrix.ts`, `tighter`). A judge measured the version
+ * where it could: `{"medium":3}` in a resealed file made this a silent `allow`
+ * at taint 3. Since ADR-0053 it is held by the `external` row instead — same
+ * number, now stated rather than inherited, which is what that measurement
+ * asked for.
  */
 export function mcpCapabilityFor(server: string): CapabilityDecl {
   return {
     id: `mcp.${server}`,
+    // Third-party code we do not own, outside the egress allowlist model: the
+    // one row the threat model's matrix does not print, kept at exactly the
+    // ceiling this capability already had rather than widened into a printed
+    // row nobody reviewed it for.
+    effect: 'external',
     risk: 'medium',
     reversible: 'no',
     // We do not own the semantics on the other side of the pipe, so a call that

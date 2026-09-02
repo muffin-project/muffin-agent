@@ -42,6 +42,7 @@ const sendFileArgs = z.object({
 
 export const sendFileCapability: CapabilityDecl = {
   id: 'surface.send_file',
+  effect: 'reply',
   // Same trust class as replying with more text on the same channel ("Reply
   // sul canale di origine: ALLOW", 03-threat-model.md §2) — this attaches to
   // the conversation already under way, it does not open one. The "Outward"
