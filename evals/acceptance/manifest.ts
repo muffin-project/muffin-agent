@@ -193,6 +193,25 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'job-fires: a real SIGKILL between binding a fire and creating its turn, and another between the turn finishing and settlement, both recover to exactly one delivered turn — the model called exactly once',
   ),
   verde('B11', 'streaming: the real binary, driven with --stream over a pipe, delivers the answer through the SSE path and exits clean'),
+  // New (slice/journey-telegram): B13/B14/D12 were BLOCKER only for lack of a
+  // scenario that drives the mechanism over the real Telegram surface — the
+  // rows' own text names each mechanism as already in HEAD. This is that
+  // missing proof, against a fake Bot API server (`evals/acceptance/
+  // telegram.ts`) and a real `muffin gateway`, alongside B1's own Telegram
+  // half (a plain, unmanifested scenario — see `b-telegram-journey.accept.ts`'s
+  // own docstring for why that one does not register here).
+  verde(
+    'B13',
+    'progress telegram: a scripted multi-round turn produces one status message, edited in place (never a second one), throttled, and replaced by the real answer',
+  ),
+  verde(
+    'B14',
+    'attachment telegram: `send_file` reaches `sendDocument` on the real binary, with the real filename and byte length, to the owner\'s chat',
+  ),
+  verde(
+    'D12',
+    'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
+  ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
   // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
