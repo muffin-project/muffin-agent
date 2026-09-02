@@ -1051,9 +1051,19 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // accetta la connessione e non risponde non deve tenere `doctor` appeso, e
   // «non ha risposto» prende il ramo che il runtime prenderebbe — trascrivere
   // in casa — perché è l'unico che non manda niente fuori.
+  //
+  // Solo quando una superficie che porta voce è abilitata: le note vocali
+  // arrivano da Telegram e Discord, non dal terminale. Su un'installazione
+  // con la sola CLI questa riga sarebbe un avviso su un problema che non
+  // può presentarsi — e A10 (`e2e-giro-owner.accept.ts`) lo ha misurato
+  // subito: «WARN non dichiarato» su una home appena inizializzata.
   const modello = config.models.main;
-  const ascolta = await probeAudio(options.voce?.accettaAudio, config.provider.baseUrl, modello);
-  if (ascolta) {
+  const superficiVocali = config.surfaces.enabled.filter((id) => id === 'telegram' || id === 'discord');
+  const ascolta =
+    superficiVocali.length === 0 ? false : await probeAudio(options.voce?.accettaAudio, config.provider.baseUrl, modello);
+  if (superficiVocali.length === 0) {
+    ok('note vocali', 'nessuna superficie vocale abilitata (telegram, discord): niente da preparare');
+  } else if (ascolta) {
     ok('note vocali', `${modello} accetta audio: le note vocali vanno al modello`);
   } else {
     const audio = config.audio;
