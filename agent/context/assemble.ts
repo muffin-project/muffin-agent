@@ -421,6 +421,15 @@ function concat(parts: string[]): string {
  *    `fs_list` in ten seconds, two of them inside the same second.
  *  - **Silence over long work.** One turn ran 300 seconds across eleven model
  *    calls and said nothing until it was over.
+ *
+ * And a fourth, from the owner's database (episode 310, 29/08/2026): asked
+ * whether it could schedule a message, the model answered that the tool for
+ * creating jobs existed but "da Telegram, a taint 2, non me lo espongono: è
+ * la policy, non un bug". No such tool exists on any surface at any taint —
+ * jobs are created only from the CLI. A missing tool explained as a
+ * permission is the worst of both: false, plausible, and it sends the owner
+ * to look for a setting that does not exist. The runtime cannot close this
+ * one: nothing is called, so nothing is denied.
  */
 const WORK_RULES = [
   // `#` e non `##`, ed è una correzione di struttura, non di stile. I quattro
@@ -435,6 +444,7 @@ const WORK_RULES = [
   '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
   "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
+  "- I tool che hai sono quelli che vedi. Se per una cosa non ne hai uno, dillo così: non inventare una policy o un permesso che lo nasconderebbe.",
   "- Prima di rifare una chiamata che hai già fatto, chiediti cosa è cambiato. Se non è cambiato niente, la risposta ce l'hai già.",
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
