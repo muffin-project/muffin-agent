@@ -27,13 +27,16 @@ vengono prima di allargare capability o architettura.
         ↓
 2  undo semantico (l'altra metà di D11, raggiungibile solo dopo 1)
         ↓
-3  prerequisiti reali sulla macchina dell'owner, detti da doctor prima
-   che servano (note vocali: whisper.cpp, ffmpeg, modello)
+3  promozione dev → main e `muffin update` sull'installazione reale
         ↓
 4  dogfood reale e backlog guidato dai fallback
         ↓
-5  journey integrate / battery finale quando una claim lo richiede
+5  battery finale e revisione indipendente del dev integrato
 ```
+
+I prerequisiti vocali (whisper.cpp, ffmpeg, modello) sono sulla macchina
+dell'owner dal 02/09 e `doctor` li controlla prima che servano: non sono più
+un passo.
 
 L'ordine 1 → 2 si è invertito il 02/09 per una misura, non per gusto: sul
 database dell'owner `fs.write` non è mai stata eseguita, e la metà di undo che
@@ -110,15 +113,15 @@ La prova terminale è un percorso reale del tipo:
 
 non un test isolato del valore di taint.
 
-### I requisiti sono riconciliati; le righe di sola evidence si chiudono per journey
+### Le righe di sola evidence sono chiuse per journey
 
-La rilettura riga per riga contro HEAD è stata fatta il 02/09 e vive nel
-banner datato di `requirements-status.md`. Quello che ne esce come dipendenza:
-diciassette righe aspettano soltanto uno scenario di accettazione sul binario
-vero, e vanno chiuse per **journey reale** (lifecycle/install/backup ·
-memoria/documenti · shell/processi · Telegram · tracing), non una PR per riga —
-lo stesso scenario può chiudere più righe se attraversa gli stessi confini.
-Una riga rossa solo per evidence riceve evidence, mai un subsystem.
+Le diciassette righe che aspettavano solo uno scenario sono state chiuse il
+02/09 da quattro journey sul binario vero (lifecycle, memoria/documenti,
+capability, Telegram su gateway vivo). Restano due righe della stessa famiglia
+che l'harness non raggiunge ancora — B10 (immagini) e C8 (nota vocale) — perché
+il finto Bot API non serve `getFile`: la dipendenza è un'estensione
+dell'harness, non un meccanismo di prodotto. Una riga rossa solo per evidence
+riceve evidence, mai un subsystem.
 
 ### Da qui ordina l'uso
 

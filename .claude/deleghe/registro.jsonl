@@ -293,3 +293,15 @@
 {"id":"ae7010a13828febbd","chiuso":"D1: attribuisciEpisodi ricostruisce la giunzione da tenant/surface/session + finestra temporale, con sovrapposti() che blocca e dichiara l'ambiguo; D2: undone_at non e piu un latch, dietroLaRete conta i prefissi (pari annulla, dispari rifa). 5 mutazioni uccise, 2251 passati","quando":"2026-08-27T16:32:23.610Z"}
 {"id":"ae95b1a589bd9074a","slug":"judge-186-r3","cosa":"terzo giro CRITICAL: attribuisciEpisodi puo attribuire l'episodio sbagliato? il backfill e distruttivo? annidamento di annulla- e taglio a 48?","quando":"2026-08-27T16:32:23.663Z"}
 {"id":"ae95b1a589bd9074a","parcheggiata":"terzo giro CRITICAL su #186 fermato al safe point: mai partito davvero (191 byte di output). Da rilanciare: attribuisciEpisodi puo attribuire l'episodio sbagliato al bordo della finestra? il backfill e reversibile? annidamento annulla-annulla e taglio a 48?","quando":"2026-08-27T16:36:02.321Z"}
+{"id":"journey-lifecycle","slug":"journey-lifecycle","cosa":"scenari di accettazione sul binario vero per le righe A4 A6 A7 A8 E3","quando":"2026-09-02T04:33:01.508Z"}
+{"id":"journey-memoria","slug":"journey-memoria","cosa":"scenari di accettazione sul binario vero per le righe C2 C3 C6 C7","quando":"2026-09-02T04:33:01.554Z"}
+{"id":"journey-capability","slug":"journey-capability","cosa":"scenari di accettazione sul binario vero per le righe D4 D5 B6 E7","quando":"2026-09-02T04:33:01.598Z"}
+{"id":"journey-telegram","slug":"journey-telegram","cosa":"scenari di accettazione sul binario vero per le righe B1 B13 B14 D12","quando":"2026-09-02T04:33:01.644Z"}
+{"id":"journey-memoria","branch":"slice/journey-memoria","quando":"2026-09-02T04:57:27.835Z"}
+{"id":"journey-capability","branch":"slice/journey-capability","quando":"2026-09-02T04:57:27.882Z"}
+{"id":"journey-capability","chiuso":"PR #284 integrata: D4 D5 E7 provati, B6 provato per mutazione (pavimento SSRF)","quando":"2026-09-02T05:06:40.237Z"}
+{"id":"journey-lifecycle","branch":"slice/journey-lifecycle","quando":"2026-09-02T05:14:14.716Z"}
+{"id":"journey-telegram","branch":"slice/journey-telegram","quando":"2026-09-02T05:14:14.764Z"}
+{"id":"journey-memoria","chiuso":"PR #283 integrata: C2 C3 C6 C7 provati sul binario vero; seam MUFFIN_MEMORY_IDLE_MS; embeddings finti nel provider","quando":"2026-09-02T05:40:34.173Z"}
+{"id":"journey-lifecycle","chiuso":"PR #285 integrata: A4 A6 A7 A8 E3 provati sul binario vero","quando":"2026-09-02T05:48:16.169Z"}
+{"id":"journey-telegram","chiuso":"PR #286 integrata: B13 B14 D12 provati sul gateway vero + finto Bot API; metà Telegram di B1","quando":"2026-09-02T05:54:52.697Z"}
