@@ -36,7 +36,7 @@ type Arrivo = { line: string; image?: ImageBlock; audio?: AudioBlock };
 type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
-import { startProgress } from './progress.js';
+import { startTranscript } from './transcript.js';
 import { escapeHtml, renderForTelegram } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
@@ -912,12 +912,16 @@ export class TelegramConnector {
       isPrivate: incoming.isPrivate,
       placeholder: 'sto guardando…',
     });
-    // DAY-1 requirement B13: a second, independent status surface — see `progress.ts`'s
-    // own file docstring for why this is not folded into `presence` above.
-    // Unconditional, same as `onDelta`/`presence` just above: no per-surface
-    // gate like the REPL's `isTTY` check, because there is no "non-interactive
-    // Telegram" the way there is a piped terminal.
-    const progress = startProgress(this.deps.api, incoming.chatId, {
+    // DAY-1 requirements B11/B13, the owner's shape (03/09/2026): what the
+    // agent said and did on its way to the answer, kept in one message per
+    // segment — see `transcript.ts`'s file docstring. Separate from
+    // `presence` above on purpose: the draft previews the *answer* as it
+    // forms and disappears when the real one lands; the transcript is what
+    // happened before it, and stays. Unconditional, same as `presence`: no
+    // per-surface gate like the REPL's `isTTY` check, because there is no
+    // "non-interactive Telegram" the way there is a piped terminal.
+    const transcript = startTranscript(this.deps.api, incoming.chatId, {
+      isPrivate: incoming.isPrivate,
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
 
@@ -946,10 +950,13 @@ export class TelegramConnector {
       let deltaText = '';
       const onDelta = (delta: TurnDelta): void => {
         if (delta.type === 'boundary') {
-          // Quel testo non era la risposta, e da oggi arriva davvero fin qui:
-          // il preambolo di un giro con tool si vede mentre l'agente lavora.
-          // Senza l'azzeramento resterebbe incollato in testa alla risposta —
-          // e sarebbe il messaggio finale, non una riga di servizio.
+          // Quel testo non era la risposta: era il preambolo di un giro con
+          // tool. Fino al 03/09 veniva solo azzerato dal draft, e l'owner lo
+          // perdeva («non voglio perdere gli step»). Ora passa alla
+          // trascrizione, che lo mette in un messaggio vero e ci appende
+          // sotto i passi; il draft riparte vuoto per il testo del giro
+          // dopo — che, se nessun boundary lo chiude, è la risposta.
+          transcript.spoke(deltaText, delta.reason);
           deltaText = '';
           return;
         }
@@ -957,11 +964,11 @@ export class TelegramConnector {
         presence.streamText(deltaText);
       };
       // DAY-1 requirement B13: the sibling sink, same shape — this closure only forwards,
-      // `progress.ts`'s own `report` owns the rate limit, the coalescing and
+      // `transcript.ts`'s own `report` owns the rate limit, the coalescing and
       // the create-vs-edit choice, exactly as `presence.streamText` does above
       // for `onDelta`.
       const onProgress = (event: TurnEvent): void => {
-        progress.report(event);
+        transcript.report(event);
       };
 
       // Fault point 2, made observable: a real crash here lands after `bind`
@@ -1027,10 +1034,10 @@ export class TelegramConnector {
       // only in the `finally` — because `stop()` is idempotent and this is
       // what cancels a coalesced, still-pending live update before it can
       // race the final edit and land after it with stale, mid-turn text (and,
-      // for `progress`, what removes the status message before the real
-      // answer is sent — never leaving it orphaned above the reply).
+      // for `transcript`, what makes the last edit — counter gone, an
+      // abandoned step marked — land *above* the real answer, never after).
       await presence.stop();
-      await progress.stop();
+      await transcript.stop();
 
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
@@ -1089,7 +1096,7 @@ export class TelegramConnector {
       this.deps.inbox.markProcessed(stored.updateId, this.now());
     } finally {
       await presence.stop();
-      await progress.stop();
+      await transcript.stop();
     }
   }
 
