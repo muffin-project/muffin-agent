@@ -27,16 +27,14 @@ vengono prima di allargare capability o architettura.
         ↓
 2  undo semantico (l'altra metà di D11, raggiungibile solo dopo 1)
         ↓
-3  promozione dev → main e `muffin update` sull'installazione reale
+3  dogfood reale e backlog guidato dai fallback
         ↓
-4  dogfood reale e backlog guidato dai fallback
-        ↓
-5  battery finale e revisione indipendente del dev integrato
+4  battery finale e revisione indipendente del dev integrato
 ```
 
-I prerequisiti vocali (whisper.cpp, ffmpeg, modello) sono sulla macchina
-dell'owner dal 02/09 e `doctor` li controlla prima che servano: non sono più
-un passo.
+I prerequisiti vocali sono sulla macchina dell'owner dal 02/09 e `doctor` li
+controlla; la promozione `dev → main` e `muffin update` sono stati eseguiti lo
+stesso giorno (build installata `dd38d40`): non sono più passi.
 
 L'ordine 1 → 2 si è invertito il 02/09 per una misura, non per gusto: sul
 database dell'owner `fs.write` non è mai stata eseguita, e la metà di undo che
