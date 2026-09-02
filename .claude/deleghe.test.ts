@@ -1,4 +1,4 @@
-import { cpSync, chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,20 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'deleghe.mjs');
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+}
+
+const INVENTARIO = join('docs', 'work', 'day1', 'requirements-status.md');
+
+const INVENTARIO_FINTO = [
+  '| A1 | Boot | parte da solo? | BLOCKER — manca lo scenario |',
+  '| A9 | Doctor | dice la verità? | READY |',
+  '| B2 | Retry | riprova? | BLOCKER — nessun tool riprova |',
+  '| C3 | Consolidation | consolida? | BLOCKER — solo scenario mancante |',
+];
+
+/** Un inventario DAY-1 nella forma reale: prosa, poi la tabella a quattro colonne. */
+function inventario(righe: string[]): string {
+  return ['# Requisiti DAY-1', '', 'Prosa che precede la tabella.', '', '| # | Area | Domanda DAY-1 | Stato |', '|---|---|---|---|', ...righe, ''].join('\n');
 }
 
 function fixture(): { repo: string; env: NodeJS.ProcessEnv } {
@@ -41,6 +55,14 @@ function fixture(): { repo: string; env: NodeJS.ProcessEnv } {
   git(repo, 'commit', '-m', 'open work');
   git(repo, 'update-ref', 'refs/remotes/origin/slice/aperta', 'HEAD');
   git(repo, 'switch', 'dev');
+
+  // L'inventario DAY-1 al suo path canonico. Fino al 2026-09-02 la fixture non
+  // lo aveva: ogni test di `riprendi` passava dal ramo «file assente», e
+  // `BLOCCANTI SENZA DELEGA (0 su 0)` era l'output normale della suite mentre
+  // in produzione il path era sbagliato e l'inventario vero aveva 31 BLOCKER.
+  // B2 è nominata dalla delega `aperta` qui sotto: resta scoperta solo A1 e C3.
+  mkdirSync(join(repo, 'docs', 'work', 'day1'), { recursive: true });
+  writeFileSync(join(repo, 'docs', 'work', 'day1', 'requirements-status.md'), inventario(INVENTARIO_FINTO));
 
   writeFileSync(
     join(repo, '.claude', 'deleghe', 'registro.jsonl'),
@@ -362,5 +384,63 @@ describe('delegation handoff without GitHub', () => {
     expect(dopo).toContain('chiusa: digest letto, niente da riprendere');
     expect(dopo).toContain('SCONOSCIUTE (1)');
     expect(dopo).not.toMatch(/SCONOSCIUTE[\s\S]*mappa-tools/);
+  });
+});
+
+describe('the DAY-1 inventory behind BLOCCANTI SENZA DELEGA', () => {
+  // La classe di guasto che questi test chiudono (misurata il 2026-09-01): il
+  // path dell'inventario era sbagliato, il `catch` lo trasformava in stringa
+  // vuota, e `riprendi` stampava `0 su 0` mentre l'inventario vero aveva 31
+  // BLOCKER, 14 senza delega. `[]` è uno stato di dominio legittimo — nessun
+  // bloccante — quindi non può essere anche il sentinel di «non ho letto».
+  it('counts the uncovered blockers from a real inventory', () => {
+    const r = run(fixture(), 'riprendi');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('BLOCCANTI SENZA DELEGA (2 su 3)');
+    expect(r.out).toMatch(/^\s+A1\s+Boot\s+BLOCKER/m);
+    expect(r.out).toMatch(/^\s+C3\s+Consolidation\s+BLOCKER/m);
+    expect(r.out).not.toMatch(/^\s+B2\s+Retry/m);
+  });
+
+  it('a delegation that names a blocker subtracts it', () => {
+    const f = fixture();
+    run(f, 'registra', 'boot', 'boot-scenario', 'A1 scenario di accettazione del boot');
+    const r = run(f, 'riprendi');
+    expect(r.out).toContain('BLOCCANTI SENZA DELEGA (1 su 3)');
+    expect(r.out).not.toMatch(/^\s+A1\s+Boot/m);
+  });
+
+  it('an inventory with no blocker is legitimately 0 su 0', () => {
+    const f = fixture();
+    writeFileSync(join(f.repo, INVENTARIO), inventario(['| A9 | Doctor | dice la verità? | READY |']));
+    const r = run(f, 'riprendi');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('BLOCCANTI SENZA DELEGA (0 su 0)');
+    expect(r.out).not.toContain('NON DISPONIBILE');
+  });
+
+  it('a missing inventory is not an empty one: explicit, and non-zero', () => {
+    const f = fixture();
+    rmSync(join(f.repo, INVENTARIO));
+    const r = run(f, 'riprendi');
+    expect(r.out).not.toContain('0 su 0');
+    expect(r.out).toContain('INVENTARIO DAY-1 NON DISPONIBILE');
+    expect(r.out).toContain('ENOENT');
+    expect(r.out).toContain(INVENTARIO);
+    expect(r.code).not.toBe(0);
+    // Il resto del briefing si legge comunque: la delega sconosciuta c'è ancora.
+    expect(r.out).toContain('SCONOSCIUTE (1)');
+  });
+
+  it('an inventory whose table is not recognised is not an empty one either', () => {
+    // La seconda porta della stessa classe: il file c'è ma le colonne sono
+    // cambiate, la regex non prende niente, e `[]` tornerebbe a mentire.
+    const f = fixture();
+    writeFileSync(join(f.repo, INVENTARIO), '# Requisiti DAY-1\n\n| # | Area | Stato |\n|---|---|---|\n| A1 | Boot | BLOCKER |\n');
+    const r = run(f, 'riprendi');
+    expect(r.out).not.toContain('0 su 0');
+    expect(r.out).toContain('INVENTARIO DAY-1 NON DISPONIBILE');
+    expect(r.out).toContain('tabella');
+    expect(r.code).not.toBe(0);
   });
 });
