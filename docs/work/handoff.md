@@ -43,8 +43,9 @@ Dodici PR su `dev`: ledger (#277), F5 (#278), riconciliazione (#279), `doctor`
 note vocali (#280), regola «un tool che non c'è non è una policy» (#281), F6
 (#282), quattro journey (#283–#286), tetto accettazione (#287), stato (#288).
 Inventario **36 READY · 14 BLOCKER · 6 OUT**. Revisione indipendente del `dev`
-integrato: **NOT READY** per il bivio n. 1. Manca ancora: promozione `dev →
-main` e `muffin update` (il binario installato è `e76d521` del 30/08).
+integrato: **NOT READY** per il bivio n. 1. Promozione `dev → main` fatta
+(#289, `dd38d40`) e `muffin update` eseguito sull'installazione reale: build
+`dd38d40`, gateway riavviato da launchd, `doctor` senza `fail`.
 
 **Ledger di studio:** `docs/evidence/design-study-ledger-2026-09-02.md`,
 evidence datata, non authority — si legge quando il dominio entra nel lavoro.
