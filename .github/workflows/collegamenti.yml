@@ -83,3 +83,13 @@ jobs:
       # l'exit status di `tail`.
       - name: i riferimenti risolvono
         run: npx vitest run docs/collegamenti --reporter=dot
+
+      # La mappa derivata cita i documenti per riga (`ancore.json`), e il test
+      # che controlla che ogni ancora punti ancora al suo testo girava solo in
+      # `verifica` — che i `docs/**` li ignora. Misurato il 02/09/2026: una PR
+      # di soli documenti ha spostato una riga citata di `requirements-status.md`,
+      # è passata verde qui, e le due PR di codice successive sono andate rosse
+      # su una riga che non avevano toccato. Il job che possiede «i documenti
+      # sono cambiati» possiede anche «le ancore sui documenti risolvono ancora».
+      - name: le ancore della mappa risolvono
+        run: npx vitest run docs/derived/architecture-map --reporter=dot
