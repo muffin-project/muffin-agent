@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { trascrivi } from './trascrivi.js';
+import { MODELLO_MANCANTE, prerequisitiTrascrizione, RIMEDIO_FFMPEG, RIMEDIO_WHISPER, trascrivi } from './trascrivi.js';
 
 /**
  * La voce dell'owner trascritta in casa, e cosa succede quando non si può.
@@ -187,5 +187,46 @@ describe('il WAV convertito non resta in giro', () => {
     });
     expect(cartella).not.toBe('');
     expect(existsSync(cartella)).toBe(false);
+  });
+});
+
+describe('i prerequisiti si possono chiedere prima che arrivi una nota vocale', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'muffin-prereq-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('con niente installato dice le tre cose che mancano, con gli stessi rimedi di trascrivi', () => {
+    const esito = prerequisitiTrascrizione({ whisperModel: join(dir, 'ggml-base.bin') }, dir);
+    expect(esito.map((x) => x.ok)).toEqual([false, false, false]);
+    const rimedi = esito.map((x) => (x.ok ? '' : x.rimedio));
+    expect(rimedi[0]).toBe(RIMEDIO_FFMPEG);
+    expect(rimedi[1]).toBe(RIMEDIO_WHISPER);
+    expect(rimedi[2]).toBe(MODELLO_MANCANTE);
+    expect(esito[0]).toMatchObject({ why: 'ffmpeg non è installato (ffmpeg non è nel PATH)' });
+  });
+
+  it('trova i binari lungo il PATH che gli si dà, e il modello sul disco', () => {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    const modello = join(dir, 'ggml-base.bin');
+    writeFileSync(modello, '');
+    const esito = prerequisitiTrascrizione({ whisperModel: modello }, `${join(dir, 'vuota')}:${bin}`);
+    expect(esito).toEqual([
+      { cosa: 'ffmpeg', ok: true, dove: join(bin, 'ffmpeg') },
+      { cosa: 'whisper.cpp', ok: true, dove: join(bin, 'whisper-cli') },
+      { cosa: 'modello whisper', ok: true, dove: modello },
+    ]);
+  });
+
+  it('un binario dato per percorso si guarda lì, non nel PATH', () => {
+    const mio = join(dir, 'whisper-mio');
+    writeFileSync(mio, '');
+    const esito = prerequisitiTrascrizione({ whisperBin: mio, whisperModel: join(dir, 'no.bin') }, '');
+    expect(esito[1]).toEqual({ cosa: 'whisper.cpp', ok: true, dove: mio });
+    expect(esito[0]).toMatchObject({ ok: false });
   });
 });
