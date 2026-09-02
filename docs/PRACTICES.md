@@ -108,6 +108,31 @@ Then use the smallest evidence that can falsify the claim:
 Do not run a larger suite merely because it exists. Do not skip a production
 path merely because a unit test is green.
 
+## Repair at the lowest layer that removes the class
+
+**Trigger:** fixing a defect, especially one already seen before.
+
+Owner directive, 2026-08-15, restated after the 2026-08-17 no-framework
+correction: repair at the **lowest semantic layer that makes the invalid state
+unrepresentable**, not at the widest layer you can plausibly redesign.
+
+```text
+line -> function -> contract between modules -> type/schema -> architectural boundary
+```
+
+Stop at the first level where the defect can no longer be expressed. Climb one
+level only when the lower repair would leave the same class of invalid state
+representable, recurrent, or structurally likely. A `void`-returning delivery
+that cannot say "not delivered" is a signature problem, not three call-site
+problems; an unreadable source that becomes `[]` is a representation problem,
+not a `catch` problem.
+
+Two occurrences justify **investigating** a common root, not building an
+abstraction. A wider refactor is not more "root" because it is wider: "root"
+means the smallest form that fails by itself — an exhaustive `switch`, a type
+that forces the caller to handle the outcome, a mandatory sink in the
+signature — instead of one that depends on someone remembering.
+
 ## Mechanise repeated or load-bearing rules
 
 **Trigger:** the same mistake happens twice, or violating a rule would create a

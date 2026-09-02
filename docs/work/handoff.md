@@ -55,17 +55,6 @@ lì.
 sessione, 44 fatti attivi su 83 `asked_to`/`asks_to`. Il tetto dei tool **non** è
 più il problema (`0d519cb`).
 
-## F5 — decisione owner non ancora entrata
-
-La direttiva del 15/08 «si ripara alla radice» è stata tolta da
-`ORCHESTRATION.md` il 19/08 senza riospitarla. Casa decisa: `PRACTICES.md`, con
-una **micro-slice sua** — una slice che sposta quel file non la porta con sé.
-Semantica: *repair at the lowest semantic layer that eliminates the class of
-failure, not at the widest layer you can plausibly redesign*. Scala `riga →
-funzione → contratto di modulo → tipo/schema → confine architetturale`; si sale
-**solo** se una riparazione più locale lascerebbe la stessa classe di stato
-invalido rappresentabile. Originale: `git show 451cd916:docs/ORCHESTRATION.md`.
-
 ## Aperto, non bloccante
 
 **Prossimo grosso:** dichiarare i **permessi** nel prompt. Oggi il kernel
