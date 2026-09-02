@@ -436,8 +436,8 @@ export function buildRuntime(
   // `denyRead` names every place a secret can be, which is more than one now.
   // The list was `[p.secrets]` while ADR-0030 required `cwd` to be the repo —
   // because that is where the gitignored `.env` with the model key lives — and
-  // `fs.read` is low risk with no `maxTaint`, so its ceiling is
-  // `defaultMaxTaint.low`, which `rot/policy.json` sets to 3. In an owner turn
+  // `fs.read` sits on the `context` effect row, whose ceiling is 3
+  // (ADR-0053; `defaultMaxTaint.low`, also 3, before it). In an owner turn
   // that had already taken one tier-3 tool result (the fetch-then-act pattern
   // the threat model calls *"il più comune, e va chiuso"*), `fs_read(".env")`
   // returned the provider key in plaintext. Not exploitable on the owner's

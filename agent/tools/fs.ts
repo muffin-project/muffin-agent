@@ -87,9 +87,10 @@ export const DISK_TIER: TrustTier = 2;
 
 export const fsCapabilities: CapabilityDecl[] = [
   /**
-   * `fs.read` states no `maxTaint`, so its ceiling is `defaultMaxTaint.low` —
-   * 3 in the shipped `rot/policy.json`. That was examined on its own merits
-   * (ADR-0039) and left alone, which is a decision and not an omission.
+   * `fs.read` states no `maxTaint`, so its ceiling is its effect row's:
+   * `context`, which is 3 (ADR-0053; it was `defaultMaxTaint.low`, also 3,
+   * until then). That was examined on its own merits (ADR-0039) and left
+   * alone, which is a decision and not an omission.
    *
    * **Why not 1.** `web_search` and `sys.http` both carry 3 with a recorded
    * reason: the first result taints the turn to 3, so a lower ceiling would
@@ -119,9 +120,11 @@ export const fsCapabilities: CapabilityDecl[] = [
    * readable there again, this argument stops holding and the number has to
    * be revisited — that, and not the taint value, is the thing to watch.
    *
-   * Deliberately *not* pinned to 3 in the declaration: pinning would override an
-   * owner who lowered `defaultMaxTaint.low` in `rot/policy.json`, and the file's
-   * one legitimate direction is tightening (`core/policy/matrix.ts`).
+   * Deliberately *not* pinned to 3 in the declaration: pinning would override
+   * an owner who tightened the `context` row in `rot/policy.json`, and the
+   * file's one legitimate direction is tightening (`core/policy/matrix.ts`).
+   * Since ADR-0053 a pin cannot widen anyway — the kernel takes the stricter of
+   * row and pin — so a pin here would be inert as well as wrong.
    */
   {
     id: 'fs.read',
