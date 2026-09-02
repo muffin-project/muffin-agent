@@ -98,7 +98,64 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'persona: the installed persona.md/voice.md reach the real system prompt in canonical order (persona, identity, voice), and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
   ),
   verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
-  verde('A8', 'backup: copying the home directory and restoring it keeps memory findable'),
+  // New (slice/journey-lifecycle): the row was BLOCKER only for a missing
+  // scenario — `muffin config` is read-only by design (ADR-0036,
+  // `cli/config.ts:7,22-37`) and the mechanism (`listConfigKnobs`, `muffin
+  // rot reseal`) already existed. Proves both halves of ADR-0036's split on
+  // the real binary: an unsealed knob (`models.main` in `config.json`)
+  // changes what the provider actually receives with no reseal in between,
+  // and a sealed knob (`rot/budgets.json`) changes what the binary *does*
+  // (a hand-edited cap of 0 stops a turn) before `muffin rot reseal`, which
+  // is what stops `doctor` from calling the edit tampering — never a
+  // precondition for the value binding.
+  verde(
+    'A4',
+    'config: an unsealed knob (config.json) binds with no reseal, a sealed knob (rot/budgets.json) binds before reseal too, and `muffin rot reseal` is what clears doctor — all three witnessed by the real binary and `muffin config --json`',
+  ),
+  // New (slice/journey-lifecycle): `muffin update` (`cli/update.ts`) exists
+  // (9f56484, 26/08) but had no acceptance scenario. `cmdUpdate` gives a
+  // spawned `muffin update` no way to point at anything other than the real
+  // git checkout (`findCheckoutRoot`'s own docstring walks to the MAIN
+  // worktree) and the real system bin directories — running it as a real
+  // child process from this suite would mutate the actual repository this
+  // agent runs from. So this exercises `runUpdate` — the exact function
+  // `cmdUpdate` calls with only argv-parsing on top — redirected at only the
+  // two inputs its own doc comments name as the test seam (`moduleDir`,
+  // `bindirs`); `git`, `npmCi`, `smokeTest`, `readNewSchemaVersion` and
+  // `backup` are all the real defaults, running for real against a real
+  // throwaway checkout+origin, and `backup` runs against the real, populated
+  // `$MUFFIN_HOME` the real spawned binary built earlier in the same
+  // scenario. Does not exercise `cmdUpdate`'s own argv parsing or its
+  // interactive restart prompt, which carry no logic of their own.
+  verde(
+    'A6',
+    'update: a validated backup is taken before the launcher swap, and content written before the update is still there after — the real mechanism, redirected only at the checkout root and the bindirs',
+  ),
+  // New (slice/journey-lifecycle): `rebuildTable`/`SchemaAheadError` were
+  // proven at the unit level (RETURN S2); the acceptance gap was that no
+  // scenario ran the real binary against a real, POPULATED database with a
+  // migration actually pending — `install()` alone stamps every migration
+  // fresh (`stampFresh`) and never runs an `up()`. Rewinds a real database's
+  // `schema_version` stamp (never its data) to simulate a pre-migration
+  // install, lets the real binary discover and run the pending migration on
+  // its own next boot, and asserts rows survive, the migration's own
+  // backfill actually took effect (not just "the column exists"), and a
+  // database stamped ahead of the code's own version is refused before
+  // anything is written. `MIGRATIONS` today has no `rebuildTable`-based
+  // entry (only additive `ALTER TABLE`), so the CHECK-widening escape hatch
+  // stays unreached by this scenario — see its own comment.
+  verde(
+    'A7',
+    "migration: a real additive migration runs against a real populated database on the binary's own boot, rows survive and the migration's backfill is actually active, and a database stamped ahead of the code refuses before writing",
+  ),
+  // Riscritto (slice/journey-lifecycle, riconciliazione 02/09): la versione
+  // precedente copiava la home con `cpSync` — provava il filesystem, non i
+  // verbi. Ora esercita `muffin backup`/`muffin restore` (`cli/backup.ts`)
+  // per davvero: il file di backup dichiarato esiste ed è quick_check-ato
+  // indipendentemente, il contenuto scritto DOPO il backup sparisce dal
+  // restore (sostituisce, non aggiunge) e la copia-di-cortesia che
+  // `restoreFrom` mette da parte esiste sul disco.
+  verde('A8', 'backup: `muffin backup` and `muffin restore` — a real snapshot, replacing (not merging) the live database, memory findable after'),
   verde(
     'A9',
     'setup locale: `init --local` builds a second, throwaway home that reuses a persisted secret through the same chain — never a copy — and refuses a directory that is or contains the real home',
@@ -323,14 +380,20 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
-  // Narrower than E3's own question ("posso ricostruire cosa è successo?") —
-  // it does not promote the row past the acceptance-scenario gap the DAY-1
-  // requirements inventory
-  // still names for it. What it proves is the P34-2 half ADR-0048 closes: a
-  // tool result that happens to contain a secret-shaped string never reaches
-  // `turn_tool_calls.content` in the clear, through the real binary and a
-  // real home database, not a unit-level fake.
-  verde('E3', 'tracing: a tool result that looks like a secret is redacted before it reaches the durable record'),
+  // Extended (slice/journey-lifecycle): still narrower than E3's own full
+  // question in one respect (it does not exercise every span shape the row
+  // could name), but now covers both halves the row's BLOCKER text asked
+  // for: the P34-2 secret-redaction half ADR-0048 closes (a tool result that
+  // happens to contain a secret-shaped string never reaches
+  // `turn_tool_calls.content` in the clear) AND reconstructing an arbitrary
+  // turn via `muffin trace turn <id>`/`muffin trace grep` — asserted as
+  // isolation (the reconstruction of turn B never shows turn A's tool call,
+  // and vice versa), not merely "the command printed something". One
+  // scenario, not two: `report.ts`'s manifest is 1:1 per row.
+  verde(
+    'E3',
+    'tracing: a tool result that looks like a secret is redacted before it reaches the durable record, and an arbitrary turn is reconstructed — and only that turn — via `trace turn`/`trace grep`',
+  ),
   // E4 is this suite's own row ("acceptance test reali, non solo unit?") —
   // giving it a scenario would mean the acceptance mechanism registering a
   // test of itself, which proves nothing a passing suite does not already
