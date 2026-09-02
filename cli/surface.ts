@@ -311,6 +311,18 @@ export function cmdSurfaceDisable(home: string, id: string): number {
  * risponderebbe non-ok, cioè «non so»: si trascrive in casa, che è il ramo
  * conservativo.
  */
+/**
+ * A gateway log line carries its time.
+ *
+ * `gateway.err` recorded only failures and never dated them: it said *how
+ * many* times Telegram polling failed, never *for how long* — and deducing a
+ * duration from that file cost nineteen hours of misdiagnosis once (handoff,
+ * 2026-08-30). One prefix, one place, for every surface that logs here.
+ */
+export function rigaDiLog(line: string): void {
+  process.stderr.write(`\r${new Date().toISOString()} ${line}\n`);
+}
+
 function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
   const audio = runtime.config.audio;
   const modello = audio?.whisperModel ?? paths(home).whisperModel;
@@ -340,7 +352,7 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
  * gateway perde la domanda e il lavoro dietro.
  *
  * **Cosa mostra.** L'azione concreta e il taint del turno — i due fatti che
- * `M5-BIS` D12 chiede per non fare teatro: «approvi sys.shell?» non è una
+ * DAY-1 requirement D12 chiede per non fare teatro: «approvi sys.shell?» non è una
  * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
  * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
  * quello che è.
@@ -588,7 +600,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: (line) => process.stderr.write(`\r${line}\n`),
+          log: rigaDiLog,
         });
 
         // Registrato prima di far partire il connettore: un turno che chiede
@@ -683,7 +695,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: (line) => process.stderr.write(`\r${line}\n`),
+          log: rigaDiLog,
         });
 
         // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
@@ -754,7 +766,7 @@ export function connectSurfaces(
 }
 
 /**
- * Registers `send_file` (M5-BIS B14) against the registry `connectSurfaces`
+ * Registers `send_file` (DAY-1 requirement B14) against the registry `connectSurfaces`
  * just built.
  *
  * Separate call, not folded into `connectSurfaces`, for the reason `attachMcp`

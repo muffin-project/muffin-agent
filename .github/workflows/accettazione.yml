@@ -38,9 +38,9 @@
 # **secondo** gate del job, non solo un log informativo: fallisce anche su una
 # riga `READY` dell'inventario senza uno scenario, o con uno scenario ancora
 # `atteso-rosso` — "pronta" e "provata rossa apposta" non possono essere vere
-# insieme (mandato DAY-1 §4.9). Conseguenza nota, non silenziosa: oggi restano
+# insieme (readiness-criteria.md#day-1-ready). Conseguenza nota, non silenziosa: oggi restano
 # sette righe già `READY` senza scenario qui (B14, C2, C3, C6, C7, D4, D6 —
-# dettaglio in `docs/blueprint/M5-BIS.md`), che un'altra slice in corso
+# dettaglio in `docs/work/day1/requirements-status.md`), che un'altra slice in corso
 # (`slice/triage-day1`) riclassifica; finché non è integrata questo step resta
 # rosso su `dev` **per verità, non per rottura** — vedi la PR che ha introdotto
 # questo trigger (#54).
@@ -76,7 +76,13 @@ permissions:
 jobs:
   accettazione:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Dieci e non cinque, misurato il 02/09/2026: con le journey DAY-1 (#283,
+    # #285, #286) la suite passa 40/40 e chiude a 5:03 — un minuto sopra il
+    # tetto, che GitHub segnala come `cancelled`, non come rosso. Tre PR verdi
+    # nel log sono state «cancellate» per questa ragione e nessuna per un
+    # difetto. Il tetto resta: un run che si appende deve morire; deve solo
+    # essere più alto della suite che protegge.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

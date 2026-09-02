@@ -73,7 +73,7 @@ export type ComposeAbsence = (a: Absence) => Promise<Composed>;
  * It is a **burst limiter, not a rate limit**: it bounds what you see in one
  * run, not in a week, and nothing bounds how often the runs happen. Three is a
  * design assumption, not a citable number — the research found the "3-5 a day"
- * in circulation has no primary source (`research/proattivita-quando-parlare.md`
+ * in circulation has no primary source (`docs/evidence/proattivita-quando-parlare.md`
  * §4).
  */
 const OBSERVE_LIMIT = 3;

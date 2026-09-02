@@ -19,7 +19,7 @@ import { TelegramDeliveryStore } from './delivery.js';
 /**
  * The acceptance scenario, run the way the owner runs it: a PDF sent to the bot.
  *
- * `M5-BIS.md` C7 was `BLOCKER — nessun parser`, and the sentence under it is the
+ * DAY-1 requirement C7 was `BLOCKER — nessun parser`, and the sentence under it is the
  * one this file has to falsify: *"un PDF che arriva su Telegram viene salvato e
  * mai indicizzato"*. Every layer below the connector is the production assembly
  * — `buildRuntime`, the real vault, the real tools, the real kernel. Only the

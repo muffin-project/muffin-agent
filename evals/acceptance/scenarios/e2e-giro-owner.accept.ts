@@ -47,7 +47,7 @@ import { scenario } from '../scenario.js';
  *
  * The macOS half of ring 4 is a *fallback*, and it says so at the assertion
  * that names it: this repository's production target is a Linux VPS
- * (AGENTS.md, `docs/blueprint/M5-BIS.md` A1), and only the Linux leg drives
+ * (AGENTS.md, `docs/work/day1/requirements-status.md` A1), and only the Linux leg drives
  * the unit through the platform's supervisor-verifying parser the way an
  * owner's `systemctl --user daemon-reload` eventually would. Neither leg ever
  * asks a real supervisor to hold a process up across a reboot — that is a
@@ -159,7 +159,7 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         const warnLines = doctor.out.split('\n').filter((l) => l.startsWith('! '));
         const expectedWarnNames = [
           // single-user is the mode `muffin init` seals by default — the one
-          // declared warning M5-BIS names for the owner's own, fully-run
+          // declared warning the DAY-1 requirements inventory names for the owner's own, fully-run
           // machine (detection without prevention).
           'root of trust mode',
           // No chunk has ever been indexed yet — nothing has been written to
@@ -402,7 +402,7 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           }
 
           tg.deliver(privateMessage({ id: 999, name: 'Owner' }, 'qual è il mio piatto preferito da oggi?'));
-          // By text, not by position: M5-BIS B13 means a real turn can now
+          // By text, not by position: DAY-1 requirement B13 means a real turn can now
           // also send a `sendMessage` for its own progress status line (the
           // pairing confirmation above is a real message too) before the
           // real answer, and `FakeTelegram.messages()` is a flat log of every

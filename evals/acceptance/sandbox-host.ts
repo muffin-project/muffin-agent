@@ -90,7 +90,7 @@ export function hostContiene(
  * Un `it` che ha bisogno di contenimento vero.
  *
  * Gemello di `scenario(..., nonProvabileQui)` per i file che non registrano una
- * riga M5-BIS (`b-job-script`). Stessa regola: la domanda va a bwrap, non a
+ * requisito DAY-1 (`b-job-script`). Stessa regola: la domanda va a bwrap, non a
  * Muffin, e il salto si stampa — una capability non esercitata che non lascia
  * traccia nell'output è indistinguibile da una provata.
  */

@@ -29,15 +29,15 @@ unused manifest would be another source of drift.
 | How should installable capability grow around the core? | `docs/EXTENSIONS.md` |
 | How should the owner-run project become public/community-maintained? | `docs/OPEN-SOURCE-STRATEGY.md` |
 | How do public/current/historical claims stay honest outside this repo? | `docs/PUBLIC-NARRATIVE.md` |
-| Why was an architectural choice made? | The relevant ADR in `docs/blueprint/adr/` |
-| What makes DAY-1 true? | `docs/blueprint/gate1/MANDATO-DAY-1.md` |
-| Is a DAY-1 requirement currently satisfied? | `docs/blueprint/M5-BIS.md` |
-| In which order do remaining Gate blockers get attacked? | `docs/blueprint/gate1/PERCORSO-CRITICO.md` |
-| What work is active right now? | Observed Git/PR state first, then `docs/blueprint/LAVORO.md` as the handoff. |
+| Why was an architectural choice made? | The relevant ADR in `docs/decisions/` |
+| What makes DAY-1 true? | `docs/work/day1/readiness-criteria.md` |
+| Is a DAY-1 requirement currently satisfied? | `docs/work/day1/requirements-status.md` |
+| In which order do remaining DAY-1 blockers get attacked? | `docs/work/day1/critical-path.md` |
+| What work is active right now? | Observed Git/PR state first, then `docs/work/handoff.md` as the handoff. |
 | How is repository work orchestrated and verified? | `docs/ORCHESTRATION.md`, with `BRANCHING.md`, `JUDGE.md` and `PRACTICES.md` for their scoped concerns. |
-| What evidence informed a decision? | `docs/blueprint/research/`, audits and `docs/lessons.md` |
+| What evidence informed a decision? | `docs/evidence/`, audits and `docs/evidence/lessons.md` |
 | What did the project believe or do at an earlier point? | `docs/history/` and rebuild-era material; never a claim about HEAD |
-| What does the architecture map show? | `docs/blueprint/mappa/`; a derived view, never an independent source of truth |
+| What does the architecture map show? | `docs/derived/architecture-map/`; a derived view, never an independent source of truth |
 
 There is no universal "Markdown beats code" or "latest file wins" rule. Authority
 is **typed by question**.
@@ -63,7 +63,7 @@ Muffin product idea.
 
 `ROADMAP.md` owns **phase placement only**. It does not own whether a DAY-1 row is
 READY/BLOCKER, the next implementation slice, or whether an item is already
-shipped. Those questions stay with M5, the critical path, Git and executable
+shipped. Those questions stay with the DAY-1 requirements, the critical path, Git and executable
 authority respectively.
 
 Scoped current design documents such as `EXTENSIONS.md` are loaded only when
@@ -114,7 +114,7 @@ sound.
 
 ## Operational state
 
-Operational state is deliberately small and disposable. `LAVORO.md` may name the
+Operational state is deliberately small and disposable. `docs/work/handoff.md` may name the
 current objective, live PR/slice, immediate blockers, owner decisions and next
 action. It must be possible to delete it without losing product knowledge.
 
@@ -130,7 +130,31 @@ copy that can drift.
 The current architecture map has a narrower guarantee than its old wording
 implied: its anchor machinery verifies that cited source text still resolves,
 not that every surrounding editorial sentence is semantically current. See
-`docs/blueprint/mappa/README.md` before using it for exact mechanics.
+`docs/derived/architecture-map/README.md` before using it for exact mechanics.
+
+## A name is the first thing read
+
+> **Semantic name = primary identity. Opaque ID = optional stable handle.**
+>
+> A durable artifact or requirement must be understandable without decoding its
+> historical or ordinal identifier.
+
+A path and a filename are read before anything inside them, and they are read by
+people and agents who do not know this project's history. `M5-BIS.md`, `gate1/`
+and `MANDATO-DAY-1.md` failed that test: each needed a sentence of the form «X
+means Y» before it could be used, and that sentence is a cost paid on every
+read. If a name needs one, it is probably the wrong name.
+
+The rule reaches prose, not just filenames. A comment that says «requirement B5»
+and nothing else asks the reader to go look B5 up; the same comment that says
+what B5 *is* does not. The opaque id may stay where a machine needs a stable
+key — `manifest.ts` binds acceptance scenarios to `A1`…`E7`, and `report.ts`
+parses them back out of test titles — but it is never the whole of what a human
+sentence says.
+
+Historical identifiers remain in Git, `docs/history/` and dated records, where
+they are how those documents actually referred to things. They are not the
+canonical identity of anything current.
 
 ## Progressive disclosure
 
@@ -142,7 +166,7 @@ Agents and humans should start with a map, not a manual.
 - `COGNITIVE-DESIGN.md` is loaded when a task proposes or evaluates a cognitive
   mechanism, person-model behaviour, memory salience/decay or proactivity claim.
 - `ROADMAP.md` is loaded when the question is when a deliberate deferral should
-  be reconsidered, not as a substitute for current Gate or Git state.
+  be reconsidered, not as a substitute for current DAY-1 or Git state.
 - Product strategy is not required to fix a runtime bug unless it changes the
   product claim being implemented.
 - Research and history are opt-in context, not startup context.
@@ -152,15 +176,25 @@ uses it. A hint controls discoverability, not authority.
 
 ## Rebuild-era material
 
-`docs/blueprint/README.md` classifies the mixed-generation blueprint directory.
-The root 00–12 rebuild corpus, old threat model/roadmap/contracts, BRIEF,
-critique and contract validation are lineage/evidence, not current mechanics.
+The 00–12 rebuild corpus, the old threat model/roadmap/contracts, `BRIEF`,
+`critique/` and the contract validation were archived on 2026-08-31 to
+`docs/history/rebuild-2026/`. They are lineage/evidence, never current mechanics.
+The inherited foundations corpus went to `docs/history/foundations/legacy/`.
+`docs/history/README.md` carries the old path → current home map.
 
-`docs/blueprint/STATE.md` is now a tombstone; its full chronicle is preserved in
-`docs/history/rebuild-2026/STATE-chronicle.md`.
+The architectural decisions moved to `docs/decisions/` and the durable cognitive
+corpus to `docs/knowledge/`: neither is history, and neither needed the blueprint
+name to be found. The dated evidence went to `docs/evidence/`, the design lineage
+to `docs/history/design-notes/`, and the architecture map to
+`docs/derived/architecture-map/` — derived, not merely generated.
 
-Historical files are not being mass-moved while unresolved ADR/code references
-may point to their paths. Stable lineage is more valuable than folder aesthetics.
+`docs/blueprint/` and `docs/foundations/` **no longer exist**. Both had shrunk to
+a single compatibility redirect, and on 2026-09-01 both were removed. The retired
+`docs/blueprint/STATE.md` chronicle is preserved byte-for-byte at
+`docs/history/rebuild-2026/STATE-chronicle.md`, and the inherited foundations are
+under `docs/history/foundations/`. A deleted path is not a lost path — Git keeps
+the rename, and `docs/history/README.md` carries the map. Nothing current points
+at either namespace, which is the condition that let them go.
 
 ## A change is complete when its authoritative home is not stale
 

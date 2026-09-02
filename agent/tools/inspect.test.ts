@@ -9,7 +9,8 @@ import type { RegisteredTool } from '../loop.js';
 /**
  * E7: la propriocezione è **misurata**, non ricordata.
  *
- * L'acceptance scritta nella riga M5-BIS è questa: chiedi «come funzioni e cosa
+ * L'acceptance scritta nel requisito DAY-1 E7 — sa spiegare tecnicamente come
+ * funziona e cosa sta usando adesso — è questa: chiedi «come funzioni e cosa
  * stai usando adesso», cambia una condizione reale, richiedi. Se recita lo
  * stato vecchio è rotto. Qui la condizione la cambiano le fonti iniettate — è
  * lo stesso esperimento, senza dover spegnere ollama per farlo girare in CI.

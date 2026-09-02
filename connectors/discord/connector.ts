@@ -388,7 +388,7 @@ export class DiscordConnector {
       // `sent` on a turn that has not answered — the owner would read it as the
       // answer. Discord has no `deliverTo` yet, so the resumed answer
       // is recorded `failed:` by the lane until that door exists (named in
-      // M5-BIS): the mirror of the guard
+      // requisiti DAY-1): the mirror of the guard
       // `agent/turn-lane.ts` already has on the resume path. Found by the
       // integrated judge of the dev→main promotion (#44), between #41 and #42.
       if (result.stopped === 'suspended') return;

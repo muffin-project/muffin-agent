@@ -3,7 +3,7 @@ import { startPresence } from './presence.js';
 import type { TelegramApiLike } from './api.js';
 
 /**
- * The streaming half of presence — M5-BIS B11. Rate limit, coalescing,
+ * The streaming half of presence — DAY-1 requirement B11. Rate limit, coalescing,
  * disable-on-failure and the "draft is the activity indicator" rule, each
  * against a fake `TelegramApiLike` that records every call with the fake
  * clock's own timestamp, under `vi.useFakeTimers()` so a test asserting
@@ -12,7 +12,7 @@ import type { TelegramApiLike } from './api.js';
  * Reads through the public `startPresence`/`Presence` contract only — the
  * point of most of these is that they would go red if the *wiring* inside
  * `startPresence` were undone (drop the rate limit, drop the coalescing,
- * drop the heartbeat-silencing), which is the PRACTICES §5 shape: assert the
+ * drop the heartbeat-silencing), which is the PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate shape: assert the
  * mechanism is reached, not only that its pieces compile.
  */
 

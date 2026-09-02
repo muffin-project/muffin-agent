@@ -1,7 +1,7 @@
 # Character eval — al Day 1, Muffin è riconoscibilmente Muffin?
 
 Questa suite risponde a **una** domanda (`ORCHESTRATION.md` §8): *sui modelli che
-useremo davvero nella finestra Gate 1, il carattere definito in
+useremo davvero nella finestra DAY-1, il carattere definito in
 `defaults/persona.md`, `defaults/voice.md` e `defaults/rot/identity.md` arriva
 alla risposta — o resta un file che nessuno esegue?*
 
@@ -72,4 +72,4 @@ corsa con misure perse fa uscire il comando con stato diverso da zero.
   serve che Muffin sia già riconoscibile, non che la voce sia finita.
 - Un confronto con le risposte del **vecchio** Muffin: non ne abbiamo un corpus,
   e i suoi prompt non sono un golden output — il confronto qualitativo dei testi
-  sta in `docs/blueprint/research/muffin-vecchio-vs-nuovo-identita.md`.
+  sta in `docs/evidence/muffin-vecchio-vs-nuovo-identita.md`.

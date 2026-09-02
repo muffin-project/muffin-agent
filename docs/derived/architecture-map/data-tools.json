@@ -1,0 +1,285 @@
+{
+  "registry": {
+    "file": "agent/runtime.ts:260-386 (buildRuntime, synchronous tool+capability registration); agent/runtime.ts:525-535 (attachMcp, async, called separately)",
+    "note": "buildRuntime() (agent/runtime.ts:104) builds a RegisteredTool[] array and a CapabilityId->CapabilityDecl Map at boot: fs x3 always via a single `...makeFsTools(scope)` spread (the three handlers live in agent/tools/fs.ts, not inline here), memory always, shell only if the sandbox probe succeeds, process x2 always, skill always, http always, search only if configured+keyed+allowlisted, wait and todo always (registered last, so a low maxToolsExposed profile drops them before it drops anything else), capabilities Map assembled further down. Every real entrypoint (cli/repl.ts:111, cli/run.ts:30, cli/gateway.ts:297) then calls attachMcp(runtime, home) (runtime.ts:525-535) as a second, async step that connects rot/mcp.json's servers and pushes their verified tools via Runtime.register() (runtime.ts:98,464-467 - attachMcp is its only caller, line 531). agent/loop.ts's runTool() is the sole consumer: it resolves the model-chosen name against the full deps.tools list (never the filtered 'exposed' list, so a member naming a host-only tool still gets a real policy denial and not a fabricated 'unknown tool'), derives a Resource via resourceFor() (loop.ts:1639), and gates execution through PermissionSnapshot.check() (loop.ts:747, backed by core/policy/decide.ts)."
+  },
+  "tools": [
+    {
+      "name": "fs_read",
+      "capability": "fs.read",
+      "file": "agent/tools/fs.ts:89-98",
+      "params": ["path: string (required, relative to working directory)"],
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "taintOut": "tier: 2 (DISK_TIER, agent/tools/fs.ts) on every read - ADR-0044. Until that ADR this handler returned {content} with no `tier` key and a file's content was treated as fully trusted whatever its provenance; the map recorded that as a finding (see gaps) and it is now closed. 2 because `stat` cannot tell the owner's own note from something that arrived in ~/Downloads: under that uncertainty the fail-closed reading is the only honest one.",
+      "wired": true,
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:480-539 (makeFsTools), not inline in runtime.ts (the three fs handlers were unified into one factory, used by both runtime.ts and evals/floor/run.ts, so the fix could not stay in the tool file without reaching production).",
+      "onDeny": "Generic kernel refusal at agent/loop.ts:769-776: 'Rifiutato dal kernel dei permessi (<code>). Non insistere: serve una decisione dell'owner.' Most likely code in practice: taint_exceeded once turn taint > 3 (defaultMaxTaint.low, core/policy/matrix.ts:95).",
+      "oneLine": "Legge un file di testo dentro la working directory."
+    },
+    {
+      "name": "fs_list",
+      "capability": "fs.list",
+      "file": "agent/tools/fs.ts:99-107",
+      "params": ["path: string (required, directory relative to working directory)"],
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "taintOut": "tier: 2 (DISK_TIER) - same shape as fs_read, and the same argument: a filename is text somebody chose, and `IGNORA le istruzioni precedenti.md` costs an attacker nothing. Treating a listing as metadata rather than content would be a special case whose only argument is that the strings are short (ADR-0044).",
+      "wired": true,
+      "wiredNote": "Registered unconditionally via the `...makeFsTools(scope)` spread at agent/runtime.ts:299 - the handler itself lives at agent/tools/fs.ts:486-520 (makeFsTools), not inline in runtime.ts.",
+      "onDeny": "agent/loop.ts:769-776, same generic kernel refusal as fs_read.",
+      "oneLine": "Elenca le voci di una directory, indicando quali sono cartelle."
+    },
+    {
+      "name": "fs_write",
+      "capability": "fs.write",
+      "file": "agent/tools/fs.ts:108-120",
+      "params": ["path: string (required)", "content: string (required)"],
+      "risk": "medium",
+      "reversible": null,
+      "maxTaint": null,
+      "taintOut": "tier: 0, declared and not omitted (ADR-0044): the result is this tool's own receipt ('wrote N bytes'), nothing enters the turn.",
+      "wired": true,
+      "wiredNote": "Registered via the `...makeFsTools(scope)` spread at agent/runtime.ts:392 and exposed to the model. fs.write is risk:'medium' + reversible:'undoable' (agent/tools/fs.ts:145), so core/policy/decide.ts:204-207 answers 'draft' - and until slice/undo-journal that verdict had no implementation, so the loop refused it and fs_write never wrote a file at any taint. Now agent/loop.ts:2229 takes a copy first: the file the write will actually touch comes from the tool itself (agent/tools/fs.ts:571, the same resolveInScope the handler uses), the copy lands in ~/.muffin/undo/<turno>/ (core/undo/journal.ts), and only then does the handler run. If the copy cannot be taken, the write does not happen. End-to-end proof in agent/runtime-wiring.test.ts.",
+      "onDeny": "Not a policy 'deny' - a 'draft' verdict. It executes behind a snapshot (agent/loop.ts:2229) and refuses only when the copy cannot be taken, when no journal is wired, or when the tool does not declare which file it will touch. `muffin undo` puts it back (cli/undo.ts).",
+      "oneLine": "Scrive un file dopo averne salvato una copia; `muffin undo` la rimette."
+    },
+    {
+      "name": "memory_search",
+      "capability": "memory.read",
+      "file": "agent/tools/memory.ts:32-46",
+      "params": ["query: string (required)", "limit?: number (default 8, max 20)"],
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "taintOut": "Dynamic: the max trustTier across the recalled items, 0 if none (agent/tools/memory.ts:90-93). Same rule the pre-loop's own recall applies, deliberately, per the file's docstring.",
+      "wired": true,
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:279-289. Tenant is bound from ToolContext at call time (handler: (args, ctx) => searchMemory(recallDeps, ctx.tenant, args), runtime.ts:284), not from the tool's own arguments - see gaps re: its resourceKind:'tenant' declaration.",
+      "onDeny": "agent/loop.ts:769-776 generic refusal; hostOnly:false (memory.ts:29-30) so group members are NOT blocked by principal_forbidden, unlike every host-only tool.",
+      "oneLine": "Cerca nella memoria del tenant: conversazioni, documenti, fatti appresi."
+    },
+    {
+      "name": "shell_run",
+      "capability": "sys.shell",
+      "file": "agent/tools/shell.ts:42-65",
+      "params": ["command: string (required)", "cwd?: string (relative to project root, default root)", "timeout_ms?: number (default 120000, max 600000)"],
+      "risk": "high",
+      "reversible": false,
+      "maxTaint": 2,
+      "taintOut": "tier: 2 - formatExecOutcome (agent/tools/shell.ts) returns DISK_TIER, the same constant fs_read uses, because `cat ~/Downloads/nota.md` is fs_read through another door and a door that did not taint was a way around the one that did (ADR-0044). maxTaint: 2, not the inherited defaultMaxTaint.high = 1 - owner decision, 2026-08-16 (ADR-0044, Revisione 2026-08-16): at taint 2 sys.shell is ask (one read downgrades the hardened auto-allow to a prompt instead of ending shell access outright); at taint 3 - a web/search/mcp result - it is still deny/taint_exceeded. The ceiling moved by one step, not away.",
+      "wired": true,
+      "wiredNote": "Conditionally registered at agent/runtime.ts:301-304: only if `new SandboxExecutor(guards).status().available` is true, i.e. core/sandbox/executor.ts:75-78's probeSandbox() found a real OS-level containment on this host. Absent sandbox -> absent tool entirely, never an unsandboxed fallback (ADR-0018 rule 5, per the file's own docstring lines 27-30).",
+      "onDeny": "High risk: core/policy/decide.ts:208-213 allows only if hardened && owner principal && taint===0; otherwise ask(`sys.shell on ...`). If an approver is wired (agent/loop.ts:792-816), the owner is prompted and a 'no' returns 'L'owner ha rifiutato ... Non insistere' (loop.ts:806-813). If no approver is wired (see gaps), the turn stops early with stopped:'ask' and a pending ApprovalRequest (loop.ts:112-117, 577-590) instead of a normal tool_result.",
+      "oneLine": "Esegue un comando shell non interattivo, sandboxato, senza rete."
+    },
+    {
+      "name": "process_list",
+      "capability": "sys.process.list",
+      "file": "agent/tools/process.ts:42-53",
+      "params": ["grep?: string (case-insensitive substring filter, max 200 chars)"],
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": 1,
+      "taintOut": "tier: 1 (ADR-0044) - the host's own process table, and `PS_ARGV` asks for `comm`, never `args`. Not DISK_TIER: choosing one of those strings costs an attacker code execution on the host, while planting a file in ~/Downloads costs them an email. Deliberately at (not above) the maxTaint:1 this capability pins, so listing processes does not become a once-per-turn tool.",
+      "wired": true,
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:310 via makeProcessTools() (both process tools come from one call).",
+      "onDeny": "agent/loop.ts:769-776 generic; realistically taint_exceeded once turn taint > 1 - a tight, explicit ceiling (process.ts:27) narrower than the low-risk default of 3, so this tool goes unreachable after a single tier-2+ event (e.g. one memory recall of group-authored content).",
+      "oneLine": "Elenca i processi in corso sull'host (pid, utente, comando)."
+    },
+    {
+      "name": "process_kill",
+      "capability": "sys.process.kill",
+      "file": "agent/tools/process.ts:55-69",
+      "params": ["pid: number (required, > 1)", "signal?: 'TERM'|'INT'|'HUP'|'KILL' (default TERM)"],
+      "risk": "high",
+      "reversible": false,
+      "maxTaint": null,
+      "taintOut": "tier: 0 on every path (ADR-0044): a kill is a write, and every string it can return - a refusal, a translated errno, the delivery receipt - is one this file wrote. Nothing enters the turn.",
+      "wired": true,
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:310 via makeProcessTools() (same call as process_list).",
+      "onDeny": "Same high-risk ask/refuse pattern as shell_run (core/policy/decide.ts:208-213); same approve-wiring gap applies (see gaps). Schema itself rejects pid<=1 and the agent's own pid is refused in the handler (process.ts:146-148: 'refused: <pid> is the agent process itself').",
+      "oneLine": "Invia un segnale (default TERM) a un processo dato il pid."
+    },
+    {
+      "name": "skill_read",
+      "capability": "skill.read",
+      "file": "agent/tools/skill.ts:33-45",
+      "params": ["name: string (required, max 64 chars)", "file?: string (path relative to the skill dir, max 500 chars)"],
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": 1,
+      "taintOut": "tier: 1, always (skill.ts:127) - deliberately not tier 0 and not fenced. The file's own comment (skill.ts:114-121) documents a since-fixed defect: an omitted tier let a skill body reach context at taint 0, which combined with decide.ts's hardened-high-risk branch (taint===0 required for a silent allow) meant a turn could read a skill's instructions and then reach sys.shell without the owner ever being asked. Current code sets tier:1 and this file's docstring calls skill bodies 'instructions on purpose' (owner-installed, owner-audited).",
+      "wired": true,
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:346, over whatever discoverSkills(home) found at boot (skillScan.skills); parse failures are reported as boot lines (runtime.ts:488), never silently dropped.",
+      "onDeny": "agent/loop.ts:769-776 generic.",
+      "oneLine": "Legge SKILL.md o un file allegato di una skill installata."
+    },
+    {
+      "name": "http_get",
+      "capability": "sys.http",
+      "file": "agent/tools/http.ts:41-56",
+      "params": ["url: string (required, http(s))"],
+      "risk": "medium",
+      "reversible": true,
+      "maxTaint": 3,
+      "taintOut": "3 on every real HTTP response, 2xx through non-2xx alike (fenced via core/memory/spotlight.js fence()), including after local main-content extraction (agent/tools/extract.ts) when the body is text/html or application/xhtml+xml. Transport/validation failures (bad URL, DNS SSRF veto, blocked redirect, fetch exception, unparseable redirect location) return `tier: 0` - explicitly since ADR-0044, where they used to carry no `tier` key and meant the same thing only by accident.",
+      "wired": true,
+      "wiredNote": "Registered unconditionally at agent/runtime.ts:327.",
+      "onDeny": "medium+reversible:'yes' -> core/policy/decide.ts:204-207 allow (never drafts). Extra kernel logic specific to url-resourceKind capabilities: the allowlist check (off-allowlist -> ask for the owner only if taint<=1, else deny/resource_denied); on an allowlisted host, a non-empty query string or fragment ALSO answers to paramsMaxTaint via gateParams (default 1, defaults/rot/policy.json) - above it, ask for the owner showing the whole URL, deny for anyone else, added by slice/egress-params (2026-08-17, P04-1) because until then the allowlist checked the host and nothing else. PLUS the tool's own re-check of every redirect hop against the same allowlist (http.ts, addressVeto/hop loop), because the kernel only ever saw hop 0's host.",
+      "oneLine": "Scarica un URL via GET, solo host in allowlist."
+    },
+    {
+      "name": "web_search",
+      "capability": "sys.search",
+      "file": "agent/tools/search.ts:59-72",
+      "params": ["query: string (required, max 400 chars)"],
+      "risk": "medium",
+      "reversible": true,
+      "maxTaint": 3,
+      "taintOut": "3 on a successful search including zero-hit responses ('nessun risultato ...'), fenced. `tier: 0` when the backend call itself throws - 'nothing from the provider reached us, so there is nothing to be tainted by', now stated rather than left unstated (ADR-0044).",
+      "wired": true,
+      "wiredNote": "Conditionally registered at agent/runtime.ts:333-370: only if config.search is set AND the Tavily API key resolves (readSecret) AND api.tavily.com passes hostAllowed() against rot/egress.json, checked ONCE at boot - the destination is a constant, unlike http_get's model-nominated host, so there is nothing per-call for an allowlist to hold it against (search.ts:29-47). Any registration failure degrades to a boot-line note (runtime.ts:349-351, 365-368) and the tool is simply absent, not broken. Slice/egress-params (2026-08-17) closed the gap this left: the boot-time endpoint check answers 'is this destination trusted at all', not 'did this turn's taint just choose these query bytes' - see onDeny.",
+      "onDeny": "hostOnly:true (search.ts:63) so a group member is refused principal_forbidden before risk logic even runs (core/policy/decide.ts:128-130) - unlike http_get, which a member CAN reach. For the owner: resourceKind:'query' (search.ts:61, was 'none' before slice/egress-params/P04-2) reaches decide.ts's params-gate branch (gateParams, alongside http_get's own query/fragment check) - at taint <= ctx.matrix.paramsMaxTaint (default 1, defaults/rot/policy.json) medium+reversible:'yes' allows same as before; above it the owner is asked and shown the query text (ApprovalRequest.resource, agent/loop.ts), never a silent allow.",
+      "oneLine": "Cerca sul web: restituisce titoli, URL e brevi estratti."
+    },
+    {
+      "name": "mcp_<server>_<tool>",
+      "capability": "mcp.<server>",
+      "file": "agent/tools/mcp.ts:93-114 (built per remote tool, inside buildMcpTools' loop starting at mcp.ts:61)",
+      "params": ["dynamic - def.inputSchema taken verbatim from the remote MCP server's tool definition and passed through opaquely (mcp.ts:102 comment: 'the shape is the server's contract and the provider passes it through opaquely'), hash-verified against the owner's pin before being trusted"],
+      "risk": "medium",
+      "reversible": false,
+      "maxTaint": null,
+      "taintOut": "3 always, on both success AND error results alike (mcp.ts:106-111: `tier: 3, ...(result.isError?{isError:true}:{})` are set unconditionally) - unlike http_get/web_search, even a remote tool's own error message taints the turn exactly like a success would.",
+      "wired": true,
+      "wiredNote": "NOT registered inside buildRuntime()/the synchronous tools array. Registered by attachMcp() (agent/runtime.ts:525-535), a separate async function called after buildRuntime() by every real surface - cli/repl.ts:174, cli/run.ts:47, cli/gateway.ts:363 - which loads rot/mcp.json's registry, connects each server, and for each one that VERIFIES (live tool defs hash-match the owner's pin, mcp.ts:71-88) pushes its tools via Runtime.register() (runtime.ts:464-467, called at runtime.ts:531). A server whose tools don't match its pin is SUSPENDED: zero tools, zero capability, one Italian report line naming what changed (mcp.ts:74-88), and re-approval via `muffin mcp add <server>` is the only way back. Zero MCP capabilities/tools exist until rot/mcp.json lists at least one server.",
+      "onDeny": "hostOnly:true (mcp.ts:37) so a group member is refused principal_forbidden before risk logic runs. Otherwise medium+reversible:'no' -> core/policy/decide.ts:204-207 allow (never drafts, unlike fs.write). Ceiling is DELIBERATELY inherited (maxTaint omitted) rather than pinned, per mcp.ts:20-28's own warning: pinning is the fallback ONLY if the matrix's downward-clamp (core/policy/matrix.ts `tighter()`) is ever removed.",
+      "oneLine": "Chiama un tool di un server MCP remoto, verificato."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "fs.read",
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "file": "agent/tools/fs.ts:62-69",
+      "hasTool": true,
+      "note": "1:1 with fs_read. No maxTaint declared -> inherits defaultMaxTaint.low = 3 (core/policy/matrix.ts:95), deliberately not pinned so an owner who lowers policy.json's low ceiling is obeyed (fs.ts:88-124 argues this at length: the alternative would break search-then-read-notes in one turn)."
+    },
+    {
+      "id": "fs.list",
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "file": "agent/tools/fs.ts:70-77",
+      "hasTool": true,
+      "note": "1:1 with fs_list. Same inherited ceiling as fs.read."
+    },
+    {
+      "id": "fs.write",
+      "risk": "medium",
+      "reversible": null,
+      "maxTaint": null,
+      "file": "agent/tools/fs.ts:78-85",
+      "hasTool": true,
+      "note": "1:1 with fs_write - but see gaps. reversible:'undoable' routes every call to the kernel's 'draft' verdict (core/policy/decide.ts:204-207), and agent/loop.ts always hard-refuses 'draft' because no undo journal exists (loop.ts:777-791). The capability, the tool and the registration all exist and are reachable; only the write itself never happens, for anyone, at any taint."
+    },
+    {
+      "id": "memory.read",
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": null,
+      "file": "agent/tools/memory.ts:21-30",
+      "hasTool": true,
+      "note": "1:1 with memory_search. Declares resourceKind:'tenant' + policyArgs:['query'] (memory.ts:25-26), but see gaps: agent/loop.ts's resourceFor() (loop.ts:1639) only ever constructs 'url' or 'path' resources, never 'tenant' - this declaration never reaches decide() as a real Resource. Tenant scoping is real but happens structurally instead, via ToolContext.tenant threaded straight to the handler (loop.ts, toolContext construction; memory.ts:48-52)."
+    },
+    {
+      "id": "sys.process.list",
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": 1,
+      "file": "agent/tools/process.ts:23-31",
+      "hasTool": true,
+      "note": "1:1 with process_list. Ceiling explicitly pinned to 1, narrower than the low-risk default of 3 - process.ts:18-20 states why: 'the matrix row for host processes denies everything at taint >=2, so the list capability narrows its ceiling explicitly.'"
+    },
+    {
+      "id": "sys.process.kill",
+      "risk": "high",
+      "reversible": false,
+      "maxTaint": null,
+      "file": "agent/tools/process.ts:32-39",
+      "hasTool": true,
+      "note": "1:1 with process_kill. No maxTaint declared, but high's default ceiling is already 1 (matrix.ts:95), so nothing would change by pinning it."
+    },
+    {
+      "id": "sys.shell",
+      "risk": "high",
+      "reversible": false,
+      "maxTaint": null,
+      "file": "agent/tools/shell.ts:32-40",
+      "hasTool": true,
+      "note": "1:1 with shell_run, but the tool is registered only when the sandbox probe succeeds (agent/runtime.ts:301-304) - an install without a working sandbox has a declared capability with no tool behind it at all."
+    },
+    {
+      "id": "sys.http",
+      "risk": "medium",
+      "reversible": true,
+      "maxTaint": 3,
+      "file": "agent/tools/http.ts:30-39",
+      "hasTool": true,
+      "note": "1:1 with http_get. Ceiling explicitly widened to 3 above the medium default of 1, reasoned about at length in decide.ts:32-43 (a tainted turn may still read another public page)."
+    },
+    {
+      "id": "sys.search",
+      "risk": "medium",
+      "reversible": true,
+      "maxTaint": 3,
+      "file": "agent/tools/search.ts:48-57",
+      "hasTool": true,
+      "note": "1:1 with web_search, but the tool is registered only when config.search + a resolvable API key + an egress-allowlisted endpoint all hold (agent/runtime.ts:333-370) - otherwise the capability is simply never added to the map at all (runtime.ts:384: '...(searchOn ? [searchCapability] : [])'), so this is one of the few capability declarations that is itself conditional, not just its tool."
+    },
+    {
+      "id": "skill.read",
+      "risk": "low",
+      "reversible": true,
+      "maxTaint": 1,
+      "file": "agent/tools/skill.ts:22-30",
+      "hasTool": true,
+      "note": "1:1 with skill_read. Ceiling pinned to 1 - narrower than low's default of 3 - specifically so a tainted turn cannot read a skill body and then combine it with the hardened-mode shell auto-allow (see skill_read's taintOut for the historical near-miss this closed)."
+    },
+    {
+      "id": "mcp.<server>",
+      "risk": "medium",
+      "reversible": false,
+      "maxTaint": null,
+      "file": "agent/tools/mcp.ts:30-39 (mcpCapabilityFor - a template function, not a static constant)",
+      "hasTool": true,
+      "note": "One instance PER connected+hash-verified MCP server, not a single static id - created by mcpCapabilityFor(server) inside buildMcpTools' loop (mcp.ts:91) and registered late via attachMcp()/Runtime.register(), never inside buildRuntime() itself. Zero instances exist until rot/mcp.json lists a server; a server whose live tool defs don't hash-match its pin gets zero tools AND zero capability ('SOSPESO', mcp.ts:74-88). maxTaint is deliberately left undeclared (inherits medium's default of 1) - mcp.ts:20-28 warns this must stay inherited, not pinned, unless core/policy/matrix.ts's downward-only clamp on policy.json is ever removed; a judge run once measured that exact clamp's absence turning this into a silent allow at taint 3."
+    }
+  ],
+  "gaps": [
+    {
+      "what": "fs_write is fully registered, declared, schema-valid and reachable by the model - and can never actually write a file. fs.write is declared risk:'medium' + reversible:'undoable' (agent/tools/fs.ts:78-85). core/policy/decide.ts:204-207 maps EVERY medium+undoable capability to effect:'draft'. agent/loop.ts:777-791 has no undo journal implemented, so the 'draft' case is an unconditional hard refusal (isError:true, 'il registro di undo non esiste ancora') - the fsWrite() function itself (fs.ts:257-262) is fully correct code with no caller in production.",
+      "evidence": "agent/tools/fs.ts:78-85; core/policy/decide.ts:204-207; agent/loop.ts:777-791; confirmed by tests at core/policy/decide.test.ts:117 (draft even for owner at taint 0) and agent/loop.test.ts:527-556 ('refuses a draft instead of executing it as an allow')",
+      "why_it_matters": "The only declared write capability among 'the three filesystem primitives of M1' (fs.ts:7) is inert in every build that ships today - an owner asking Muffin to save a note or edit a file gets the same fixed Italian refusal every single time, and no runtime configuration changes that outcome; only building the undo journal would."
+    },
+    {
+      "what": "The owner-approval channel (LoopDeps.approve) is implemented on exactly one of the three real surfaces. cli/repl.ts:157-164 sets runtime.deps.approve (reads a yes/no from the terminal's stdin). cli/gateway.ts - the headless daemon that hosts the Telegram connector via cli/surface.ts:295 (connectSurfaces, called identically by both repl.ts and gateway.ts, and now also the source of both the turn lane's delivery door and the scheduler's SurfaceRegistry) - never sets it anywhere in the file. cli/surface.ts:344 builds TelegramConnector with `loop: runtime.deps` as-is, no override.",
+      "evidence": "agent/loop.ts:172 (Approver is optional on LoopDeps); agent/loop.ts:798-803 (no approver -> throw ApprovalRequired, turning into stopped:'ask' at loop.ts:577-590 with the text 'Su questa superficie non posso chiederla.'); cli/repl.ts:157-164 (the only .approve assignment found in cli/ or agent/, via grep); cli/gateway.ts (zero occurrences of 'approve'); connectors/telegram/connector.ts:307-317 (runs the turn, forwards only result.text to the chat, never reads result.pending)",
+      "why_it_matters": "cli/run.ts:96-113 treats a missing approval channel as a deliberate, documented design for a one-shot script ('Headless has no channel by design', exits 3 and tells the operator to relaunch interactively) - but cli/gateway.ts is not a script, it is the always-on daemon meant to host Telegram for ongoing use. On that surface sys.shell and sys.process.kill are permanently un-approvable for the owner too, not just group members: there is no code path today that can turn their 'ask' verdict into an 'allow' outside a foreground `muffin` terminal session, and the turn only ever reports this politely in the chat rather than at boot."
+    },
+    {
+      "what": "CLOSED by ADR-0044 (2026-08-15). WAS: five of the ten static tool handlers never set ToolOutcome.tier at all - fs_read, fs_list, shell_run (formatExecOutcome), process_list and process_kill all returned a plain {content}, and agent/loop.ts raised taint only when outcome.tier was present, so none of the five could ever raise the turn's taint. NOW: `tier` is a REQUIRED field on ToolOutcome, so the omission is a compile error rather than a silent zero, and the loop raises unconditionally. fs_read/fs_list/shell_run carry DISK_TIER = 2, process_list carries 1, process_kill and the pure-error paths carry an explicit 0.",
+      "evidence": "docs/decisions/0044-il-disco-non-ha-provenienza.md; agent/loop.ts (`tier: TrustTier` required, `snapshot.raiseTaint(outcome.tier)` unconditional); agent/tools/fs.ts (DISK_TIER, makeFsTools); agent/read-then-egress.test.ts (the chain, measured red first); agent/runtime-wiring.test.ts (the same chain through buildRuntime)",
+      "why_it_matters": "This map found it and could not tell whether it was a decision or an omission - and it was worse than either: fs.ts's own long comment argued its high taint ceiling by leaning on the egress gate ('off-allowlist above taint 1 is DENY, never ask'), and that gate reads the turn's taint, which the read did not raise. The security argument written in the file depended on a property the file did not produce. Measured before the fix: fs_read of an injected file, then http_get to an off-allowlist host, came back as an `ask` the owner approved and the fetch ran. The cost of the fix is stated and deliberate: a turn that has read from disk can no longer act on the host (shell, skill_read, process, mcp all become taint_exceeded), which is threat model 03 section 3's own row applied to a context that swallowed unprovenanced bytes."
+    },
+    {
+      "what": "memory.read declares resourceKind:'tenant' and policyArgs:['query'] (agent/tools/memory.ts:25-26), and the Resource type has a matching {kind:'tenant', value: TenantId} variant (core/policy/types.ts:40-44) - but agent/loop.ts's resourceFor(), the only function that turns a capability declaration plus call args into a kernel-facing Resource, special-cases only 'url', 'path' and 'query' and returns {kind:'none'} for anything else (agent/loop.ts:2549-2565). No 'tenant' Resource is ever constructed by any code path read in this repo.",
+      "evidence": "agent/tools/memory.ts:25-26; core/policy/types.ts:40-44; agent/loop.ts:2553 (`if (!decl || (decl.resourceKind !== 'url' && decl.resourceKind !== 'path' && decl.resourceKind !== 'query')) return {kind:'none'}`)",
+      "why_it_matters": "Reading the declaration alone, it looks like the kernel checks the tenant resource per call the way it checks 'url' against the egress allowlist (decide.ts:155-193) - it does not; core/policy/decide.ts has no branch on resource.kind==='tenant' at all. Real tenant scoping for memory_search does hold, but entirely outside decide(), via ToolContext.tenant threaded straight into the handler (loop.ts, toolContext construction; memory.ts:48-52) - which is safe today only because that wiring is correct, not because the declared resourceKind is doing any enforcement."
+    }
+  ]
+}

@@ -37,7 +37,23 @@ import type { AddressInfo } from 'node:net';
 export type FakeUpdate = Record<string, unknown>;
 
 /** One outbound call the binary made, in order. */
-type SentCall = { method: string; payload: Record<string, unknown> };
+type SentCall = {
+  method: string;
+  payload: Record<string, unknown>;
+  /**
+   * Only set for a `multipart/form-data` call (`sendDocument`, B14): the file
+   * parts, keyed by their form field name (`document`). `size` is the real
+   * byte length of the part body, not a string length — see `parseMultipart`.
+   */
+  files?: Record<string, { filename: string; size: number }>;
+  /**
+   * Only set for `sendMessage`/`sendMessageDraft` (D12, B13): the fresh id
+   * this server invented for the message it just created. `editMessageText`/
+   * `deleteMessage` need none — they already name the id they mean as
+   * `payload['message_id']`, the same field a real Bot API call carries.
+   */
+  messageId?: number;
+};
 
 export type FakeTelegram = {
   /** `https://127.0.0.1:<port>` — what `--api-base` is given. */
@@ -67,8 +83,59 @@ export type FakeTelegram = {
   sent(): SentCall[];
   /** Only `sendMessage`, the ones a person would actually read. */
   messages(): Array<{ chatId: number; text: string }>;
+  /** Only `sendDocument` (B14) — the file, its byte length, and where it went. */
+  documents(): Array<{ chatId: number; filename: string; bytes: number; caption?: string }>;
   close(): Promise<void>;
 };
+
+/**
+ * The one place a `multipart/form-data` body (`sendDocument`, B14) gets read.
+ *
+ * Minimal on purpose — this is a test double for one real caller
+ * (`connectors/telegram/media.ts#sendDocument`, built with the platform's own
+ * `FormData`/`Blob`), not a general-purpose multipart library: it knows the
+ * shape that caller produces (plain string fields, at most one file field per
+ * call) and nothing else. `raw` must be the exact bytes the request carried —
+ * concatenated `Buffer`s, never `toString()`'d first, or a binary file part
+ * would already be corrupted before this ever runs.
+ */
+function parseMultipart(
+  raw: Buffer,
+  contentType: string,
+): { fields: Record<string, string>; files: Record<string, { filename: string; size: number }> } {
+  const fields: Record<string, string> = {};
+  const files: Record<string, { filename: string; size: number }> = {};
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) return { fields, files };
+  const delimiter = Buffer.from(`--${boundary}`);
+
+  let start = raw.indexOf(delimiter);
+  while (start !== -1) {
+    const next = raw.indexOf(delimiter, start + delimiter.length);
+    if (next === -1) break; // the closing `--boundary--` ends the walk, not a part of its own
+    let partStart = start + delimiter.length;
+    if (raw[partStart] === 0x0d && raw[partStart + 1] === 0x0a) partStart += 2; // the CRLF right after the marker
+    let partEnd = next;
+    if (raw[partEnd - 2] === 0x0d && raw[partEnd - 1] === 0x0a) partEnd -= 2; // the CRLF right before the next marker
+    if (partEnd > partStart) {
+      const part = raw.subarray(partStart, partEnd);
+      const headerEnd = part.indexOf('\r\n\r\n');
+      if (headerEnd !== -1) {
+        const headerText = part.subarray(0, headerEnd).toString('utf8');
+        const body = part.subarray(headerEnd + 4);
+        const name = /name="([^"]*)"/.exec(headerText)?.[1];
+        const filename = /filename="([^"]*)"/.exec(headerText)?.[1];
+        if (name !== undefined) {
+          if (filename !== undefined) files[name] = { filename, size: body.length };
+          else fields[name] = body.toString('utf8');
+        }
+      }
+    }
+    start = next;
+  }
+  return { fields, files };
+}
 
 /**
  * `getUpdates` is a **long poll**: the real server holds the connection open
@@ -90,18 +157,32 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   let nextMessageId = 1000;
 
   const server: Server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
+    // `Buffer`s, not a string: `sendDocument` (B14) carries real file bytes in
+    // a `multipart/form-data` body, and `body += chunk` (the old shape here)
+    // ran every chunk through the default utf8 `toString()` on the way in —
+    // silently corrupting anything that was not text before this function
+    // ever saw it.
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
     });
     req.on('end', () => {
       // `<base>/bot<token>/METHOD` — the shape is Telegram's, unchanged.
       const method = (req.url ?? '').split('/').pop() ?? '';
+      const raw = Buffer.concat(chunks);
+      const contentType = String(req.headers['content-type'] ?? '');
       let payload: Record<string, unknown> = {};
-      try {
-        payload = body ? (JSON.parse(body) as Record<string, unknown>) : {};
-      } catch {
-        payload = {};
+      let files: Record<string, { filename: string; size: number }> | undefined;
+      if (contentType.toLowerCase().startsWith('multipart/form-data')) {
+        const parsed = parseMultipart(raw, contentType);
+        payload = parsed.fields;
+        if (Object.keys(parsed.files).length > 0) files = parsed.files;
+      } else {
+        try {
+          payload = raw.length > 0 ? (JSON.parse(raw.toString('utf8')) as Record<string, unknown>) : {};
+        } catch {
+          payload = {};
+        }
       }
 
       const ok = (result: unknown): void => {
@@ -138,14 +219,23 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         return;
       }
 
+      // `sendMessage`/`sendMessageDraft` *create* a message — the id is the
+      // server's own invention, and this is the only place it is ever known.
+      // `editMessageText`/`deleteMessage` *address* an existing one — the
+      // caller already names it as `message_id` in the request payload
+      // (`connectors/telegram/api.ts`), so it needs no manufacturing here; a
+      // scenario reads it straight off `sent()[i].payload['message_id']`.
+      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' ? nextMessageId++ : undefined;
+
       // Everything else is an outbound effect, and it is recorded before it is
       // answered: a scenario asserting "Muffin never sent this" needs the
       // record to exist even when the reply is uninteresting.
-      calls.push({ method, payload });
+      calls.push({ method, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
 
       if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft') {
         ok({
-          message_id: nextMessageId++,
+          // An edit echoes the id it was given; a create hands out the fresh one.
+          message_id: createdId ?? Number(payload['message_id'] ?? 0),
           date: Math.floor(Date.now() / 1000),
           chat: { id: Number(payload['chat_id'] ?? 0), type: 'private' },
           text: String(payload['text'] ?? ''),
@@ -179,6 +269,15 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       calls
         .filter((c) => c.method === 'sendMessage')
         .map((c) => ({ chatId: Number(c.payload['chat_id'] ?? 0), text: String(c.payload['text'] ?? '') })),
+    documents: () =>
+      calls
+        .filter((c) => c.method === 'sendDocument')
+        .map((c) => ({
+          chatId: Number(c.payload['chat_id'] ?? 0),
+          filename: c.files?.['document']?.filename ?? '',
+          bytes: c.files?.['document']?.size ?? 0,
+          ...(typeof c.payload['caption'] === 'string' ? { caption: c.payload['caption'] as string } : {}),
+        })),
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -195,6 +294,35 @@ export function privateMessage(from: { id: number; name?: string }, text: string
       from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
       chat: { id: from.id, type: 'private' },
       text,
+    },
+  };
+}
+
+/**
+ * An inbound button press, the shape Telegram sends for `callback_query`
+ * (D12 — the ASK's Consenti/Rifiuta buttons, `cli/surface.ts`'s
+ * `approvatoreTelegram`). `message` must echo the id/chat of the real ASK
+ * message this press is answering, the way a real Telegram client would —
+ * `connectors/telegram/connector.ts#handleCallback` reads `message.chat.id`
+ * and `message.message_id` to strike the confirmation onto that same bubble.
+ */
+export function callbackQuery(
+  from: { id: number; name?: string },
+  data: string,
+  message: { messageId: number; chatId: number; text: string },
+): FakeUpdate {
+  return {
+    callback_query: {
+      id: `cbq${Math.floor(Math.random() * 1_000_000)}`,
+      from: { id: from.id, is_bot: false, first_name: from.name ?? `u${from.id}` },
+      chat_instance: '1',
+      data,
+      message: {
+        message_id: message.messageId,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: message.chatId, type: 'private' },
+        text: message.text,
+      },
     },
   };
 }

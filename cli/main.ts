@@ -355,7 +355,7 @@ async function main(rawArgv: string[]): Promise<number> {
       return 0;
     case '--version':
     case '-v': {
-      // GNU baseline: every CLI answers --version (docs/PRACTICES.md §3).
+      // GNU baseline: every CLI answers --version (docs/PRACTICES.md#prior-art-before-durable-shape).
       process.stdout.write(`muffin ${readOwnVersion()}\n`);
       return 0;
     }
@@ -461,7 +461,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     return 78;
   }
 
-  // --local (M5-BIS A9): a throwaway second home for a "fresh install"
+  // --local (DAY-1 requirement A9): a throwaway second home for a "fresh install"
   // rehearsal, resolved and guarded before anything below reads or writes
   // through it. `home` replaces every default `paths().home` call for the
   // rest of this function; when `--local` is absent it is that same default,

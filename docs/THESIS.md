@@ -278,7 +278,7 @@ continuity substrate must be able to outlive today's retrieval design.
 And it is not a promise that the current implementation already satisfies every
 sentence above. Current architecture is mapped in `docs/ARCHITECTURE.md`; current
 security boundaries in `docs/SECURITY.md`; DAY-1 proof status in
-`docs/blueprint/M5-BIS.md`.
+`docs/work/day1/requirements-status.md`.
 
 The thesis is falsifiable in use. If changing model or surface changes who the
 agent is; if accumulated history cannot survive a harness rewrite; or if months

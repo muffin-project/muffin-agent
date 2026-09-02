@@ -21,7 +21,7 @@ const ctx = (replyChannel: string | null) => toolContext({ replyChannel });
  * delivery must never read as "inviato", and the channel a file goes to must
  * be the *turn's* channel (`ctx.replyChannel`), never something the tool
  * invents or ignores. Both are wiring properties, not logic properties — the
- * kind PRACTICES §5 asks to be proven by a call that fails without the seam,
+ * kind PRACTICES.md#model-judgement-and-deterministic-contracts-stay-separate asks to be proven by a call that fails without the seam,
  * not just by a call that succeeds with it.
  */
 

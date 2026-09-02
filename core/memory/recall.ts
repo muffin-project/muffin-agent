@@ -102,7 +102,7 @@ export const EVERY_INSTANT = 'all';
  * clause false and the search comes back empty. Empty is indistinguishable from
  * *"I never knew that"* — a typo would read to the owner as amnesia, which is
  * the worst way for this to fail and the reason parsing lives at the boundary
- * (PRACTICES §4) instead of inside the query.
+ * (PRACTICES.md#parse-at-boundaries-preserve-provenance) instead of inside the query.
  *
  * `edge` resolves what a named period means as a single instant, and the two
  * answers are genuinely different:

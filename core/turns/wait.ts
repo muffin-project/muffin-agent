@@ -11,7 +11,7 @@ import { pidAlive } from '../lock/durable.js';
  * ## What a wait is, and what it is not
  *
  * `WAIT → persist the state → RELEASE execution → scheduler/event → resume`
- * (`docs/blueprint/M5-BIS.md` §2). An `await sleep()` inside the cognitive
+ * (`docs/work/day1/requirements-status.md` §2). An `await sleep()` inside the cognitive
  * process is **not** this: it is a very long async function that holds the
  * runtime, and the difference is exactly the one between a Muffin that lives
  * and a Muffin launched from a terminal. Nothing in this file sleeps.
@@ -24,7 +24,7 @@ import { pidAlive } from '../lock/durable.js';
  *  - **a time** — `wake_at`, and it is mandatory. A job with no stop condition
  *    keeps arriving, so the owner notices it; a suspended turn with no deadline
  *    is silent, holds its whole context, and nobody would ever know
- *    (`research/turno-sospendibile.md` §Domanda 3). The worse of the two, so
+ *    (`docs/evidence/turno-sospendibile.md` §Domanda 3). The worse of the two, so
  *    the deadline is not optional even when an event is also armed.
  *  - **an event** — `wait_for`, from a **closed set**. A free string here
  *    rebuilds the firehose ADR-0028 made unbuildable, and — worse for this
@@ -216,7 +216,7 @@ export function satisfied(waitFor: WaitFor, checks: BarrierChecks | ((pid: numbe
  * rather than an error.
  *
  * A deadline that killed the turn in silence would rebuild the problem this
- * primitive closes (`research/turno-sospendibile.md` §Domanda 3, second stop
+ * primitive closes (`docs/evidence/turno-sospendibile.md` §Domanda 3, second stop
  * condition): the model asked to wait, so it is the one that decides what an
  * expired wait means. It is also told **which** barrier ended the wait, because
  * "the process exited" and "you ran out of time" lead to different next moves.

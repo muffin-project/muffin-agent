@@ -1,0 +1,234 @@
+{
+  "kernel": {
+    "fn": "decide",
+    "file": "core/policy/decide.ts:92",
+    "pure": true,
+    "inputs": [
+      { "name": "principal", "type": "Principal", "note": "owner|member|system|agent — types.ts:11-24; never inferred from message content" },
+      { "name": "tenant", "type": "TenantId", "note": "types.ts:27; checked for coherence against principal at decide.ts:120-123" },
+      { "name": "capability", "type": "CapabilityId", "note": "dotted id; undeclared = deny (decide.ts:96-98)" },
+      { "name": "resource", "type": "Resource", "note": "path|url|tenant|none — types.ts:40-44; url resources are the only ones gated against the egress allowlist" },
+      { "name": "args", "type": "Readonly<Record<string,unknown>>", "note": "types.ts:67 'already validated against the tool's input schema — never raw model output'" },
+      { "name": "taint", "type": "TrustTier (0-3)", "note": "types.ts:69-70 'Recomputed at every call, never frozen for the turn'" },
+      { "name": "ctx.capabilities", "type": "ReadonlyMap<CapabilityId,CapabilityDecl>", "note": "boot-time closure input, decide.ts:20" },
+      { "name": "ctx.matrix", "type": "PolicyMatrix", "note": "boot-time closure input from rot/policy.json, decide.ts:45; POLICY_FLOOR is the compiled fallback (matrix.ts:94-102)" },
+      { "name": "ctx.budgetExhausted", "type": "(tenant:string)=>boolean", "note": "boot-time closure, decide.ts:55; sync so the kernel stays sync" },
+      { "name": "ctx.hardened", "type": "boolean", "note": "decide.ts:60; gates whether a high-risk owner call can silently allow" },
+      { "name": "ctx.safeMode", "type": "boolean|undefined", "note": "decide.ts:67; RoT-diverged flag, checked first of all" },
+      { "name": "ctx.egressAllowed", "type": "(host:string)=>boolean|undefined", "note": "decide.ts:74; ABSENT means deny-all, not allow-all" }
+    ],
+    "effects": [
+      {
+        "effect": "allow",
+        "meaning": "capability executes immediately, no confirmation or journal",
+        "whoConsumes": "agent/loop.ts:817-824 (case 'allow': break, falls into tool.handler at line 823)"
+      },
+      {
+        "effect": "ask",
+        "meaning": "owner is prompted synchronously; on a surface with no approver the turn stops and reports what it wanted instead of executing",
+        "whoConsumes": "agent/loop.ts:792-816 (calls deps.approve, or throws ApprovalRequired which runTurn turns into stopped:'ask')"
+      },
+      {
+        "effect": "draft",
+        "meaning": "threat-model spec is act-notify-undo: execute now, reversibly, tell the owner, keep an undo window (decide.ts:206 windowSeconds:300)",
+        "whoConsumes": "NOBODY executes the drafted action. agent/loop.ts:777-791 intercepts every 'draft' verdict and returns a hard refusal (isError, 'draft_unavailable') because no undo journal exists yet — the kernel's own comment at decide.ts:205-207 and the loop's comment both say so. The only capability that can ever produce 'draft' is fs.write (agent/tools/fs.ts:79-85, the sole risk:'medium'+reversible:'undoable' declaration), so fs_write cannot succeed under any principal/taint/hardened combination today — confirmed by core/policy/decide.test.ts:117."
+      },
+      {
+        "effect": "deny",
+        "meaning": "refused with a machine-readable DenyCode and free-text detail, logged",
+        "whoConsumes": "agent/loop.ts:769-776 (isError tool_result carrying decision.code)"
+      }
+    ]
+  },
+  "decisionOrder": [
+    { "n": 1, "rule": "capability must be declared (registered by some tool)", "file": "core/policy/decide.ts:95-98", "outcome": "deny no_capability" },
+    { "n": 2, "rule": "safeMode true AND risk !== 'low'", "file": "core/policy/decide.ts:103-109", "outcome": "deny safe_mode — checked before anything that could allow, on purpose" },
+    { "n": 3, "rule": "capability covered by matrix.neverAtRuntime (rot.write, rot.*)", "file": "core/policy/decide.ts:111-117", "outcome": "deny rot_violation" },
+    { "n": 4, "rule": "tenant on the request must equal tenantOf(principal)", "file": "core/policy/decide.ts:119-123", "outcome": "deny tenant_mismatch" },
+    { "n": 5, "rule": "capability.hostOnly AND principal.kind === 'member'", "file": "core/policy/decide.ts:127-130", "outcome": "deny principal_forbidden" },
+    { "n": 6, "rule": "principal.kind === 'system' AND capability covered by matrix.forbiddenForSystem (outward.*, config.ratchet)", "file": "core/policy/decide.ts:132-134", "outcome": "deny principal_forbidden — NOTE: does not check principal.kind==='agent', only 'system'" },
+    { "n": 7, "rule": "taint > ceiling, where ceiling = decl.maxTaint ?? matrix.defaultMaxTaint[decl.risk]", "file": "core/policy/decide.ts:136-143", "outcome": "deny taint_exceeded" },
+    { "n": 8, "rule": "decl.risk !== 'low' AND budgetExhausted(tenant)", "file": "core/policy/decide.ts:145-147", "outcome": "deny budget_exhausted" },
+    { "n": 9, "rule": "resourceKind === 'url': resource must actually be kind:'url' (else refuse rather than skip), host must parse, host checked against egress allowlist; off-list → ask if owner+taint<=1, else deny", "file": "core/policy/decide.ts:149-193", "outcome": "deny resource_denied OR ask(owner prompt) OR pass through" },
+    { "n": 10, "rule": "principal.kind is 'system' or 'agent' AND decl.risk === 'high'", "file": "core/policy/decide.ts:195-199", "outcome": "ask 'queued: <capability> requested by <kind>' — autonomous principals never auto-approve high risk" },
+    { "n": 11, "rule": "final switch on decl.risk", "file": "core/policy/decide.ts:201-214", "outcome": "low -> allow; medium+undoable -> draft, medium+other -> allow; high -> allow only if hardened && owner && taint===0, else ask" }
+  ],
+  "taint": {
+    "tiers": [
+      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)", "docs/history/rebuild-2026/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
+      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/history/rebuild-2026/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
+      { "tier": 2, "name": "gruppo/sconosciuti (group members) — e il disco", "sources": ["agent/loop.ts (principal.kind === 'member' ? 2 : 0, written into the record's taint column)", "agent/tools/fs.ts (DISK_TIER, ADR-0044)"], "meaning": "turn started by a non-owner group member, OR a turn that read from the local filesystem: `stat` cannot separate the owner's own note from a file a stranger sent, so an unprovenanced read lands in the same bucket as a stranger speaking" },
+      { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint, which since ADR-0044 is called unconditionally because `tier` is a required field" }
+    ],
+    "monotonic": "agent/loop.ts:942-946 — raiseTaint(tier) only assigns when tier > taint, and clears the per-turn decision cache on every raise; there is no lowerTaint anywhere in the codebase (grep confirms). types.ts:104-109 documents the PermissionSnapshot contract this implements.",
+    "maxTaintDefaults": "core/policy/matrix.ts:94-102 (POLICY_FLOOR.defaultMaxTaint = { low: 3, medium: 1, high: 1 }), mirrored verbatim in the shipped seal at defaults/rot/policy.json:4. A sealed rot/policy.json may only tighten these (core/policy/matrix.ts:162-165 tighter(), 181-185 merge()) — never raise them, even if the file says so."
+  },
+  "denyPaths": [
+    { "pattern": "~/.muffin/rot/ (p.rot)", "file": "core/rot/guards.ts:69", "enforced": true, "note": "enforced in agent/tools/fs.ts:315-345 (resolveInScope) and core/sandbox/executor.ts:118-120,139 (filesystem.denyWrite, both base and per-call config)" },
+    { "pattern": "config (p.config)", "file": "core/rot/guards.ts:71", "enforced": true, "note": "same two enforcement sites as above" },
+    { "pattern": "secrets — both ADR-0039 links: secretDir('home'), secretDir('persistent')", "file": "core/rot/guards.ts:73-74", "enforced": true, "note": "in BOTH denyWrite and denyRead (guards.ts:82-83); also fed into SandboxExecutor.denyRead" },
+    { "pattern": ".git/hooks (join(cwd,'.git','hooks'))", "file": "core/rot/guards.ts:76", "enforced": true, "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites" },
+    { "pattern": "shell dotfiles — 9 named files (.zshrc/.zshenv/.zprofile/.zlogin/.bashrc/.bash_profile/.bash_login/.profile/.kshrc) + fish config", "file": "core/rot/guards.ts:47-57,77-79", "enforced": true, "note": "named individually rather than globbed, by design (guards.ts:41-46)" }
+  ],
+  "denyPathsSummary": "5 of 5 mandatory categories from docs/history/rebuild-2026/03-threat-model.md:69 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
+  "surfaces": [
+    {
+      "name": "RoT / sigillo",
+      "file": "core/rot/verify.ts:156-213 (verify), core/rot/verify.ts:120-178 (hardeningHolds), core/rot/readers.ts:261-354 (checkRotReaders)",
+      "guards": "hash-chain (manifest.json + external anchor) over every file under rot/; two modes — hardened (refuse boot on divergence) vs single-user (degrade to safe mode); a second, independent invariant that every sealed file has a real production reader",
+      "holds": "hardened is no longer a config self-report — hardeningHolds() probes W_OK on the RoT dir, the anchor, the manifest and every sealed file, AND (P36, since a same-uid file is one same-user chmod away from writable regardless of current mode) that the owning uid differs from this process's own and no group/other write bit is set (verify.ts:120-178), wired at agent/runtime.ts:135-146 so a falsely-hardened install degrades to single-user semantics and tells the owner why. checkRotReaders (readers.ts) strips comments and imports before matching, specifically because a prior version was fooled by a docstring naming a file with no code opening it (readers.ts:204-222).",
+      "gap": "forbiddenForSystem (matrix.ts:99: outward.send/outward.*/config.ratchet) is checked only for principal.kind==='system' (decide.ts:132), never for 'agent' — this matches the threat-model's literal wording ('escluse... da system@scheduler', 03-threat-model.md:53) but is a narrower guarantee than a reader might assume; currently moot only because no outward.* capability is registered yet (grep confirms zero declarations)."
+    },
+    {
+      "name": "Vault",
+      "file": "core/vault/vault.ts:95-338",
+      "guards": "content-hash identity (hashOf, sha256) decides changed-vs-unchanged, not mtime; trust tier is inherited from the existing indexed row or from any other path with identical content, never lowered by a rename; a fixed filename/dotfile denylist keeps certain files from ever becoming indexed content, checked on the symlink-resolved real path",
+      "holds": "vault.ts:219-227 — tier = existing-row-tier ?? maxTierForContent(hash) ?? caller default, so a tier-3 file renamed or copied cannot launder down to whatever tier the next reindex call defaults to; skipReason (vault.ts:58-67) runs on realpathSync'd segments specifically so a symlink named 'appunti' pointing at ~/.ssh cannot dodge the filter by its display name; audit() (core/vault/vault.ts:420-337) independently cross-checks disk vs index and reports missing/stale/orphaned rather than trusting the incremental updater's own bookkeeping.",
+      "gap": "NEVER_CONTENT (core/vault/vault.ts:74-77) is a fixed 9-name list (id_rsa, id_ed25519, id_ecdsa, credentials, credentials.json, secrets.json, service-account.json, keyfile.json, authorized_keys) — filename-based only. A credential pasted into an ordinarily-named note (e.g. notes.md) is chunked, embedded and made recallable into any future prompt; the vault pipeline never reuses core/tracing/redact.ts's value-shape secret net, and vault.ts:26-30 explicitly documents that documents are 'never mined for facts' — but that design goal is about belief-extraction, not about secret-shaped strings reaching the embedder."
+    },
+    {
+      "name": "Sandbox",
+      "file": "core/sandbox/executor.ts:63-239, core/sandbox/probe.ts:31-179",
+      "guards": "platform-native OS sandbox (Seatbelt on macOS, bubblewrap on Linux), gated behind a probe that executes a REAL containment rather than checking for a binary; filesystem write-scope + mandatory RoT deny paths on every call; network allow-only per invocation with an empty default; rebuilt (not inherited) child environment",
+      "holds": "probe.ts:61-127 (macOS) runs a deny-all profile that must fail a read of /etc/hosts, THEN an allow-all control that must succeed — so a broken sandbox-exec binary cannot be misread as containment (the exact bug class documented at probe.ts:99-106, dated 2026-08-15 against macOS 15's exit-65 behavior); probe.ts:129-169 (Linux) runs a real bwrap --unshare-all and explicitly refuses to answer when run as root (probe.ts:130-140) because root bypasses the userns restriction and would report a false positive. executor.ts:168-178 rebuilds the child env from a 5-key allowlist plus whatever srt itself changed, so a provider API key sitting in the host's own env never rides into the sandboxed child. All of the above have executing tests, not just assertions on config shape (core/sandbox/executor.test.ts: 'a write inside the scope succeeds', 'network egress is denied by default', 'a host-env secret does not ride into the child environment').",
+      "gap": "PLATFORM SPLIT — macOS: Unix-domain-socket restriction stays on by default (no override); Linux: both baseConfig() and every per-call config set `allowAllUnixSockets: true` (executor.ts:114-115, 134) because the optional seccomp layer is off in v1 (two open upstream bugs on Ubuntu 24.04, executor.ts:112-114) — declared in the source, not silent, but it means Linux installs have a containment layer macOS installs do not need to give up. SEPARATE, LARGER GAP on both platforms: filesystem READ is not scoped at all beyond the RoT's 2-3 explicit denyRead paths (core/rot/guards.ts:81-87) — confirmed by the test's own title, core/sandbox/executor.test.ts:173 'the write scope is a write scope — reads outside it are NOT contained (declared limit)'. An approved sys.shell command (ask-gated, high risk) can read any host file the OS user running Muffin can read — e.g. ~/.ssh/id_rsa is not on any deny-read list — and return it as tool output."
+    },
+    {
+      "name": "Egress / allowlist",
+      "file": "core/net/egress.ts:41-124; kernel check at core/policy/decide.ts:149-193",
+      "guards": "allow-only hostname allowlist (exact match or single-label wildcard) evaluated by the kernel for any capability declared resourceKind:'url'; an SSRF floor (isForbiddenAddress) blocking loopback/RFC1918/link-local(incl. cloud metadata)/CGNAT/multicast/reserved and their IPv6 equivalents including v4-mapped-v6, applied by the http tool per-hop after DNS resolution",
+      "holds": "ships with an empty allow list by default (defaults/rot/egress.json:4 — 'No domain is granted by default'); off-allowlist is ASK only for the owner at taint<=1 and DENY for every other principal/taint combination (decide.ts:182-192) — a tainted context cannot nominate a new exfiltration destination, per decide.ts:149-154's own reasoning comment; agent/tools/http.ts:116-122 re-checks EVERY redirect hop against the same allowlist, not just the URL the kernel approved, closing the '302 as allowlist bypass' path; isForbiddenAddress is actually called (agent/tools/http.ts:192,203), not merely declared.",
+      "gap": "sys.shell and sys.process.* declare resourceKind:'none' (agent/tools/shell.ts:36, agent/tools/process.ts:28,37) so they never reach the kernel's egress branch at all — their only network control is the sandbox's per-call allowedDomains, which agent/tools/shell.ts:106-111 never populates (no allowHosts field passed), so shell network access is fully blocked rather than allowlisted — stricter than 'allowlist', worth noting as a mechanism difference. Separately, agent/tools/http.ts:22-24 self-declares a resolve-then-connect DNS-rebinding TOCTOU window as an accepted v1 limit."
+    },
+    {
+      "name": "Budget",
+      "file": "core/budget/budget.ts:66-152, core/budget/pricing.ts:45-89, sealed loader core/rot/budgets.ts:104-149",
+      "guards": "two independent caps — global monthly, per-tenant-per-day — read once from the sealed rot/budgets.json; the kernel refuses any non-low-risk capability once budgetExhausted(tenant) is true (decide.ts:145-147); pricing turns raw token counts into USD so exhausted() has a real number to compare",
+      "holds": "the host tenant is deliberately exempt from the daily cap (budget.ts:127-130, documented rationale: the cap exists to stop a group talking to itself, not to throttle the owner's own day) while still bound by the global monthly cap; recordSpend is called on every model response in the loop (agent/loop.ts:453-461) and its result invalidates the cached permission snapshot (agent/loop.ts:466) so a decision cached before the cap tripped cannot outlive the crossing; unknown/unrecognised models are priced at the highest known rate (pricing.ts:43,52 UNKNOWN={15,75}) so an unrecognised model trips the cap early rather than never.",
+      "gap": "core/budget/pricing.ts:74-88's own comment: on the native Anthropic adapter, cache-write tokens are undercounted — billed at a fraction of the input rate against a true higher cost, because on that adapter `inputTokens` excludes written tokens (true only on the OpenRouter-compat wire). The file's stated safety invariant ('being wrong here is not dangerous ... an unknown model is charged at the highest known rate') is inverted on this one code path; the comment says the fix is filed, not smuggled in — i.e. still open."
+    },
+    {
+      "name": "Tracing / redaction",
+      "file": "core/tracing/redact.ts:1-95, core/tracing/tracer.ts:24-104",
+      "guards": "two independent filters applied to every span's attributes at end(): a field-NAME filter that segments camelCase/snake_case/kebab-case into words and matches 11 whole secret-words (key, token, secret, password, passwd, credential, credentials, auth, bearer, cookie, session), and a value-SHAPE filter matching 7 known credential regexes (OpenAI/Anthropic/GitHub/Slack/Google key formats, JWT, PEM)",
+      "holds": "redaction is invoked unconditionally inside SpanHandle.end() (tracer.ts:94: `attributes: redactAttributes(current)`), so no caller can forget to redact a span; the word-splitter fixes a real, shipped hole documented in the file's own header — the previous delimiter-based regex caught `api_key` but not `apiKey`/`authToken`/`accessToken`/`clientSecret` for the module's entire life with zero tests (redact.ts:11-24), now covered by redact.test.ts.",
+      "gap": "CLOSED (ADR-0048, 2026-08-17, P34-2): redactText is now also called from agent/loop.ts's runTool — agent/loop.ts:2004 (success path, before recordOutcome/sessions.append/the returned tool_result) and agent/loop.ts:2044 (the catch path's error message) — so core/session/store.ts's `append` and core/turns/store.ts's `endToolCall`/`finish` receive already-redacted content, not raw. Verified by reading both sinks: neither transforms content again, so redacting once upstream is sufficient (agent/secret-redaction.test.ts reads the actual SQLite row and the actual JSONL line, not the in-memory value; mutation-verified: removing either redactText call turns the durable-record assertions red). redact.ts itself gained a secret-reference passthrough (`secret://<name>`, redact.ts:90, never redacted even under a secret-flavoured field name) and three labelled shapes — Bearer header, key=value/JSON pairs, Telegram bot token (redact.ts:110-121) — measured against a 15-item false-positive corpus (redact.test.ts), zero hits. Declared residual, not closed by this change: this whole mechanism is class-3, best-effort text matching on content that merely *looks* like a secret — it is not the guarantee for a secret the backend actually knows. That guarantee is structural and separate: readSecret (core/config/config.ts) has a fixed, enumerated set of callers (core/config/secret-boundary.test.ts), none of which is a tool handler, so a real secret never reaches this redaction path in the first place. `muffin init --api-key` remains a declared, unfixed gap: the key is visible in argv/`ps aux`/shell history at that one entry point (ADR-0048 §Cosa NON copre)."
+    },
+    {
+      "name": "Session transcripts (supplementary — not in the required 6, added because core/session/ was in scope and is load-bearing for the redaction gap above)",
+      "file": "core/session/store.ts:35-69",
+      "guards": "append-only per-session JSONL, one file per session id, tolerant of a truncated last line (crash mid-write loses only the partial record)",
+      "holds": "SessionMessage has no tenant field at all (store.ts:21-31); isolation between tenants is achieved entirely by callers choosing non-colliding, tenant-derived session ids — confirmed by reading every call site: connectors/telegram/connector.ts:313 uses `telegram:${chatId}`, agent/scheduler-run.ts:44 uses `job-${job.id}-...`, agent/observe-run.ts:53 uses `observe-${entityId}-...`, cli/run.ts:54-55 defaults to a random id. No collision found in the call sites read.",
+      "gap": "the store itself enforces no tenant isolation — nothing in core/session/store.ts would catch two different tenants being handed the same session id by a future caller bug; the guarantee is entirely a convention upheld outside this module."
+    }
+  ],
+  "claimedVsReal": [
+    {
+      "claim": "DRAFT (act-notify-undo)",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:30",
+      "real": "kernel emits 'draft' for fs.write unconditionally; the loop refuses every draft outright — no act, no notify, no undo journal exists",
+      "verdict": "BROKEN",
+      "evidence": "core/policy/decide.ts:204-207; agent/loop.ts:777-791; core/policy/decide.test.ts:117"
+    },
+    {
+      "claim": "Shell / filesystem host / processi ... taint 2 -> ASK (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione) · taint 3 -> DENY. The row label still spans three capability families; the amended cell, its note (docs/history/rebuild-2026/03-threat-model.md:51) and ADR-0044 §Revisione name only sys.shell ('tocca solo il soffitto di sys.shell ... non quella che legge').",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:45; docs/decisions/0044-il-disco-non-ha-provenienza.md:180",
+      "real": "Measured 2026-08-16 by running createDecide() with the production declarations against the shipped matrix (defaults/rot/policy.json:4 == POLICY_FLOOR core/policy/matrix.ts:95: low 3 / medium 1 / high 1). sys.shell: maxTaint pinned to 2 (agent/tools/shell.ts:53) so taint 2 passes the ceiling check (core/policy/decide.ts:136-143) and lands in the high branch, which is ask unless hardened && owner && taint===0 (core/policy/decide.ts:208-213) — ASK for the owner, queued-ASK for system/agent (core/policy/decide.ts:197-199); taint 3 is deny/taint_exceeded. The shell half of the row now HOLDS. fs.read and fs.list: risk low, no maxTaint (agent/tools/fs.ts:105-121) -> ceiling 3 -> ALLOW at taint 2 AND 3, contradicting both cells — deliberate (ADR-0039; agent/tools/fs.ts:69-80: the read itself pays by tainting the turn to DISK_TIER=2, agent/tools/fs.ts:65). fs.write: medium, no maxTaint (agent/tools/fs.ts:123-124) -> ceiling 1 -> deny/taint_exceeded at 2 and 3, stricter than the row's ASK. sys.process.list pins maxTaint 1 (agent/tools/process.ts:24-28) and sys.process.kill is high with no maxTaint (agent/tools/process.ts:34-35) -> both deny/taint_exceeded at 2 and 3, stricter than ASK. All six are hostOnly, so a member@group principal gets deny/principal_forbidden before taint is read (core/policy/decide.ts:128-130): for groups the 'qualunque' column is DENY whatever the cell says. Net: one row, three families, three different behaviours at taint 2 (ASK / ALLOW / DENY) — the amendment fixed the sys.shell drift and left the reads over-claimed in both columns and writes/processes under-claimed at 2.",
+      "verdict": "PARTIAL",
+      "evidence": "agent/tools/shell.ts:45-53; agent/tools/fs.ts:65; agent/tools/fs.ts:69-80; agent/tools/fs.ts:105-124; agent/tools/process.ts:24-36; core/policy/decide.ts:128-130; core/policy/decide.ts:136-143; core/policy/decide.ts:197-199; core/policy/decide.ts:208-213; core/policy/matrix.ts:95; defaults/rot/policy.json:4"
+    },
+    {
+      "claim": "hardened: RoT owned by another OS user, runtime cannot write it — Prevention",
+      "doc": "core/rot/verify.ts:16-24 (restates ADR-0003)",
+      "real": "now independently verified with a real W_OK probe, plus an owning-uid and group/other-mode check (P36), against every sealed path before the kernel is told hardened:true, instead of trusting the config string",
+      "verdict": "HOLDS",
+      "evidence": "core/rot/verify.ts:120-178; agent/runtime.ts:135-146"
+    },
+    {
+      "claim": "Mandatory deny paths: RoT, config, secrets, .git/hooks, shell dotfiles",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:69",
+      "real": "all five categories present in one shared guard object and enforced at both the fs tool and the sandbox executor",
+      "verdict": "HOLDS",
+      "evidence": "core/rot/guards.ts:64-88; agent/tools/fs.ts:315-345; core/sandbox/executor.ts:117-120,136-140"
+    },
+    {
+      "claim": "filesystem write-scope = workspace del turno + tmp di sessione",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:68",
+      "real": "write is scoped as claimed; read is explicitly NOT scoped beyond 2-3 RoT paths, per the test's own title",
+      "verdict": "PARTIAL",
+      "evidence": "core/sandbox/executor.test.ts:173; core/rot/guards.ts:81-87"
+    },
+    {
+      "claim": "nessun dominio pre-concesso (no domain pre-granted)",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:68",
+      "real": "shipped egress.json allow list is empty",
+      "verdict": "HOLDS",
+      "evidence": "defaults/rot/egress.json:4"
+    },
+    {
+      "claim": "secrets: mai mostrabili — né in log, né in trace, né in chat, da nessuna parte (rewritten 2026-08-17 per ADR-0048; superseded the narrower 'mai in chiaro nei trace' this row used to check)",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:121; docs/decisions/0048-segreti-mai-mostrabili.md",
+      "real": "two distinct mechanisms, not one. (1) Structural, for a secret the backend actually knows: readSecret has a fixed, enumerated set of production callers (agent/runtime.ts, cli/surface.ts, cli/doctor.ts), none a tool handler, each resolving inline into the privileged sink that needs it and never storing the plaintext elsewhere — enumerated by a test that walks the whole source tree, not asserted. (2) Best-effort text redaction, for content that merely looks like a secret (a tool result, a thrown error): applied once, upstream, in agent/loop.ts's runTool, before the durable record, the session JSONL and turns.messages — verified by reading the actual DB row and the actual JSONL line, and by mutation. The session-transcript gap this row used to name (core/session/store.ts writing verbatim with no redaction anywhere upstream) is closed by (2). One declared residual: `muffin init --api-key` puts a fresh key in argv (ps aux, shell history) at the one entry point that still can — not fixed by this change, named in ADR-0048.",
+      "verdict": "HOLDS",
+      "evidence": "core/config/secret-boundary.test.ts; agent/loop.ts:2004,2044; core/tracing/redact.ts:90,110-121; agent/secret-redaction.test.ts; evals/acceptance/scenarios/e-cost.accept.ts (scenario E3); core/rot/guards.test.ts"
+    },
+    {
+      "claim": "Sandbox non disponibile != silenziosamente unsandboxed",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:70",
+      "real": "when the probe fails, the shell tool is simply never registered (absent from the tool list) rather than the documented ALLOW-to-ASK step-down — stricter in outcome, different in mechanism",
+      "verdict": "PARTIAL",
+      "evidence": "agent/runtime.ts:301-304"
+    },
+    {
+      "claim": "outward.* escluse del tutto da system@scheduler a qualunque taint",
+      "doc": "docs/history/rebuild-2026/03-threat-model.md:53",
+      "real": "forbiddenForSystem is checked only for principal.kind==='system', exactly as worded (not for 'agent'); matches literally, currently unexercised since no outward.* capability is registered",
+      "verdict": "HOLDS",
+      "evidence": "core/policy/decide.ts:132-134; core/policy/matrix.ts:99"
+    },
+    {
+      "claim": "an unknown model is charged at the highest known rate",
+      "doc": "core/budget/pricing.ts:17-18 (internal safety claim, not the threat model doc)",
+      "real": "true for unrecognised model ids, but cache-write tokens are undercounted on the native Anthropic adapter by the file's own admission — the opposite direction from the stated safety rule",
+      "verdict": "PARTIAL",
+      "evidence": "core/budget/pricing.ts:74-88"
+    }
+  ],
+  "gaps": [
+    {
+      "what": "fs.write is permanently non-executable: the only capability declared reversible:'undoable' always produces 'draft', and the loop always refuses 'draft' because no undo journal exists",
+      "evidence": "agent/tools/fs.ts:79-85; core/policy/decide.ts:204-207; agent/loop.ts:777-791; core/policy/decide.test.ts:117",
+      "why_it_matters": "the agent's only file-write tool cannot succeed under any principal, taint, or hardened combination today — a whole verdict of the four-verdict kernel (allow/ask/draft/deny) has zero live executions in production."
+    },
+    {
+      "what": "sandboxed shell execution has no read containment beyond 2-3 explicit RoT paths",
+      "evidence": "core/rot/guards.ts:81-87; core/sandbox/executor.ts:117-118,136-137; core/sandbox/executor.test.ts:173",
+      "why_it_matters": "once sys.shell is approved (ask-gated, high risk), the command can read any file the host OS user can read — e.g. ~/.ssh — not just the workspace, and that output flows straight back into the model's context."
+    },
+    {
+      "what": "session transcripts bypass the redaction layer entirely",
+      "evidence": "core/session/store.ts:48-50 (no redact call in the whole module); core/tracing/tracer.ts:94 (the only call site of redactAttributes in the repo)",
+      "why_it_matters": "a secret that surfaces in a shell command's stdout or an HTTP response body is masked in the trace file but written byte-for-byte to ~/.muffin/sessions/*.jsonl."
+    },
+    {
+      "what": "vault secret filtering is a 9-name filename denylist, not content inspection",
+      "evidence": "core/vault/vault.ts:74-77 (NEVER_CONTENT), core/vault/vault.ts:58-67 (skipReason)",
+      "why_it_matters": "a credential pasted into any ordinarily-named note is chunked, embedded, and becomes recallable into future prompts; the vault never reuses core/tracing/redact.ts's value-shape secret net."
+    },
+    {
+      "what": "budget engine undercounts cache-write tokens on the native Anthropic adapter path",
+      "evidence": "core/budget/pricing.ts:74-88 (self-documented, unfixed)",
+      "why_it_matters": "the file's own stated safety principle is 'charge high so the cap trips early'; this path does the opposite, so the monthly/daily caps can be crossed later than the numbers suggest."
+    },
+    {
+      "what": "'Sandbox non disponibile -> ALLOW degrades to ASK' is not how degradation actually works",
+      "evidence": "agent/runtime.ts:301-304 (shell tool pushed to the tool array only `if (executor.status().available)`)",
+      "why_it_matters": "the mechanism the threat model names (a policy-level step-down) does not exist; the real mechanism (tool omission at wiring time) happens to be at least as strict, but a future capability wired differently would not automatically get the documented behaviour."
+    },
+    {
+      "what": "HTTP egress is resolve-then-connect, open to DNS-rebinding between the allowlist check and the actual fetch",
+      "evidence": "agent/tools/http.ts:22-24 (self-declared in a code comment, not hidden)",
+      "why_it_matters": "an allowlisted hostname whose DNS answer changes between check and connect could reach a private address; declared as an accepted v1 limit rather than fixed."
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import type { TelegramApiLike } from './api.js';
 import { escapeHtml } from './render.js';
 
 /**
- * Showing that a long turn is still alive — M5-BIS B13.
+ * Showing that a long turn is still alive — DAY-1 requirement B13.
  *
  * `TurnInput.onProgress` (`agent/loop.ts`) has existed since #136: a `TurnEvent`
  * fired at every round, model call and tool call, from the same call sites that

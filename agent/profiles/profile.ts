@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
  * output) lives here as data, never as `if (model === ...)` in the loop.
  *
  * That is what makes it scaffolding you can remove: when a model stops needing
- * the crutches, you delete a profile, not a code path. See docs/adr/0022 and
+ * the crutches, you delete a profile, not a code path. See
+ * docs/decisions/0022-un-processo-con-priorita-foreground.md and
  * the durable-vs-scaffolding split in the blueprint.
  */
 
@@ -118,7 +119,7 @@ export const CONSERVATIVE: Profile = {
 const MAX_ITERATIONS_HARD_CAP = 40;
 
 /**
- * Parsed, not cast (PRACTICES §4) — and the history is why. `recovery` used to
+ * Parsed, not cast (PRACTICES.md#parse-at-boundaries-preserve-provenance) — and the history is why. `recovery` used to
  * be inert data: a typo added 1 to a counter and nothing else. Once the cascade
  * executed as declared, an unknown name became a TypeError thrown at the one
  * moment a turn was already failing — a latent bomb armed precisely when the

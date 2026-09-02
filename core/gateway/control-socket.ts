@@ -10,7 +10,7 @@ import { join } from 'node:path';
  *
  * Preso da Hermes, che ha già fatto questa migrazione e ne ha scritto il perché
  * nel docstring del suo `gateway/control_socket.py` (letto il 27/08/2026,
- * riportato in `docs/blueprint/research/gateway-e-client-2026-08-27.md`). La
+ * riportato in `docs/evidence/gateway-e-client-2026-08-27.md`). La
  * frase che conta descrive **noi**, non loro:
  *
  * > every other process on the machine … currently discovers gateway

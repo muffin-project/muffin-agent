@@ -9,7 +9,7 @@ import { TodoStore, planTaint, renderTodos, type TodoItem } from './todo.js';
  * The plan, and the two things it has to survive: a restart, and the model
  * restating itself.
  *
- * `goal → plan → todo{done|blocked|waiting|retry|pending} → resume` (M5-BIS §2).
+ * `goal → plan → todo{done|blocked|waiting|retry|pending} → resume` (requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool).
  * The transcript cannot carry this — it is prose, it gets compacted, and
  * re-deriving the open list from the model's own earlier paragraph is how a
  * step goes missing between one resume and the next.
@@ -124,7 +124,7 @@ describe('muovere un passo', () => {
   });
 
   it('il criterio di completamento è deterministico: si legge dalle righe', () => {
-    // M5-BIS §2 asks for a deterministic completion criterion. This is it, and
+    // requirements-status.md#wait-e-todo-sono-primitive-del-runtime-non-tool asks for a deterministic completion criterion. This is it, and
     // it is the reason `open` exists: "finished" is a query, never the model
     // declaring itself done.
     const todos = memory();

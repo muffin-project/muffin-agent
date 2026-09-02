@@ -3,8 +3,8 @@ import type { SessionMessage } from '../../core/session/store.js';
 import { historyTaint, messageTier, reinjectedHistory } from './history-taint.js';
 
 /**
- * The pure half of MANDATO-DAY-1 invariant 2 ("taint attraverso la session
- * history"): given a set of messages and a resolved traceId→taint map, what
+ * The pure half of the DAY-1 readiness invariant "session history does not
+ * launder taint": given messages and a resolved traceId→taint map, what
  * tier does the set carry? `agent/session-history-taint.test.ts` covers the
  * wiring — that `agent/loop.ts` actually calls this before the kernel decides
  * anything; this file covers the three-source resolution and the cut on their

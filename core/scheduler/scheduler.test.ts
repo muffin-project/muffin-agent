@@ -201,7 +201,7 @@ describe('Scheduler.tick', () => {
   });
 
   /**
-   * M5-BIS B8 — «un job che dice "inviato" è arrivato?».
+   * DAY-1 requirement B8 — «un job che dice "inviato" è arrivato?».
    *
    * The defect these three guard is not that delivery could fail. It is that a
    * `Deliver` returning `Promise<void>` had no way to *say so*, so the one

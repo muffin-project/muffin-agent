@@ -19,7 +19,7 @@ import { renderForTelegram, TELEGRAM_MAX } from './render.js';
  *
  * `telegram` means the owner's chat — the surface's default room, which is what
  * `surfaces.default` has always meant. `telegram:<chatId>` names one explicitly
- * (ADR-0021 §4, "ogni job schedulato dichiara il proprio target"). Nothing else
+ * (ADR-0021, "ogni job schedulato dichiara il proprio target"). Nothing else
  * is accepted: a channel string that looks *almost* right is refused by
  * `handles`, so the registry reports "nessuna superficie serve" rather than this
  * file guessing which chat was meant.
@@ -46,7 +46,7 @@ export function telegramSurface(api: TelegramApi, ownerChatId: number | undefine
     maxMessageChars: TELEGRAM_MAX,
     // sendDocument's ceiling on the public Bot API. Photos are 10MB but a
     // document is how anything that must survive byte-for-byte goes out
-    // (`research/m3-connector-capabilities-telegram-discord.md`: sendPhoto
+    // (`docs/evidence/capability-output-telegram-e-discord.md`: sendPhoto
     // always recompresses to JPEG), so the document limit is the honest one.
     maxUploadBytes: 50 * 1024 * 1024,
     maxDownloadBytes: MAX_DOWNLOAD_BYTES,

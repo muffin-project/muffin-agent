@@ -6,7 +6,7 @@ import { install, until } from '../harness.js';
 /**
  * D1 (judge round 2) — the model lane, proven on the real path.
  *
- * Not an M5-BIS row: this is not a product capability, it is the engineering
+ * Not a DAY-1 requirement: this is not a product capability, it is the engineering
  * guarantee ADR-0047 §6 states in prose — *"un token non può essere collegato
  * a metà"* — and that prose was false until this slice. `core/turns/lane.ts`
  * and `core/scheduler/scheduler.ts` unit-test their own serialisation with a

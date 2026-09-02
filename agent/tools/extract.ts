@@ -7,7 +7,7 @@ import { Defuddle } from 'defuddle/node';
  * `clipBody` alone ships whatever bytes came back — script, style, nav,
  * cookie banners, the article, all treated the same until a 50,000-character
  * cut lands wherever it lands. Measured on four real pages
- * (docs/blueprint/research/recupero-dal-web.md): 9,700-17,000 tokens per
+ * (docs/evidence/recupero-dal-web.md): 9,700-17,000 tokens per
  * page reaching the model, most of it markup, and pages under the clip
  * threshold ship their *entire* raw HTML. This module runs Defuddle (over a
  * linkedom document, imported as a library — never a subprocess, never a
@@ -30,7 +30,7 @@ const PLAUSIBILITY_CHECK_FLOOR_RAW_CHARS = 2_000;
  * The measured failure mode this guards against: on a 1,325,730-character
  * page, an extractor picked the cookie-consent banner instead of the
  * article — 217 characters, not the ~13,000 the article actually was
- * (docs/blueprint/research/recupero-dal-web.md §"Extraction, measured on
+ * (docs/evidence/recupero-dal-web.md §"Extraction, measured on
  * four real pages", note on the Anthropic docs page — that run used
  * Readability, not Defuddle, but the failure shape is the one this floor
  * exists to catch regardless of which extractor produces it). 300 sits

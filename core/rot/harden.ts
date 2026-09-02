@@ -71,7 +71,7 @@ export function readOwner(
  * owner whose uid differs from the agent's own and who does not hand out
  * group/other write — root already satisfies both, on every machine, with no
  * provisioning step to get wrong. (`muffin init --hardened`'s own eventual
- * service-account story — `docs/blueprint/09-contratti-m0-m1.md` §4, the
+ * service-account story — `docs/history/rebuild-2026/09-contratti-m0-m1.md` §4, the
  * "Hardened (raccomandata...)" bullet — is a different move: it relocates
  * the *runtime* to a dedicated user and keeps `rot/` with the installer.
  * That would leave the owner's own `muffin rot reseal` unaffected — the

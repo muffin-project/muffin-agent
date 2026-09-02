@@ -912,7 +912,7 @@ export class TelegramConnector {
       isPrivate: incoming.isPrivate,
       placeholder: 'sto guardando…',
     });
-    // M5-BIS B13: a second, independent status surface — see `progress.ts`'s
+    // DAY-1 requirement B13: a second, independent status surface — see `progress.ts`'s
     // own file docstring for why this is not folded into `presence` above.
     // Unconditional, same as `onDelta`/`presence` just above: no per-surface
     // gate like the REPL's `isTTY` check, because there is no "non-interactive
@@ -926,7 +926,7 @@ export class TelegramConnector {
       // set once and reused below for the download's vault tier and for the
       // turn's own, so a forwarded attachment cannot land in memory at the
       // sender's tier from one call while the turn itself starts at tier 2
-      // from the other (M5-BIS B16, ADR-0044 amendment).
+      // from the other (DAY-1 requirement B16, ADR-0044 amendment).
       const contentTaint = contentTaintOf(incoming);
 
       // The file lands and is indexed **before** the turn runs, so the agent
@@ -937,7 +937,7 @@ export class TelegramConnector {
         ? await this.ingest(incoming, incoming.attachment, tenant, maxTier(tierOf(principal), contentTaint))
         : null;
 
-      // M5-BIS B11: fed to `presence.streamText`, which owns the rate limit,
+      // DAY-1 requirement B11: fed to `presence.streamText`, which owns the rate limit,
       // the coalescing and the transport choice (draft vs. edit) — this
       // closure only accumulates, exactly like the REPL's own `onDelta` does
       // for `process.stdout` (`cli/repl.ts`). `deltaText` holds what the draft
@@ -956,7 +956,7 @@ export class TelegramConnector {
         deltaText += delta.text;
         presence.streamText(deltaText);
       };
-      // M5-BIS B13: the sibling sink, same shape — this closure only forwards,
+      // DAY-1 requirement B13: the sibling sink, same shape — this closure only forwards,
       // `progress.ts`'s own `report` owns the rate limit, the coalescing and
       // the create-vs-edit choice, exactly as `presence.streamText` does above
       // for `onDelta`.
@@ -989,7 +989,7 @@ export class TelegramConnector {
         // niente — la nota vocale e' gia' diventata testo dentro `arrival.line`,
         // recintato come dati.
         ...(arrival?.audio ? { audios: [arrival.audio] } : {}),
-        // M5-BIS B16: a forwarded message's content is not the principal's own
+        // DAY-1 requirement B16: a forwarded message's content is not the principal's own
         // words, so the turn cannot be allowed to start at the principal's
         // tier alone. `agent/loop.ts` takes `max(tierOf(principal),
         // contentTaint)` for the row's starting taint and for the episode/
@@ -1323,7 +1323,7 @@ export class TelegramConnector {
     // The name the sender chose is not interpolated here: `composeTurnText`
     // already adds it as its own fenced block whenever `incoming.attachment`
     // is set, unconditionally. Saying it again here as free text would be the
-    // exact leak M5-BIS B16 exists to close — attacker-chosen bytes copied
+    // exact leak DAY-1 requirement B16 exists to close — attacker-chosen bytes copied
     // straight into the prompt instead of entering as typed, fenced data.
     if (!this.deps.vault) return { line: '[allegato ricevuto ma il vault non è configurato]' };
     try {
@@ -1371,7 +1371,7 @@ export class TelegramConnector {
             // **Recintata.** E' la voce di chi ha mandato il messaggio, passata
             // per un trascrittore: byte scelti da qualcun altro, che entrano
             // come dati e mai come prosa. In un gruppo questa e' esattamente la
-            // strada che M5-BIS B16 esiste per chiudere, e una trascrizione
+            // strada che DAY-1 requirement B16 esiste per chiudere, e una trascrizione
             // sciolta nel prompt sarebbe la sua riapertura.
             return {
               line: `[nota vocale ricevuta: ${quanto} — questo modello non ascolta, l'ho trascritta qui senza farla uscire]\n${

@@ -123,7 +123,7 @@ describe('quali tool vede davvero un turno', () => {
      *
      * La risposta strutturale non è alzare ancora il numero — è la tool
      * search, scartata il 26/08 valutandola contro il budget di token invece
-     * che contro questo tetto (`research/tool-design-2026-08-26.md`).
+     * che contro questo tetto (`docs/evidence/tool-design-2026-08-26.md`).
      */
     expect(cut, 'il tetto è tornato a tagliare: alzarlo ancora è un cerotto, non una risposta').toEqual([]);
 
