@@ -187,9 +187,10 @@ describe('a telegram turn records where the answer goes and whether it got there
     const row = h.row();
     expect(row?.status).toBe('waiting');
     expect(row?.delivery).toBe('pending'); // addressed, not delivered — never 'sent'
-    // Only the presence placeholder went out ("sto guardando…"); no answer, no
-    // empty edit or send after the suspension.
-    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([]);
+    // The presence placeholder ("sto guardando…") and, since 03/09/2026, the
+    // transcript of the one step the turn took before suspending — a real
+    // message that stays (`transcript.ts`). No answer, no empty send.
+    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual(['send:✓ mi metto in attesa']);
     h.runtime.close();
   });
 });
