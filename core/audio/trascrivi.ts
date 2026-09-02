@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const esegui = promisify(execFile);
@@ -80,10 +80,83 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  * non nostra. Chi vuole `small` cambia una riga di config; chi non vuole
  * scaricare niente non trascrive, e Muffin glielo dice invece di provarci.
  */
-const MODELLO_MANCANTE = [
+export const MODELLO_MANCANTE = [
   'curl -L --create-dirs -o ~/.muffin/models/ggml-base.bin \\',
   '  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
 ].join('\n');
+
+/**
+ * Un rimedio solo per ciascun pezzo, letto da due posti: da `trascrivi`, quando
+ * la nota vocale è già arrivata, e da `muffin doctor`, prima che arrivi. Se
+ * fossero due stringhe, un giorno direbbero due cose diverse — e quella di
+ * `doctor` sarebbe quella non provata.
+ */
+export const RIMEDIO_FFMPEG = 'brew install ffmpeg   # su Linux: apt install ffmpeg';
+export const RIMEDIO_WHISPER = 'brew install whisper-cpp   # su Linux: github.com/ggml-org/whisper.cpp';
+
+/** La frase di `manca()` per un `ENOENT`, e la stessa che `doctor` stampa in anticipo. */
+function nonInstallato(nome: string, bin: string): string {
+  return `${nome} non è installato (${bin} non è nel PATH)`;
+}
+
+/**
+ * Un binario, cercato come lo cercherà `execFile`: per nome lungo il PATH, o
+ * al suo percorso se ne ha uno. Una passeggiata sul PATH e non `which` — lo
+ * stesso motivo di `cli/gateway.ts`: `which` non è garantito su un'immagine
+ * minima, ed `existsSync` risponde alla stessa domanda senza un processo.
+ */
+function trovaBinario(bin: string, path: string): string | null {
+  if (bin.includes('/')) return existsSync(bin) ? bin : null;
+  for (const dir of path.split(delimiter)) {
+    if (dir.length === 0) continue;
+    const candidato = join(dir, bin);
+    if (existsSync(candidato)) return candidato;
+  }
+  return null;
+}
+
+export type Prerequisito =
+  | { cosa: 'ffmpeg' | 'whisper.cpp' | 'modello whisper'; ok: true; dove: string }
+  | { cosa: 'ffmpeg' | 'whisper.cpp' | 'modello whisper'; ok: false; why: string; rimedio: string };
+
+/**
+ * Ciò che `trascrivi` troverebbe mancante, detto **prima** che una nota vocale
+ * arrivi.
+ *
+ * Misurato il 02/09/2026 sull'installazione dell'owner: il modello non
+ * accetta audio, `whisper-cli` e `ffmpeg` non c'erano, il modello ggml
+ * nemmeno, e `muffin doctor` era tutto verde — il primo a saperlo sarebbe
+ * stato l'owner, dalla prima nota vocale non capita. Stessi default, stessi
+ * nomi e stessi rimedi di `trascrivi`, per costruzione: questa funzione non
+ * ha una lista sua.
+ *
+ * Non esegue niente. Un binario che c'è ma non parte lo scopre `trascrivi`,
+ * e lo dice con l'errore del comando — qui si risponde alla domanda che si
+ * può rispondere senza un processo.
+ */
+export function prerequisitiTrascrizione(
+  deps: Pick<TrascriviDeps, 'whisperBin' | 'whisperModel' | 'ffmpegBin'>,
+  path: string = process.env['PATH'] ?? '',
+): Prerequisito[] {
+  const ffmpegBin = deps.ffmpegBin ?? 'ffmpeg';
+  const whisperBin = deps.whisperBin ?? 'whisper-cli';
+  const ffmpeg = trovaBinario(ffmpegBin, path);
+  const whisper = trovaBinario(whisperBin, path);
+  const modello = deps.whisperModel;
+  return [
+    ffmpeg === null
+      ? { cosa: 'ffmpeg', ok: false, why: nonInstallato('ffmpeg', ffmpegBin), rimedio: RIMEDIO_FFMPEG }
+      : { cosa: 'ffmpeg', ok: true, dove: ffmpeg },
+    whisper === null
+      ? { cosa: 'whisper.cpp', ok: false, why: nonInstallato('whisper.cpp', whisperBin), rimedio: RIMEDIO_WHISPER }
+      : { cosa: 'whisper.cpp', ok: true, dove: whisper },
+    modello === undefined || modello === ''
+      ? { cosa: 'modello whisper', ok: false, why: 'nessun modello whisper configurato', rimedio: MODELLO_MANCANTE }
+      : existsSync(modello)
+        ? { cosa: 'modello whisper', ok: true, dove: modello }
+        : { cosa: 'modello whisper', ok: false, why: `il modello whisper configurato non c'è: ${modello}`, rimedio: MODELLO_MANCANTE },
+  ];
+}
 
 /**
  * Trascrive un file audio, o dice **perché no**.
@@ -132,7 +205,7 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
       // scritta così nel README di whisper.cpp.
       await run(ffmpegBin, ['-nostdin', '-loglevel', 'error', '-i', percorsoAudio, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-y', wav], timeoutMs);
     } catch (error) {
-      return manca(ffmpegBin, error, 'ffmpeg', 'brew install ffmpeg   # su Linux: apt install ffmpeg');
+      return manca(ffmpegBin, error, 'ffmpeg', RIMEDIO_FFMPEG);
     }
 
     let stdout: string;
@@ -147,7 +220,7 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
       );
       stdout = res.stdout;
     } catch (error) {
-      return manca(whisperBin, error, 'whisper.cpp', 'brew install whisper-cpp   # su Linux: github.com/ggml-org/whisper.cpp');
+      return manca(whisperBin, error, 'whisper.cpp', RIMEDIO_WHISPER);
     }
 
     // Il file, quando c'è: `--output-txt` scrive la trascrizione pulita, mentre
@@ -173,7 +246,7 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
 function manca(bin: string, error: unknown, nome: string, rimedio: string): Trascrizione {
   const codice = (error as { code?: unknown } | null)?.code;
   if (codice === 'ENOENT') {
-    return { ok: false, why: `${nome} non è installato (${bin} non è nel PATH)`, rimedio };
+    return { ok: false, why: nonInstallato(nome, bin), rimedio };
   }
   const why = error instanceof Error ? error.message : String(error);
   return { ok: false, why: `${nome} ha fallito: ${why}` };
