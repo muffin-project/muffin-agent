@@ -643,6 +643,15 @@ function inventarioDay1() {
   if (!/^\|\s*#\s*\|\s*Area\s*\|[^|]*\|\s*Stato\s*\|\s*$/m.test(testo)) {
     return { errore: 'tabella `| # | Area | … | Stato |` non riconosciuta: il parser è più vecchio del file' };
   }
+  // Una riga con uno stato DAY-1 ma un id che il parser non sa leggere (`F1`,
+  // `a1`) è la terza porta: cadrebbe fuori dalla regex sotto e il conteggio
+  // scenderebbe in silenzio, fino a un `0 su 0` credibile.
+  const nonLette = [...testo.matchAll(/^\|\s*([^|]*?)\s*\|[^|]*\|[^|]*\|\s*(?:READY|OUT|BLOCKER|INVALIDATED)\b[^|]*\|/gm)]
+    .map((m) => m[1])
+    .filter((id) => !/^[A-E]\d+$/.test(id));
+  if (nonLette.length) {
+    return { errore: `${nonLette.length} righe con id non riconosciuto (${nonLette.slice(0, 3).join(', ')}): il parser è più vecchio del file` };
+  }
   const bloccanti = [...testo.matchAll(/^\|\s*([A-E]\d+)\s*\|([^|]*)\|([^|]*)\|\s*(BLOCKER[^|]*)\|/gm)].map((m) => ({
     id: m[1],
     area: m[2].trim(),
