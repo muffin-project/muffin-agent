@@ -205,12 +205,16 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI p
   );
 });
 
-describe('acceptance · B13 · lo stato di avanzamento su Telegram', () => {
+describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
   /**
-   * Falsifier: delete the `messageId === null` check in `progress.ts#sendNow`
-   * (always call `sendMessage`) and the "exactly one create" assertion below
-   * breaks. Delete the `await progress.stop()` call in `connector.ts` (or the
-   * `deleteMessage` inside `stop()`) and the cleanup assertion breaks instead.
+   * Since 03/09/2026 the shape is the owner's (`docs/evidence/dogfood-superfici-2026-09-03.md`
+   * §5.1): one message per segment, steps appended to it, **never deleted**.
+   *
+   * Falsifier: delete the `seg.messageId === null` branch in
+   * `transcript.ts#sendSegment` (always call `sendMessage`) and the "exactly
+   * one create" assertion below breaks. Delete the `await transcript.stop()`
+   * in `connector.ts` and the "no live counter left" assertion breaks. Put a
+   * `deleteMessage` back into `stop()` and the "never deleted" one does.
    */
   scenario(
     'B13',
@@ -235,50 +239,57 @@ describe('acceptance · B13 · lo stato di avanzamento su Telegram', () => {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'fammi un resoconto dei miei appunti'));
           await until(() => tg.messages().some((m) => m.text.includes('niente di nuovo da ieri a oggi')), 30_000);
 
-          // A progress line looks like "<attività> · <N>s" (`formatTelegramProgress`)
-          // — distinct from the pairing confirmation and from the real answer.
-          const progressLike = /·\s*\d+s$/;
+          // A transcript message carries the steps in the owner's own words
+          // (`agent/tool-phrase.ts`) — distinct from the pairing confirmation
+          // and from the real answer.
           const sent = tg.sent();
-
-          const creates = sent.filter((c) => c.method === 'sendMessage' && progressLike.test(String(c.payload['text'] ?? '')));
+          const creates = sent.filter(
+            (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('cerco in memoria'),
+          );
           if (creates.length !== 1) {
             throw new Error(
-              `atteso esattamente 1 sendMessage di avanzamento (mai un secondo — "one message, not a log"), trovati ${creates.length}:\n` +
+              `atteso esattamente 1 sendMessage di trascrizione (due tool senza parole in mezzo = un segmento), trovati ${creates.length}:\n` +
                 JSON.stringify(creates, null, 2),
             );
           }
-          const progressMessageId = creates[0]!.messageId;
-          if (progressMessageId === undefined) throw new Error('il sendMessage di avanzamento non ha un id registrato');
+          const transcriptId = creates[0]!.messageId;
+          if (transcriptId === undefined) throw new Error('il sendMessage di trascrizione non ha un id registrato');
 
-          const edits = sent.filter(
-            (c) => c.method === 'editMessageText' && Number(c.payload['message_id']) === progressMessageId,
-          );
+          const edits = sent.filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) === transcriptId);
           if (edits.length === 0) {
             throw new Error(
-              `nessun editMessageText sulla riga di avanzamento (id ${progressMessageId}) — il turno non è durato ` +
-                `abbastanza da riaprire la finestra di MIN_EDIT_MS, o la riga non è stata editata:\n${JSON.stringify(sent, null, 2)}`,
+              `nessun editMessageText sulla trascrizione (id ${transcriptId}) — il turno non è durato ` +
+                `abbastanza da riaprire la finestra, o il secondo passo non è mai stato appeso:\n${JSON.stringify(sent, null, 2)}`,
             );
           }
           if (String(edits[0]!.payload['text'] ?? '') === String(creates[0]!.payload['text'] ?? '')) {
             throw new Error('editMessageText ha ripetuto lo stesso testo del create — non è un aggiornamento reale');
           }
-
-          const deletes = sent.filter(
-            (c) => c.method === 'deleteMessage' && Number(c.payload['message_id']) === progressMessageId,
-          );
-          if (deletes.length === 0) {
-            throw new Error(`la riga di avanzamento (id ${progressMessageId}) non è mai stata cancellata:\n${JSON.stringify(sent, null, 2)}`);
+          const finale = String(edits[edits.length - 1]!.payload['text'] ?? '');
+          if (!finale.includes('✓ cerco in memoria: appunti di ieri') || !finale.includes('✓ cerco in memoria: appunti di oggi')) {
+            throw new Error(`la trascrizione finale non tiene entrambi i passi:\n${finale}`);
+          }
+          if (/⏳|· \d+s/.test(finale)) {
+            throw new Error(`la trascrizione finale ha ancora un contatore vivo — transcript.stop() non ha chiuso:\n${finale}`);
           }
 
-          // The real answer is a distinct message, not an edit of the status
-          // line — "cleaned/replaced by the final answer", not folded into it.
-          const answer = tg.messages().find((m) => m.text.includes('niente di nuovo da ieri a oggi'));
-          if (!answer) throw new Error('nessuna risposta finale trovata fra i sendMessage');
+          // Never deleted: the record of what happened stays above the answer.
+          if (sent.some((c) => c.method === 'deleteMessage')) {
+            throw new Error(`qualcosa è stato cancellato — la trascrizione deve restare:\n${JSON.stringify(sent, null, 2)}`);
+          }
+
+          // The real answer is a distinct message, not an edit of the
+          // transcript — and it comes after the transcript's last edit.
           const answerCall = sent.find(
             (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('niente di nuovo da ieri a oggi'),
           );
-          if (answerCall?.messageId === progressMessageId) {
-            throw new Error('la risposta finale ha riusato lo stesso id della riga di avanzamento invece di essere un messaggio a parte');
+          if (!answerCall) throw new Error('nessuna risposta finale trovata fra i sendMessage');
+          if (answerCall.messageId === transcriptId) {
+            throw new Error('la risposta finale ha riusato lo stesso id della trascrizione invece di essere un messaggio a parte');
+          }
+          const lastEditAt = sent.lastIndexOf(edits[edits.length - 1]!);
+          if (lastEditAt > sent.indexOf(answerCall)) {
+            throw new Error('la trascrizione è stata editata DOPO la risposta: transcript.stop() non è atteso prima di deliverTo');
           }
         } finally {
           await gw.stop();
@@ -378,14 +389,14 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
       const inst = await install({
         main: [
           { tool: { name: 'memory_search', args: { query: 'nota interna' } } },
-          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.' } } },
+          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
           // The same call again: a resumed turn re-asks the model, and the
           // model is scripted here to retry exactly the call it made before
           // suspending (`cli/surface.ts#approvatoreTelegram`'s own docstring:
           // "il turno si sospende qui e riprende da solo quando arriva la
           // risposta" — the retry is real production behaviour, not a test
           // artefact).
-          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.' } } },
+          { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
           { text: 'fatto, il comando ha risposto ciao' },
         ],
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
@@ -413,6 +424,11 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
           }
+          // 03/09: the model's own account of the command, above it — and
+          // never *inside* the argument line, where it would read as a
+          // parameter of the command rather than a sentence about it.
+          if (!askText.includes('stampa la parola ciao')) throw new Error(`l'ASK non mostra cosa fa il comando:\n${askText}`);
+          if (askText.includes('description:')) throw new Error(`la description è finita fra gli argomenti:\n${askText}`);
           if (!askText.includes('taint 2')) throw new Error(`l'ASK non mostra il taint del turno:\n${askText}`);
           const askMessageId = askCall.messageId;
           if (askMessageId === undefined) throw new Error('il messaggio ASK non ha un id registrato');
