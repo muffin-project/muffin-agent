@@ -151,6 +151,26 @@ export const MANIFEST: readonly ScenarioEntry[] = [
       'turn keeps `failed:<why>`, and `doctor` names it',
   ),
   verde('C1', 'memory write: something said in one turn is shown to the model recalling a later one'),
+  // New (slice/journey-memoria). C2's row named the exact gap: extraction is
+  // wired at turn end (`agent/runtime.ts`'s `onTurnEnd`) but nothing had ever
+  // driven it through the real binary. `muffin run` cannot demonstrate this —
+  // its trailing-edge timer is unref'd and `runtime.close()` disarms it in
+  // the same tick the turn finishes — so this drives a real job through a
+  // real gateway subprocess and never calls `muffin memory extract`.
+  verde(
+    'C2',
+    "extraction: a real gateway process, with nothing calling `muffin memory extract`, produces a fact from a turn's own words within the trailing-edge debounce",
+  ),
+  // New (slice/journey-memoria). C3's row named three things together: a
+  // backlog bigger than one page fully drains, an exact-duplicate pair only
+  // `sweepDuplicates` can catch gets caught, and `muffin memory review`
+  // shows a contradiction the judge left open — all through one
+  // `muffin memory extract` and one `muffin memory review`, both real
+  // processes.
+  verde(
+    'C3',
+    'consolidation: a 27-episode backlog drains fully in one `memory extract`, an exact-duplicate pair only the sweep can catch is retired, and `memory review` shows the contradiction the judge left open',
+  ),
   // Promoted (this slice): the retrieval gap the old reason described is
   // real (vector search never sees a fact inserted straight through
   // `store.addFact`, and `searchEpisodes` never returns facts at all) — but
@@ -165,6 +185,24 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   verde(
     'C4',
     'recall: a superseded fact is invisible to search until --history asks for it',
+  ),
+  // New (slice/journey-memoria). C6's row asked for the temporal graph
+  // itself: `factsAsOf`/`nearestFactTo` (`core/memory/store.ts`) and `asOf`
+  // as the one parameter both the CLI and the `memory_search` tool take,
+  // proven through both surfaces with the exact "Anna until August, Bruno
+  // after" shape `factsAsOf`'s own docstring reasons through.
+  verde(
+    'C6',
+    'temporal graph: "who was X in May" answers correctly through --as-of on the CLI and through a real turn calling the memory_search tool with as_of',
+  ),
+  // New (slice/journey-memoria). C7's row named the gap precisely:
+  // `connectors/telegram/document-arrival.test.ts` proves attachment→vault→
+  // reindex→episode in-process, and the fake Telegram serves no file
+  // downloads — so this drives the path that is reachable from the CLI,
+  // `muffin vault add`, with a real (byte-built) PDF and a real scan.
+  verde(
+    'C7',
+    "documents: a real PDF's text reaches an episode and is findable by search, and a scanned PDF with no text layer fails explicitly instead of indexing empty",
   ),
   verde(
     'D1',
