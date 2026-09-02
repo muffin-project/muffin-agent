@@ -76,7 +76,13 @@ permissions:
 jobs:
   accettazione:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Dieci e non cinque, misurato il 02/09/2026: con le journey DAY-1 (#283,
+    # #285, #286) la suite passa 40/40 e chiude a 5:03 — un minuto sopra il
+    # tetto, che GitHub segnala come `cancelled`, non come rosso. Tre PR verdi
+    # nel log sono state «cancellate» per questa ragione e nessuna per un
+    # difetto. Il tetto resta: un run che si appende deve morire; deve solo
+    # essere più alto della suite che protegge.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
