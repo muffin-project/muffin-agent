@@ -49,6 +49,7 @@ export type SecurityBaselineScenario = {
  */
 const OUTWARD_EVAL: CapabilityDecl = {
   id: 'outward.send.eval',
+  effect: 'outward',
   risk: 'high',
   reversible: 'no',
   rerunnable: false,
@@ -102,8 +103,16 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
   {
     id: 's1-local-read-owner-write',
     family: 'local-read-then-act',
+    // Fino al 02/09 questa riga leggeva "…turns an otherwise undoable owner
+    // write into a hard deny", ed era vera. Il `deny` era però una
+    // trascrizione mancata e non una decisione: la riga `host` della matrice
+    // normativa dice `ASK` a taint 2 e solo `sys.shell` l'aveva ricevuta
+    // (ADR-0053). Quello che lo scenario misura resta lo stesso — quanto costa
+    // il taint ambientale sulla stessa azione — e ora il costo è una domanda
+    // invece di un rifiuto, che è un costo diverso e va misurato per quello
+    // che è.
     claim:
-      'after unprovenanced local bytes enter context at tier 2, ambient taint alone turns an otherwise undoable owner write into a hard deny',
+      'after unprovenanced local bytes enter context at tier 2, ambient taint turns an owner write that would be an unattended draft into a question',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -112,7 +121,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
       args: { path: '/workspace/result.txt' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'deny', noAmbient: 'draft', ambientCode: 'taint_exceeded' },
+    expect: { ambient: 'ask', noAmbient: 'draft' },
   },
   {
     id: 's1-local-read-owner-shell',

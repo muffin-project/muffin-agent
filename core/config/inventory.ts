@@ -133,6 +133,19 @@ export function listConfigKnobs(home: string = muffinHome()): ConfigKnob[] {
   // rot/policy.json — sealed.
   const policyFile = join(p.rot, 'policy.json');
   const matrix = loadPolicyMatrix(home);
+  // One knob per effect row: since ADR-0053 these are what decide the taint
+  // ceiling. The `defaultMaxTaint` entries below stay because they are still
+  // literally in the sealed file and this inventory answers "which file holds
+  // this value", not "which value won" — but they are listed after the rows,
+  // and the rows are the ones an owner should read first.
+  for (const [name, row] of Object.entries(matrix.rows)) {
+    knobs.push({
+      key: `policy.rows.${name}`,
+      value: `chiede sopra ${row.askAbove}, nega sopra ${row.denyAbove}`,
+      source: policyFile,
+      sealed: true,
+    });
+  }
   knobs.push(
     {
       key: 'policy.defaultMaxTaint.low',

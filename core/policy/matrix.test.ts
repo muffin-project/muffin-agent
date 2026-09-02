@@ -21,6 +21,67 @@ function home(): string {
 
 const policyOf = (dir: string) => join(paths(dir).rot, 'policy.json');
 
+/**
+ * The rows carry the ceiling since ADR-0053, so the clamp that matters is
+ * theirs. These four exist for the reason the four below them do: an owner-
+ * documented knob inside the Root of Trust with correct code and no falsifying
+ * evidence is the shape this repository keeps getting caught by, and an
+ * independent judge named it on the slice that introduced this one.
+ */
+describe('le righe della matrice sigillata', () => {
+  it('lascia che il file stringa una riga', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 0, denyAbove: 1 } } }));
+    expect(loadPolicyMatrix(dir).rows.host).toEqual({ askAbove: 0, denyAbove: 1 });
+    // E le altre righe restano quelle del pavimento: un file parziale eredita.
+    expect(loadPolicyMatrix(dir).rows.context).toEqual(POLICY_FLOOR.rows.context);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rifiuta di lasciargliela allargare, su entrambe le soglie', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 3, denyAbove: 3 } } }));
+    expect(loadPolicyMatrix(dir).rows.host).toEqual(POLICY_FLOOR.rows.host);
+
+    // Mista: la metà che stringe atterra, quella che allarga no.
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { host: { askAbove: 0, denyAbove: 3 } } }));
+    expect(loadPolicyMatrix(dir).rows.host).toEqual({ askAbove: 0, denyAbove: POLICY_FLOOR.rows.host.denyAbove });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('ignora una riga che il codice non conosce, invece di aggiungerla', () => {
+    const dir = home();
+    writeFileSync(
+      policyOf(dir),
+      JSON.stringify({ schemaVersion: 1, rows: { hostt: { denyAbove: 0 }, inventata: { denyAbove: 0 } } }),
+    );
+    const rows = loadPolicyMatrix(dir).rows;
+    expect(Object.keys(rows).sort()).toEqual(Object.keys(POLICY_FLOOR.rows).sort());
+    // E il refuso non ha stretto niente: `hostt` non è `host`.
+    expect(rows.host).toEqual(POLICY_FLOOR.rows.host);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('non lascia risalire la riga che non deve essere raggiungibile a runtime', () => {
+    const dir = home();
+    // `rot` sta a -1: irraggiungibile a ogni taint. Il tipo del file è 0-3,
+    // quindi qualunque valore scrivibile è più largo — e viene scartato.
+    writeFileSync(policyOf(dir), JSON.stringify({ schemaVersion: 1, rows: { rot: { denyAbove: 3 } } }));
+    expect(loadPolicyMatrix(dir).rows.rot.denyAbove).toBe(-1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('un file illeggibile non allarga niente: si torna al pavimento, e si dice', () => {
+    const dir = home();
+    writeFileSync(policyOf(dir), '{ "schemaVersion": 1, "rows": { "host": { "denyAbove": "tre" } } }');
+    const m = loadPolicyMatrix(dir);
+    expect(m.source).toBe('fallback');
+    expect(m.note).toBeTruthy();
+    expect(m.rows).toEqual(POLICY_FLOOR.rows);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('the sealed permission matrix', () => {
   it('lets the file tighten a ceiling and refuses to let it raise one', () => {
     // The judge measured what an unclamped default bought: `{"medium":3}` in a

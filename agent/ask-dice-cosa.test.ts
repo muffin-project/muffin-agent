@@ -55,6 +55,7 @@ const answer = (text: string): ChatResult => ({ text, toolCalls: [], stopReason:
 /** A high-risk capability with no kernel resource: the shell shape, stubbed. */
 const probeAct: CapabilityDecl = {
   id: 'probe.act',
+  effect: 'context',
   risk: 'high',
   reversible: 'no',
   rerunnable: false,
@@ -67,6 +68,7 @@ const probeAct: CapabilityDecl = {
 /** A benign capability the kernel allows outright, for counting executions. */
 const probePing: CapabilityDecl = {
   id: 'probe.ping',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,

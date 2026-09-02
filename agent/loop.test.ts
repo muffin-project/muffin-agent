@@ -72,12 +72,14 @@ const lastSaid = (call: ChatCall): string => {
 };
 
 const decls: CapabilityDecl[] = [
-  { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
-  { id: 'demo.write', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+  { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'demo.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
   // `medium` + `undoable` è la coppia che il kernel mappa su `draft`, ed è
   // esattamente quella di `fs.write` in produzione. Serve a esercitare un ramo
   // del loop che non aveva nessun test: vedi il describe in fondo al file.
-  { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
 ];
 
 function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDeps> = {}) {
@@ -228,10 +230,10 @@ describe('agent loop', () => {
       externalId: 'u9',
     };
     const hostDecl = (id: string): CapabilityDecl => ({
-      id, risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true,
+      id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true,
     });
     const openDecl = (id: string): CapabilityDecl => ({
-      id, risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false,
+      id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false,
     });
     const tool = (name: string, capability: string): RegisteredTool => ({
       capability,
@@ -474,7 +476,8 @@ describe('agent loop', () => {
     // loop turned it into a tool error claiming it could not ask, which is a
     // failure the tool never had. Headless now exits on it, so a script can act.
     const asking: CapabilityDecl[] = [
-      { id: 'demo.ask', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.ask', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_ask'), answer('mai')], {
@@ -504,7 +507,8 @@ describe('agent loop', () => {
 
   it('runs the tool when the surface can ask and the owner says yes', async () => {
     const asking: CapabilityDecl[] = [
-      { id: 'demo.ask', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.ask', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const asked: string[] = [];
     const ran: string[] = [];
@@ -551,7 +555,8 @@ describe('agent loop', () => {
     // The loop had no branch for it and fell through to the handler: the write
     // happened immediately, with no undo journal and no window.
     const undoable: CapabilityDecl[] = [
-      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const ran: string[] = [];
     const { deps: d, store } = deps([callTool('demo_draft'), answer('ok')], {
@@ -585,7 +590,8 @@ describe('agent loop', () => {
     // che la sostituisce, e la sua unica frase: **un checkpoint che non si può
     // prendere è un effetto che non deve avvenire.**
     const undoable: CapabilityDecl[] = [
-      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
     ];
     const kernelDraft = () =>
       createDecide({
@@ -1218,7 +1224,7 @@ describe('the loop hands the model its own reasoning back', () => {
         },
       ],
       capabilities: new Map([
-        ['demo.read', { id: 'demo.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
+        ['demo.read', { id: 'demo.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: false } as CapabilityDecl],
       ]),
     });
     await runTurn(d, input(store));
@@ -1639,10 +1645,12 @@ describe('agent loop · progress (B13)', () => {
    */
   describe('closes the tool_start/tool_end pair on every exit that refuses', () => {
     const high: CapabilityDecl[] = [
-      { id: 'demo.high', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.high', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
     const undoable: CapabilityDecl[] = [
-      { id: 'demo.draft', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
+      // era il default della classe: la riga 'context' non lo eredita più
+      { id: 'demo.draft', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true },
     ];
 
     /** A tool that records if it ran, so "refused" is proved and not assumed. */

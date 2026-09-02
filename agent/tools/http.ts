@@ -37,13 +37,17 @@ import type { RegisteredTool } from '../loop.js';
  */
 export const httpCapability: CapabilityDecl = {
   id: 'sys.http',
+  effect: 'egress',
   risk: 'medium',
   reversible: 'yes',
   // True *because* the verb is fixed at GET, above. The day a body-carrying
   // verb arrives it arrives as its own capability — and that capability
   // answers this question with `false`, rather than this line being widened.
   rerunnable: true,
-  maxTaint: 3,
+  // The `maxTaint: 3` that used to sit here is now the `egress` row's: the
+  // threat model gives that row's columns to the allowlist and to
+  // `paramsMaxTaint`, not to a ceiling, which is what this pin was working
+  // around by widening the medium class default one capability at a time.
   resourceKind: 'url',
   policyArgs: ['url'],
   hostOnly: false,
