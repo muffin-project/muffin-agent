@@ -31,6 +31,18 @@ import type { AddressInfo } from 'node:net';
 export type ScriptedReply = {
   text?: string;
   tool?: { name: string; args: Record<string, unknown> };
+  /**
+   * Test seam for B13 (`connectors/telegram/progress.ts`'s throttle):
+   * `progress.ts` never sends a second status message inside `MIN_EDIT_MS`
+   * (3s) of the last one, so a turn whose round trips are all sub-millisecond
+   * — every provider call here answers over loopback — can finish before that
+   * window ever reopens, and the *edit* half of "one message, throttled, and
+   * edited" would never be exercised. This holds the response before writing
+   * it, so a scripted round can be made to take real wall-clock time without
+   * reaching for a fake clock inside `progress.ts` itself (which would be the
+   * production file, not the test double). Not used by any other scenario.
+   */
+  delayMs?: number;
 };
 
 export type RecordedRequest = {
@@ -240,46 +252,53 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       // slice's own brief names: no scenario reaches a paid endpoint, and a
       // scenario for B11 gets a real, if coarse, multi-delta stream rather
       // than one chunk pretending to be several.
-      if (body.stream === true) {
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-        const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: entry.model };
-        const send = (patch: Record<string, unknown>): void => {
-          res.write(`data: ${JSON.stringify({ ...base, ...patch })}\n\n`);
-        };
-        send({ choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] });
-        if (content) {
-          for (const piece of wordChunks(content)) {
-            send({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] });
+      const respond = (): void => {
+        if (body.stream === true) {
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: entry.model };
+          const send = (patch: Record<string, unknown>): void => {
+            res.write(`data: ${JSON.stringify({ ...base, ...patch })}\n\n`);
+          };
+          send({ choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] });
+          if (content) {
+            for (const piece of wordChunks(content)) {
+              send({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] });
+            }
           }
+          const tc = toolCalls[0];
+          if (tc) {
+            send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: tc.id, type: 'function', function: { name: tc.function.name, arguments: '' } }] }, finish_reason: null }] });
+            send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }] }, finish_reason: null }] });
+          }
+          send({ choices: [{ index: 0, delta: {}, finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop' }] });
+          send({ choices: [], usage });
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
         }
-        const tc = toolCalls[0];
-        if (tc) {
-          send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: tc.id, type: 'function', function: { name: tc.function.name, arguments: '' } }] }, finish_reason: null }] });
-          send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }] }, finish_reason: null }] });
-        }
-        send({ choices: [{ index: 0, delta: {}, finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop' }] });
-        send({ choices: [], usage });
-        res.write('data: [DONE]\n\n');
-        res.end();
-        return;
-      }
 
-      const payload = {
-        id: `chatcmpl-${requests.length}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: entry.model,
-        choices: [
-          {
-            index: 0,
-            message: { role: 'assistant', content, ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}) },
-            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
-          },
-        ],
-        usage,
+        const payload = {
+          id: `chatcmpl-${requests.length}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: entry.model,
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content, ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}) },
+              finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+            },
+          ],
+          usage,
+        };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(payload));
       };
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(payload));
+      // See `ScriptedReply.delayMs`'s own comment: held here, on the wire,
+      // rather than faked inside `progress.ts` — the file under test never
+      // learns this scenario exists.
+      if (reply.delayMs !== undefined && reply.delayMs > 0) setTimeout(respond, reply.delayMs);
+      else respond();
     });
   });
 
