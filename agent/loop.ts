@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { recall, recallTaint, renderForPrompt, type RecallDeps } from '../core/memory/recall.js';
 import type { MemoryStore } from '../core/memory/store.js';
 import type { Decide, PermissionSnapshot, Principal, TenantId, TrustTier } from '../core/policy/types.js';
-import type { CapabilityDecl, CapabilityId, DecisionRequest } from '../core/policy/types.js';
+import type { CapabilityDecl, CapabilityId, Decision, DecisionRequest } from '../core/policy/types.js';
 import type { SessionMessage, SessionRef, SessionStore } from '../core/session/store.js';
 import { tierOf } from '../core/surface/types.js';
 import type { UndoJournal } from '../core/undo/journal.js';
@@ -958,6 +958,30 @@ function freshCounters(): TurnCounters {
     resumes: 0,
     contextBuilt: false,
   };
+}
+
+/**
+ * The sentence the model reads when the kernel refuses.
+ *
+ * Until 2026-09-02 every refusal said the same thing — «serve una decisione
+ * dell'owner» — and for `taint_exceeded` that sentence is false: no approval
+ * exists at runtime for a ceiling the turn's taint has already crossed, and
+ * the owner cannot grant one. The dogfood review of 2026-08-29
+ * (`docs/evidence/dogfood-autonomia-2026-08-29.md` §9, item 1) ordered this
+ * first, and the owner's database shows the price of leaving it: episode 310,
+ * where the model explained a refusal as «è la policy, non un bug» and sent
+ * the owner to look for a setting that does not exist. A refusal names its
+ * cause, says what would change it, and never promises a permission.
+ */
+export function denyText(decision: Extract<Decision, { effect: 'deny' }>): string {
+  if (decision.code === 'taint_exceeded') {
+    return (
+      `Rifiutato dal kernel dei permessi (taint_exceeded): ${decision.detail ?? 'il taint del turno supera il soffitto'}. ` +
+      "Nessuna approvazione lo sblocca in questo turno: non chiedere all'owner un permesso che non esiste. " +
+      'Dillo, e se serve davvero spiega che una conversazione nuova riparte con il contesto pulito.'
+    );
+  }
+  return `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`;
 }
 
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
@@ -2763,7 +2787,7 @@ async function runTool(
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`,
+        content: denyText(decision),
         isError: true,
       };
     case 'draft': {

@@ -394,6 +394,12 @@ describe('la taint viene dalla riga, non dal principal', () => {
     //    is a refusal, at taint 0 it is an allow.
     const afterWaking = prompt(w.provider.seen[w.provider.seen.length - 1]);
     expect(afterWaking).toMatch(/Rifiutato dal kernel dei permessi \(taint_exceeded\)/);
+    // And it says why, in the kernel's own words, instead of promising an
+    // owner decision that does not exist for a crossed ceiling (episode 310
+    // of the owner's database: the model turned that promise into «è la
+    // policy, non un bug»).
+    expect(afterWaking).toMatch(/context taint 3 exceeds 1 for net\.http/);
+    expect(afterWaking).not.toMatch(/serve una decisione dell'owner/);
 
     // 2. And the value the turn reports, which is the same snapshot read from
     //    the other end.
