@@ -1,4 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { install, until } from '../harness.js';
@@ -210,6 +211,30 @@ describe('acceptance · C2/C3 · il consolidamento parte da solo e drena', () =>
         },
       });
       try {
+        // The embedder, pointed at the same fake provider — never at the
+        // machine's real Ollama. `sweepDuplicates`'s gate is on
+        // `factsAdded > 0`, and the batch that trips it also indexes a
+        // backlog through `VectorIndex` (`agent/runtime.ts`'s `vectors`),
+        // which without this defaults to `OllamaEmbedder` against
+        // `127.0.0.1:11434` — present on the author's machine and absent on
+        // CI, exactly the "proves the author's machine" class
+        // `docs/evidence/lessons.md` names. `provider.ts`'s server answers
+        // `/embeddings` with small deterministic vectors; nothing here
+        // asserts on their content, only that indexing completes without
+        // `EmbedderUnavailable`.
+        const secret = await inst.muffin(['secret', 'set', 'fake_embed_key'], 'fake_embed_key-value');
+        if (secret.code !== 0) throw new Error(`secret set fake_embed_key: exit ${secret.code}\n${secret.err}`);
+        const configPath = join(inst.home, 'config.json');
+        const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+        config['embedder'] = {
+          kind: 'openai-compat',
+          model: 'fake-embed',
+          dimensions: 8,
+          baseUrl: inst.provider.baseUrl,
+          apiKeyRef: 'secret://fake_embed_key',
+        };
+        writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
         let dupOldId: number;
         let dupKeepId: number;
         const db = new DatabaseCtor(join(inst.home, 'muffin.db'));
@@ -265,6 +290,14 @@ describe('acceptance · C2/C3 · il consolidamento parte da solo e drena', () =>
         const extract = await inst.muffin(['memory', 'extract']);
         if (extract.code !== 0) {
           throw new Error(`muffin memory extract: exit ${extract.code}\n${extract.out}\n${extract.err}`);
+        }
+        // The embedder actually ran — not just "no error", which a `vectors:
+        // undefined` skip would also produce. `cmdMemoryExtract`'s own line
+        // names the count; zero here would mean the fake `/embeddings` route
+        // was never reached.
+        const indexedMatch = /(\d+) chunk indicizzati/.exec(extract.out);
+        if (!indexedMatch || Number(indexedMatch[1]) === 0) {
+          throw new Error(`nessun chunk indicizzato attraverso l'embedder finto:\n${extract.out}`);
         }
 
         // (1) drain a pagina piena: 27 episodi pendenti — più di un giro — e
