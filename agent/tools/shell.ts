@@ -155,14 +155,14 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
  * back are.
  *
  * **The cost, as it stands after the owner's decision (ADR-0044 §Revisione
- * 2026-08-16), not the verdict that decision replaced.** `sys.shell` pins
- * `maxTaint: 2` (`shellCapability` above) instead of inheriting
- * `defaultMaxTaint.high` = 1, so one read (`DISK_TIER` = 2) downgrades
+ * 2026-08-16), not the verdict that decision replaced.** `sys.shell` sits on
+ * the `host` effect row, whose ceiling is 2 (ADR-0053; it was a `maxTaint: 2`
+ * pinned on this declaration alone until then), so one read (`DISK_TIER` = 2) downgrades
  * `shell_run` to an **`ask`**, not the flat `deny/taint_exceeded` this file
  * used to describe — that is what keeps *"leggi il file e poi lancia i
  * test"* completable with the owner's yes. The floor stays real: the hardened
  * auto-allow still requires `taint === 0` (`core/policy/decide.ts`), which a
- * turn that has read anything never reaches at `maxTaint: 2` any more than at
+ * turn that has read anything never reaches at a ceiling of 2 any more than at
  * 1, and a turn at taint 3 — a web/search/mcp result, the one case that still
  * reaches the ceiling — is still a flat `deny/taint_exceeded`: this widened
  * the ceiling by exactly one step, not to the top of the scale. Asserted as a

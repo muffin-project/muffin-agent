@@ -45,22 +45,15 @@ const CLEAN: 0 = 0;
 
 export const waitCapability: CapabilityDecl = {
   id: 'turn.wait',
-  effect: 'context',
   /**
-   * `medium`, not `low`. A wait costs nothing at the moment it is armed and
-   * something real afterwards: it holds a row and its whole context, and every
-   * resume re-sends the prefix — a turn that waits ten times pays ten prefixes,
-   * and the per-turn budget that would measure that does not exist yet
-   * (DAY-1 requirement E1). Rated for what it commits to, not for what it does.
-   */
-  risk: 'medium',
-  /**
-   * **`3`, and it has to be stated** — the class default would make this tool
-   * unusable in the one case it exists for.
+   * **`3`, and it had to be stated** — the class default would have made this
+   * tool unusable in the one case it exists for. Since ADR-0053 the number
+   * comes from the `context` row instead of from a pin here, and the argument
+   * below is what earns that row.
    *
-   * `defaultMaxTaint.medium` is 1 (`core/policy/matrix.ts`), so without this
-   * line the canonical wait — *"leggi la pagina, aspetta un'ora, ricontrolla"* —
-   * is denied `taint_exceeded` the moment the page is read. The agent would be
+   * `defaultMaxTaint.medium` was 1 (`core/policy/matrix.ts`), so without a
+   * ceiling of 3 the canonical wait — *"leggi la pagina, aspetta un'ora,
+   * ricontrolla"* — is denied `taint_exceeded` the moment the page is read. The agent would be
    * able to wait only about things it had not looked at, which is close to
    * never, and the failure would arrive as a refusal the owner reads as a bug.
    *
@@ -88,6 +81,15 @@ export const waitCapability: CapabilityDecl = {
    * shaped like this, which is the point — one capability at a time is how the
    * kernel and the printed matrix drifted apart.
    */
+  effect: 'context',
+  /**
+   * `medium`, not `low`. A wait costs nothing at the moment it is armed and
+   * something real afterwards: it holds a row and its whole context, and every
+   * resume re-sends the prefix — a turn that waits ten times pays ten prefixes,
+   * and the per-turn budget that would measure that does not exist yet
+   * (DAY-1 requirement E1). Rated for what it commits to, not for what it does.
+   */
+  risk: 'medium',
   /**
    * `'yes'`: nothing landed in the world, and the barrier can be cleared by
    * finishing the turn. There is no state outside our own database to undo.
