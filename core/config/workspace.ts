@@ -139,6 +139,49 @@ export function muffinWorkspace(home = muffinHome()): string {
   return join(dirname(resolve(home)), `${basename(resolve(home)).replace(/^\./, '')}-workspace`);
 }
 
+/**
+ * The workspace's status, read without creating anything.
+ *
+ * `resolveWorkspace` below is the only function allowed to decide and to
+ * `mkdirSync` — calling it from a diagnostic would leave a directory on disk
+ * as a side effect of asking a question, and would make "esiste già" and "non
+ * esiste ancora" indistinguishable (it creates the directory either way).
+ * `muffin doctor` needs exactly that distinction, so it reads through here
+ * instead: the same default `muffinWorkspace` computes, `existsSync` and
+ * nothing else.
+ *
+ * `sys.inspect` does not call this — it prints `Runtime.workspace` straight
+ * from the live `resolveWorkspace` result `buildRuntime` already computed, so
+ * a turn mid-way through an owner-chosen cwd is described accurately rather
+ * than by this function's installation default. The two agree whenever
+ * nobody has stood inside a project directory and typed `muffin` — which is
+ * the case this function exists to make legible: a fresh install, or the
+ * supervised gateway, where nothing chose a workspace at all.
+ */
+export type WorkspaceStatus = {
+  /** The default an install falls back to absent an owner-chosen cwd. */
+  workspace: string;
+  exists: boolean;
+  /**
+   * Set when `MUFFIN_WORKSPACE` named the home, or somewhere inside it, and
+   * `muffinWorkspace` silently fell back to the default because of it — the
+   * one relocation a diagnostic run without any particular cwd can actually
+   * see (a supervisor's imposed cwd is invisible from here; see above).
+   */
+  envRejected: { requested: string } | null;
+};
+
+export function describeWorkspace(home = muffinHome()): WorkspaceStatus {
+  const workspace = muffinWorkspace(home);
+  const raw = process.env[WORKSPACE_ENV];
+  let envRejected: WorkspaceStatus['envRejected'] = null;
+  if (raw !== undefined && raw.trim() !== '') {
+    const candidate = resolve(raw.trim());
+    if (isSameOrNestedPath(candidate, home)) envRejected = { requested: candidate };
+  }
+  return { workspace, exists: existsSync(workspace), envRejected };
+}
+
 /** What `resolveWorkspace` decided, and what the caller has to say about it. */
 export type WorkspaceChoice = {
   /** Absolute, existing. Becomes `FsScope.root` and the sandbox write scope. */
