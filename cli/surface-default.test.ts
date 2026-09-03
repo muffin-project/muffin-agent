@@ -10,7 +10,7 @@ import {
   saveConfig,
   type Config,
 } from '../core/config/config.js';
-import { cmdSurfaceDefault, cmdSurfaceList } from './surface.js';
+import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceList } from './surface.js';
 
 /**
  * `surfaces.default` era una manopola senza porta.
@@ -116,5 +116,50 @@ describe('muffin surface default', () => {
     cmdSurfaceList(dir);
     vi.restoreAllMocks();
     expect(out.join('')).not.toContain('finisce nel log');
+  });
+
+  /**
+   * Il vicolo cieco in due passi, chiuso: `default pippo` rimandava a `enable
+   * pippo`, che rispondeva «superficie sconosciuta».
+   */
+  it('una superficie che non esiste lo dice qui, non due comandi piu in la', () => {
+    const dir = home({ default: 'cli', enabled: ['cli'] });
+    const { err } = capture();
+    const code = cmdSurfaceDefault(dir, 'pippo');
+    vi.restoreAllMocks();
+    expect(code).toBe(78);
+    const testo = err.join('');
+    expect(testo).toContain('superficie sconosciuta');
+    expect(testo).not.toContain('surface enable pippo');
+    expect(loadConfig(dir).surfaces.default).toBe('cli');
+  });
+
+  /**
+   * Spegnere la predefinita la riporta a `cli`.
+   *
+   * Lo stato che si evita: `default: "telegram"` con telegram fuori da
+   * `enabled`. `reachesOwner` avrebbe risposto «si» — non e' `cli` — la
+   * consegna sarebbe tornata `{ delivered: false }` a ogni giro, e l'impegno
+   * sarebbe rimasto dovuto per sempre senza nessuna riga che nominasse la
+   * causa.
+   */
+  it('disabilitando la predefinita la riporta a cli, e lo dice', () => {
+    const dir = home({ default: 'telegram', enabled: ['cli', 'telegram'] });
+    const { out } = capture();
+    const code = cmdSurfaceDisable(dir, 'telegram');
+    vi.restoreAllMocks();
+    expect(code).toBe(0);
+    expect(loadConfig(dir).surfaces.default).toBe('cli');
+    expect(loadConfig(dir).surfaces.enabled).not.toContain('telegram');
+    expect(out.join('')).toContain('torna a cli');
+  });
+
+  it('disabilitando una superficie che non e la predefinita non tocca la predefinita', () => {
+    const dir = home({ default: 'telegram', enabled: ['cli', 'telegram', 'discord'] });
+    const { out } = capture();
+    cmdSurfaceDisable(dir, 'discord');
+    vi.restoreAllMocks();
+    expect(loadConfig(dir).surfaces.default).toBe('telegram');
+    expect(out.join('')).not.toContain('torna a cli');
   });
 });

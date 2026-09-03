@@ -10,6 +10,7 @@ import {
   locateSecret,
   locateSecretAll,
   paths,
+  readDefaultChannel,
   readSecret,
   secretDir,
   writeSecret,
@@ -187,5 +188,42 @@ describe('the secret chain says which link answered', () => {
     vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'altrove'));
     expect(secretDir('persistent', join(dir, '.muffin'))).toBe(join(dir, 'altrove', 'muffin', 'secrets'));
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * The live read behind `Runtime.defaultChannel`.
+ *
+ * These assertions exist to fail if the boot snapshot ever comes back. A judge
+ * measured the defect on a running gateway: `muffin surface default telegram`
+ * rewrote `config.json` from another process, the lane kept answering `cli`,
+ * and the remedy the agent itself had printed did nothing. Nothing in that
+ * failure was visible to a test that read the config once.
+ */
+describe('readDefaultChannel', () => {
+  it('sees a surfaces.default rewritten by another process, with no restart', () => {
+    const dir = home();
+    expect(readDefaultChannel(dir, 'cli')).toBe('cli');
+
+    const file = paths(dir).config;
+    const config = JSON.parse(readFileSync(file, 'utf8'));
+    config.surfaces = { default: 'telegram', enabled: ['cli', 'telegram'] };
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+
+    expect(readDefaultChannel(dir, 'cli')).toBe('telegram');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('falls back to the booted value rather than throwing, on a config that no longer parses', () => {
+    const dir = home();
+    writeFileSync(paths(dir).config, '{ non e json');
+    // The caller is the 30-second beat that keeps the gateway's claim alive: a
+    // config the owner is halfway through editing must not end the process.
+    expect(readDefaultChannel(dir, 'telegram')).toBe('telegram');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('falls back when the home has no config at all', () => {
+    expect(readDefaultChannel(join(tmpdir(), 'muffin-non-esiste-mai'), 'discord')).toBe('discord');
   });
 });

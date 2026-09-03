@@ -53,6 +53,17 @@ import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
  * verbs about the registry, not ways of running the agent.
  */
 
+/**
+ * Le superfici che questa build conosce.
+ *
+ * Una lista sola, perché `surface list` la percorreva con un letterale suo e
+ * `surface default` non ce l'aveva affatto: chiedere `default pippo` rimandava
+ * a `enable pippo`, che rispondeva «superficie sconosciuta» — un vicolo cieco
+ * in due passi. Aggiungere una superficie senza toccarla è il modo in cui i due
+ * elenchi finiscono per non essere d'accordo.
+ */
+export const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
+
 export const SURFACE_USAGE = `usage:
   muffin surface list                     le superfici e il loro stato
   muffin surface enable telegram [--owner <chat-id>]
@@ -83,6 +94,13 @@ export function cmdSurfaceDefault(home: string, id: string): number {
   // `cli` e' sempre abilitata (L0-1) e non compare necessariamente in `enabled`
   // di ogni config scritta a mano: l'unica superficie che non ha bisogno del
   // permesso di essere scelta.
+  // Una superficie che non esiste si dice qui. Prima il ramo era uno solo e
+  // mandava a `surface enable pippo`, che risponde «superficie sconosciuta»:
+  // un vicolo cieco in due passi, trovato da un giudice.
+  if (!SUPERFICI_NOTE.includes(id)) {
+    process.stderr.write(`superficie sconosciuta: ${id}\n  quelle che esistono: ${SUPERFICI_NOTE.join(', ')}\n`);
+    return 78;
+  }
   if (id !== 'cli' && !config.surfaces.enabled.includes(id)) {
     process.stderr.write(
       `${id} non è abilitata: non può essere la superficie predefinita
@@ -102,6 +120,12 @@ export function cmdSurfaceDefault(home: string, id: string): number {
     `superficie predefinita: ${id}
 ` +
       `  è dove finisce ciò che Muffin dice di sua iniziativa — promemoria scaduti, osservazioni.
+` +
+      // Vero perché la corsia rilegge `config.json` a ogni giro
+      // (`Runtime.defaultChannel`). Prima non lo era, e il giudice l'ha
+      // misurato: l'owner girava la manopola, il gateway continuava per giorni
+      // a rispondere `cli`, e niente distingueva il rimedio da un difetto.
+      `  un gateway già in esecuzione la prende al giro dopo, senza riavvio.
 `,
   );
   return 0;
@@ -111,7 +135,7 @@ export function cmdSurfaceList(home: string): number {
   const config = loadConfig(home);
   const lines: string[] = [];
 
-  for (const id of ['cli', 'telegram', 'discord']) {
+  for (const id of SUPERFICI_NOTE) {
     const enabled = config.surfaces.enabled.includes(id);
     const isDefault = config.surfaces.default === id;
     let detail = '';
@@ -374,11 +398,30 @@ export function cmdSurfaceDisable(home: string, id: string): number {
     process.stderr.write(`${id} non è abilitata\n`);
     return 1;
   }
+  // Spegnere la superficie predefinita la riporta a `cli`, e lo dice. Lasciarla
+  // puntata a una superficie ora spenta era uno stato che nessun comando poteva
+  // produrre di proposito: `reachesOwner` avrebbe risposto «sì» (non è `cli`) e
+  // la consegna sarebbe tornata `{ delivered: false }` a ogni giro, con
+  // l'impegno dovuto per sempre e nessuna riga che nominasse la causa.
+  const eraPredefinita = config.surfaces.default === id;
   saveConfig(
-    { ...config, surfaces: { ...config.surfaces, enabled: config.surfaces.enabled.filter((s) => s !== id) } },
+    {
+      ...config,
+      surfaces: {
+        ...config.surfaces,
+        enabled: config.surfaces.enabled.filter((s) => s !== id),
+        ...(eraPredefinita ? { default: 'cli' } : {}),
+      },
+    },
     home,
   );
   process.stdout.write(`${id} disabilitata\n`);
+  if (eraPredefinita) {
+    process.stdout.write(
+      `  era la superficie predefinita: torna a cli\n` +
+        `  → muffin surface default <id> per mandarla altrove\n`,
+    );
+  }
   return 0;
 }
 

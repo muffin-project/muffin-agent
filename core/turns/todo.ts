@@ -203,10 +203,13 @@ CREATE TABLE IF NOT EXISTS todos (
   -- ADR-0060. Nullable with no default, the opposite direction from the tier
   -- column above: a step without a moment is the ordinary case, and inventing
   -- one would turn every plan item into something that can wake the process up.
-  -- Migration 4 adds both to installs that predate them (core/db/migrate.ts).
+  -- Migration 4 adds this to installs that predate it (core/db/migrate.ts).
   due_at      TEXT,
   -- The full ceiling of the turn that put the date on. NULL for a row nobody
-  -- ever dated; read only by dueCommitments, never by planTaint. See the
+  -- ever dated; read only by dueCommitments, never by planTaint. Migration 5,
+  -- separate from 4 on purpose: the two columns shipped as one version for a
+  -- single commit, and a database stamped by that build would never get this
+  -- one (core/db/migrate.ts). See the
   -- section on the second tier in this file's docstring: the delayed trigger is
   -- precisely the case intrinsicTaint is defined to exclude.
   due_tier    INTEGER CHECK (due_tier IS NULL OR due_tier BETWEEN 0 AND 3),

@@ -66,6 +66,8 @@ function harness(
   events: CommitmentEvent[];
   lane: CommitmentLane;
   scheduler: Scheduler;
+  /** Turn the manopola under a lane that is already running. */
+  setChannel: (c: string) => void;
 } {
   const db = new DatabaseCtor(':memory:');
   const todos = new TodoStore(db, () => WROTE);
@@ -78,10 +80,16 @@ function harness(
       sent.push({ channel, text });
       return DELIVERED;
     });
+  // Mutable, because `surfaces.default` is: it is the field
+  // `muffin surface default` rewrites, from another process, while this one
+  // keeps running. A `const` here would have been a fake that agreed with the
+  // defect.
+  let channel = over.channel ?? 'cli';
   const runtime = {
     db,
     deps: { todos },
-    config: { surfaces: { default: over.channel ?? 'cli' } },
+    config: { surfaces: { default: channel } },
+    defaultChannel: () => channel,
     quietHours: over.quietHours ?? QUIET,
     budget: { exhausted: () => over.budgetExhausted === true },
   } as unknown as Runtime;
@@ -91,6 +99,9 @@ function harness(
     hasTerminal: () => over.hasTerminal !== false,
     onEvent: (e) => events.push(e),
   });
+  const setChannel = (c: string): void => {
+    channel = c;
+  };
   const scheduler = new Scheduler(
     new JobStore(db),
     async () => ({ stopped: 'error' as const, text: '', turnId: null }),
@@ -106,7 +117,7 @@ function harness(
     undefined,
     lane,
   );
-  return { todos, fires, sent, events, lane, scheduler };
+  return { todos, fires, sent, events, lane, scheduler, setChannel };
 }
 
 /** Writes one dated step exactly the way the `todo` tool does. */
@@ -412,6 +423,87 @@ describe('B1 — dove finisce la promessa, e quando l ancora si brucia', () => {
         text: 'Promemoria in ritardo: chiamare il commercialista — era per martedì 6 ottobre alle 09:00.',
       },
     ]);
+  });
+
+  /**
+   * Il caso vero, e il bloccante del secondo giudice.
+   *
+   * Il test qui sopra parte gia' con `telegram`: prova che una corsia costruita
+   * con la manopola gia' girata consegna, che non e' quello che l'ADR afferma.
+   * L'affermazione e' «quando l'owner gira la manopola, la promessa arriva» — e
+   * l'owner la gira da **un altro processo**, su un gateway che sotto launchd
+   * sta su per giorni. Misurato sul binario: il canale era catturato alla
+   * costruzione, quindi il giro dopo diceva ancora `"cli" non arriva a nessuno
+   * da qui`. Il rimedio che l'agente stesso stampa era inerte.
+   */
+  it('la manopola girata a corsia viva: il giro dopo consegna, senza riavvio', async () => {
+    const h = harness({ hasTerminal: false });
+    promise(h.todos, 'chiamare il commercialista', 0);
+
+    h.scheduler.tick(ON_TIME);
+    await h.lane.idle();
+    expect(h.sent).toEqual([]);
+    expect(h.events.filter((e) => e.kind === 'unreachable')).toHaveLength(1);
+
+    // `muffin surface default telegram`, da fuori, senza toccare questo processo.
+    h.setChannel('telegram');
+    h.scheduler.tick(new Date('2026-10-06T09:04:30+02:00'));
+    await h.lane.idle();
+
+    expect(h.sent).toEqual([{ channel: 'telegram', text: 'Promemoria: chiamare il commercialista' }]);
+    expect(h.fires.has(anchorOf(1))).toBe(true);
+  });
+
+  /**
+   * E se la manopola porta su una superficie che non risponde, la riga nuova si
+   * dice una volta sola per canale — ma **si dice**: e' un fatto diverso da
+   * quello gia' annunciato per `cli`, e tacerlo lascerebbe l'owner convinto che
+   * il rimedio abbia funzionato.
+   */
+  it('cambiato canale, il silenzio si annuncia di nuovo — una volta per canale', async () => {
+    const h = harness({ hasTerminal: false, deliver: async () => ({ delivered: false, why: 'giu' }) });
+    promise(h.todos, 'una cosa', 0);
+
+    h.scheduler.tick(ON_TIME);
+    await h.lane.idle();
+    h.setChannel('telegram');
+    for (const t of [new Date('2026-10-06T09:04:30+02:00'), new Date('2026-10-06T09:05:00+02:00')]) {
+      h.scheduler.tick(t);
+      await h.lane.idle();
+    }
+
+    expect(h.events.map((e) => e.kind)).toEqual(['unreachable', 'undelivered']);
+    expect(h.fires.has(anchorOf(1))).toBe(false);
+  });
+
+  /**
+   * `unreachable` era dedotto, `undelivered` no: una predefinita giu' per
+   * sempre scriveva una riga ogni trenta secondi, cioe' le 2 880 al giorno che
+   * l'altro dedup esiste per evitare. Zittire la *riga* non zittisce il
+   * tentativo — l'ancora resta aperta e il giro dopo riprova.
+   */
+  it('una consegna fallita lo dice una volta, non a ogni battito', async () => {
+    let tentativi = 0;
+    const h = harness({
+      hasTerminal: true,
+      deliver: async () => {
+        tentativi += 1;
+        return { delivered: false, why: 'la superficie non risponde' };
+      },
+    });
+    promise(h.todos, 'una cosa', 0);
+    for (const t of [
+      ON_TIME,
+      new Date('2026-10-06T09:04:30+02:00'),
+      new Date('2026-10-06T09:05:00+02:00'),
+    ]) {
+      h.scheduler.tick(t);
+      await h.lane.idle();
+    }
+
+    expect(h.events.filter((e) => e.kind === 'undelivered')).toHaveLength(1);
+    expect(tentativi).toBe(3);
+    expect(h.fires.has(anchorOf(1))).toBe(false);
   });
 
   it('un canale irraggiungibile lo dice una volta, non a ogni battito', async () => {

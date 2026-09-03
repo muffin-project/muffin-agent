@@ -15,8 +15,10 @@ import type { Runtime } from './runtime.js';
  *
  * Everything here is read from the runtime rather than re-derived: the quiet
  * window and the spend cap come from inside the seal via `Runtime.quietHours`
- * and `Runtime.budget`, the channel from the config the surfaces were built
- * from, and the database connection is the process's single one.
+ * and `Runtime.budget`, the channel from `Runtime.defaultChannel` — which
+ * re-reads `config.json` per pass, so the remedy this lane prints works on a
+ * gateway that is already running — and the database connection is the
+ * process's single one.
  */
 
 /**
@@ -58,7 +60,10 @@ export function makeCommitmentLane(
     // commitment and an absence can never collide and neither can speak twice.
     fires: new FireLog(runtime.db),
     deliver,
-    channel: runtime.config.surfaces.default,
+    // Read per pass, from disk, not from the boot snapshot — `Runtime.defaultChannel`
+    // carries the measurement. The remedy this lane prints is a command another
+    // process runs; a captured value made it inert.
+    channel: runtime.defaultChannel,
     /**
      * `cli` reaches the owner only when a terminal is attached; every other
      * channel is answered by the registry itself, which already returns

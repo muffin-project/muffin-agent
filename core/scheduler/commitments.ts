@@ -57,6 +57,28 @@ import type { ProactiveContext, ProactiveDecision, ProactiveTrigger } from './pr
  * correction attached, because "closed by construction" is the claim this
  * repository is most often wrong about.
  *
+ * ### Where the rail ends, measured
+ *
+ * It bounds the class; it does not close it, and the second judge measured the
+ * boundary. `due_tier` is the ceiling of the turn that put the **date** on the
+ * row, and a ceiling decays: `taint()` is computed over the reinjected history,
+ * which is `MAX_HISTORY_TURNS = 40` turns (`agent/loop.ts`). A page read at
+ * turn N can have its sentence written as a plan step at turn N+1 already at
+ * tier 0 — `intrinsicTaint()` is *defined* to exclude what came back from an
+ * earlier turn, and `agent/tools/todo.test.ts` asserts that as intended — and
+ * once the tainted lines have fallen out of the window, dating that still-open
+ * step arms it at `max(0, 0) = 0`. The lane then allows it and speaks the
+ * page's sentence.
+ *
+ * So the honest claim is narrower than "denied": a promise planted by a page or
+ * a group is denied while the turn that plants or dates it still carries the
+ * ceiling, which is the whole same-turn case and the following forty. Beyond
+ * that window the ceiling is gone and the rail is not there. Closing it needs
+ * provenance **per row** rather than a snapshot of a tier — a different, larger
+ * decision than ADR-0060, recorded in its "Limiti noti" rather than implied
+ * away here. Stated rather than discovered, because the previous two versions
+ * of this paragraph both claimed a closure the code did not have.
+ *
  * ## Un `deny` e' definitivo, e si registra
  *
  * Both tiers are monotone per row (`max()` in every writer), so a commitment
@@ -265,9 +287,27 @@ export type CommitmentLaneDeps = {
   tenant: string;
   fires: FireLog;
   deliver: Deliver;
-  channel: string;
   /**
-   * Does a message sent to `channel` actually arrive where the owner is?
+   * Where the owner reads, **asked per pass** — not captured once.
+   *
+   * Same rule as `context` below, and the second judge is why it is a function
+   * rather than a string. `surfaces.default` is the manopola the `unreachable`
+   * event tells the owner to turn, and it is turned by a *different process*
+   * (`muffin surface default`, writing `config.json`). A lane that read it at
+   * construction obeyed a value from boot for ever: measured on a running
+   * gateway, the knob went to `telegram` and the next pass still printed
+   * `"cli" non arriva a nessuno da qui`. Under launchd that is a remedy the
+   * owner performs, sees no effect from, and has no way to tell from a bug —
+   * the mechanism existing while production never reaches it, on the one field
+   * that decides whether a promise is ever spoken.
+   *
+   * `config.json` is deliberately outside the seal (`core/rot/budgets.ts`
+   * says why: it holds the surfaces and the pairing state), so re-reading it
+   * is a plain file read and crosses no trust boundary.
+   */
+  channel: () => string;
+  /**
+   * Does a message sent to that channel actually arrive where the owner is?
    *
    * Required, not optional, and the judge's B1 is why. `cliSurface.deliver`
    * writes to stdout and returns `DELIVERED` — honestly, because for that
@@ -291,12 +331,23 @@ export type CommitmentLaneDeps = {
 
 export type CommitmentEvent =
   | { kind: 'spoke'; anchor: string; late: boolean }
+  /**
+   * Reachable in principle, and the send did not land. Deduped exactly like
+   * `unreachable`, and the second judge is why: only that one was, so a
+   * default surface that was permanently down wrote a line every thirty
+   * seconds for ever — the 2 880 lines a day the other dedup exists to
+   * prevent. Suppressing the *line* is not suppressing the retry: the anchor
+   * stays open and the next pass tries again, and a send that lands is
+   * reported as `spoke`.
+   */
   | { kind: 'undelivered'; anchor: string; why: string }
   /**
    * Due, allowed by the gate, and nowhere to say it. Reported once per anchor
-   * per process, not once per tick: the promise stays open and the tick is
-   * every thirty seconds, so the alternative is a log that repeats the same
-   * line 2 880 times a day.
+   * **and channel** per process, not once per tick: the promise stays open and
+   * the tick is every thirty seconds, so the alternative is a log that repeats
+   * the same line 2 880 times a day. The channel is part of the key because it
+   * can now change under a running process — after the owner turns the knob,
+   * a still-unreachable promise is a different fact and says so once more.
    */
   | { kind: 'unreachable'; anchor: string; channel: string; remedy: string }
   /** The pass itself threw. See `tick`: this must never reach the process. */
@@ -326,7 +377,10 @@ export type CommitmentEvent =
 export class CommitmentLane {
   private inFlight: Promise<void> = Promise.resolve();
   private running = false;
-  /** Anchors already reported as having nowhere to go, this process. */
+  /**
+   * Anchors already reported as unspoken, this process, keyed by anchor and
+   * channel — see `unreachable` and `undelivered`.
+   */
   private readonly announced = new Set<string>();
 
   constructor(private readonly deps: CommitmentLaneDeps) {}
@@ -359,12 +413,22 @@ export class CommitmentLane {
   }
 
   private async pass(now: Date): Promise<void> {
+    // Once per pass, not once per row: every observation in this pass is
+    // judged against the same channel, and a config rewritten mid-loop must
+    // not split one beat between two answers.
+    const channel = this.deps.channel();
+    const detto = (anchor: string): boolean => {
+      const key = `${anchor}\u0000${channel}`;
+      if (this.announced.has(key)) return true;
+      this.announced.add(key);
+      return false;
+    };
     const observations = observeCommitments({
       due: () => this.deps.todos.dueCommitments(this.deps.tenant, now),
       decide: this.deps.decide ?? decideProactive,
       fires: this.deps.fires,
       ctx: this.deps.context(now),
-      channel: this.deps.channel,
+      channel,
     });
 
     for (const obs of observations) {
@@ -381,13 +445,12 @@ export class CommitmentLane {
       // promise the owner cannot receive is still owed. It is *not* delivered
       // to the terminal-of-last-resort first — that would print the same
       // reminder into the journal every thirty seconds for ever.
-      if (!this.deps.reachesOwner(this.deps.channel)) {
-        if (!this.announced.has(obs.anchor)) {
-          this.announced.add(obs.anchor);
+      if (!this.deps.reachesOwner(channel)) {
+        if (!detto(obs.anchor)) {
           this.deps.onEvent?.({
             kind: 'unreachable',
             anchor: obs.anchor,
-            channel: this.deps.channel,
+            channel,
             remedy: 'muffin surface default <telegram|discord>',
           });
         }
@@ -396,13 +459,15 @@ export class CommitmentLane {
 
       try {
         const text = commitmentMessage(obs.commitment, now, this.deps.timezone);
-        const outcome = await this.deps.deliver(this.deps.channel, text);
+        const outcome = await this.deps.deliver(channel, text);
         if (!outcome.delivered) {
           // The anchor stays open, the rule `cli/observe.ts` runs on: only a
           // message that reached the owner is a thing that was said. A promise
           // burned on a delivery that did not happen is a promise lost for
           // good, which is the one outcome ADR-0060 refuses.
-          this.deps.onEvent?.({ kind: 'undelivered', anchor: obs.anchor, why: outcome.why });
+          if (!detto(obs.anchor)) {
+            this.deps.onEvent?.({ kind: 'undelivered', anchor: obs.anchor, why: outcome.why });
+          }
           continue;
         }
         recordCommitmentFired(this.deps.fires, obs, now);
@@ -414,11 +479,13 @@ export class CommitmentLane {
       } catch (error) {
         // Rendering is inside this `try` too, not only the send: `quando()`
         // reaches `Intl` with a timezone this process has never validated.
-        this.deps.onEvent?.({
-          kind: 'undelivered',
-          anchor: obs.anchor,
-          why: error instanceof Error ? error.message : String(error),
-        });
+        if (!detto(obs.anchor)) {
+          this.deps.onEvent?.({
+            kind: 'undelivered',
+            anchor: obs.anchor,
+            why: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
   }

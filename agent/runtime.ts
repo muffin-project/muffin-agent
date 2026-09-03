@@ -4,7 +4,15 @@ import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { loadConfig, paths, promptVersion, readSecret, secretDir, type Config } from '../core/config/config.js';
+import {
+  loadConfig,
+  paths,
+  promptVersion,
+  readDefaultChannel,
+  readSecret,
+  secretDir,
+  type Config,
+} from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import type { QuietHours } from '../core/scheduler/proactivity.js';
@@ -115,6 +123,38 @@ export type Runtime = {
    * `{quietHours:{timezone:1}}` meant.
    */
   quietHours: QuietHours;
+  /**
+   * `surfaces.default` — where the owner reads — **read from disk per call**,
+   * not the copy in `config` above.
+   *
+   * A live question, exposed the way `budget.exhausted()` is, and a judge
+   * measured why. The dated-commitment lane (ADR-0060) tells the owner to run
+   * `muffin surface default telegram` when a promise has nowhere to go. That
+   * command is a *different process* rewriting `config.json`; this one holds a
+   * snapshot taken at boot. So the owner ran the remedy the agent asked for,
+   * on a gateway that keeps running for days under launchd, and the next pass
+   * still said `"cli" non arriva a nessuno da qui` — the remedy inert, with
+   * nothing to distinguish it from a bug.
+   *
+   * Two callers, one function, for the same reason `makeCommitmentLane` is one
+   * function: a manopola that works from the gateway and not the REPL is a
+   * manopola the owner cannot rely on.
+   *
+   * The read is a plain `readFileSync` + parse of a file that is deliberately
+   * **outside** the seal (`core/rot/budgets.ts` states why: `config.json` holds
+   * the surfaces and the pairing state), so it crosses no trust boundary. A
+   * config that has become unreadable or invalid since boot falls back to the
+   * booted value rather than throwing: the caller is on the 30-second beat that
+   * keeps the gateway's claim alive, and a promise is not the thing to take a
+   * process down over.
+   *
+   * What this does *not* buy: a surface **enabled** after boot. The registry is
+   * built once by `connectSurfaces`, so pointing the default at a surface this
+   * process never connected returns `{ delivered: false }` — honest, anchor
+   * left open, and still a restart. Turning the knob between surfaces that were
+   * already up is the case this makes live, and it is the case the remedy names.
+   */
+  defaultChannel: () => string;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
   /**
@@ -888,6 +928,7 @@ export function buildRuntime(
     config,
     budget,
     quietHours: budgets.quietHours,
+    defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
     jobs,
     jobFires,
     db,

@@ -46,9 +46,23 @@ export const todoCapability: CapabilityDecl = {
    * What guards the new consumer is not this declaration and could not be: the
    * policy kernel decides what a *turn* may do, and the promise is delivered a
    * month later by a process with no turn in it. It is `decideProactive`, whose
-   * first line denies any trigger above tier 1 — and the row carries the tier of
-   * the turn that wrote it (`ctx.intrinsicTaint()`, below), so a promise planted
-   * by a page or a group cannot speak. Said plainly here because a capability
+   * first line denies any trigger above tier 1, reading the row's own
+   * `max(tier, due_tier)` — the ceiling of the turn that put the **date** on
+   * it, not just the one that wrote the text.
+   *
+   * That bounds the case; it does not close it, and the limit is written here
+   * rather than left to be discovered. The ceiling is a snapshot of a turn, and
+   * a turn's ceiling decays with the reinjection window (`MAX_HISTORY_TURNS`,
+   * `agent/loop.ts`): a sentence from a page can be written as a step at tier 0
+   * the very next turn — `intrinsicTaint()` is defined to exclude what came
+   * back from an earlier turn, and `todo.test.ts` asserts that as intended —
+   * and dating that step forty turns later arms it at 0. So: a promise planted
+   * by a page or a group cannot speak *while the ceiling of the turn that
+   * plants or dates it still carries the page*; beyond that window it can.
+   * Closing it needs per-row provenance instead of a tier snapshot, which is a
+   * larger decision than this one — ADR-0060, "Limiti noti".
+   *
+   * Said plainly here because a capability
    * whose declaration describes the world before the last commit is exactly the
    * lie this file's own docstring warns about.
    */

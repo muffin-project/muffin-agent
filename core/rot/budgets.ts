@@ -162,7 +162,15 @@ export function loadSealedBudgets(home: string): SealedBudgets {
     // Il motivo, non solo il verdetto: `"Europe/Roma"` e `"11pm"` sono lo
     // stesso esito con due cause diverse, e una riga che non le distingue
     // manda l'owner a rileggere il file invece che a correggere un carattere.
-    notes.push(`${file}: quietHours non valide (${issue(quiet.error)}) — vale la finestra compilata`);
+    // E il fuso, non solo la finestra: `QUIET_FLOOR` è in UTC, e da questo
+    // stesso campo la corsia degli impegni rende «era per giovedì alle 11:00».
+    // Un giudice l'ha misurato — con `"Europe/Roma"` sigillato l'orario usciva
+    // in UTC e la riga di avviso non lo diceva, quindi l'owner leggeva un'ora
+    // sbagliata senza nessun modo di sapere perché.
+    notes.push(
+      `${file}: quietHours non valide (${issue(quiet.error)}) — vale la finestra compilata ` +
+        `(${QUIET_FLOOR.from}–${QUIET_FLOOR.to} ${QUIET_FLOOR.timezone}, e gli orari che Muffin dice escono in ${QUIET_FLOOR.timezone})`,
+    );
   }
 
   return {

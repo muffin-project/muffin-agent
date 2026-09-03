@@ -127,9 +127,31 @@ un terminale attaccato (il REPL risponde sempre sì, il gateway chiede a
 `process.stdout.isTTY`), ogni altro canale è già risolto dal registro, che
 risponde `{ delivered: false }` per una superficie che non è su e lascia l'ancora
 aperta. Se non raggiunge, **non si manda e non si brucia**: l'impegno resta
-dovuto, e viene annunciato **una volta per ancora e per processo**, non a ogni
-battito — l'alternativa è la stessa riga 2 880 volte al giorno. Quando l'owner
-gira la manopola, la promessa arriva: in ritardo, e dicendolo.
+dovuto, e viene annunciato **una volta per ancora e per canale, per processo**,
+non a ogni battito — l'alternativa è la stessa riga 2 880 volte al giorno. Lo
+stesso dedup vale per una consegna che fallisce: la riga si dice una volta, il
+**tentativo** invece si ripete a ogni giro, perché l'ancora resta aperta.
+
+**E la manopola si legge a ogni giro, non all'avvio.** È la riparazione del
+secondo giudice, e senza di essa la frase qui sotto era falsa. `surfaces.default`
+lo riscrive **un altro processo** (`muffin surface default`), mentre il gateway
+sotto launchd sta su per giorni: una corsia che lo avesse catturato alla
+costruzione avrebbe continuato a rispondere `cli` per sempre. Misurato su un
+gateway vivo prima della riparazione: girata la manopola su `telegram`, il giro
+dopo stampava ancora *«"cli" non arriva a nessuno da qui»*. Il rimedio che
+l'agente stesso stampa era inerte — il meccanismo che esiste e che la produzione
+non raggiunge, dentro la riparazione che doveva chiudere proprio quella forma.
+`config.json` sta **fuori** dal sigillo di proposito (tiene superfici e
+appaiamento), quindi rileggerlo è una lettura di file e non attraversa nessun
+confine di fiducia; una config illeggibile a metà modifica ricade sul valore
+d'avvio invece di uccidere il processo, perché il chiamante è il battito che
+tiene viva la rivendicazione del gateway.
+
+Quindi, adesso, quando l'owner gira la manopola la promessa arriva al giro
+successivo: in ritardo, e dicendolo. Con **un'eccezione dichiarata**: una
+superficie *accesa* dopo l'avvio non c'è nel registro, che `connectSurfaces`
+costruisce una volta sola — la consegna torna `{ delivered: false }`, onesta e
+con l'ancora aperta, e lì serve ancora un riavvio.
 
 Scartata l'alternativa di un canale **per riga** (`todo due --channel`): un
 impegno non ha nessuna ragione di andare altrove rispetto a tutto il resto di ciò
@@ -272,7 +294,7 @@ funzione, `makeCommitmentLane`.
 
 ## Limiti noti, dichiarati e non chiusi qui
 
-Quattro, trovati da un giudice indipendente e **non riparati in questa slice**:
+Cinque, trovati da giudici indipendenti e **non riparati in questa slice**:
 sono scritti qui perché un limite non dichiarato è indistinguibile da un difetto
 che nessuno ha visto.
 
@@ -290,7 +312,22 @@ che nessuno ha visto.
    09:00» letto tre mesi dopo si legge come ieri. La forma giusta probabilmente
    dipende da quanto è vecchio l'impegno, e inventarla senza un caso vero è
    esattamente ciò che questo repository chiama una costante non misurata.
-4. **Un passo `blocked` o `waiting` con una data parla comunque.** Solo `done`
+4. **La rotaia del taint è limitata dalla finestra di reiniezione, non
+   assoluta.** `due_tier` è il soffitto del turno che ha messo la **data**, e un
+   soffitto decade: `taint()` si calcola sulla storia reiniettata, che è
+   `MAX_HISTORY_TURNS = 40` turni. Una pagina letta al turno N può vedere la
+   propria frase scritta come passo già al turno N+1 a tier 0 —
+   `intrinsicTaint()` è *definita* per escludere ciò che è tornato da un turno
+   precedente, e `agent/tools/todo.test.ts` lo asserisce come voluto — e datare
+   quel passo ancora aperto dopo che le righe sporche sono uscite dalla finestra
+   lo arma a `max(0, 0) = 0`: la corsia consegna la frase della pagina. Il caso
+   che il primo giudice aveva trovato (datare mentre il soffitto è **ancora**
+   alto) è chiuso e verificato; questo no. Chiuderlo vuol dire una **provenienza
+   per riga** invece di un'istantanea di tier, che è una decisione nuova e non
+   questa. Registrato qui perché due stesure di fila hanno affermato all'indicativo
+   una chiusura che il codice non aveva, e nel codice le due frasi sono state
+   corrette (`core/scheduler/commitments.ts`, `agent/tools/todo.ts`).
+5. **Un passo `blocked` o `waiting` con una data parla comunque.** Solo `done`
    zittisce. È coerente con il modello — `blocked` significa «qualcosa lo ha
    fermato», non «non serve più», e ADR-0047 rifiuta di proposito uno stato
    «lascia perdere» — ma non era dichiarato da nessuna parte, e quindi finora
@@ -319,5 +356,9 @@ riaperta con quel numero in mano.
 
 Il secondo segnale è quello che ADR-0028 ha già scelto per sé: il tasso con cui
 l'owner scarta ciò che Muffin dice di sua iniziativa. Se sale, il produttore si
-spegne. Oggi non è misurabile — il fire log registra solo gli `allow`, per
-costruzione dichiarata — e questa slice non lo cambia.
+spegne. Oggi resta non misurabile, e va detto con precisione perché una stesura
+precedente di questo paragrafo contraddiceva il §1-bis di questa stessa
+decisione: il fire log non registra più *soltanto* gli `allow` — un `deny`
+definitivo ci finisce, ed è il §1-bis — ma «rifiutato dal kernel» non è
+«scartato dall'owner», che è il numero che servirebbe. Nessuna delle due righe
+lo misura, e questa slice non aggiunge il canale che potrebbe.
