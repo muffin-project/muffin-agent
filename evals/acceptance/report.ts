@@ -53,10 +53,28 @@ export type InventoryRow = { id: string; area: string; question: string; stato: 
  * the parser needs updating, not that the row does not exist.
  */
 function parseInventory(): InventoryRow[] {
-  const text = readFileSync(DAY1_REQUIREMENTS, 'utf8');
+  return parseInventoryRows(readFileSync(DAY1_REQUIREMENTS, 'utf8'), DAY1_REQUIREMENTS);
+}
+
+/**
+ * Il parser, separato dal file che legge, perché la sua trappola si prova solo
+ * su testo.
+ *
+ * `(?:[^|\\]|\\.)+?` e non `[^|]+?`: in una tabella Markdown una barra dentro
+ * una cella si scrive `\|`, ed è legale. Con la classe negata secca quella
+ * cella terminava la colonna, la riga non corrispondeva più, e l'inventario
+ * *perdeva la riga* — in silenzio. Misurato il 03/09: aggiungendo
+ * `--channel <main\|dev>` alla riga A6, il rapporto non ha detto «A6 non si
+ * legge» ma «scenario A6 orfano», cioè ha accusato il manifest di un difetto
+ * che stava nella cella di un documento. Un `continue` che salta la riga
+ * sbagliata è peggio di un errore: manda a cercare nel file sbagliato.
+ */
+export function parseInventoryRows(text: string, source = DAY1_REQUIREMENTS): InventoryRow[] {
+  const CELL = String.raw`(?:[^|\\]|\\.)+?`;
+  const riga = new RegExp(String.raw`^\|\s*([A-Z]\d{1,2})\s*\|\s*(${CELL})\s*\|\s*(${CELL})\s*\|\s*(${CELL})\s*\|\s*$`);
   const rows: InventoryRow[] = [];
   for (const line of text.split('\n')) {
-    const m = /^\|\s*([A-Z]\d{1,2})\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$/.exec(line);
+    const m = riga.exec(line);
     if (!m) continue;
     const [, id, area, question, rawStato] = m as unknown as [string, string, string, string, string];
     let stato: Stato;
@@ -68,7 +86,7 @@ function parseInventory(): InventoryRow[] {
     rows.push({ id, area, question, stato, rawStato });
   }
   if (rows.length === 0)
-    throw new Error(`nessuna riga trovata in ${DAY1_REQUIREMENTS} — il parser è disallineato dal formato`);
+    throw new Error(`nessuna riga trovata in ${source} — il parser è disallineato dal formato`);
   return rows;
 }
 

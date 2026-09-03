@@ -10,6 +10,7 @@ import type { RegisteredTool } from '../loop.js';
 import type { BuildStamp } from '../../cli/update.js';
 import type { TurnHealth } from '../../core/turns/store.js';
 import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
+import type { CapabilityGap } from './capability-status.js';
 
 /**
  * Propriocezione tecnica: cosa sta usando **adesso**, non cosa dice il progetto.
@@ -82,6 +83,14 @@ export type InspectSources = {
   turns: () => TurnHealth;
   /** `JobStore.list()`, come `muffin jobs`. */
   jobs: () => Job[];
+  /**
+   * Ogni capacità che questo assemblaggio ha spento o tagliato, dalla stessa
+   * lista che produce le `bootLines` e che `muffin doctor` legge (E7, la
+   * lacuna misurata il 03/09/2026: `web_search` spento, tre turni a
+   * riprovare, e il motivo — un host mancante in `rot/egress.json` — seduto
+   * in `gateway.err` da prima del primo tentativo).
+   */
+  capabilityGaps: readonly CapabilityGap[];
 };
 
 const inspectArgs = z.object({});
@@ -137,11 +146,25 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       const principal: Principal = ctx.principal;
       const cls = tenantClass(principal, ctx.tenant);
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
-      const esposti = visibleTools(
+      // Filtro poi tetto — lo stesso ordine di `agent/loop.ts` (`exposed =
+      // visibleTools(...).slice(0, maxToolsExposed)`), non solo il filtro. La
+      // riga precedente si fermava al filtro e diceva «capability esposte» su
+      // un elenco che il tetto del profilo avrebbe comunque ristretto: onesto
+      // sull'esclusione da host-only, muto su quella del tetto — la stessa
+      // lacuna che questo file esiste per chiudere altrove.
+      const filtrati = visibleTools(
         sources.tools.map((t) => ({ capability: t.capability, name: t.spec.name })),
         principal,
         sources.capabilities,
       );
+      const esposti = filtrati.slice(0, sources.profile.maxToolsExposed);
+      const tagliatiDalTetto = filtrati.slice(sources.profile.maxToolsExposed);
+      // Solo le spente qui: le tagliate dal tetto sono calcolate sopra, per
+      // *questo* principal e *questo* turno — più accurato del calcolo
+      // all'avvio in `sources.capabilityGaps` (che vale per il registro
+      // intero, prima del filtro host-only). Le due domande restano distinte
+      // anche nel testo: "spenta" contro "tagliata dal tetto".
+      const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];
       const salute = sources.turns();
       const job = sources.jobs();
@@ -161,10 +184,23 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `surface: ${surfaceOf(principal)} · principal: ${principal.kind} · tenant: ${ctx.tenant} · classe prompt: ${cls}`,
         `taint corrente: ${ctx.taint()}`,
         `capability esposte: ${esposti.map((t) => t.name).sort().join(', ')}`,
-        sources.tools.length === esposti.length
+        sources.tools.length === filtrati.length
           ? ''
-          : `  (${sources.tools.length - esposti.length} registrate ma non esposte a questo principal)`,
+          : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
+        tagliatiDalTetto.length === 0
+          ? ''
+          : `  (${tagliatiDalTetto.length} tagliate dal tetto di ${sources.profile.maxToolsExposed} tool del profilo "${sources.profile.name}": ${tagliatiDalTetto.map((t) => t.name).join(', ')} — alza maxToolsExposed in agent/profiles/${sources.profile.name}.json, oppure riduci quanti tool sono registrati prima di questi)`,
         '',
+        // Distinto da quanto sopra apposta: qui non è «non visto da questo
+        // principal» né «tagliato dal tetto», è «non esiste in questa
+        // installazione», con la ragione misurata e non ricordata (E7).
+        ...(spente.length === 0
+          ? []
+          : [
+              '# Capacità spente',
+              ...spente.map((g) => `  ✗ ${g.capability}: ${g.reason}${g.remedy === null ? '' : ` → ${g.remedy}`}`),
+              '',
+            ]),
         '# Salute, misurata adesso (le stesse verifiche di `muffin doctor`)',
         ...report.checks.map(checkLine),
         '',

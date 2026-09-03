@@ -265,12 +265,19 @@ export function createDecide(ctx: PolicyContext): Decide {
           return decl.reversible === 'undoable'
             ? { effect: 'draft', undo: { capability, windowSeconds: 300 } }
             : { effect: 'allow' };
-        case 'high':
+        case 'high': {
           // Without OS-level prevention of RoT tampering, a high-risk capability
           // is never a silent allow — see docs/decisions/0003-root-of-trust.md (revision).
-          return ctx.hardened && isOwnerPrincipal(principal) && taint === 0
-            ? { effect: 'allow' }
-            : ask(describe(capability, resource));
+          if (ctx.hardened && isOwnerPrincipal(principal) && taint === 0) return { effect: 'allow' };
+          // The owner reads this prompt with nothing else on screen: naming
+          // *why* it always asks is cheaper here than in a doc he is not
+          // reading mid-approval. Gated strictly on `!ctx.hardened` — a
+          // hardened install still asking here is asking for a different
+          // reason (a non-owner principal, or taint above 0), and must not
+          // borrow this one.
+          const because = ctx.hardened ? '' : ' — chiede sempre finché il blocco non è reale (`muffin rot harden`)';
+          return ask(`${describe(capability, resource)}${because}`);
+        }
       }
     })();
 

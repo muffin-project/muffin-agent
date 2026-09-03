@@ -6,6 +6,7 @@ import { formatReport, runDoctor } from './doctor.js';
 import { styleFor } from './ui.js';
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { cmdUndo } from './undo.js';
+import { cmdOrientamento } from './orientamento.js';
 import { defaultModels, isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { seal, verify } from '../core/rot/verify.js';
@@ -170,6 +171,12 @@ ispezione:
   muffin trace turn <id>        il turno passo per passo: cosa ha fatto, quanto
                                 ci ha messo, quanti token — l'id è quello che il
                                 turno stampa alla fine ("trace c22cb4445952")
+  muffin orientamento --db <path> [--cap N]
+                                quota di chiamate "di orientamento"
+                                (fs_list/fs_read/fs_search/sys_inspect) su
+                                turn_tool_calls di un database esplicito, mai
+                                la home di default; --cap conta i turni che
+                                l'hanno toccata (default 15)
 
 Exit code: 0 ok · 1 avvisi · 2 errore bloccante · 3 serve conferma · 70 errore imprevisto
            77 permesso negato · 78 configurazione non valida
@@ -355,6 +362,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return cmdTrace(rest);
     case 'undo':
       return cmdUndo(rest);
+    case 'orientamento':
+      return cmdOrientamento(rest);
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
