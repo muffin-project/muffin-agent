@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ambienteSection } from './assemble.js';
+import { ambienteSection, MAX_VOCI_CWD, type IstanzaFacts } from './assemble.js';
 
 const QUANDO = new Date('2026-08-28T04:59:00Z');
 const base = { adesso: QUANDO, surface: 'cli', classe: 'owner' as const, model: 'qwen/qwen3.8-27b', profilo: 'consumer-local', timeZone: 'Europe/Rome' };
@@ -133,5 +133,79 @@ describe('con cosa stai rispondendo', () => {
     const s = ambienteSection({ ...base, model: 'qwen/qwen3.8-27b', profilo: 'consumer-local' });
     expect(s).toContain('qwen/qwen3.8-27b');
     expect(s).toContain('consumer-local');
+  });
+});
+
+/**
+ * L'estensione di `docs/evidence/orizzonte-del-turno-2026-09-03.md` Parte 0:
+ * due righe di fatti d'istanza, sourced come `sys_inspect` li legge — non
+ * ricalcolati qui, solo formattati.
+ */
+describe('istanza (docs/evidence/orizzonte-del-turno-2026-09-03.md Parte 0)', () => {
+  const istanza: IstanzaFacts = {
+    cwd: '/home/owner/progetti/muffin',
+    voci: ['agent', 'cli', 'core', 'docs', 'package.json'],
+    provider: 'openrouter',
+    jobAttivi: 2,
+    safeMode: null,
+  };
+
+  it('assente di default: il blocco resta quello di prima', () => {
+    const s = ambienteSection({ ...base, classe: 'owner' });
+    expect(s).not.toContain('Cartella di lavoro');
+    expect(s).not.toContain('Istanza:');
+  });
+
+  it("dice la working directory, le sue voci di primo livello, il provider, i job attivi e il RoT", () => {
+    const s = ambienteSection({ ...base, classe: 'owner', istanza });
+    expect(s).toContain('Cartella di lavoro: /home/owner/progetti/muffin');
+    expect(s).toContain('agent, cli, core, docs, package.json');
+    expect(s).toContain('Istanza: openrouter · 2 job attivi · RoT integro.');
+  });
+
+  it('una directory vuota lo dice, invece di una riga senza voci', () => {
+    const s = ambienteSection({ ...base, classe: 'owner', istanza: { ...istanza, voci: [] } });
+    expect(s).toContain('0 elementi di primo livello: (vuota)');
+  });
+
+  it('il SAFE MODE sostituisce "RoT integro" con la ragione', () => {
+    const s = ambienteSection({
+      ...base,
+      classe: 'owner',
+      istanza: { ...istanza, safeMode: { reason: 'identity.md modificato' } },
+    });
+    expect(s).toContain('SAFE MODE (identity.md modificato)');
+    expect(s).not.toContain('RoT integro');
+  });
+
+  /**
+   * Il tetto sulle voci mostrate — la stessa ragione di `fs_list` che limita,
+   * qui applicata a un blocco che vive in **ogni** turno: senza un tetto
+   * questa sezione ricrea nel budget dei token il problema che la slice chiude
+   * nel budget dei tool.
+   */
+  it('più voci del tetto vengono tagliate, e il taglio si dice come conteggio', () => {
+    const tante = Array.from({ length: MAX_VOCI_CWD + 5 }, (_, i) => `voce-${i}`);
+    const s = ambienteSection({ ...base, classe: 'owner', istanza: { ...istanza, voci: tante } });
+    expect(s).toContain(`${tante.length} elementi di primo livello`);
+    expect(s).toContain('+5 altre');
+    // La prima voce oltre il tetto non compare per nome nell'elenco mostrato.
+    expect(s).not.toContain('voce-12');
+  });
+
+  /**
+   * **La proprietà che rende questa sezione collocabile solo nella coda
+   * volatile e mai in `systemPrompts`**: un membro di gruppo non vede
+   * l'istanza — stessa ragione di `inspectCapability.hostOnly` — anche quando
+   * il chiamante gliela passa. Non è un secondo controllo di sicurezza (quello
+   * lo fa `visibleTools`/il kernel per `sys_inspect`); è che qui non c'è una
+   * riga in meno da dimenticare di negare, perché la classe la nasconde da
+   * sola.
+   */
+  it("una classe 'group' non vede l'istanza, anche se passata", () => {
+    const s = ambienteSection({ ...base, classe: 'group', istanza });
+    expect(s).not.toContain('Cartella di lavoro');
+    expect(s).not.toContain('Istanza:');
+    expect(s).not.toContain('openrouter');
   });
 });
