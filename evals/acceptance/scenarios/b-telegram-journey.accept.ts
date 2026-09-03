@@ -500,6 +500,64 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (!tg.sent().some((c) => c.method === 'answerCallbackQuery')) {
             throw new Error('nessun answerCallbackQuery registrato dopo il click');
           }
+
+          // === docs/evidence/forma-delle-superfici-2026-09-03.md §7, esteso ===
+          //
+          // Il resto dello scenario si fermava qui, prima di questa slice: mai
+          // un'asserzione su cosa appare **fra** l'approvazione risolta e la
+          // risposta finale, perché prima non appariva niente da asserire. Le
+          // due righe sotto sono lo STAND-IN dichiarato dal brief: `tg` è il
+          // fake Bot API dell'harness di accettazione, non un client reale —
+          // vedi `docs/ORCHESTRATION.md` §"A stand-in cannot close a row the
+          // owner can see" e il report di questa slice.
+          //
+          // (a) La tastiera del messaggio ASK sparisce per costruzione, non
+          // per omissione: una chiamata esplicita a `editMessageReplyMarkup`
+          // con `reply_markup: { inline_keyboard: [] } — mai un'assunzione sul
+          // comportamento (non documentato) di `editMessageText` senza
+          // `reply_markup` (§4.4 della memo).
+          const tastieraTolta = tg
+            .sent()
+            .find((c) => c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === askMessageId);
+          if (!tastieraTolta) {
+            throw new Error('nessun editMessageReplyMarkup esplicito sul messaggio ASK dopo la decisione');
+          }
+          const tastieraVuota = tastieraTolta.payload['reply_markup'] as Keyboard | undefined;
+          if (!Array.isArray(tastieraVuota?.inline_keyboard) || tastieraVuota.inline_keyboard.length !== 0) {
+            throw new Error(`reply_markup non è una tastiera esplicitamente vuota: ${JSON.stringify(tastieraTolta.payload)}`);
+          }
+
+          // (b) Il passo `⏸ … aspetto la tua approvazione` dentro il segmento
+          // della trascrizione (un messaggio diverso da quello con la
+          // tastiera) si è risolto: l'ultimo edit su quel messaggio non porta
+          // più la riga di attesa, e porta il verdetto nello stesso
+          // vocabolario di ogni altro passo (`transcript.ts`'s `resolveAsk`).
+          const editSullaTrascrizione = tg
+            .sent()
+            .filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) !== askMessageId);
+          if (editSullaTrascrizione.length === 0) {
+            throw new Error('nessun edit sul messaggio della trascrizione (diverso da quello ASK)');
+          }
+          const ultimoTestoTrascrizione = String(
+            editSullaTrascrizione[editSullaTrascrizione.length - 1]?.payload['text'] ?? '',
+          );
+          if (ultimoTestoTrascrizione.includes('aspetto la tua approvazione')) {
+            throw new Error(
+              `la riga di attesa resta congelata a turno concluso:\n${ultimoTestoTrascrizione}`,
+            );
+          }
+          if (!ultimoTestoTrascrizione.includes('sys.shell: consentito')) {
+            throw new Error(`il verdetto non compare, risolto, nella trascrizione:\n${ultimoTestoTrascrizione}`);
+          }
+          // E il tool rieseguito dopo la ripresa è arrivato nello stesso
+          // segmento — non un messaggio nuovo — a riprova che
+          // `resumeStream` ha riusato la trascrizione tenuta aperta invece
+          // di aprirne una fresca.
+          if (!ultimoTestoTrascrizione.includes('eseguo un comando: echo ciao')) {
+            throw new Error(
+              `il passo del tool rieseguito dopo l'approvazione non è nello stesso segmento risolto:\n${ultimoTestoTrascrizione}`,
+            );
+          }
         } finally {
           await gw.stop();
         }
