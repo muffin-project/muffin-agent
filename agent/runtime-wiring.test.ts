@@ -266,16 +266,22 @@ describe('the sealed permission matrix reaches the kernel', () => {
    *
    * `memory.read` is the capability that isolates the ceiling: it is low risk,
    * so safe mode cannot be the thing refusing it, and it declares no `maxTaint`
-   * of its own, so the class default from `rot/policy.json` is the only number
-   * in play. A member starts the turn at taint 2 (`loop.ts`), which the shipped
-   * ceiling of 3 admits and a lowered ceiling of 1 does not.
+   * of its own, so the number from `rot/policy.json` is the only one in play. A
+   * member starts the turn at taint 2 (`loop.ts`), which the shipped ceiling of
+   * 3 admits and a lowered ceiling of 1 does not.
+   *
+   * The owner's edit is a **row** since ADR-0053, not a risk class:
+   * `memory.read` sits on `context`, and that is the entry the sealed file now
+   * tightens. The proof is the same one and about the same seam — an owner
+   * edit, a reseal, a restart, a different answer — on the vocabulary that
+   * decides.
    */
   function homeWithLowCeiling(low: number): string {
     const home = mkdtempSync(join(tmpdir(), 'muffin-matrix-'));
     runInit({ home, apiKey: 'sk-never-called' });
     const file = join(paths(home).rot, 'policy.json');
     const policy = JSON.parse(readFileSync(file, 'utf8'));
-    policy.defaultMaxTaint = { ...policy.defaultMaxTaint, low };
+    policy.rows = { ...(policy.rows ?? {}), context: { denyAbove: low } };
     writeFileSync(file, JSON.stringify(policy, null, 2));
     // Reseal, because an edited-but-unsealed root of trust degrades to safe
     // mode and would refuse for a reason that has nothing to do with this test.

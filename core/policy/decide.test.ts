@@ -4,13 +4,17 @@ import { POLICY_FLOOR } from './matrix.js';
 import type { CapabilityDecl, CapabilityId, Principal } from './types.js';
 
 const decls: CapabilityDecl[] = [
-  { id: 'memory.read', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'tenant', policyArgs: [], hostOnly: false },
-  { id: 'fs.write', risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
-  { id: 'sys.shell', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
-  { id: 'sys.http', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
-  { id: 'sys.search', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'query', policyArgs: ['query'], hostOnly: true },
-  { id: 'outward.send', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
-  { id: 'rot.write', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'path', policyArgs: [], hostOnly: true },
+  { id: 'memory.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'tenant', policyArgs: [], hostOnly: false },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'fs.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'sys.shell', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
+  { id: 'sys.http', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
+  { id: 'sys.search', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'query', policyArgs: ['query'], hostOnly: true },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'outward.send', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
+  // era il default della classe: la riga 'context' non lo eredita più
+  { id: 'rot.write', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'path', policyArgs: [], hostOnly: true },
 ];
 
 function kernel(overrides: Partial<PolicyContext> = {}) {
@@ -154,8 +158,10 @@ describe('policy kernel', () => {
       capabilities: new Map(
         [
           ...decls,
-          { id: 'outward.publish', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
-          { id: 'outward.email.send', risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+          // era il default della classe: la riga 'context' non lo eredita più
+          { id: 'outward.publish', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+          // era il default della classe: la riga 'context' non lo eredita più
+          { id: 'outward.email.send', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
         ].map((d) => [d.id, d as CapabilityDecl]),
       ),
       matrix: POLICY_FLOOR,
@@ -434,6 +440,7 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
   it('una capability senza risorsa produce un prompt che nomina solo la capability', () => {
     const decl: CapabilityDecl = {
       id: 'sys.shell',
+      effect: 'context',
       risk: 'high',
       reversible: 'no',
       rerunnable: false,
@@ -467,6 +474,7 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
   it('una capability CON risorsa continua a mostrarla', () => {
     const decl: CapabilityDecl = {
       id: 'fs.write',
+      effect: 'context',
       risk: 'high',
       reversible: 'no',
       rerunnable: false,

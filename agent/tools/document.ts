@@ -31,6 +31,7 @@ import type { ToolSpec } from '../providers/types.js';
 
 export const documentCapability: CapabilityDecl = {
   id: 'documents.read',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   resourceKind: 'tenant',

@@ -26,6 +26,7 @@ import type { ToolSpec } from '../providers/types.js';
 
 export const memoryCapability: CapabilityDecl = {
   id: 'memory.read',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   // A read, and a read of our own store: running it twice returns the same

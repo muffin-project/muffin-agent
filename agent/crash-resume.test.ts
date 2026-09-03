@@ -68,7 +68,7 @@ const rt = buildRuntime(home, ws);
 // Not re-runnable, and that is the whole point of the scenario: sending a
 // message twice is not something any record can undo.
 const decl = {
-  id: 'demo.send', risk: 'low', reversible: 'no', rerunnable: false,
+  id: 'demo.send', effect: 'context', risk: 'low', reversible: 'no', rerunnable: false,
   resourceKind: 'none', policyArgs: [], hostOnly: false,
 };
 rt.register({
@@ -201,6 +201,7 @@ describe('accettazione · ucciso a metà turno, riprende al riavvio', () => {
       },
       {
         id: 'demo.send',
+        effect: 'context',
         risk: 'low',
         reversible: 'no',
         rerunnable: false,
