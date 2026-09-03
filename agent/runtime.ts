@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
+import { loadConfig, paths, promptVersion, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
@@ -771,6 +771,10 @@ export function buildRuntime(
     home,
     safeMode !== null,
     skillsPromptSection(skillScan.skills, promptNonce(home)),
+    // La versione viene dalla config e da nient'altro: `muffin prompt version`
+    // scrive quel campo e `promptVersion` lo legge, quindi il comando non può
+    // annunciare una versione diversa da quella che il turno riceve.
+    promptVersion(config),
   );
 
   /**

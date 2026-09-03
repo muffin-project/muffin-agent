@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRuntime } from '../agent/runtime.js';
-import { paths } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { sha256 } from '../core/rot/verify.js';
 import { runInit } from './init.js';
-import { cmdPromptShow } from './prompt-show.js';
+import { cmdPromptShow, cmdPromptVersion } from './prompt-show.js';
 
 /**
  * `muffin prompt show` has to be **truthful**, not merely functional: its one
@@ -206,5 +206,100 @@ describe('muffin prompt show', () => {
     // not a description of safe mode bolted on afterwards.
     expect(out).toContain('Modalità sicura');
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+/**
+ * `muffin prompt version` — la seconda porta, e il fatto che le due porte non
+ * possano dire cose diverse.
+ *
+ * La regola di casa che questo test difende è vecchia: una manopola esposta da
+ * una porta sola è un difetto, e due porte che divergono sono peggio di una. La
+ * proprietà non è «il comando scrive un campo» — è che il prompt montato dopo
+ * il comando sia **byte per byte** quello montato dopo la stessa scelta scritta
+ * a mano in `config.json`.
+ */
+describe('muffin prompt version — le due porte sulla stessa manopola', () => {
+  it('senza argomento stampa la versione attiva, e il default è v1 senza scriverlo da nessuna parte', () => {
+    const home = bootHome();
+    expect(loadConfig(home).prompt).toBeUndefined();
+    const r = capture(() => cmdPromptVersion(home, []));
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe('v1');
+    // stdout è il risultato, stderr la spiegazione: la stessa regola di casa
+    // che `prompt show` segue, così `$(muffin prompt version)` è usabile.
+    expect(r.err).toContain('v1, v2');
+    expect(loadConfig(home).prompt).toBeUndefined();
+  });
+
+  it('scrivere v2 col comando dà lo stesso prompt di scriverlo a mano in config.json', () => {
+    const aMano = bootHome();
+    saveConfig({ ...loadConfig(aMano), prompt: { version: 'v2' } }, aMano);
+
+    const colComando = bootHome();
+    const r = capture(() => cmdPromptVersion(colComando, ['v2']));
+    expect(r.code).toBe(0);
+    expect(loadConfig(colComando).prompt?.version).toBe('v2');
+
+    // Le due home differiscono per il nonce delle skill (è per-installazione),
+    // quindi il confronto è sul blocco che la versione decide, non sulla
+    // stringa intera: prendere l'intero proverebbe che i nonce sono diversi.
+    const uno = buildRuntime(aMano, WORKSPACE);
+    const due = buildRuntime(colComando, WORKSPACE);
+    try {
+      const blocco = (r: typeof uno, nome: string) => r.promptBlocks.owner.find((b) => b.name === nome)?.text;
+      for (const nome of ['persona', 'voice', 'work-rules']) {
+        expect(blocco(due, nome), nome).toBe(blocco(uno, nome));
+      }
+      expect(blocco(due, 'work-rules')).toContain('## Quando il risultato è incerto');
+    } finally {
+      uno.close();
+      due.close();
+    }
+  });
+
+  it('il comando non può annunciare una versione diversa da quella che il turno riceve', () => {
+    // `promptVersion` è la sola risposta alla domanda: `cmdPromptVersion` la
+    // stampa e `buildRuntime` la monta. Il confronto qui è fra quello che il
+    // comando dice e quello che il prompt **è**, non fra due letture della
+    // config.
+    const home = bootHome();
+    capture(() => cmdPromptVersion(home, ['v2']));
+    const detto = capture(() => cmdPromptVersion(home, [])).out.trim();
+    const runtime = buildRuntime(home, WORKSPACE);
+    try {
+      const montato = runtime.deps.systemPrompts.owner.includes('## Quando il risultato è incerto') ? 'v2' : 'v1';
+      expect(montato).toBe(detto);
+      // E `prompt show` lo dice a chi guarda, invece di lasciarglielo dedurre.
+      const mostrato = capture(() => cmdPromptShow(home, []));
+      expect(mostrato.err).toContain('versione prompt: v2');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('torna a v1 e riporta i byte esatti di prima', () => {
+    const home = bootHome();
+    const prima = buildRuntime(home, WORKSPACE);
+    const v1 = prima.deps.systemPrompts.owner;
+    prima.close();
+
+    capture(() => cmdPromptVersion(home, ['v2']));
+    capture(() => cmdPromptVersion(home, ['v1']));
+    const dopo = buildRuntime(home, WORKSPACE);
+    try {
+      expect(dopo.deps.systemPrompts.owner).toBe(v1);
+    } finally {
+      dopo.close();
+    }
+  });
+
+  it('rifiuta una versione che non esiste senza toccare la config', () => {
+    const home = bootHome();
+    capture(() => cmdPromptVersion(home, ['v2']));
+    const r = capture(() => cmdPromptVersion(home, ['v3']));
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('v3');
+    expect(loadConfig(home).prompt?.version).toBe('v2');
   });
 });
