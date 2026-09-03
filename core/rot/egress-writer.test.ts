@@ -3,7 +3,7 @@ import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { widenEgressForCapability } from './egress-writer.js';
+import { isValidEgressHost, widenEgressForCapability } from './egress-writer.js';
 import { verify } from './verify.js';
 import { paths } from '../config/config.js';
 
@@ -27,9 +27,9 @@ describe('widenEgressForCapability', () => {
     const h = home();
     const egressPath = join(paths(h).rot, 'egress.json');
     const prima = readFileSync(egressPath, 'utf8');
-    writeFileSync(egressPath, JSON.stringify({ schemaVersion: 1, allow: ['già-dentro.example'] }, null, 2));
+    writeFileSync(egressPath, JSON.stringify({ schemaVersion: 1, allow: ['gia-dentro.example'] }, null, 2));
     let chiesto = 0;
-    const out = widenEgressForCapability(h, ['già-dentro.example'], 'test', {
+    const out = widenEgressForCapability(h, ['gia-dentro.example'], 'test', {
       out: () => {},
       chiediConferma: () => {
         chiesto += 1;
@@ -135,13 +135,90 @@ describe('widenEgressForCapability', () => {
     expect(egressAllow(h)).toEqual(['a.example', 'b.example']);
   });
 
+  /**
+   * Un host a due sole etichette (`solo-questo.example`) non distinguerebbe
+   * "scrivi esattamente questo" da un'eventuale mutazione che allargasse a
+   * `*.example` — la parte dopo il primo punto resterebbe un dominio
+   * plausibile. Tre etichette rendono l'asserzione stringente: qualunque
+   * forma diversa dall'esatta stringa passata (compreso un wildcard dedotto
+   * dal genitore) fa fallire `toEqual`.
+   */
   it('non inferisce host non nominati: chiede e scrive solo quelli passati', async () => {
     const h = home();
-    await widenEgressForCapability(h, ['solo-questo.example'], 'test', {
+    await widenEgressForCapability(h, ['sub.solo-questo.example'], 'test', {
       out: () => {},
       chiediConferma: () => Promise.resolve('s'),
     });
-    expect(egressAllow(h)).toEqual(['solo-questo.example']);
+    expect(egressAllow(h)).toEqual(['sub.solo-questo.example']);
+  });
+});
+
+/**
+ * `isValidEgressHost` da sola, e poi attraverso `widenEgressForCapability`:
+ * `--host` è testo scritto a mano (o una variabile di shell non impostata),
+ * mai un valore già fidato. Prima di questo controllo uno qualunque di questi
+ * valori finiva scritto e sigillato tale e quale, con «aggiunto
+ * all'allowlist» stampato sopra — e poi non funzionava mai, perché
+ * `hostAllowed()` confronta contro `new URL(...).hostname`, oppure (la
+ * stringa vuota) faceva fallire `loadEgress()` al prossimo boot e il catch
+ * muto di `agent/runtime.ts` azzerava OGNI host già approvato.
+ */
+describe('isValidEgressHost', () => {
+  it.each([
+    ['api.tavily.com', true],
+    ['*.example.com', true],
+    ['localhost', true],
+    ['a-b.c-d.example', true],
+    ['', false],
+    ['   ', false],
+    ['api.tavily.com:443', false],
+    ['https://api.tavily.com/search', false],
+    ['a.example,b.example', false],
+    ['user@evil.example', false],
+    ['../../../etc/passwd', false],
+    ['..', false],
+    ['exa..mple.com', false],
+    ['-inizia-con-trattino.example', false],
+  ])('%s → %s', (candidato, atteso) => {
+    expect(isValidEgressHost(candidato)).toBe(atteso);
+  });
+});
+
+describe('widenEgressForCapability — host non valido: rifiuta prima di chiedere o scrivere', () => {
+  it.each([
+    ['', 'stringa vuota — es. una variabile di shell non impostata'],
+    ['api.tavily.com:443', 'una porta'],
+    ['https://api.tavily.com/search', 'uno schema e un percorso'],
+    ['a.example,b.example', 'un elenco'],
+    ['user@evil.example', 'un utente'],
+    ['../../../etc/passwd', 'un attraversamento di percorso'],
+  ])('"%s" (%s): niente domanda, niente scrittura, il perché è nel messaggio', async (host) => {
+    const h = home();
+    let chiesto = 0;
+    const { out, sink } = raccogli();
+    const esito = await widenEgressForCapability(h, [host], 'test', {
+      out: sink,
+      chiediConferma: () => {
+        chiesto += 1;
+        return Promise.resolve('s');
+      },
+    });
+    expect(esito.ok).toBe(false);
+    expect(chiesto).toBe(0);
+    expect(egressAllow(h)).toEqual([]);
+    expect(out.join('\n')).toMatch(/non è un host valido|non sono host validi/);
+    // Il root of trust non si è mosso.
+    expect(verify(h, 'single-user').ok).toBe(true);
+  });
+
+  it('un host valido insieme a uno non valido: rifiuta tutto, non ne scrive nemmeno uno', async () => {
+    const h = home();
+    const esito = await widenEgressForCapability(h, ['api.tavily.com', 'https://evil.example/'], 'test', {
+      out: () => {},
+      chiediConferma: () => Promise.resolve('s'),
+    });
+    expect(esito.ok).toBe(false);
+    expect(egressAllow(h)).toEqual([]);
   });
 });
 
@@ -173,6 +250,50 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
         chmodSync(egressPath, 0o600);
       }
       expect(readFileSync(egressPath, 'utf8')).toBe(prima);
+    },
+  );
+
+  /**
+   * Il caso che il primo test qui sopra NON copre: lì la primissima
+   * scrittura falliva, quindi non c'era niente da riportare indietro.
+   * `seal()` scrive `manifest.json` per primo e l'anchor per secondo
+   * (`core/rot/verify.ts`) — bloccando solo l'anchor, `egress.json` E
+   * `manifest.json` sono già stati riscritti quando il sigillo fallisce, e
+   * puntano ai nuovi hash mentre l'anchor punta ancora ai vecchi. Misurato
+   * senza il rollback: l'esito era `{ok:false}` col messaggio "niente è
+   * stato scritto", ma `egress.json` conteneva già il nuovo host e
+   * `verify()` tornava `anchor_mismatch` — modalità sicura al prossimo
+   * avvio, per un cambiamento che l'owner aveva approvato un attimo prima.
+   */
+  it.skipIf(platform() === 'win32' || process.getuid?.() === 0)(
+    'il sigillo fallisce DOPO che egress.json e manifest.json erano già stati riscritti: torna tutto com era',
+    async () => {
+      const h = home();
+      const egressPath = join(paths(h).rot, 'egress.json');
+      const manifestPath = join(paths(h).rot, 'manifest.json');
+      const anchorPath = join(h, '.rot-anchor');
+      const egressPrima = readFileSync(egressPath, 'utf8');
+      const manifestPrima = readFileSync(manifestPath, 'utf8');
+      // Solo l'anchor è bloccato: `seal()` riesce a scrivere manifest.json e
+      // fallisce solo sull'ultimo dei due write.
+      chmodSync(anchorPath, 0o400);
+      try {
+        const { out, sink } = raccogli();
+        const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
+          out: sink,
+          chiediConferma: () => Promise.resolve('s'),
+        });
+        expect(esito.ok).toBe(false);
+      } finally {
+        chmodSync(anchorPath, 0o600);
+      }
+      // Non solo "il messaggio dice che non è cambiato niente" — è vero:
+      // entrambi i file sono tornati esattamente ai byte di prima.
+      expect(readFileSync(egressPath, 'utf8')).toBe(egressPrima);
+      expect(readFileSync(manifestPath, 'utf8')).toBe(manifestPrima);
+      // La prova che conta di più: non è `anchor_mismatch`/modalità sicura.
+      const stato = verify(h, 'single-user');
+      expect(stato.ok).toBe(true);
     },
   );
 });
