@@ -14,40 +14,42 @@ GitHub**, sulla *condizione*, mai su una stampa; `gate:local` è il ripiego.
 ## Le decisioni dell'owner
 
 **Instradamento: deciso** — `routing.only: ["alibaba"]`, `dataCollection:
-"deny"`. Aperte da prima: **`muffin rot harden`** (serve `sudo`; finché non è
-fatto `sys.shell` chiede *sempre* conferma) e la **chiave Tavily**. C8 note
-vocali: meccanismo su `dev`, macchina pronta, `doctor` verde.
+"deny"`. Finché `rot harden` non è fatto, `sys.shell` chiede *sempre* conferma.
 
 ## Il 03/09: il dogfood ha bocciato le superfici
 
-Memo `docs/evidence/dogfood-superfici-2026-09-03.md` — **non ripensare quello
-che c'è scritto.** B11/B13 tornano BLOCKER: il finto provider e il finto Bot
-API provavano il meccanismo, non la forma. Le decisioni sono nel memo e
-implementate: bolla per segmento su Telegram, scroll region in fondo sulla CLI,
-ADR-0054 (coda a turno vivo, `/steer` `/stop` `/pause` `/resume`), corsia e2e
-reale accanto al finto, e ADR-0055 — risposta ed episodio sono
-`surface.reply`/`memory.write` dichiarate dal kernel, permessi invariati, ora
-osservabili e stringibili.
+Memo `dogfood-superfici-2026-09-03.md` — **non ripensarlo**: implementato e
+promosso. **Il prossimo passo è dell'owner:** `npm run e2e:telegram` con un bot di prova
+(`evals/e2e/README.md`) — B11/B13/B2 restano BLOCKER finché quella corsa non è
+verde e datata nelle righe.
 
-**Stato:** 2a→2d e il punto 3 sono su `dev` e su `main`; due giudici hanno
-chiuso ADR-0054, uno ADR-0055. **Il prossimo passo è dell'owner:**
-`npm run e2e:telegram` con un bot di prova (`evals/e2e/README.md`) — B11/B13/B2
-restano BLOCKER finché quella corsa non è verde e datata nelle righe.
+## Il difetto di forma, misurato il 03/09
 
-**Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
-`@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
-`string-width` è l'unica piccola che chiude un difetto (larghezza CJK).
+Guardare il `muffin.db` vivo ha trovato in dieci minuti ciò che una notte di PR
+non aveva trovato: **zero documenti e zero media indicizzati da sempre** (il
+filtro dei dotfile girava sul percorso assoluto e la home è `~/.muffin`), verde
+in ogni test perché una home di test non ha punti. Regola scritta in
+`ORCHESTRATION.md`: **un banco di prova finto non chiude una riga che l'owner
+vede.** Leggere il database dell'owner viene **prima** di aprire una fetta.
 
-## ADR-0053 chiuso, colonne aperte
+**La divergenza fra superfici è il difetto strutturale aperto.** Su Discord non
+esistono streaming, passi, **approvazioni**, consegna durevole, inoltri con
+provenienza, note vocali, né coda/`/steer`/`/stop`: ~9300 righe di connettore
+Telegram contro ~2700. Causa: il registro ha unificato l'**uscita** e l'ingresso
+non ha mai avuto il gemello, quindi ogni funzione inbound ha una sola casa
+naturale. ADR-0021 diceva già «il canale non è parte dell'identità» e, due
+paragrafi sotto, il contrario: il codice ha seguito la seconda. Ordine deciso:
+(1) evento tipizzato + percorso in entrata condiviso + coda/comandi fuori da
+Telegram + **test di parità che fallisce se un comportamento vive su una sola
+superficie**; (2) approvazioni, streaming e passi sullo stesso percorso.
 
-Il soffitto viene dalla riga di effetto; `effect-rows.test.ts` asserisce ogni
-cella. Resta se il taint **ambientale** sia il segnale giusto (`SECURITY.md`
-§13): eval comparativo, adapter B + corpus avversariale in `evals/security/`.
+## Le colonne: si misura, non si decide
 
-## Bivio owner n. 2: un tool `jobs` per il modello
-
-Un job creato da un turno tainted è un'iniezione differita: serve una forma
-prima di costruirlo. Non DAY-1.
+Il taint ambientale resta un'ipotesi non falsificata (`SECURITY.md` §13) e
+l'eval comparativo è in costruzione. Misura dal vivo: **tutte** le 35
+approvazioni mai chieste sono `sys.shell` a taint 2, 32 sì e 3 no — un gate
+concesso nove volte su dieci è un riflesso. Nessun soffitto si muove prima
+del risultato.
 
 **Azioni owner senza codice:** chiave Tavily + `rot/egress.json` ·
 `muffin rot harden` · togliere `discord` da `surfaces.enabled` finché flappa ·
@@ -55,11 +57,9 @@ prima di costruirlo. Non DAY-1.
 
 ## Aperto, non bloccante
 
-**Prossimo grosso:** dichiarare i **permessi** nel prompt (Codex
-`<permission_profile>`, OpenClaw `## Authorized Senders`).
-
-**Harness:** il finto Bot API non serve `getFile` (B10, C8 senza scenario).
-Accettazione ~5 min, tetto 10.
+**Harness:** il finto Bot API non serve `getFile` (B10, C8 senza scenario);
+accettazione ~5 min, tetto 10. Dopo l'ingresso unico: dichiarare i **permessi**
+nel prompt (Codex `<permission_profile>`, OpenClaw `## Authorized Senders`).
 
 **Code dei giudici (03/09), non bloccanti:** un `sessions.append` fallito nella
 ripesca dello `/steer` è silenzioso; `gestiti` nel connettore Telegram non si
