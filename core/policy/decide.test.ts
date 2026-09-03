@@ -502,3 +502,49 @@ describe('D12 — il prompt del kernel non annuncia la propria ignoranza', () =>
     expect(decision.ask.prompt).toContain('/tmp/x');
   });
 });
+
+describe('the ask prompt names why single-user always asks — 03/09/2026 UX pass', () => {
+  // `muffin doctor` already told the owner this in the `root of trust mode`
+  // line; the approval prompt itself — the one screen he actually reads
+  // mid-turn — did not. Same decision either way (still `ask`), only the
+  // words on it change.
+  const decl: CapabilityDecl = {
+    id: 'sys.shell',
+    effect: 'context',
+    risk: 'high',
+    reversible: 'no',
+    rerunnable: false,
+    maxTaint: 3,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: false,
+  };
+  const base = { matrix: POLICY_FLOOR, capabilities: new Map([[decl.id, decl]]), budgetExhausted: () => false };
+  const req0 = {
+    principal: owner,
+    tenant: 'host',
+    capability: 'sys.shell' as const,
+    resource: { kind: 'none' } as const,
+    args: {},
+    taint: 0 as const,
+  };
+
+  it('single-user: the prompt says it always asks, and points at `muffin rot harden`', () => {
+    const decision = createDecide({ ...base, hardened: false })(req0);
+    expect(decision.effect).toBe('ask');
+    if (decision.effect !== 'ask') return;
+    expect(decision.ask.prompt).toContain('sys.shell');
+    expect(decision.ask.prompt).toContain('muffin rot harden');
+  });
+
+  it('hardened, still asking for an unrelated reason (taint above 0): no borrowed single-user reason', () => {
+    // Hardened only auto-allows at taint 0. At taint 2 it still asks — for a
+    // taint reason, not a "prevention isn't real" reason, so the prompt must
+    // not claim the single-user explanation it did not earn.
+    const decision = createDecide({ ...base, hardened: true })({ ...req0, taint: 2 });
+    expect(decision.effect).toBe('ask');
+    if (decision.effect !== 'ask') return;
+    expect(decision.ask.prompt).toContain('sys.shell');
+    expect(decision.ask.prompt).not.toContain('muffin rot harden');
+  });
+});

@@ -99,6 +99,23 @@ describe('doctor names the everyday consequence of single-user, and the remedy f
     expect(c?.remedy).toContain('muffin rot harden');
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('leads with what happens to him, and only names the mode afterwards — 03/09/2026 UX pass', async () => {
+    // The owner's own complaint, read against real `muffin doctor` output:
+    // the line named "root of trust", "single-user", "seal" before it ever
+    // said what he should expect or do. This locks the order so a future
+    // edit cannot quietly put the vocabulary back in front.
+    const dir = home();
+    const c = await check(dir, 'root of trust mode');
+    const consequenceAt = c!.detail.indexOf('sys.shell');
+    const modeNameAt = c!.detail.indexOf('single-user');
+    expect(consequenceAt).toBeGreaterThan(-1);
+    expect(modeNameAt).toBeGreaterThan(-1);
+    expect(consequenceAt).toBeLessThan(modeNameAt);
+    // Every warning names something the owner can actually type.
+    expect(c?.remedy).toMatch(/`muffin [^`]+`/);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('doctor names which profile the configured model resolves to', () => {
@@ -922,6 +939,64 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       // The consequence is said BEFORE the command — the owner decides first.
       expect(safeModeAt).toBeLessThan(cpAt);
       expect(cpAt).toBeLessThan(resealAt);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
+
+  it('several sealed rot/ files diverging together get one grouped remedy, not one paragraph per file — 03/09/2026 UX pass', async () => {
+    // Same synthetic-checkout technique as the single-file test above, but
+    // with two sealed files both stuck at v1 while HEAD moved to v2. Before
+    // this slice each file produced its own full "questo file è dentro il
+    // sigillo…" paragraph, `muffin rot reseal` named once per file — the
+    // owner read the same explanation twice for one `muffin update`.
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-doctor-drift-group-checkout-')));
+    const sh = (cmd: string, args: string[]): void => {
+      const r = spawnSync(cmd, args, { cwd: checkout, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
+    sh('git', ['init', '-q']);
+    sh('git', ['config', 'user.email', 't@t']);
+    sh('git', ['config', 'user.name', 't']);
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v1']);
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v2 identity — HEAD ora dice questo\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v2']);
+
+    const dir = home();
+    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n');
+    rmSync(paths(dir).defaultsManifest, { force: true });
+
+    try {
+      const report = await runDoctor(dir, { checkoutRoot: checkout });
+
+      // No per-file check for the two that diverged together — they are
+      // folded into the group instead of repeating.
+      expect(report.checks.find((c) => c.name === 'default rot/identity.md')).toBeUndefined();
+      expect(report.checks.find((c) => c.name === 'default rot/policy.json')).toBeUndefined();
+
+      const group = report.checks.find((c) => c.name === 'default rot/*');
+      expect(group).toBeTruthy();
+      expect(group?.level).toBe('warn');
+      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/policy.json');
+      expect(group?.remedy).toBeTruthy();
+      // One explanation, one command sequence: `rot reseal` named exactly
+      // once for the whole batch, not once per file.
+      const resealCount = (group!.remedy!.match(/rot reseal/g) ?? []).length;
+      expect(resealCount).toBe(1);
+      // A command an owner can actually run — for each file — is still there.
+      expect(group?.remedy).toContain('cp ');
+      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'identity.md'));
+      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'policy.json'));
+      expect(group?.remedy).toContain('safe mode');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(checkout, { recursive: true, force: true });
