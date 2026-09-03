@@ -1390,19 +1390,44 @@ async function drive(
     return decision;
   };
   /**
+   * Open, or the refusal that closed it — a `switch` over the closed union,
+   * with `assertNever` in `default`, exactly like `runTool`'s.
+   *
+   * Anything but `allow` is a no: neither `draft` nor `ask` has a meaning on
+   * these two rows (see `doors.ts`), so both refuse. What the `switch` buys
+   * over `decision.effect !== 'allow'` is the fifth verdict: an inequality
+   * treats a variant nobody wrote a branch for as a refusal and carries on,
+   * which is the same silent fall-through — one sign flipped — that let
+   * `draft` run as an implicit allow for a year. Here it breaks the build the
+   * day the union grows, and throws if a value ever reaches it having
+   * bypassed the type checker.
+   */
+  const doorRefusal = (decision: Decision): Exclude<Decision, { effect: 'allow' }> | undefined => {
+    switch (decision.effect) {
+      case 'allow':
+        return undefined;
+      case 'deny':
+      case 'ask':
+      case 'draft':
+        return decision;
+      default:
+        return assertNever(decision);
+    }
+  };
+  /** What a refusal is called on a span: the deny code when there is one, the verdict otherwise. */
+  const refusalLabel = (refusal: Exclude<Decision, { effect: 'allow' }>): string =>
+    refusal.effect === 'deny' ? refusal.code : refusal.effect;
+  /**
    * May this turn write an episode into its tenant's memory right now?
    *
-   * Anything but `allow` is a no: a `draft` or an `ask` has no meaning for a
-   * memory row (see `memoryWriteCapability`), and treating either as a yes
-   * would be the implicit-allow fall-through `runTool`'s switch exists to
-   * forbid. The refusal is counted on the turn, not swallowed: an episode
-   * that was not written is a fact about this turn a reader of the trace must
-   * be able to see.
+   * The refusal is counted on the turn, not swallowed: an episode that was
+   * not written is a fact about this turn a reader of the trace must be able
+   * to see.
    */
   const memoryDoorOpen = (): boolean => {
-    const decision = door(memoryWriteCapability.id, { kind: 'tenant', value: input.tenant });
-    if (decision.effect === 'allow') return true;
-    turn.setAttributes({ 'muffin.memory.write_refused': decision.effect === 'deny' ? decision.code : decision.effect });
+    const refusal = doorRefusal(door(memoryWriteCapability.id, { kind: 'tenant', value: input.tenant }));
+    if (refusal === undefined) return true;
+    turn.setAttributes({ 'muffin.memory.write_refused': refusalLabel(refusal) });
     return false;
   };
 
@@ -1731,10 +1756,10 @@ async function drive(
        * `error`: the turn ended the way the policy told it to, and the trace
        * carries the decision that ended it.
        */
-      const reply = door(replyCapability.id, { kind: 'none' });
-      if (reply.effect !== 'allow') {
-        turn.setAttributes({ 'muffin.reply.refused': reply.effect === 'deny' ? reply.code : reply.effect });
-        return finish(turn, 'answered', replyRefusedText(reply), iterations, usage);
+      const replyRefusal = doorRefusal(door(replyCapability.id, { kind: 'none' }));
+      if (replyRefusal !== undefined) {
+        turn.setAttributes({ 'muffin.reply.refused': refusalLabel(replyRefusal) });
+        return finish(turn, 'answered', replyRefusedText(replyRefusal), iterations, usage);
       }
       iterations += 1;
       // Reports the number this line just committed to — the same counter
