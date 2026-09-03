@@ -86,6 +86,51 @@ export type RiskClass = 'low' | 'medium' | 'high';
 type Reversibility = 'yes' | 'undoable' | 'no';
 
 /**
+ * **Where the bytes of this effect end up** — the row of the threat model's own
+ * matrix (`docs/history/rebuild-2026/03-threat-model.md` §3) that this capability
+ * belongs to.
+ *
+ * This exists because that matrix is normative and the kernel was not executing
+ * it. The table's rows are effect classes and its columns are taint; the kernel
+ * decided instead from `risk` plus a `maxTaint` pinned by hand on each
+ * declaration, and the two drifted apart without anything going red. The
+ * measured instance: the row *"Shell / filesystem host / processi"* reads `ASK`
+ * at taint 2, the 2026-08-16 amendment moved that cell for `sys.shell` alone by
+ * pinning a number on it, and `fs.write` — same row, same host, and the only
+ * one of the two with a checkpoint and an undo — went on answering `deny`
+ * because it inherited the medium class default of 1. Two doors to the same
+ * sink, the safer one shut. See ADR-0053.
+ *
+ * `risk` and `effect` are different questions and both are needed: risk says how
+ * bad it is to get this wrong (and drives allow/draft/ask), effect says where
+ * the result lands (and drives the ceiling and the floor above which nothing is
+ * unattended). A capability that answers only one of the two is the shape the
+ * drift came in.
+ *
+ * `core/policy/effect-rows.test.ts` asserts every shipped declaration against
+ * the printed matrix, cell by cell.
+ */
+export type EffectRow =
+  /** Bytes enter the turn; nothing leaves, nothing on the host changes. */
+  | 'context'
+  /** The host machine: its filesystem, its shell, its processes. */
+  | 'host'
+  /** Back down the conversation already under way, to whoever opened it. */
+  | 'reply'
+  /** The network, where the allowlist and `paramsMaxTaint` own the columns. */
+  | 'egress'
+  /** A durable write to the tenant's own memory. */
+  | 'memory'
+  /** Third-party code or services outside the allowlist model (MCP). */
+  | 'external'
+  /** A **new** recipient: mail, a message to someone else, publication. */
+  | 'outward'
+  /** Configuration and voice, reachable only through the ratchet. */
+  | 'config'
+  /** The Root of Trust, which no principal reaches at runtime. */
+  | 'rot';
+
+/**
  * A tool without one of these does not exist for the runtime.
  * Lives next to the tool in its feature folder; core/policy only owns the type.
  */
@@ -138,7 +183,18 @@ export type CapabilityDecl = {
    * nuovo non eredita un avviso che nessuno ha pensato per lui.
    */
   readonly progress?: 'idempotent_read';
-  /** Omitted when it equals the default for the risk class. */
+  /** Where this effect lands. See `EffectRow`: it owns the ceiling. */
+  readonly effect: EffectRow;
+  /**
+   * A **tightening** of this capability's own row, and nothing else.
+   *
+   * It used to be the ceiling itself, `?? defaultMaxTaint[risk]`, and that is
+   * the knob that produced the drift ADR-0053 repairs: widening one capability
+   * at a time is how the printed matrix and the kernel stopped agreeing. The
+   * kernel now takes the stricter of the two, so a value above the row's is
+   * inert — and `effect-rows.test.ts` refuses it out loud rather than letting
+   * it read as a decision someone made.
+   */
   readonly maxTaint?: TrustTier;
   readonly resourceKind: Resource['kind'];
   /** Which fields of args the kernel is allowed to inspect. */

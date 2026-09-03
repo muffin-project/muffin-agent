@@ -186,7 +186,11 @@ describe('web_search', () => {
     expect(searchCapability.hostOnly).toBe(true);
     // And the ceiling matches sys.http, because a tier-3 result taints the turn
     // to 3 — a lower ceiling would allow exactly one search per turn and make
-    // search → read → search impossible.
-    expect(searchCapability.maxTaint).toBe(3);
+    // search → read → search impossible. Since ADR-0053 that is the `egress`
+    // row's doing rather than a number pinned here: the row leaves its columns
+    // to the allowlist and to `paramsMaxTaint`, which are the gates that read
+    // the bytes actually leaving.
+    expect(searchCapability.effect).toBe('egress');
+    expect(searchCapability.maxTaint).toBeUndefined();
   });
 });

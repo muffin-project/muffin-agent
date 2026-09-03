@@ -309,7 +309,7 @@
     "transport": [
       "stdio"
     ],
-    "capabilityMapping": "Una capability per server, non per tool: mcp.<server> (agent/tools/mcp.ts:30-39), medium risk, hostOnly, taint ceiling ereditato dalla classe (di default 1, che policy.json puo' solo abbassare mai alzare — commento esplicito su un giudice che ha misurato la violazione, agent/tools/mcp.ts:24-28).",
+    "capabilityMapping": "Una capability per server, non per tool: mcp.<server> (agent/tools/mcp.ts:30-39), medium risk, hostOnly, riga di effetto `external` (ADR-0053): soffitto 1, dichiarato invece che ereditato dalla classe — il commento accanto ricorda il giudice che aveva misurato la violazione quando il numero veniva dal default e un reseal poteva alzarlo (agent/tools/mcp.ts:24-30).",
     "lifecycle": [
       {
         "n": 1,

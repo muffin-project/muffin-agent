@@ -34,6 +34,7 @@ import { jobPayload, type Job } from '../../core/scheduler/jobs.js';
  */
 export const inspectCapability: CapabilityDecl = {
   id: 'sys.inspect',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   // Una lettura di stato nostro: due chiamate di fila danno la stessa risposta
