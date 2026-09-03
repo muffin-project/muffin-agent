@@ -317,10 +317,26 @@ process's full authority.
 The sandbox boundary must:
 
 - confine allowed filesystem scope;
+- keep that scope **disjoint from Muffin's own installation** — see below;
 - preserve explicit deny-read locations, especially secret backends;
 - avoid inheriting the parent's complete environment;
 - make the path authorised by policy correspond to the path the OS will touch;
 - fail conservatively when containment cannot be established.
+
+The workspace a turn writes in and the directory the process happens to run in
+are two different questions. Conflating them cost the supervised gateway its
+own state: the unit anchors `WorkingDirectory` to the Muffin home on purpose
+(ADR-0035), and until ADR-0059 that home was also the write scope, so
+`.rot-anchor`, `muffin.db`, `voice.md` and `sessions/` were writable from a
+turn whose content came from a forwarded message or a fetched page. The home is
+installation state: nothing legitimate reaches it through the shell or
+filesystem tools, and the boundary is enforced twice — the workspace is a
+sibling directory, and the home is denied outright whatever the per-call scope
+says.
+
+Read access to the home is a separate, still-open question: a contained command
+can read `muffin.db` and the session log, and what leaves is governed by taint
+and egress rather than by this boundary.
 
 Symlink, hardlink, ancestor-symlink and path-canonicalisation behaviour are part
 of the security claim rather than filesystem edge cases.
