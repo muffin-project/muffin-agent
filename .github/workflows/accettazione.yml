@@ -76,13 +76,29 @@ permissions:
 jobs:
   accettazione:
     runs-on: ubuntu-latest
-    # Dieci e non cinque, misurato il 02/09/2026: con le journey DAY-1 (#283,
-    # #285, #286) la suite passa 40/40 e chiude a 5:03 — un minuto sopra il
-    # tetto, che GitHub segnala come `cancelled`, non come rosso. Tre PR verdi
-    # nel log sono state «cancellate» per questa ragione e nessuna per un
-    # difetto. Il tetto resta: un run che si appende deve morire; deve solo
-    # essere più alto della suite che protegge.
-    timeout-minutes: 10
+    # **Venti, e la ragione è che questo tetto ha già sbagliato due volte.**
+    #
+    # Il 02/09/2026 era cinque: la suite chiudeva a 5:03, tre PR verdi sono
+    # uscite «cancellate» e nessuna per un difetto, e il tetto è passato a dieci.
+    # Il 04/09/2026 è successo di nuovo. Misurate, non stimate, le durate degli
+    # ultimi run riusciti: 7,1 · 7,8 · 7,9 · 8,0 · 8,2 · 8,7 · 8,8 minuti. Con un
+    # tetto a dieci il margine peggiore era del 12%, e tre run su quattro lo
+    # hanno superato in una notte di runner lenti — mentre `verifica`, sullo
+    # stesso commit, passava a 10:03 contro una norma di 5–6,5 minuti.
+    #
+    # La lezione non è «alzalo di nuovo di cinque». Un tetto che va rialzato a
+    # ogni crescita della suite è **una stima travestita da gate**: quando scatta
+    # al 12% sopra la norma non misura più «la suite è rotta», misura «stanotte i
+    # runner sono lenti» — e insegna a rilanciare invece che a leggere, che è il
+    # contrario di ciò per cui esiste un gate. `timeout-minutes` serve a uccidere
+    # un run **appeso**, non a fare da budget di prestazione: per quello ci sono
+    # le durate per scenario che il report stampa a ogni giro, che crescono
+    # visibilmente senza far diventare rossa una PR che non ha colpe.
+    #
+    # Venti è quindi generoso di proposito — più del doppio della norma — e resta
+    # un tetto vero: una suite che si appende muore comunque, in un tempo che
+    # nessun runner lento raggiunge per caso.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
