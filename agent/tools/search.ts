@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 import { fence } from '../../core/memory/spotlight.js';
+import { SEARCH_PROVIDERS } from '../../core/config/providers.js';
 import type { RegisteredTool } from '../loop.js';
 import type { Config } from '../../core/config/config.js';
 import { hostAllowed, type EgressPolicy } from '../../core/net/egress.js';
@@ -133,9 +134,12 @@ export function tavilyBackend(options: TavilyOptions): SearchBackend {
 
   return {
     id: 'tavily',
-    endpoint: 'https://api.tavily.com/search',
+    // Una fonte sola per l'URL: `core/config/providers.ts` — `muffin search`
+    // deve poter proporre lo stesso host per `rot/egress.json` prima ancora
+    // di avere una chiave con cui costruire questo backend.
+    endpoint: SEARCH_PROVIDERS.tavily.endpoint,
     async search(query, signal) {
-      const response = await fetchFn('https://api.tavily.com/search', {
+      const response = await fetchFn(SEARCH_PROVIDERS.tavily.endpoint, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${options.apiKey}`,

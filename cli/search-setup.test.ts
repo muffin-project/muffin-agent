@@ -6,6 +6,7 @@ import { runInit } from './init.js';
 import { cmdSearch } from './search-setup.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { SEARCH_PROVIDERS } from '../core/config/providers.js';
+import { verify } from '../core/rot/verify.js';
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), 'muffin-search-'));
@@ -149,5 +150,62 @@ describe('muffin search', () => {
     const { out, sink } = raccogli();
     await cmdSearch(h, [], { out: sink });
     expect(out.join('\n')).toContain('quel segreto non esiste');
+  });
+
+  /**
+   * Il caso esatto dell'owner (ADR-0058): chiave giusta, config giusta, e fino
+   * a qui `api.tavily.com` restava fuori da `rot/egress.json` — scoperto solo
+   * al boot del runtime, con un `! web_search spento` che non si legge nel
+   * momento in cui conta. Da un terminale vero, ora, un solo comando basta:
+   * la chiave si scrive, l'host si aggiunge, il root of trust si risigilla —
+   * e resta integro, non degradato in modalità sicura.
+   */
+  it('caso owner: su un terminale vero, un comando solo accende la chiave e apre la porta di rete', async () => {
+    const h = home();
+    const domande: string[] = [];
+    const code = await cmdSearch(h, ['tavily'], {
+      out: () => {},
+      readKey: () => '',
+      chiediChiave: () => Promise.resolve('tvly-dal-terminale'),
+      chiediConferma: (d) => {
+        domande.push(d);
+        return Promise.resolve('s');
+      },
+    });
+    expect(code).toBe(0);
+    expect(domande).toHaveLength(1);
+    expect(domande[0]).toContain('api.tavily.com');
+
+    const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
+    expect(egress.allow).toContain('api.tavily.com');
+
+    // Il seal è valido, non l'installazione degradata in modalità sicura.
+    const stato = verify(h, 'single-user');
+    expect(stato.ok).toBe(true);
+  });
+
+  it('senza terminale (nessun chiediConferma): la config resta scritta, l egress no, e dice come rimediare a mano', async () => {
+    const h = home();
+    const { out, sink } = raccogli();
+    const code = await cmdSearch(h, ['tavily'], { out: sink, readKey: () => 'tvly-x' });
+    expect(code).toBe(0);
+    expect(loadConfig(h).search?.provider).toBe('tavily');
+    const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
+    expect(egress.allow).toEqual([]);
+    expect(out.join('\n')).toContain('nessun terminale interattivo');
+    expect(out.join('\n')).toContain('muffin rot reseal');
+  });
+
+  it('l owner dice no alla domanda: niente allargato, la config resta', async () => {
+    const h = home();
+    const code = await cmdSearch(h, ['tavily'], {
+      out: () => {},
+      readKey: () => 'tvly-x',
+      chiediConferma: () => Promise.resolve('no'),
+    });
+    expect(code).toBe(0);
+    expect(loadConfig(h).search?.provider).toBe('tavily');
+    const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
+    expect(egress.allow).toEqual([]);
   });
 });

@@ -404,6 +404,19 @@ four below, before it says anything else:
    day: without real prevention, no high-risk capability can ever become a
    silent allow — `sys.shell` always asks.
 
+**A capability-setup verb (`muffin search <provider>`, `muffin mcp add
+--host`) may widen `rot/egress.json` and reseal, and that is the same act as
+`rot reseal`, not a smaller one (ADR-0058).** It goes through one shared
+function (`widenEgressForCapability`, `core/rot/egress-writer.ts`) that: asks
+one question naming the exact host(s) about to be added, answers it only when
+a real interactive terminal is wired in (never from a flag — none exists to
+skip it), and refuses with a printed manual remedy otherwise. `sys.shell`'s
+sandboxed child never reaches the question — its stdin is never a TTY — and
+even a direct write at the file is denied by `mandatoryGuards`
+(`core/rot/guards.ts`), the same mandatory deny-write list the production
+sandbox is built with. Every widening is still an addition the owner named
+explicitly; nothing is inferred from a URL or pre-filled.
+
 The rest of this section formalises those two questions for whoever
 implements or verifies the mechanism, not for whoever reads `muffin doctor`.
 
