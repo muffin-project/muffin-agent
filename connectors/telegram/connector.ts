@@ -1082,7 +1082,7 @@ export class TelegramConnector {
    * ever calls the model — mirrors `agent/scheduler-run.ts`'s `runFresh`.
    */
   private async runFresh(stored: StoredUpdate, incoming: Incoming, turnId: string): Promise<void> {
-    const { principal, tenant } = principalFor(incoming, this.deps.config.ownerUserId);
+    const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
     const presence = await startPresence(this.deps.api, incoming.chatId, {
       isPrivate: incoming.isPrivate,
       placeholder: 'sto guardando…',
@@ -1165,9 +1165,14 @@ export class TelegramConnector {
         principal,
         tenant,
         surface: 'telegram',
-        // One session per chat, so a conversation continues where it left off
-        // and two chats never share one.
-        session: this.deps.sessions.open(`telegram:${incoming.chatId}`),
+        // La chiave viene da `identify` (`core/surface/types.ts`) e non da un
+        // letterale scritto qui: per l'owner è `owner`, la stessa che apre il
+        // terminale, così una conversazione sola attraversa le due porte
+        // (ADR-0056, il failure del 03/09 «non sembra lo stesso muffin»); per
+        // un gruppo è `telegram:<chatId>`, cioè esattamente la stringa che
+        // stava scritta qui — due stanze non condividono mai una sessione, e
+        // l'owner che parla *dentro* un gruppo è un `member` di quel tenant.
+        session: this.deps.sessions.open(sessionKey),
         text: composeTurnText(incoming, arrival?.line ?? null),
         // I byte dell'immagine viaggiano nello stesso messaggio della domanda.
         // Non serve alzare niente a mano: il turno parte gia' a
@@ -1466,10 +1471,13 @@ export class TelegramConnector {
    */
   private async tryCommand(incoming: Incoming): Promise<boolean> {
     if (!this.deps.comandi || !sembraComando(incoming.text)) return false;
-    const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
+    const { principal, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
     if (principal.kind !== 'owner') return false;
 
-    const sessione = this.deps.sessions.open(`telegram:${String(incoming.chatId)}`);
+    // Stessa chiave del turno qui sopra, e dalla stessa funzione: `/new` deve
+    // archiviare la conversazione che il turno successivo riaprirà, non
+    // un'altra con lo stesso nome.
+    const sessione = this.deps.sessions.open(sessionKey);
     const chatId = incoming.chatId;
     const pausa = this.deps.pausa;
     // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della

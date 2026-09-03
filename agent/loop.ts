@@ -2133,10 +2133,17 @@ async function drive(
              * write. `searchEpisodes` has no role filter and `indexBacklog`
              * indexes agent rows like any other, so tomorrow's recall fishes
              * this sentence back out; `recallTaint` takes the max over what it
-             * found, sees 0, and raises nothing; `describeTier(0)` labels it
-             * **«tu»** in front of the model. What a web page said last week
-             * comes back this week as something the owner said, at the one tier
-             * that arms a proactive trigger (`decideProactive` refuses tier > 1).
+             * found, sees 0, and raises nothing. What a web page said last week
+             * would come back this week at the one tier that arms a proactive
+             * trigger (`decideProactive` refuses tier > 1).
+             *
+             * *Chi* l'ha detto, invece, non si perde più, e questa riga lo
+             * prediceva ancora: da `b9093ba` (19/08) `describeEpisodeSource`
+             * (`core/memory/recall.ts`) separa lo speaker dal tier e rende un
+             * episodio dell'agente come `Muffin`, su tutte e tre le vie di
+             * recupero — non più «tu». Il codice si era mosso e il commento no;
+             * una nota che predice un guasto già chiuso è il modo più efficiente
+             * per farlo riaprire (memo continuità/provenienza 03/09 §6).
              *
              * Extraction is *not* what closes this: `ingest.ts` skips
              * `role: 'agent'` for its own reason (the agent's words are evidence
@@ -3604,10 +3611,27 @@ function buildContext(
       ],
     });
   }
+  /**
+   * Da dove viene questa riga, quando non viene da qui.
+   *
+   * Finché ogni finestra veniva da una porta sola, `{role, content}` nudo era
+   * giusto: non c'era niente da distinguere. Da ADR-0056 la conversazione
+   * dell'owner attraversa le porte, e una riga senza marca è una riga di cui
+   * il modello non sa se è stata detta a voce al telefono o scritta in un
+   * terminale — la stessa classe di errore che `describeEpisodeSource` chiude
+   * per la memoria, spostata dalla memoria al contesto.
+   *
+   * Marcata **solo** quando la superficie è diversa da quella del turno: una
+   * marca che compare ovunque smette di essere letta, ed è la regola che
+   * `core/memory/recall.ts` porta già scritta per `temporalLabel`. Una riga
+   * vecchia senza `surface` non viene marcata: dire `[undefined]` sarebbe
+   * peggio del silenzio.
+   */
   for (const m of kept) {
+    const altrove = m.surface !== undefined && m.surface !== '' && m.surface !== input.surface;
     messages.push({
       role: m.role as 'user' | 'assistant',
-      content: [{ type: 'text' as const, text: m.content }],
+      content: [{ type: 'text' as const, text: altrove ? `[${m.surface}] ${m.content}` : m.content }],
     });
   }
   /**

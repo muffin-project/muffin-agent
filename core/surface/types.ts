@@ -175,8 +175,54 @@ export type FileSpec = {
   caption?: string;
 };
 
-/** Who is speaking and whose memory this belongs to. */
-export type SurfaceIdentity = { principal: Principal; tenant: TenantId };
+/** Who is speaking, whose memory this belongs to, and which conversation it continues. */
+export type SurfaceIdentity = {
+  principal: Principal;
+  tenant: TenantId;
+  /**
+   * Quale conversazione questo messaggio continua — l'id di sessione, deciso
+   * qui e da nessun'altra parte.
+   *
+   * Il failure che l'ha portato dentro `identify`, misurato dall'owner il
+   * 2026-09-03: «non sembra di star parlando allo stesso muffin». Non era un
+   * confine di sicurezza — la DM Telegram dell'owner e il terminale sono già
+   * lo stesso tenant `host`, poche righe più sotto — era una stringa scritta a
+   * mano in due connector (`telegram:<chatId>`, `discord:<channelId>`) che due
+   * porte diverse non possono mai far coincidere.
+   *
+   * `owner` **senza connector** è il punto: è l'unica stringa che due porte
+   * diverse possono produrre, ed è ciò che rende ADR-0045 §1 vero in pratica
+   * («CLI, chat, voce e device sono porte; nessuna può possedere una persona,
+   * una memoria o una policy separata»).
+   *
+   * Il ramo `member` produce **la stringa che i connector già usavano**,
+   * quindi per i gruppi non cambia niente — nemmeno il nome del file. E la
+   * separazione dei gruppi smette di essere una condizione da ricordare una
+   * volta per connector: un `member` non produce mai `owner`, e l'owner che
+   * parla *dentro* un gruppo è un `member` di quel tenant. È una conseguenza
+   * della funzione, ed è la ragione per cui la chiave sta qui e non in un
+   * helper esportato accanto, che un connector potrebbe non chiamare.
+   *
+   * Cosa **non** è: un indirizzo di consegna. `replyTo.channel` e
+   * `replyChannel` restano `telegram:<chatId>` pienamente qualificati, ed è la
+   * loro separazione da questa chiave che impedisce a una risposta di uscire
+   * dalla porta sbagliata.
+   *
+   * Vedi ADR-0056 e `docs/evidence/continuita-e-provenienza-2026-09-03.md` §8.
+   */
+  sessionKey: string;
+};
+
+/**
+ * La chiave di conversazione dell'owner, per i chiamanti che sono owner **per
+ * costruzione** e quindi non passano da `identify`: il REPL, che parla su un
+ * terminale già autenticato dal fatto di girare sulla macchina dell'owner
+ * (`cli/repl.ts` passa già `tenant: 'host'`).
+ *
+ * Esportata come costante e non come funzione: non c'è niente da decidere, e
+ * una funzione inviterebbe un connector a chiamarla invece di `identify`.
+ */
+export const OWNER_SESSION_KEY = 'owner';
 
 /**
  * What a surface must know about an incoming message to answer "who is this".
@@ -250,6 +296,9 @@ export function identify(incoming: IncomingIdentity, ownerId: string | undefined
     return {
       principal: { kind: 'owner', connector: incoming.connector, externalId: incoming.authorId },
       tenant: 'host',
+      // Senza connector, e questa è l'unica riga del file che due porte
+      // diverse possono far coincidere. Vedi `SurfaceIdentity.sessionKey`.
+      sessionKey: OWNER_SESSION_KEY,
     };
   }
 
@@ -262,6 +311,9 @@ export function identify(incoming: IncomingIdentity, ownerId: string | undefined
       externalId: incoming.authorId === '' ? incoming.conversationId : incoming.authorId,
     },
     tenant,
+    // Invariata: è la stringa che i connector scrivevano a mano, quindi la
+    // fusione non tocca nemmeno il nome del file di un gruppo.
+    sessionKey: `${incoming.connector}:${incoming.conversationId}`,
   };
 }
 

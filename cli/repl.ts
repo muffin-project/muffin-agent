@@ -23,6 +23,7 @@ import { makeStatusLine, type StatusLine } from './status-line.js';
 import { styleFor } from './ui.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { attachSendFile, connectSurfaces, rigaDatata } from './surface.js';
+import { OWNER_SESSION_KEY } from '../core/surface/types.js';
 
 /**
  * The REPL.
@@ -659,7 +660,19 @@ export async function runRepl(
     return allowed ? 'allow' : 'deny';
   });
 
-  let session = runtime.deps.sessions.open();
+  /**
+   * La conversazione dell'owner, non una per lancio.
+   *
+   * Il terminale è owner per costruzione (`tenant: 'host'` più sotto), quindi
+   * apre la stessa chiave che `identify` dà alla sua DM su Telegram e su
+   * Discord — un id casuale qui era ciò che faceva del terminale una
+   * conversazione a parte, e per di più senza continuità nemmeno con sé stesso
+   * fra due lanci (ADR-0056, il failure del 03/09).
+   *
+   * `const`, non `let`: `/new` non apre più un id nuovo, lo ruota — vedi il
+   * ramo `nuovaSessione` più sotto.
+   */
+  const session = runtime.deps.sessions.open(OWNER_SESSION_KEY);
   let controller: AbortController | null = null;
   let lastInterrupt = 0;
   const pausa = new Pausa(runtime.db);
@@ -841,7 +854,15 @@ export async function runRepl(
           process.stderr.write(`comando sconosciuto.\n${aiuto(true)}\n`);
           continue;
         }
-        if (esito.nuovaSessione === true) session = runtime.deps.sessions.open();
+        if (esito.nuovaSessione === true) {
+          // `/new` è una rotazione, non un id nuovo: con una chiave condivisa
+          // fra le porte «una conversazione nuova» non può essere una chiave
+          // diversa — sarebbe una conversazione altrui. È ciò che `/new`
+          // significa già su Telegram (`cli/surface.ts`), e ora le due porte
+          // dicono la stessa cosa. Il file di prima viene archiviato con la
+          // data, mai cancellato.
+          runtime.deps.sessions.rotate(session);
+        }
         if (esito.verbosity !== undefined) verbosity = esito.verbosity;
         // `status.line` e non `stderr.write`: lo spinner possiede il terminale
         // mentre gira, e una riga scritta sotto di lui gli finisce dentro.
