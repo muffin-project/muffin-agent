@@ -85,34 +85,53 @@ const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 /**
  * Un host valido per `rot/egress.json`: un hostname nudo, o un pattern
- * `*.dominio` con un solo livello di wildcard iniziale — mai uno schema
- * (`https://`), una porta (`:443`), un percorso (`/search`), un utente
- * (`user@`), un elenco (`a.example,b.example`) o un attraversamento di
- * percorso (`../../etc/passwd`, che comunque non contiene i caratteri di un
- * host).
+ * `*.dominio` con un solo livello di wildcard iniziale.
  *
- * Prima di questo controllo, `--host` finiva scritto e sigillato **tale e
- * quale** in `rot/egress.json`: `hostAllowed()` confronta contro
- * `new URL(...).hostname`, quindi un valore come `https://api.tavily.com/`
- * non avrebbe mai fatto match — l'owner leggeva "aggiunto", il seal era
- * valido, e la capability restava spenta. Lo stesso difetto misurato per
- * questa ADR, con un messaggio di successo sopra. Peggio, una stringa vuota
- * (`--host ''`, tipicamente una variabile di shell non impostata) scritta in
- * `allow` fa fallire `loadEgress()` al prossimo avvio, e il `catch` muto in
- * `agent/runtime.ts` la trasforma in `{ allow: [] }` — **ogni** host prima
- * approvato sparisce, senza una riga in nessun log.
+ * **Un meccanismo solo, non una lista nera di caratteri.** La stesura
+ * precedente rifiutava esplicitamente `/`, `:`, `@`, `,` e gli spazi PRIMA di
+ * spezzare in etichette — ma un revisore indipendente ha mostrato che quel
+ * controllo era ridondante: tolto, i 53 test restavano tutti verdi, perché
+ * `DNS_LABEL` già rifiuta ciascuno di quei caratteri **dentro ogni etichetta**
+ * (`split('.')` non consuma `/`, `:`, `@`, `,` o uno spazio, quindi finiscono
+ * sempre dentro un'etichetta, e `DNS_LABEL` ammette solo lettere/cifre/
+ * trattino). Una lista nera che si può togliere senza che un test se ne
+ * accorga non sta proteggendo niente da sola — è un secondo posto dove la
+ * stessa regola può disallinearsi dalla prima. Restava un guardiano solo:
+ * `DNS_LABEL`, applicato etichetta per etichetta dopo aver tolto un eventuale
+ * `*.` iniziale (`split('.').every(...)`) — e uno schema (`https://`), una
+ * porta (`:443`), un percorso (`/search`), un utente (`user@`), un elenco
+ * (`a.example,b.example`) e un attraversamento di percorso
+ * (`../../etc/passwd`) restano tutti rifiutati, perché nessuno dei loro
+ * caratteri passa `DNS_LABEL` in nessuna etichetta.
+ *
+ * **Lo stesso meccanismo chiude anche lo spazio ai bordi, senza un `trim()`
+ * separato — ed è proprio lì che la stesura precedente aveva il difetto
+ * bloccante di una review indipendente.** `raw.trim()` veniva chiamato
+ * **solo** dentro questa funzione, mai su `normalizzati` (`hosts.map((h) =>
+ * h.toLowerCase().replace(/\.$/, ''))`, sotto): un host con uno spazio o un
+ * `\n` a un bordo (`"api.tavily.com "`, `"\napi.tavily.com"`, o una variabile
+ * di shell con un ritorno a capo finale, `--host "$MCP_HOST"`) passava questa
+ * funzione (che lo vedeva già ripulito), veniva scritto **con lo spazio
+ * dentro**, sigillato, e non avrebbe mai fatto match in `hostAllowed()` — la
+ * stessa capability spenta con un messaggio di successo sopra, sulla porta
+ * scritta apposta per chiuderla. Ora non c'è alcun `trim()`: lo spazio (o il
+ * `\n`) finisce dentro un'etichetta esattamente come `/` o `@`, e
+ * `DNS_LABEL` — ancorato con `^`/`$`, che in JavaScript non perdona un `\n`
+ * finale come farebbe in altri linguaggi — lo rifiuta per lo stesso motivo.
+ *
+ * Prima di questo controllo (in qualunque stesura), `--host` finiva scritto e
+ * sigillato **tale e quale** in `rot/egress.json`: `hostAllowed()` confronta
+ * contro `new URL(...).hostname`, quindi un valore come
+ * `https://api.tavily.com/` non avrebbe mai fatto match — l'owner leggeva
+ * "aggiunto", il seal era valido, e la capability restava spenta. Peggio, una
+ * stringa vuota (`--host ''`, tipicamente una variabile di shell non
+ * impostata) scritta in `allow` fa fallire `loadEgress()` al prossimo avvio,
+ * e il `catch` muto in `agent/runtime.ts` la trasforma in `{ allow: [] }` —
+ * **ogni** host prima approvato sparisce, senza una riga in nessun log.
  */
 export function isValidEgressHost(raw: string): boolean {
-  const h = raw.trim();
-  if (h === '') return false;
-  // Un carattere di questi non compare mai in un hostname vero: se c'è, chi
-  // ha scritto `--host` ha messo uno schema, una porta, un percorso, un
-  // utente, un elenco o spazio — non un host.
-  if (/[/:@,\s]/.test(h)) return false;
-  const senzaWildcard = h.startsWith('*.') ? h.slice(2) : h;
-  if (senzaWildcard === '' || senzaWildcard.includes('..')) return false;
-  const labels = senzaWildcard.split('.');
-  return labels.every((l) => DNS_LABEL.test(l));
+  const senzaWildcard = raw.startsWith('*.') ? raw.slice(2) : raw;
+  return senzaWildcard.split('.').every((label) => DNS_LABEL.test(label));
 }
 
 const MANIFEST_FILENAME = 'manifest.json'; // Lo stesso letterale privato di `core/rot/verify.ts`.
@@ -229,34 +248,39 @@ export async function widenEgressForCapability(
   } catch (error) {
     // Rollback, best-effort: se uno di questi due write torna a fallire (per
     // esempio perché è mancato lo stesso permesso che ha fatto fallire il
-    // primo tentativo) non c'è altro da fare — ma è esattamente il caso in
-    // cui non serve, perché allora anche la scrittura sopra non è mai
-    // avvenuta. Quello che questo rollback chiude è il caso intermedio: la
-    // scrittura di `egress.json` è riuscita, `seal()` ha riscritto
-    // `manifest.json` ed è fallito solo sull'anchor.
+    // primo tentativo) non c'è altro da fare per rimetterlo a posto da soli —
+    // ma è un esito diverso da "non è cambiato niente", e va detto, non
+    // inghiottito in un `catch` muto: altrimenti il messaggio promette uno
+    // stato che il disco non ha. Quello che questo rollback chiude di norma è
+    // il caso intermedio: la scrittura di `egress.json` è riuscita, `seal()`
+    // ha riscritto `manifest.json` ed è fallito solo sull'anchor.
+    let rollbackFallito = false;
     try {
       writeFileSync(egressFile, egressRawPrima, 'utf8');
     } catch {
-      /* niente da fare di più: vedi sopra */
+      rollbackFallito = true;
     }
     if (manifestRawPrima !== undefined) {
       try {
         writeFileSync(manifestFile, manifestRawPrima, 'utf8');
       } catch {
-        /* idem */
+        rollbackFallito = true;
       }
     }
 
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EACCES' || code === 'EPERM') {
-      out(
-        `non posso scrivere in ${rotDir}: permesso negato. Se hai reso vera la modalità hardened, rifai questo ` +
+    const motivo =
+      code === 'EACCES' || code === 'EPERM'
+        ? `non posso scrivere in ${rotDir}: permesso negato. Se hai reso vera la modalità hardened, rifai questo ` +
           "comando con il privilegio che serve (es. `sudo`), oppure a mano: " +
-          rimedioAMano,
-      );
-    } else {
-      out(`scrittura fallita: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`);
-    }
+          rimedioAMano
+        : `scrittura fallita: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`;
+    out(
+      rollbackFallito
+        ? `${motivo} E non sono riuscito a rimettere ${egressFile}/${manifestFile} come stavano prima: verifica con ` +
+          '`muffin rot verify` — se dice che è diverso, `muffin rot reseal` a mano dopo aver controllato cosa è cambiato.'
+        : motivo,
+    );
     return { ok: false };
   }
 
