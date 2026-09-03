@@ -45,7 +45,12 @@
 #     è nativo).
 #
 # `timeout-minutes` non è cautela: è il tetto che impedisce a un test appeso di
-# mangiarsi il budget del mese mentre nessuno guarda.
+# mangiarsi il budget del mese mentre nessuno guarda. Quello, e **non** un budget
+# di prestazione — la distinzione è scritta per esteso in `accettazione.yml`,
+# dove lo stesso tetto ha fatto uscire «cancellate» PR verdi due volte in due
+# giorni. Qui era a dieci contro durate misurate di 4,9–6,6 minuti, e il
+# 04/09/2026 un run è passato a **10:03**: verde per tre secondi. Un gate che si
+# decide su tre secondi di runner non sta misurando questo repository.
 
 name: verifica
 
@@ -76,7 +81,7 @@ permissions:
 jobs:
   verifica:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
