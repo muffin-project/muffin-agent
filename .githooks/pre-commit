@@ -1,0 +1,24 @@
+#!/bin/sh
+# Rifiuta il commit se `docs/derived/architecture-map/ancore.json` è
+# disallineato dal working tree — la stessa esatta condizione che
+# `mappa.test.ts` fa fallire in CI, controllata prima invece che dopo un push.
+#
+# Registrato localmente da `docs/derived/architecture-map/setup-merge-driver.mjs`
+# (girato da `npm run prepare`). Un checkout su cui non è mai girato non ha
+# questo hook: nessuna regressione, solo il controllo tardivo di CI, com'era
+# prima di questo meccanismo.
+#
+# Legge il WORKING TREE, non l'indice: uno `git commit` senza `-a` su un file
+# citato modificato ma non ancora staged non viene visto qui — resta comunque
+# preso da CI.
+set -eu
+ROOT="$(git rev-parse --show-toplevel)"
+OUT="$(mktemp)"
+trap 'rm -f "$OUT"' EXIT
+if ! node "$ROOT/docs/derived/architecture-map/ancore.mjs" --check >"$OUT" 2>&1; then
+  cat "$OUT" >&2
+  echo "" >&2
+  echo "Commit bloccato: la mappa dell'architettura non è aggiornata." >&2
+  echo "Esegui \`npm run mappa:regen\`, controlla eventuale drift genuino, poi riprova." >&2
+  exit 1
+fi

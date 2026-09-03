@@ -1,0 +1,18 @@
+# Pure derived artefacts of docs/derived/architecture-map/{ancore.mjs,build.mjs}.
+# See docs/derived/architecture-map/README.md and setup-merge-driver.mjs.
+#
+# `merge=mappa-regen` is configured locally (never here — Git requires a
+# driver definition to live in `.git/config`) as the builtin `true` command:
+# on a conflict, Git just keeps "ours" instead of leaving a human to
+# textually merge 289 KB of generated JSON/HTML. The real content is
+# recomputed correctly a moment later, once the whole merge/rebase has
+# finished (`post-merge-regen.mjs`, wired via `.githooks/post-merge` and
+# `post-rewrite`) — not mid-merge, when sibling files this map cites are not
+# guaranteed to be on disk yet.
+#
+# Every clone gets this registered automatically on `npm install` / `npm ci`
+# via the `prepare` script. A clone that never ran it keeps Git's normal
+# 3-way text merge on these two paths: today's behaviour, never a silent
+# wrong merge.
+docs/derived/architecture-map/ancore.json merge=mappa-regen
+docs/derived/architecture-map/mappa.html merge=mappa-regen -diff linguist-generated=true
