@@ -623,3 +623,29 @@ export class ConfigError extends Error {
     this.name = 'ConfigError';
   }
 }
+
+/**
+ * `surfaces.default` as it is on disk **right now**, or `fallback` if the file
+ * cannot be read or no longer parses.
+ *
+ * A separate door from `loadConfig` because the callers are separate in kind.
+ * `loadConfig` runs at boot, and a bad config there must stop the boot — the
+ * owner is watching, and a home that silently ran on defaults would be worse
+ * than a refusal. This one runs on the scheduler's 30-second beat inside a
+ * process that is already up, to answer one question: where does the owner read
+ * *now*. Turning `muffin surface default telegram` into a remedy that works on
+ * a running gateway is the whole reason it exists (`Runtime.defaultChannel`,
+ * ADR-0060 §1-ter), and taking the process down because the owner is halfway
+ * through hand-editing `config.json` would be a cure worse than the defect.
+ *
+ * No caching and no stat: the read is a few hundred bytes twice a minute, and a
+ * cache keyed on mtime is exactly the kind of cleverness that reintroduces the
+ * staleness this function was written to remove.
+ */
+export function readDefaultChannel(home: string, fallback: string): string {
+  try {
+    return loadConfig(home).surfaces.default;
+  } catch {
+    return fallback;
+  }
+}

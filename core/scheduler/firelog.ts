@@ -40,10 +40,22 @@ export type Fire = {
   kind: ProactiveKind;
   decidedAt: Date;
   /**
-   * Three values in the type, one in the table: `recordFired` is the only
-   * writer and it always records `'allow'`, because a `defer` has to stay
-   * re-decidable (`observe.ts`). Said here so a later reader does not query
-   * this table for deferred decisions — they are not in it, and never were.
+   * Three values in the type, **two** in the table since ADR-0060.
+   *
+   * `'allow'` — `recordFired` (`observe.ts`) and `recordCommitmentFired`: this
+   * was said, and must not be said again.
+   *
+   * `'deny'` — `recordCommitmentDenied` (`commitments.ts`) only, and only for
+   * `tainted_source`. The sentence this comment used to carry, *"the only
+   * writer always records 'allow'"*, was true of one mechanism and became a
+   * trap for the next: a dated commitment denied for its provenance is denied
+   * on a number that only ever rises, so re-deciding it on every tick was pure
+   * cost — and, with a per-pass ceiling, it starved the clean commitments
+   * behind it. A decision that cannot change is a decision worth writing down.
+   *
+   * `'defer'` is still **never** written, and that is the line that has not
+   * moved: "not now" has to stay re-decidable, or one quiet-hours pass would
+   * become a permanent silence.
    */
   effect: ProactiveDecision['effect'];
   /** Short, and the evidence rather than prose: what made this worth saying. */
