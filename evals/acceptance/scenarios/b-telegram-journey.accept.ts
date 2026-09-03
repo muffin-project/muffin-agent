@@ -123,18 +123,33 @@ function plantTier2Episode(home: string, threadKey: string): void {
   }
 }
 
-describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI per memoria, non per sessione', () => {
+describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `run` usa e getta per memoria, non per sessione', () => {
   /**
+   * **Aggiornato da ADR-0056 (03/09).** Questo scenario asseriva
+   * `session_id === 'telegram:<chatId>'` anche per la DM dell'owner, e quella
+   * frase è ora falsa: la chiave la decide `identify`, e per il principal owner
+   * è `owner` su ogni porta — è il fix del failure «non sembra lo stesso
+   * muffin» (`b-una-conversazione.accept.ts` lo prova). La claim che questo file
+   * porta **non cambia**: un processo che apre una sessione *diversa* non vede
+   * il trascritto dell'altra, e ciò che attraversa quel confine è la memoria
+   * scopata sul tenant, mai la sessione.
+   *
+   * Cambia solo quale porta incarna quel confine. Non più «Telegram contro la
+   * CLI» (che oggi condividono la conversazione dell'owner, di proposito) ma
+   * `muffin run` **senza `--session`**, che tiene un id per invocazione perché
+   * «a script run in a loop should not silently accumulate a conversation»
+   * (`cli/run.ts`) — l'unica porta che ADR-0056 lascia deliberatamente fuori
+   * dalla conversazione dell'owner.
+   *
    * Falsifier: comment out `session: this.deps.sessions.open(…)` in
    * `connector.ts` (or point it at a constant id) and the `session_id`
-   * assertion below breaks immediately — that is the literal claim B1's row
-   * makes ("le sessioni non sono la stessa per costruzione"). Comment out the
-   * tenant-scoped recall in `core/memory/recall.ts` and the *second* half
-   * breaks instead: the CLI process would ask about the fact and get nothing
-   * back, because nothing but memory carries it across this boundary.
+   * assertion below breaks immediately. Comment out the tenant-scoped recall in
+   * `core/memory/recall.ts` and the *second* half breaks instead: the `run`
+   * process would ask about the fact and get nothing back, because nothing but
+   * memory carries it across this boundary.
    */
   it(
-    'la sessione Telegram è "telegram:<chatId>"; un secondo processo CLI non la vede, ma la memoria del tenant sì',
+    'la sessione della DM dell owner è "owner"; un `muffin run` usa e getta non la vede, ma la memoria del tenant sì',
     async () => {
       const tg = await startFakeTelegram();
       const inst = await install({
@@ -151,8 +166,9 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI p
           await until(() => tg.messages().some((m) => m.text.includes('tasso')), 20_000);
 
           // The construction claim, checked directly rather than inferred:
-          // `connectors/telegram/connector.ts` opens the session as exactly
-          // `telegram:${incoming.chatId}`.
+          // `connectors/telegram/connector.ts` opens the session with the key
+          // `identify` computed, which for the owner's DM is exactly `owner`
+          // — never a literal written in the connector (ADR-0056).
           const turnRow = inst.db(
             (db) =>
               db.prepare(`SELECT session_id, tenant, surface FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
@@ -160,8 +176,8 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI p
                 | undefined,
           );
           if (!turnRow) throw new Error('nessun turno dopo il messaggio Telegram');
-          if (turnRow.session_id !== `telegram:${OWNER_ID}`) {
-            throw new Error(`session_id atteso "telegram:${OWNER_ID}", trovato ${JSON.stringify(turnRow.session_id)}`);
+          if (turnRow.session_id !== 'owner') {
+            throw new Error(`session_id atteso "owner", trovato ${JSON.stringify(turnRow.session_id)}`);
           }
           if (turnRow.tenant !== 'host' || turnRow.surface !== 'telegram') {
             throw new Error(`tenant/surface inattesi sul turno Telegram: ${JSON.stringify(turnRow)}`);
@@ -171,15 +187,18 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI p
         }
 
         // A second, unrelated CLI process — its own fresh session id
-        // (`cli/run.ts`'s default, never `telegram:<chatId>`), nothing shared
-        // with the Telegram chat but this tenant's memory.
+        // (`cli/run.ts`'s default, `run-<data>-<hex>`, never the owner's
+        // shared conversation), nothing shared with the Telegram chat but this
+        // tenant's memory. Dopo ADR-0056 è **questa** la porta che isola, ed è
+        // isolata di proposito: `--session owner` sarebbe la scelta esplicita
+        // di entrare nella conversazione.
         const second = await inst.muffin(['run', '--timeout', '20', 'qual è il mio animale preferito?']);
         if (second.code !== 0) throw new Error(`secondo processo CLI: exit ${second.code}\n${second.err}`);
         const sent = inst.provider.main().at(-1);
         if (!sent) throw new Error('il secondo processo CLI non ha mai chiamato il modello');
 
         // Sessions are distinct by construction: no literal `role: 'assistant'`
-        // turn from the Telegram exchange appears in this CLI process's own
+        // turn from the Telegram exchange appears in this `run` process's own
         // wire messages — the same shape `b-continuity.accept.ts`'s B1 checks
         // for the CLI-only case, checked here for its absence instead.
         const literalTelegramTurn = sent.messages.find(
@@ -187,8 +206,8 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna al CLI p
         );
         if (literalTelegramTurn) {
           throw new Error(
-            `il secondo processo CLI ha visto la trascrizione letterale della sessione Telegram — le sessioni ` +
-              `non sono distinte come dichiarato dalla riga B1:\n${JSON.stringify(sent.messages, null, 2)}`,
+            `un \`muffin run\` senza \`--session\` ha visto la trascrizione letterale della conversazione ` +
+              `dell'owner: la sessione usa e getta di \`cli/run.ts\` non isola più niente:\n${JSON.stringify(sent.messages, null, 2)}`,
           );
         }
         // And yet the fact crossed the boundary — through tenant-scoped
