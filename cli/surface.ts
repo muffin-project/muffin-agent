@@ -58,7 +58,54 @@ export const SURFACE_USAGE = `usage:
   muffin surface enable telegram [--owner <chat-id>]
   muffin surface enable discord [--owner <user-id>]
   muffin surface disable telegram|discord
+  muffin surface default <id>             dove Muffin parla quando nessuno ha chiesto
 `;
+
+/**
+ * `surfaces.default` era una manopola senza porta, e la porta mancante costava
+ * una promessa.
+ *
+ * Il campo si dichiara da sempre come *«dove Muffin parla quando nessuno ha
+ * chiesto»* — ed e' cio' che leggono sia `muffin observe` sia la corsia degli
+ * impegni (ADR-0060) — ma `DEFAULT_CONFIG` lo mette a `cli`, `muffin surface
+ * enable telegram` non lo tocca, e non esisteva nessun comando per cambiarlo.
+ * Sull'installazione reale dell'owner: `default: "cli"` con `enabled:
+ * ["cli","telegram","discord"]`. Sotto un supervisore quel `cli` e' il journal,
+ * quindi un messaggio non richiesto finiva in un log e nessuno poteva
+ * spostarlo senza aprire `config.json` a mano.
+ *
+ * Non lo cambia nessun altro comando, di proposito: `enable` che sposta il
+ * canale predefinito sarebbe un effetto che l'owner non ha chiesto sul verbo
+ * che usa per fare tutt'altro. Quello che `enable` fa adesso e' **dirlo**.
+ */
+export function cmdSurfaceDefault(home: string, id: string): number {
+  const config = loadConfig(home);
+  // `cli` e' sempre abilitata (L0-1) e non compare necessariamente in `enabled`
+  // di ogni config scritta a mano: l'unica superficie che non ha bisogno del
+  // permesso di essere scelta.
+  if (id !== 'cli' && !config.surfaces.enabled.includes(id)) {
+    process.stderr.write(
+      `${id} non è abilitata: non può essere la superficie predefinita
+` +
+        `→ muffin surface enable ${id}
+`,
+    );
+    return 78;
+  }
+  if (config.surfaces.default === id) {
+    process.stdout.write(`${id} è già la superficie predefinita
+`);
+    return 0;
+  }
+  saveConfig({ ...config, surfaces: { ...config.surfaces, default: id } }, home);
+  process.stdout.write(
+    `superficie predefinita: ${id}
+` +
+      `  è dove finisce ciò che Muffin dice di sua iniziativa — promemoria scaduti, osservazioni.
+`,
+  );
+  return 0;
+}
 
 export function cmdSurfaceList(home: string): number {
   const config = loadConfig(home);
@@ -94,6 +141,24 @@ export function cmdSurfaceList(home: string): number {
     }
 
     lines.push(`${enabled ? '●' : '○'} ${id.padEnd(10)}${isDefault ? ' (default)' : ''}${detail}`);
+  }
+
+  /**
+   * La riga che mancava, e non e' cosmetica.
+   *
+   * `default: "cli"` con una superficie remota accesa e' la configurazione
+   * dell'owner, ed e' quella in cui un promemoria scaduto finisce sul
+   * terminale — cioe' nel journal, sotto un supervisore. Detto qui perche'
+   * `surface list` e' il posto dove si va a guardare, e perche' fino a questa
+   * slice non esisteva nemmeno il comando per cambiarlo.
+   */
+  const remote = config.surfaces.enabled.filter((s) => s !== 'cli');
+  if (config.surfaces.default === 'cli' && remote.length > 0) {
+    lines.push(
+      '',
+      `! ciò che Muffin dice di sua iniziativa va su "cli": in un processo senza terminale`,
+      `  finisce nel log e nessuno lo legge — \`muffin surface default ${remote[0]}\``,
+    );
   }
 
   process.stdout.write(`${lines.join('\n')}\n`);
@@ -202,6 +267,7 @@ async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: st
   saveConfig(next, home);
   process.stdout.write(`telegram abilitata: @${me.username ?? me.id}, owner ${ownerChatId}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
+  ricordaLaPredefinita(home, 'telegram');
   return 0;
 }
 
@@ -276,8 +342,26 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
   saveConfig(next, home);
   process.stdout.write(`discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
+  ricordaLaPredefinita(home, 'discord');
   return 0;
 }
+/**
+ * Detto, mai fatto di nascosto.
+ *
+ * `enable` non sposta `surfaces.default` — spostarlo sarebbe un effetto che
+ * l'owner non ha chiesto sul verbo che sta usando per altro — ma tacere e'
+ * come si e' arrivati a un'installazione con Telegram acceso e i messaggi non
+ * richiesti diretti al terminale. Una riga, con il comando esatto.
+ */
+function ricordaLaPredefinita(home: string, id: string): void {
+  const config = loadConfig(home);
+  if (config.surfaces.default === id) return;
+  process.stdout.write(
+    `ciò che Muffin dice di sua iniziativa continua ad andare su "${config.surfaces.default}"\n` +
+      `  → muffin surface default ${id}\n`,
+  );
+}
+
 
 export function cmdSurfaceDisable(home: string, id: string): number {
   if (id === 'cli') {

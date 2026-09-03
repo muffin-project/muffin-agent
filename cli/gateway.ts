@@ -676,10 +676,31 @@ export async function cmdGatewayRun(
    * e l'ancora resta aperta, che è esattamente la regola su cui gira
    * `cli/observe.ts`: si brucia solo ciò che è arrivato all'owner.
    */
-  const commitments = makeCommitmentLane(runtime, deliver, (e) => {
-    if (e.kind === 'undelivered') {
-      process.stderr.write(`impegno ${e.anchor}: non consegnato — ${e.why}\n`);
-    }
+  const commitments = makeCommitmentLane(runtime, deliver, {
+    /**
+     * Il gateway gira in due modi e la risposta e' diversa: `muffin gateway
+     * run` in un terminale ha davvero l'owner davanti; sotto launchd o systemd
+     * stdout **e' il journal**. E' lo stesso segnale che `cliSurface` legge per
+     * decidere se lo streaming ha un senso, letto qui perche' e' qui che si sa
+     * come questo processo e' stato avviato.
+     */
+    hasTerminal: () => process.stdout.isTTY === true,
+    onEvent: (e) => {
+      if (e.kind === 'undelivered') {
+        process.stderr.write(`impegno ${e.anchor}: non consegnato — ${e.why}\n`);
+      } else if (e.kind === 'unreachable') {
+        // Una volta per ancora, non una ogni trenta secondi (vedi
+        // `CommitmentEvent`). La promessa resta dovuta: quando l'owner cambia
+        // la superficie predefinita, arriva — in ritardo, e dicendolo.
+        process.stderr.write(
+          `impegno ${e.anchor}: scaduto, ma "${e.channel}" non arriva a nessuno da qui — ` +
+            `resta in attesa\n→ ${e.remedy}\n`,
+        );
+      } else if (e.kind === 'failed') {
+        // Il processo e' vivo: e' questo il punto della riga.
+        process.stderr.write(`corsia impegni: giro fallito — ${e.error}\n`);
+      }
+    },
   });
   const scheduler = new Scheduler(
     runtime.jobs,

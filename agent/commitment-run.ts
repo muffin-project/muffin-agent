@@ -28,10 +28,28 @@ import type { Runtime } from './runtime.js';
  */
 export const COMMITMENT_TENANT = 'host';
 
+export type CommitmentLaneOptions = {
+  /**
+   * Is there a person at the terminal of this process?
+   *
+   * **Required, no default**, and the reason is the judge's B1 rather than
+   * style. `cliSurface` answers `DELIVERED` for a write to stdout, which is
+   * true of the bytes and false of the owner when stdout is a supervisor's
+   * journal — and the owner's real installation has `surfaces.default = "cli"`
+   * with Telegram enabled, so the promise went to the journal and the anchor
+   * was burned. A default here would be a value nobody chose, on exactly the
+   * question that decides whether a promise is lost; the repository has already
+   * paid for one of those (`Scheduler`'s `modelLane`, D1 judge round 2). So the
+   * REPL says "yes, a terminal" and the gateway asks the file descriptor.
+   */
+  hasTerminal: () => boolean;
+  onEvent?: (e: CommitmentEvent) => void;
+};
+
 export function makeCommitmentLane(
   runtime: Runtime,
   deliver: Deliver,
-  onEvent?: (e: CommitmentEvent) => void,
+  opts: CommitmentLaneOptions,
 ): CommitmentLane {
   return new CommitmentLane({
     todos: runtime.deps.todos,
@@ -41,6 +59,20 @@ export function makeCommitmentLane(
     fires: new FireLog(runtime.db),
     deliver,
     channel: runtime.config.surfaces.default,
+    /**
+     * `cli` reaches the owner only when a terminal is attached; every other
+     * channel is answered by the registry itself, which already returns
+     * `{ delivered: false }` for a surface that is not up — and that leaves the
+     * anchor open, which is the same outcome by a different route.
+     *
+     * The remedy the event names is a real command as of this slice:
+     * `muffin surface default` (`cli/surface.ts`). Before it there was no door
+     * at all — `muffin surface enable telegram` never touched
+     * `surfaces.default`, and the field's own comment claimed it was
+     * "deliberately not the CLI by default" while `DEFAULT_CONFIG` set it to
+     * `cli`.
+     */
+    reachesOwner: (channel) => channel !== 'cli' || opts.hasTerminal(),
     // The owner's timezone, from the sealed root of trust — so "era per martedì
     // alle 09:00" is their Tuesday, not the supervisor's UTC.
     timezone: runtime.quietHours.timezone,
@@ -52,6 +84,6 @@ export function makeCommitmentLane(
       quietHours: runtime.quietHours,
       budgetExhausted: runtime.budget.exhausted(),
     }),
-    ...(onEvent === undefined ? {} : { onEvent }),
+    ...(opts.onEvent === undefined ? {} : { onEvent: opts.onEvent }),
   });
 }

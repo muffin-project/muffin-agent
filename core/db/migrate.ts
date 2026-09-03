@@ -143,7 +143,8 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 4,
-    description: "todos.due_at — un passo può avere un momento, e quel momento può svegliare Muffin",
+    description:
+      "todos.due_at + todos.due_tier — un passo può avere un momento, e quel momento porta il soffitto che l'ha armato",
     up: (db) => {
       // Same guard as migrations 2 and 3, same reason: `todos` is created by
       // `TodoStore`, which runs after this runner. A fresh install never
@@ -162,6 +163,18 @@ const MIGRATIONS: Migration[] = [
         // concept; giving any of them a date would turn text the owner never
         // dated into something that can make Muffin speak first.
         db.exec(`ALTER TABLE todos ADD COLUMN due_at TEXT`);
+      }
+      if (!colonne.some((c) => c.name === 'due_tier')) {
+        // The ceiling that armed the date, separate from `tier` on purpose
+        // (`core/turns/todo.ts`). NULL means "never dated", and `dueCommitments`
+        // reads `max(tier, coalesce(due_tier, 0))` — so a NULL here can only
+        // ever make the promise *less* trusted than the row already was, never
+        // more. No CHECK on the ALTER path: SQLite cannot add a constrained
+        // column to an existing table without a rebuild, and the writer
+        // (`setDue`) is the only one there is. Fresh installs get the CHECK
+        // from `TODO_SCHEMA`; this is the one asymmetry, and it is stated
+        // rather than discovered.
+        db.exec(`ALTER TABLE todos ADD COLUMN due_tier INTEGER`);
       }
       // The index the scheduler's session-blind scan uses. Created here as well
       // as in `TODO_SCHEMA` because a pre-existing install reaches the store's

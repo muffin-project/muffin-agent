@@ -92,11 +92,34 @@ const CapsShape = z.object({
  *  - `to: "8am"` — `decideProactive` computes the end of the window before it
  *    checks anything, so the run dies inside cron-parser with
  *    "Invalid characters, got value: NaN" instead of deferring.
+ *
+ * The third way was left open until ADR-0060, and it was the same failure with
+ * a different spelling: `timezone: "Europe/Roma"` passed `min(1)` and then
+ * exploded downstream — `Intl.DateTimeFormat` throws `RangeError` on an unknown
+ * zone, and `nextTimeOfDay` hands it to cron-parser, which dies with
+ * "CronDate: unhandled timestamp". Before this validation existed that typo
+ * broke `muffin observe --send`, a command the owner types and watches; from
+ * ADR-0060 the same window is read on the gateway's 30-second beat, so a
+ * one-letter typo in a sealed file became a process that dies at every start.
+ * The zone is therefore checked against the runtime's own tz database here,
+ * where it is parsed — not guarded at each of the places that use it.
  */
+function isRealTimezone(tz: string): boolean {
+  try {
+    // The cheapest question that actually consults the tz database. A zone the
+    // runtime does not know throws `RangeError` here, which is exactly the
+    // throw we are moving from three call sites to one.
+    new Intl.DateTimeFormat('en-GB', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const QuietShape = z.object({
   from: z.string().regex(/^\d{1,2}:\d{2}$/),
   to: z.string().regex(/^\d{1,2}:\d{2}$/),
-  timezone: z.string().min(1),
+  timezone: z.string().min(1).refine(isRealTimezone, { message: 'fuso orario IANA sconosciuto' }),
 });
 
 const SCHEMA_VERSION = 1;
@@ -136,7 +159,10 @@ export function loadSealedBudgets(home: string): SealedBudgets {
   }
   const quiet = QuietShape.safeParse((raw as { quietHours?: unknown }).quietHours);
   if (!quiet.success) {
-    notes.push(`${file}: quietHours non valide — vale la finestra compilata`);
+    // Il motivo, non solo il verdetto: `"Europe/Roma"` e `"11pm"` sono lo
+    // stesso esito con due cause diverse, e una riga che non le distingue
+    // manda l'owner a rileggere il file invece che a correggere un carattere.
+    notes.push(`${file}: quietHours non valide (${issue(quiet.error)}) — vale la finestra compilata`);
   }
 
   return {

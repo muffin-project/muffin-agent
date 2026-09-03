@@ -767,8 +767,16 @@ export async function runRepl(
     },
     gateway !== null,
   );
-  const commitments = makeCommitmentLane(runtime, deliver, (e) => {
-    if (e.kind === 'undelivered') status.line(`impegno ${e.anchor}: non consegnato — ${e.why}`);
+  const commitments = makeCommitmentLane(runtime, deliver, {
+    // Il REPL *e'* il terminale: se questa sessione esiste, l'owner e' davanti
+    // allo schermo. E' l'unico posto dell'albero dove la risposta e' una
+    // costante, ed e' costante per una ragione, non per comodita'.
+    hasTerminal: () => true,
+    onEvent: (e) => {
+      if (e.kind === 'undelivered') status.line(`impegno ${e.anchor}: non consegnato — ${e.why}`);
+      else if (e.kind === 'unreachable') status.line(`impegno ${e.anchor}: nessun canale — ${e.remedy}`);
+      else if (e.kind === 'failed') status.line(`corsia impegni: giro fallito — ${e.error}`);
+    },
   });
   const scheduler = new Scheduler(
     runtime.jobs,
