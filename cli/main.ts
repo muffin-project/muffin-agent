@@ -59,7 +59,7 @@ import {
   type ProviderKind,
 } from '../core/config/config.js';
 import { promptLine, promptSecret } from './prompt.js';
-import { cmdPromptShow, PROMPT_USAGE } from './prompt-show.js';
+import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import {
   askLocalOrApi,
   askModelChoice,
@@ -146,6 +146,10 @@ comandi operatore:
                                 il system prompt che il modello riceverebbe
                                 davvero, sulla home corrente — niente chiamate
                                 al modello, segreti redatti
+  muffin prompt version [v1|v2]
+                                quale prompt assembla questa installazione. v1 e
+                                il default e non si muove; v2 riscrive carattere,
+                                voce e regole di lavoro. Vale dal prossimo boot.
   muffin secret set NOME [--persist]
                                 (valore su stdin) --persist lo scrive fuori da
                                 ~/.muffin, così sopravvive a \`uninstall\` e
@@ -1052,8 +1056,9 @@ async function cmdMemory(argv: string[]): Promise<number> {
 }
 
 /**
- * `prompt` has one sub-verb today, `show`. A dispatcher rather than a
- * top-level `cmdPromptShow` in the switch above so a second sub-verb (say,
+ * `prompt` has two sub-verbs: `show`, what the model would really receive, and
+ * `version`, which of the two assemblies it receives. A dispatcher rather than
+ * a top-level `cmdPromptShow` in the switch above so a further sub-verb (say,
  * `prompt diff` against a previous snapshot) has somewhere to land without
  * touching `main`'s own switch again — the same shape `cmdMemory`/`cmdVault`
  * already use for their own sub-verbs.
@@ -1061,6 +1066,7 @@ async function cmdMemory(argv: string[]): Promise<number> {
 function cmdPrompt(argv: string[]): number {
   const [sub, ...rest] = argv;
   if (sub === 'show') return cmdPromptShow(paths().home, rest);
+  if (sub === 'version') return cmdPromptVersion(paths().home, rest);
   process.stderr.write(PROMPT_USAGE);
   return 78;
 }
