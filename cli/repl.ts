@@ -22,7 +22,7 @@ import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
 import { styleFor } from './ui.js';
 import { costUsd } from '../core/budget/pricing.js';
-import { attachSendFile, connectSurfaces } from './surface.js';
+import { attachSendFile, connectSurfaces, rigaDatata } from './surface.js';
 
 /**
  * The REPL.
@@ -114,6 +114,47 @@ export function makeReplCliWrite(
     } finally {
       // Nel `finally`, e non dopo la scrittura: una `write` che lancia (EPIPE)
       // lascerebbe il REPL senza prompt e con l'aria di essere piantato.
+      riquadro.redraw();
+    }
+  };
+}
+
+/**
+ * Le righe dei connettori, dentro un REPL: sopra la casella, non addosso.
+ *
+ * `rigaDiLog` scrive dritto su stderr (`cli/surface.ts`), che è giusto per
+ * `muffin gateway run` — lì stderr è `gateway.err`, un file, e una sequenza di
+ * escape dentro un file di log è sporcizia. In un REPL la stessa scrittura
+ * cade dove sta il cursore, cioè **dentro** il riquadro: il 03/09/2026, in un
+ * `tmux capture-pane` sull'installazione dell'owner, `telegram: connesso come
+ * @…` e `discord: connesso come @…` si sono stampati sulle righe della casella
+ * mangiandone il bordo, due secondi dopo l'avvio. Da fuori sembrava che la
+ * casella non ci fosse mai stata.
+ *
+ * Una riga di log è una scrittura **fuori banda** esattamente come una
+ * consegna: stessa classe, stessa strada. Quindi qui non c'è niente di nuovo
+ * rispetto a `makeReplCliWrite` sopra — togli il riquadro, scrivi, rimettilo,
+ * e il `redraw` nel `finally` perché una `write` che lancia non deve lasciare
+ * lo schermo senza prompt. La differenza è solo il testo: niente `⏰`, e la
+ * data che `rigaDatata` mette per tutti e due gli scrittori, così il REPL non
+ * può avere una sua idea di formato.
+ */
+export function makeReplLog(
+  riquadro: { cancella: () => void; redraw: () => void },
+  /**
+   * Su **stderr**, come `rigaDiLog`: stdout resta i byte della risposta e
+   * basta (B11), e le sequenze del fondo fisso viaggiano già di qui.
+   */
+  write: (s: string) => void = (s) => process.stderr.write(s),
+  /** Toglie l'attesa in corso, per la stessa ragione di `makeReplCliWrite`. */
+  clear: () => void = () => {},
+): (line: string) => void {
+  return (line) => {
+    try {
+      clear();
+      riquadro.cancella();
+      write(`\r${rigaDatata(line)}\n`);
+    } finally {
       riquadro.redraw();
     }
   };
@@ -390,6 +431,18 @@ export async function runRepl(
     runtime,
     home,
     makeReplCliWrite({ cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() }, () => status.clear()),
+    // Nessuna corsia da spingere: il REPL cede i turni al gateway (ADR-0035).
+    undefined,
+    // Le righe dei connettori passano dalla stessa strada delle consegne. Con
+    // le stesse chiusure tardive: qui la textzone non esiste ancora, e una riga
+    // arrivata prima che esista semplicemente non ha nessun riquadro da
+    // togliere — che è il caso dell'avvio, dove il fondo non è ancora
+    // agganciato e scrivere è già corretto.
+    makeReplLog(
+      { cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() },
+      (s) => process.stderr.write(s),
+      () => status.clear(),
+    ),
   );
   // DAY-1 requirement B14: a file the model produces can now reach the owner as a real
   // attachment on whichever surface this turn is on, not only as a path cited

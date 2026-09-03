@@ -321,8 +321,24 @@ export function cmdSurfaceDisable(home: string, id: string): number {
  * 2026-08-30). One prefix, one place, for every surface that logs here.
  */
 export function rigaDiLog(line: string): void {
-  process.stderr.write(`\r${new Date().toISOString()} ${line}\n`);
+  process.stderr.write(`\r${rigaDatata(line)}\n`);
 }
+
+/**
+ * Dove va la riga è del chiamante; **quando è successo** no.
+ *
+ * Il prefisso sta qui e non nei due scrittori, o il REPL — che dal 03/09/2026
+ * scrive le stesse righe passando dal togli/scrivi/rimetti della casella
+ * (`makeReplLog`) — avrebbe la sua idea del formato, e la data sarebbe una
+ * cosa che una delle due destinazioni può dimenticare. È esattamente il modo
+ * in cui `gateway.err` è finito senza date.
+ */
+export function rigaDatata(line: string): string {
+  return `${new Date().toISOString()} ${line}`;
+}
+
+/** Dove finisce una riga di log di superficie: stderr, o la regione sopra la casella. */
+export type SinkDiLog = (line: string) => void;
 
 function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<Voce> {
   const audio = runtime.config.audio;
@@ -515,6 +531,25 @@ export function connectSurfaces(
    * la stessa cosa che vale già per `wait`.
    */
   onWork?: () => void,
+  /**
+   * Dove i connettori scrivono le loro righe — e perché è un parametro.
+   *
+   * Una riga di log è una scrittura **fuori banda**, della stessa classe di una
+   * consegna: arriva quando arriva, e in un REPL arriva mentre la casella
+   * dell'input è a schermo. Fino al 03/09/2026 `rigaDiLog` scriveva dritto su
+   * stderr, quindi ogni riga si stampava *dentro* la casella e ne mangiava il
+   * bordo — visto in `tmux capture-pane` sull'installazione dell'owner, due
+   * secondi dopo l'avvio, che è il motivo per cui la casella «non si vedeva».
+   *
+   * Il rimedio non è tacere: è passare dalla stessa strada che il REPL ha già
+   * per le consegne (togli il riquadro, scrivi, rimettilo). Quella strada la
+   * conosce solo chi possiede il terminale, cioè `cli/repl.ts` — e questo file
+   * non deve importare la textzone per saperlo, o la dipendenza si
+   * rovescerebbe. Quindi il sink lo dà il chiamante: il REPL il suo
+   * (`makeReplLog`), `cli/gateway.ts` niente, cioè `rigaDiLog` — dove stderr è
+   * un file e una sequenza di escape sarebbe sporcizia dentro `gateway.err`.
+   */
+  log: SinkDiLog = rigaDiLog,
 ): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver; salute: SaluteSuperfici } {
   const lines: string[] = [];
   /**
@@ -618,7 +653,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: rigaDiLog,
+          log,
         });
 
         // Registrato prima di far partire il connettore: un turno che chiede
@@ -637,7 +672,7 @@ export function connectSurfaces(
         void connector.run().catch((error: unknown) => {
           const causa = error instanceof Error ? error.message : String(error);
           salute.caduta('telegram', causa, adesso());
-          process.stderr.write(`\rtelegram: caduta — ${causa}\n`);
+          log(`telegram: caduta — ${causa}`);
         });
         stops.push(() => connector.stop());
         // The door for the lane. Registered next to the connector that owns it,
@@ -713,7 +748,7 @@ export function connectSurfaces(
               home,
             );
           },
-          log: rigaDiLog,
+          log,
         });
 
         // Sincrono, prima che il connettore abbia parlato con qualcuno: fra qui
@@ -724,7 +759,7 @@ export function connectSurfaces(
         void connector.run().catch((error: unknown) => {
           const causa = error instanceof Error ? error.message : String(error);
           salute.caduta('discord', causa, adesso());
-          process.stderr.write(`\rdiscord: caduta — ${causa}\n`);
+          log(`discord: caduta — ${causa}`);
         });
         stops.push(() => connector.stop());
         surfaces.push(discordSurface(api, ownerUserId));

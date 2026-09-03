@@ -295,13 +295,24 @@ async function main(rawArgv: string[]): Promise<number> {
       process.stdout.write(`${styleFor(process.stdout).header('muffin search')}\n`);
       return cmdSearch(paths().home, rest, {
         out: (l) => process.stdout.write(`${l}\n`),
+        // Su un terminale stdin non e' una pipe: leggerlo vorrebbe dire
+        // aspettare byte che nessuno sta scrivendo, e poi stampare un errore
+        // di scadenza al posto della domanda. `isatty(0)` divide i due mondi,
+        // la stessa guardia di `readKeyFromStdin`.
         readKey: () => {
+          if (isatty(0)) return '';
           try {
             return readAllStdin();
           } catch {
             return '';
           }
         },
+        // Il terminale la chiede e non la mostra. Lo stesso `promptSecret` di
+        // `muffin init`: la chiave non tocca mai una riga di comando, quindi
+        // non entra ne' nella history ne' in un `ps`.
+        ...(isatty(0)
+          ? { chiediChiave: () => promptSecret('  ') }
+          : {}),
       });
     case 'doctor':
       return cmdDoctor(rest);
