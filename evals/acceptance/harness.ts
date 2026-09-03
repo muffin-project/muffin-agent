@@ -185,7 +185,13 @@ export type InstallOptions = FakeProviderOptions & {
  */
 export async function install(options: InstallOptions): Promise<Install> {
   const root = mkdtempSync(join(tmpdir(), 'muffin-accept-'));
-  const home = join(root, 'home');
+  // `.muffin`, not `home`: la home reale di un owner è `~/.muffin`, quindi ogni
+  // percorso assoluto sotto di essa contiene un segmento che inizia con un
+  // punto. Finché questo harness costruiva `<root>/home` l'accettazione provava
+  // una forma che non esiste su nessuna macchina installata — ed è esattamente
+  // così che l'ingest del vault è rimasto morto in produzione e verde qui
+  // (`core/vault/vault.ts`, filtro dotfile sul percorso assoluto risolto).
+  const home = join(root, '.muffin');
   const xdg = join(root, 'xdg');
   const workspace = join(root, 'workspace');
   mkdirSync(workspace, { recursive: true });
