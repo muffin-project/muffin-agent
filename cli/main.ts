@@ -28,7 +28,7 @@ import {
 } from './memory.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
+import { cmdSurfaceDefault, cmdSurfaceDisable, cmdSurfaceEnable, cmdSurfaceList, SURFACE_USAGE } from './surface.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import { cmdAdopt } from './adopt.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
@@ -137,6 +137,7 @@ comandi operatore:
   muffin update --rollback [--yes]
                                 torna alla release precedente (flip inverso)
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
+  muffin surface default <id>   dove Muffin parla quando nessuno ha chiesto
   muffin gateway status | stop | install [--write]
                                 il processo che tiene vivi i job quando non hai
                                 nessuna finestra aperta. \`muffin init\` propone
@@ -1194,6 +1195,9 @@ async function cmdSurface(argv: string[]): Promise<number> {
     return cmdSurfaceEnable(home, id, values.owner, values['api-base']);
   }
   if (sub === 'disable' && id) return cmdSurfaceDisable(home, id);
+  // ADR-0060: la manopola che `surfaces.default` dichiarava da sempre e che
+  // nessun comando poteva girare.
+  if (sub === 'default' && id) return cmdSurfaceDefault(home, id);
   process.stderr.write(SURFACE_USAGE);
   return 78;
 }
