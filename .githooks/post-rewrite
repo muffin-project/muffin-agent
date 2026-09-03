@@ -1,0 +1,7 @@
+#!/bin/sh
+# Equivalente di `post-merge` per `git rebase`, che non lo attiva. Gira solo
+# a rebase (mai dopo un semplice `commit --amend`, dove non c'è niente da
+# rigenerare). Vedi post-merge-regen.mjs e .githooks/post-merge.
+[ "$1" = "rebase" ] || exit 0
+ROOT="$(git rev-parse --show-toplevel)"
+node "$ROOT/docs/derived/architecture-map/post-merge-regen.mjs"

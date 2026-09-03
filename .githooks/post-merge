@@ -1,0 +1,10 @@
+#!/bin/sh
+# Dopo un `git merge` riuscito, rigenera la mappa dell'architettura contro
+# l'albero di lavoro finale (garantito completo qui, non durante il merge)
+# e committa il risultato se è cambiato. Vedi post-merge-regen.mjs.
+#
+# Registrato da setup-merge-driver.mjs via `npm run prepare`. Assente in un
+# checkout che non l'ha mai girato: si torna al comportamento di prima —
+# `npm run mappa:regen` a mano, o il controllo tardivo di CI.
+ROOT="$(git rev-parse --show-toplevel)"
+node "$ROOT/docs/derived/architecture-map/post-merge-regen.mjs"
