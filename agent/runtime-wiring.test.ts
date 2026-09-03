@@ -563,6 +563,9 @@ describe('doctor e sys.inspect nominano la stessa cartella di lavoro, dalla stes
 
       const report = await runDoctor(home);
       const workspaceCheck = report.checks.find((c) => c.name === 'workspace');
+      // ok, non warn: la cartella esiste già a questo punto (resolveWorkspace
+      // l'ha creata dentro buildRuntime) e non c'è niente da fare.
+      expect(workspaceCheck?.level).toBe('ok');
       expect(workspaceCheck?.detail).toContain(runtime.workspace);
     } finally {
       runtime.close();

@@ -99,28 +99,38 @@ describe('doctor names the source of the permission matrix', () => {
  * la cartella incondizionatamente).
  */
 describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
-  it('dice che non esiste ancora su un\'installazione fresca — resolveWorkspace non gira a `muffin init`', async () => {
+  it('dice che non esiste ancora su un\'installazione fresca, ma resta un ok — niente da fare qui', async () => {
+    // Coordinatore, 03/09: un `warn` senza un'azione insegna a scorrere oltre
+    // gli avvisi, ed è la regola che una slice mergiata oggi ha già fissato —
+    // lead con la conseguenza e l'azione, mai un warn dove non c'è azione.
+    // «si crea da sola» non è qualcosa che l'owner deve fare: resta un `ok`
+    // con la nota dentro, non un `warn`.
     const dir = home();
     expect(existsSync(muffinWorkspace(dir))).toBe(false);
     const c = await check(dir, 'workspace');
-    expect(c?.level).toBe('warn');
+    expect(c?.level).toBe('ok');
     expect(c?.detail).toContain(muffinWorkspace(dir));
-    expect(c?.detail).toContain('non esiste ancora');
-    expect(c?.remedy).toMatch(/primo turno/);
+    expect(c?.detail).toContain('atterrano le scritture');
+    expect(c?.detail).toContain('si crea da sola al primo turno che ci scrive');
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('è ok una volta che il workspace esiste', async () => {
+  it('è ok, con lo stesso testo, una volta che il workspace esiste già', async () => {
     const dir = home();
     mkdirSync(muffinWorkspace(dir), { recursive: true });
     const c = await check(dir, 'workspace');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain(muffinWorkspace(dir));
     expect(c?.detail).toContain('atterrano le scritture');
+    // Distinto dal caso "non esiste ancora": una volta creato non porta più
+    // la nota su come si crea.
+    expect(c?.detail).not.toContain('si crea da sola');
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('dice che MUFFIN_WORKSPACE è stato ignorato, e perché, quando punta dentro la casa', async () => {
+  it('dice che MUFFIN_WORKSPACE è stato ignorato, e perché, quando punta dentro la casa — questo resta un warn: è genuinamente suo da correggere', async () => {
     const dir = home();
     vi.stubEnv(WORKSPACE_ENV, dir);
     const c = await check(dir, 'workspace');
@@ -132,9 +142,11 @@ describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('nomina esattamente il path che il runtime vero risolve — stessa funzione di `resolveWorkspace`, non un secondo calcolo', async () => {
+  it('nomina esattamente il path che il runtime vero risolve, ok — stessa funzione di `resolveWorkspace`, non un secondo calcolo', async () => {
     // cwd = home forza il caso rilocalizzato: lo scenario misurato dall'ADR
-    // (la unit del gateway fissa WorkingDirectory sulla casa).
+    // (la unit del gateway fissa WorkingDirectory sulla casa). buildRuntime
+    // crea davvero la cartella (resolveWorkspace fa mkdirSync), quindi qui
+    // il check è 'ok' — non il ramo "non esiste ancora".
     const dir = home();
     const runtime = buildRuntime(dir, dir);
     const risolto = runtime.workspace;
@@ -142,6 +154,7 @@ describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
     expect(risolto).toBe(muffinWorkspace(dir));
 
     const c = await check(dir, 'workspace');
+    expect(c?.level).toBe('ok');
     expect(c?.detail).toContain(risolto);
     rmSync(dir, { recursive: true, force: true });
   });
