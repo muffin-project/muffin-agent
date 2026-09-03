@@ -218,7 +218,11 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
     );
   } else if (!workspace.exists) {
-    warn('workspace', `${workspace.workspace} non esiste ancora`, 'si crea da sola al primo turno che ci scrive');
+    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
+    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
+    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
+    // resta, dentro la riga verde.
+    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`);
   } else {
     ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
   }
