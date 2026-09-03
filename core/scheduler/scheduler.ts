@@ -161,7 +161,7 @@ export type SchedulerEvent =
   | { kind: 'ran'; job: Job; stopped: JobOutcome['stopped']; delivered: boolean }
   // 'bound_turn_pending' is `FireDeferred`: the fire's turn exists and is not
   // `done` yet, which belongs to the turn lane's own resume machinery.
-  | { kind: 'deferred'; reason: 'foreground' | 'in_flight' | 'handover' | 'bound_turn_pending' }
+  | { kind: 'deferred'; reason: 'foreground' | 'in_flight' | 'handover' | 'bound_turn_pending' | 'paused' }
   | { kind: 'yielded'; job: Job }
   | { kind: 'delivery_failed'; job: Job; error: string }
   /** The turn ran, and the store could not be told. See `run`. */
@@ -236,6 +236,12 @@ export class Scheduler {
      * does not care about occurrence identity.
      */
     private readonly settleFire: (job: Job) => void = () => {},
+    /**
+     * «L'owner ha detto di fermarsi» (ADR-0054 §4, `core/runtime/pausa.ts`).
+     * Un default costante-falso, come `standDown`: un'installazione senza
+     * `/pause` non paga una lettura per tick per sentirsi dire di no.
+     */
+    private readonly paused: () => boolean = () => false,
   ) {}
 
   /**
@@ -248,6 +254,13 @@ export class Scheduler {
     // not the scheduler any more, and the honest thing is to stop being one.
     if (this.standDown()) {
       this.onEvent({ kind: 'deferred', reason: 'handover' });
+      return;
+    }
+    // «L'owner ha detto di fermarsi» (ADR-0054 §4): nessun job parte, e il
+    // job resta dovuto — `markRan` non viene toccato, quindi al `/resume` è
+    // ancora lì, in ritardo e non perso.
+    if (this.paused()) {
+      this.onEvent({ kind: 'deferred', reason: 'paused' });
       return;
     }
     // Asked of the shared lane, not of a flag of our own: the thing that must

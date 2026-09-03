@@ -28,11 +28,17 @@ passi appesi e mai cancellati; mai testo tagliato; ASK intero; `description`
 su `shell_run`). **CLI** scroll region DECSTBM, casella e stato in fondo, mai
 in cima (costa lo scrollback). **ADR-0054**: messaggio a turno vivo → coda con
 conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
-riceve sempre (oggi `drain()` attende il turno). **Test end-to-end veri**:
-corsia reale in locale con modello e Bot API veri (chiave mai stampata),
-accanto al finto. Ordine: critical-path.md#ordine-corrente punto 2 (a→d).
-**Punto 3 (ADR-0055)**: risposta ed episodio sono `surface.reply`/`memory.write`
-dichiarate dal kernel — permessi invariati, ora osservabili e stringibili.
+riceve sempre. **Test end-to-end veri**: corsia reale in locale con modello e
+Bot API veri (chiave mai stampata), accanto al finto. Ordine:
+critical-path.md#ordine-corrente punto 2 (a→d). **Punto 3 (ADR-0055, PR #303)**:
+risposta ed episodio sono `surface.reply`/`memory.write` dichiarate dal kernel —
+permessi invariati, ora osservabili e stringibili.
+
+**Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c+2d in
+PR #300 (CRITICAL: **serve il giudice** prima del merge). **Il prossimo passo
+è dell'owner:** `npm run e2e:telegram` con un bot di prova
+(`evals/e2e/README.md`) — B11/B13/B2 restano BLOCKER finché quella corsa non è
+verde e datata nelle righe. Poi `dev → main` e `muffin update`.
 
 **Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
 `@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
