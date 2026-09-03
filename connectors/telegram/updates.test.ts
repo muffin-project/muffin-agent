@@ -18,7 +18,7 @@ describe('telegram inbox', () => {
     expect(box.nextOffset()).toBe(0);
 
     const result = box.accept([{ update_id: 10 }, { update_id: 11 }], NOW);
-    expect(result).toEqual({ stored: 2, duplicates: 0 });
+    expect(result).toEqual({ stored: 2, duplicates: 0, accepted: [10, 11] });
     expect(box.nextOffset()).toBe(12);
     expect(box.pending().map((u) => u.updateId)).toEqual([10, 11]);
   });
@@ -27,7 +27,7 @@ describe('telegram inbox', () => {
     const box = inbox();
     box.accept([{ update_id: 10 }, { update_id: 11 }], NOW);
     const again = box.accept([{ update_id: 11 }, { update_id: 12 }], NOW);
-    expect(again).toEqual({ stored: 1, duplicates: 1 });
+    expect(again).toEqual({ stored: 1, duplicates: 1, accepted: [12] });
     expect(box.stats().total).toBe(3);
   });
 
@@ -74,7 +74,7 @@ describe('telegram inbox', () => {
   it('does nothing on an empty batch, including to the offset', () => {
     const box = inbox();
     box.accept([{ update_id: 7 }], NOW);
-    expect(box.accept([], NOW)).toEqual({ stored: 0, duplicates: 0 });
+    expect(box.accept([], NOW)).toEqual({ stored: 0, duplicates: 0, accepted: [] });
     expect(box.nextOffset()).toBe(8);
   });
 });

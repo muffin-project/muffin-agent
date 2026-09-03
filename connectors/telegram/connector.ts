@@ -1,7 +1,7 @@
 import type { CallbackQuery, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
-import { COMANDI, sembraComando } from '../../agent/comandi.js';
+import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
 import { fence } from '../../core/memory/spotlight.js';
@@ -138,7 +138,12 @@ export type ConnectorDeps = {
    * `/spend` esiste due volte, una per superficie, e che la seconda diverge
    * dalla prima il giorno che qualcuno tocca una sola delle due.
    */
-  comandi?: (riga: string, sessionId: string) => Promise<{ testo: string } | null>;
+  comandi?: (riga: string, sessionId: string, controlli: Controlli) => Promise<{ testo: string } | null>;
+  /**
+   * La pausa durevole (ADR-0054 §4, `core/runtime/pausa.ts`). Assente = mai
+   * in pausa, e `/pause` risponde che qui non può.
+   */
+  pausa?: { attiva: () => boolean; metti: () => void; togli: () => void } | undefined;
   /**
    * Il registro delle approvazioni, per la metà che arriva **indietro**.
    *
@@ -262,6 +267,17 @@ export type Incoming = {
  * scope. Parsing now produces facts, `principalFor` applies the rule, and the
  * rule lives in `core/surface/types.ts` where every surface reads the same one.
  */
+/**
+ * I comandi che il poller serve **prima** della coda (ADR-0054 §5): sono le
+ * leve sul lavoro in corso, e in coda dietro al lavoro in corso non
+ * servirebbero a niente. Ogni altro comando resta nell'ordine dei messaggi.
+ */
+const CONTROLLO: ReadonlySet<string> = new Set(['stop', 'steer', 'pause', 'resume']);
+
+function nomeComando(testo: string): string {
+  return /^\/([a-z]+)/i.exec(testo.trim())?.[1]?.toLowerCase() ?? '';
+}
+
 export function parseUpdate(update: Update, botId?: number): Incoming | null {
   const message: Message | undefined = update.message ?? update.edited_message;
   if (!message || typeof message.chat?.id !== 'number') return null;
@@ -564,6 +580,18 @@ function originLabel(origin: ForwardedOrigin): string {
 export class TelegramConnector {
   private running = false;
   /**
+   * I turni vivi, per chat (ADR-0054): la leva per `/stop` e la coda delle
+   * correzioni per `/steer`. Una chat, un turno alla volta — è la corsia.
+   */
+  private readonly vivi = new Map<number, { controller: AbortController; correzioni: string[] }>();
+  /** Lo svuotamento in corso, se c'è: uno solo alla volta, e chi arriva dopo lo rimette in coda. */
+  private draining: Promise<void> | null = null;
+  private drainAgain = false;
+  /** Gli update già serviti dal poller (i comandi di controllo): il drain li salta. */
+  private readonly gestiti = new Set<number>();
+  /** Gli update a cui è già stato detto «in coda» o «in pausa»: una volta sola. */
+  private readonly avvisati = new Set<number>();
+  /**
    * Chi siamo, secondo `getMe`.
    *
    * Serve a una domanda sola — «questo messaggio citato l'ho scritto io?» — e
@@ -628,8 +656,9 @@ export class TelegramConnector {
     log(`telegram: connesso come @${me.username ?? me.id}`);
     await this.publishCommands(log);
 
-    // Anything left pending from a previous life comes first, before new work.
-    await this.drain();
+    // Anything left pending from a previous life comes first, before new work
+    // — in background, come ogni drain da oggi: il poller non aspetta.
+    this.scheduleDrain();
 
     while (this.running && signal?.aborted !== true) {
       // Everything the beat does lives in one `try`, not only the network call:
@@ -643,9 +672,22 @@ export class TelegramConnector {
         // e' lavoro nostro, non la prova che Telegram risponde.
         this.deps.salute?.connessa('telegram', new Date(this.now()));
         if (updates.length > 0) {
-          const { stored, duplicates } = this.deps.inbox.accept(updates, this.now());
+          const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
           if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
-          if (stored > 0) await this.drain();
+          if (stored > 0) {
+            // Solo i nuovi, non il batch grezzo: un update gia' nell'inbox e'
+            // gia' stato servito (o e' in coda per il drain), e ripassarlo a
+            // `controlla` vorrebbe dire eseguire lo stesso comando dell'owner
+            // una seconda volta.
+            const nuovi = new Set(accepted);
+            // ADR-0054 §5: il poller riceve sempre. Fino al 03/09 questa riga
+            // era `await this.drain()`, e mentre un turno girava `getUpdates`
+            // non veniva chiamato: un `/stop` arrivava a turno finito. Ora i
+            // comandi di controllo si servono **qui**, subito, e il resto va
+            // in coda — con una conferma, così l'owner sa che è arrivato.
+            await this.controlla(updates.filter((u) => nuovi.has(u.update_id)));
+            this.scheduleDrain();
+          }
         }
       } catch (error) {
         // Registrato prima di scegliere come dirlo: un 409 che dura e' un
@@ -745,9 +787,105 @@ export class TelegramConnector {
     return deliverTelegram(this.deps.delivery, this.deps.api, turnId, plan, () => this.now());
   }
 
+  /**
+   * Uno svuotamento alla volta, in background. Un secondo `scheduleDrain`
+   * mentre uno gira non ne apre un altro — segnerebbe due volte lo stesso
+   * update — ma lo fa ripartire appena finisce, così ciò che è arrivato nel
+   * frattempo non aspetta il prossimo batch.
+   */
+  private scheduleDrain(): void {
+    if (this.draining !== null) {
+      this.drainAgain = true;
+      return;
+    }
+    this.draining = this.drain().finally(() => {
+      this.draining = null;
+      if (this.drainAgain) {
+        this.drainAgain = false;
+        this.scheduleDrain();
+      }
+    });
+  }
+
+  /**
+   * Il poller, prima della coda (ADR-0054 §5): i quattro comandi di controllo
+   * dell'owner si servono subito, anche con un turno vivo — è il solo modo
+   * in cui `/stop` può fermare qualcosa. Tutto il resto resta nell'inbox
+   * per il drain, e se un turno è vivo o il runtime è in pausa lo si dice,
+   * una volta per messaggio.
+   */
+  private async controlla(updates: Update[]): Promise<void> {
+    // Due passate, e la prima **senza un solo `await`**.
+    //
+    // `gestiti` è ciò che dice al drain «questo l'ho già servito io». Finché
+    // veniva riempito dentro il ciclo che serve i comandi, un batch di due —
+    // `[/pause, /resume]` — lo popolava solo fino a dove era arrivato: mentre
+    // il `/pause` era in volo, il drain che `controlla` stessa fa ripartire
+    // leggeva `pending()`, non trovava il `/resume` fra i gestiti e lo serviva
+    // una seconda volta. L'owner leggeva «ripreso…» e poi «non ero in pausa.»
+    // per un comando scritto una volta sola; con `/steer`, la correzione
+    // entrava due volte nel turno.
+    //
+    // Registrarli tutti prima di cedere il controllo chiude la finestra per
+    // costruzione: non c'è nessun punto, fra `accept` e il primo `await`, in
+    // cui il drain possa osservare un batch mezzo registrato.
+    const controlli: Incoming[] = [];
+    for (const update of updates) {
+      const incoming = parseUpdate(update, this.meId);
+      if (!incoming) continue;
+      const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
+      if (principal.kind !== 'owner') continue;
+      if (sembraComando(incoming.text) && CONTROLLO.has(nomeComando(incoming.text))) {
+        this.gestiti.add(incoming.updateId);
+        controlli.push(incoming);
+      }
+    }
+
+    for (const incoming of controlli) {
+      try {
+        await this.tryCommand(incoming);
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: comando ${nomeComando(incoming.text)} fallito — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      this.deps.inbox.markProcessed(incoming.updateId, this.now());
+      // `/resume` deve far ripartire la coda senza aspettare un altro update.
+      // È anche il drain che, prima della registrazione anticipata qui sopra,
+      // trovava il comando *successivo* dello stesso batch ancora `pending` e
+      // lo serviva una seconda volta.
+      if (this.draining === null) this.scheduleDrain();
+    }
+
+    for (const update of updates) {
+      const incoming = parseUpdate(update, this.meId);
+      if (!incoming) continue;
+      const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
+      if (principal.kind !== 'owner') continue;
+      if (sembraComando(incoming.text)) continue;
+      await this.avvisa(incoming);
+    }
+  }
+
+  /** «In coda» o «in pausa», una volta sola per messaggio, solo quando è vero. */
+  private async avvisa(incoming: Incoming): Promise<void> {
+    if (this.avvisati.has(incoming.updateId)) return;
+    const inPausa = this.deps.pausa?.attiva() === true;
+    const vivo = this.vivi.has(incoming.chatId);
+    if (!inPausa && !vivo) return;
+    this.avvisati.add(incoming.updateId);
+    const testo = inPausa ? '⏸ in pausa: lo leggo al /resume.' : '📥 in coda: rispondo appena finisco con quello di prima.';
+    try {
+      await this.deps.api.sendMessage(incoming.chatId, testo, { replyTo: incoming.messageId });
+    } catch (error) {
+      (this.deps.log ?? (() => {}))(`telegram: conferma di coda non inviata — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     for (const stored of this.deps.inbox.pending()) {
+      if (this.gestiti.has(stored.updateId)) continue;
       const update = JSON.parse(stored.payload) as Update;
       // Prima di `parseUpdate`, che di un `callback_query` non sa niente e
       // restituirebbe `null`: un pulsante premuto verrebbe archiviato come
@@ -814,6 +952,13 @@ export class TelegramConnector {
     // ripresa e consegna costruita per una risposta che non arriverà.
     if (await this.tryCommand(incoming)) {
       this.deps.inbox.markProcessed(stored.updateId, this.now());
+      return;
+    }
+
+    // ADR-0054 §4: in pausa niente parte. L'update resta nell'inbox, avvisato
+    // una volta, e il `/resume` fa ripartire il drain che lo trova ancora lì.
+    if (this.deps.pausa?.attiva() === true) {
+      await this.avvisa(incoming);
       return;
     }
 
@@ -977,7 +1122,16 @@ export class TelegramConnector {
       // same window (`MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS`, #76).
       await testStall('MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_BIND_MS');
 
+      // ADR-0054: il turno vivo di questa chat, con la leva per fermarlo e la
+      // coda delle correzioni. Registrato prima di `runTurn` e tolto nel
+      // `finally` qui sotto, così `/stop` e `/steer` trovano qualcosa esattamente
+      // mentre c'è qualcosa.
+      const vivo = { controller: new AbortController(), correzioni: [] as string[] };
+      this.vivi.set(incoming.chatId, vivo);
+
       const result = await runTurn(this.deps.loop, {
+        signal: vivo.controller.signal,
+        steer: () => vivo.correzioni.splice(0),
         principal,
         tenant,
         surface: 'telegram',
@@ -1095,6 +1249,7 @@ export class TelegramConnector {
       }
       this.deps.inbox.markProcessed(stored.updateId, this.now());
     } finally {
+      if (this.vivi.get(incoming.chatId)?.controller !== undefined) this.vivi.delete(incoming.chatId);
       await presence.stop();
       await transcript.stop();
     }
@@ -1285,7 +1440,30 @@ export class TelegramConnector {
     if (principal.kind !== 'owner') return false;
 
     const sessione = this.deps.sessions.open(`telegram:${String(incoming.chatId)}`);
-    const esito = await this.deps.comandi(incoming.text, sessione.id);
+    const chatId = incoming.chatId;
+    const pausa = this.deps.pausa;
+    // Le leve di ADR-0054, per **questa** chat: il turno vivo è quello della
+    // sua corsia, e `/stop` dal gruppo non ferma il turno della privata.
+    const controlli: Controlli = {
+      vivo: () => this.vivi.has(chatId),
+      stop: () => {
+        const v = this.vivi.get(chatId);
+        if (v === undefined) return false;
+        v.controller.abort();
+        return true;
+      },
+      steer: (testo) => {
+        const v = this.vivi.get(chatId);
+        if (v === undefined) return false;
+        v.correzioni.push(testo);
+        return true;
+      },
+      pausa:
+        pausa === undefined
+          ? { attiva: () => false, metti: () => {}, togli: () => {} }
+          : { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
+    };
+    const esito = await this.deps.comandi(incoming.text, sessione.id, controlli);
     if (esito === null) return false;
     // `renderForTelegram` taglia sotto il limite di Telegram: `/model --list`
     // supera i 4096 caratteri con una manciata di modelli, e mandarne solo il
