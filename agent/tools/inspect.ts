@@ -122,6 +122,14 @@ const SPEC_DESCRIPTION =
  * Quindi: nome e livello sempre, `detail` solo per i check che passano. Il
  * valore della riga è «l'embedder risponde o no», non l'errno: chi vuole
  * l'errno ha `muffin doctor`, che lo mostra all'owner e non al modello.
+ *
+ * **Non «niente di terzi», però: una cosa passa, e la nomina un giudice.** I
+ * nomi dei tool MCP (`mcp_<server>_<def.name>`) li sceglie il server, e questo
+ * outcome li stampa. Il `tier: 0` regge lo stesso, ma per una ragione diversa da
+ * quella scritta sopra: quei nomi sono fissati dal pin di `verifyTools`, cioè
+ * l'owner li ha approvati uno per uno, e un server che ne cambia uno rompe il
+ * pin invece di far comparire testo nuovo. È una difesa più stretta della frase
+ * generica che aveva preso il suo posto.
  */
 /**
  * Da dove arriva il turno, senza inventare un campo che non tutti i principal
