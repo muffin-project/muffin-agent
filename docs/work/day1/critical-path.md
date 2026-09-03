@@ -49,6 +49,11 @@ Il punto 2 precede le porte perché è ciò che rende il dogfood **sopportabile*
 senza, l'owner torna al vecchio agente prima che il punto 3 serva a qualcuno.
 2d va costruita con 2a e non dopo: è la prova che 2a e 2b chiedono.
 
+Stato al 03/09: 2a (#298) e 2b (#299) su `dev`; 2c in PR (#300, profilo
+CRITICAL, aspetta la revisione indipendente); 2d **costruita**
+(`evals/e2e/telegram.ts`) e da eseguire dall'owner — il passo che chiude
+B11/B13/B2 è quella corsa, non un'altra PR.
+
 Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
 **riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa
 eseguibile: la matrice normativa era prosa, il kernel decideva da una classe di
