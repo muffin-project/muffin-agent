@@ -8,6 +8,7 @@ import {
   verifyTools,
   type McpServerEntry,
 } from '../core/mcp/registry.js';
+import { widenEgressForCapability, type EgressWidenDeps } from '../core/rot/egress-writer.js';
 
 /**
  * Operator verbs over the MCP allowlist — the audit surface the threat model
@@ -18,13 +19,27 @@ import {
  * pins — the owner approves text they have seen, not a count. Re-running
  * `add <name>` with no command reconnects the stored entry and re-pins:
  * that is what "rivedi e ri-approva" resolves to.
+ *
+ * **`--host` is the second door of the same lock (ADR-0058).** A local MCP
+ * server is already part of the trusted computing base — `docs/SECURITY.md`
+ * §10 says so plainly, nothing here contains what it can reach — so `--host`
+ * is not a containment claim. It is the declaration `rot/egress.json` already
+ * promises to be honest about ("everywhere muffin can reach", comment in
+ * `agent/tools/search.ts`): naming the destinations this server needs, in the
+ * same sealed file `sys.http`/`sys.search` are gated by, through the same
+ * `widenEgressForCapability` that `muffin search` uses — one confirmation
+ * naming every host, never inferred from the command or its arguments.
  */
 
 export const MCP_USAGE = `usage:
   muffin mcp list [--verify]          i server approvati; --verify riconnette e ricontrolla i pin
-  muffin mcp add <name> [--env K=V]... -- <command> [args...]
+  muffin mcp add <name> [--env K=V]... [--host HOST]... -- <command> [args...]
   muffin mcp add <name>               ri-approva un server esistente (ripinna i tool)
   muffin mcp remove <name>
+
+  --host HOST  ripetibile: un host che questo server deve poter raggiungere.
+               Viene aggiunto a rot/egress.json (stessa allowlist di
+               sys.http/sys.search) dopo una conferma esplicita a terminale.
 `;
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -35,6 +50,8 @@ export async function cmdMcpAdd(
   command: string | undefined,
   args: string[],
   env: Record<string, string>,
+  hosts: readonly string[] = [],
+  egressDeps: EgressWidenDeps = { out: (l) => process.stdout.write(`${l}\n`) },
 ): Promise<number> {
   if (!NAME_RE.test(name)) {
     process.stderr.write(`nome non valido: "${name}" (minuscole, cifre, - e _, max 32)\n`);
@@ -80,6 +97,14 @@ export async function cmdMcpAdd(
     process.stdout.write(
       `\n${Object.keys(entry.tools).length} tool pinnati. Ogni variazione futura sospende il server.\n`,
     );
+
+    // Stessa porta di `muffin search`: l'owner nomina gli host con --host, e
+    // solo quelli — mai dedotti dal comando o dagli argomenti del server.
+    // Un fallimento qui (nessun terminale, l'owner ha detto no) non disfa
+    // l'approvazione appena scritta.
+    if (hosts.length > 0) {
+      await widenEgressForCapability(home, hosts, `il server MCP «${name}»`, egressDeps);
+    }
     return 0;
   } finally {
     await connection.close().catch(() => {});

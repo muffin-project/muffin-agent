@@ -404,6 +404,53 @@ four below, before it says anything else:
    day: without real prevention, no high-risk capability can ever become a
    silent allow — `sys.shell` always asks.
 
+**A capability-setup verb (`muffin search <provider>`, `muffin mcp add
+--host`) may widen `rot/egress.json` and reseal, and that is the same act as
+`rot reseal`, not a smaller one (ADR-0058).** It goes through one shared
+function (`widenEgressForCapability`, `core/rot/egress-writer.ts`) that: asks
+one question naming the exact host(s) about to be added, answers it only when
+a real interactive terminal is wired in (never from a flag — none exists to
+skip it), and refuses with a printed manual remedy otherwise.
+
+**The `isatty(0)` gate is ergonomics, not the security boundary — say this
+precisely, because the first version of this section did not.** An
+independent review ran the production `SandboxExecutor` under bwrap on Linux
+and allocated a real pty for `sys.shell`'s grandchild with `script -qc
+"…" /dev/null`: the grandchild then observes `process.stdin.isTTY === true`,
+and a second independent review reproduced bwrap in Docker and mutated
+`p.rot` out of `denyWrite` — behind that same real pty, the grandchild really
+does write the file once the deny is gone, which is what makes the deny
+itself the thing worth believing rather than an assumption nobody tried to
+break. macOS/seatbelt denies the pty allocation outright (the exact OS error
+text for that denial is not load-bearing and differs by machine — this repo
+has seen both `openpty: Operation not permitted` and `out of pty devices`),
+which is why the original claim ("stdin is never a TTY") tested green here
+for the wrong reason. The boundary that actually holds, on both platforms,
+pty or no pty, is the write-deny on `~/.muffin/rot` (`mandatoryGuards`,
+`core/rot/guards.ts`) — the same mandatory deny-write list `agent/runtime.ts`
+builds the production sandbox with, which the sandboxed child cannot lift
+even by naming `paths(home).rot` explicitly in its own write scope
+(mandatory beats explicit), and which fails with `EPERM` under seatbelt and
+`EROFS` under bwrap. `core/rot/egress-shell-escalation.test.ts` proves both
+the pty (where a pty can be allocated at all — it skips cleanly, loudly, and
+fails instead of skipping under `MUFFIN_REQUIRE_SANDBOX=1`) and the
+write-deny that holds regardless.
+
+Every widening is still an addition the owner named explicitly, validated as
+a bare hostname before anything is asked or written (`isValidEgressHost`,
+`core/rot/egress-writer.ts`) — including a leading/trailing space or a
+trailing newline, which a third independent review found slipping through a
+first cut of that function: it validated a copy it had trimmed internally,
+while the untrimmed value (with the whitespace still inside it) was what
+actually got written and sealed — a shell variable with a trailing newline is
+exactly the ordinary case that produces one. The validator now trims nothing
+at all: whitespace anywhere in the string fails the same per-label check
+that also rejects a scheme, a port, a path, a userinfo, or a comma-separated
+list, because none of those characters can appear inside a DNS label either
+— one regex applied per label after splitting on `.`, not a second,
+separately-maintained character blacklist. Nothing is inferred from a URL or
+pre-filled.
+
 The rest of this section formalises those two questions for whoever
 implements or verifies the mechanism, not for whoever reads `muffin doctor`.
 
