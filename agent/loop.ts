@@ -623,6 +623,14 @@ export type TurnInput = {
   audios?: AudioBlock[];
   signal?: AbortSignal;
   /**
+   * Le correzioni dell'owner arrivate mentre il turno gira (`/steer`,
+   * ADR-0054 §2), consegnate al prossimo confine di giro: chiamata all'inizio
+   * di ogni iterazione, restituisce quelle non ancora consegnate e le svuota.
+   * Assente = nessuna superficie sa correggere questo turno. Testo
+   * dell'owner, al suo tier: non è contenuto esterno.
+   */
+  steer?: (() => string[]) | undefined;
+  /**
    * Mint the row under this identity instead of a fresh random one.
    *
    * Absent on every caller that predates it (a REPL turn, a Telegram message):
@@ -1055,6 +1063,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
     ...(input.onDelta ? { onDelta: input.onDelta } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    ...(input.steer ? { steer: input.steer } : {}),
   });
 }
 
@@ -1297,6 +1306,8 @@ async function drive(
      * attempt's progress. See `TurnInput.onProgress`.
      */
     onProgress?: ((event: TurnEvent) => void) | undefined;
+    /** Vivo solo su un turno fresco, come `onDelta`: chi riprende un turno non ha la chat che lo corregge. */
+    steer?: (() => string[]) | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -1337,6 +1348,7 @@ async function drive(
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(options.steer ? { steer: options.steer } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -1661,6 +1673,15 @@ async function drive(
       if (input.signal?.aborted) {
         return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
       }
+      // `/steer` (ADR-0054 §2): l'owner ha corretto il turno mentre girava. Il
+      // confine sicuro è **qui** — i tool del giro prima hanno finito, il
+      // modello non è ancora stato chiamato — e la correzione entra come un
+      // messaggio dell'owner, nel transcript che il checkpoint sopra
+      // persiste, così un turno ripreso dopo un crash la ricorda. Mai a metà
+      // di una tool call: un effect avviato non si finge non avvenuto.
+      for (const correzione of input.steer?.() ?? []) {
+        messages.push({ role: 'user', content: [{ type: 'text', text: correzione }] });
+      }
       iterations += 1;
       // Reports the number this line just committed to — the same counter
       // `muffin.chat_call` below is about to tag itself with
@@ -1807,6 +1828,12 @@ async function drive(
         // surface is not the answer, and saying so is cheaper than a surface
         // guessing from the silence that follows.
         closeLive('superseded');
+        // `/stop` (ADR-0054 §3) or Ctrl+C **during** the model call: the SDK
+        // rejects the request with an `AbortError`, and until 03/09/2026 that
+        // rejection fell through to `throw error` — the turn ended `error`
+        // and the owner read «esito error» for a stop they had asked for.
+        // The signal is the fact; the exception is only how it arrived.
+        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
         // Two failures wearing one type, and they take different doors.
         //
         // `output` is the model's own doing — arguments the adapter could not
@@ -2450,6 +2477,42 @@ async function drive(
     used: TurnResult['usage'],
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
+    // ADR-0054 §2 (emendamento 03/09): l'ultima svuotata della porta di steer.
+    //
+    // Le correzioni si leggono in cima al giro, quindi una risposta senza tool
+    // — **un** giro — non ne consuma nessuna: un `/steer` scritto mentre quella
+    // sola chiamata era in corso spariva con il turno, dopo che la superficie
+    // aveva risposto «ricevuto». Qui la correzione non viene buttata: entra nel
+    // transcript della sessione come parole dell'owner, così è il turno dopo a
+    // vederla — la history reinjection (`reinjectedHistory`) la rimette nel
+    // primo messaggio del prossimo modello.
+    //
+    // Non su `aborted`: lì l'owner ha detto `/stop`, e ripescare una correzione
+    // dentro un turno che ha chiesto di fermare sarebbe l'opposto di quello che
+    // ha chiesto. Fuori dal `try` di nessuno: una scrittura di sessione che
+    // fallisce non deve trasformare un turno riuscito in un errore.
+    if (stopped !== 'aborted') {
+      for (const residua of input.steer?.() ?? []) {
+        try {
+          deps.sessions.append(input.session, {
+            role: 'user',
+            content: residua,
+            surface: input.surface,
+            createdAt: now().toISOString(),
+            traceId: span.traceId,
+            // Parole dell'owner, come il messaggio che ha aperto il turno:
+            // `record.taint` — lo stesso valore, e per la stessa ragione, che
+            // l'append del messaggio utente qui sopra usa al posto di
+            // `initialTaint(input)` (che su un turno ripreso non vedrebbe
+            // `contentTaint`). Mai `snapshot.currentTaint()`: la correzione è
+            // testo dell'owner, non qualcosa che il turno ha derivato.
+            tier: record.taint,
+          });
+        } catch (error) {
+          span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+        }
+      }
+    }
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
