@@ -85,7 +85,10 @@ const callDocumentRead = (args: Record<string, unknown>): ChatResult => ({
 });
 
 function harness(bytes: Buffer | Buffer[], script: ChatResult[] = []) {
-  const home = mkdtempSync(join(tmpdir(), 'muffin-docarr-'));
+  // Una home della forma di produzione (`~/.muffin`): il segmento col punto è
+  // ciò che rendeva questo test verde mentre l'ingest reale rifiutava tutto.
+  const home = join(mkdtempSync(join(tmpdir(), 'muffin-docarr-')), '.muffin');
+  mkdirSync(home, { recursive: true });
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-docarr-ws-'));
   runInit({ home, apiKey: 'sk-docarr-never-called' });
   const runtime = buildRuntime(home, workspace);
