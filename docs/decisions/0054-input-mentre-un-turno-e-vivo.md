@@ -95,6 +95,25 @@ riscritte sopra:
   «lo uso al prossimo passo di questo turno; se finisce prima, resta in
   conversazione per il turno dopo» — perché nel momento in cui si risponde
   non si sa ancora quale dei due sarà vero.
+- **§2, una correzione pendente quando il turno si *sospende*** (03/09, dal
+  giudice indipendente che l'ha misurata). L'emendamento qui sopra copre il
+  turno che **finisce**; un turno sospeso non è finito — ha rilasciato il
+  runtime e gli è dovuto un risveglio — e lì la correzione si perdeva due
+  volte: la barriera si onora in cima al giro **prima** del drain, quindi una
+  correzione arrivata durante il giro N veniva saltata, e `suspendHere` —
+  a differenza di `finish` — non svuotava mai la porta, mentre il `finally`
+  del connettore cancella la voce `vivi` (con le sue correzioni) appena
+  `runTurn` torna. Regola: **una correzione pendente quando un turno si
+  sospende viaggia nei `messages` persistiti di quel turno** — è ciò che
+  `deps.turns.suspend` scrive e ciò da cui un turno ripreso riparte — e viene
+  applicata **quando quel turno si sveglia**, che è letteralmente «il prossimo
+  confine di giro» promesso da §2. Solo la correzione rimasta quando un turno
+  finisce davvero va nella sessione, per il turno dopo. Se la scrittura di
+  sospensione fallisce il turno non si sospende: la correzione già drenata
+  viene scritta in sessione con la stessa provenienza (`record.taint`) che usa
+  `finish`, invece di svanire nel ramo che sta già ammettendo il guasto. Il
+  drain è distruttivo, quindi ogni strada che esce dal loop la consegna una
+  volta sola. La conferma nomina adesso tutti e tre gli esiti.
 - **§5, un comando servito due volte.** `gestiti` — l'insieme che dice al drain
   «questo l'ho già servito io» — veniva riempito *mentre* i comandi si
   servivano, quindi un batch `[/pause, /resume]` lo popolava solo fino a dove
