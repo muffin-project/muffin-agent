@@ -2066,12 +2066,12 @@
   },
   "core/vault/vault.ts:238": {
     "path": "core/vault/vault.ts",
-    "line": 238,
+    "line": 274,
     "testo": "walk(this.root);"
   },
   "core/vault/vault.ts:420": {
     "path": "core/vault/vault.ts",
-    "line": 420,
+    "line": 454,
     "testo": "report.chunks += 1;"
   },
   "core/vault/vault.ts:58": {
@@ -2086,7 +2086,7 @@
   },
   "core/vault/vault.ts:95": {
     "path": "core/vault/vault.ts",
-    "line": 95,
+    "line": 130,
     "testo": "type VaultFile = {"
   },
   "decide.ts:114": {
@@ -2906,7 +2906,7 @@
   },
   "vault.ts:219": {
     "path": "core/vault/vault.ts",
-    "line": 219,
+    "line": 226,
     "testo": "}"
   },
   "vault.ts:26": {

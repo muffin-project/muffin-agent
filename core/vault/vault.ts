@@ -76,18 +76,53 @@ const NEVER_CONTENT = new Set([
   'secrets.json', 'service-account.json', 'keyfile.json', 'authorized_keys',
 ]);
 
+/** The refusal reason for an entry whose resolved path leaves the vault root. */
+const WHY_OUTSIDE =
+  'link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile';
+
 /**
- * Applied to the **resolved** path, not the name in the directory listing: a
- * symlink called `appunti` pointing at `~/.ssh` would otherwise walk straight
- * past a filter that only looks at what it is called here.
+ * Is `real` the vault root, or below it — **by path segments**, never by string
+ * prefix.
+ *
+ * `startsWith(rootReal)` would answer yes for `/a/vault-evil` against `/a/vault`,
+ * which is a whole sibling directory smuggled inside the boundary by nothing
+ * more than sharing six characters. Comparing `${rootReal}${sep}` is what makes
+ * the question "is this path under that directory" instead of "does this string
+ * begin with those bytes".
  */
-function skipReason(relPath: string, realPath: string): string | null {
-  const segments = [...relPath.split('/'), ...realPath.split(sep)];
+function insideRoot(rootReal: string, real: string): boolean {
+  return real === rootReal || real.startsWith(`${rootReal}${sep}`);
+}
+
+/**
+ * Applied to the path **relative to the vault root**, on both the name in the
+ * listing and the resolved target — never to an absolute path.
+ *
+ * It used to split the resolved *absolute* path too, so that a symlink called
+ * `appunti` pointing at `~/.ssh` could not walk past a filter that only looked
+ * at what it was called here. That reasoning was right about symlinks and wrong
+ * about where the answer lives: escaping the vault is a **containment**
+ * question, and `insideRoot` above answers it with a better message. Inspecting
+ * the absolute path meanwhile made the filter depend on where the vault happens
+ * to sit — and the Muffin home is `~/.muffin`, so on the owner's real
+ * installation the segment `.muffin` matched and *every file ever sent* was
+ * refused as «nascosto». Measured 2026-09-03: three files in the vault, zero
+ * `kind='document'` episodes, and a green test suite whose temp homes had no
+ * dot segment in them.
+ *
+ * The reason names the segment that actually triggered it, because "nascosto:
+ * i dotfile non sono note" printed over `inbox/cv.pdf` is a sentence the owner
+ * can neither believe nor act on.
+ */
+function skipReason(relPath: string, relReal: string): string | null {
+  const segments = [...relPath.split('/'), ...relReal.split(sep)];
   for (const segment of segments) {
     if (segment.startsWith('.') && segment !== '.' && segment !== '..') {
-      return 'nascosto: i dotfile non sono note e a volte sono chiavi';
+      return `nascosto: «${segment}» inizia con un punto — i dotfile non sono note e a volte sono chiavi`;
     }
-    if (NEVER_CONTENT.has(segment.toLowerCase())) return 'nome che non è mai contenuto';
+    if (NEVER_CONTENT.has(segment.toLowerCase())) {
+      return `«${segment}» è un nome che non è mai contenuto`;
+    }
   }
   return null;
 }
@@ -204,17 +239,18 @@ export class Vault {
           continue;
         }
 
-        const reason = skipReason(rel, real);
-        if (reason !== null) {
-          skipped.push({ path: rel, why: reason });
+        // Containment first, and the name filter only afterwards, on paths that
+        // are already known to live under the root. The order is the fix: it is
+        // what keeps the dot rule from ever seeing the directory the vault is
+        // installed in.
+        if (!insideRoot(rootReal, real)) {
+          skipped.push({ path: rel, why: WHY_OUTSIDE });
           continue;
         }
 
-        if (real !== rootReal && !real.startsWith(`${rootReal}${sep}`)) {
-          skipped.push({
-            path: rel,
-            why: 'link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile',
-          });
+        const reason = skipReason(rel, relative(rootReal, real));
+        if (reason !== null) {
+          skipped.push({ path: rel, why: reason });
           continue;
         }
 
@@ -290,11 +326,9 @@ export class Vault {
     }
 
     const rootReal = realpathSync(this.root);
-    const reason = skipReason(normalized, real);
+    if (!insideRoot(rootReal, real)) return skipped(WHY_OUTSIDE);
+    const reason = skipReason(normalized, relative(rootReal, real));
     if (reason !== null) return skipped(reason);
-    if (real !== rootReal && !real.startsWith(`${rootReal}${sep}`)) {
-      return skipped('link esterno al vault: non indicizzato perché document_read non può rileggere una fonte mutabile');
-    }
     if (!stat.isFile()) return skipped('non è un file');
 
     return {
@@ -555,9 +589,7 @@ export class Vault {
     } catch {
       return null;
     }
-    if (real !== realpathSync(this.root) && !real.startsWith(`${realpathSync(this.root)}${sep}`)) {
-      return null;
-    }
+    if (!insideRoot(realpathSync(this.root), real)) return null;
     const extraction = await extractDocument(readFileSync(real));
     return extraction.ok ? extraction.document : null;
   }
