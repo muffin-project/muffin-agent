@@ -10,7 +10,7 @@ import {
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
-import { DISK_TIER } from './fs.js';
+import { DISK_TIER, fenceDisk } from './fs.js';
 
 /**
  * shell_run — the one contained command tool.
@@ -158,6 +158,11 @@ export function makeShellTool(executor: Exec, scope: ShellScope): RegisteredTool
  * Turn a contained run into a model-facing result: header, stdout, annotated
  * stderr.
  *
+ * **`fenceDisk`, the same fence `fs_read` uses, and for the same reason as the
+ * tier below.** A command's stdout is disk bytes; `cat ~/Downloads/nota.md` is
+ * `fs_read` through a different door, and a door that tiered but did not fence
+ * was a door around the marking that the other one now does.
+ *
  * **`DISK_TIER`, the same constant `fs_read` uses, and not a coincidence.**
  * `shell_run` has no network, so what its stdout can carry is the disk — `cat
  * ~/Downloads/nota.md` is `fs_read` with a different door, and a door that did
@@ -188,11 +193,18 @@ function formatExecOutcome(
   const header = result.timedOut
     ? `killed at ${result.durationMs}ms: the command did not complete — nothing after this ran`
     : `exit ${result.code ?? '?'} · ${result.durationMs}ms`;
-  const parts = [header];
+  const parts: string[] = [];
   if (result.stdout.length > 0) parts.push(result.stdout);
   if (stderr.length > 0) parts.push(`--- stderr ---\n${stderr}`);
   return {
-    content: parts.join('\n'),
+    // Header outside, output inside — the same shape `http.ts` uses, where the
+    // status line stays above the fence and the body goes in it. And the fence
+    // is unconditional: a command that printed nothing still produces an empty
+    // one, so there is a single shape rather than a branch an attacker can aim
+    // at by arranging for no output. `annotateSandboxFailures`' own sentence
+    // ends up inside too, which marks Muffin's own text as less trusted than it
+    // is — the direction that fails closed, unlike letting a byte out.
+    content: [header, fenceDisk(parts.join('\n'), `output di \`${command}\``)].join('\n'),
     ...(result.code !== 0 || result.timedOut ? { isError: true as const } : {}),
     tier: DISK_TIER,
   };

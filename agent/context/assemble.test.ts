@@ -103,6 +103,31 @@ describe('the owner-class prompt does not move', () => {
    * Note that the three files named above are not the only inputs: `WORK_RULES`
    * in `assemble.ts` is a fourth, and it is the one the re-capture below moved.
    *
+   * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`): una riga in più in
+   * `WORK_RULES`, 305 caratteri, che dice al modello **cosa sia un recinto**.
+   * Fino a ieri nessuna riga del prompt spedito lo diceva: l'unico posto dove il
+   * modello veniva avvertito era la descrizione di due tool (`http_get`,
+   * `web_search`), cioè un avvertimento che sparisce se quei tool non sono
+   * registrati e che per il disco non c'è mai stato.
+   *
+   * **Perché muovere v1 invece di tenerlo congelato**, che era l'altra strada e
+   * va detta: il congelamento ha una ragione vera e recente — `slice/prompt-v2`
+   * tiene v1 come fondo su cui l'owner torna indietro, e la reversibilità *è*
+   * che v1 non si muova di un byte. Ma `promptVersion` di default è `v1`
+   * (`core/config/config.ts`): una riga solo in v2 non arriverebbe a nessuno
+   * finché l'owner non gira la manopola, e il buco che questa fetta chiude è
+   * spedito adesso. Fra «v1 immobile» e «la regola arriva all'installazione che
+   * gira» vince la seconda, e il costo si scrive invece di subirlo: ogni
+   * sessione con un prefisso caldo va a freddo una volta, su tutte e due le
+   * classi. Il fondo per il ritorno indietro resta, con la riga dentro — v1 e v2
+   * dicono la stessa cosa sul recinto, quindi la manopola continua a scegliere
+   * fra due prompt e non fra due politiche di sicurezza.
+   *
+   * La riga è la metà **probabilistica** di questa fetta e non è il controllo:
+   * il controllo è `fenceDisk` in `agent/tools/fs.ts`, che marca i byte in
+   * codice qualunque cosa il modello stia pensando. Pin precedente:
+   * `ac57a24adb0fa04428a72c9b6ba363e54f341db829835854a9faa51897fd41a7`.
+   *
    * Ri-fissato 2026-08-27 (`slice/skill-di-serie`): due cose insieme, e la
    * seconda è il motivo per cui questo test esiste. (1) Il catalogo delle skill
    * ora ha contenuto — `defaults/skills/` spedisce due skill e `init` le mette
@@ -169,7 +194,7 @@ describe('the owner-class prompt does not move', () => {
    * `3ebf2cfc307bdda5c73fff6ed4d60d5a9db2eceffac754164b220a86214cabf2`.
    */
   const OWNER_PROMPT_SHA_AT_SPLIT =
-    'ac57a24adb0fa04428a72c9b6ba363e54f341db829835854a9faa51897fd41a7';
+    'a8eb81ecd95df248b8bdc588c07521292bed8d5d75dcddce22b76fb32112c8b3';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -241,7 +266,14 @@ describe('the owner-class prompt does not move', () => {
    * nello stesso commit della modifica, così l'invalidazione della cache è una
    * cosa che qualcuno ha deciso e non una cosa che è successa.
    */
-  const GROUP_PROMPT_SHA_V1 = '23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b';
+  /**
+   * Ri-fissato 2026-09-03 (`slice/il-disco-ha-un-recinto`) insieme al pin owner,
+   * e per la stessa riga: `WORK_RULES` spedisce a tutte e due le classi, quindi
+   * la regola sul recinto arriva anche alla stanza — che è dove il contenuto di
+   * qualcun altro entra per definizione. Pin precedente:
+   * `23aa24da39dc582dd7909f750fed59b165a71ce70dc549428b5df634ced0ed9b`.
+   */
+  const GROUP_PROMPT_SHA_V1 = '6d0a7bef6f7da6ded227c879427715bb64c53e8886e52710b58ace44823a524b';
 
   it('e la stanza riceve lo stesso prompt di ieri, byte per byte', () => {
     const runtime = boot(bootHome());
@@ -333,7 +365,12 @@ describe('quale versione del prompt assembla questa installazione', () => {
     };
     const v1 = conta('v1');
     const v2 = conta('v2');
-    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(20);
+    // Era `> 20` fino al 2026-09-03: la riga sul recinto aggiunge 305 caratteri
+    // a `WORK_RULES` e porta il rapporto v1 da 23,35 a 17,07 (19.335 / 1.133).
+    // La soglia scende con la misura invece di essere aggirata, e l'affermazione
+    // che il test fa — v1 è pesantemente carattere, v2 no — regge identica: 17
+    // contro il `< 8` di v2 sotto, che è la riga che porta il peso.
+    expect(v1.chiSei / v1.comeLavori).toBeGreaterThan(15);
     expect(v2.chiSei / v2.comeLavori).toBeLessThan(8);
     // E il prompt non è cresciuto per farlo: il peso si è spostato.
     expect(v2.chiSei + v2.comeLavori).toBeLessThan((v1.chiSei + v1.comeLavori) * 1.02);
