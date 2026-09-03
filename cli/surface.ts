@@ -7,7 +7,7 @@ import { generatePairingCode, startPairing } from '../core/config/pairing.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Runtime } from '../agent/runtime.js';
-import type { LaneDeliver } from '../agent/turn-lane.js';
+import type { AttachStream, LaneDeliver } from '../agent/turn-lane.js';
 import {
   loadConfig,
   paths,
@@ -579,7 +579,14 @@ export function connectSurfaces(
    * serve», che e' il caso del gateway stesso e di `observe`.
    */
   gatewayServes?: () => { pid: number } | null,
-): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver; salute: SaluteSuperfici } {
+): {
+  lines: string[];
+  stop: () => void;
+  registry: SurfaceRegistry;
+  deliver: LaneDeliver;
+  attachStream: AttachStream;
+  salute: SaluteSuperfici;
+} {
   const lines: string[] = [];
   /**
    * Letto una volta qui, e poi solo dal sorvegliante in fondo: le righe di
@@ -628,6 +635,16 @@ export function connectSurfaces(
     string,
     (turnId: string, replyTo: Record<string, unknown>, text: string) => Promise<void | 'possibly_sent'>
   >();
+  /**
+   * The lane's own half of B11/B13 for a resumed turn — same shape as
+   * `doors` immediately above, and for the same reason: keyed by
+   * `record.surface`, filled only by whichever connector actually came up
+   * in this process. Absent for a surface with no live sink to attach (a
+   * job, `cli` — the REPL never resumes a turn, ADR-0035) means exactly
+   * what it always meant before this slice: the resumed turn runs silent
+   * until its final answer.
+   */
+  const streams = new Map<string, AttachStream>();
 
   if (runtime.config.surfaces.enabled.includes('telegram')) {
     try {
@@ -730,6 +747,7 @@ export function connectSurfaces(
           const outcome = await connector.deliverTo(turnId, replyTo, text);
           return outcome === 'possibly_sent' ? outcome : undefined;
         });
+        streams.set('telegram', connector.resumeStream);
         // Delivery for `SurfaceRegistry`, from the same token the listener
         // uses. `ownerChatId` is what makes `handles('telegram')` true, so an
         // unpaired surface listens but does not claim to be a destination —
@@ -900,6 +918,7 @@ export function connectSurfaces(
       if (turn.replyTo === null) throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
       return door(turn.id, turn.replyTo, text);
     },
+    attachStream: (record) => streams.get(record.surface)?.(record),
   };
 }
 

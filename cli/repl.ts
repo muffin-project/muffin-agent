@@ -606,6 +606,9 @@ export async function runRepl(
   const textzone = makeTextzone({
     input: (opts.stdin ?? process.stdin) as NodeJS.ReadStream,
     output: process.stdout,
+    // B11: il prompt `[s/N]` di un'approvazione è cornice, non la risposta
+    // del turno — vedi `TextzoneDeps.promptOutput`.
+    promptOutput: process.stderr,
     historyFile: join(home, 'repl-history'),
     comandi: COMANDI,
     fondo,
@@ -636,27 +639,37 @@ export async function runRepl(
   // funzione sola per processo, e un turno arrivato da Telegram finiva a
   // chiedere `[s/N]` qui dentro — a chi non l'aveva chiesto, su uno schermo che
   // in quel momento nessuno guarda.
+  //
+  // Il verdetto rientra nel vocabolario dei passi (`⏸`/`✓`/`✗`, gli stessi
+  // segni di `formatProgressLine`), non un blocco `⚠` a parte — la metà CLI
+  // del difetto che `docs/evidence/forma-delle-superfici-2026-09-03.md` §3
+  // registra: prima restavano due annunci consecutivi della stessa cosa, in
+  // due alfabeti diversi. Ogni riga passa da `status.line`, l'unica porta per
+  // una scrittura fuori banda mentre un turno gira (`cli/status-line.ts`),
+  // così una spinner viva non gli finisce incollato davanti.
   runtime.approvers.set('cli', async (request) => {
-    status.line(`\n⚠ ${request.prompt}`);
+    status.line(`  ⏸ ${request.capability}: aspetto la tua approvazione`);
     // The model's own account first, the exact bytes after: one reads the
     // sentence to know whether to look, and the command to decide. Never
     // the sentence alone — a paraphrase is where a request sounds smaller.
-    if (request.description) process.stderr.write(`   cosa fa: ${request.description}\n`);
-    if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
+    if (request.description) status.line(`     cosa fa: ${request.description}`);
+    if (request.resource) status.line(`     su: ${request.resource}`);
     // Taint 0 is the quiet default; anything above it means untrusted content
     // already steered this turn, and that changes the answer more often than
     // the capability name does.
     if (request.taint > 0) {
       const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][request.taint];
-      process.stderr.write(`   contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}\n`);
+      status.line(`     contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}`);
     }
-    const risposta = await textzone.readLine(`   approvi "${request.capability}"? [s/N] `);
+    // B11: la stessa riga di prompt, ma su stderr (`TextzoneDeps.promptOutput`)
+    // — mai su stdout, che qui porterebbe solo i byte della risposta del turno.
+    const risposta = await textzone.readLine(`approvi "${request.capability}"? [s/N] `);
     // Ctrl+C qui è un no, non un'attesa. Prima non lo era: il gestore SIGINT
     // annullava il turno e questa domanda restava appesa, quindi il terminale
     // continuava a chiedere l'approvazione di una cosa già annullata.
     const answer = risposta.tipo === 'testo' ? risposta.testo.trim().toLowerCase() : '';
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
-    process.stderr.write(`   ${allowed ? 'approvato' : 'rifiutato'}\n\n`);
+    status.line(`  ${allowed ? '✓' : '✗'} ${request.capability}: ${allowed ? 'consentito' : 'rifiutato'}`);
     return allowed ? 'allow' : 'deny';
   });
 

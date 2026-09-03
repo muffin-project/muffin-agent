@@ -1122,6 +1122,24 @@ export type ResumeRefusal = {
 };
 
 /**
+ * A live sink for a resumed turn, handed in by whoever is picking the row
+ * back up.
+ *
+ * Until `docs/evidence/forma-delle-superfici-2026-09-03.md` this did not
+ * exist as a parameter at all, and `drive` already supported both fields —
+ * the gap was never the engine, it was that nothing upstream of `resumeTurn`
+ * ever *had* a sink to hand it. A turn suspended on an approval now resumes
+ * on the same process that owns the lane (`agent/turn-lane.ts`'s
+ * `makeLaneRunner`), and that process is exactly the one already holding the
+ * durable address (`record.replyTo`) a fresh `onDelta`/`onProgress` can be
+ * built against — see `ResumeStream` there for how.
+ */
+export type ResumeStream = {
+  onDelta?: ((delta: TurnDelta) => void) | undefined;
+  onProgress?: ((event: TurnEvent) => void) | undefined;
+};
+
+/**
  * Pick a turn back up — after a wait, after a crash, or after a connector
  * handed it over without running it.
  *
@@ -1145,6 +1163,14 @@ export type ResumeRefusal = {
 export async function resumeTurn(
   deps: LoopDeps,
   turnId: string,
+  /**
+   * The wiring `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3 found
+   * missing: absent, a resumed turn streams nothing until it finishes, exactly
+   * the "quella bolla lì" the owner is describing. Optional because not every
+   * caller of `resumeTurn` has a live surface to attach — a headless retry, a
+   * test — and an absent sink is silence, not an error.
+   */
+  stream?: ResumeStream,
 ): Promise<TurnResult | ResumeRefusal> {
   const existing = deps.turns.get(turnId);
   if (existing === null) {
@@ -1280,6 +1306,16 @@ export async function resumeTurn(
     return { turnId, why: 'exhausted', detail };
   }
 
+  // La stessa stanza dove il turno era stato aperto, letta dal `replyTo`
+  // durevole invece che da un chiamante che qui non esiste più: `runFresh`
+  // (CLI e Telegram) scrive sempre `channel` dentro `replyTo` insieme a
+  // `chatId`/`messageId`, proprio perché un giorno un resume ne avrebbe avuto
+  // bisogno (`agent/turn-lane.ts`, commento su `LaneDeliver`). Un tool che
+  // indirizza una consegna di metà turno (`send_file`) durante una ripresa
+  // trova quindi la stessa stanza, non `undefined`.
+  const replyChannelAlRisveglio =
+    typeof record.replyTo?.['channel'] === 'string' ? (record.replyTo['channel'] as string) : undefined;
+
   return drive(deps, record, span, {
     resumed: !firstAttempt,
     wokenFromWait: wasWaiting,
@@ -1288,6 +1324,12 @@ export async function resumeTurn(
     // sempre «è passato il tempo», anche quando a svegliare il turno è stata
     // una risposta dell'owner arrivata un istante fa.
     waitForAtWake: existing.waitFor,
+    ...(replyChannelAlRisveglio === undefined ? {} : { replyChannel: replyChannelAlRisveglio }),
+    // Il filo che `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3
+    // trovava reciso: `drive` li accetta già da sempre (`options.onDelta`/
+    // `options.onProgress` qui sotto), mancava solo chi li passasse fin qui.
+    ...(stream?.onDelta ? { onDelta: stream.onDelta } : {}),
+    ...(stream?.onProgress ? { onProgress: stream.onProgress } : {}),
   });
 }
 
@@ -1312,37 +1354,43 @@ async function drive(
     /** The ref the caller already opened. Absent on a resume — see `input.session`. */
     session?: SessionRef | undefined;
     /**
-     * The caller's `TurnInput.replyChannel`, for a fresh turn only.
+     * The caller's `TurnInput.replyChannel`.
      *
-     * Not persisted on `TurnRecord` — by design, per `ToolContext.replyChannel`'s
-     * own docstring, so there is nowhere on `record` to read it back from on a
-     * resume. `runTurn` is the only caller that ever has a live one to pass;
-     * `resumeTurn` leaves this absent on purpose, which is the correct answer
-     * there and not an oversight — a turn woken with no stack to return to has
-     * no live "this call's own channel" either, only the durable `replyTo` the
-     * lane already carries. `string | undefined`, matching `TurnInput`'s own
-     * field exactly — `null` is `ToolContext`'s vocabulary, applied once, where
-     * `toolContext` is built below.
+     * Not persisted on `TurnRecord` as its own column — by design, per
+     * `ToolContext.replyChannel`'s own docstring — but `runFresh` on both
+     * surfaces already writes it *inside* `replyTo` (`{ chatId, messageId,
+     * channel }`), so `resumeTurn` derives it from there rather than needing
+     * a caller with a live stack. `runTurn` still passes its own live value
+     * directly for a fresh turn; a resume reads the durable copy. `string |
+     * undefined`, matching `TurnInput`'s own field exactly — `null` is
+     * `ToolContext`'s vocabulary, applied once, where `toolContext` is built
+     * below.
      */
     replyChannel?: string | undefined;
     /**
-     * Same story as `replyChannel`, immediately above: live only on a fresh
-     * turn, absent on a resume for the same reason — a process that picks a
-     * suspended turn back up (the gateway's lane, a reboot) is not the one
-     * holding whatever REPL or Telegram chat asked the *previous* attempt to
-     * stream. See `TurnInput.onDelta` for why that is never a gap in what the
-     * owner sees: no delta can have reached a surface on a round that goes on
-     * to suspend.
+     * The surface's own live sink, when one is attached.
+     *
+     * Always present on a fresh turn (`runTurn`'s caller holds the surface
+     * directly). On a resume it is present only when the caller of
+     * `resumeTurn` built one — see `ResumeStream` and
+     * `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3: a process
+     * that picks a suspended turn back up (the gateway's lane) is not the
+     * one that *received* the previous attempt's `onDelta`, but it can be
+     * the one that opens a fresh sink addressed at the durable `replyTo` —
+     * which is exactly what `agent/turn-lane.ts`'s `makeLaneRunner` now does
+     * for Telegram. Still absent for a caller with no surface to attach (a
+     * headless retry, a test), and that absence is silence, not a gap the
+     * owner notices, because there was nothing streaming before either.
      */
     onDelta?: ((delta: TurnDelta) => void) | undefined;
-    /**
-     * Same story as `onDelta`, immediately above: live only on a fresh turn,
-     * absent on a resume, because the process picking a suspended turn back
-     * up is not the one holding whatever REPL was rendering the previous
-     * attempt's progress. See `TurnInput.onProgress`.
-     */
+    /** Same story as `onDelta`, immediately above. See `TurnInput.onProgress`. */
     onProgress?: ((event: TurnEvent) => void) | undefined;
-    /** Vivo solo su un turno fresco, come `onDelta`: chi riprende un turno non ha la chat che lo corregge. */
+    /**
+     * Vivo solo su un turno fresco — a differenza di `onDelta`/`onProgress`
+     * qui sopra, questo non ha un indirizzo durevole da cui ricostruirsi su
+     * una ripresa: chi riprende un turno non ha la chat che lo corregge, solo
+     * l'indirizzo dove mandare la risposta.
+     */
     steer?: (() => string[]) | undefined;
   } = {},
 ): Promise<TurnResult> {

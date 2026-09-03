@@ -1,6 +1,6 @@
 import type { LaneEvent, LaneRun } from '../core/turns/lane.js';
 import type { TurnRecord } from '../core/turns/store.js';
-import { resumeTurn, type LoopDeps } from './loop.js';
+import { resumeTurn, type LoopDeps, type ResumeStream } from './loop.js';
 
 /**
  * The bridge from a row in `turns` to a real turn, and from a finished turn to
@@ -36,6 +36,20 @@ import { resumeTurn, type LoopDeps } from './loop.js';
 export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'possibly_sent'>;
 
 /**
+ * Opens a live sink for a row the lane is about to resume, addressed at its
+ * own durable `replyTo` — the wiring
+ * `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3 found missing.
+ *
+ * Returns `undefined` for a surface with nothing to attach (no connector for
+ * `record.surface` came up in this process — a `NO_SURFACE` process, or a
+ * turn addressed to a surface this boot never connected). `stop`, when given,
+ * is awaited once execution ends, win or lose, exactly the way `runFresh` on
+ * each surface already calls `presence.stop()`/`transcript.stop()` in its own
+ * `finally` — a resumed turn owes its sink the same close.
+ */
+export type AttachStream = (record: TurnRecord) => (ResumeStream & { stop?: () => Promise<void> }) | undefined;
+
+/**
  * A surface with nowhere to send. Used by a runtime that has no connector
  * attached: the turn still runs, still records, and the answer is reported as
  * undeliverable rather than silently dropped.
@@ -53,9 +67,32 @@ export function makeLaneRunner(
    * the loop — and a `console.error` in a library is a report nobody can route.
    */
   onUndeliverable: (event: Extract<LaneEvent, { kind: 'undeliverable' }>) => void = () => {},
+  /**
+   * Absent means what it always meant: a resumed turn produces no live
+   * updates, only its final answer at `deliver`. Given, it is asked for a
+   * sink *before* `resumeTurn` runs — on the row as it stands right now, not
+   * after — because the row is exactly what a connector needs to know which
+   * chat, which message, which surface to open a fresh stream against.
+   */
+  attachStream?: AttachStream,
 ): LaneRun {
   return async (turnId) => {
-    const outcome = await resumeTurn(deps, turnId);
+    const before = deps.turns.get(turnId);
+    const stream = before === null ? undefined : attachStream?.(before);
+    let outcome: Awaited<ReturnType<typeof resumeTurn>>;
+    try {
+      outcome = await resumeTurn(deps, turnId, stream);
+    } finally {
+      // Closed here and not inside `resumeTurn`: the sink is this file's own
+      // dependency, and a stream left open past its turn is a message that
+      // never gets its last, disciplined edit — the same promise `runFresh`
+      // keeps on each surface with its own `finally`.
+      try {
+        await stream?.stop?.();
+      } catch {
+        /* the turn's own outcome already stands; a sink failing to close does not change it */
+      }
+    }
     if ('why' in outcome) {
       /**
        * A refused resume still owes the owner a sentence.
