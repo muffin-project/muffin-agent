@@ -149,6 +149,32 @@ describe('muffin mcp add --host', () => {
     expect(out.join('\n')).toMatch(/non è un host valido/);
     expect(verify(h, 'single-user').ok).toBe(true);
   });
+
+  /**
+   * `EgressFileSchema` in modalità `.loose()` (`core/net/egress.ts`): una
+   * chiave che l'owner ha scritto a mano in `rot/egress.json` sopravvive a
+   * una riscrittura fatta da `widenEgressForCapability` — provato qui
+   * passando dalla porta `muffin mcp add --host`, non solo a livello di
+   * unità (`core/rot/egress-writer.test.ts` prova la funzione condivisa
+   * direttamente; `cli/search-setup.test.ts` prova la stessa cosa
+   * dall'altra porta).
+   */
+  it('una nota owner in rot/egress.json sopravvive ad un --host di mcp add', async () => {
+    const h = home();
+    const egressPath = join(paths(h).rot, 'egress.json');
+    writeFileSync(
+      egressPath,
+      JSON.stringify({ schemaVersion: 1, allow: [], nota_owner: 'non toccare, serve al progetto Y' }, null, 2),
+    );
+    const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, ['a.example'], {
+      out: () => {},
+      chiediConferma: () => Promise.resolve('s'),
+    });
+    expect(code).toBe(0);
+    const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+    expect(egress.nota_owner).toBe('non toccare, serve al progetto Y');
+    expect(egress.allow).toContain('a.example');
+  });
 });
 
 
