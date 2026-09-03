@@ -65,6 +65,32 @@ export function mandatoryGuards(home: string, cwd: string, userHome: string = ho
   const p = paths(home);
   return {
     denyWrite: [
+      // 0. the installation itself — the category the five below were a
+      //    partial spelling of.
+      //
+      //    The threat model's five are the five *escapes* that were known when
+      //    it was written; they are not a description of what the home holds.
+      //    Measured on the production `SandboxExecutor` with this very list
+      //    (2026-09-03): `rot/` and `config.json` held, and `.rot-anchor`,
+      //    `muffin.db`, `voice.md` and `sessions/` were all overwritten by an
+      //    ordinary `shell_run` — because in the supervised gateway the write
+      //    scope *was* the home (`core/config/workspace.ts` documents how it
+      //    got to be). `.rot-anchor` lives beside `rot/`, not inside it — "an
+      //    anchor inside what it anchors is decoration" (`core/rot/verify.ts`)
+      //    — so the entry protecting the sealed directory did not protect the
+      //    seal, and a write there costs the next boot an `anchor_mismatch`.
+      //
+      //    Naming the home is the only spelling of "Muffin's own state" that a
+      //    file added next month is inside by default. The five below stay:
+      //    three are subsumed by this line, two are not (`.git/hooks` and the
+      //    dotfiles live outside the home), and a list that says which threats
+      //    it answers is worth more than a shorter one.
+      //
+      //    This is the belt. The braces are that a turn no longer works *in*
+      //    the home at all (`resolveWorkspace`); either alone would close the
+      //    measured hole, and neither alone survives the next surface that
+      //    forgets to pass a workspace.
+      p.home,
       // 1. the root of trust
       p.rot,
       // 2. config

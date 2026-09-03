@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
 import { connectServer } from '../../core/mcp/connect.js';
 import { probeSandbox } from '../../core/sandbox/probe.js';
+import { isSameOrNestedPath } from '../../core/config/workspace.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
@@ -219,6 +220,39 @@ describe('M3 acceptance — through the production runtime', () => {
     expect(out.isError).toBe(true);
     expect(existsSync(escape)).toBe(false);
   }, 20_000);
+
+  /**
+   * The gateway's own shape, through the production assembly.
+   *
+   * Every other test in this file passes an explicit `workspace`, so none of
+   * them could ever have caught the defect this asserts: under launchd/systemd
+   * the unit pins `WorkingDirectory` to the home (ADR-0035, deliberately) and
+   * `cli/gateway.ts` built the runtime with no cwd, so `process.cwd()` — the
+   * home — became `FsScope.root` and the sandbox write scope. Measured on the
+   * owner's live gateway, 2026-09-03; `muffin.db`, `.rot-anchor`, `voice.md`
+   * and `sessions/` were all writable from a turn.
+   *
+   * `buildRuntime(home, home)` is that shape exactly. Nothing here mocks the
+   * decision: the assertion is on the tool the runtime actually registered.
+   */
+  it.runIf(contained)('a runtime built with the home as its cwd works somewhere else, and says so', async () => {
+    const supervisionato = buildRuntime(home, home);
+    try {
+      expect(supervisionato.workspace).not.toBe(home);
+      expect(isSameOrNestedPath(supervisionato.workspace, home)).toBe(false);
+      expect(supervisionato.bootLines.join('\n')).toContain('cartella di lavoro');
+
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+      const db = join(home, 'muffin.db');
+      const prima = readFileSync(db);
+      const out = await shell!.handler({ command: `printf 'pwned\\n' > '${db}'` }, toolContext());
+      expect(out.isError).toBe(true);
+      expect(readFileSync(db), 'the agent overwrote its own database').toEqual(prima);
+    } finally {
+      supervisionato.close();
+    }
+  }, 30_000);
 
   afterAll(() => {
     runtime?.close();

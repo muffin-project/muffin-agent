@@ -121,7 +121,7 @@ async function runFresh(
   turnId: string,
   signal: AbortSignal | undefined,
   exec: JobExec | null,
-  scope: ScriptScope,
+  scope: ScriptScope | null,
 ): Promise<JobOutcome> {
   // Un job `script` non passa di qui sotto: nessuna sessione, nessun prompt,
   // nessuna chiamata al modello. Il turno durevole viene scritto lo stesso —
@@ -189,7 +189,7 @@ async function resolveBound(
   turnId: string,
   signal: AbortSignal | undefined,
   exec: JobExec | null,
-  scope: ScriptScope,
+  scope: ScriptScope | null,
 ): Promise<JobOutcome | FireDeferred | FireSettleOnly> {
   const existing = deps.turns.get(turnId);
   // The bind landed, but the row it points at does not exist — a crash
@@ -243,7 +243,20 @@ export function makeJobRunner(
    * il probe della sandbox fallisce.
    */
   exec: JobExec | null = null,
-  scope: ScriptScope = { cwd: process.cwd() },
+  /**
+   * Dove gira uno script, e `null` quando nessuno l'ha detto.
+   *
+   * Il default era `{ cwd: process.cwd() }`, e sotto launchd/systemd quella
+   * directory è la home di Muffin: uno script schedulato — che gira **senza
+   * nessuno che guardi**, a orario — avrebbe avuto in scrittura memoria,
+   * sessioni e il sigillo. Oggi i due chiamanti di produzione passano
+   * `runtime.workspace`, che non è mai l'installazione
+   * (`core/config/workspace.ts`); questo `null` è la ragione per cui un terzo
+   * chiamante che se ne dimenticasse non erediterebbe di nuovo la cwd del
+   * processo. Stessa scelta di `exec` qui sopra, per lo stesso motivo: chiude
+   * invece di indovinare.
+   */
+  scope: ScriptScope | null = null,
 ): RunJob {
   return async (job: Job, signal): Promise<JobOutcome | FireDeferred | FireSettleOnly> => {
     // The occurrence that is due, not the moment this process noticed it —
@@ -284,7 +297,7 @@ async function runScript(
   job: Job,
   turnId: string,
   exec: JobExec | null,
-  scope: ScriptScope,
+  scope: ScriptScope | null,
 ): Promise<JobOutcome> {
   await testStall('MUFFIN_JOB_FIRES_STALL_AFTER_BIND_MS');
   const session = deps.sessions.open(`job-${job.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`);
@@ -367,6 +380,17 @@ async function runScript(
       'error',
       `Job "${job.id.slice(0, 8)}" non eseguito: la sandbox non è disponibile su questa macchina, ` +
         `e uno script schedulato non gira senza contenimento. \`muffin doctor\` dice cosa manca.`,
+    );
+  }
+
+  if (scope === null) {
+    // Stesso fail-closed, per l'altra metà della stessa domanda: senza una
+    // cartella di lavoro dichiarata non si ripiega sulla cwd del processo, che
+    // sotto un supervisore è la home di Muffin.
+    return chiudi(
+      'error',
+      `Job "${job.id.slice(0, 8)}" non eseguito: nessuna cartella di lavoro dichiarata per gli script, ` +
+        `e uno script schedulato non gira nell'installazione.`,
     );
   }
 
