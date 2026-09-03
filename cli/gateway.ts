@@ -772,7 +772,7 @@ export async function cmdGatewayRun(
   });
   onAssembled?.({ turnLane, lock });
 
-  let stopSurfaces: (() => void) | null = null;
+  let stopSurfaces: ((budgetMs: number) => Promise<void>) | null = null;
   let controlSocket: ControlServer | undefined;
   const avviatoAlle = new Date().toISOString();
   const envTickMs = tickMsFromEnv(process.env['MUFFIN_GATEWAY_TICK_MS']);
@@ -784,14 +784,29 @@ export async function cmdGatewayRun(
     scheduler,
     turnLane,
     jobs: runtime.jobs,
-    close: () => {
+    close: async (remainingMs) => {
       // Il socket per primo: da qui in poi nessuno deve poterci parlare, e il
       // file rimosto dalla chiusura pulita e' meta' del contratto — quello che
       // resta e' sempre e solo il socket di un morto (`control-socket.ts`).
       void controlSocket?.close();
       // Surfaces first, then the runtime: the connector must stop polling
       // before the database under it goes away (the REPL's order, same reason).
-      stopSurfaces?.();
+      //
+      // **Awaited, not fired and forgotten.** Until 03/09/2026 `stopSurfaces`
+      // only *signalled* — synchronous, `() => void` — and `runtime.close()`
+      // ran the very next line, closing the database while a `getUpdates`
+      // already in flight (Telegram's long poll, up to 65s) or a turn a
+      // connector's own drain was still writing (never tracked by `Gateway`'s
+      // `busy()` — those run outside `turnLane`) was still going. It landed on
+      // the owner's real gateway: `~/.muffin/gateway.err` showed `telegram:
+      // update 99665860 fallito — The database connection is not open`
+      // followed by `telegram: polling fallito (The database connection is
+      // not open)`, both after `gateway: SIGTERM — drenaggio…` had already
+      // printed. `remainingMs` is what is left of `Gateway.drain`'s own
+      // budget after its busy-wait — not a second budget invented here, so the
+      // "fino a Xs" the owner already read stays true of the whole shutdown,
+      // comfortably inside `unit.ts`'s `TimeoutStopSec` margin.
+      await stopSurfaces?.(remainingMs);
       runtime.close();
     },
     log: (line) => process.stderr.write(`${line}\n`),

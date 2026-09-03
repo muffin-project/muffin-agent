@@ -35,6 +35,7 @@ import type { Approver } from '../agent/loop.js';
 import { escapeHtml, splitHtml } from '../connectors/telegram/render.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
 import { HEARTBEAT_MS } from '../core/gateway/lock.js';
+import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -581,7 +582,22 @@ export function connectSurfaces(
   gatewayServes?: () => { pid: number } | null,
 ): {
   lines: string[];
-  stop: () => void;
+  /**
+   * Stops every connector this call started, and — unlike the `void` fire-
+   * and-forget `stop()` this used to be — **waits** for each of them to be
+   * genuinely gone: no `getUpdates` still in flight, no drain still writing,
+   * before the caller (`cli/gateway.ts`'s `close`) lets the database under
+   * them close. `budgetMs` is the gateway's own drain budget, passed through
+   * rather than a second one invented here — a connector that does not answer
+   * in time gives up honestly (each connector's own `stop()` logs the line)
+   * instead of hanging this past the drain the owner was already told about.
+   *
+   * `budgetMs` defaults to the same `DRAIN_BUDGET_MS` the gateway's own drain
+   * uses, for the callers that are not the gateway (`muffin observe --send`,
+   * `cli/repl.ts`'s own shutdown) and so have no `remainingMs` of their own to
+   * pass through.
+   */
+  stop: (budgetMs?: number) => Promise<void>;
   registry: SurfaceRegistry;
   deliver: LaneDeliver;
   attachStream: AttachStream;
@@ -615,7 +631,7 @@ export function connectSurfaces(
    */
   const salute = new SaluteSuperfici();
   const adesso = (): Date => new Date();
-  const stops: (() => void)[] = [];
+  const stops: ((budgetMs: number) => Promise<void>)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
   /**
    * How a turn the **lane** finished gets back to whoever asked for it.
@@ -737,9 +753,12 @@ export function connectSurfaces(
             log(`telegram: caduta — ${causa}`);
           });
         };
-        pollers.push({ start: avviaTelegram, stop: () => connector.stop() });
+        // Fire-and-forget on purpose here: the mouth handoff is not a
+        // shutdown, nothing downstream is about to close the database, and
+        // the interval callback that calls this must not block on it.
+        pollers.push({ start: avviaTelegram, stop: () => void connector.stop() });
         if (gatewayAtBoot === null) avviaTelegram();
-        stops.push(() => connector.stop());
+        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
         // The door for the lane. Registered next to the connector that owns it,
         // so a surface that did not come up simply has none — the honest state,
         // rather than a door onto a dead poller.
@@ -831,11 +850,12 @@ export function connectSurfaces(
             log(`discord: caduta — ${causa}`);
           });
         };
-        pollers.push({ start: avviaDiscord, stop: () => connector.stop() });
+        // Fire-and-forget for the same reason Telegram's poller stop is.
+        pollers.push({ start: avviaDiscord, stop: () => void connector.stop() });
         // Stessa ragione di Telegram: una sola gateway websocket per token,
         // altrimenti ogni messaggio viene servito due volte.
         if (gatewayAtBoot === null) avviaDiscord();
-        stops.push(() => connector.stop());
+        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
         surfaces.push(discordSurface(api, ownerUserId));
         // N2 (judge, PR #42): this used to say "connessa" before `api.me()` —
         // called inside `connector.run()`, fire-and-forget above — had
@@ -891,13 +911,19 @@ export function connectSurfaces(
       for (const p of pollers) (now ? p.stop : p.start)();
     }, HEARTBEAT_MS);
     vigile.unref();
-    stops.push(() => clearInterval(vigile));
+    stops.push(async () => {
+      clearInterval(vigile);
+    });
   }
 
   return {
     lines,
     salute,
-    stop: () => stops.forEach((s) => s()),
+    // Concurrent, not sequential: each connector's `stop()` already carries
+    // its own bounded wait against the *same* budget, so running them one
+    // after another would let two slow connectors add their waits together
+    // instead of sharing one clock.
+    stop: (budgetMs = DRAIN_BUDGET_MS) => Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
     registry: new SurfaceRegistry(surfaces),
     /**
      * The lane's delivery, over whichever surfaces are up.

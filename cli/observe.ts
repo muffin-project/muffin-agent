@@ -219,7 +219,7 @@ async function sendAllowed(
   // for the provider graph, and must work on a home with no API key.
   const { makeAbsenceComposer } = await import('../agent/observe-run.js');
   let runtime: Runtime | null = null;
-  let stopSurfaces: (() => void) | null = null;
+  let stopSurfaces: ((budgetMs?: number) => Promise<void>) | null = null;
   let deps = over.deps;
   let deliver = over.deliver;
   if (!deps || !deliver) {
@@ -266,8 +266,9 @@ async function sendAllowed(
     }
   } finally {
     // Surfaces before the runtime, the order every other caller uses: a
-    // connector must stop polling before the database under it goes away.
-    stopSurfaces?.();
+    // connector must stop polling before the database under it goes away —
+    // and awaited, same reason `cli/gateway.ts`'s `close` awaits it.
+    await stopSurfaces?.();
     runtime?.close();
   }
   return failures;
