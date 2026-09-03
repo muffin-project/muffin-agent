@@ -246,7 +246,12 @@ export const PROBES: readonly Probe[] = [
   {
     id: 'runtime-debugging',
     label: 'Runtime debugging',
-    properties: ['technical_when_needed', 'plumbing_visible_when_relevant', 'agentic'],
+    // `plumbing_not_default_voice` sta qui accanto a `plumbing_visible_when_relevant`
+    // apposta: su una domanda tecnica dove il cofano va aperto per davvero, il
+    // silenzio e il dump grezzo di log sono due fallimenti opposti, e senza
+    // entrambe le proprietà solo il primo veniva misurato — il secondo lo
+    // misurava solo `mcp-tool-use`, dove il cofano poteva restare chiuso.
+    properties: ['technical_when_needed', 'plumbing_visible_when_relevant', 'plumbing_not_default_voice', 'agentic'],
     turns: ['Il gateway continua a riavviarsi, il log dice EADDRINUSE sulla 8787. Da dove partiresti?'],
   },
   {
