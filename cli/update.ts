@@ -244,9 +244,26 @@ export type UpdateDeps = {
   onStep?: (step: UpdateStep) => void;
 };
 
-function run(cmd: string, args: string[], cwd: string, timeoutMs = 120_000): SpawnResult {
+/**
+ * Exported for one reason: a `spawnSync` **timeout** is a case its own test
+ * has to reach directly, because nothing about it is visible through
+ * `offerGatewayRestart`'s injected `restart` — that seam replaces this whole
+ * function, so a bug inside it can only be seen by calling it.
+ *
+ * The bug, measured on the owner's machine 03/09/2026: `launchctl kickstart -k`
+ * printed «il riavvio non è uscito 0:» followed by nothing. `spawnSync` on a
+ * timeout kills the child and sets `r.error` to the one clue that survives
+ * (`spawnSync <cmd> ETIMEDOUT`) — but it leaves `r.stdout`/`r.stderr` as empty
+ * **strings**, not `undefined` (verified: `spawnSync('sleep', ['2'], {timeout:
+ * 200})` → `{status:null, stdout:'', stderr:'', error: Error(...ETIMEDOUT)}`).
+ * The old `r.stderr ?? (r.error ? r.error.message : '')` only falls back on
+ * `null`/`undefined`, so on a timeout it never fires and `r.error.message`
+ * — the only sentence that says why — is built and then thrown away.
+ */
+export function run(cmd: string, args: string[], cwd: string, timeoutMs = 120_000): SpawnResult {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout: timeoutMs });
-  return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? (r.error ? r.error.message : '') };
+  const stderr = r.stderr && r.stderr.trim() !== '' ? r.stderr : r.error ? r.error.message : (r.stderr ?? '');
+  return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr };
 }
 
 function git(args: string[], cwd: string): SpawnResult {
@@ -612,15 +629,98 @@ function restartCommand(platform: NodeJS.Platform): { printable: string; argv: s
   return { argv: ['systemctl', '--user', 'restart', unit], printable: `systemctl --user restart ${unit}` };
 }
 
-function isGatewayRunning(home: string): boolean {
+/**
+ * Il pid che sta servendo adesso, o `null` — mai un booleano. `offerGatewayRestart`
+ * deve confrontare un pid PRIMA con un pid DOPO per sapere se un riavvio è
+ * davvero successo; «gira qualcosa» non basta a rispondere. Stessa lettura di
+ * quella che c'era già in `isGatewayRunning`, generalizzata perché la stessa
+ * domanda serve anche a `cli/gateway.ts` — un meccanismo solo, non due che
+ * possono divergere.
+ */
+export function currentGatewayPid(home: string): number | null {
   const file = paths(home).db;
-  if (!existsSync(file)) return false;
+  if (!existsSync(file)) return null;
   const db = new DatabaseCtor(file, { readonly: true });
   try {
-    return readGateway(db) !== null;
+    return readGateway(db)?.pid ?? null;
   } finally {
     db.close();
   }
+}
+
+function isGatewayRunning(home: string): boolean {
+  return currentGatewayPid(home) !== null;
+}
+
+/**
+ * «È già cambiato?», chiesto un numero limitato di volte — mai `while(true)`:
+ * un processo che non arriva mai non deve appendere la CLI in eterno per
+ * un'osservazione che è comunque best-effort. Di default 8 letture ogni
+ * 750ms, 6s in tutto: la claim del lock avviene presto nell'avvio di un
+ * gateway sano (`cmdGatewayRun` in `cli/gateway.ts` la prende subito dopo
+ * `buildRuntime`, prima di qualunque tick), quindi 6s bastano per un riavvio
+ * che va bene; per uno che non va, dire onestamente «non confermato entro Ns»
+ * è la risposta giusta — non un'attesa più lunga a caso.
+ */
+export async function waitForGatewayPid(
+  readPid: () => number | null,
+  before: number | null,
+  opts: {
+    attempts?: number | undefined;
+    intervalMs?: number | undefined;
+    sleep?: ((ms: number) => Promise<void>) | undefined;
+  } = {},
+): Promise<number | null> {
+  const attempts = opts.attempts ?? 8;
+  const intervalMs = opts.intervalMs ?? 750;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let pid = readPid();
+  for (let i = 0; i < attempts && (pid === null || pid === before); i++) {
+    await sleep(intervalMs);
+    pid = readPid();
+  }
+  return pid;
+}
+
+export type RestartVerdict = { restarted: boolean; line: string };
+
+/**
+ * Le tre frasi diverse per tre esiti diversi — mai la stessa consolazione per
+ * casi opposti. Misurato il 03/09/2026: tutte e tre le strade stampavano
+ * «entra comunque al prossimo riavvio», compreso il caso in cui il gateway
+ * era appena ripartito. La regola è quella della casa: il successo lo decide
+ * lo STATO (un pid diverso da prima), mai l'exit status del comando che ha
+ * appena mutato il supervisore.
+ *
+ * Funzione pura — decide il testo, non lo stampa — cosicché ogni esito abbia
+ * un test che legge esattamente la frase e non un frammento di comportamento.
+ */
+export function restartVerdict(args: {
+  pidBefore: number | null;
+  pidAfter: number | null;
+  commandOk: boolean;
+  /** stderr/stdout del comando di riavvio, già scelto e già tagliato — mai vuoto quando il comando aveva qualcosa da dire (vedi `run`). */
+  commandDetail: string;
+}): RestartVerdict {
+  const restarted = args.pidAfter !== null && args.pidAfter !== args.pidBefore;
+  const chi = args.pidBefore === null ? 'nessun processo rilevato prima' : `pid ${args.pidBefore}`;
+  if (restarted) {
+    const base = `gateway riavviato — verificato: ${chi} → adesso serve pid ${args.pidAfter}.`;
+    return {
+      restarted: true,
+      line: args.commandOk
+        ? base
+        : `${base}\n(il comando di riavvio aveva segnalato un errore, ma il gateway è comunque ripartito su un processo nuovo — probabile scontro transitorio con lo stato del supervisore appena dopo lo swing del symlink, non c'è altro da fare. Dettaglio del comando: ${args.commandDetail || '(nessuno)'})`,
+    };
+  }
+  return {
+    restarted: false,
+    line:
+      `il riavvio non è avvenuto: il gateway servito adesso è ancora lo stesso di prima (${chi}) — sei ancora sulla build vecchia.` +
+      (args.commandOk
+        ? ' Il comando è uscito 0, ma nessun processo nuovo ha preso il posto entro il tempo di attesa.'
+        : `\n${args.commandDetail || '(il comando non è uscito 0 e non ha detto perché)'}`),
+  };
 }
 
 /**
@@ -642,11 +742,18 @@ export async function offerGatewayRestart(
     /** Same injection seam `cli/doctor.ts` uses for `checkSupervisor` — real OS probes by default, overridden so a test never shells out to a real systemctl/launchctl. */
     supervisorProbes?: Partial<SupervisorProbes>;
     gatewayRunning?: boolean;
+    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
+    readGatewayPid?: () => number | null;
+    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid`. */
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
   },
 ): Promise<void> {
   const promptFn = opts.promptFn ?? promptLine;
   const restart = opts.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
-  const status = checkSupervisor(opts.platform, home, opts.gatewayRunning ?? isGatewayRunning(home), {
+  const readGatewayPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
+  const status = checkSupervisor(opts.platform, home, opts.gatewayRunning ?? readGatewayPid() !== null, {
     ...realSupervisorProbes(),
     ...opts.supervisorProbes,
   });
@@ -666,19 +773,31 @@ export async function offerGatewayRestart(
   }
 
   const { printable, argv } = restartCommand(opts.platform);
-  const doRestart = (): void => {
+  /**
+   * Verifica lo stato dopo, non l'output (regola della casa). Il comando che
+   * muta il supervisore viene comunque eseguito ed emesso — l'owner deve
+   * poterlo rilanciare a mano — ma l'esito che si stampa non è più il suo
+   * exit status: è se il pid che serve adesso è diverso da quello di prima.
+   * Le tre frasi che ne escono sono decise in `restartVerdict`, che questa
+   * funzione chiama e basta.
+   */
+  const doRestart = async (): Promise<void> => {
     process.stderr.write(`\n${printable}\n`);
+    const pidBefore = readGatewayPid();
     const r = restart(argv);
-    if (r.status === 0) {
-      process.stderr.write('gateway riavviato.\n');
-    } else {
-      process.stderr.write(`il riavvio non è uscito 0: ${(r.stderr || r.stdout).trim()}\n`);
-      carryOn();
-    }
+    const commandDetail = (r.stderr || r.stdout).trim();
+    const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
+      attempts: opts.verifyAttempts,
+      intervalMs: opts.verifyIntervalMs,
+      sleep: opts.sleep,
+    });
+    const verdict = restartVerdict({ pidBefore, pidAfter, commandOk: r.status === 0, commandDetail });
+    process.stderr.write(`${verdict.line}\n`);
+    if (!verdict.restarted) carryOn();
   };
 
   if (opts.yes) {
-    doRestart();
+    await doRestart();
     return;
   }
 
@@ -693,7 +812,7 @@ export async function offerGatewayRestart(
     carryOn();
     return;
   }
-  doRestart();
+  await doRestart();
 }
 
 function rollback(checkoutRoot: string, home: string, deps: UpdateDeps, steps: UpdateStep[]): UpdateResult {
