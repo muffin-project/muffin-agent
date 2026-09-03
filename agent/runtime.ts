@@ -13,7 +13,12 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
+import {
+  buildSystemPromptBlocks,
+  renderSystemPrompts,
+  type IstanzaFacts,
+  type SystemPromptBlocks,
+} from './context/assemble.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import { ApprovalStore } from '../core/approvals/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
@@ -21,7 +26,7 @@ import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
+import { fsCapabilities, fsList, makeFsTools, type FsScope } from './tools/fs.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { Vault } from '../core/vault/vault.js';
@@ -774,6 +779,29 @@ export function buildRuntime(
    */
   const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
 
+  /**
+   * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
+   * Parte 0, letti dalle **stesse fonti** che `makeInspectTool` sopra passa a
+   * `sys_inspect`: `scope`/`cwd` (la stessa `FsScope` dei tool fs), `config`,
+   * `jobs`, `safeMode`. Nessuna seconda copia — se una di quelle cambia
+   * definizione, questa la eredita senza essere toccata.
+   *
+   * Una funzione, richiamata da `agent/loop.ts` a ogni turno (`deps.istanza?.()`),
+   * non un valore congelato al boot: `fsList` è la stessa lettura di sola
+   * lettura che il tool `fs_list` farebbe, quindi un file creato a metà
+   * sessione o un job aggiunto da un'altra finestra non restano un fatto
+   * stantio fino al prossimo riavvio.
+   */
+  const leggiIstanza = (): IstanzaFacts => ({
+    cwd,
+    voci: fsList(scope, '.')
+      .split('\n')
+      .filter((riga) => riga.length > 0),
+    provider: config.provider.kind,
+    jobAttivi: jobs.list().filter((j) => j.active).length,
+    safeMode: safeMode ? { reason: safeMode.reason } : null,
+  });
+
   return {
     executor: contained ? executor : null,
     workspace: cwd,
@@ -856,6 +884,7 @@ export function buildRuntime(
       // stay at zero and recall stays keyword-only for its whole life.
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       systemPrompts: renderSystemPrompts(promptBlocks),
+      istanza: leggiIstanza,
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {

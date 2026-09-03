@@ -16,7 +16,14 @@ import { ATTR } from '../core/tracing/types.js';
 import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
 import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
-import { ambienteSection, tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
+import {
+  ambienteSection,
+  tenantClass,
+  todoSection,
+  visibleTools,
+  type IstanzaFacts,
+  type SystemPrompts,
+} from './context/assemble.js';
 import { compactToolResults } from './context/compact.js';
 import { historyTaint, reinjectedHistory, type ReinjectedHistory } from './context/history-taint.js';
 import { iterationCap, type Profile } from './profiles/profile.js';
@@ -484,6 +491,23 @@ export type LoopDeps = {
    * to elicit personal facts.
    */
   systemPrompts: SystemPrompts;
+  /**
+   * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
+   * Parte 0 — `cwd`, il primo livello del workspace, provider, job attivi,
+   * RoT — nella **coda volatile** (`ambienteSection`), mai qui accanto a
+   * `systemPrompts`: quei valori cambiano da installazione a installazione e
+   * da sessione a sessione, e infilarli nel prefisso cacheable lo
+   * invaliderebbe alla prima differenza.
+   *
+   * Una funzione e non un valore statico: letta a ogni turno da
+   * `buildContext`, come `deps.now`, così una directory che guadagna un file o
+   * un job aggiunto a metà sessione non restano un fatto stantio finché
+   * qualcuno non riavvia. Assente = `ambienteSection` non aggiunge le due
+   * righe (comportamento identico a prima di questa slice); `agent/runtime.ts`
+   * la cabla leggendo le stesse fonti di `sys_inspect` — nessun ricalcolo,
+   * nessuna seconda fonte.
+   */
+  istanza?: (() => IstanzaFacts) | undefined;
   /**
    * Absent in tests and before M2 is configured. When present the turn both
    * remembers what was said and recalls what is relevant — and inherits the
@@ -1673,7 +1697,7 @@ async function drive(
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name));
+    messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name, deps.istanza?.()));
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -3588,6 +3612,13 @@ function buildContext(
   /** Quale modello sta rispondendo, e con quale profilo. Vedi `ambienteSection`. */
   modello: string,
   profilo: string,
+  /**
+   * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
+   * Parte 0 — `undefined` quando `deps.istanza` non è cablato (test minimi,
+   * `LoopDeps` di default). Letto qui e non ricalcolato: `deps.istanza()` in
+   * `agent/runtime.ts` legge le stesse fonti di `sys_inspect`.
+   */
+  istanza: IstanzaFacts | undefined,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -3660,6 +3691,7 @@ function buildContext(
     classe: tenantClass(input.principal, input.tenant),
     model: modello,
     profilo,
+    ...(istanza ? { istanza } : {}),
   });
 
   // Recalled memory rides in the same turn as the message it is context for, not
