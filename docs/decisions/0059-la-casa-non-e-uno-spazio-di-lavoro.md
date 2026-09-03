@@ -44,6 +44,14 @@ Contro il `SandboxExecutor` di produzione con i `mandatoryGuards` veri, con
 | `muffin.db` | **sovrascritto** (20480 B → 6 B) | episodi, chunk, fatti, turni, job, spesa |
 | `voice.md` | **sovrascritto** | la voce che l'agente propone di cambiare col cricchetto |
 | `sessions/*.jsonl` | **sovrascritto** | l'intera storia conversazionale |
+| `mcp.json` | **scritto** | il registro dei server MCP: chi Muffin lancia come figlio locale, e con quali `secret://` |
+| `prompt-nonce` | **scritto** | il recinto delle skill nel system prompt smette di essere imprevedibile |
+
+Le ultime due righe non erano nella prima stesura di questa tabella: le ha
+trovate il giudice indipendente, ed è esattamente l'argomento del punto 4 qui
+sotto — un elenco di bersagli è sempre più corto della casa, e la casa è
+l'unica scrittura di «lo stato di Muffin» in cui un file aggiunto il mese
+prossimo si trova dentro per costruzione.
 
 `.rot-anchor` è quello tagliente: vive **accanto** a `rot/`, non dentro — *«an
 anchor inside what it anchors is decoration»* (`core/rot/verify.ts:49`) — quindi
@@ -106,10 +114,30 @@ dalla casa non c'è niente da ordinare: deny e allow non si sovrappongono.
 3. **`resolveWorkspace(home, cwd)` è l'unica porta**, dentro `buildRuntime`.
    Onora la cwd quando l'owner l'ha scelta standoci dentro; la sostituisce
    quando *è* l'installazione, cioè esattamente quando a sceglierla è stato un
-   supervisore. Quando sostituisce, lo **dice** in `bootLines`.
+   supervisore. Quando sostituisce, lo **dice** in `bootLines`. Ricontrolla
+   anche il proprio risultato: se il workspace è un collegamento che riporta
+   dentro la casa, `mkdirSync` lo segue senza lamentarsi e la cintura poi
+   rifiuta ogni scrittura — l'agente resterebbe senza mani e senza una frase
+   che lo spieghi. E se il workspace non può proprio esistere (un file al suo
+   posto, un genitore non scrivibile) il rifiuto è un `ConfigError`, che
+   `cli/gateway.ts` mappa su `EXIT_PERMANENT`: fallire chiuso era già giusto,
+   fallire chiuso una volta ogni `RestartSec` con un errno di cinque parole no.
 4. **`mandatoryGuards` nega la casa in scrittura**, come categoria 0 accanto
    alle cinque del threat model. È la cintura: le bretelle sono il punto 3, e
    nessuna delle due da sola sopravvive alla prossima superficie che dimentica.
+
+   **La cintura sa nascondere le bretelle, ed è successo.** Il giudice
+   indipendente ha rimesso `root: cwd`, `makeShellTool(… { root: cwd })` e
+   `mandatoryGuards(home, cwd)` — lasciando `resolveWorkspace` intatto, a
+   calcolare un workspace che nessuno usava — e **239 file / 3035 test sono
+   rimasti verdi**: sotto il gateway supervisionato la casa tornava a essere
+   `FsScope.root`, le scritture fallivano lo stesso, ma solo per la cintura. Il
+   punto 3 non aveva un falsificatore da nessuna parte. Una deny non può
+   tenere il cablaggio, perché una deny ha lo stesso aspetto qualunque
+   meccanismo l'abbia prodotta: solo una **claim positiva** può. Quindi
+   l'accettazione ora asserisce che una scrittura del turno **atterra dentro
+   `runtime.workspace`** — per tutt'e due le porte, `shell_run` e `fs_write` —
+   e sotto quella stessa mutazione fallisce, da sola, in tutta la suite.
 5. **Una porta sola, anche per il gateway.** La prima stesura faceva nominare al
    gateway il proprio workspace — «è la superficie dove non guarda nessuno,
    quindi non dipenda dalla guardia». Era sbagliata, e l'ha detto
@@ -155,6 +183,8 @@ quindi lì quella gamba prova davvero la deny — ed è verde.
 Codice: `core/config/workspace.ts`, `core/rot/guards.ts`, `agent/runtime.ts`,
 `agent/scheduler-run.ts` (e `cli/gateway.ts`, che ora non passa una cwd di
 proposito). Prove:
-`core/sandbox/home-not-workspace.test.ts` (comando reale, cintura e bretelle
-falsificabili separatamente), `core/config/workspace.test.ts`,
-`evals/system/acceptance.test.ts` («a runtime built with the home as its cwd»).
+`core/sandbox/home-not-workspace.test.ts` (comando reale — falsifica la
+**cintura**, e non le bretelle: costruisce casa e workspace a mano e non chiama
+mai `resolveWorkspace`); `core/config/workspace.test.ts` (la decisione);
+`evals/system/acceptance.test.ts` («a turn's own writes land in
+runtime.workspace») per il **cablaggio** alla giuntura di produzione.

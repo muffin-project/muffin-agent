@@ -254,6 +254,64 @@ describe('M3 acceptance — through the production runtime', () => {
     }
   }, 30_000);
 
+  /**
+   * **The assertion that holds the wiring, and the reason it is separate.**
+   *
+   * The test above only ever asks whether the home *resists*, and the home
+   * resists for two independent reasons: because the turn works somewhere else
+   * (`resolveWorkspace` → `FsScope.root` → `makeShellTool`'s scope), and
+   * because `mandatoryGuards` denies it outright. A judge proved the
+   * consequence by measurement (2026-09-03): reverting `agent/runtime.ts` to
+   * `root: cwd` / `makeShellTool(executor, { root: cwd })` /
+   * `mandatoryGuards(home, cwd)` — leaving `resolveWorkspace` in place and
+   * computing a `workspace` nothing then used — left **239 files / 3035 tests
+   * green**. The belt was carrying the suspenders, and ADR-0059's point 3
+   * ("one door decides where a turn works") had no falsifier anywhere in the
+   * suite. That is the failure `AGENTS.md` names first: a mechanism that
+   * exists and whose wiring nothing proves.
+   *
+   * A deny cannot hold the wiring, because a deny looks the same whichever
+   * mechanism produced it. Only a **positive** claim can: a relative path
+   * written by a turn has to land in `runtime.workspace`, and under the reverted
+   * wiring it lands in the home instead — where the belt then refuses it, so
+   * the file exists nowhere and both assertions below go red.
+   *
+   * Both doors, because ADR-0059 gave both the same root and either could be
+   * reverted alone: `shell_run` gets it through `ShellScope.root`, `fs_write`
+   * through `FsScope.root`.
+   */
+  it.runIf(contained)("a turn's own writes land in runtime.workspace — the positive claim the deny cannot make", async () => {
+    const supervisionato = buildRuntime(home, home);
+    try {
+      const ws = supervisionato.workspace;
+
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+      const daShell = await shell!.handler(
+        { command: `printf 'dalla shell\\n' > nota-shell.txt` },
+        toolContext(),
+      );
+      expect(daShell.isError, `shell_run failed: ${daShell.content}`).toBeUndefined();
+      expect(
+        existsSync(join(ws, 'nota-shell.txt')),
+        `shell_run wrote a relative path somewhere other than runtime.workspace (${ws})`,
+      ).toBe(true);
+      expect(existsSync(join(home, 'nota-shell.txt'))).toBe(false);
+
+      const write = supervisionato.deps.tools.find((t) => t.spec.name === 'fs_write');
+      expect(write, 'fs_write not registered').toBeDefined();
+      const daFs = await write!.handler({ path: 'nota-fs.txt', content: 'dai tool fs\n' }, toolContext());
+      expect(daFs.isError, `fs_write failed: ${daFs.content}`).toBeUndefined();
+      expect(
+        existsSync(join(ws, 'nota-fs.txt')),
+        `fs_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
+      ).toBe(true);
+      expect(existsSync(join(home, 'nota-fs.txt'))).toBe(false);
+    } finally {
+      supervisionato.close();
+    }
+  }, 30_000);
+
   afterAll(() => {
     runtime?.close();
   });

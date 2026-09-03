@@ -36,20 +36,41 @@ import { probeSandbox } from './probe.js';
  * those is reachable from a turn whose content arrived in a forwarded message,
  * a web page or a PDF.
  *
- * ## Two claims, two blocks, two falsifications
+ * ## What this file falsifies, and what it does not
  *
- * The fix has a belt and braces, and a single block would let either half rot
- * unnoticed while the other carried the test:
+ * The fix has two halves:
  *
  * - **the braces** — `resolveWorkspace` (`core/config/workspace.ts`) never
  *   hands a turn the installation, so the write scope is a sibling directory;
  * - **the belt** — `mandatoryGuards` denies the home outright, so even a write
  *   scope that *named* the home would not reach it.
  *
- * The first block reverts red when the braces go, the second when the belt
- * does. Measured, not asserted: with `p.home` removed from `core/rot/guards.ts`
- * the second block failed on `.rot-anchor`, `muffin.db`, `voice.md` and the
- * grandchild, while the first stayed green.
+ * **Only the belt is falsifiable here, and an earlier version of this comment
+ * claimed otherwise.** It said the first block "reverts red when the braces
+ * go". It does not: that block builds a home and a workspace by hand and never
+ * calls `resolveWorkspace` at all, so removing the braces leaves all of its
+ * assertions green — measured by a judge, 2026-09-03, not reasoned about. The
+ * sentence was false, and a test file that misstates where its own guarantee
+ * lives is worse than one that says nothing, because the next reader trusts
+ * it.
+ *
+ * So, precisely:
+ *
+ * - **the belt** is falsified *here*: with `p.home` removed from
+ *   `core/rot/guards.ts`, the second block fails on `.rot-anchor`,
+ *   `muffin.db`, `voice.md`, the grandchild and the interpreter, while the
+ *   first stays green;
+ * - **the braces** are falsified *elsewhere*, and both places are needed:
+ *   `core/config/workspace.test.ts` for the decision itself, and
+ *   `evals/system/acceptance.test.ts` — *"a turn's own writes land in
+ *   runtime.workspace"* — for the wiring at the production seam. That second
+ *   one exists because reverting `FsScope.root`/`makeShellTool` to the raw
+ *   `cwd`, with `resolveWorkspace` left intact, once left the entire suite
+ *   green: a deny cannot hold the wiring, since a deny looks the same
+ *   whichever mechanism produced it. Only a positive claim can.
+ *
+ * What this file proves, then, is the belt — and it proves it against a real
+ * containment rather than a mock.
  *
  * ## The two properties a deny list gets wrong more often than the deny
  *
@@ -142,10 +163,14 @@ const ROWS: [string, string][] = [
   ['voice.md', 'voice.md'],
 ];
 
-describe.runIf(gate.run)('the braces: a turn works in a workspace, never in the installation', () => {
+/**
+ * The **shape** the braces produce, not the braces themselves: a scope built by
+ * hand the way `buildRuntime` builds it. It says what a turn in a real
+ * workspace can reach; it cannot say that production puts a turn there — see
+ * the header for where that is proven.
+ */
+describe.runIf(gate.run)('the shape the braces produce: a workspace scope reaches nothing in the installation', () => {
   const s = scaffold();
-  // Exactly what `buildRuntime` now constructs: the guards of this home, and a
-  // write scope that is the workspace.
   const exec = new SandboxExecutor(mandatoryGuards(s.home, s.workspace));
 
   for (const [label, rel] of ROWS) {
