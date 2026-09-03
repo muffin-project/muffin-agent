@@ -31,277 +31,277 @@
   },
   "agent/loop.ts:102": {
     "path": "agent/loop.ts",
-    "line": 142,
+    "line": 143,
     "testo": "* An omitted `replyChannel` has no default to be silent about — the one"
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1746,
+    "line": 1852,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1847,
+    "line": 1953,
     "testo": "// model at all."
   },
   "agent/loop.ts:1405": {
     "path": "agent/loop.ts",
-    "line": 1662,
+    "line": 1742,
     "testo": "// with it — the transcript, the taint it has climbed to, and how much of"
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 2472,
+    "line": 2578,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
     "path": "agent/loop.ts",
-    "line": 212,
+    "line": 213,
     "testo": "export type ApprovalRequest = {"
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 2836,
+    "line": 2942,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2861,
+    "line": 2967,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3187,
+    "line": 3293,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3251,
+    "line": 3357,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 2881,
+    "line": 2987,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3363,
+    "line": 3469,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3367,
+    "line": 3473,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
     "path": "agent/loop.ts",
-    "line": 351,
+    "line": 352,
     "testo": "};"
   },
   "agent/loop.ts:273": {
     "path": "agent/loop.ts",
-    "line": 417,
+    "line": 418,
     "testo": "export type LoopDeps = {"
   },
   "agent/loop.ts:289": {
     "path": "agent/loop.ts",
-    "line": 433,
+    "line": 434,
     "testo": "* seen, resumed, or told apart from one that died mid-effect. So the type"
   },
   "agent/loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 443,
+    "line": 444,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "agent/loop.ts:316": {
     "path": "agent/loop.ts",
-    "line": 460,
+    "line": 461,
     "testo": "* `stopped: 'ask'` rather than pretending the tool failed."
   },
   "agent/loop.ts:320": {
     "path": "agent/loop.ts",
-    "line": 473,
+    "line": 474,
     "testo": "* Bills a model call and returns what it cost. Absent in tests; absent in"
   },
   "agent/loop.ts:338": {
     "path": "agent/loop.ts",
-    "line": 491,
+    "line": 492,
     "testo": "memory?: { store: MemoryStore; recall: RecallDeps } | undefined;"
   },
   "agent/loop.ts:351": {
     "path": "agent/loop.ts",
-    "line": 504,
+    "line": 505,
     "testo": "capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;"
   },
   "agent/loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 386,
+    "line": 387,
     "testo": "/**"
   },
   "agent/loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 518,
+    "line": 519,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "agent/loop.ts:363": {
     "path": "agent/loop.ts",
-    "line": 526,
+    "line": 527,
     "testo": "* Deliberately **not** the closure-handed-back shape of"
   },
   "agent/loop.ts:379": {
     "path": "agent/loop.ts",
-    "line": 570,
+    "line": 571,
     "testo": "export type TurnInput = {"
   },
   "agent/loop.ts:428": {
     "path": "agent/loop.ts",
-    "line": 710,
+    "line": 711,
     "testo": "onDelta?: ((delta: TurnDelta) => void) | undefined;"
   },
   "agent/loop.ts:449": {
     "path": "agent/loop.ts",
-    "line": 829,
+    "line": 830,
     "testo": "* before it happened. `suspended` is the arm this slice adds, and adding it in"
   },
   "agent/loop.ts:453": {
     "path": "agent/loop.ts",
-    "line": 440,
+    "line": 441,
     "testo": "/**"
   },
   "agent/loop.ts:466": {
     "path": "agent/loop.ts",
-    "line": 846,
+    "line": 847,
     "testo": "* is a fact the caller needs in the same breath as `text`."
   },
   "agent/loop.ts:482": {
     "path": "agent/loop.ts",
-    "line": 862,
+    "line": 863,
     "testo": "* that can count. Three is enough to survive a laptop closing, a `systemctl"
   },
   "agent/loop.ts:488": {
     "path": "agent/loop.ts",
-    "line": 472,
+    "line": 473,
     "testo": "/**"
   },
   "agent/loop.ts:503": {
     "path": "agent/loop.ts",
-    "line": 943,
+    "line": 944,
     "testo": "* rest, and it is why nothing here calls recall — recall is an embedder plus a"
   },
   "agent/loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 961,
+    "line": 962,
     "testo": "});"
   },
   "agent/loop.ts:528": {
     "path": "agent/loop.ts",
-    "line": 968,
+    "line": 969,
     "testo": "iterations: 0,"
   },
   "agent/loop.ts:529": {
     "path": "agent/loop.ts",
-    "line": 969,
+    "line": 970,
     "testo": "recoveriesUsed: 0,"
   },
   "agent/loop.ts:538": {
     "path": "agent/loop.ts",
-    "line": 770,
+    "line": 771,
     "testo": "}"
   },
   "agent/loop.ts:540": {
     "path": "agent/loop.ts",
-    "line": 1004,
+    "line": 1016,
     "testo": "export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {"
   },
   "agent/loop.ts:543": {
     "path": "agent/loop.ts",
-    "line": 1009,
+    "line": 1021,
     "testo": "[ATTR.tenant]: input.tenant,"
   },
   "agent/loop.ts:56": {
     "path": "agent/loop.ts",
-    "line": 64,
+    "line": 65,
     "testo": "* turn that created it. A handler that wants durable state attached to the"
   },
   "agent/loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 1050,
+    "line": 1062,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "agent/loop.ts:595": {
     "path": "agent/loop.ts",
-    "line": 1084,
+    "line": 1096,
     "testo": "why: 'not_found' | 'claimed' | 'model_changed' | 'exhausted' | 'finished';"
   },
   "agent/loop.ts:62": {
     "path": "agent/loop.ts",
-    "line": 70,
+    "line": 71,
     "testo": "* a plan that died with the turn that wrote it would not be a plan."
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 1227,
+    "line": 1239,
     "testo": "const detail ="
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 1270,
+    "line": 1282,
     "testo": "options: {"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1330,
+    "line": 1342,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1354,
+    "line": 1366,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "agent/loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 856,
+    "line": 857,
     "testo": "/**"
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 1375,
+    "line": 1455,
     "testo": "let transportRetriesLeft = record.counters.transportRetriesLeft;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 1384,
+    "line": 1464,
     "testo": "iterations,"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 1396,
+    "line": 1476,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 1398,
+    "line": 1478,
     "testo": "* `null` until a handler asks. See `ToolContext.suspend` for why it is armed"
   },
   "agent/loop.ts:848": {
     "path": "agent/loop.ts",
-    "line": 1013,
+    "line": 1025,
     "testo": "// `SimpleTracer.start` takes `traceId = parent?.traceId ?? id(16)` — handing"
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1479,
+    "line": 1590,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1568,
+    "line": 1648,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1619,
+    "line": 1699,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -1784,85 +1784,85 @@
     "line": 122,
     "testo": "expect(kernel()(req(owner, 'host', 'fs.write', 0))).toMatchObject({ effect: 'draft' });"
   },
-  "core/policy/decide.ts:103": {
-    "path": "core/policy/decide.ts",
-    "line": 99,
-    "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
-  },
   "core/policy/decide.ts:111": {
     "path": "core/policy/decide.ts",
-    "line": 107,
+    "line": 129,
     "testo": "if (denyListCovers(ctx.matrix.neverAtRuntime, capability)) {"
+  },
+  "core/policy/decide.ts:113": {
+    "path": "core/policy/decide.ts",
+    "line": 113,
+    "testo": "const decl = ctx.capabilities.get(capability) ?? doors.get(capability);"
   },
   "core/policy/decide.ts:119": {
     "path": "core/policy/decide.ts",
-    "line": 115,
+    "line": 137,
     "testo": "// Guard against a caller assembling an incoherent request."
+  },
+  "core/policy/decide.ts:121": {
+    "path": "core/policy/decide.ts",
+    "line": 121,
+    "testo": "if (ctx.safeMode === true && decl.risk !== 'low') {"
   },
   "core/policy/decide.ts:127": {
     "path": "core/policy/decide.ts",
-    "line": 123,
+    "line": 145,
     "testo": "// rule below behind a wrong refusal."
   },
   "core/policy/decide.ts:128": {
     "path": "core/policy/decide.ts",
-    "line": 124,
+    "line": 146,
     "testo": "if (decl.hostOnly && principal.kind === 'member') {"
   },
   "core/policy/decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 128,
+    "line": 150,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "core/policy/decide.ts:137": {
     "path": "core/policy/decide.ts",
-    "line": 132,
+    "line": 154,
     "testo": "// The ceiling comes from the capability's **effect row** — where the bytes"
   },
   "core/policy/decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 149,
+    "line": 171,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "core/policy/decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 153,
+    "line": 175,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "core/policy/decide.ts:195": {
     "path": "core/policy/decide.ts",
-    "line": 232,
+    "line": 254,
     "testo": "// Autonomous principals never auto-approve what a human would be asked for:"
   },
   "core/policy/decide.ts:201": {
     "path": "core/policy/decide.ts",
-    "line": 239,
+    "line": 261,
     "testo": "switch (decl.risk) {"
   },
   "core/policy/decide.ts:204": {
     "path": "core/policy/decide.ts",
-    "line": 242,
+    "line": 264,
     "testo": "case 'medium':"
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 246,
+    "line": 268,
     "testo": "case 'high':"
+  },
+  "core/policy/decide.ts:88": {
+    "path": "core/policy/decide.ts",
+    "line": 88,
+    "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/decide.ts:91": {
     "path": "core/policy/decide.ts",
-    "line": 87,
-    "testo": "export function createDecide(ctx: PolicyContext): Decide {"
-  },
-  "core/policy/decide.ts:92": {
-    "path": "core/policy/decide.ts",
     "line": 88,
-    "testo": "return function decide(req: DecisionRequest): Decision {"
-  },
-  "core/policy/decide.ts:95": {
-    "path": "core/policy/decide.ts",
-    "line": 91,
-    "testo": "const decl = ctx.capabilities.get(capability);"
+    "testo": "export function createDecide(ctx: PolicyContext): Decide {"
   },
   "core/policy/matrix.ts:162": {
     "path": "core/policy/matrix.ts",
@@ -2089,80 +2089,80 @@
     "line": 95,
     "testo": "type VaultFile = {"
   },
+  "decide.ts:114": {
+    "path": "core/policy/decide.ts",
+    "line": 114,
+    "testo": "if (!decl) {"
+  },
   "decide.ts:120": {
     "path": "core/policy/decide.ts",
-    "line": 116,
+    "line": 138,
     "testo": "const expected = tenantOf(principal);"
   },
   "decide.ts:132": {
     "path": "core/policy/decide.ts",
-    "line": 128,
+    "line": 150,
     "testo": "if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {"
   },
   "decide.ts:145": {
     "path": "core/policy/decide.ts",
-    "line": 149,
+    "line": 171,
     "testo": "if (decl.risk !== 'low' && ctx.budgetExhausted(tenant)) {"
   },
   "decide.ts:149": {
     "path": "core/policy/decide.ts",
-    "line": 153,
+    "line": 175,
     "testo": "// Egress: a URL-holding capability answers to the allowlist in the root of"
   },
   "decide.ts:155": {
     "path": "core/policy/decide.ts",
-    "line": 159,
+    "line": 181,
     "testo": "if (decl.resourceKind === 'url') {"
   },
   "decide.ts:182": {
     "path": "core/policy/decide.ts",
-    "line": 186,
+    "line": 208,
     "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "decide.ts:20": {
     "path": "core/policy/decide.ts",
-    "line": 21,
+    "line": 22,
     "testo": "capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;"
   },
   "decide.ts:205": {
     "path": "core/policy/decide.ts",
-    "line": 243,
+    "line": 265,
     "testo": "return decl.reversible === 'undoable'"
   },
   "decide.ts:206": {
     "path": "core/policy/decide.ts",
-    "line": 244,
+    "line": 266,
     "testo": "? { effect: 'draft', undo: { capability, windowSeconds: 300 } }"
   },
   "decide.ts:45": {
     "path": "core/policy/decide.ts",
-    "line": 41,
+    "line": 42,
     "testo": "matrix: PolicyMatrix;"
   },
   "decide.ts:55": {
     "path": "core/policy/decide.ts",
-    "line": 51,
+    "line": 52,
     "testo": "budgetExhausted: (tenant: string) => boolean;"
   },
   "decide.ts:60": {
     "path": "core/policy/decide.ts",
-    "line": 56,
+    "line": 57,
     "testo": "hardened: boolean;"
   },
   "decide.ts:67": {
     "path": "core/policy/decide.ts",
-    "line": 63,
+    "line": 64,
     "testo": "safeMode?: boolean;"
   },
   "decide.ts:74": {
     "path": "core/policy/decide.ts",
-    "line": 70,
+    "line": 71,
     "testo": "egressAllowed?: (host: string) => boolean;"
-  },
-  "decide.ts:96": {
-    "path": "core/policy/decide.ts",
-    "line": 92,
-    "testo": "if (!decl) {"
   },
   "defaults/rot/budgets.json:4": {
     "path": "defaults/rot/budgets.json",
@@ -2381,127 +2381,127 @@
   },
   "loop.ts:112": {
     "path": "agent/loop.ts",
-    "line": 152,
+    "line": 153,
     "testo": "* the same shape — the `SurfaceRegistry` address — so a tool can ask the"
   },
   "loop.ts:1542": {
     "path": "agent/loop.ts",
-    "line": 1808,
+    "line": 1914,
     "testo": "input.onDelta({ type: 'text', text: out });"
   },
   "loop.ts:1544": {
     "path": "agent/loop.ts",
-    "line": 1810,
+    "line": 1916,
     "testo": "} catch (error) {"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2579,
+    "line": 2685,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
     "path": "agent/loop.ts",
-    "line": 443,
+    "line": 444,
     "testo": "* A todo list is only a mechanism if every turn of the session is shown it"
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3515,
+    "line": 3621,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
     "path": "agent/loop.ts",
-    "line": 453,
+    "line": 454,
     "testo": "* `() => boolean`, so the per-tenant daily cap could not be consulted through"
   },
   "loop.ts:352": {
     "path": "agent/loop.ts",
-    "line": 386,
+    "line": 387,
     "testo": "/**"
   },
   "loop.ts:355": {
     "path": "agent/loop.ts",
-    "line": 518,
+    "line": 519,
     "testo": "* The loop had no way to hand a finished turn to anything, which is why the"
   },
   "loop.ts:442": {
     "path": "agent/loop.ts",
-    "line": 822,
+    "line": 823,
     "testo": "* never the same one as `stopped`."
   },
   "loop.ts:484": {
     "path": "agent/loop.ts",
-    "line": 864,
+    "line": 865,
     "testo": "* not about the infrastructure."
   },
   "loop.ts:485": {
     "path": "agent/loop.ts",
-    "line": 490,
+    "line": 485,
     "testo": "*/"
   },
   "loop.ts:508": {
     "path": "agent/loop.ts",
-    "line": 948,
+    "line": 949,
     "testo": "export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {"
   },
   "loop.ts:521": {
     "path": "agent/loop.ts",
-    "line": 961,
+    "line": 962,
     "testo": "});"
   },
   "loop.ts:574": {
     "path": "agent/loop.ts",
-    "line": 1050,
+    "line": 1062,
     "testo": "// Pinned here and never re-derived: a resume onto a different model sends"
   },
   "loop.ts:577": {
     "path": "agent/loop.ts",
-    "line": 956,
+    "line": 957,
     "testo": "model: deps.model,"
   },
   "loop.ts:594": {
     "path": "agent/loop.ts",
-    "line": 1083,
+    "line": 1095,
     "testo": "turnId: string;"
   },
   "loop.ts:602": {
     "path": "agent/loop.ts",
-    "line": 582,
+    "line": 583,
     "testo": "*"
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 1296,
+    "line": 1308,
     "testo": "* holding whatever REPL or Telegram chat asked the *previous* attempt to"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 1299,
+    "line": 1311,
     "testo": "* to suspend."
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1330,
+    "line": 1342,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1354,
+    "line": 1366,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "loop.ts:792": {
     "path": "agent/loop.ts",
-    "line": 856,
+    "line": 857,
     "testo": "/**"
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 1385,
+    "line": 1465,
     "testo": "recoveriesUsed,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 1422,
+    "line": 1502,
     "testo": "},"
   },
   "maintenance.ts:21": {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { sendFileCapability } from '../../agent/tools/deliver.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
 import { httpCapability } from '../../agent/tools/http.js';
 import { shellCapability } from '../../agent/tools/shell.js';
+import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import { makeBaselineHarness } from './baseline.js';
 import { SECURITY_BASELINE_CAPABILITIES, SECURITY_BASELINE_SCENARIOS } from './scenarios.js';
@@ -101,15 +103,28 @@ describe('la baseline misura la produzione, non una copia', () => {
     expect(SECURITY_BASELINE_CAPABILITIES).toContain(scritta);
     expect(SECURITY_BASELINE_CAPABILITIES).toContain(shellCapability);
     expect(SECURITY_BASELINE_CAPABILITIES).toContain(httpCapability);
+    // Le tre porte di sink. Le due di ADR-0055 non sono registrate da nessun
+    // runtime: le dichiara il kernel (`core/policy/doors.ts`), ed e quello
+    // l oggetto che deve arrivare qui — una copia misurerebbe una porta che
+    // nessuna risposta attraversa.
+    expect(SECURITY_BASELINE_CAPABILITIES).toContain(sendFileCapability);
+    expect(SECURITY_BASELINE_CAPABILITIES).toContain(replyCapability);
+    expect(SECURITY_BASELINE_CAPABILITIES).toContain(memoryWriteCapability);
   });
 
   it('l unica capability inventata e dichiaratamente da eval', () => {
     // La produzione non spedisce niente verso l esterno, e la distinzione di
     // policy si prova lo stesso. L id lo dice, cosi nessuno la scambia per una
     // capability che Muffin ha davvero.
-    const inventate = SECURITY_BASELINE_CAPABILITIES.filter(
-      (c) => c !== shellCapability && c !== httpCapability && !fsCapabilities.includes(c),
-    );
+    const diProduzione = [
+      shellCapability,
+      httpCapability,
+      sendFileCapability,
+      replyCapability,
+      memoryWriteCapability,
+      ...fsCapabilities,
+    ];
+    const inventate = SECURITY_BASELINE_CAPABILITIES.filter((c) => !diProduzione.includes(c));
     expect(inventate.map((c) => c.id)).toEqual(['outward.send.eval']);
   });
 
@@ -126,5 +141,23 @@ describe('la baseline misura la produzione, non una copia', () => {
     expect(shellCapability.maxTaint).toBeUndefined();
     expect(POLICY_FLOOR.rows.host.denyAbove).toBe(2);
     expect(shellCapability.risk).toBe('high');
+  });
+
+  /**
+   * L asimmetria che il memo del 02/09 §1.3 ha misurato, tenuta aperta come
+   * asserzione invece che come tabella in un documento.
+   *
+   * Le tre porte che finiscono nella stessa chat dell owner — allegare il file,
+   * rispondere col suo testo, ricordarsene — stanno sulla stessa riga della
+   * matrice normativa e devono rispondere lo stesso numero. Fino ad ADR-0053
+   * la prima diceva `deny` a taint 2 e la seconda non passava dal kernel
+   * affatto; se tornano a divergere, questa riga cade prima degli scenari.
+   */
+  it('le porte di sink stanno sulle righe che il threat model gli assegna', () => {
+    expect(sendFileCapability.effect).toBe('reply');
+    expect(replyCapability.effect).toBe('reply');
+    expect(memoryWriteCapability.effect).toBe('memory');
+    expect(POLICY_FLOOR.rows.reply.denyAbove).toBe(3);
+    expect(POLICY_FLOOR.rows.memory.denyAbove).toBe(3);
   });
 });

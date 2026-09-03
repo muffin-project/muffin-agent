@@ -30,7 +30,9 @@ in cima (costa lo scrollback). **ADR-0054**: messaggio a turno vivo → coda con
 conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
 riceve sempre. **Test end-to-end veri**: corsia reale in locale con modello e
 Bot API veri (chiave mai stampata), accanto al finto. Ordine:
-critical-path.md#ordine-corrente punto 2 (a→d).
+critical-path.md#ordine-corrente punto 2 (a→d). **Punto 3 (ADR-0055, PR #303)**:
+risposta ed episodio sono `surface.reply`/`memory.write` dichiarate dal kernel —
+permessi invariati, ora osservabili e stringibili.
 
 **Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c+2d in
 PR #300 (CRITICAL: **serve il giudice** prima del merge). **Il prossimo passo
