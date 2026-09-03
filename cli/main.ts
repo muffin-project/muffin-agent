@@ -320,7 +320,12 @@ async function main(rawArgv: string[]): Promise<number> {
         // sono di `cmdSearch`, che sa cosa sta chiedendo; qui c'e' solo il
         // terminale a cui chiederla.
         ...(isatty(0)
-          ? { chiediChiave: (domanda: string) => promptSecret(domanda) }
+          ? {
+              chiediChiave: (domanda: string) => promptSecret(domanda),
+              // Stessa guardia, per l'unica domanda che allarga
+              // `rot/egress.json`: solo un terminale vero la vede.
+              chiediConferma: (domanda: string) => promptLine(domanda),
+            }
           : {}),
       });
     case 'doctor':
@@ -1128,7 +1133,13 @@ async function cmdMcp(argv: string[]): Promise<number> {
     const flags = sep === -1 ? rest.slice(1) : rest.slice(1, sep);
     const commandLine = sep === -1 ? [] : rest.slice(sep + 1);
     const env: Record<string, string> = {};
+    const hosts: string[] = [];
     for (let i = 0; i < flags.length; i++) {
+      if (flags[i] === '--host' && flags[i + 1] !== undefined) {
+        hosts.push(flags[i + 1]!);
+        i++;
+        continue;
+      }
       if (flags[i] !== '--env' || !flags[i + 1]?.includes('=')) {
         process.stderr.write(MCP_USAGE);
         return 78;
@@ -1154,7 +1165,12 @@ async function cmdMcp(argv: string[]): Promise<number> {
       env[key] = value;
       i++;
     }
-    return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env);
+    return cmdMcpAdd(home, name, commandLine[0], commandLine.slice(1), env, hosts, {
+      out: (l) => process.stdout.write(`${l}\n`),
+      // Stessa guardia di `muffin search`: solo su un terminale vero si chiede
+      // conferma, mai su una pipe/script/il figlio non-TTY di `sys.shell`.
+      ...(isatty(0) ? { chiediConferma: (domanda: string) => promptLine(domanda) } : {}),
+    });
   }
   process.stderr.write(MCP_USAGE);
   return 78;
