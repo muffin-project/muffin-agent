@@ -22,7 +22,8 @@
     "acceptance:report": "tsx evals/acceptance/report.ts",
     "prepare": "npm run compile",
     "test:acceptance:linux": "evals/acceptance/gate-linux.sh . .gate-linux",
-    "gate:local": "bash scripts/local-gate.sh"
+    "gate:local": "bash scripts/local-gate.sh",
+    "e2e:telegram": "tsx evals/e2e/telegram.ts"
   },
   "devDependencies": {
     "@grammyjs/types": "^4.0.0",
