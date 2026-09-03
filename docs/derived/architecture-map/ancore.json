@@ -51,7 +51,7 @@
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 2578,
+    "line": 2651,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
@@ -61,37 +61,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 2942,
+    "line": 2998,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2967,
+    "line": 3023,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3293,
+    "line": 3349,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3357,
+    "line": 3413,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 2987,
+    "line": 3043,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3469,
+    "line": 3525,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3473,
+    "line": 3529,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -2396,7 +2396,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2685,
+    "line": 2741,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2406,7 +2406,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3621,
+    "line": 3677,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
