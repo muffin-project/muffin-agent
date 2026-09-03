@@ -66,6 +66,12 @@ const shellSpec: ToolSpec = {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The command line to execute' },
+      description: {
+        type: 'string',
+        description:
+          'One plain sentence for the owner, in their language: what this command does and why you are running it. ' +
+          'It is shown above the command when the owner is asked to approve it.',
+      },
       cwd: {
         type: 'string',
         description: 'Working directory, relative to the project root. Default: the root.',
@@ -75,13 +81,18 @@ const shellSpec: ToolSpec = {
         description: `Kill timeout in ms. Default ${EXEC_DEFAULT_TIMEOUT_MS}, max ${EXEC_MAX_TIMEOUT_MS}.`,
       },
     },
-    required: ['command'],
+    // `description` is required of the model — the schema is what it reads —
+    // and tolerated missing at parse time below: a scripted call in a test,
+    // or a provider that drops a field, must not turn into a failed command.
+    // The ASK simply has no summary line then (`ApprovalRequest.description`).
+    required: ['command', 'description'],
   },
 };
 
 /** Parse at the boundary: the model's JSON is external data (practice §4). */
 const shellArgs = z.object({
   command: z.string().min(1, 'command must not be empty'),
+  description: z.string().optional(),
   cwd: z.string().optional(),
   timeout_ms: z.number().int().min(1_000).max(EXEC_MAX_TIMEOUT_MS).optional(),
 });
