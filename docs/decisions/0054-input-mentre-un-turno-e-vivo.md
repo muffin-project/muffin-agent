@@ -22,32 +22,69 @@ ha finito da solo. Il loop accetta già un `AbortSignal`
 
 ## Decisione
 
-1. **Coda per default.** Un messaggio che arriva mentre un turno della stessa
-   sessione è vivo diventa il turno successivo, nell'ordine di arrivo. La
-   superficie lo **conferma** subito (una riga, «in coda, rispondo dopo»),
-   così l'owner sa che è arrivato. Non si fonde con il turno in corso e non lo
-   interrompe.
-2. **`/steer <testo>`** è l'unico modo di entrare nel turno vivo. Il testo
-   viene consegnato al loop al **prossimo confine di giro** — dopo che i tool
-   del giro corrente hanno finito e prima della chiamata al modello
-   successiva — come messaggio dell'owner nel contesto. Mai a metà di una tool
-   call: un effect avviato non si finge non avvenuto (ADR-0052 §Conseguenze).
-   Se nessun turno è vivo, `/steer` dice che non c'è niente da correggere.
-3. **`/stop`** aborta il turno vivo della sessione (`AbortSignal` → esito
-   `aborted`). I tool in corso ricevono lo stesso segnale; ciò che è già
-   avvenuto resta avvenuto e il turno lo dice. La coda **non** si svuota:
-   `/stop` ferma *questo* turno, non il lavoro futuro.
-4. **`/pause`** ferma il runtime: nessun job parte, nessun turno in coda
-   inizia, il turno vivo finisce il giro corrente e si sospende. Persistito,
-   così un riavvio non lo dimentica. **`/resume`** riparte da dove era.
-   Entrambi rispondono con lo stato risultante.
-5. **Il poller riceve sempre.** `getUpdates` continua durante un turno; gli
-   update finiscono nell'inbox durevole come oggi, e i comandi vengono
-   riconosciuti e serviti **prima** di entrare nella coda dei turni. È la
-   metà di B2 che mancava.
-6. **Un meccanismo, tutte le porte.** I quattro comandi stanno in
-   `agent/comandi.ts`; REPL e Telegram li elencano e li servono allo stesso
-   modo (Ctrl+C nel terminale resta l'equivalente di `/stop`).
+### 1. Coda per default
+
+Un messaggio che arriva mentre un turno della stessa sessione è vivo diventa
+il turno successivo, nell'ordine di arrivo. La superficie lo **conferma**
+subito (una riga, «in coda, rispondo dopo»), così l'owner sa che è arrivato.
+Non si fonde con il turno in corso e non lo interrompe.
+
+### 2. `/steer <testo>`
+
+L'unico modo di entrare nel turno vivo. Il testo viene consegnato al loop al
+**prossimo confine di giro** — dopo che i tool del giro corrente hanno finito
+e prima della chiamata al modello successiva — come messaggio dell'owner nel
+contesto. Mai a metà di una tool call: un effect avviato non si finge non
+avvenuto (ADR-0052 §Conseguenze). Se nessun turno è vivo, `/steer` dice che
+non c'è niente da correggere.
+
+### 3. `/stop`
+
+Aborta il turno vivo della sessione (`AbortSignal` → esito `aborted`). I tool
+in corso ricevono lo stesso segnale; ciò che è già avvenuto resta avvenuto e
+il turno lo dice. La coda **non** si svuota: `/stop` ferma *questo* turno, non
+il lavoro futuro.
+
+### 4. `/pause` e `/resume`
+
+`/pause` ferma il runtime: nessun job parte, nessun turno in coda inizia, il
+turno vivo finisce il giro corrente e si sospende. Persistito, così un riavvio
+non lo dimentica. `/resume` riparte da dove era. Entrambi rispondono con lo
+stato risultante.
+
+### 5. Il poller riceve sempre
+
+`getUpdates` continua durante un turno; gli update finiscono nell'inbox
+durevole come oggi, e i comandi vengono riconosciuti e serviti **prima** di
+entrare nella coda dei turni. È la metà di B2 che mancava.
+
+### 6. Un meccanismo, tutte le porte
+
+I quattro comandi stanno in `agent/comandi.ts`; REPL e Telegram li elencano e
+li servono allo stesso modo (Ctrl+C nel terminale resta l'equivalente di
+`/stop`).
+
+## Emendamento, stesso giorno, all'implementazione
+
+Due precisazioni trovate costruendo (`slice/busy-input`), registrate qui e non
+riscritte sopra:
+
+- **§4, il turno vivo sotto `/pause`.** «Finisce il giro corrente e si
+  sospende» avrebbe richiesto una nuova barriera di attesa (`WaitKind`) che
+  nessun evento oggi soddisfa. Il turno vivo **finisce da solo** (è comunque
+  limitato a 15 giri) e la risposta del comando lo dice, con `/stop` come
+  leva per fermarlo davvero. Sospenderlo al giro resta possibile il giorno
+  in cui serve; oggi sarebbe una barriera senza chi la valuta.
+- **§6, il terminale.** Il REPL non legge mentre il modello risponde, quindi
+  `/stop` e `/steer` dal terminale trovano sempre «nessun turno in corso» e
+  lo dicono; il `/stop` del terminale a turno vivo è Ctrl+C. Leggere anche
+  durante un turno — la coda del terminale — è il passo dopo, ora che la
+  casella sta fissa in fondo (`cli/fondo.ts`). `/pause` e `/resume` dal
+  terminale valgono per tutti i processi, come da §4.
+- **Un abort a metà chiamata al modello** finiva `error`, non `aborted`: l'SDK
+  rigetta con `AbortError` e `agent/loop.ts` lo rilanciava. Ora il segnale è
+  il fatto e il turno chiude «Interrotto.» — vale anche per il Ctrl+C del
+  REPL, che aveva lo stesso difetto.
 
 ## Alternative scartate
 

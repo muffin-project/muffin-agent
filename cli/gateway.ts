@@ -32,6 +32,7 @@ import { Scheduler, type Deliver } from '../core/scheduler/scheduler.js';
 import type { SurfaceRegistry } from '../core/surface/registry.js';
 import { notDelivered } from '../core/surface/types.js';
 import { attachSendFile, connectSurfaces } from './surface.js';
+import { Pausa } from '../core/runtime/pausa.js';
 import type { SaluteSuperfici } from '../core/surface/salute.js';
 
 /**
@@ -646,6 +647,7 @@ export async function cmdGatewayRun(
   const deliver: Deliver = async (channel, text) =>
     registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
 
+  const pausa = new Pausa(runtime.db);
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
@@ -687,6 +689,9 @@ export async function cmdGatewayRun(
     // run — never a required rewire, just the one thing this store still
     // needed to know before advancing a schedule it also gates.
     (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // ADR-0054 §4: `/pause` da qualunque superficie, letta dal database che
+    // tutti i processi condividono.
+    () => pausa.attiva(),
   );
 
   /**
@@ -731,6 +736,7 @@ export async function cmdGatewayRun(
     // takeover mid-resume would go uncaught until the next tick's `due()`
     // simply found nothing left to claim.
     stillOwner: () => lock.isCurrentClaim(),
+    paused: () => pausa.attiva(),
   });
   onAssembled?.({ turnLane, lock });
 

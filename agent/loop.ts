@@ -1828,6 +1828,12 @@ async function drive(
         // surface is not the answer, and saying so is cheaper than a surface
         // guessing from the silence that follows.
         closeLive('superseded');
+        // `/stop` (ADR-0054 §3) or Ctrl+C **during** the model call: the SDK
+        // rejects the request with an `AbortError`, and until 03/09/2026 that
+        // rejection fell through to `throw error` — the turn ended `error`
+        // and the owner read «esito error» for a stop they had asked for.
+        // The signal is the fact; the exception is only how it arrived.
+        if (input.signal?.aborted) return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
         // Two failures wearing one type, and they take different doors.
         //
         // `output` is the model's own doing — arguments the adapter could not

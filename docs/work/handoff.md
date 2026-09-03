@@ -28,9 +28,14 @@ passi appesi e mai cancellati; mai testo tagliato; ASK intero; `description`
 su `shell_run`). **CLI** scroll region DECSTBM, casella e stato in fondo, mai
 in cima (costa lo scrollback). **ADR-0054**: messaggio a turno vivo → coda con
 conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
-riceve sempre (oggi `drain()` attende il turno). **Test end-to-end veri**:
-corsia reale in locale con modello e Bot API veri (chiave mai stampata),
-accanto al finto. Ordine: critical-path.md#ordine-corrente punto 2 (a→d).
+riceve sempre. **Test end-to-end veri**: corsia reale in locale con modello e
+Bot API veri (chiave mai stampata), accanto al finto. Ordine:
+critical-path.md#ordine-corrente punto 2 (a→d).
+
+**Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c
+busy-input in PR (`slice/busy-input`: `controlla`+`scheduleDrain`,
+`core/runtime/pausa.ts`, `steer` nel loop, abort → `aborted`); **2d la corsia
+reale è la prossima** — B11/B13/B2 restano BLOCKER finché non è provata lì.
 
 **Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
 `@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
