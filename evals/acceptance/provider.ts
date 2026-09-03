@@ -32,14 +32,14 @@ export type ScriptedReply = {
   text?: string;
   tool?: { name: string; args: Record<string, unknown> };
   /**
-   * Test seam for B13 (`connectors/telegram/progress.ts`'s throttle):
-   * `progress.ts` never sends a second status message inside `MIN_EDIT_MS`
+   * Test seam for B13 (`connectors/telegram/transcript.ts`'s throttle):
+   * `transcript.ts` never sends a second status message inside `MIN_EDIT_MS`
    * (3s) of the last one, so a turn whose round trips are all sub-millisecond
    * — every provider call here answers over loopback — can finish before that
    * window ever reopens, and the *edit* half of "one message, throttled, and
    * edited" would never be exercised. This holds the response before writing
    * it, so a scripted round can be made to take real wall-clock time without
-   * reaching for a fake clock inside `progress.ts` itself (which would be the
+   * reaching for a fake clock inside `transcript.ts` itself (which would be the
    * production file, not the test double). Not used by any other scenario.
    */
   delayMs?: number;
@@ -336,7 +336,7 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
         res.end(JSON.stringify(payload));
       };
       // See `ScriptedReply.delayMs`'s own comment: held here, on the wire,
-      // rather than faked inside `progress.ts` — the file under test never
+      // rather than faked inside `transcript.ts` — the file under test never
       // learns this scenario exists.
       if (reply.delayMs !== undefined && reply.delayMs > 0) setTimeout(respond, reply.delayMs);
       else respond();

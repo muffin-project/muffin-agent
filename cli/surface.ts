@@ -31,7 +31,7 @@ import { makeSendFileTool, sendFileCapability } from '../agent/tools/deliver.js'
 import type { FsScope } from '../agent/tools/fs.js';
 import { cmdModel } from './model.js';
 import type { Approver } from '../agent/loop.js';
-import { escapeHtml } from '../connectors/telegram/render.js';
+import { escapeHtml, splitHtml } from '../connectors/telegram/render.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
 
 /**
@@ -355,7 +355,14 @@ function voceFor(runtime: Runtime, home: string): (percorso: string) => Promise<
  * DAY-1 requirement D12 chiede per non fare teatro: «approvi sys.shell?» non è una
  * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
  * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
- * quello che è.
+ * quello che è. Dal 03/09 anche la frase del modello su *cosa fa* il comando
+ * (`ApprovalRequest.description`), **sopra** il comando e mai al suo posto.
+ *
+ * **Intera, sempre.** L'owner ha ricevuto un comando lungo tagliato nel
+ * messaggio stesso che gli chiedeva se eseguirlo (`summarizeCallArgs` tagliava
+ * a 220; non più). Qui il testo si spezza con `splitHtml` come una risposta
+ * qualunque: se non entra in un messaggio ne prende due, e i pulsanti stanno
+ * sull'ultimo — la domanda è sempre l'ultima cosa che si legge.
  */
 function approvatoreTelegram(api: TelegramApi): Approver {
   const ETICHETTA_TAINT = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'];
@@ -367,6 +374,9 @@ function approvatoreTelegram(api: TelegramApi): Approver {
     if (typeof chatId !== 'number' || where.approvalId === undefined) return 'unavailable';
 
     const righe = [`⚠ <b>${escapeHtml(request.prompt)}</b>`];
+    if (request.description !== undefined && request.description !== '') {
+      righe.push(`<i>${escapeHtml(request.description)}</i>`);
+    }
     if (request.resource !== undefined && request.resource !== '') {
       righe.push(`<pre><code>${escapeHtml(request.resource)}</code></pre>`);
     }
@@ -378,7 +388,9 @@ function approvatoreTelegram(api: TelegramApi): Approver {
       );
     }
 
-    await api.sendMessage(chatId, righe.join('\n\n'), {
+    const parti = splitHtml(righe.join('\n\n'));
+    for (let i = 0; i < parti.length - 1; i++) await api.sendMessage(chatId, parti[i]!);
+    await api.sendMessage(chatId, parti[parti.length - 1] ?? '', {
       keyboard: [
         [
           { text: `Consenti "${request.capability}"`, callback_data: `ok:${where.approvalId}`, style: 'success' },
