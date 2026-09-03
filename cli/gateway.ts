@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
-import { makeLaneRunner, NO_SURFACE, type LaneDeliver } from '../agent/turn-lane.js';
+import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
 import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
@@ -709,6 +709,14 @@ export async function cmdGatewayRun(
    * indirection is the seam B2's two-phase delivery attaches to.
    */
   let deliverFromLane: LaneDeliver = NO_SURFACE;
+  /**
+   * Late-bound for the same reason `deliverFromLane` is, immediately above:
+   * the surfaces this call attaches to do not exist until `connectSurfaces`
+   * runs, further down. Absent (`undefined`) until then means the same thing
+   * `NO_SURFACE` means for delivery — a resumed turn in that window runs
+   * silent, never throws.
+   */
+  let attachStreamFromLane: AttachStream | undefined;
   const laneLog = (e: LaneEvent): void => {
     if (e.kind === 'refused') {
       process.stderr.write(`turno ${e.turnId.slice(0, 8)}: ripresa rifiutata — ${e.why}\n`);
@@ -726,7 +734,12 @@ export async function cmdGatewayRun(
   };
   const turnLane = new TurnLane({
     turns: runtime.deps.turns,
-    run: makeLaneRunner(runtime.deps, (turn, text) => deliverFromLane(turn, text), laneLog),
+    run: makeLaneRunner(
+      runtime.deps,
+      (turn, text) => deliverFromLane(turn, text),
+      laneLog,
+      (record) => attachStreamFromLane?.(record),
+    ),
     onEvent: laneLog,
     // The same token the scheduler got, which is the whole point of building it
     // above rather than letting each lane default to its own.
@@ -833,6 +846,7 @@ export async function cmdGatewayRun(
   // recorded `failed:` rather than sent nowhere quietly — the window is the boot
   // sequence, and the honest direction inside it is "undelivered", not "sent".
   deliverFromLane = surfaces.deliver;
+  attachStreamFromLane = surfaces.attachStream;
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
   registry = surfaces.registry;
