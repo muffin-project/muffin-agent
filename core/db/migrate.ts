@@ -141,6 +141,71 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    description: 'todos.due_at — un passo può avere un momento',
+    up: (db) => {
+      // Same guard as migrations 2 and 3, same reason: `todos` is created by
+      // `TodoStore`, which runs after this runner. A fresh install never
+      // reaches the ALTER — `TODO_SCHEMA` already carries the column — and an
+      // existing one has the table without it.
+      const esiste = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'`)
+        .get() as unknown;
+      if (esiste === undefined) return;
+
+      const colonne = db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>;
+      if (!colonne.some((c) => c.name === 'due_at')) {
+        // Nullable, no default, no backfill, and the direction is the point —
+        // exactly as migration 2 argued for `jobs.kind`. Every row written
+        // before today was written when "a step with a moment" was not a
+        // concept; giving any of them a date would turn text the owner never
+        // dated into something that can make Muffin speak first.
+        db.exec(`ALTER TABLE todos ADD COLUMN due_at TEXT`);
+      }
+      // The index the scheduler's session-blind scan uses. Created here as well
+      // as in `TODO_SCHEMA` because a pre-existing install reaches the store's
+      // `CREATE INDEX IF NOT EXISTS` only after this runner has already handed
+      // it the column — belt and braces for the boot order, not a second source
+      // of truth.
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(tenant, due_at) WHERE due_at IS NOT NULL`);
+    },
+  },
+  {
+    version: 5,
+    description: "todos.due_tier — il momento porta il soffitto che l'ha armato",
+    /**
+     * A separate version from `due_at`, and the reason is a measured one rather
+     * than tidiness. The two columns shipped together as a single migration 4
+     * on this branch for one commit (`44dbcdf`). A database stamped by *that*
+     * build has `due_at` and not `due_tier`, and the runner skips a version it
+     * has already recorded — so the second column would never arrive, and the
+     * first statement `TodoStore` prepares would throw `no such column:
+     * due_tier` before the runtime finished booting. No released home is at
+     * that stamp (the owner's is at 3, and `dev` never carried a 4), but a
+     * version number is not a thing to reuse once it has run anywhere.
+     */
+    up: (db) => {
+      const esiste = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'`)
+        .get() as unknown;
+      if (esiste === undefined) return;
+
+      const colonne = db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>;
+      if (!colonne.some((c) => c.name === 'due_tier')) {
+        // The ceiling that armed the date, separate from `tier` on purpose
+        // (`core/turns/todo.ts`). NULL means "never dated", and `dueCommitments`
+        // reads `max(tier, coalesce(due_tier, 0))` — so a NULL here can only
+        // ever make the promise *less* trusted than the row already was, never
+        // more. No CHECK on the ALTER path: SQLite cannot add a constrained
+        // column to an existing table without a rebuild, and the writer
+        // (`setDue`) is the only one there is. Fresh installs get the CHECK
+        // from `TODO_SCHEMA`; this is the one asymmetry, and it is stated
+        // rather than discovered.
+        db.exec(`ALTER TABLE todos ADD COLUMN due_tier INTEGER`);
+      }
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;
