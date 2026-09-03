@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
 import { connectServer } from '../../core/mcp/connect.js';
 import { probeSandbox } from '../../core/sandbox/probe.js';
+import { isSameOrNestedPath } from '../../core/config/workspace.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
@@ -219,6 +220,97 @@ describe('M3 acceptance — through the production runtime', () => {
     expect(out.isError).toBe(true);
     expect(existsSync(escape)).toBe(false);
   }, 20_000);
+
+  /**
+   * The gateway's own shape, through the production assembly.
+   *
+   * Every other test in this file passes an explicit `workspace`, so none of
+   * them could ever have caught the defect this asserts: under launchd/systemd
+   * the unit pins `WorkingDirectory` to the home (ADR-0035, deliberately) and
+   * `cli/gateway.ts` built the runtime with no cwd, so `process.cwd()` — the
+   * home — became `FsScope.root` and the sandbox write scope. Measured on the
+   * owner's live gateway, 2026-09-03; `muffin.db`, `.rot-anchor`, `voice.md`
+   * and `sessions/` were all writable from a turn.
+   *
+   * `buildRuntime(home, home)` is that shape exactly. Nothing here mocks the
+   * decision: the assertion is on the tool the runtime actually registered.
+   */
+  it.runIf(contained)('a runtime built with the home as its cwd works somewhere else, and says so', async () => {
+    const supervisionato = buildRuntime(home, home);
+    try {
+      expect(supervisionato.workspace).not.toBe(home);
+      expect(isSameOrNestedPath(supervisionato.workspace, home)).toBe(false);
+      expect(supervisionato.bootLines.join('\n')).toContain('cartella di lavoro');
+
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+      const db = join(home, 'muffin.db');
+      const prima = readFileSync(db);
+      const out = await shell!.handler({ command: `printf 'pwned\\n' > '${db}'` }, toolContext());
+      expect(out.isError).toBe(true);
+      expect(readFileSync(db), 'the agent overwrote its own database').toEqual(prima);
+    } finally {
+      supervisionato.close();
+    }
+  }, 30_000);
+
+  /**
+   * **The assertion that holds the wiring, and the reason it is separate.**
+   *
+   * The test above only ever asks whether the home *resists*, and the home
+   * resists for two independent reasons: because the turn works somewhere else
+   * (`resolveWorkspace` → `FsScope.root` → `makeShellTool`'s scope), and
+   * because `mandatoryGuards` denies it outright. A judge proved the
+   * consequence by measurement (2026-09-03): reverting `agent/runtime.ts` to
+   * `root: cwd` / `makeShellTool(executor, { root: cwd })` /
+   * `mandatoryGuards(home, cwd)` — leaving `resolveWorkspace` in place and
+   * computing a `workspace` nothing then used — left **239 files / 3035 tests
+   * green**. The belt was carrying the suspenders, and ADR-0059's point 3
+   * ("one door decides where a turn works") had no falsifier anywhere in the
+   * suite. That is the failure `AGENTS.md` names first: a mechanism that
+   * exists and whose wiring nothing proves.
+   *
+   * A deny cannot hold the wiring, because a deny looks the same whichever
+   * mechanism produced it. Only a **positive** claim can: a relative path
+   * written by a turn has to land in `runtime.workspace`, and under the reverted
+   * wiring it lands in the home instead — where the belt then refuses it, so
+   * the file exists nowhere and both assertions below go red.
+   *
+   * Both doors, because ADR-0059 gave both the same root and either could be
+   * reverted alone: `shell_run` gets it through `ShellScope.root`, `fs_write`
+   * through `FsScope.root`.
+   */
+  it.runIf(contained)("a turn's own writes land in runtime.workspace — the positive claim the deny cannot make", async () => {
+    const supervisionato = buildRuntime(home, home);
+    try {
+      const ws = supervisionato.workspace;
+
+      const shell = supervisionato.deps.tools.find((t) => t.spec.name === 'shell_run');
+      expect(shell, 'shell tool not registered — sandbox unavailable?').toBeDefined();
+      const daShell = await shell!.handler(
+        { command: `printf 'dalla shell\\n' > nota-shell.txt` },
+        toolContext(),
+      );
+      expect(daShell.isError, `shell_run failed: ${daShell.content}`).toBeUndefined();
+      expect(
+        existsSync(join(ws, 'nota-shell.txt')),
+        `shell_run wrote a relative path somewhere other than runtime.workspace (${ws})`,
+      ).toBe(true);
+      expect(existsSync(join(home, 'nota-shell.txt'))).toBe(false);
+
+      const write = supervisionato.deps.tools.find((t) => t.spec.name === 'fs_write');
+      expect(write, 'fs_write not registered').toBeDefined();
+      const daFs = await write!.handler({ path: 'nota-fs.txt', content: 'dai tool fs\n' }, toolContext());
+      expect(daFs.isError, `fs_write failed: ${daFs.content}`).toBeUndefined();
+      expect(
+        existsSync(join(ws, 'nota-fs.txt')),
+        `fs_write wrote a relative path somewhere other than runtime.workspace (${ws})`,
+      ).toBe(true);
+      expect(existsSync(join(home, 'nota-fs.txt'))).toBe(false);
+    } finally {
+      supervisionato.close();
+    }
+  }, 30_000);
 
   afterAll(() => {
     runtime?.close();
