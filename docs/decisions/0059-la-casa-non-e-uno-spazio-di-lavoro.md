@@ -145,6 +145,13 @@ scrivere nella casa *attraverso* i tool o la sandbox, il punto 4 lo romperebbe:
 la risposta non è un'eccezione annidata (misurata morta, sopra) ma una porta
 in-process come quelle che tutti gli altri produttori già usano.
 
+**Una differenza fra i due meccanismi, misurata e non dedotta.** Con la deny
+list svuotata, per far parlare il pty e non il deny: su **seatbelt** un pty non
+si alloca affatto dentro la sandbox (`script: openpty: Operation not
+permitted`), quindi lì una via d'uscita via pty non esiste; su **bubblewrap**
+(Linux, la piattaforma di produzione) il pty si alloca e la scrittura passa,
+quindi lì quella gamba prova davvero la deny — ed è verde.
+
 Codice: `core/config/workspace.ts`, `core/rot/guards.ts`, `agent/runtime.ts`,
 `agent/scheduler-run.ts` (e `cli/gateway.ts`, che ora non passa una cwd di
 proposito). Prove:
