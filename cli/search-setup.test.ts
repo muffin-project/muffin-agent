@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -66,10 +66,15 @@ describe('muffin search', () => {
   it('su un terminale la chiede, e la scrive senza che sia mai passata da argv', async () => {
     const h = home();
     const { out, sink } = raccogli();
+    // Il fuoco di questo test è la chiave (chiediChiave), non l'egress:
+    // `chiediConferma` risponde "sì" solo perché senza di essa il widen
+    // fallirebbe per mancanza di terminale e porterebbe il code a 1 per una
+    // ragione estranea a quello che questo test vuole provare.
     const code = await cmdSearch(h, ['tavily'], {
       out: sink,
       readKey: () => '',
       chiediChiave: () => Promise.resolve('tvly-dal-terminale'),
+      chiediConferma: () => Promise.resolve('s'),
     });
     expect(code).toBe(0);
     expect(loadConfig(h).search?.apiKeyRef).toBe('secret://tavily_api_key');
@@ -81,6 +86,8 @@ describe('muffin search', () => {
   it('la pipe vince sul terminale: uno script non si trova una domanda', async () => {
     const h = home();
     let chiesto = 0;
+    // Stessa ragione del test sopra: `chiediConferma` qui è solo per tenere
+    // il code a 0, il fuoco è `chiediChiave` che non deve mai essere chiamato.
     const code = await cmdSearch(h, ['tavily'], {
       out: () => {},
       readKey: () => 'tvly-dalla-pipe',
@@ -88,6 +95,7 @@ describe('muffin search', () => {
         chiesto += 1;
         return Promise.resolve('tvly-dal-terminale');
       },
+      chiediConferma: () => Promise.resolve('s'),
     });
     expect(code).toBe(0);
     expect(chiesto).toBe(0);
@@ -97,7 +105,10 @@ describe('muffin search', () => {
     const h = home();
     const { out, sink } = raccogli();
     const code = await cmdSearch(h, ['tavily'], { out: sink, readKey: () => 'tvly-segretissima\n' });
-    expect(code).toBe(0);
+    // Nessun `chiediConferma`: la chiave e la config si scrivono comunque, ma
+    // senza un terminale l'egress non si allarga — e da qui in poi l'exit
+    // code lo dice (1), non più 0 sempre: la stessa convenzione di `mcp add`.
+    expect(code).toBe(1);
     const c = loadConfig(h);
     expect(c.search?.provider).toBe('tavily');
     // In config va il riferimento, mai il valore.
@@ -184,11 +195,15 @@ describe('muffin search', () => {
     expect(stato.ok).toBe(true);
   });
 
-  it('senza terminale (nessun chiediConferma): la config resta scritta, l egress no, e dice come rimediare a mano', async () => {
+  it('senza terminale (nessun chiediConferma): la config resta scritta, l egress no, e l exit code non è 0', async () => {
     const h = home();
     const { out, sink } = raccogli();
     const code = await cmdSearch(h, ['tavily'], { out: sink, readKey: () => 'tvly-x' });
-    expect(code).toBe(0);
+    // La config resta scritta (verificato sotto) — ma l'host non è entrato
+    // nell'allowlist, e uno script che guarda solo l'exit code deve potersene
+    // accorgere: stessa convenzione di `mcp add --host` (ADR-0058, revisione
+    // 03/09/2026, "un meccanismo, due porte" vale anche qui).
+    expect(code).toBe(1);
     expect(loadConfig(h).search?.provider).toBe('tavily');
     const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
     expect(egress.allow).toEqual([]);
@@ -196,16 +211,42 @@ describe('muffin search', () => {
     expect(out.join('\n')).toContain('muffin rot reseal');
   });
 
-  it('l owner dice no alla domanda: niente allargato, la config resta', async () => {
+  it('l owner dice no alla domanda: niente allargato, la config resta, e l exit code non è 0', async () => {
     const h = home();
     const code = await cmdSearch(h, ['tavily'], {
       out: () => {},
       readKey: () => 'tvly-x',
       chiediConferma: () => Promise.resolve('no'),
     });
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(loadConfig(h).search?.provider).toBe('tavily');
     const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
     expect(egress.allow).toEqual([]);
+  });
+
+  /**
+   * `EgressFileSchema` in modalità `.loose()` (`core/net/egress.ts`): una
+   * chiave che l'owner ha scritto a mano in `rot/egress.json` sopravvive a
+   * una riscrittura fatta da `widenEgressForCapability` — provato qui
+   * passando dalla porta `muffin search`, non solo a livello di unità
+   * (`core/rot/egress-writer.test.ts` prova la funzione condivisa
+   * direttamente; `cli/mcp.test.ts` prova la stessa cosa dall'altra porta).
+   */
+  it('una nota owner in rot/egress.json sopravvive ad un accensione di search', async () => {
+    const h = home();
+    const egressPath = join(paths(h).rot, 'egress.json');
+    writeFileSync(
+      egressPath,
+      JSON.stringify({ schemaVersion: 1, allow: [], nota_owner: 'non toccare, serve al progetto Y' }, null, 2),
+    );
+    const code = await cmdSearch(h, ['tavily'], {
+      out: () => {},
+      readKey: () => 'tvly-x',
+      chiediConferma: () => Promise.resolve('s'),
+    });
+    expect(code).toBe(0);
+    const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+    expect(egress.nota_owner).toBe('non toccare, serve al progetto Y');
+    expect(egress.allow).toContain('api.tavily.com');
   });
 });
