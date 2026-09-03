@@ -29,6 +29,9 @@ import { describeBuild, findCheckoutRoot, type BuildStamp } from './update.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { audioAccettato } from '../agent/providers/modalita.js';
 import { prerequisitiTrascrizione, type Prerequisito } from '../core/audio/trascrivi.js';
+import { loadEgress, type EgressPolicy } from '../core/net/egress.js';
+import { diagnoseSearch } from '../agent/tools/search.js';
+import { baseToolOrder } from '../agent/runtime.js';
 
 /**
  * Diagnosis that executes instead of assuming.
@@ -1017,6 +1020,66 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'sandbox',
       `${sandbox.mechanism} unavailable (${sandbox.reason}): ${sandbox.detail} — execution capabilities degrade to ask`,
       sandbox.remedy,
+    );
+  }
+
+  // `web_search`: stesso produttore di `agent/runtime.ts`, non una seconda
+  // lettura. Prima di questa riga il motivo per cui il tool mancava viveva
+  // solo in una riga di `gateway.err` scritta all'avvio — misurato il
+  // 03/09/2026: l'owner ha riprovato tre turni contro «api.tavily.com non è
+  // in rot/egress.json», ragione già presente nel log dal boot precedente, e
+  // ha finito per grepparselo a mano. `diagnoseSearch` (agent/tools/
+  // search.ts) è la funzione che decide anche in `buildRuntime`: un motore
+  // qui e uno là sarebbero due modi di saperlo.
+  let egressPerRicerca: EgressPolicy;
+  try {
+    egressPerRicerca = loadEgress(home);
+  } catch {
+    egressPerRicerca = { allow: [] };
+  }
+  const ricerca = diagnoseSearch(config, egressPerRicerca, (ref) => readSecret(ref, home));
+  if (config.search !== undefined) {
+    if (ricerca.on) {
+      ok('capacità: web_search', `${ricerca.backend.id} — attivo`);
+    } else if (ricerca.gap) {
+      warn(
+        'capacità: web_search',
+        ricerca.gap.reason,
+        ricerca.gap.remedy ?? 'correggi search.provider/apiKeyRef in config.json e riavvia',
+      );
+    }
+  }
+
+  // `shell_run`/`sys.shell`: la stessa sonda del check `sandbox` sopra, letta
+  // di nuovo qui solo per darle un nome di capacità — mai una seconda scelta
+  // di come si prova la sandbox.
+  if (!sandbox.available) {
+    warn(
+      'capacità: shell_run',
+      `${sandbox.mechanism} non disponibile (${sandbox.reason}): ${sandbox.detail}`,
+      sandbox.remedy,
+    );
+  } else {
+    ok('capacità: shell_run', 'attivo');
+  }
+
+  // Il tetto del profilo: quali tool, fra quelli che questa installazione
+  // registrerebbe, cadono oltre `maxToolsExposed`. `baseToolOrder`
+  // (agent/runtime.ts) è la stessa lista ordinata che il boot usa per
+  // `capabilityGaps` e che `runtime-exposure.test.ts` tiene allineata al
+  // registro reale — non un secondo elenco scritto qui a mano.
+  const ordineBase = baseToolOrder({ sandboxAvailable: sandbox.available, searchOn: ricerca.on });
+  const tagliatiDalTetto = ordineBase.slice(resolvedProfile.maxToolsExposed);
+  if (tagliatiDalTetto.length === 0) {
+    ok(
+      'capacità: tetto tool',
+      `${ordineBase.length} tool entro il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
+    );
+  } else {
+    warn(
+      'capacità: tetto tool',
+      `${tagliatiDalTetto.length} tool oltre il tetto di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}" e quindi invisibili al modello — ${tagliatiDalTetto.join(', ')}`,
+      `alza maxToolsExposed in agent/profiles/${resolvedProfile.name}.json, oppure riduci quanti tool sono registrati prima di questi`,
     );
   }
 

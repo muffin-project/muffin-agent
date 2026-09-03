@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
-import { buildRuntime } from './runtime.js';
+import { baseToolOrder, buildRuntime } from './runtime.js';
 
 /**
  * Which tools a turn is actually shown, and what falls off the end.
@@ -43,39 +43,36 @@ function realRuntime(): { names: string[]; close: () => void } {
  */
 const SANDBOXED = 'shell_run';
 
-/** The order `buildRuntime` registers in, sandbox aside. Change this on purpose. */
-const REGISTERED = [
-  'fs_read',
-  'fs_list',
-  // Terzo, con le altre due letture, perché è una lettura: apre gli stessi
-  // file di `fs_read`, dallo stesso scope, e serve nello stesso momento —
-  // quando non sai ancora quale file aprire. Metterlo in fondo lo avrebbe
-  // esposto solo ai profili che non hanno il problema.
-  'fs_search',
-  'fs_write',
-  'memory_search',
-  'document_read',
-  'process_list',
-  'process_kill',
-  'skill_read',
-  'http_get',
-  // Last, and deliberately so — see the comment in `buildRuntime`. A weak model
-  // that loses the web in exchange for being able to suspend itself has made
-  // the wrong trade on the profile least able to run a multi-turn plan.
-  'wait',
-  'todo',
-  // Ultimo, e non paga più il prezzo: il tetto di `consumer-local` è passato
-  // da 10 a 14 (owner, 27/08) proprio perché tagliava questo. Resta ultimo —
-  // se il tetto tornerà a mordere, è il primo a sparire, e il test sopra lo
-  // dice invece di lasciarlo succedere.
-  'sys_inspect',
-];
+/**
+ * L'ordine dichiarato, sandbox e search a parte — non più un secondo elenco
+ * scritto a mano qui: `baseToolOrder` (`agent/runtime.ts`) è la stessa lista
+ * che `muffin doctor` legge per dire quali tool un tetto taglierebbe senza
+ * costruire un runtime intero. Un elenco qui e un elenco là erano due modi di
+ * saperlo, ed è esattamente la forma di guasto che questo file esiste per
+ * impedire (`slice/turno-sospeso`: `wait`/`todo` in posizione 6-7 spinsero
+ * `skill_read` e `http_get` oltre il tetto, in silenzio, e la suite restò
+ * verde).
+ */
+const REGISTERED = baseToolOrder({ sandboxAvailable: false, searchOn: false });
 
 describe('quali tool vede davvero un turno', () => {
   it('l’ordine di registrazione è quello dichiarato, e cambiarlo fallisce qui', () => {
     const rt = realRuntime();
     rt.close();
     expect(rt.names.filter((n) => n !== SANDBOXED)).toEqual(REGISTERED);
+  });
+
+  it('baseToolOrder non diverge dal registro reale, sandbox della macchina compresa', () => {
+    // Il de-drift esplicito: qui `shell_run` NON viene filtrato, a differenza
+    // del test sopra — `baseToolOrder` deve prevedere esattamente la
+    // posizione reale di `sys.shell` quando la sandbox di questa macchina è
+    // disponibile, non solo il caso senza. Se un domani un tool si inserisce
+    // fra `document_read` e `process_list` senza toccare `baseToolOrder`, qui
+    // diventa rosso — non a `cli/doctor.test.ts`, dove nessuno lo cercherebbe.
+    const rt = realRuntime();
+    rt.close();
+    const conteneva = rt.names.includes(SANDBOXED);
+    expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(rt.names);
   });
 
   it('su consumer-local il tetto non taglia più niente, e questo va visto', () => {

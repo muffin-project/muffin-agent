@@ -18,6 +18,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
+import { buildRuntime } from '../agent/runtime.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import {
   runDoctor,
@@ -1655,5 +1656,132 @@ describe('doctor says whether a voice note would be understood, before the first
       },
     });
     expect(c?.level).toBe('warn');
+  });
+});
+
+/**
+ * "Perché non ho `web_search`" costava tre turni di retry, il 03/09/2026:
+ * `config.json` dichiarava Tavily, `rot/egress.json` non allowlistava
+ * `api.tavily.com`, e la ragione stava già una volta sola in `gateway.err`
+ * dal boot — nessuna delle due porte che l'owner guarda (un turno, `muffin
+ * doctor`) la diceva. Questo blocco prova che ora entrambe la dicono, dalla
+ * stessa funzione (`diagnoseSearch`, `agent/tools/search.ts`), non da due
+ * letture che potrebbero divergere.
+ */
+describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () => {
+  it('web_search: stessa ragione e stesso rimedio di `sys.inspect`, dalla stessa fonte', async () => {
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('tavily', 'tvly-test-key', dir);
+    // rot/egress.json resta quello di `muffin init`: nessun host allowlistato
+    // — la lacuna esatta dell'owner.
+
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-doctor-capgap-ws-'));
+    const runtime = buildRuntime(dir, workspace);
+    const gap = runtime.capabilityGaps.find((g) => g.capability === 'web_search');
+    runtime.close();
+    expect(gap).toBeDefined();
+
+    const c = await check(dir, 'capacità: web_search');
+    expect(c?.level).toBe('warn');
+    // Non "menziona la stessa cosa" — è letteralmente la stessa stringa,
+    // perché entrambe le porte chiamano `diagnoseSearch` e nessuna delle due
+    // la riscrive con parole proprie.
+    expect(c?.detail).toBe(gap?.reason);
+    expect(c?.remedy).toBe(gap?.remedy);
+    expect(c?.detail).toContain('api.tavily.com');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('web_search: ok una volta che l’host è allowlistato e il sigillo è rifatto', async () => {
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('tavily', 'tvly-test-key', dir);
+    const egressPath = join(paths(dir).rot, 'egress.json');
+    const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+    egress.allow = ['api.tavily.com'];
+    writeFileSync(egressPath, JSON.stringify(egress, null, 2));
+    seal(dir, '1', new Date());
+
+    const c = await check(dir, 'capacità: web_search');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('attivo');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('web_search: nessuna riga quando la ricerca non è configurata affatto', async () => {
+    // La postura deliberata di `agent/runtime.ts`: assente non è un guasto.
+    const dir = home();
+    const c = await check(dir, 'capacità: web_search');
+    expect(c).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('shell_run: spento con la stessa ragione del check `sandbox`, non una parola generica', async () => {
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'contain_failed',
+      detail: "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+      remedy: 'questa macchina non può contenere: nessun comando verrà eseguito',
+    });
+    try {
+      const c = await check(dir, 'capacità: shell_run');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain('contain_failed');
+      expect(c?.remedy).toContain('non può contenere');
+      // Distinto da "tagliato dal tetto": nessuna capacità spenta usa quella
+      // parola, e nessuna capacità tagliata dice "non disponibile".
+      expect(c?.detail).not.toContain('tetto');
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('shell_run: ok quando il contenimento regge', async () => {
+    const dir = home();
+    const c = await check(dir, 'capacità: shell_run');
+    expect(c?.level).toBe('ok');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('tetto tool: nomina i tool tagliati quando il modello risolve sul profilo conservativo, e non è la stessa frase di uno spento', async () => {
+    // Nessun profilo spedito taglia oggi (consumer-local: 15, frontier: 24,
+    // contro una dozzina di tool base — agent/runtime-exposure.test.ts lo
+    // misura). Un id modello che non combacia con nessun `match` risolve su
+    // CONSERVATIVE (maxToolsExposed: 10), che invece taglia davvero.
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.models.main = 'modello-mai-schedato-xyz';
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await check(dir, 'capacità: tetto tool');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('tetto');
+    expect(c?.detail).toContain('conservative');
+    expect(c?.remedy).toContain('maxToolsExposed');
+    // Distinto da una capacità spenta: il tetto non "non è disponibile" e non
+    // è "spento", è tagliato — e viceversa, il check `sandbox`/`web_search`
+    // non nomina mai un tetto.
+    expect(c?.detail).not.toContain('non disponibile');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('tetto tool: ok quando il profilo risolto copre tutti i tool registrati', async () => {
+    const dir = home(); // cli/init.ts risolve su un profilo frontier, tetto 24
+    const c = await check(dir, 'capacità: tetto tool');
+    expect(c?.level).toBe('ok');
+    expect(c?.remedy).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

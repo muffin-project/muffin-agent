@@ -36,6 +36,7 @@ const finto = (over: Partial<InspectSources> = {}): InspectSources => ({
   }),
   turns: () => ({ total: 3, waiting: { count: 1, oldestWakeAt: null }, undeliverable: { count: 0 }, interrupted: [] }),
   jobs: () => [],
+  capabilityGaps: [],
   ...over,
 });
 
