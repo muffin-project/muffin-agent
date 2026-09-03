@@ -126,10 +126,16 @@ an assertion failure is one even under load. Whichever way it goes, declare the
 path in the PR instead of showing only the final green.
 
 **The generated map.** `ancore.json` and `mappa.html` conflict between any two
-slices that move cited lines — which is most of them. Resolve by rerunning
-`ancore.mjs` then `build.mjs`, never by hand-editing the artefacts. This is
-cheaper for the orchestrator to do once at merge time than for each worker to
-attempt against a moving base.
+slices that move cited lines — which is most of them. `npm install` now
+registers a local git driver plus post-merge/post-rewrite hooks (see
+`docs/derived/architecture-map/README.md`) that keep "ours" through the
+conflict and then regenerate — and, when clean, commit — the map once the
+merge/rebase has actually finished, refusing instead of committing when a
+citation shows genuine drift rather than a moved line. If a clone never
+registered that, or you are resolving by hand, run `npm run mappa:regen` —
+one command, both generators, `git add` included — never hand-edit the
+artefacts. This is cheaper for the orchestrator to do once at merge time than
+for each worker to attempt against a moving base.
 
 ## Research budget
 

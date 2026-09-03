@@ -20,10 +20,11 @@
     "test": "vitest run",
     "test:acceptance": "vitest run --config vitest.acceptance.config.ts",
     "acceptance:report": "tsx evals/acceptance/report.ts",
-    "prepare": "npm run compile",
+    "prepare": "npm run compile && node docs/derived/architecture-map/setup-merge-driver.mjs",
     "test:acceptance:linux": "evals/acceptance/gate-linux.sh . .gate-linux",
     "gate:local": "bash scripts/local-gate.sh",
-    "e2e:telegram": "tsx evals/e2e/telegram.ts"
+    "e2e:telegram": "tsx evals/e2e/telegram.ts",
+    "mappa:regen": "node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs && git add docs/derived/architecture-map/ancore.json docs/derived/architecture-map/mappa.html"
   },
   "devDependencies": {
     "@grammyjs/types": "^4.0.0",
