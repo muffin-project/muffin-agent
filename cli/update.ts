@@ -21,6 +21,7 @@ import { makeStatusLine } from './status-line.js';
 import { styleFor } from './ui.js';
 import { backupNow } from './backup.js';
 import { realishPath } from './init.js';
+import { reconcileDefaults, rigaRiconciliazione } from './adopt.js';
 import { promptLine } from './prompt.js';
 import { paths } from '../core/config/config.js';
 import { readGateway } from '../core/gateway/lock.js';
@@ -766,6 +767,29 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 
   const readNewSchemaVersion = deps.readNewSchemaVersion ?? defaultReadNewSchemaVersion;
   step('schema', migrationsDetail(p.db, readNewSchemaVersion(releaseDir)));
+
+  // **I default della release nuova, portati in una casa vecchia.**
+  //
+  // Perche' qui e non altrove. `muffin update` e' l'unico momento in cui
+  // esistono contemporaneamente le due cose che servono: una casa gia' viva, e
+  // l'albero `defaults/` del codice **nuovo** — che sta in `releaseDir`, non
+  // nel checkout, il quale dopo lo swing e' ancora indietro (vedi
+  // `noteDopoLoSwing` due righe piu' sotto). Al boot sarebbe una scrittura in
+  // un percorso che deve solo leggere, e su un verbo esplicito soltanto
+  // dipenderebbe da qualcuno che si ricorda di digitarlo: e' esattamente cosi'
+  // che le skill spedite non sono mai arrivate a casa dell'owner (03/09/2026,
+  // il suo `defaults-manifest.json` elencava un file solo).
+  //
+  // Dopo lo swing e prima del riavvio, perche' il processo che riparte deve
+  // gia' trovarsele: la sezione skill del prompt si assembla all'avvio.
+  //
+  // Sicuro per costruzione, non per attenzione: `reconcileDefaults` installa
+  // **solo cio' che manca**, non scrive mai dentro `rot/` e non sostituisce
+  // mai un file esistente — nemmeno uno adottabile, che resta un verbo
+  // dell'owner. Un aggiornamento non deve poter riscrivere niente di suo.
+  const riconciliato = reconcileDefaults(home, releaseDir);
+  const rigaDefault = rigaRiconciliazione(riconciliato);
+  step('default', rigaDefault ?? 'la casa ha gia\' tutti i default che questa release spedisce', riconciliato.falliti.length === 0);
 
   // Le due conseguenze che il comando taceva — vedi `noteDopoLoSwing`. Lo stato
   // si legge qui, dallo stesso `gitRunner` di tutto il resto; la decisione sta
