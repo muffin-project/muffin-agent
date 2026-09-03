@@ -1,7 +1,14 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { paths } from '../config/config.js';
-import { EgressFileSchema, hostAllowed, loadEgress, type EgressPolicy } from '../net/egress.js';
+import {
+  EgressFileSchema,
+  hostAllowed,
+  isForbiddenAddress,
+  loadEgress,
+  type EgressPolicy,
+} from '../net/egress.js';
 import { seal, type RotManifest } from './verify.js';
 
 /**
@@ -128,10 +135,36 @@ const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
  * impostata) scritta in `allow` fa fallire `loadEgress()` al prossimo avvio,
  * e il `catch` muto in `agent/runtime.ts` la trasforma in `{ allow: [] }` —
  * **ogni** host prima approvato sparisce, senza una riga in nessun log.
+ *
+ * **Un indirizzo privato o link-local non sfugge al pavimento anti-SSRF solo
+ * perché è scritto a mano.** `127.0.0.1`, `169.254.169.254` (l'endpoint
+ * metadata dei cloud) e ogni indirizzo RFC1918 superano `DNS_LABEL` — ogni
+ * ottetto è una sequenza di cifre, e una sequenza di cifre è un'etichetta DNS
+ * valida — quindi senza questo controllo finivano scritti e sigillati come
+ * un host qualunque. Non sono raggiungibili lo stesso tramite `sys.http`:
+ * `addressVeto` (`agent/tools/http.ts`) chiama `isForbiddenAddress`
+ * (`core/net/egress.ts`) su ogni hop, prima di connettersi, ed è una barriera
+ * indipendente da questa — ma è disonesto proporre all'owner, e fargli
+ * confermare, un host che la connessione rifiuterebbe comunque: la prima
+ * porta che *scrive* un allowlist deve rispettare lo stesso pavimento che la
+ * porta che *legge* già rispetta, non solo assumere che qualcun altro lo
+ * faccia. Un letterale IPv6 (`::1`, `fe80::1`) è già escluso da `DNS_LABEL`
+ * — contiene `:`, che nessuna etichetta ammette — quindi qui basta guardare
+ * gli IPv4.
+ *
+ * **La lunghezza totale, non solo quella di un'etichetta.** `DNS_LABEL`
+ * ferma un'etichetta oltre i 63 caratteri, ma niente fermava il nome intero
+ * oltre i 253 (RFC 1035 §3.1) prima di questo controllo: cinque etichette da
+ * 60 caratteri, unite da un punto, passavano ciascuna il limite di etichetta
+ * e insieme superavano comunque i 253 — un nome che nessun resolver DNS reale
+ * accetterebbe, scritto e sigillato lo stesso.
  */
 export function isValidEgressHost(raw: string): boolean {
   const senzaWildcard = raw.startsWith('*.') ? raw.slice(2) : raw;
-  return senzaWildcard.split('.').every((label) => DNS_LABEL.test(label));
+  if (senzaWildcard.length > 253) return false;
+  if (!senzaWildcard.split('.').every((label) => DNS_LABEL.test(label))) return false;
+  if (isIP(senzaWildcard) === 4 && isForbiddenAddress(senzaWildcard)) return false;
+  return true;
 }
 
 const MANIFEST_FILENAME = 'manifest.json'; // Lo stesso letterale privato di `core/rot/verify.ts`.
@@ -277,7 +310,7 @@ export async function widenEgressForCapability(
         : `scrittura fallita: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`;
     out(
       rollbackFallito
-        ? `${motivo} E non sono riuscito a rimettere ${egressFile}/${manifestFile} come stavano prima: verifica con ` +
+        ? `${motivo} E non sono riuscito a rimettere ${egressFile} e ${manifestFile} come stavano prima: verifica con ` +
           '`muffin rot verify` — se dice che è diverso, `muffin rot reseal` a mano dopo aver controllato cosa è cambiato.'
         : motivo,
     );
