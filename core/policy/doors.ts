@@ -65,5 +65,10 @@ export const memoryWriteCapability: CapabilityDecl = {
   hostOnly: false,
 };
 
-/** Both, for the one place that registers them (`agent/runtime.ts`) and the tests that assert their rows. */
+/**
+ * Both, for the kernel that owns them (`decide.ts` consults this as the
+ * fallback under whatever a caller declared) and the tests that assert their
+ * rows. No runtime registers them, deliberately: a runtime that had to
+ * remember would answer `no_capability` on every reply the day it forgot.
+ */
 export const DOORS: readonly CapabilityDecl[] = [replyCapability, memoryWriteCapability];
