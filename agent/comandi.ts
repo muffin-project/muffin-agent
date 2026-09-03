@@ -39,8 +39,27 @@ export type EsitoComando = {
   sconosciuto?: boolean;
 };
 
+/**
+ * Le leve sul lavoro in corso (ADR-0054): chi le tiene è la superficie, perché
+ * è la superficie a sapere quale turno è vivo per *questa* conversazione.
+ *
+ * `vivo` dice se c'è un turno da fermare o correggere; `stop` e `steer`
+ * tornano `false` quando non c'è, e il comando lo dice invece di fingere.
+ * `pausa` è il fatto durevole condiviso da tutti i processi sullo stesso
+ * database (`core/runtime/pausa.ts`): `/pause` dal telefono ferma anche i job
+ * del terminale.
+ */
+export type Controlli = {
+  vivo: () => boolean;
+  stop: () => boolean;
+  steer: (testo: string) => boolean;
+  pausa: { attiva: () => boolean; metti: () => void; togli: () => void };
+};
+
 export type ContestoComandi = {
   home: string;
+  /** Assenti dove non esiste un turno da governare (`muffin run`, i test): i quattro comandi rispondono che qui non possono. */
+  controlli?: Controlli | undefined;
   /** Letta e riscritta: `/model` e `/think` la cambiano davvero. */
   config: Config;
   /** Riletta dopo una scrittura, così il chiamante vede cosa è cambiato. */
@@ -76,6 +95,10 @@ export const COMANDI: readonly { nome: string; aiuto: string; soloTerminale?: bo
   { nome: 'think', aiuto: 'ragionamento: on | off | reset (senza argomenti lo mostra)' },
   { nome: 'model', aiuto: 'modello: [main|light|embed] <slug>, --list, o niente per vederli' },
   { nome: 'debug', aiuto: 'giri, token e millisecondi: on | off (da solo, inverte)' },
+  { nome: 'stop', aiuto: 'interrompe il turno in corso; quelli in coda restano' },
+  { nome: 'steer', aiuto: '<testo> — corregge il turno in corso, al prossimo passo' },
+  { nome: 'pause', aiuto: 'ferma job e turni in coda finché non riprendi' },
+  { nome: 'resume', aiuto: 'riprende dopo /pause' },
   { nome: 'help', aiuto: 'questo elenco' },
   { nome: 'exit', aiuto: 'esci (o Ctrl+D)', soloTerminale: true },
 ];
@@ -111,6 +134,38 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
 
     case 'session':
       return { testo: ctx.sessionId };
+
+    // Le quattro leve di ADR-0054. Ognuna dice cosa ha fatto davvero: un
+    // «fermato» su niente sarebbe la stessa bugia di un «inviato» non arrivato.
+    case 'stop': {
+      if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da fermare.' };
+      return { testo: ctx.controlli.stop() ? 'fermato: il turno in corso si interrompe al prossimo passo.' : 'nessun turno in corso.' };
+    }
+    case 'steer': {
+      if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da correggere.' };
+      if (arg === '') return { testo: '/steer <cosa cambiare> — senza testo non so cosa correggere.' };
+      return {
+        testo: ctx.controlli.steer(arg)
+          ? 'ricevuto: lo tengo presente dal prossimo passo.'
+          : 'nessun turno in corso: dimmelo come messaggio normale.',
+      };
+    }
+    case 'pause': {
+      if (ctx.controlli === undefined) return { testo: 'qui non c\'è niente da mettere in pausa.' };
+      if (ctx.controlli.pausa.attiva()) return { testo: 'già in pausa. /resume per riprendere.' };
+      ctx.controlli.pausa.metti();
+      return {
+        testo:
+          'in pausa: nessun job parte e i messaggi restano in coda finché non dici /resume.' +
+          (ctx.controlli.vivo() ? ' Il turno in corso finisce; /stop se vuoi fermare anche quello.' : ''),
+      };
+    }
+    case 'resume': {
+      if (ctx.controlli === undefined) return { testo: 'qui non c\'è niente da riprendere.' };
+      if (!ctx.controlli.pausa.attiva()) return { testo: 'non ero in pausa.' };
+      ctx.controlli.pausa.togli();
+      return { testo: 'ripreso: riparto da quello che è rimasto in coda.' };
+    }
 
     case 'spend': {
       const s = ctx.budget.status();

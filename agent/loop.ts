@@ -623,6 +623,14 @@ export type TurnInput = {
   audios?: AudioBlock[];
   signal?: AbortSignal;
   /**
+   * Le correzioni dell'owner arrivate mentre il turno gira (`/steer`,
+   * ADR-0054 §2), consegnate al prossimo confine di giro: chiamata all'inizio
+   * di ogni iterazione, restituisce quelle non ancora consegnate e le svuota.
+   * Assente = nessuna superficie sa correggere questo turno. Testo
+   * dell'owner, al suo tier: non è contenuto esterno.
+   */
+  steer?: (() => string[]) | undefined;
+  /**
    * Mint the row under this identity instead of a fresh random one.
    *
    * Absent on every caller that predates it (a REPL turn, a Telegram message):
@@ -1055,6 +1063,7 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     ...(input.replyChannel !== undefined ? { replyChannel: input.replyChannel } : {}),
     ...(input.onDelta ? { onDelta: input.onDelta } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+    ...(input.steer ? { steer: input.steer } : {}),
   });
 }
 
@@ -1297,6 +1306,8 @@ async function drive(
      * attempt's progress. See `TurnInput.onProgress`.
      */
     onProgress?: ((event: TurnEvent) => void) | undefined;
+    /** Vivo solo su un turno fresco, come `onDelta`: chi riprende un turno non ha la chat che lo corregge. */
+    steer?: (() => string[]) | undefined;
   } = {},
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
@@ -1337,6 +1348,7 @@ async function drive(
     ...(options.replyChannel !== undefined ? { replyChannel: options.replyChannel } : {}),
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(options.steer ? { steer: options.steer } : {}),
   };
 
   // ---- Pre-loop: deterministic, no model call. ------------------------------
@@ -1660,6 +1672,15 @@ async function drive(
       }
       if (input.signal?.aborted) {
         return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+      }
+      // `/steer` (ADR-0054 §2): l'owner ha corretto il turno mentre girava. Il
+      // confine sicuro è **qui** — i tool del giro prima hanno finito, il
+      // modello non è ancora stato chiamato — e la correzione entra come un
+      // messaggio dell'owner, nel transcript che il checkpoint sopra
+      // persiste, così un turno ripreso dopo un crash la ricorda. Mai a metà
+      // di una tool call: un effect avviato non si finge non avvenuto.
+      for (const correzione of input.steer?.() ?? []) {
+        messages.push({ role: 'user', content: [{ type: 'text', text: correzione }] });
       }
       iterations += 1;
       // Reports the number this line just committed to — the same counter
