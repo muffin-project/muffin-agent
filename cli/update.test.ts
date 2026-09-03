@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
+import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -270,6 +270,84 @@ describe('runUpdate — happy path (bootstrap: no prior release recorded)', () =
     expect(schemaStep?.detail).toMatch(/v1/);
     expect(schemaStep?.detail).toMatch(/v3/);
     expect(schemaStep?.detail).toMatch(/in sospeso/);
+  });
+});
+
+/**
+ * Le due conseguenze di un update riuscito che il comando taceva (misurate
+ * sulla macchina dell'owner il 03/09/2026): il checkout resta indietro, e un
+ * processo già avviato continua sul codice vecchio.
+ */
+describe('noteDopoLoSwing', () => {
+  it('non dice niente del checkout quando è già sul commit della release', () => {
+    const righe = noteDopoLoSwing({
+      releaseSha: 'a'.repeat(40),
+      checkoutSha: 'a'.repeat(40),
+      behind: 0,
+      checkoutRoot: '/home/o/muffin-agent',
+    });
+    expect(righe.some((r) => /checkout/.test(r))).toBe(false);
+    expect(righe.some((r) => /git -C/.test(r))).toBe(false);
+  });
+
+  it('quando il checkout è indietro nomina di quanto e il comando che lo ripara', () => {
+    const righe = noteDopoLoSwing({
+      releaseSha: 'b'.repeat(40),
+      checkoutSha: 'c'.repeat(40),
+      behind: 7,
+      checkoutRoot: '/home/o/muffin-agent',
+    });
+    const riga = righe.find((r) => /checkout/.test(r));
+    expect(riga).toMatch(/indietro di 7 commit/);
+    expect(riga).toContain('git -C /home/o/muffin-agent pull');
+    expect(riga).toContain('ccccccc');
+    expect(riga).toContain('bbbbbbb');
+  });
+
+  it('la riga sul riavvio c\'è sempre, e parla di sessioni in primo piano — non del gateway', () => {
+    for (const args of [
+      { releaseSha: 'a'.repeat(40), checkoutSha: 'a'.repeat(40), behind: 0, checkoutRoot: '/r' },
+      { releaseSha: 'a'.repeat(40), checkoutSha: 'd'.repeat(40), behind: 2, checkoutRoot: '/r' },
+      { releaseSha: 'a'.repeat(40), checkoutSha: null, behind: 0, checkoutRoot: '/r' },
+    ]) {
+      const righe = noteDopoLoSwing(args);
+      const riavvio = righe.find((r) => /REPL/.test(r));
+      expect(riavvio).toMatch(/già in esecuzione/);
+      // `offerGatewayRestart` si occupa del gateway subito dopo: dirlo qui sarebbe falso.
+      expect(riavvio).not.toMatch(/gateway/i);
+    }
+  });
+
+  it('senza un HEAD leggibile non inventa una distanza', () => {
+    const righe = noteDopoLoSwing({ releaseSha: 'a'.repeat(40), checkoutSha: null, behind: 0, checkoutRoot: '/r' });
+    expect(righe.some((r) => /git -C/.test(r))).toBe(false);
+  });
+});
+
+describe("runUpdate — le note dopo lo swing arrivano davvero in fondo all'update", () => {
+  it('dice che il checkout è indietro, con il comando, e che i processi vivi vanno rilanciati', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir } = seedLauncher(f.installed);
+    const home = dir('muffin-update-home-');
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    });
+
+    expect(result.code).toBe(0);
+    const note = result.steps.filter((s) => s.name === 'dopo').map((s) => s.detail);
+    // il fixture lascia `installed` a v1 mentre la release è v2: esattamente il
+    // caso dell'owner, e la distanza la conta il `gitRunner` reale.
+    const checkout = note.find((d) => /checkout/.test(d));
+    expect(checkout).toMatch(/indietro di 1 commit/);
+    expect(checkout).toContain(`git -C ${f.installed} pull`);
+    expect(note.some((d) => /già in esecuzione/.test(d))).toBe(true);
   });
 });
 
