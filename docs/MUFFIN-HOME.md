@@ -139,6 +139,40 @@ What does **not** belong in Git:
 The repository should contain enough semantics and tooling that another agent can
 understand a home without committing the home itself.
 
+### Una casa che invecchia riceve lo stesso i default nuovi (03/09/2026)
+
+**Invariante:** un default spedito arriva anche in una casa nata prima che
+quel default esistesse, e ciò che l'owner ha scritto non viene mai
+sovrascritto.
+
+Fino a questa data non era vero, e non era vero in silenzio. `muffin update`
+sposta il **codice**, `runInit` semina una casa **nuova**, e nessuno
+riconciliava una casa **esistente** con i default aggiunti dopo la sua
+nascita. Misurato sull'installazione dell'owner: il repository spediva due
+skill in `defaults/skills/`, il suo `defaults-manifest.json` elencava **un**
+file — `persona.md` — e `~/.muffin/skills` non esisteva; quindi
+`skillsPromptSection` tornava stringa vuota, il modello non sentiva mai la
+parola «skill» e `skill_read` era un tool senza niente da leggere. La suite
+era verde: una casa di test la crea `runInit` da zero, e quindi ha già tutto.
+Il difetto non era delle skill — qualunque default futuro (una policy, un
+template) avrebbe fatto la stessa fine.
+
+La riconciliazione vive in `reconcileDefaults` (`cli/adopt.ts`), gira dentro
+`muffin update` sull'albero `defaults/` della release **nuova**, e ha una sola
+porta di scrittura: **installa soltanto ciò che manca**. Un file presente non
+viene mai sostituito da solo — nemmeno uno mai toccato dall'owner: quello
+resta `muffin adopt`, un verbo che si digita. Un file presente e diverso non
+si tocca e si dichiara. Dentro `rot/` non si scrive mai: copiare nel sigillo
+fa divergere l'hash e manda l'installazione in safe mode, quindi lì il
+percorso resta `muffin init`, che copia e risigilla nello stesso giro.
+`muffin doctor` lo dice comunque, per chi non ha ancora aggiornato.
+
+Su una casa antecedente al registro, «mai installato» e «installato e poi
+modificato» si distinguono **solo** quando il file è assente: lì non c'è
+ambiguità e non c'è niente da perdere. Per un file presente decide la regola 2
+di `core/config/defaults-drift.ts` (la storia Git), e quando neanche quella sa
+rispondere la direzione sicura è non toccare.
+
 ## 5. Agent diagnostic workflow
 
 When work depends on the installed agent:

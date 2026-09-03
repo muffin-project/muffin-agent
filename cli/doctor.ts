@@ -1170,7 +1170,24 @@ function defaultsDriftCheck(
       ok(name, d.detail);
       return;
     case 'missing':
-      warn(name, d.detail, "`muffin init` lo ricrea — oppure, se l'hai tolto di proposito, ignora questa riga");
+      // Il rimedio nomina il verbo che **registra** (`cli/adopt.ts`), non
+      // `muffin init`: init lo ricrea davvero, ma rifa' anche config, database
+      // e sigillo per un file che manca. Sotto `rot/` il verbo giusto resta
+      // init, perche' e' l'unico che copia dentro il sigillo e risigilla nello
+      // stesso giro — altrimenti l'installazione resta in safe mode.
+      //
+      // Un default che manca non e' quasi mai una scelta: e' una casa nata
+      // prima che quel default esistesse (misurato sull'installazione
+      // dell'owner il 03/09/2026 — il suo registro elencava `persona.md` e
+      // basta, e le skill di serie non erano mai arrivate). `muffin update` ora
+      // lo ripara da solo; questa riga esiste per chi non lo ha ancora lanciato.
+      warn(
+        name,
+        d.detail,
+        d.sealed
+          ? "`muffin init` lo ricopia dentro il sigillo e risigilla — oppure, se l'hai tolto di proposito, ignora questa riga"
+          : "`muffin adopt " + d.path + "` (o `muffin adopt --tutto`) lo installa e lo registra; `muffin update` lo fa da sé — oppure, se l'hai tolto di proposito, ignora questa riga",
+      );
       return;
     case 'unknown':
       warn(
