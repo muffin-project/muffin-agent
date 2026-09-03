@@ -19,6 +19,7 @@ import {
   type ProviderKind,
   type SecretBackend,
 } from '../core/config/config.js';
+import { describeWorkspace } from '../core/config/workspace.js';
 
 /**
  * Bootstrap.
@@ -187,6 +188,24 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // including anything the steps above wrote into the root of trust.
   const manifest = seal(home, CONFIG_SCHEMA_VERSION.toString(), new Date());
   step('sealed', `${manifest.files.length} files hashed, anchor written`);
+
+  // ADR-0059: named, not created. `resolveWorkspace` (`core/config/
+  // workspace.ts`) makes the directory lazily, at the first `buildRuntime` —
+  // `muffin run`/the REPL may honour a project directory the owner is already
+  // standing in and never touch this default at all, the same reason `traces/`
+  // is not created here either. But lazy must not mean silent: before this
+  // step the only place that ever named the workspace was a boot line on
+  // stderr that reaches `gateway.err` and nowhere a person looks, so a fresh
+  // install answered "dove hai scritto?" with nothing. `describeWorkspace`
+  // only reads — the same function `muffin doctor` and `sys.inspect` read
+  // through, never a second computation that could name a different folder.
+  const workspace = describeWorkspace(home);
+  step(
+    'workspace',
+    workspace.exists
+      ? `${workspace.workspace} — qui atterrano le scritture di un turno`
+      : `${workspace.workspace} (si crea da sola al primo turno che ci scrive)`,
+  );
 
   return steps;
 }
