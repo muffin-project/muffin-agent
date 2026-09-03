@@ -3,6 +3,9 @@ import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
 import { fence } from '../../core/memory/spotlight.js';
 import type { RegisteredTool } from '../loop.js';
+import type { Config } from '../../core/config/config.js';
+import { hostAllowed, type EgressPolicy } from '../../core/net/egress.js';
+import type { CapabilityGap } from './capability-status.js';
 
 /**
  * sys.search — one question out, titles and snippets back.
@@ -163,6 +166,81 @@ export function tavilyBackend(options: TavilyOptions): SearchBackend {
       }));
     },
   };
+}
+
+export type SearchDiagnosis =
+  | { on: true; backend: SearchBackend; gap: null }
+  | { on: false; backend?: undefined; gap: CapabilityGap | null };
+
+/**
+ * Is `web_search` on, and if not, why — the one producer `buildRuntime`,
+ * `sys.inspect` and `muffin doctor` all call, so the reason cannot say one
+ * thing to the model and another to the owner.
+ *
+ * Two ways to be off, and both are measured, never generic:
+ *  - the backend cannot be built (bad provider, unreadable key) — the raw
+ *    error's own message and, when the error carries one (`ConfigError`), its
+ *    own remedy;
+ *  - the backend builds fine but its endpoint is not in `rot/egress.json` —
+ *    the owner's exact situation on 03/09/2026: `config.json` declared
+ *    Tavily, the seal never allowed `api.tavily.com`, and three turns of
+ *    retrying taught nothing the log did not already say once, at boot.
+ *
+ * `gap: null` with `on: false` means "not configured at all" — the
+ * deliberate, silent posture `config.search === undefined` already had, and
+ * still has: an unconfigured install prints nothing, because there is
+ * nothing broken to report.
+ */
+export function diagnoseSearch(
+  config: Pick<Config, 'search'>,
+  egress: EgressPolicy,
+  readSecret: (ref: string) => string,
+): SearchDiagnosis {
+  if (!config.search) return { on: false, gap: null };
+
+  let backend: SearchBackend;
+  try {
+    const opzioni = {
+      apiKey: readSecret(config.search.apiKeyRef),
+      ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
+    };
+    // Uno `switch` esaustivo, per lo stesso motivo di `agent/runtime.ts`: un
+    // id nuovo nel catalogo diventa un errore di compilazione qui, non un
+    // motore scelto in config e ignorato a runtime.
+    switch (config.search.provider) {
+      case 'tavily':
+        backend = tavilyBackend(opzioni);
+        break;
+      default:
+        throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // `readSecret` throws `ConfigError`, which carries its own remedy
+    // (`cli/doctor.ts`'s api-key check reads the same field the same way).
+    // Duck-typed rather than imported: the error's shape is the contract, not
+    // its class.
+    const remedy = (error as { remedy?: unknown }).remedy;
+    return {
+      on: false,
+      gap: { capability: 'web_search', kind: 'disabled', reason, remedy: typeof remedy === 'string' ? remedy : null },
+    };
+  }
+
+  const endpointHost = new URL(backend.endpoint).hostname;
+  if (!hostAllowed(endpointHost, egress)) {
+    return {
+      on: false,
+      gap: {
+        capability: 'web_search',
+        kind: 'disabled',
+        reason: `${endpointHost} non è in rot/egress.json`,
+        remedy: `aggiungi ${endpointHost} a rot/egress.json e rifai \`muffin rot reseal\``,
+      },
+    };
+  }
+
+  return { on: true, backend, gap: null };
 }
 
 export function makeSearchTool(backend: SearchBackend): RegisteredTool {
