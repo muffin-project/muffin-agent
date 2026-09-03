@@ -6,6 +6,7 @@ import { runInit } from '../../cli/init.js';
 import { isValidEgressHost, widenEgressForCapability } from './egress-writer.js';
 import { verify } from './verify.js';
 import { paths } from '../config/config.js';
+import { hostAllowed } from '../net/egress.js';
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), 'muffin-egress-writer-'));
@@ -182,6 +183,50 @@ describe('isValidEgressHost', () => {
   ])('%s → %s', (candidato, atteso) => {
     expect(isValidEgressHost(candidato)).toBe(atteso);
   });
+
+  /**
+   * Il blocco confermato da una terza review indipendente: una prima stesura
+   * chiamava `raw.trim()` **dentro** questa funzione, ma il chiamante
+   * (`normalizzati` in `widenEgressForCapability`, sotto) non chiamava mai
+   * `trim()` sul valore che poi finiva scritto — quindi la funzione vedeva
+   * una copia ripulita e diceva "valido", mentre lo spazio (o il `\n`) restava
+   * dentro il valore vero. Ora non c'è alcun `trim()` da nessuna parte: questi
+   * tre valori sono esattamente quelli misurati end-to-end nella review — uno
+   * spazio o un ritorno a capo a un bordo (il caso ordinario di
+   * `--host "$MCP_HOST"` con una variabile che porta un `\n` finale) — e
+   * `isValidEgressHost` li rifiuta perché lo spazio/`\n` finisce dentro
+   * un'etichetta esattamente come `/` o `@`, senza bisogno di un controllo
+   * separato per lo spazio.
+   */
+  it.each([
+    ['api.tavily.com ', false, 'spazio finale'],
+    [' api.tavily.com', false, 'spazio iniziale'],
+    ['api.tavily.com\n', false, 'a capo finale — il caso di una variabile di shell'],
+    ['\tapi.tavily.com', false, 'tab iniziale'],
+  ])('%s → %s (%s)', (candidato, atteso) => {
+    expect(isValidEgressHost(candidato)).toBe(atteso);
+  });
+
+  /**
+   * `DNS_LABEL` da sola fa tutto il lavoro (una review indipendente ha
+   * mostrato che il controllo esplicito su `/:@,\s` era ridondante: tolto,
+   * nessuno dei 53 test cambiava esito, perché nessuno di quei caratteri
+   * passa mai `DNS_LABEL` dentro un'etichetta). Questi casi non dipendono da
+   * nessun altro controllo — solo da `DNS_LABEL` — cosa che i casi sopra
+   * (schema, porta, percorso, utente, elenco, `..`) non garantivano da soli:
+   * sostituendo `DNS_LABEL` con un pattern che accetta tutto, uno solo dei
+   * casi sopra si accorgeva del guasto. Questi cinque se ne accorgono anche
+   * loro, senza passare da `/`, `:`, `@`, `,`, spazio o `..`.
+   */
+  it.each([
+    ['trattino-alla-fine-.example', false, 'un trattino alla fine di un etichetta'],
+    ['a_b.example', false, 'un underscore — non RFC1123'],
+    [`${'a'.repeat(64)}.example`, false, "un'etichetta oltre i 63 caratteri"],
+    ['.example', false, 'un punto iniziale — etichetta vuota'],
+    ['*.', false, 'un wildcard senza dominio dopo'],
+  ])('%s → %s (%s)', (candidato, atteso) => {
+    expect(isValidEgressHost(candidato)).toBe(atteso);
+  });
 });
 
 describe('widenEgressForCapability — host non valido: rifiuta prima di chiedere o scrivere', () => {
@@ -192,6 +237,9 @@ describe('widenEgressForCapability — host non valido: rifiuta prima di chieder
     ['a.example,b.example', 'un elenco'],
     ['user@evil.example', 'un utente'],
     ['../../../etc/passwd', 'un attraversamento di percorso'],
+    ['api.tavily.com ', 'uno spazio finale'],
+    [' api.tavily.com', 'uno spazio iniziale'],
+    ['api.tavily.com\n', 'un a capo finale — una variabile di shell con un \\n dietro'],
   ])('"%s" (%s): niente domanda, niente scrittura, il perché è nel messaggio', async (host) => {
     const h = home();
     let chiesto = 0;
@@ -220,6 +268,38 @@ describe('widenEgressForCapability — host non valido: rifiuta prima di chieder
     expect(esito.ok).toBe(false);
     expect(egressAllow(h)).toEqual([]);
   });
+
+  /**
+   * Il caso end-to-end che la seconda review indipendente ha misurato: il
+   * perché rifiutare `"api.tavily.com "` (e i suoi fratelli con lo spazio
+   * all'inizio o l'a-capo alla fine) non è cosmetico. Se quel valore fosse
+   * finito scritto — la prima stesura di questa funzione lo faceva —
+   * `hostAllowed()` non lo avrebbe mai fatto corrispondere a
+   * `"api.tavily.com"`, la stringa che il boot controlla davvero
+   * (`agent/runtime.ts`, `new URL(backend.endpoint).hostname`): l'owner
+   * avrebbe letto «aggiunto all'allowlist», il seal sarebbe stato valido, e
+   * `web_search` sarebbe rimasto spento lo stesso. Qui si prova sia che oggi
+   * non si scrive quel valore, sia — costruendo a mano l'allowlist che una
+   * versione senza il controllo avrebbe scritto — che se lo si scrivesse
+   * davvero il match fallirebbe: la ragione per cui il rifiuto a monte è
+   * quello giusto, non solo uno dei due modi validi di chiudere il difetto.
+   */
+  it.each(['api.tavily.com ', ' api.tavily.com', 'api.tavily.com\n'])(
+    '"%s": non scritto oggi, e se lo fosse hostAllowed() non lo troverebbe comunque',
+    async (host) => {
+      const h = home();
+      const esito = await widenEgressForCapability(h, [host], 'la ricerca web (Tavily)', {
+        out: () => {},
+        chiediConferma: () => Promise.resolve('s'),
+      });
+      expect(esito.ok).toBe(false);
+      expect(egressAllow(h)).toEqual([]);
+      // La dimostrazione che il rifiuto non è pignoleria: un allowlist che
+      // contenesse quel valore tale e quale non farebbe mai match sull'host
+      // pulito che il boot chiede.
+      expect(hostAllowed('api.tavily.com', { allow: [host.toLowerCase()] })).toBe(false);
+    },
+  );
 });
 
 describe('widenEgressForCapability — permesso negato al risigillo', () => {
