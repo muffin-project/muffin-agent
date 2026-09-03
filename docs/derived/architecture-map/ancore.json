@@ -961,47 +961,47 @@
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 320,
+    "line": 331,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 324,
+    "line": 335,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 440,
+    "line": 451,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 459,
+    "line": 470,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 638,
+    "line": 649,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 684,
+    "line": 695,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 694,
+    "line": 705,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 725,
+    "line": 736,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 943,
+    "line": 954,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
@@ -1061,52 +1061,52 @@
   },
   "cli/repl.ts:100": {
     "path": "cli/repl.ts",
-    "line": 283,
+    "line": 324,
     "testo": "export async function runRepl("
   },
   "cli/repl.ts:111": {
     "path": "cli/repl.ts",
-    "line": 301,
+    "line": 342,
     "testo": "* Where the readline interface reads from. Injectable for the same reason"
   },
   "cli/repl.ts:145": {
     "path": "cli/repl.ts",
-    "line": 394,
+    "line": 447,
     "testo": "// DAY-1 requirement B14: a file the model produces can now reach the owner as a real"
   },
   "cli/repl.ts:157": {
     "path": "cli/repl.ts",
-    "line": 406,
+    "line": 459,
     "testo": "* possible (`--no-stream`), and the capability object has no room to carry"
   },
   "cli/repl.ts:174": {
     "path": "cli/repl.ts",
-    "line": 426,
+    "line": 479,
     "testo": "mcpLines = await attachMcp(runtime, home);"
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 620,
+    "line": 673,
     "testo": "* `gatewayStandDown` arbitrates each tick — which is also what lets this"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 656,
+    "line": 709,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 658,
+    "line": 711,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 659,
+    "line": 712,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 679,
+    "line": 732,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
@@ -1166,17 +1166,17 @@
   },
   "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 488,
+    "line": 504,
     "testo": "* never arrived even on a home where Telegram was connected and answering"
   },
   "cli/surface.ts:295": {
     "path": "cli/surface.ts",
-    "line": 492,
+    "line": 508,
     "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 576,
+    "line": 611,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
