@@ -79,6 +79,7 @@ export interface TelegramApiLike {
   getUpdates(offset: number, allowed?: string[]): Promise<Update[]>;
   sendMessage(chatId: number, html: string, options?: SendOptions): Promise<Message>;
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
+  editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean>;
   deleteMessage(chatId: number, messageId: number): Promise<boolean>;
   sendChatAction(chatId: number, action?: string): Promise<boolean>;
   sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
@@ -275,6 +276,29 @@ export class TelegramApi implements TelegramApiLike {
       text: html,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+    });
+  }
+
+  /**
+   * Toglie la tastiera da un messaggio, per costruzione — non per omissione.
+   *
+   * La pagina ufficiale di `editMessageText`
+   * (`https://core.telegram.org/bots/api#editmessagetext`, letta il
+   * 03/09/2026) elenca `reply_markup` come parametro opzionale ma non dice
+   * cosa succede alla tastiera esistente quando viene omesso, e l'esistenza
+   * stessa di `editMessageReplyMarkup` come metodo a parte è il segnale più
+   * forte disponibile che «un edit cambia solo i campi che passi», non «un
+   * edit senza `reply_markup` la cancella»
+   * (`docs/evidence/forma-delle-superfici-2026-09-03.md` §4.4). Un metodo
+   * dedicato invece di un parametro opzionale su `editMessageText`, perché il
+   * chiamante che sta solo chiudendo una domanda non deve anche ricomporre il
+   * testo per toglierle i pulsanti.
+   */
+  editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean> {
+    return this.effect<Message | boolean>('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
     });
   }
 

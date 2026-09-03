@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from './init.js';
+import { applica } from './schermo.js';
 import {
   formatProgressLine,
   makeReplCliWrite,
@@ -384,6 +385,138 @@ describe('the REPL renders progress on stderr, gated on stderr being a TTY (B13)
 
       expect(code).toBe(0);
       expect(err.join('').split('\n').some((l) => l.startsWith('· '))).toBe(false);
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
+      await provider.close();
+    }
+  });
+});
+
+/**
+ * The residue `docs/evidence/forma-delle-superfici-2026-09-03.md` §3-§5
+ * describes: on the real binary, an approval used to leave a standalone `⚠`
+ * block behind, never merged with the `✓`/`✗` line the tool that followed
+ * already got. This is the wiring test §7 of that memo asks for — the same
+ * genre as the B11/B13 suites above (a real turn, through `runRepl`), not a
+ * unit test on `formatProgressLine` in isolation — and it asserts on the
+ * **rendered screen** (`cli/schermo.ts`), not on raw bytes: a redraw that
+ * happened to write `⚠` twice and erase it once would look green to a
+ * substring check on the raw writes and still be the defect on a real
+ * terminal.
+ */
+describe('un\'approvazione rientra nel vocabolario dei passi (§4.1/§5 della memo)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function homeAgainst(baseUrl: string): string {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-repl-approve-'));
+    runInit({ home, provider: 'openai-compat', baseUrl, apiKey: 'sk-repl-approve-fake' });
+    return home;
+  }
+
+  /** Il messaggio, poi la risposta al prompt `[s/N]` — due righe, un solo stdin. */
+  function stdinConSN(messaggio: string, risposta: string): PassThrough {
+    const stdin = new PassThrough();
+    stdin.write(`${messaggio}\n`);
+    stdin.write(`${risposta}\n`);
+    stdin.end();
+    return stdin;
+  }
+
+  it('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
+    const provider = await startFakeProvider({
+      main: [
+        { tool: { name: 'shell_run', args: { command: 'echo ciao', cwd: '.' } } },
+        { text: 'Fatto, ho stampato ciao.' },
+      ],
+    });
+    const originalIsTTY = process.stderr.isTTY;
+    process.stderr.isTTY = true;
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const out: string[] = [];
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        out.push(String(chunk));
+        return true;
+      });
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stdin: stdinConSN('esegui il comando echo per favore', 's') });
+
+      expect(code).toBe(0);
+      // B11, la parte concreta della memo (`cli/textzone.ts:357`): il prompt
+      // `[s/N]`, la `s` digitata e la sua eco non hanno mai toccato stdout —
+      // solo la risposta del turno lo fa.
+      const suStdout = out.join('');
+      expect(suStdout).not.toContain('approvi');
+      expect(suStdout).not.toContain('[s/N]');
+      expect(suStdout).toContain('Fatto, ho stampato ciao.');
+
+      const schermo = applica(err);
+      const righe = schermo.righe.map((r) => r.trimEnd());
+      const testo = righe.join('\n');
+
+      // Il formato a parte è sparito per intero, non solo nascosto da un
+      // secondo ridisegno che lo cancella: applicare i byte è l'unico modo di
+      // saperlo (`cli/schermo.ts`, header del file).
+      expect(testo).not.toContain('⚠');
+      // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
+      // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
+      expect(testo).toContain('⏸ sys.shell: aspetto la tua approvazione');
+
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: consentito'));
+      expect(rigaVerdetto).toBeGreaterThan(-1);
+      // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
+      // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
+      const dopo = righe.slice(rigaVerdetto + 1).find((r) => r.trim() !== '');
+      const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
+      // Nessuna riga vuota fra il verdetto e il passo che segue.
+      expect(indiceDopo).toBe(rigaVerdetto + 1);
+      expect(dopo).toContain('✓ eseguo un comando: echo ciao');
+    } finally {
+      process.stderr.isTTY = originalIsTTY;
+      await provider.close();
+    }
+  });
+
+  it('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
+    const provider = await startFakeProvider({
+      main: [
+        { tool: { name: 'shell_run', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
+        { text: 'Va bene, non lo eseguo.' },
+      ],
+    });
+    const originalIsTTY = process.stderr.isTTY;
+    process.stderr.isTTY = true;
+    try {
+      const home = homeAgainst(provider.baseUrl);
+      const err: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err.push(String(chunk));
+        return true;
+      });
+
+      const code = await runRepl(home, { stdin: stdinConSN('cancella /tmp/x', 'n') });
+
+      expect(code).toBe(0);
+      const testo = applica(err)
+        .righe.map((r) => r.trimEnd())
+        .join('\n');
+      expect(testo).not.toContain('⚠');
+      expect(testo).toContain('✗ sys.shell: rifiutato');
+      // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
+      // secondo canale — quindi la riga del passo segue comunque, con `✗`:
+      // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
+      const righe = testo.split('\n').map((r) => r.trimEnd());
+      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell: rifiutato'));
+      const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
+      expect(indiceDopo).toBe(rigaVerdetto + 1);
+      expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');
+      expect(testo).not.toMatch(/✓ eseguo un comando/);
     } finally {
       process.stderr.isTTY = originalIsTTY;
       await provider.close();

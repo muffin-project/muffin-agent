@@ -18,6 +18,7 @@ import {
 import { seal } from '../core/rot/verify.js';
 import type { SupervisorProbes } from '../core/gateway/supervisor.js';
 import { runInit } from './init.js';
+import { buildRuntime } from '../agent/runtime.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import {
   runDoctor,
@@ -97,6 +98,23 @@ describe('doctor names the everyday consequence of single-user, and the remedy f
     expect(c?.detail).toContain('single-user');
     expect(c?.detail).toContain('sys.shell');
     expect(c?.remedy).toContain('muffin rot harden');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('leads with what happens to him, and only names the mode afterwards — 03/09/2026 UX pass', async () => {
+    // The owner's own complaint, read against real `muffin doctor` output:
+    // the line named "root of trust", "single-user", "seal" before it ever
+    // said what he should expect or do. This locks the order so a future
+    // edit cannot quietly put the vocabulary back in front.
+    const dir = home();
+    const c = await check(dir, 'root of trust mode');
+    const consequenceAt = c!.detail.indexOf('sys.shell');
+    const modeNameAt = c!.detail.indexOf('single-user');
+    expect(consequenceAt).toBeGreaterThan(-1);
+    expect(modeNameAt).toBeGreaterThan(-1);
+    expect(consequenceAt).toBeLessThan(modeNameAt);
+    // Every warning names something the owner can actually type.
+    expect(c?.remedy).toMatch(/`muffin [^`]+`/);
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -927,6 +945,64 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       rmSync(checkout, { recursive: true, force: true });
     }
   });
+
+  it('several sealed rot/ files diverging together get one grouped remedy, not one paragraph per file — 03/09/2026 UX pass', async () => {
+    // Same synthetic-checkout technique as the single-file test above, but
+    // with two sealed files both stuck at v1 while HEAD moved to v2. Before
+    // this slice each file produced its own full "questo file è dentro il
+    // sigillo…" paragraph, `muffin rot reseal` named once per file — the
+    // owner read the same explanation twice for one `muffin update`.
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'muffin-doctor-drift-group-checkout-')));
+    const sh = (cmd: string, args: string[]): void => {
+      const r = spawnSync(cmd, args, { cwd: checkout, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
+    sh('git', ['init', '-q']);
+    sh('git', ['config', 'user.email', 't@t']);
+    sh('git', ['config', 'user.name', 't']);
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v1']);
+    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v2 identity — HEAD ora dice questo\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
+    sh('git', ['add', '.']);
+    sh('git', ['commit', '-qm', 'v2']);
+
+    const dir = home();
+    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n');
+    rmSync(paths(dir).defaultsManifest, { force: true });
+
+    try {
+      const report = await runDoctor(dir, { checkoutRoot: checkout });
+
+      // No per-file check for the two that diverged together — they are
+      // folded into the group instead of repeating.
+      expect(report.checks.find((c) => c.name === 'default rot/identity.md')).toBeUndefined();
+      expect(report.checks.find((c) => c.name === 'default rot/policy.json')).toBeUndefined();
+
+      const group = report.checks.find((c) => c.name === 'default rot/*');
+      expect(group).toBeTruthy();
+      expect(group?.level).toBe('warn');
+      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/policy.json');
+      expect(group?.remedy).toBeTruthy();
+      // One explanation, one command sequence: `rot reseal` named exactly
+      // once for the whole batch, not once per file.
+      const resealCount = (group!.remedy!.match(/rot reseal/g) ?? []).length;
+      expect(resealCount).toBe(1);
+      // A command an owner can actually run — for each file — is still there.
+      expect(group?.remedy).toContain('cp ');
+      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'identity.md'));
+      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'policy.json'));
+      expect(group?.remedy).toContain('safe mode');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
 });
 
 
@@ -1580,5 +1656,132 @@ describe('doctor says whether a voice note would be understood, before the first
       },
     });
     expect(c?.level).toBe('warn');
+  });
+});
+
+/**
+ * "Perché non ho `web_search`" costava tre turni di retry, il 03/09/2026:
+ * `config.json` dichiarava Tavily, `rot/egress.json` non allowlistava
+ * `api.tavily.com`, e la ragione stava già una volta sola in `gateway.err`
+ * dal boot — nessuna delle due porte che l'owner guarda (un turno, `muffin
+ * doctor`) la diceva. Questo blocco prova che ora entrambe la dicono, dalla
+ * stessa funzione (`diagnoseSearch`, `agent/tools/search.ts`), non da due
+ * letture che potrebbero divergere.
+ */
+describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () => {
+  it('web_search: stessa ragione e stesso rimedio di `sys.inspect`, dalla stessa fonte', async () => {
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('tavily', 'tvly-test-key', dir);
+    // rot/egress.json resta quello di `muffin init`: nessun host allowlistato
+    // — la lacuna esatta dell'owner.
+
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-doctor-capgap-ws-'));
+    const runtime = buildRuntime(dir, workspace);
+    const gap = runtime.capabilityGaps.find((g) => g.capability === 'web_search');
+    runtime.close();
+    expect(gap).toBeDefined();
+
+    const c = await check(dir, 'capacità: web_search');
+    expect(c?.level).toBe('warn');
+    // Non "menziona la stessa cosa" — è letteralmente la stessa stringa,
+    // perché entrambe le porte chiamano `diagnoseSearch` e nessuna delle due
+    // la riscrive con parole proprie.
+    expect(c?.detail).toBe(gap?.reason);
+    expect(c?.remedy).toBe(gap?.remedy);
+    expect(c?.detail).toContain('api.tavily.com');
+    expect(c?.remedy).toContain('rot reseal');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('web_search: ok una volta che l’host è allowlistato e il sigillo è rifatto', async () => {
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.search = { provider: 'tavily', apiKeyRef: 'secret://tavily' };
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeSecret('tavily', 'tvly-test-key', dir);
+    const egressPath = join(paths(dir).rot, 'egress.json');
+    const egress = JSON.parse(readFileSync(egressPath, 'utf8'));
+    egress.allow = ['api.tavily.com'];
+    writeFileSync(egressPath, JSON.stringify(egress, null, 2));
+    seal(dir, '1', new Date());
+
+    const c = await check(dir, 'capacità: web_search');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('attivo');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('web_search: nessuna riga quando la ricerca non è configurata affatto', async () => {
+    // La postura deliberata di `agent/runtime.ts`: assente non è un guasto.
+    const dir = home();
+    const c = await check(dir, 'capacità: web_search');
+    expect(c).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('shell_run: spento con la stessa ragione del check `sandbox`, non una parola generica', async () => {
+    const dir = home();
+    const spia = vi.spyOn(SandboxExecutor.prototype, 'verify').mockResolvedValue({
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'contain_failed',
+      detail: "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+      remedy: 'questa macchina non può contenere: nessun comando verrà eseguito',
+    });
+    try {
+      const c = await check(dir, 'capacità: shell_run');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain('contain_failed');
+      expect(c?.remedy).toContain('non può contenere');
+      // Distinto da "tagliato dal tetto": nessuna capacità spenta usa quella
+      // parola, e nessuna capacità tagliata dice "non disponibile".
+      expect(c?.detail).not.toContain('tetto');
+    } finally {
+      spia.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('shell_run: ok quando il contenimento regge', async () => {
+    const dir = home();
+    const c = await check(dir, 'capacità: shell_run');
+    expect(c?.level).toBe('ok');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('tetto tool: nomina i tool tagliati quando il modello risolve sul profilo conservativo, e non è la stessa frase di uno spento', async () => {
+    // Nessun profilo spedito taglia oggi (consumer-local: 15, frontier: 24,
+    // contro una dozzina di tool base — agent/runtime-exposure.test.ts lo
+    // misura). Un id modello che non combacia con nessun `match` risolve su
+    // CONSERVATIVE (maxToolsExposed: 10), che invece taglia davvero.
+    const dir = home();
+    const configPath = paths(dir).config;
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.models.main = 'modello-mai-schedato-xyz';
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const c = await check(dir, 'capacità: tetto tool');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('tetto');
+    expect(c?.detail).toContain('conservative');
+    expect(c?.remedy).toContain('maxToolsExposed');
+    // Distinto da una capacità spenta: il tetto non "non è disponibile" e non
+    // è "spento", è tagliato — e viceversa, il check `sandbox`/`web_search`
+    // non nomina mai un tetto.
+    expect(c?.detail).not.toContain('non disponibile');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('tetto tool: ok quando il profilo risolto copre tutti i tool registrati', async () => {
+    const dir = home(); // cli/init.ts risolve su un profilo frontier, tetto 24
+    const c = await check(dir, 'capacità: tetto tool');
+    expect(c?.level).toBe('ok');
+    expect(c?.remedy).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

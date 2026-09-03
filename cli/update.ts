@@ -38,8 +38,8 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * docstring: re-pointing the symlink is *already* the sanctioned way to move
  * what a running unit executes without touching the unit itself). This slice
  * is that fact, used on purpose: an update never edits the tree a live
- * gateway is running from. It fetches `origin/main`, checks out that commit
- * into its own `git worktree` under `.releases/<sha>` (sharing the object
+ * gateway is running from. It fetches the channel's branch, checks out that
+ * commit into its own `git worktree` under `.releases/<sha>` (sharing the object
  * store, not a second clone), builds and smoke-tests *that* directory, takes a
  * backup, and only then swings the launcher symlink(s) over — one `rename(2)`
  * per link, so a reader never sees a half-written target. A `npm ci` that
@@ -49,9 +49,42 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * failure" design could not get by trying harder — this one gets it by
  * construction (owner directive, 2026-08-26, after exploring the space).
  *
- * `main` is deliberately the channel this reads from — `dev` stays where
- * development happens; the two are not the same question `muffin update`
- * exists to answer.
+ * ## Il canale, e perché il comando non può più tacerlo
+ *
+ * `main` resta il canale **predefinito**, e per la ragione di sempre: è la
+ * linea promossa, e la PR di promozione `dev → main` fa girare l'intera CI
+ * esattamente sull'albero che sta per diventare `main`. È la verifica più
+ * forte che questo repository produca.
+ *
+ * Ma `main` avanza **solo** quando un umano apre e mergia quella PR, e fino al
+ * 03/09/2026 questo comando non sapeva distinguere due situazioni opposte che
+ * stampava identiche: «non c'è niente di nuovo» e «c'è parecchio, nessuno
+ * l'ha promosso». Misurato quel giorno sulla macchina dell'owner: il launcher
+ * puntava a `5c49f1e`, che *era* la testa di `origin/main`, quindi `muffin
+ * update` diceva «già aggiornato» ed era vero — mentre `origin/dev` era
+ * avanti di sette commit non-merge, compresa la correzione che aspettava.
+ *
+ * Da ADR-0057 (`docs/decisions/0057-il-canale-si-dichiara.md`) il canale è
+ * **una scelta dichiarata, non un default silenzioso**:
+ *
+ *  - `--channel <main|dev>` sceglie da dove leggere, per invocazione. Non è
+ *    persistibile di proposito: un canale salvato in configurazione tornerebbe
+ *    a essere un default invisibile, che è esattamente il difetto di partenza.
+ *  - qualunque canale si legga, il comando **nomina sempre la distanza
+ *    dell'altro** (`channelLagNote`): quanti commit ci sono su `origin/dev`
+ *    che non sono su `origin/main`, e come installarli sapendo che non sono
+ *    promossi. È la riga che mancava il 03/09.
+ *  - dopo un aggiornamento riuscito dice **cosa è arrivato**
+ *    (`arrivalsSummary`): i soggetti dei commit fra il marker vecchio e quello
+ *    nuovo, non solo che è andato bene.
+ *
+ * La promozione automatica è stata valutata e **rifiutata** in quell'ADR, su
+ * due fatti misurati e non su gusto: nessun workflow parte sul push a `dev`
+ * (`.github/workflows/` — i trigger sono `pull_request` e il push a `main`),
+ * quindi la testa di `dev` non ha **nessuna** check run da cui un cancello
+ * possa leggere una conclusion; e la protezione di ramo su questo piano
+ * risponde 403, quindi l'auto-merge di GitHub — l'unico cancello a conclusion
+ * che non costerebbe CI in più — non è disponibile.
  *
  * ## The one update this command cannot perform
  *
@@ -68,6 +101,105 @@ import { schemaVersionOf } from '../core/db/migrate.js';
  * bootstrap marker), and every later update is one command.
  */
 
+/**
+ * I canali che questo comando sa leggere, e chi sta davanti a chi.
+ *
+ * Non è un elenco di rami: è la scala di promozione. `dev` è dove il lavoro
+ * atterra, `main` è dove viene promosso, quindi `main` può essere indietro
+ * rispetto a `dev` e mai il contrario. `UPSTREAM_OF` è esattamente quella
+ * asimmetria, ed è ciò che rende la riga di ritardo una domanda con una
+ * risposta sola invece di un confronto fra pari.
+ */
+export const CHANNELS = ['main', 'dev'] as const;
+export type Channel = (typeof CHANNELS)[number];
+export const DEFAULT_CHANNEL: Channel = 'main';
+const UPSTREAM_OF: Readonly<Record<Channel, Channel | null>> = { main: 'dev', dev: null };
+
+export function isChannel(x: string): x is Channel {
+  return (CHANNELS as readonly string[]).includes(x);
+}
+
+/**
+ * La riga che mancava il 03/09/2026.
+ *
+ * «già aggiornato» era vero e inutile: diceva che il canale letto non ha
+ * commit nuovi, non che il lavoro esiste altrove e nessuno l'ha promosso. Le
+ * due situazioni stampavano gli stessi byte, e l'owner ne ha concluso quella
+ * sbagliata.
+ *
+ * Tre esiti, tre frasi diverse, e nessuna delle tre è il silenzio:
+ *
+ *  - il canale non ha niente sopra di sé (`dev`) → si dice, così chi legge sa
+ *    che l'assenza di una distanza è una proprietà del canale e non un dato
+ *    mancante;
+ *  - la distanza non si è potuta misurare (`origin/<upstream>` non risponde) →
+ *    si dichiara di non saperlo. Un numero non misurato non si inventa, e
+ *    tacere qui sarebbe tornare al difetto;
+ *  - la distanza c'è → **il numero e il ramo**, più il comando che li installa
+ *    adesso sapendo che non sono promossi.
+ *
+ * Funzione pura: decide la riga, non la stampa.
+ */
+export function channelLagNote(args: {
+  channel: Channel;
+  upstream: Channel | null;
+  /** `null` quando `origin/<upstream>` non si è potuto leggere: non si sa, e si dice. */
+  ahead: number | null;
+}): string {
+  if (args.upstream === null) {
+    return `stai leggendo ${args.channel}: è il ramo dove il lavoro atterra per primo, non c'è nessun canale più avanti.`;
+  }
+  const ref = `origin/${args.upstream}`;
+  const qui = `origin/${args.channel}`;
+  if (args.ahead === null) {
+    return `non riesco a leggere ${ref}: non posso dire se ci sia lavoro non ancora arrivato su ${args.channel}.`;
+  }
+  if (args.ahead === 0) return `niente in attesa: ${ref} non ha commit oltre ${qui}.`;
+  return (
+    `su ${ref} ci sono ${args.ahead} commit che NON sono su ${qui}: questo aggiornamento non li contiene. ` +
+    `Arrivano quando ${args.upstream} viene promosso su ${args.channel}; per installarli adesso, sapendo che non sono promossi:\n` +
+    `  → muffin update --channel ${args.upstream}`
+  );
+}
+
+/**
+ * Cosa è arrivato, non solo che è andato bene.
+ *
+ * Prima l'aggiornamento riusciva e l'owner non imparava niente su ciò che
+ * aveva appena installato: un `✓ flip` e un percorso. I soggetti dei commit
+ * fra il marker vecchio e quello nuovo sono l'unica risposta che il comando
+ * ha già in mano e non dava.
+ *
+ * `subjects === null` è il caso che conta per la robustezza: `git log` può non
+ * rispondere (marker che punta a un commit potato, `.releases/current`
+ * scritto da una release più vecchia, oggetto assente dopo un `gc`). Un
+ * elenco mancante **non** è un aggiornamento fallito — la release è già viva
+ * sul disco — quindi si degrada al conteggio, che si conosce comunque, invece
+ * di far saltare il passo.
+ */
+export function arrivalsSummary(args: {
+  /** I soggetti, dal più recente. `null` quando `git log` non ha risposto. */
+  subjects: string[] | null;
+  /** La distanza già misurata: nota anche quando i soggetti non lo sono. */
+  fallbackCount: number;
+  max?: number;
+}): string {
+  const max = args.max ?? 10;
+  if (args.subjects === null) {
+    return `${args.fallbackCount} commit installati — non riesco a elencarli (\`git log\` non ha risposto): \`git log\` nel checkout, quando vuoi vederli.`;
+  }
+  if (args.subjects.length === 0) {
+    return `${args.fallbackCount} commit installati — nessuno di lavoro: solo merge.`;
+  }
+  const mostrati = args.subjects.slice(0, max);
+  const resto = args.subjects.length - mostrati.length;
+  return (
+    `${args.subjects.length} commit installati:\n` +
+    mostrati.map((s) => `  · ${s}`).join('\n') +
+    (resto > 0 ? `\n  … e altri ${resto}` : '')
+  );
+}
+
 export type UpdateStep = { name: string; done: boolean; detail: string };
 export type UpdateResult = { steps: UpdateStep[]; code: number };
 
@@ -80,6 +212,8 @@ export type UpdateDeps = {
   home?: string;
   dryRun?: boolean;
   rollback?: boolean;
+  /** Da quale ramo leggere. `main` (promosso) di default; `dev` è una scelta esplicita, mai un default salvato — vedi la testa di questo file. */
+  channel?: Channel;
   /** Real `spawnSync('git', …)` by default; overridden only for the pure unit tests below. */
   git?: GitRunner;
   /** Real `npm ci` inside the release by default — the one step tests fake, per the injection pattern already used for `npmCi`/probes elsewhere in this CLI. */
@@ -645,17 +779,38 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 
   if (deps.rollback) return rollback(checkoutRoot, home, deps, steps);
 
+  const channel = deps.channel ?? DEFAULT_CHANNEL;
+  const channelRef = `refs/remotes/origin/${channel}`;
+
   begin('fetch');
-  const fetchRes = gitRunner(['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'], checkoutRoot);
+  const fetchRes = gitRunner(['fetch', 'origin', `+refs/heads/${channel}:${channelRef}`], checkoutRoot);
   if (fetchRes.status !== 0) {
     step('fetch', `${fetchRes.stderr.trim() || 'git fetch fallito'}\n  → ${fetchFailureRemedy(fetchRes.stderr)}`, false);
     return { steps, code: 1 };
   }
-  const newSha = gitRunner(['rev-parse', 'refs/remotes/origin/main'], checkoutRoot).stdout.trim();
-  const newShort = gitRunner(['rev-parse', '--short', 'refs/remotes/origin/main'], checkoutRoot).stdout.trim();
+  const newSha = gitRunner(['rev-parse', channelRef], checkoutRoot).stdout.trim();
+  const newShort = gitRunner(['rev-parse', '--short', channelRef], checkoutRoot).stdout.trim();
   const baseline = currentOrBootstrap(checkoutRoot, gitRunner);
   const behindRes = gitRunner(['rev-list', '--count', `${baseline.marker.sha}..${newSha}`], checkoutRoot);
   const behind = Number(behindRes.stdout.trim() || '0');
+
+  /**
+   * Il ramo davanti a questo canale, misurato — mai dedotto dal fatto che il
+   * canale sia aggiornato. Un fetch del ramo a monte che fallisce non ferma
+   * l'aggiornamento (non è il canale che si sta installando): rende la
+   * distanza *ignota*, e `channelLagNote` lo dichiara invece di stampare zero.
+   */
+  const upstream = UPSTREAM_OF[channel];
+  let ahead: number | null = null;
+  if (upstream !== null) {
+    const upstreamRef = `refs/remotes/origin/${upstream}`;
+    if (gitRunner(['fetch', 'origin', `+refs/heads/${upstream}:${upstreamRef}`], checkoutRoot).status === 0) {
+      const r = gitRunner(['rev-list', '--count', `${channelRef}..${upstreamRef}`], checkoutRoot);
+      const n = Number(r.stdout.trim());
+      if (r.status === 0 && Number.isFinite(n)) ahead = n;
+    }
+  }
+  const lag = (): void => step('canale', channelLagNote({ channel, upstream, ahead }));
 
   const bootstrapNote = baseline.bootstrap ? ' (nessuna release registrata ancora — confronto con l\'HEAD di questo checkout)' : '';
 
@@ -663,16 +818,18 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
     step(
       'dry-run',
       behind === 0
-        ? `già aggiornato: origin/main è a ${newShort}, nessun commit di distanza${bootstrapNote}`
-        : `dietro di ${behind} commit rispetto a origin/main (${baseline.marker.sha.slice(0, 7)} → ${newShort})${bootstrapNote}`,
+        ? `già aggiornato: origin/${channel} è a ${newShort}, nessun commit di distanza${bootstrapNote}`
+        : `dietro di ${behind} commit rispetto a origin/${channel} (${baseline.marker.sha.slice(0, 7)} → ${newShort})${bootstrapNote}`,
     );
+    lag();
     return { steps, code: 0 };
   }
 
-  step('fetch', `origin/main a ${newShort}${bootstrapNote}`);
+  step('fetch', `origin/${channel} a ${newShort}${bootstrapNote}`);
 
   if (behind === 0) {
-    step('aggiornamento', 'già aggiornato: nessun commit di distanza da origin/main');
+    step('aggiornamento', `già aggiornato: nessun commit di distanza da origin/${channel}`);
+    lag();
     return { steps, code: 0 };
   }
 
@@ -759,6 +916,24 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
       : `nessun launcher in PATH punta a questo checkout — .releases/current aggiornato comunque (${entry}); se lanci muffin da un altro punto, ripunta il link a mano`,
   );
 
+  /**
+   * Cosa è appena entrato. `--no-merges` perché in questo repository i merge
+   * si chiamano «Merge pull request #NNN from …»: il titolo della slice è già
+   * nel commit che quel merge porta, e ripeterlo raddoppierebbe l'elenco
+   * dicendo meno. Il conteggio di riserva è `behind`, che è misurato sopra e
+   * resta noto anche se `git log` non risponde.
+   */
+  const logRes = gitRunner(['log', '--no-merges', '--format=%s', `${previousForMarker.sha}..${newSha}`], checkoutRoot);
+  const subjects =
+    logRes.status === 0
+      ? logRes.stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l !== '')
+      : null;
+  step('novità', arrivalsSummary({ subjects, fallbackCount: behind }));
+  lag();
+
   const keepNames = new Set(
     [newShort, releaseDirNameOf(checkoutRoot, previousForMarker)].filter((x): x is string => x !== null),
   );
@@ -810,13 +985,17 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 }
 
 export const UPDATE_USAGE = `uso:
-  muffin update [--dry-run] [--yes]     fetch origin/main, costruisce una release
-                                         affiancata (git worktree + npm ci),
+  muffin update [--dry-run] [--yes]     fetch del canale, costruisce una release
+      [--channel main|dev]               affiancata (git worktree + npm ci),
                                          backup, poi scambio atomico del/i
                                          launcher — il gateway vivo resta sul
                                          codice vecchio finché non riparte
                                          --dry-run  quanto sei indietro, non tocca niente
                                          --yes      salta la domanda «riavvio ora?»
+                                         --channel  da quale ramo leggere (default: main,
+                                                    la linea promossa). Qualunque canale
+                                                    scegli, il comando dice sempre quanti
+                                                    commit ci sono sull'altro.
   muffin update --rollback [--yes]      torna alla release precedente (flip inverso)
 `;
 
@@ -837,15 +1016,29 @@ const UPDATE_PHRASE: Readonly<Record<string, string>> = {
 };
 
 export async function cmdUpdate(argv: string[]): Promise<number> {
-  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean };
+  let values: { 'dry-run'?: boolean; yes?: boolean; rollback?: boolean; channel?: string };
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { 'dry-run': { type: 'boolean' }, yes: { type: 'boolean' }, rollback: { type: 'boolean' } },
+      options: {
+        'dry-run': { type: 'boolean' },
+        yes: { type: 'boolean' },
+        rollback: { type: 'boolean' },
+        channel: { type: 'string' },
+      },
       allowPositionals: false,
     }));
   } catch {
     process.stderr.write(UPDATE_USAGE);
+    return 78;
+  }
+
+  // Un canale sconosciuto si ferma qui, non a `git fetch`: `+refs/heads/<x>`
+  // con una `<x>` arbitraria darebbe l'errore di git, che parla di refspec e
+  // non della manopola che l'utente ha girato.
+  const requested = values.channel ?? DEFAULT_CHANNEL;
+  if (!isChannel(requested)) {
+    process.stderr.write(`canale sconosciuto: ${requested} — i canali sono ${CHANNELS.join(', ')}\n${UPDATE_USAGE}`);
     return 78;
   }
 
@@ -862,6 +1055,7 @@ export async function cmdUpdate(argv: string[]): Promise<number> {
   const status = makeStatusLine((text) => process.stderr.write(text), process.stderr.isTTY === true);
   const result = runUpdate({
     home,
+    channel: requested,
     dryRun: values['dry-run'] ?? false,
     rollback: values.rollback ?? false,
     onBegin: (name) => status.show(`${UPDATE_PHRASE[name] ?? name}…`),
