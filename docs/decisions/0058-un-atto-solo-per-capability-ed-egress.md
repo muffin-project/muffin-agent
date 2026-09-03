@@ -221,6 +221,94 @@ mutazione verso un wildcard sul genitore — ora ne usa tre; e `seal(home, '1',
 quello corrente — corretto leggendo il manifest esistente prima di
 risigillare, invece di lasciarlo come nota.
 
+## Revisione — 2026-09-03: i sei follow-up del terzo giro di judge, chiusi
+
+Il terzo giro di judge (68 casi mirati più un fuzz da 3 milioni di stringhe
+contro `hostAllowed()`) ha dato MERGE senza blocchi, e sei follow-up non
+bloccanti. Nessuna delle decisioni sopra cambia — la conferma, la regola
+"solo interattivo", la barriera write-deny restano esattamente quelle. Sei
+rinforzi:
+
+1. **Il pavimento anti-SSRF ora vale anche per chi scrive.** `127.0.0.1`,
+   `169.254.169.254` (il metadata endpoint cloud) e ogni indirizzo RFC1918
+   superavano `DNS_LABEL` — ogni ottetto è cifre, e una sequenza di cifre è
+   un'etichetta DNS valida — quindi finivano proposti, confermabili, scritti
+   e sigillati. Non erano raggiungibili comunque da `sys.http`:
+   `addressVeto` (`agent/tools/http.ts`) chiama `isForbiddenAddress`
+   (`core/net/egress.ts`) su ogni hop, indipendentemente da questa allowlist
+   — verificato leggendo il codice, non per fiducia. `sys.search` non è
+   esposto allo stesso rischio per un motivo diverso: il suo host non viene
+   mai da `rot/egress.json`, viene dal catalogo (`SEARCH_PROVIDERS`) — la
+   voce nell'allowlist serve solo a spegnere/accendere quell'host fisso,
+   `hostAllowed()` non sceglie mai dove connettersi. `--host` di `muffin mcp
+   add` non fa mai connettere nulla di suo: dichiara soltanto (§10, MCP resta
+   TCB). Non abbiamo trovato un consumatore dell'allowlist che dialoghi con
+   un host nominato dall'owner senza passare da `isForbiddenAddress` — se
+   in futuro ne comparisse uno, questo non sarebbe più solo un rinforzo, ma
+   un buco vero, e andrebbe segnalato come tale. `isValidEgressHost` ora
+   rifiuta un letterale IPv4 forbidden (`core/rot/egress-writer.ts`); un
+   letterale IPv6 era già escluso da `DNS_LABEL` (contiene `:`).
+2. **`rollbackFallito` aveva zero copertura** — l'unica riga owner-facing del
+   modulo senza un test. Riprodotto mockando `writeFileSync` per fallire da
+   subito dopo la prima scrittura riuscita in poi (stesso metodo del judge),
+   cosicché `egress.json` si scriva davvero, `seal()` fallisca sul suo primo
+   write e **anche** il tentativo di rimettere `egress.json` com'era fallisca
+   — lo stato che il messaggio deve ammettere, mai tacere.
+3. **Il messaggio di rollback fallito incollava due percorsi con `/`**
+   (`…/egress.json//var/…/manifest.json`, leggibile come un unico percorso
+   inesistente). Ora sono separati con " e ".
+4. **Nessun tetto sulla lunghezza totale.** `DNS_LABEL` fermava un'etichetta
+   oltre i 63 caratteri ma non il nome intero oltre i 253 (RFC 1035 §3.1):
+   cinque etichette da 60 caratteri passavano ciascuna il limite di etichetta
+   e insieme superavano comunque 253. `isValidEgressHost` ora rifiuta anche
+   questo.
+5. **`EgressFileSchema` era in modalità strip.** Una chiave che l'owner
+   scrive a mano in `rot/egress.json` (una nota, un promemoria) spariva alla
+   prossima riscrittura fatta da `widenEgressForCapability`, senza che nulla
+   lo dicesse. Delle tre strade — tacere e scartare, tacere e conservare,
+   rifiutare e dirlo — scartare in silenzio è la peggiore: distrugge
+   qualcosa che una persona ha scritto nel proprio file, senza che se ne
+   accorga. Fra le altre due, abbiamo scelto **conservare** (`.loose()` in
+   `core/net/egress.ts`) e non **rifiutare**: nessun codice legge mai una
+   chiave sconosciuta (`loadEgress` proietta solo su `allow`), quindi
+   conservarla non costa niente in sicurezza, mentre rifiutare bloccherebbe
+   un `muffin search`/`mcp add` legittimo per una nota che non c'entra con
+   la richiesta in corso — lo stesso genere di attrito sproporzionato che
+   questo repository ha già segnato altrove come un difetto, non come
+   prudenza.
+6. **`muffin mcp add --host "$X"` con `$X` vuoto (o un host altrimenti non
+   valido, o senza terminale) usciva sempre 0**, anche quando l'host
+   nominato non veniva aggiunto — deliberato: il server MCP resta comunque
+   approvato, un fallimento sull'egress non disfa un'approvazione già
+   scritta (vedi "Il meccanismo" sopra). Ma uno script che lancia quel
+   comando e guarda solo l'exit code non aveva modo di accorgersi che
+   l'allargamento non è avvenuto: l'output è per un terminale, non per uno
+   script. Abbiamo scelto l'**exit code**, non un output più vistoso: `muffin
+   mcp list --verify` già usa questa convenzione in questo stesso file
+   ("pulito" → 0, "qualcosa da rivedere" → 1) — coerenza con un precedente
+   già scritto, non una seconda regola inventata qui. **La stessa regola vale
+   per entrambe le porte**, non solo per `mcp add`: `cmdSearch`
+   (`cli/search-setup.ts`) ha esattamente lo stesso schema — chiave e config
+   si scrivono comunque, `widenEgressForCapability` può fallire per la
+   stessa ragione (nessun terminale, l'owner dice no, il risigillo negato),
+   e prima di questa correzione tornava sempre 0. La prima stesura di questo
+   punto ha corretto solo `cmdMcpAdd` e non `cmdSearch`: due porte con lo
+   stesso meccanismo condiviso (`widenEgressForCapability`) che rispondevano
+   in modo diverso allo stesso evento — esattamente il difetto «un
+   meccanismo, due porte» che questo repository ha già registrato altrove,
+   riapparso dentro la correzione che chiudeva un follow-up su quel difetto.
+   Un secondo giro lo ha chiuso: `cmdSearch` ora esce 1 nello stesso caso, e
+   `cli/egress-widen-exit-symmetry.test.ts` prova la simmetria stessa —
+   invocando entrambe le porte con lo stesso fallimento nello stesso test, e
+   asserendo lo stesso exit code — non solo che ciascuna sia corretta per
+   conto proprio, che i test di `mcp.test.ts` e `search-setup.test.ts` già
+   provavano separatamente e che da soli non avrebbero mai potuto accorgersi
+   della divergenza fra le due.
+
+Nessuna di queste sei tocca `mandatoryGuards`, `core/sandbox/**`, la
+conferma o la regola "solo interattivo" — sono rinforzi sopra un meccanismo
+che il terzo giudice ha già accettato, non una revisione della decisione.
+
 ## Cosa lo farebbe rivedere
 
 - Un futuro modello di estensione (§10, "network destinations... should be

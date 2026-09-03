@@ -18,11 +18,24 @@ import { paths } from '../config/config.js';
  * widening is a policy edit the owner can read in a diff).
  */
 
-export const EgressFileSchema = z.object({
-  _comment: z.string().optional(),
-  schemaVersion: z.literal(1),
-  allow: z.array(z.string().min(1)),
-});
+/**
+ * `.loose()`, not the strip-by-default of a bare `z.object`: `rot/egress.json`
+ * is a file the owner can and does hand-edit (`_comment` exists exactly for
+ * that), and a key we do not recognise — a second note, a field a future
+ * version will read — is not garbage to discard on the next rewrite
+ * (`widenEgressForCapability`, `core/rot/egress-writer.ts`). Nothing here
+ * ever *reads* an unknown key (`loadEgress` below still projects out only
+ * `allow`), so keeping it costs nothing at the only two call sites that
+ * parse this schema, and it is the one choice of the three that never turns
+ * an owner's own edit into data loss the file's next writer never mentions.
+ */
+export const EgressFileSchema = z
+  .object({
+    _comment: z.string().optional(),
+    schemaVersion: z.literal(1),
+    allow: z.array(z.string().min(1)),
+  })
+  .loose();
 
 export type EgressPolicy = {
   readonly allow: readonly string[];
