@@ -171,3 +171,28 @@ cursore a casa; il fondo che cresce deve prima scorrere e poi stringere; le
 sequenze di posizione vanno su stderr, mai su stdout (B11). `cli/schermo.ts`
 capisce i margini e `cli/fondo.test.ts` misura una risposta di venti righe su
 uno schermo di dodici.
+
+## Ogni scrittura fuori banda passa dalla casella (03/09/2026)
+
+**La regola.** In un REPL, chiunque scriva mentre la casella è a schermo la
+toglie, scrive, e la rimette — `cancella` → scrittura → `redraw`, con il
+`redraw` in un `finally`. Non è una raccomandazione di stile: il cursore, fra
+una lettura e l'altra, sta *dentro* il riquadro, quindi una `write` diretta
+non finisce «da qualche parte in alto», finisce sulla riga del testo che stai
+scrivendo.
+
+**E una riga di log di un connettore è una scrittura fuori banda.** Era
+l'eccezione non dichiarata: `rigaDiLog` scriveva dritto su stderr, e in un
+`tmux capture-pane` sulla macchina dell'owner `telegram: connesso come @…` e
+`discord: connesso come @…` si sono stampati sopra la casella mangiandone il
+bordo, due secondi dopo l'avvio — con l'effetto che l'intera slice del fondo
+fisso sembrava non esserci. Adesso il sink lo passa il chiamante
+(`connectSurfaces`): il REPL il suo (`makeReplLog`), `muffin gateway run`
+quello di prima, perché lì stderr è `gateway.err` e una sequenza di escape
+dentro un file di log è sporcizia. La data la mette una funzione sola
+(`rigaDatata`), così nessuna delle due porte può dimenticarla.
+
+**Come si prova.** Sullo schermo, mai sui byte: `cli/schermo.ts` applica le
+sequenze e `cli/fondo.test.ts` misura che la riga stia *sopra* il riquadro e
+che il testo mezzo scritto sopravviva; `cli/log-superfici.test.ts` tiene
+chiuso l'altro capo, cioè che quel sink arrivi davvero dentro il connettore.
