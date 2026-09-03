@@ -61,37 +61,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 2800,
+    "line": 2836,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 2825,
+    "line": 2861,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3151,
+    "line": 3187,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3215,
+    "line": 3251,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 2845,
+    "line": 2881,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3327,
+    "line": 3363,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3331,
+    "line": 3367,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -1191,7 +1191,7 @@
   },
   "connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1063,
+    "line": 1096,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "connectors/discord/connector.ts:139": {
@@ -1231,17 +1231,17 @@
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1260,
+    "line": 1293,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1266,
+    "line": 1299,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1063,
+    "line": 1096,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
@@ -2396,7 +2396,7 @@
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2543,
+    "line": 2579,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2406,7 +2406,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3479,
+    "line": 3515,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
@@ -2901,8 +2901,8 @@
   },
   "updates.ts:81": {
     "path": "connectors/telegram/updates.ts",
-    "line": 232,
-    "testo": "accept(updates: { update_id: number }[], receivedAt: string): { stored: number; duplicates: number } {"
+    "line": 81,
+    "testo": "workId: string | null;"
   },
   "vault.ts:219": {
     "path": "core/vault/vault.ts",

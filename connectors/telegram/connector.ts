@@ -672,15 +672,20 @@ export class TelegramConnector {
         // e' lavoro nostro, non la prova che Telegram risponde.
         this.deps.salute?.connessa('telegram', new Date(this.now()));
         if (updates.length > 0) {
-          const { stored, duplicates } = this.deps.inbox.accept(updates, this.now());
+          const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
           if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
           if (stored > 0) {
+            // Solo i nuovi, non il batch grezzo: un update gia' nell'inbox e'
+            // gia' stato servito (o e' in coda per il drain), e ripassarlo a
+            // `controlla` vorrebbe dire eseguire lo stesso comando dell'owner
+            // una seconda volta.
+            const nuovi = new Set(accepted);
             // ADR-0054 §5: il poller riceve sempre. Fino al 03/09 questa riga
             // era `await this.drain()`, e mentre un turno girava `getUpdates`
             // non veniva chiamato: un `/stop` arrivava a turno finito. Ora i
             // comandi di controllo si servono **qui**, subito, e il resto va
             // in coda — con una conferma, così l'owner sa che è arrivato.
-            await this.controlla(updates);
+            await this.controlla(updates.filter((u) => nuovi.has(u.update_id)));
             this.scheduleDrain();
           }
         }
@@ -810,6 +815,21 @@ export class TelegramConnector {
    * una volta per messaggio.
    */
   private async controlla(updates: Update[]): Promise<void> {
+    // Due passate, e la prima **senza un solo `await`**.
+    //
+    // `gestiti` è ciò che dice al drain «questo l'ho già servito io». Finché
+    // veniva riempito dentro il ciclo che serve i comandi, un batch di due —
+    // `[/pause, /resume]` — lo popolava solo fino a dove era arrivato: mentre
+    // il `/pause` era in volo, il drain che `controlla` stessa fa ripartire
+    // leggeva `pending()`, non trovava il `/resume` fra i gestiti e lo serviva
+    // una seconda volta. L'owner leggeva «ripreso…» e poi «non ero in pausa.»
+    // per un comando scritto una volta sola; con `/steer`, la correzione
+    // entrava due volte nel turno.
+    //
+    // Registrarli tutti prima di cedere il controllo chiude la finestra per
+    // costruzione: non c'è nessun punto, fra `accept` e il primo `await`, in
+    // cui il drain possa osservare un batch mezzo registrato.
+    const controlli: Incoming[] = [];
     for (const update of updates) {
       const incoming = parseUpdate(update, this.meId);
       if (!incoming) continue;
@@ -817,18 +837,31 @@ export class TelegramConnector {
       if (principal.kind !== 'owner') continue;
       if (sembraComando(incoming.text) && CONTROLLO.has(nomeComando(incoming.text))) {
         this.gestiti.add(incoming.updateId);
-        try {
-          await this.tryCommand(incoming);
-        } catch (error) {
-          (this.deps.log ?? (() => {}))(
-            `telegram: comando ${nomeComando(incoming.text)} fallito — ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        this.deps.inbox.markProcessed(incoming.updateId, this.now());
-        // `/resume` deve far ripartire la coda senza aspettare un altro update.
-        if (this.draining === null) this.scheduleDrain();
-        continue;
+        controlli.push(incoming);
       }
+    }
+
+    for (const incoming of controlli) {
+      try {
+        await this.tryCommand(incoming);
+      } catch (error) {
+        (this.deps.log ?? (() => {}))(
+          `telegram: comando ${nomeComando(incoming.text)} fallito — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      this.deps.inbox.markProcessed(incoming.updateId, this.now());
+      // `/resume` deve far ripartire la coda senza aspettare un altro update.
+      // È anche il drain che, prima della registrazione anticipata qui sopra,
+      // trovava il comando *successivo* dello stesso batch ancora `pending` e
+      // lo serviva una seconda volta.
+      if (this.draining === null) this.scheduleDrain();
+    }
+
+    for (const update of updates) {
+      const incoming = parseUpdate(update, this.meId);
+      if (!incoming) continue;
+      const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
+      if (principal.kind !== 'owner') continue;
       if (sembraComando(incoming.text)) continue;
       await this.avvisa(incoming);
     }
