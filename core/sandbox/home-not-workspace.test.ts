@@ -236,15 +236,22 @@ describe.runIf(gate.run)('the belt: the deny holds even when a write scope names
    * A pty, because a terminal is a different code path in every shell and
    * "it held for a pipe" is not the claim.
    *
-   * What was actually measured (2026-09-03, macOS 15, seatbelt): `script(1)`
-   * exists inside the sandbox and dies at `script: openpty: Operation not
-   * permitted`. The sandbox refuses the pty itself, so on this mechanism there
-   * is no pty-shaped escape to test the deny list against — and that is the
-   * result, recorded, not a leg quietly dropped. This test therefore accepts
-   * exactly two outcomes and no third: the pty was refused, or it was
-   * allocated and the write was still denied. It never accepts "the file is
-   * intact" on its own, which is what a `script` failing for an unrelated
-   * reason would also produce.
+   * The two mechanisms answer differently, and both answers were measured on
+   * 2026-09-03 with the deny list emptied, so that each says what it says
+   * about the pty and not about the deny:
+   *
+   * - **seatbelt (macOS 15)**: `script(1)` exists inside the sandbox and dies
+   *   at `script: openpty: Operation not permitted`. The sandbox refuses the
+   *   pty itself, so on this mechanism there is no pty-shaped escape at all.
+   * - **bubblewrap (Linux, node:22-bookworm, non-root)**: the pty allocates
+   *   and, with no deny, the write lands — `exit=0`, file `"pwned"`. So on the
+   *   platform Muffin actually lives on, this leg is a real test of the deny,
+   *   and it is green.
+   *
+   * This test therefore accepts exactly two outcomes and no third: the pty was
+   * refused, or it was allocated and the write was still denied. It never
+   * accepts "the file is intact" on its own, which is what a `script` failing
+   * for an unrelated reason would also produce.
    */
   it('a pty is either refused outright or does not get the write through', async () => {
     const target = s.file('pty.md');
