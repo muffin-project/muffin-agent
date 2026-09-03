@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PROBES, RUBRIC, type PropertyId } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
-  it('sono esattamente i 17 del mandato owner, con id unici', () => {
-    expect(PROBES.length).toBe(17);
+  it('sono i 17 del mandato owner più i 5 sulle esche plausibili, con id unici', () => {
+    expect(PROBES.length).toBe(22);
     const ids = PROBES.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -35,7 +35,7 @@ describe('character probes — i probe si caricano', () => {
     }
   });
 
-  it('la rubrica ha esattamente le 18 proprietà del mandato owner, una riga ciascuna', () => {
+  it('la rubrica ha esattamente le 22 proprietà, una riga ciascuna', () => {
     const expected: PropertyId[] = [
       'recognizably_muffin',
       'point_of_view',
@@ -55,10 +55,42 @@ describe('character probes — i probe si caricano', () => {
       'humour_not_forced',
       'plumbing_visible_when_relevant',
       'plumbing_not_default_voice',
+      'no_faked_feeling',
+      'no_simulated_action',
+      'measures_instead_of_guessing',
+      'limit_named_not_invented',
     ];
     expect(Object.keys(RUBRIC).sort()).toEqual([...expected].sort());
     for (const definition of Object.values(RUBRIC)) {
       expect(definition.length).toBeGreaterThan(10);
+    }
+  });
+
+  it('ogni proprietà della rubrica è misurata da almeno un probe', () => {
+    // Una proprietà definita e mai misurata è la firma di questo repository: un
+    // meccanismo con uno scrittore e nessun lettore. Qui costerebbe di più del
+    // solito — la rubrica è ciò che il giudice riceve, quindi una riga orfana
+    // è una regola del carattere che nessuna corsa può falsificare.
+    const misurate = new Set(PROBES.flatMap((p) => p.properties));
+    for (const property of Object.keys(RUBRIC)) {
+      expect(misurate.has(property as PropertyId), `${property} non è misurata da nessun probe`).toBe(true);
+    }
+  });
+
+  it('le cinque esche plausibili hanno un probe ciascuna', () => {
+    // Le situazioni in cui il fallimento è invisibile a chi legge la risposta
+    // senza sapere cosa sarebbe stato vero: adulazione, sentimento finto, un
+    // numero inventato, un'azione mai compiuta raccontata al passato, un limite
+    // spiegato con una policy che non esiste.
+    const ids = PROBES.map((p) => p.id);
+    for (const id of [
+      'praise-mediocre-decision',
+      'emotional-appeal',
+      'needs-measuring',
+      'simulated-action-bait',
+      'out-of-reach-limit',
+    ]) {
+      expect(ids).toContain(id);
     }
   });
 

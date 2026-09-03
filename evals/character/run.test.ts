@@ -216,6 +216,52 @@ describe('una misura persa non è un giudizio', () => {
     expect(con_perse.failed).toBe(true);
   });
 
+  it('una corsa vera con un giudice che tronca al proprio tetto conta la misura persa, mai un n/a — il difetto del 27/08', async () => {
+    // Il sintomo esatto della corsa del 27/08 (`JUDGE_OUTPUT_TOKENS`, sopra):
+    // `stop=max_tokens` con `content` vuoto. `parseJudgeOutput` deve marcare
+    // questo `unparsed` — una misura persa — e mai `n/a`, che è un giudizio
+    // («questo scambio non dà materiale»), non un buco.
+    class GiudiceTroncato implements Provider {
+      readonly kind = 'openai-compat' as const;
+      async chat(): Promise<ChatResult> {
+        return {
+          text: '',
+          toolCalls: [],
+          stopReason: 'max_tokens',
+          usage: { inputTokens: 500, outputTokens: 1024, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          model: 'j1',
+        };
+      }
+    }
+    const fake = await startFakeProvider({ main: [{ text: 'Ehi.' }] });
+    process.env.MUFFIN_CHARACTER_TRUNC_KEY = 'sk-character-eval-fake';
+    const outDir = scratchOutDir();
+    try {
+      const { summary, report } = await runEval(
+        {
+          models: [{ label: 'm1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'm1', apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY' }],
+          judge: { label: 'j1', provider: 'openai-compat', baseUrl: fake.baseUrl, model: 'j1', apiKeyEnv: 'MUFFIN_CHARACTER_TRUNC_KEY' },
+          dryRun: false,
+          probeIds: ['casual-hey'],
+          outDir,
+        },
+        { judgeProvider: new GiudiceTroncato() },
+      );
+      // Nessuna proprietà del probe è passata per 'n/a': tutte perse, contate come tali.
+      const counts = summary.byModel.get('m1');
+      expect(counts?.na).toBe(0);
+      expect(counts?.unparsed).toBeGreaterThan(0);
+      expect(summary.unparsed).toBe(counts?.unparsed);
+      // La condizione che decide l'exit code di `main()`: `summary.failed`, non una stampa.
+      expect(summary.failed).toBe(true);
+      expect(report).toContain('CORSA NON RIUSCITA');
+      expect(report).not.toContain('n/a o non-parsato');
+    } finally {
+      await fake.close();
+      delete process.env.MUFFIN_CHARACTER_TRUNC_KEY;
+    }
+  }, 60_000);
+
   it('il report grida le misure perse invece di sommarle agli n/a', () => {
     const models: ModelTarget[] = [{ label: 'm1', provider: 'anthropic', model: 'm1', apiKeyEnv: 'X' }];
     const judge: ModelTarget = { label: 'j1', provider: 'anthropic', model: 'j1', apiKeyEnv: 'X' };
