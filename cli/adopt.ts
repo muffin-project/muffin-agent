@@ -1,4 +1,4 @@
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findCheckoutRoot } from './update.js';
@@ -41,6 +41,41 @@ import {
  * nuova — e vale al contrario per `muffin rot reseal`, che *non* copia e
  * infatti non deve registrare niente.
  *
+ * ## E poi c'e' la casa che invecchia (03/09/2026)
+ *
+ * **Invariante di questo modulo, dalla riga qui sotto in poi: un default
+ * spedito arriva anche in una casa nata prima che esistesse, e cio' che
+ * l'owner ha scritto non viene mai sovrascritto.**
+ *
+ * Misurato sull'installazione dell'owner il 03/09: spediamo due skill in
+ * `defaults/skills/`, `runInit` le installa in una casa nuova, e il suo
+ * `defaults-manifest.json` elencava **un** file, `persona.md`. La sua casa e'
+ * nata prima delle skill e nessuno gliele ha mai portate: `~/.muffin/skills`
+ * non esisteva, `skillsPromptSection` tornava stringa vuota, il modello non
+ * sentiva mai la parola «skill» e `skill_read` era un tool senza niente da
+ * leggere. Ogni test passava, perche' una casa di test la crea `runInit` da
+ * zero e quindi ha gia' tutto.
+ *
+ * La radice non e' delle skill. `muffin update` sposta il **codice**,
+ * `runInit` semina una casa **nuova**, e nessuno riconciliava una casa
+ * **esistente** con i default aggiunti dopo la sua nascita: qualunque default
+ * futuro — una skill, una policy, un template — faceva la stessa fine.
+ *
+ * `reconcileDefaults` chiude quel buco, e installa **solo cio' che manca**.
+ * La distinzione e' la sicurezza stessa:
+ *
+ *  - **assente** = non c'e' niente dell'owner da perdere. Sicuro per
+ *    costruzione, si fa da soli.
+ *  - **presente e invariato dalla copia** (`adoptable`) = sostituirlo cambia
+ *    il comportamento di un'installazione viva. Resta `muffin adopt`, che e'
+ *    un verbo che l'owner digita.
+ *  - **presente e diverso** (`owner-modified`, o `unknown`) = non si tocca, si
+ *    dichiara. Vale anche per l'incertezza: su una casa antecedente al
+ *    registro, «mai installato» e «installato e poi modificato» si distinguono
+ *    solo per un file **assente** (nessuna ambiguita' possibile); per un file
+ *    presente decide la regola 2 di `defaults-drift.ts` (la storia Git), e
+ *    quando neanche quella sa rispondere la direzione sicura e' non toccare.
+ *
  * ## Il sigillo resta dell'owner
  *
  * Questo comando **non scrive mai dentro `rot/`**. Non perché sia impossibile,
@@ -50,6 +85,13 @@ import {
  * `core/rot/harden.ts`, che il piano lo stampa e non lo esegue). Per quei file
  * `adopt` stampa i due comandi in ordine e si ferma: la porta sul sigillo
  * resta una sola, e sono le mani dell'owner.
+ *
+ * Vale identico per un file di `defaults/rot/` **assente**: installarlo non
+ * distrugge niente, ma fa divergere l'hash sigillato lo stesso e manda
+ * l'installazione in safe mode finche' non gira `muffin rot reseal`. Quindi
+ * anche li' si nomina e non si scrive — `muffin init` e' l'unico percorso che
+ * copia dentro il sigillo, ed e' l'unico perche' risigilla nello stesso giro
+ * (`cli/init.ts`, `seal()` come ultimo passo).
  */
 
 export type AdoptDeps = {
@@ -82,10 +124,24 @@ function riga(d: DefaultDrift, style: Style): string {
       ? style.ok('✓')
       : d.status === 'adoptable'
         ? style.warn('↑')
-        : d.status === 'owner-modified'
-          ? style.ok('·')
-          : style.warn('?');
+        : d.status === 'missing'
+          ? style.warn('+')
+          : d.status === 'owner-modified'
+            ? style.ok('·')
+            : style.warn('?');
   return `${segno} ${style.bold(d.path)}  ${d.detail}`;
+}
+
+/**
+ * I due stati che questo comando ha il diritto di scrivere, e nient'altro.
+ *
+ * `'missing'` sta accanto a `'adoptable'` e non e' un allargamento: e' il caso
+ * **piu'** sicuro dei due, perche' non c'e' nessun file da sostituire e quindi
+ * niente dell'owner da perdere. `'owner-modified'` e `'unknown'` restano
+ * fuori, ed e' la stessa riga di prima: non so dire se e' tuo → e' tuo.
+ */
+function scrivibile(d: DefaultDrift): boolean {
+  return d.status === 'adoptable' || d.status === 'missing';
 }
 
 /**
@@ -98,17 +154,26 @@ function riga(d: DefaultDrift, style: Style): string {
 function resoconto(drift: DefaultDrift[], style: Style, out: (l: string) => void): number {
   for (const d of drift) out(riga(d, style));
 
-  const adottabili = drift.filter((d) => d.status === 'adoptable');
-  const liberi = adottabili.filter((d) => !d.sealed);
-  const sigillati = adottabili.filter((d) => d.sealed);
+  const scrivibili = drift.filter(scrivibile);
+  const liberi = scrivibili.filter((d) => !d.sealed);
+  const sigillati = scrivibili.filter((d) => d.sealed);
 
   out('');
-  if (adottabili.length === 0) {
+  if (scrivibili.length === 0) {
     out('Niente da adottare: ogni file è allineato a HEAD, o è tuo.');
     return 0;
   }
   if (liberi.length > 0) {
-    out(`${String(liberi.length)} da adottare: ${liberi.map((d) => d.path).join(', ')}`);
+    // I mancanti si contano a parte perché chiedono una cosa diversa: non
+    // «sostituisco la tua copia con quella nuova» ma «questo default non è mai
+    // arrivato in questa casa». È il difetto misurato il 03/09, e va detto
+    // con le sue parole.
+    const mancanti = liberi.filter((d) => d.status === 'missing');
+    if (mancanti.length > 0) {
+      out(`${String(mancanti.length)} mai arrivati in questa casa: ${mancanti.map((d) => d.path).join(', ')}`);
+    }
+    const vecchi = liberi.filter((d) => d.status === 'adoptable');
+    if (vecchi.length > 0) out(`${String(vecchi.length)} da adottare: ${vecchi.map((d) => d.path).join(', ')}`);
     out(`  → \`muffin adopt --tutto\`, oppure \`muffin adopt ${liberi[0]?.path ?? ''}\` per uno solo`);
   }
   for (const d of sigillati) out(`  ${style.warn('!')} ${d.path} è dentro il sigillo: ${consegnaSigillata(d)}`);
@@ -121,10 +186,150 @@ function resoconto(drift: DefaultDrift[], style: Style, out: (l: string) => void
  * aver già mandato l'installazione in safe mode.
  */
 function consegnaSigillata(d: DefaultDrift): string {
+  if (d.status === 'missing') {
+    return (
+      `manca, ma installarlo fa divergere l'hash sigillato e manda l'installazione in safe mode. ` +
+      '`muffin init` lo copia e risigilla nello stesso giro — è l\'unico percorso che entra nel sigillo senza lasciarlo rotto'
+    );
+  }
   return (
     `adottarlo fa divergere l'hash sigillato e manda l'installazione in safe mode. ` +
     `Se la vuoi: \`${d.adoptCommand ?? '(comando non disponibile)'}\`, poi \`muffin rot reseal\``
   );
+}
+
+/**
+ * La copia vera, in un posto solo.
+ *
+ * `cmdAdopt` (l'owner che digita) e `reconcileDefaults` (l'aggiornamento che
+ * passa) devono copiare **e registrare** nello stesso identico modo: due
+ * copie di questo ciclo sarebbero libere di divergere proprio sul ramo che
+ * nessuno guarda, e la meta' che si perde per prima e' `recordCopied` — cioe'
+ * la regola 1 di `defaults-drift.ts`, quella che al giro dopo distingue «di
+ * serie» da «tuo». Chi copia registra, sempre, da qui.
+ */
+function copiaERegistra(
+  home: string,
+  checkoutRoot: string,
+  scelti: DefaultDrift[],
+  copy: (src: string, dst: string) => void,
+  nota: (path: string, esito: string) => void,
+): { copiati: string[]; falliti: { path: string; why: string }[] } {
+  const registrare: { path: string; content: Buffer }[] = [];
+  const falliti: { path: string; why: string }[] = [];
+
+  for (const d of scelti) {
+    const src = shippedPathOf(checkoutRoot, d.path);
+    const dst = installedPathOf(home, d.path);
+    // Un percorso che il **registro** conosce ma che `defaults/` non spedisce
+    // piu' (un default ritirato): non e' un guasto, e non e' niente da copiare.
+    if (!existsSync(src)) {
+      falliti.push({ path: d.path, why: `defaults/${d.path} non esiste piu' in questo checkout` });
+      continue;
+    }
+    try {
+      // `skills/<nome>/SKILL.md`: la cartella intermedia non esiste in una casa
+      // che quel default non l'ha mai avuto, ed e' esattamente il caso per cui
+      // questa funzione esiste.
+      mkdirSync(dirname(dst), { recursive: true });
+      copy(src, dst);
+    } catch (error) {
+      falliti.push({ path: d.path, why: (error as Error).message });
+      continue;
+    }
+    // Letto **dalla destinazione**, non dalla sorgente: e' l'hash di cio' che
+    // adesso sta davvero in casa che la regola 1 confrontera', e una copia
+    // andata storta a meta' deve registrarsi per com'e' finita.
+    try {
+      registrare.push({ path: d.path, content: readFileSync(dst) });
+    } catch (error) {
+      falliti.push({ path: d.path, why: `copiato, ma non rileggibile per il registro: ${(error as Error).message}` });
+      continue;
+    }
+    nota(d.path, d.status === 'missing' ? 'installato (mancava)' : 'adottato');
+  }
+
+  // Una sola scrittura del registro, alla fine, e solo con cio' che e' stato
+  // davvero copiato *e* riletto.
+  if (registrare.length > 0) recordCopied(home, registrare);
+  return { copiati: registrare.map((r) => r.path), falliti };
+}
+
+/** Cio' che questa riconciliazione ha fatto, e — piu' importante — cio' che ha deciso di non fare. */
+export type EsitoRiconciliazione = {
+  /** Installati adesso perche' **assenti**: non c'era niente dell'owner da perdere. */
+  installati: string[];
+  /** Assenti ma dentro `rot/`: nominati, mai scritti — servirebbe un `muffin rot reseal`. */
+  sigillati: DefaultDrift[];
+  /** Riscritti dall'owner: mai toccati, dichiarati divergenti. */
+  divergenti: DefaultDrift[];
+  /** Presenti e indistinguibili: non so dire se sono tuoi, quindi sono tuoi. */
+  incerti: DefaultDrift[];
+  /** Presenti, invariati dalla copia, ma HEAD e' andato avanti: e' `muffin adopt`, non e' automatico. */
+  adottabili: DefaultDrift[];
+  falliti: { path: string; why: string }[];
+};
+
+/**
+ * Porta in una casa **esistente** i default spediti dopo la sua nascita.
+ *
+ * Installa solo cio' che manca (vedi l'invariante in cima al file), non scrive
+ * mai dentro il sigillo, e non sostituisce mai un file che c'e' gia' — nemmeno
+ * uno che potrebbe essere adottato: quello resta una decisione dell'owner.
+ *
+ * Funzione, non comando: la chiamano `cmdAdopt` (la porta che l'owner digita)
+ * e `runUpdate` (la porta che passa da sola). Stessa regola, un'implementazione.
+ */
+export function reconcileDefaults(
+  home: string,
+  checkoutRoot: string | null,
+  deps: { git?: Git; copy?: (src: string, dst: string) => void } = {},
+): EsitoRiconciliazione {
+  const drift = diagnoseDefaultsDrift(home, checkoutRoot, deps.git ?? REAL_GIT);
+  const esito: EsitoRiconciliazione = {
+    installati: [],
+    sigillati: [],
+    divergenti: [],
+    incerti: [],
+    adottabili: [],
+    falliti: [],
+  };
+  const daInstallare: DefaultDrift[] = [];
+  for (const d of drift) {
+    if (d.status === 'missing') (d.sealed ? esito.sigillati : daInstallare).push(d);
+    else if (d.status === 'owner-modified') esito.divergenti.push(d);
+    else if (d.status === 'unknown') esito.incerti.push(d);
+    else if (d.status === 'adoptable') esito.adottabili.push(d);
+  }
+  if (daInstallare.length === 0) return esito;
+  if (checkoutRoot === null) {
+    for (const d of daInstallare) esito.falliti.push({ path: d.path, why: 'nessun checkout da cui copiare' });
+    return esito;
+  }
+  const fatto = copiaERegistra(home, checkoutRoot, daInstallare, deps.copy ?? ((src, dst) => copyFileSync(src, dst)), () => undefined);
+  esito.installati = fatto.copiati;
+  esito.falliti = fatto.falliti;
+  return esito;
+}
+
+/**
+ * Una riga sola, per chi stampa un aggiornamento e non un resoconto.
+ *
+ * `null` quando non c'e' niente da dire: un aggiornamento che stampa «tutto a
+ * posto» a ogni giro insegna a non leggerlo.
+ */
+export function rigaRiconciliazione(e: EsitoRiconciliazione): string | null {
+  const pezzi: string[] = [];
+  if (e.installati.length > 0) pezzi.push(`installati in casa ${String(e.installati.length)} default che mancavano: ${e.installati.join(', ')}`);
+  if (e.sigillati.length > 0)
+    pezzi.push(
+      `${String(e.sigillati.length)} dentro il sigillo non installati (${e.sigillati.map((d) => d.path).join(', ')}) — ` +
+        '`muffin init` li copia e risigilla nello stesso giro',
+    );
+  if (e.adottabili.length > 0)
+    pezzi.push(`${String(e.adottabili.length)} da aggiornare, mai modificati da te: \`muffin adopt --tutto\``);
+  for (const f of e.falliti) pezzi.push(`${f.path} non installato: ${f.why}`);
+  return pezzi.length > 0 ? pezzi.join(' · ') : null;
 }
 
 export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number {
@@ -144,23 +349,23 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
   if (!tutto && paths.length === 0) return resoconto(drift, style, out);
 
   const perPath = new Map(drift.map((d) => [d.path, d] as const));
-  // `--tutto` prende solo i liberi. I sigillati non ci finiscono dentro
-  // *per selezione*, non per un rifiuto stampato dopo: un flag che chiede
-  // «tutto» non deve poter significare «e anche il sigillo».
+  // `--tutto` prende i liberi: quelli da aggiornare **e** quelli che mancano
+  // del tutto. I sigillati non ci finiscono dentro *per selezione*, non per un
+  // rifiuto stampato dopo: un flag che chiede «tutto» non deve poter
+  // significare «e anche il sigillo».
   const scelti: DefaultDrift[] = tutto
-    ? drift.filter((d) => d.status === 'adoptable' && !d.sealed)
-    : paths.map((p) => perPath.get(p) ?? { path: p, sealed: false, status: 'missing' as const, detail: 'non è un file di defaults/ che io conosca' });
+    ? drift.filter((d) => scrivibile(d) && !d.sealed)
+    : paths.map((p) => perPath.get(p) ?? { path: p, sealed: false, status: 'unknown' as const, detail: 'non è un file di defaults/ che io conosca' });
 
   if (tutto && scelti.length === 0) {
     out('Niente da adottare.');
-    for (const d of drift.filter((x) => x.status === 'adoptable' && x.sealed)) {
+    for (const d of drift.filter((x) => scrivibile(x) && x.sealed)) {
       out(`  ${style.warn('!')} ${d.path} è dentro il sigillo: ${consegnaSigillata(d)}`);
     }
     return 0;
   }
 
-  const copia = deps.copy ?? ((src, dst) => copyFileSync(src, dst));
-  const copiati: { path: string; content: Buffer }[] = [];
+  const daCopiare: DefaultDrift[] = [];
   let problemi = 0;
 
   for (const d of scelti) {
@@ -169,7 +374,7 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
       problemi += 1;
       continue;
     }
-    if (d.status !== 'adoptable') {
+    if (!scrivibile(d)) {
       // Il rifiuto porta la ragione della diagnosi, non una sua parafrasi:
       // «modificato dall'owner» e «non so dire» chiedono cose diverse.
       out(`${style.warn('!')} ${d.path} — non adottabile: ${d.detail}`);
@@ -181,32 +386,25 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
       problemi += 1;
       continue;
     }
-    const src = shippedPathOf(checkoutRoot, d.path);
-    const dst = installedPathOf(home, d.path);
-    try {
-      copia(src, dst);
-    } catch (error) {
-      out(`${style.fail('✗')} ${d.path} — non ho potuto copiarlo: ${(error as Error).message}`);
-      problemi += 1;
-      continue;
-    }
-    // Letto **dalla destinazione**, non dalla sorgente: è l'hash di ciò che
-    // adesso sta davvero in `~/.muffin` che la regola 1 confronterà, e una
-    // copia che è andata storta a metà deve registrarsi per com'è finita.
-    try {
-      copiati.push({ path: d.path, content: readFileSync(dst) });
-    } catch (error) {
-      out(`${style.warn('!')} ${d.path} — copiato, ma non rileggibile per il registro: ${(error as Error).message}`);
-      problemi += 1;
-      continue;
-    }
-    out(`${style.ok('↑')} ${d.path} adottato`);
+    daCopiare.push(d);
   }
 
-  // Una sola scrittura del registro, alla fine, e solo con ciò che è stato
-  // davvero copiato *e* riletto.
-  if (copiati.length > 0) {
-    recordCopied(home, copiati);
+  const fatto =
+    checkoutRoot === null || daCopiare.length === 0
+      ? { copiati: [] as string[], falliti: [] as { path: string; why: string }[] }
+      : copiaERegistra(
+          home,
+          checkoutRoot,
+          daCopiare,
+          deps.copy ?? ((src, dst) => copyFileSync(src, dst)),
+          (path, esito) => out(`${style.ok('↑')} ${path} ${esito}`),
+        );
+  for (const f of fatto.falliti) {
+    out(`${style.fail('✗')} ${f.path} — ${f.why}`);
+    problemi += 1;
+  }
+
+  if (fatto.copiati.length > 0) {
     out('');
     out(style.dim(`registro d'installazione aggiornato — al prossimo giro questi file restano adottabili, non "modificati da te"`));
   }
