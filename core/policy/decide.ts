@@ -1,4 +1,5 @@
 import { denyListCovers, type PolicyMatrix } from './matrix.js';
+import { DOORS } from './doors.js';
 import type {
   CapabilityDecl,
   CapabilityId,
@@ -85,10 +86,23 @@ function ask(prompt: string): Decision {
 }
 
 export function createDecide(ctx: PolicyContext): Decide {
+  /**
+   * The kernel's own vocabulary, merged under whatever the runtime declared.
+   *
+   * The two doors (`doors.ts`) are not tools a feature registers: they are the
+   * acts the loop performs by itself — answering, remembering — and the kernel
+   * has to be able to rule on them wherever it is built, a test harness with
+   * three declarations included. A runtime that had to remember to register
+   * them would answer `no_capability` on every reply the day it forgot; a
+   * kernel that owns them cannot forget. A caller's own declaration under the
+   * same id still wins, so a harness can tighten a door on purpose.
+   */
+  const capabilities = new Map(ctx.capabilities);
+  for (const door of DOORS) if (!capabilities.has(door.id)) capabilities.set(door.id, door);
   return function decide(req: DecisionRequest): Decision {
     const { principal, tenant, capability, resource, taint } = req;
 
-    const decl = ctx.capabilities.get(capability);
+    const decl = capabilities.get(capability);
     if (!decl) {
       return { effect: 'deny', code: 'no_capability', detail: `undeclared capability: ${capability}` };
     }
