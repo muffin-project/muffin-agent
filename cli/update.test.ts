@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
+import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, restartVerdict, run, runUpdate, describeBuild } from './update.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -529,6 +529,73 @@ describe('runUpdate --rollback', () => {
   });
 });
 
+/**
+ * `run()` — the shared `spawnSync` wrapper `offerGatewayRestart`'s default
+ * `restart` goes through — has to be tested at this level and not only
+ * through `offerGatewayRestart`'s injected `restart` seam: that seam
+ * *replaces* `run()` entirely, so a bug inside it (the one measured on the
+ * owner's machine 03/09/2026 — see the docstring on `run`) is invisible from
+ * outside. A real `sleep` with a timeout well under its own duration is the
+ * only way to reach the actual `spawnSync` timeout path.
+ */
+describe('run — a spawnSync timeout must not swallow its own detail', () => {
+  it('surfaces r.error.message when the child is killed for taking too long', () => {
+    const r = run('sleep', ['2'], process.cwd(), 100);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).not.toBe('');
+    expect(r.stderr).toMatch(/ETIMEDOUT/);
+  });
+});
+
+/**
+ * The pure decision behind the three sentences the owner reads. Each case
+ * gets its own assertion on the exact wording, so a regression back to
+ * "trust the command's exit status" — which used to print the identical
+ * consoling line in all three situations, measured 03/09/2026 — fails a
+ * specific test instead of a vague one.
+ */
+describe('restartVerdict — three outcomes, three sentences', () => {
+  it('restarted and verified: the state changed, the command also said ok', () => {
+    const v = restartVerdict({ pidBefore: 88175, pidAfter: 65671, commandOk: true, commandDetail: '' });
+    expect(v.restarted).toBe(true);
+    expect(v.line).toMatch(/riavviato — verificato/);
+    expect(v.line).toContain('88175');
+    expect(v.line).toContain('65671');
+  });
+
+  it('the command failed but a new process is serving anyway (transient): nothing is wrong', () => {
+    const v = restartVerdict({
+      pidBefore: 88175,
+      pidAfter: 65671,
+      commandOk: false,
+      commandDetail: 'launchctl: qualcosa di transitorio',
+    });
+    expect(v.restarted).toBe(true);
+    expect(v.line).toMatch(/riavviato — verificato/);
+    expect(v.line).toMatch(/scontro transitorio/);
+    expect(v.line).toContain('launchctl: qualcosa di transitorio');
+  });
+
+  it('the command failed and nothing restarted: still the old build, the detail is in the line', () => {
+    const v = restartVerdict({
+      pidBefore: 88175,
+      pidAfter: 88175,
+      commandOk: false,
+      commandDetail: 'Bootstrap failed: 5: Input/output error',
+    });
+    expect(v.restarted).toBe(false);
+    expect(v.line).toMatch(/il riavvio non è avvenuto/);
+    expect(v.line).toContain('Bootstrap failed: 5: Input/output error');
+  });
+
+  it('the command claimed success but the state disagrees: still "not restarted", said plainly', () => {
+    const v = restartVerdict({ pidBefore: 88175, pidAfter: 88175, commandOk: true, commandDetail: '' });
+    expect(v.restarted).toBe(false);
+    expect(v.line).toMatch(/il riavvio non è avvenuto/);
+    expect(v.line).toMatch(/uscito 0, ma nessun processo nuovo/);
+  });
+});
+
 describe('offerGatewayRestart', () => {
   function captureErr(fn: () => Promise<void>): Promise<string> {
     let out = '';
@@ -537,6 +604,15 @@ describe('offerGatewayRestart', () => {
       return true;
     });
     return fn().finally(() => spy.mockRestore()).then(() => out);
+  }
+
+  /** Instant in tests — nothing here should ever wait on a real timer. */
+  const noSleep = async (): Promise<void> => {};
+
+  /** Returns `seq[i]` on the i-th call, then repeats the last value forever. */
+  function pidSequence(seq: (number | null)[]): () => number | null {
+    let i = 0;
+    return () => seq[Math.min(i++, seq.length - 1)] ?? null;
   }
 
   it('when nothing is supervised: says so, and that the new code lands at the next start anyway', async () => {
@@ -550,24 +626,6 @@ describe('offerGatewayRestart', () => {
     );
     expect(out).toMatch(/nessun gateway supervisionato/);
     expect(out).toMatch(/prossimo riavvio/);
-  });
-
-  it('--yes restarts immediately via the platform-correct command, without asking', async () => {
-    let restarted: string[] | null = null;
-    const out = await captureErr(() =>
-      offerGatewayRestart(dir('muffin-update-home-'), {
-        yes: true,
-        platform: 'linux',
-        gatewayRunning: false,
-        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, lingerEnabled: () => true },
-        restart: (argv) => {
-          restarted = argv;
-          return { status: 0, stdout: '', stderr: '' };
-        },
-      }),
-    );
-    expect(restarted).toEqual(['systemctl', '--user', 'restart', 'muffin-gateway.service']);
-    expect(out).toMatch(/riavviato/);
   });
 
   it('on decline: still says the new code lands at the next restart, even an involuntary one', async () => {
@@ -596,11 +654,99 @@ describe('offerGatewayRestart', () => {
           restarted = argv;
           return { status: 0, stdout: '', stderr: '' };
         },
+        readGatewayPid: pidSequence([1111, 2222]),
+        sleep: noSleep,
       }),
     );
     expect(restarted?.[0]).toBe('launchctl');
     expect(restarted?.[1]).toBe('kickstart');
     expect(restarted?.[2]).toBe('-k');
+  });
+
+  /**
+   * The three cases the mandate asks for, driven end to end: fake supervisor
+   * probes (so no real systemctl/launchctl is touched) and a fake `restart`
+   * runner, asserting the exact sentence printed — not a substring that a
+   * regression could still satisfy by accident.
+   */
+  describe('verifying the restart by state, not by exit code', () => {
+    const engaged = {
+      unitFileExists: () => true,
+      systemdEnabled: () => true,
+      systemdFailed: () => false,
+      lingerEnabled: () => true,
+    };
+
+    it('1. restarted and verified — regardless of the command also saying 0', async () => {
+      const out = await captureErr(() =>
+        offerGatewayRestart(dir('muffin-update-home-'), {
+          yes: true,
+          platform: 'linux',
+          gatewayRunning: true,
+          supervisorProbes: engaged,
+          restart: () => ({ status: 0, stdout: '', stderr: '' }),
+          readGatewayPid: pidSequence([88175, 88175, 65671]),
+          sleep: noSleep,
+        }),
+      );
+      expect(out).toMatch(/gateway riavviato — verificato: pid 88175 → adesso serve pid 65671\./);
+      // Case 1 never carries the "still on the old build" note.
+      expect(out).not.toMatch(/prossimo riavvio/);
+    });
+
+    it('2. the command failed AND nothing restarted: the owner is still on the old build, and must act', async () => {
+      const out = await captureErr(() =>
+        offerGatewayRestart(dir('muffin-update-home-'), {
+          yes: true,
+          platform: 'linux',
+          gatewayRunning: true,
+          supervisorProbes: engaged,
+          restart: () => ({ status: 1, stdout: '', stderr: 'Failed to restart muffin-gateway.service: Unit is masked.' }),
+          readGatewayPid: pidSequence([88175]), // never changes
+          sleep: noSleep,
+          verifyAttempts: 2,
+        }),
+      );
+      expect(out).toMatch(/il riavvio non è avvenuto: il gateway servito adesso è ancora lo stesso di prima \(pid 88175\)/);
+      // Objective 3: the detail must reach the owner, never swallowed.
+      expect(out).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
+      // Case 2 is the one that must still carry the "still lands eventually" note.
+      expect(out).toMatch(/entra comunque al prossimo riavvio/);
+    });
+
+    it('3. the command failed but a new process is serving anyway (transient): nothing is wrong', async () => {
+      const out = await captureErr(() =>
+        offerGatewayRestart(dir('muffin-update-home-'), {
+          yes: true,
+          platform: 'linux',
+          gatewayRunning: true,
+          supervisorProbes: engaged,
+          restart: () => ({ status: 1, stdout: '', stderr: '' }),
+          readGatewayPid: pidSequence([88175, 88175, 65671]),
+          sleep: noSleep,
+        }),
+      );
+      expect(out).toMatch(/gateway riavviato — verificato: pid 88175 → adesso serve pid 65671\./);
+      expect(out).toMatch(/scontro transitorio/);
+      // Nothing failed from the owner's point of view — no "still on the old build" note.
+      expect(out).not.toMatch(/prossimo riavvio/);
+    });
+
+    it("the failing command's stderr reaches the output verbatim — never dropped", async () => {
+      const out = await captureErr(() =>
+        offerGatewayRestart(dir('muffin-update-home-'), {
+          yes: true,
+          platform: 'linux',
+          gatewayRunning: true,
+          supervisorProbes: engaged,
+          restart: () => ({ status: 1, stdout: '', stderr: 'una riga di dettaglio molto specifica 4f2a91' }),
+          readGatewayPid: pidSequence([88175]),
+          sleep: noSleep,
+          verifyAttempts: 1,
+        }),
+      );
+      expect(out).toContain('una riga di dettaglio molto specifica 4f2a91');
+    });
   });
 });
 
