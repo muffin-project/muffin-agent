@@ -18,7 +18,7 @@ import { paths } from '../config/config.js';
  * widening is a policy edit the owner can read in a diff).
  */
 
-const EgressFileSchema = z.object({
+export const EgressFileSchema = z.object({
   _comment: z.string().optional(),
   schemaVersion: z.literal(1),
   allow: z.array(z.string().min(1)),
