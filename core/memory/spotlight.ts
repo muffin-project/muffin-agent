@@ -85,6 +85,23 @@ export function fence(label: string, body: string, note?: string, nonce_?: strin
  * perché `<{2,}` pretende caratteri consecutivi. Anche questo verificato
  * eseguendolo, non leggendolo.
  *
+ * **`{0,63}` invece di `*`, ed è una misura, non un'estetica.** `[\w-]*`
+ * costava tempo quadratico nella lunghezza del corpo: su una corsa di
+ * caratteri di parola il motore, a ogni posizione, arriva in fondo alla corsa e
+ * torna indietro a cercare `_`. Misurato eseguendolo, non leggendolo: 20k → 183
+ * ms, 40k → 720 ms, 80k → 2,9 s, 160k → 12,1 s, cioè quattro volte il tempo per
+ * ogni raddoppio. Non si vedeva perché ogni porta recintata clippava prima —
+ * `clipBody` taglia il web a 50k — e il disco, che arriva a 2 MB, l'ha reso
+ * visibile appena `fs_read` è entrato nel recinto: un file da 1,5 MB teneva il
+ * processo per **1.274 secondi**. Con il tetto sulla ripetizione le stesse
+ * stringhe passano in 204 ms a 1,5 MB e 300 ms a 2 MB, e le forme d'attacco
+ * note continuano a cadere tutte (`spotlight.test.ts`, §«un recinto non si
+ * chiude presto»). Nessuna etichetta vera si avvicina a 64 caratteri: `web`,
+ * `file`, `mcp`, `mcpdesc`, `skills`, `MEMORIA`, `DOCUMENTO`, `FRASE`,
+ * `FRAMMENTI`, `TESTO_OSSERVATO`. Vale anche per la porta MCP, che fenza il
+ * testo di un server terzo **senza clip**: lì il costo era già raggiungibile da
+ * fuori.
+ *
  * Il nonce resta la metà portante — un marcatore va comunque indovinato per
  * essere *creduto* — ma questa funzione non dipende più da lui.
  */
@@ -101,10 +118,10 @@ export function stripSentinels(body: string, label: string): string {
       // questa slice spedisce. Un recinto da chiudere per davvero porta sempre
       // il nonce, quindi chiedere l'esadecimale non lascia passare l'attacco e
       // lascia in pace il codice.
-      .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]*_[0-9a-f]{6,}/g, rimosso)
-      .replace(/[A-Za-z][\w-]*_[0-9a-f]{6,}\s*>(?:\s*>)+/g, rimosso)
+      .replace(/<(?:\s*<)+\s*[A-Za-z][\w-]{0,63}_[0-9a-f]{6,}/g, rimosso)
+      .replace(/[A-Za-z][\w-]{0,63}_[0-9a-f]{6,}\s*>(?:\s*>)+/g, rimosso)
       // E il **proprio** marcatore anche senza nonce: un corpo che prova a
       // chiudere questo recinto perde il tentativo pure quando tira a indovinare.
-      .replace(new RegExp(`<(?:\\s*<)+\\s*${suo}\\w*|${suo}\\w*\\s*>(?:\\s*>)+`, 'gi'), rimosso)
+      .replace(new RegExp(`<(?:\\s*<)+\\s*${suo}\\w{0,63}|${suo}\\w{0,63}\\s*>(?:\\s*>)+`, 'gi'), rimosso)
   );
 }

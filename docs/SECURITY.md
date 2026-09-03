@@ -95,6 +95,38 @@ capability declarations, not in this prose. `defaultMaxTaint` is no longer the
 ceiling: ADR-0053 moved that to the effect row, and left the field readable so a
 home sealed before it still parses.
 
+### Fencing: marking, not preventing
+
+Content that did not come from the owner is wrapped in a nonce-carrying fence
+before it reaches the model (`fence()`, `core/memory/spotlight.ts`), and the
+sentinel is stripped from the body so a hostile body cannot close the fence
+early. Two separate claims live here and they must not be merged:
+
+- **Marking is deterministic.** Code wraps the bytes on the way out of the tool,
+  whatever the model is thinking, and the nonce is generated after the content
+  was written.
+- **Obedience is not.** Whether the model treats a fenced block as data is its
+  judgement, and the adversarial corpus has watched it fail. Fencing is
+  provenance, not prevention: it makes "external content arrives marked as
+  external" a true sentence about this system, and it stops there.
+
+Until 2026-09-03 that sentence was true of the network doors and false of the
+disk. `fence()` was called by `agent/tools/http.ts`, `search.ts`, `mcp.ts` and
+`document.ts`; `fs_read`, `fs_list`, `fs_search` and `shell_run` returned
+`tier: DISK_TIER` and nothing else, so a file the owner had been sent and saved
+reached the model indistinguishable from his own prose — the entry point four of
+the seven scenes in `evals/security/attacks` use. Those four doors now go
+through the same function (`fenceDisk`, `agent/tools/fs.ts`, imported by
+`shell.ts`), and no tier or effect row moved with them.
+
+Two doors stay outside the fence on purpose, and the reasons are recorded where
+they are enforced: `skill_read` (tier 1) returns owner-installed skill files,
+which are instructions by design; `process_list` (tier 1) returns the host
+describing itself, where naming an entry already costs an attacker code
+execution. So **the absence of a fence is not a statement that content is
+trusted**, and the operating block of the system prompt says so to the model in
+those words.
+
 History must preserve the taint of content that is reinjected later. A session
 transcript is not a trust laundromat. Speaker/actor metadata must also survive
 recall: "trusted" is not equivalent to "the owner said this".

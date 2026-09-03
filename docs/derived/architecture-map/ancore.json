@@ -531,62 +531,62 @@
   },
   "agent/tools/fs.ts:108": {
     "path": "agent/tools/fs.ts",
-    "line": 110,
+    "line": 163,
     "testo": "* read an injected file was still at taint 0 and the off-allowlist host came"
   },
   "agent/tools/fs.ts:145": {
     "path": "agent/tools/fs.ts",
-    "line": 188,
+    "line": 241,
     "testo": "id: 'fs.write',"
   },
   "agent/tools/fs.ts:182": {
     "path": "agent/tools/fs.ts",
-    "line": 185,
+    "line": 194,
     "testo": "hostOnly: true,"
   },
   "agent/tools/fs.ts:315": {
     "path": "agent/tools/fs.ts",
-    "line": 373,
+    "line": 426,
     "testo": "export function resolveInScope(scope: FsScope, requested: string, forWrite: boolean): string {"
   },
   "agent/tools/fs.ts:480": {
     "path": "agent/tools/fs.ts",
-    "line": 792,
+    "line": 845,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:486": {
     "path": "agent/tools/fs.ts",
-    "line": 792,
+    "line": 845,
     "testo": "export function makeFsTools(scope: FsScope): RegisteredTool[] {"
   },
   "agent/tools/fs.ts:571": {
     "path": "agent/tools/fs.ts",
-    "line": 871,
+    "line": 947,
     "testo": "resolveEffectPath: (args) => resolveInScope(scope, writeArgs.parse(args).path, true),"
   },
   "agent/tools/fs.ts:62": {
     "path": "agent/tools/fs.ts",
-    "line": 63,
+    "line": 64,
     "testo": "* destination and wait for a tired yes. The whole chain closes at 2 and nowhere"
   },
   "agent/tools/fs.ts:70": {
     "path": "agent/tools/fs.ts",
-    "line": 71,
+    "line": 72,
     "testo": "* than it looks like. `skill.read` already gives the readable parts of the"
   },
   "agent/tools/fs.ts:78": {
     "path": "agent/tools/fs.ts",
-    "line": 79,
+    "line": 80,
     "testo": "* already draws, one level up, and it would still launder a poisoned file the"
   },
   "agent/tools/fs.ts:79": {
     "path": "agent/tools/fs.ts",
-    "line": 80,
+    "line": 81,
     "testo": "* moment anything wrote it inside the home."
   },
   "agent/tools/fs.ts:86": {
     "path": "agent/tools/fs.ts",
-    "line": 86,
+    "line": 87,
     "testo": "export const DISK_TIER: TrustTier = 2;"
   },
   "agent/tools/fs.ts:89": {
@@ -596,7 +596,7 @@
   },
   "agent/tools/fs.ts:99": {
     "path": "agent/tools/fs.ts",
-    "line": 101,
+    "line": 154,
     "testo": "* every read taints the turn to `DISK_TIER`, which is what a turn that has"
   },
   "agent/tools/http.ts:116": {
@@ -2346,7 +2346,7 @@
   },
   "fs.ts:257": {
     "path": "agent/tools/fs.ts",
-    "line": 315,
+    "line": 368,
     "testo": "const parent = dirname(current);"
   },
   "fs.ts:7": {
