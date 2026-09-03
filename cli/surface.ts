@@ -1,5 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
-import { aiuto, eseguiComando } from '../agent/comandi.js';
+import { aiuto, eseguiComando, type Controlli } from '../agent/comandi.js';
+import { Pausa } from '../core/runtime/pausa.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import { openDb } from '../core/db/open.js';
 import { generatePairingCode, startPairing } from '../core/config/pairing.js';
@@ -432,10 +433,13 @@ function approvatoreTelegram(api: TelegramApi): Approver {
 function comandiPerTelegram(
   runtime: Runtime,
   home: string,
-): (riga: string, sessionId: string) => Promise<{ testo: string } | null> {
-  return async (riga, sessionId) => {
+): (riga: string, sessionId: string, controlli: Controlli) => Promise<{ testo: string } | null> {
+  return async (riga, sessionId, controlli) => {
     const esito = await eseguiComando(riga, {
       home,
+      // Le leve sul turno vivo le tiene il connettore, che sa quale chat è
+      // (ADR-0054); qui passano e basta.
+      controlli,
       config: runtime.config,
       onConfig: (next) => {
         runtime.config = next;
@@ -578,6 +582,8 @@ export function connectSurfaces(
           vault: telegramVault(runtime, vaultRoot),
           voce: voceFor(runtime, home),
           comandi: comandiPerTelegram(runtime, home),
+          // ADR-0054 §4: il fatto durevole che scheduler e corsia leggono.
+          pausa: new Pausa(runtime.db),
           // La metà che torna indietro: i pulsanti li manda l'approvatore qui
           // sotto, il dito che li preme lo gestisce il connettore. Condizionale
           // e non un cast: `LoopDeps.approvals` è opzionale nel tipo, e un
