@@ -24,6 +24,63 @@ function tool(): { handler: ReturnType<typeof makeTodoTool>['handler']; todos: T
   return { handler: makeTodoTool(todos).handler, todos };
 }
 
+describe('`due`: dare un momento a un passo', () => {
+  it('accetta un istante ISO con offset e lo mette sulla riga', async () => {
+    const { handler, todos } = tool();
+    await handler({ action: 'plan', items: ['mandare la tesi'] }, toolContext({ sessionId: 'owner' }));
+    const res = await handler(
+      { action: 'due', step: 1, at: '2026-10-06T09:00:00+02:00' },
+      toolContext({ sessionId: 'owner' }),
+    );
+    expect(res.isError).not.toBe(true);
+    expect(todos.list('host', 'owner')[0]?.dueAt).toBe('2026-10-06T07:00:00.000Z');
+  });
+
+  /**
+   * `2026-10-06T09:00` è JavaScript legale e si risolve nel fuso del
+   * **processo** — che per il gateway è l'ambiente di un supervisore, non
+   * quello dell'owner. Una promessa che vuol dire silenziosamente le 09:00 UTC
+   * perché un unit file non ha impostato `TZ` è un guasto per cui niente
+   * diventa rosso, quindi la forma si rifiuta al confine.
+   */
+  it('rifiuta un orario locale senza offset invece di indovinare il fuso', async () => {
+    const { handler, todos } = tool();
+    await handler({ action: 'plan', items: ['x'] }, toolContext({ sessionId: 'owner' }));
+    const res = await handler({ action: 'due', step: 1, at: '2026-10-06T09:00' }, toolContext({ sessionId: 'owner' }));
+    expect(res.isError).toBe(true);
+    expect(todos.list('host', 'owner')[0]?.dueAt).toBe(null);
+  });
+
+  it('un passo che non esiste è un errore, non una riga nuova', async () => {
+    const { handler, todos } = tool();
+    const res = await handler(
+      { action: 'due', step: 3, at: '2026-10-06T09:00:00Z' },
+      toolContext({ sessionId: 'owner' }),
+    );
+    expect(res.isError).toBe(true);
+    expect(todos.list('host', 'owner')).toEqual([]);
+  });
+
+  /**
+   * La riga che il kernel non guarda, e che il gate guarderà.
+   *
+   * `turn.todo` resta `effect: 'context'` — niente esce, niente sull'host
+   * cambia — quindi la decisione del kernel per questo tool è la stessa di
+   * prima. Ciò che difende la promessa è `decideProactive`, e ciò che la mette
+   * nelle sue mani è questa: il tier del turno che ha datato la riga finisce
+   * sulla riga.
+   */
+  it('il tier del turno che data la riga finisce sulla riga', async () => {
+    const { handler, todos } = tool();
+    await handler({ action: 'plan', items: ['una cosa'] }, toolContext({ sessionId: 'owner' }));
+    await handler(
+      { action: 'due', step: 1, at: '2026-10-06T09:00:00Z' },
+      toolContext({ sessionId: 'owner', intrinsicTaint: () => 2 }),
+    );
+    expect(todos.list('host', 'owner')[0]?.tier).toBe(2);
+  });
+});
+
 describe('il piano appartiene alla conversazione del turno', () => {
   it('scrive nel tenant e nella sessione del contesto, non in quelli degli argomenti', async () => {
     const { handler, todos } = tool();

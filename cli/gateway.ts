@@ -6,6 +6,7 @@ import { homedir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { attachMcp, buildRuntime } from '../agent/runtime.js';
+import { makeCommitmentLane } from '../agent/commitment-run.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { makeLaneRunner, NO_SURFACE, type AttachStream, type LaneDeliver } from '../agent/turn-lane.js';
 import { TurnLane, type LaneEvent } from '../core/turns/lane.js';
@@ -667,6 +668,19 @@ export async function cmdGatewayRun(
     registry === null ? notDelivered('le superfici non sono ancora connesse') : registry.deliver(channel, text);
 
   const pausa = new Pausa(runtime.db);
+  /**
+   * ADR-0060: la promessa datata, sulla stessa battuta dei job.
+   *
+   * `deliver` è la stessa indirezione che riceve lo scheduler — quindi una
+   * consegna tentata prima che le superfici siano su torna `{ delivered: false }`
+   * e l'ancora resta aperta, che è esattamente la regola su cui gira
+   * `cli/observe.ts`: si brucia solo ciò che è arrivato all'owner.
+   */
+  const commitments = makeCommitmentLane(runtime, deliver, (e) => {
+    if (e.kind === 'undelivered') {
+      process.stderr.write(`impegno ${e.anchor}: non consegnato — ${e.why}\n`);
+    }
+  });
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
@@ -711,6 +725,10 @@ export async function cmdGatewayRun(
     // ADR-0054 §4: `/pause` da qualunque superficie, letta dal database che
     // tutti i processi condividono.
     () => pausa.attiva(),
+    // ADR-0060: l'unico produttore di `commitment_due`. Passato allo scheduler
+    // e non chiamato da `Gateway.tick`, perché le due condizioni che devono
+    // zittirlo — handover e `/pause` — sono già risolte lì dentro.
+    commitments,
   );
 
   /**

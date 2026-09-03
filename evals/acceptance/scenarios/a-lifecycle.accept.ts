@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe } from 'vitest';
 import { runUpdate } from '../../../cli/update.js';
+import { currentSchemaVersion } from '../../../core/db/migrate.js';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { install, type Install, type Run } from '../harness.js';
 import type { RecordedRequest } from '../provider.js';
@@ -948,12 +949,18 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         if (before.schemaV < 3) throw new Error(`fixture rotta: un'installazione fresca dovrebbe già essere a schema v3, trovato v${before.schemaV}`);
 
         // --- rewind: this install "has never run migration 3" --------------
-        //     Only the stamp goes away — the real, populated data stays
+        //     Only the stamps go away — the real, populated data stays
         //     exactly as a pre-v3 install would actually have had it.
+        //
+        //     `>= 3` e non `= 3`: `migrate()` riparte da `MAX(version)`, quindi
+        //     lasciare in piedi il timbro di una migrazione **successiva**
+        //     (v4, `todos.due_at`) farebbe saltare proprio la v3 che questo
+        //     scenario esiste per rieseguire — e lo scenario resterebbe verde
+        //     misurando niente. Vale per ogni migrazione che verrà.
         {
           const rewind = new DatabaseCtor(dbFile);
           try {
-            rewind.prepare(`DELETE FROM schema_version WHERE version = 3`).run();
+            rewind.prepare(`DELETE FROM schema_version WHERE version >= 3`).run();
           } finally {
             rewind.close();
           }
@@ -979,7 +986,12 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
           factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
           entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
         }));
-        if (after.schemaV !== 3) throw new Error(`schema non è tornato a v3 dopo il boot: v${after.schemaV}`);
+        // Torna a HEAD, non a 3: il boot riesegue tutto ciò che il rewind ha
+        // tolto. Letto da `currentSchemaVersion()` invece che scritto a mano,
+        // così la prossima migrazione non richiede una modifica qui.
+        if (after.schemaV !== currentSchemaVersion()) {
+          throw new Error(`schema non è tornato a v${currentSchemaVersion()} dopo il boot: v${after.schemaV}`);
+        }
         if (after.desc?.description.includes('fresh install')) {
           throw new Error(`la riga di schema_version resta timbrata "fresh install" — la migrazione non è stata rieseguita per davvero: ${after.desc.description}`);
         }

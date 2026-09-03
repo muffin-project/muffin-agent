@@ -7,6 +7,7 @@ import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, promptVersion, readSecret, secretDir, type Config } from '../core/config/config.js';
 import { resolveWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
+import type { QuietHours } from '../core/scheduler/proactivity.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { createDecide } from '../core/policy/decide.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
@@ -103,6 +104,17 @@ export type Runtime = {
    */
   vault: Vault;
   budget: BudgetEngine;
+  /**
+   * The owner's quiet window, from inside the seal.
+   *
+   * Exposed for the same reason `budget` is: the proactivity rails are read by
+   * things built *outside* this file — `cli/gateway.ts` and `cli/repl.ts` wire
+   * the dated-commitment lane (ADR-0060) — and a second `loadSealedBudgets`
+   * call there would be a second reader of the same sealed file, which is
+   * exactly how `cli/jobs.ts` and the observe path once disagreed about what
+   * `{quietHours:{timezone:1}}` meant.
+   */
+  quietHours: QuietHours;
   /** Scheduled jobs, on the same connection as everything else (ADR-0022). */
   jobs: JobStore;
   /**
@@ -875,6 +887,7 @@ export function buildRuntime(
     workspace,
     config,
     budget,
+    quietHours: budgets.quietHours,
     jobs,
     jobFires,
     db,

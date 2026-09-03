@@ -52,6 +52,27 @@ import type { TrustTier } from '../policy/types.js';
  * So each row keeps the taint of the turn that wrote it, `max()`-ed on every
  * touch, and `agent/loop.ts` raises the reading turn's snapshot to the highest
  * open row before the model is called. See ADR-0047.
+ *
+ * ## Why a row may carry a moment
+ *
+ * ADR-0060. Until it, this table could represent *a step* and nothing could
+ * represent *a step with a time*: `jobs` models a recurrence (`markRan` always
+ * reschedules and never deactivates), `wait` models an interval inside one turn
+ * of at most seven days, and a row here was read only at the start of a turn in
+ * its own session — so a promise made in passing had no clock, and the only
+ * thing that wakes on its own had no plan
+ * (`docs/evidence/fuori-dal-turno-2026-09-03.md` §4).
+ *
+ * `due_at` is that moment, and it is nullable because most steps do not have
+ * one. A row that has it is read by a **second, session-blind reader**
+ * (`dueCommitments`) and becomes the `commitment_due` trigger declared since day
+ * one with no producer (`core/scheduler/commitments.ts`).
+ *
+ * The taint column is why the date could be added here rather than to `jobs`: a
+ * dated row arrives at the proactivity gate carrying the tier of the turn that
+ * wrote it, and `decideProactive` denies everything above tier 1 as its first
+ * line. A job, by contrast, fires today at a literal `taint: 0` with a system
+ * principal, so the same date written there would launder its provenance.
  */
 
 export type TodoState = 'pending' | 'done' | 'blocked' | 'waiting' | 'retry';
@@ -94,8 +115,33 @@ export type TodoItem = {
    * what the first one wrote trustworthy again.
    */
   tier: TrustTier;
+  /**
+   * When this step is owed, ISO 8601, or `null` for a step with no moment.
+   *
+   * An **instant**, not a wall-clock intention: the tool takes an offset-bearing
+   * ISO string and refuses one without, because "3 ottobre alle 9" stored naked
+   * would mean a different instant on every machine that read it back.
+   */
+  dueAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * A dated step whose moment has arrived, read across every session of a tenant.
+ *
+ * `TodoItem` is what a session sees of its own plan; this is what the scheduler
+ * sees of the whole tenant, and it carries `sessionId` because the anchor that
+ * dedups a delivery has to name the row uniquely and the primary key is
+ * `(tenant, session_id, key)`.
+ */
+export type DueCommitment = {
+  sessionId: string;
+  seq: number;
+  text: string;
+  tier: TrustTier;
+  dueAt: Date;
+  createdAt: string;
 };
 
 const TODO_SCHEMA = `
@@ -111,11 +157,21 @@ CREATE TABLE IF NOT EXISTS todos (
   -- a row that arrived without one would read as clean, which is the one
   -- direction this column exists to forbid.
   tier        INTEGER NOT NULL CHECK (tier BETWEEN 0 AND 3),
+  -- ADR-0060. Nullable with no default, the opposite direction from the tier
+  -- column above: a step without a moment is the ordinary case, and inventing
+  -- one would turn every plan item into something that can wake the process up.
+  -- Migration 4 adds it to installs that predate it (core/db/migrate.ts).
+  due_at      TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (tenant, session_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_todos_open ON todos(tenant, session_id, state);
+-- Partial, because the scan it serves is "what is owed now across every
+-- session" and rows without a moment are the overwhelming majority: a full
+-- index would be paid for on every plan write to answer a query that never
+-- looks at those rows.
+CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(tenant, due_at) WHERE due_at IS NOT NULL;
 `;
 
 /**
@@ -139,6 +195,8 @@ export class TodoStore {
   private readonly listStmt: Database.Statement;
   private readonly openStmt: Database.Statement;
   private readonly bySeqStmt: Database.Statement;
+  private readonly setDueStmt: Database.Statement;
+  private readonly dueStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -169,15 +227,37 @@ export class TodoStore {
        WHERE tenant = @tenant AND session_id = @sessionId AND seq = @seq`,
     );
     this.listStmt = db.prepare(
-      `SELECT seq, text, state, note, tier, created_at AS createdAt, updated_at AS updatedAt
+      `SELECT seq, text, state, note, tier, due_at AS dueAt, created_at AS createdAt, updated_at AS updatedAt
        FROM todos WHERE tenant = @tenant AND session_id = @sessionId ORDER BY seq`,
     );
     this.openStmt = db.prepare(
-      `SELECT seq, text, state, note, tier, created_at AS createdAt, updated_at AS updatedAt
+      `SELECT seq, text, state, note, tier, due_at AS dueAt, created_at AS createdAt, updated_at AS updatedAt
        FROM todos WHERE tenant = @tenant AND session_id = @sessionId AND state != 'done' ORDER BY seq`,
     );
     this.bySeqStmt = db.prepare(
       `SELECT seq FROM todos WHERE tenant = @tenant AND session_id = @sessionId AND seq = @seq`,
+    );
+    this.setDueStmt = db.prepare(
+      // `max` on the tier for the same reason `setStateStmt` uses it: choosing a
+      // moment is model text written under whatever the turn had read, and a
+      // later, cleaner turn touching the row does not launder the earlier one.
+      `UPDATE todos SET due_at = @dueAt, tier = max(tier, @tier), updated_at = @now
+       WHERE tenant = @tenant AND session_id = @sessionId AND seq = @seq`,
+    );
+    this.dueStmt = db.prepare(
+      // Session-blind on purpose — this is the reader the plan never had. A job
+      // opens a throwaway session (`agent/scheduler-run.ts`), so anything keyed
+      // on `session_id` is invisible to whoever wakes up.
+      //
+      // The string comparison is chronological because `setDue` is the only
+      // writer and it always stores `toISOString()`, i.e. always UTC with the
+      // same width. Storing a local-offset ISO string here would sort wrong
+      // without any query failing, which is why the store, not the caller,
+      // owns the formatting.
+      `SELECT session_id AS sessionId, seq, text, tier, due_at AS dueAt, created_at AS createdAt
+       FROM todos
+       WHERE tenant = @tenant AND state != 'done' AND due_at IS NOT NULL AND due_at <= @now
+       ORDER BY due_at, session_id, seq`,
     );
   }
 
@@ -216,6 +296,44 @@ export class TodoStore {
     return true;
   }
 
+  /**
+   * Give a step a moment, or take it away again (`null`).
+   *
+   * Separate from `setState` rather than a sixth argument on it, because they
+   * answer different questions and a model that wants to date a step it has not
+   * moved would otherwise have to restate the state — the shape that makes a
+   * `done` item quietly `pending` again.
+   *
+   * Returns false when the session has no such number, exactly like `setState`.
+   */
+  setDue(tenant: string, sessionId: string, seq: number, dueAt: Date | null, tier: TrustTier): boolean {
+    if (this.bySeqStmt.get({ tenant, sessionId, seq }) === undefined) return false;
+    this.setDueStmt.run({
+      tenant,
+      sessionId,
+      seq,
+      dueAt: dueAt === null ? null : dueAt.toISOString(),
+      tier,
+      now: this.clock().toISOString(),
+    });
+    return true;
+  }
+
+  /**
+   * Every dated, still-open step of this tenant whose moment has passed.
+   *
+   * Unbounded and un-deduped by design: what may be said, and how often, is the
+   * proactivity gate's business (`core/scheduler/commitments.ts`), the same
+   * split `core/memory/absence.ts` and `core/scheduler/observe.ts` already keep.
+   * A store that filtered here would be a second, silent rail nobody could read.
+   */
+  dueCommitments(tenant: string, now: Date): DueCommitment[] {
+    const rows = this.dueStmt.all({ tenant, now: now.toISOString() }) as Array<
+      Omit<DueCommitment, 'dueAt'> & { dueAt: string }
+    >;
+    return rows.map((r) => ({ ...r, dueAt: new Date(r.dueAt) }));
+  }
+
   list(tenant: string, sessionId: string): TodoItem[] {
     return this.listStmt.all({ tenant, sessionId }) as TodoItem[];
   }
@@ -246,6 +364,15 @@ export function planTaint(items: TodoItem[]): TrustTier {
  */
 export function renderTodos(items: TodoItem[]): string {
   return items
-    .map((i) => `${i.seq}. [${i.state}] ${i.text}${i.note === null || i.note === '' ? '' : ` — ${i.note}`}`)
+    .map(
+      (i) =>
+        `${i.seq}. [${i.state}] ${i.text}` +
+        // Rendered where the state is, not appended after the note: the moment
+        // is part of what the step *is*, and a model reading its own plan back
+        // has to see that this one has a clock on it — otherwise it re-dates a
+        // step it already dated, or forgets that Muffin will speak about it.
+        `${i.dueAt === null ? '' : ` (entro ${i.dueAt})`}` +
+        `${i.note === null || i.note === '' ? '' : ` — ${i.note}`}`,
+    )
     .join('\n');
 }

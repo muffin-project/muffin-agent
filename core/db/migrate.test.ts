@@ -246,11 +246,12 @@ describe('migrazione 2 — jobs.kind', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    // [2, 3]: this fixture has no `facts` table, so migration 3 (added by
-    // `slice/memoria-appuntata`) is a genuine no-op here — but `migrate()`
-    // still runs and stamps it, the same way migration 2 itself no-ops (and
-    // still counts) on a database where `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3]);
+    // [2, 3, 4]: this fixture has neither a `facts` nor a `todos` table, so
+    // migrations 3 (`slice/memoria-appuntata`) and 4 (`slice/una-promessa-torna`)
+    // are genuine no-ops here — but `migrate()` still runs and stamps them, the
+    // same way migration 2 itself no-ops (and still counts) on a database where
+    // `jobs` is absent, two tests below.
+    expect(res.applied).toEqual([2, 3, 4]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -267,10 +268,10 @@ describe('migrazione 2 — jobs.kind', () => {
     const { db, backups } = fileDb();
     // È il caso di ogni installazione fresca: `migrate()` gira in
     // `agent/runtime.ts` PRIMA che `JobStore` crei la propria tabella —
-    // e prima che `MemoryStore` crei `facts`, motivo per cui la 3 arriva
-    // fin qui allo stesso modo.
+    // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
+    // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(3);
+    expect(schemaVersionOf(db)).toBe(4);
   });
 });
 
@@ -313,7 +314,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3]);
+    expect(res.applied).toEqual([2, 3, 4]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -361,6 +362,6 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(3);
+    expect(schemaVersionOf(db)).toBe(4);
   });
 });

@@ -9,10 +9,28 @@ import { JobError, JobStore, type Job, jobPayload } from '../core/scheduler/jobs
  *
  * Opens the database directly rather than through buildRuntime: listing or
  * removing a job has no reason to need the model provider or the whole runtime,
- * and `jobs list` must work on a home whose API key is absent. `add` here takes
- * an explicit cron — the natural-language path ("ogni mattina alle 8") is a
- * loop tool that turns the phrase into this cron after confirming it with the
- * owner, and lands on the same store.
+ * and `jobs list` must work on a home whose API key is absent.
+ *
+ * ## `add` takes an explicit cron, and this is the only door that creates a job
+ *
+ * These lines used to claim, in the present indicative, that *"the
+ * natural-language path ('ogni mattina alle 8') is a loop tool that turns the
+ * phrase into this cron after confirming it with the owner, and lands on the
+ * same store"*. **No such tool has ever existed.** `agent/tools/` has never
+ * contained a `jobs` tool, and `JobStore.add` has exactly one caller outside
+ * tests and evals — the `add` in this file, typed by the owner at a terminal
+ * (`docs/evidence/fuori-dal-turno-2026-09-03.md` §1). The sentence described a
+ * door that was never built, in a file whose job is to say where the doors are.
+ *
+ * Whether the model should get that door is an open owner decision («Bivio
+ * owner n. 2»), and the research note argues it is the wrong next step as it
+ * stands: a job today fires with a system principal at a literal `taint: 0`
+ * (`agent/scheduler-run.ts`), so a job created by a turn would hand a later,
+ * unattended turn a clean provenance the writing turn never had. ADR-0060 took
+ * the other road for the capability that was actually wanted — a dated
+ * commitment on `todos`, whose row carries the writing turn's tier into
+ * `decideProactive` — and left this one closed. If it is ever opened, the first
+ * change is that `taint: 0` becoming a value read from the row.
  */
 
 export const JOBS_USAGE = `usage:

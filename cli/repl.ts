@@ -11,6 +11,7 @@ import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/cons
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
 import { TICK_MS } from '../core/gateway/service.js';
+import { makeCommitmentLane } from '../agent/commitment-run.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
@@ -766,6 +767,9 @@ export async function runRepl(
     },
     gateway !== null,
   );
+  const commitments = makeCommitmentLane(runtime, deliver, (e) => {
+    if (e.kind === 'undelivered') status.line(`impegno ${e.anchor}: non consegnato — ${e.why}`);
+  });
   const scheduler = new Scheduler(
     runtime.jobs,
     makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
@@ -800,6 +804,12 @@ export async function runRepl(
     // ADR-0054 §4: la pausa è del database, non di questo processo — un
     // `/pause` dato dal telefono ferma anche i job che girano qui.
     () => pausa.attiva(),
+    // ADR-0060: la stessa corsia del gateway, dalla stessa porta. Il REPL cede
+    // allo scheduler del gateway quando c'è (`standDown` qui sopra), quindi
+    // parla solo quando nessun altro processo possiede lo store — mai due
+    // volte. Ed è qui, e non solo nel gateway, perché un'installazione senza
+    // gateway ha comunque fatto la promessa.
+    commitments,
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive

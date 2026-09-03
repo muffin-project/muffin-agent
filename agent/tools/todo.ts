@@ -32,8 +32,25 @@ export const todoCapability: CapabilityDecl = {
   effect: 'context',
   /**
    * `low`. It writes to a table of our own, scoped to the caller's tenant and
-   * session by the handler rather than by an argument, and nothing downstream
-   * acts on a row: the list is shown, never executed.
+   * session by the handler rather than by an argument.
+   *
+   * This used to end *"and nothing downstream acts on a row: the list is shown,
+   * never executed"*. **ADR-0060 made that sentence false and it is corrected
+   * here rather than left standing**, in the commit that made it false: a row
+   * with a `due_at` is read by `core/scheduler/commitments.ts` across sessions
+   * and, at its moment, makes Muffin speak first on the owner's channel. A row
+   * is still never *executed* — the message is the row's own text, no tool runs,
+   * nothing on the host changes — which is why the effect row stays `context`
+   * and the kernel's decision for this capability is unchanged.
+   *
+   * What guards the new consumer is not this declaration and could not be: the
+   * policy kernel decides what a *turn* may do, and the promise is delivered a
+   * month later by a process with no turn in it. It is `decideProactive`, whose
+   * first line denies any trigger above tier 1 — and the row carries the tier of
+   * the turn that wrote it (`ctx.intrinsicTaint()`, below), so a promise planted
+   * by a page or a group cannot speak. Said plainly here because a capability
+   * whose declaration describes the world before the last commit is exactly the
+   * lie this file's own docstring warns about.
    */
   risk: 'low',
   reversible: 'undoable',
@@ -68,19 +85,31 @@ const todoSpec: ToolSpec = {
     'start of every turn, so you do not have to re-derive it. `plan` writes the steps (restate the whole ' +
     'list — repeating a step you already wrote does not duplicate it); `set` moves one step to ' +
     `${TODO_STATES.join(' | ')}; \`list\` shows it. Use it for work that takes more than one turn. ` +
-    'Nothing here executes anything: it records what you intend to do.',
+    'Nothing here executes anything: it records what you intend to do. ' +
+    '`due` is the one exception and the only way to remember something for a moment that is not now: ' +
+    'it puts a date and time on a step, and at that moment Muffin says the step back to the owner, ' +
+    'once, on their own channel — even in a conversation nobody has opened since. Use it when the owner ' +
+    'commits to something dated ("il 3 ottobre devo…"), not to pace your own work; a step whose moment ' +
+    'passed while nothing was running is still delivered, late, saying when it was for. ' +
+    '`at` is an absolute ISO 8601 instant and must carry an offset or Z (2026-10-03T09:00:00+02:00), ' +
+    'because a naked local time means a different moment on every machine that reads it back; ' +
+    '`at: null` takes the moment off again.',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['plan', 'set', 'list'], description: 'What to do' },
+      action: { type: 'string', enum: ['plan', 'set', 'list', 'due'], description: 'What to do' },
       items: {
         type: 'array',
         items: { type: 'string' },
         description: 'plan: the steps, in order, whole list',
       },
-      step: { type: 'number', description: 'set: the number of the step, as shown in the list' },
+      step: { type: 'number', description: 'set/due: the number of the step, as shown in the list' },
       state: { type: 'string', enum: [...TODO_STATES], description: 'set: the new state' },
       note: { type: 'string', description: 'set: why — what blocked it, what it waits for, what failed' },
+      at: {
+        type: ['string', 'null'],
+        description: 'due: ISO 8601 with offset or Z, or null to remove the moment',
+      },
     },
     required: ['action'],
   },
@@ -97,7 +126,22 @@ const setArgs = z.object({
   note: z.string().max(500).optional(),
 });
 const listArgs = z.object({ action: z.literal('list') });
-const todoArgs = z.discriminatedUnion('action', [planArgs, setArgs, listArgs]);
+/**
+ * Offset-bearing ISO 8601, refused otherwise, and the refusal is the feature.
+ *
+ * `new Date('2026-10-03T09:00')` is legal JavaScript and resolves against
+ * whatever timezone the *process* is in — which for the gateway is a supervisor's
+ * environment, not the owner's. A promise that quietly means 09:00 UTC because a
+ * unit file did not set `TZ` is the kind of failure nothing goes red for, so the
+ * shape is required at the boundary instead of guessed at in the store.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const dueArgs = z.object({
+  action: z.literal('due'),
+  step: z.number().int().positive(),
+  at: z.union([z.string().regex(ISO_INSTANT).max(40), z.null()]),
+});
+const todoArgs = z.discriminatedUnion('action', [planArgs, setArgs, listArgs, dueArgs]);
 
 export function makeTodoTool(todos: TodoStore): RegisteredTool {
   return {
@@ -197,6 +241,26 @@ export function makeTodoTool(todos: TodoStore): RegisteredTool {
           // here would be a claim that survives the day the two lists diverge.
           const moved = todos.setState(tenant, sessionId, step, state, note ?? null, tier);
           if (!moved) {
+            return {
+              content: `nessun passo numero ${step} in questa conversazione — \`todo list\` per vedere quali ci sono`,
+              isError: true,
+              tier: CLEAN,
+            };
+          }
+          return { content: `Piano:\n${renderTodos(todos.list(tenant, sessionId))}`, tier: CLEAN };
+        }
+        case 'due': {
+          const { step, at } = parsed.data;
+          const when = at === null ? null : new Date(at);
+          if (when !== null && Number.isNaN(when.getTime())) {
+            return {
+              content: `\`${at}\` non è un istante reale — usa ISO 8601 con offset, per esempio 2026-10-03T09:00:00+02:00`,
+              isError: true,
+              tier: CLEAN,
+            };
+          }
+          const dated = todos.setDue(tenant, sessionId, step, when, tier);
+          if (!dated) {
             return {
               content: `nessun passo numero ${step} in questa conversazione — \`todo list\` per vedere quali ci sono`,
               isError: true,
