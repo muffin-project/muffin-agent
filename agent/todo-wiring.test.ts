@@ -361,3 +361,75 @@ describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => 
     }
   });
 });
+
+/**
+ * L'estensione di `docs/evidence/orizzonte-del-turno-2026-09-03.md` Parte 0:
+ * i fatti d'istanza (working directory, provider, job attivi, RoT), attraverso
+ * l'assemblaggio **vero** — `buildRuntime` → `agent/runtime.ts` (`leggiIstanza`)
+ * → `LoopDeps.istanza` → `agent/loop.ts` (`buildContext`) →
+ * `ambienteSection` — non una copia della logica che ripete lo stesso calcolo.
+ * Spegni una cucitura in mezzo (vedi la mutazione più sotto) e questo file
+ * diventa rosso, non uno unit test isolato su `ambienteSection` che continua a
+ * passare mentre il cablaggio reale è morto.
+ */
+describe("l'istanza è davanti al modello, senza che nessuno lo chieda (sys_inspect)", () => {
+  it("un turno dell'owner porta cartella di lavoro, provider, job attivi e RoT", async () => {
+    const home = bootHome();
+    const ws = workspace();
+    const runtime = buildRuntime(home, ws);
+    const provider = new Capturing([answer('eccomi')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const session = runtime.deps.sessions.open('istanza-owner');
+
+    await runTurn(deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'dove sei?' });
+    runtime.close();
+
+    const p = prompt(provider.seen[0]);
+    expect(p).toContain(`Cartella di lavoro: ${ws}`);
+    // Un workspace appena creato da mkdtempSync è vuoto: il conteggio lo dice.
+    expect(p).toContain('0 elementi di primo livello: (vuota)');
+    // `runInit` di default sceglie 'anthropic' (cli/init.ts) — lo stesso
+    // valore che `sys_inspect` stampa come `provider:`.
+    expect(p).toContain('Istanza: anthropic · 0 job attivi · RoT integro.');
+  });
+
+  /**
+   * Stessa ragione di `inspectCapability.hostOnly`: un membro di un gruppo non
+   * vede l'inventario della macchina dell'owner.
+   */
+  it("un turno di gruppo non vede l'istanza", async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    const provider = new Capturing([answer('eccomi')]);
+    const deps: LoopDeps = { ...runtime.deps, provider };
+    const member = { kind: 'member', connector: 'telegram', tenantId: 'group:telegram:abc', externalId: 'u1' } as const;
+    const session = runtime.deps.sessions.open('istanza-group');
+
+    await runTurn(deps, { principal: member, tenant: 'group:telegram:abc', surface: 'telegram', session, text: 'ciao' });
+    runtime.close();
+
+    const p = prompt(provider.seen[0]);
+    expect(p).not.toContain('Cartella di lavoro');
+    expect(p).not.toContain('Istanza:');
+  });
+
+  /**
+   * Il confine di cache che questa slice non deve mai attraversare: i fatti
+   * d'istanza cambiano da installazione a installazione, quindi non possono
+   * stare nel prefisso cacheable. Questo test è quello che si rompe se un
+   * domani qualcuno sposta `leggiIstanza`/`ambienteSection` dentro
+   * `buildSystemPromptBlocks` invece che nella coda volatile.
+   */
+  it("mai nel prompt di sistema, che resta un prefisso stabile per ogni installazione", async () => {
+    const home = bootHome();
+    const runtime = buildRuntime(home, workspace());
+    try {
+      expect(runtime.deps.systemPrompts.owner).not.toContain('Cartella di lavoro');
+      expect(runtime.deps.systemPrompts.owner).not.toContain('Istanza:');
+      expect(runtime.deps.systemPrompts.group).not.toContain('Cartella di lavoro');
+      expect(runtime.deps.systemPrompts.group).not.toContain('Istanza:');
+    } finally {
+      runtime.close();
+    }
+  });
+});
