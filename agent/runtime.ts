@@ -265,15 +265,7 @@ export function buildRuntime(
    * and for why the workspace is a sibling of the home rather than a
    * subdirectory of it.
    */
-  const { workspace, relocatedFrom } = resolveWorkspace(home, cwd);
-  const workspaceNotes =
-    relocatedFrom === null
-      ? []
-      : [
-          `! la cartella di lavoro era l'installazione stessa (${relocatedFrom}): lavoro in ${workspace}. ` +
-            `Dentro ~/.muffin ci sono memoria, sessioni e il sigillo — non è uno spazio di lavoro, ` +
-            `e nessun turno ci scrive.`,
-        ];
+  const { workspace, notes: workspaceNotes } = resolveWorkspace(home, cwd);
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
 
