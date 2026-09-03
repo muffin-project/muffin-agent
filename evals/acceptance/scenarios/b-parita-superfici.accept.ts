@@ -16,11 +16,22 @@ import { privateMessage, startFakeTelegram, type FakeTelegram } from '../telegra
  *     principal e la stessa history decidono diverso a seconda di *dove*
  *     entrano. Sarebbe un difetto del kernel, e verrebbe prima di qualunque
  *     manopola sul soffitto;
- *  2. la **vita della sessione** — la CLI apre una sessione nuova a ogni
- *     invocazione (`cli/run.ts`), il REPL una per lancio (`cli/repl.ts`),
- *     Telegram **una per chat, per sempre** (`connector.ts`:
- *     `sessions.open('telegram:' + chatId)`). Stessa regola, contesti diversi,
- *     quindi taint ambiente diverso.
+ *  2. la **vita della sessione** — porte diverse aprivano conversazioni
+ *     diverse. Stessa regola, contesti diversi, quindi taint ambiente diverso.
+ *
+ *     **Aggiornato da ADR-0056 (03/09).** Quella frase descriveva tre id
+ *     scritti a mano: la CLI headless una sessione nuova a ogni invocazione, il
+ *     REPL una per lancio, Telegram `telegram:<chatId>` per sempre. Oggi la
+ *     chiave la decide `identify` (`core/surface/types.ts`) e per l'owner è
+ *     `owner` su ogni porta, quindi il REPL e Telegram condividono la
+ *     conversazione — è il fix del failure «non sembra lo stesso muffin», ed è
+ *     esattamente ciò che rende questa misura più forte, non più debole: le tre
+ *     righe qui sotto continuano a dover coincidere. Resta per-invocazione solo
+ *     `cli/run.ts`, di proposito («a script run in a loop should not silently
+ *     accumulate a conversation»), ed è la porta su cui il controllo del punto 4
+ *     isola la variabile — ora con due `--session` **espliciti**, perché una
+ *     misura che si appoggia a un default è una misura che una scelta di default
+ *     può azzerare in silenzio.
  *
  * Le due ipotesi si separano con una sola misura: **a parità di history** —
  * ogni superficie legge lo stesso file nel turno 1 e chiede la stessa
@@ -175,7 +186,10 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
         await cli.cleanup();
       }
 
-      // 2 · REPL, un processo, una sessione per lancio (`sessions.open()`).
+      // 2 · REPL, un processo. Da ADR-0056 la sua sessione è `owner`, la
+      // stessa che apre la DM Telegram dell'owner qui sotto: la parità non
+      // cambia, e ora si vede anche nella colonna `sessione=` che questo
+      // scenario stampa.
       const repl = await install({ main: SCRIPT });
       try {
         semina(repl);
@@ -209,13 +223,17 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
       }
 
       // 4 · Il controllo: stessa CLI, stesso script, **sessioni diverse** —
-      // l'unica variabile che questo file sostiene essere la causa.
+      // l'unica variabile che questo file sostiene essere la causa. I due id
+      // sono scritti a mano e non lasciati al default: dopo ADR-0056 «nessun
+      // `--session`» non significa più «una sessione diversa» su tutte le
+      // porte, e un controllo che si fida di quel default smetterebbe di
+      // isolare qualcosa senza che una riga diventi rossa.
       const fresca = await install({ main: SCRIPT });
       try {
         semina(fresca);
-        const uno = await fresca.muffin(['run', '--timeout', '20', LEGGI]);
+        const uno = await fresca.muffin(['run', '--session', 'parita-a', '--timeout', '20', LEGGI]);
         if (uno.code !== 0) throw new Error(`CLI sessione fresca turno 1: exit ${uno.code}\n${uno.err}`);
-        const due = await fresca.muffin(['run', '--timeout', '20', SCRIVI]);
+        const due = await fresca.muffin(['run', '--session', 'parita-b', '--timeout', '20', SCRIVI]);
         if (due.code !== 0) throw new Error(`CLI sessione fresca turno 2: exit ${due.code}\n${due.err}`);
         misure.push(esito(fresca, 'cli sessione nuova'));
       } finally {

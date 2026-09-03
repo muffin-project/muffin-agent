@@ -361,7 +361,7 @@ export class DiscordConnector {
 
   private async handle(incoming: Incoming): Promise<void> {
     if (await this.tryPair(incoming)) return;
-    const { principal, tenant } = principalFor(incoming, this.deps.config.ownerUserId);
+    const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
     const presence = startPresence(this.deps.api, incoming.channelId);
 
     try {
@@ -371,7 +371,11 @@ export class DiscordConnector {
         principal,
         tenant,
         surface: 'discord',
-        session: this.deps.sessions.open(`discord:${incoming.channelId}`),
+        // Come su Telegram, e per la stessa ragione: la chiave la decide
+        // `identify`, non questo file. Per l'owner è `owner` — la stessa che
+        // Telegram e il terminale aprono — e per chiunque altro è
+        // `discord:<channelId>`, la stringa che stava scritta qui (ADR-0056).
+        session: this.deps.sessions.open(sessionKey),
         text: arrival ? `${arrival}\n\n${incoming.text}`.trim() : incoming.text,
         // `channel` added for #41's lane (turno sospeso): the durable
         // `replyTo` used to carry only Discord's own addressing

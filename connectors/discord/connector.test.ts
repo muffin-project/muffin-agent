@@ -113,6 +113,9 @@ describe('who is speaking', () => {
     expect(principalFor(parsed, OWNER)).toEqual({
       principal: { kind: 'owner', connector: 'discord', externalId: OWNER },
       tenant: 'host',
+      // La stessa che produce Telegram per lo stesso owner: una conversazione
+      // sola attraverso le porte (ADR-0056).
+      sessionKey: 'owner',
     });
   });
 });
