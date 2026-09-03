@@ -464,6 +464,30 @@ describe('muffin observe · quiet hours come from the RoT', () => {
         ),
       'quietHours non valide',
     ],
+    /**
+     * La terza riga, aggiunta da ADR-0060 dopo che un giudice l'ha misurata sul
+     * gateway vero: `timezone` passava `z.string().min(1)` e poi esplodeva —
+     * `Intl` lancia `RangeError` su un fuso che non conosce, e `nextTimeOfDay`
+     * lo passa a cron-parser, che muore con «CronDate: unhandled timestamp».
+     * Prima della corsia degli impegni quel refuso rompeva solo questo comando,
+     * che l'owner batte e guarda; sulla battuta da trenta secondi del gateway
+     * diventava un processo che muore a ogni avvio.
+     */
+    [
+      'with a timezone that is not a real IANA zone',
+      (home) =>
+        writeFileSync(
+          budgetsFile(home),
+          JSON.stringify({
+            schemaVersion: 1,
+            monthlyUsd: 80,
+            perTenantDailyUsd: 2,
+            // Una lettera. È così che si scrive Roma in italiano.
+            quietHours: { from: '23:00', to: '08:00', timezone: 'Europe/Roma' },
+          }),
+        ),
+      'quietHours non valide',
+    ],
     ['unreadable', (home) => writeFileSync(budgetsFile(home), '{ "quietHours": '), 'illeggibile'],
   ];
 
