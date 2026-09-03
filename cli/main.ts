@@ -309,9 +309,11 @@ async function main(rawArgv: string[]): Promise<number> {
         },
         // Il terminale la chiede e non la mostra. Lo stesso `promptSecret` di
         // `muffin init`: la chiave non tocca mai una riga di comando, quindi
-        // non entra ne' nella history ne' in un `ps`.
+        // non entra ne' nella history ne' in un `ps`. Le parole della domanda
+        // sono di `cmdSearch`, che sa cosa sta chiedendo; qui c'e' solo il
+        // terminale a cui chiederla.
         ...(isatty(0)
-          ? { chiediChiave: () => promptSecret('  ') }
+          ? { chiediChiave: (domanda: string) => promptSecret(domanda) }
           : {}),
       });
     case 'doctor':
