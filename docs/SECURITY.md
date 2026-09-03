@@ -143,9 +143,11 @@ The policy kernel is pure and deterministic. It decides from typed facts such as
   owns rather than a runtime registers. The shipped floor allows both at every
   taint: what this buys is a decision that exists, tunable by a sealed
   `policy.json` and visible as `muffin.policy_decision` on every reply and
-  every episode. Proactive deliveries (`cli/observe.ts`) are not turns and do
-  not pass this door; `decideProactive` refuses a trigger above tier 1 at the
-  source;
+  every episode of a turn. A proactive nudge composes inside a turn and so is
+  decided, but its final delivery (`cli/observe.ts`) and its episode
+  (`agent/observe-run.ts`) happen outside the loop and pass no door;
+  `decideProactive` refuses a trigger above tier 1 at the source, and vault
+  ingest writes its own episodes outside this boundary too;
 - sealed policy and egress configuration;
 - budget state;
 - Root-of-Trust health.

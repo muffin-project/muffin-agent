@@ -109,10 +109,19 @@ di ogni altra capability è invariata.
 
 ### 5. Cosa **non** è coperto: le consegne proattive
 
-`cli/observe.ts` consegna su un canale senza che ci sia un turno: la Stage 2
-dell'osservazione compone un testo e chiama `deliver(channel, text)`
-direttamente. Quella strada non attraversa `drive` e quindi **non passa da
-`surface.reply`**. Non è una svista ed è presidiata altrove: `decideProactive`
+La Stage 2 dell'osservazione **è** un turno — `agent/observe-run.ts` chiama
+`runTurn` — quindi la porta della risposta viene interrogata mentre il testo si
+compone. Quello che resta fuori è ciò che viene dopo: la consegna vera e propria
+la fa `cli/observe.ts` con `deliver(channel, text)` sul risultato, e l'episodio
+lo scrive `agent/observe-run.ts` **fuori** dal loop (quel turno gira con
+`memory: undefined`, quindi `memory.write` lì non viene mai chiesta). Da cui una
+conseguenza che va detta e non deve sorprendere: con la riga `reply` stretta
+dall'owner, il turno di composizione torna `answered` con il testo del kernel e
+`observe-run` non lo distingue da una risposta vera, quindi il nudge proattivo
+che arriva è la frase «La risposta è stata trattenuta dal kernel…», poi
+registrata come episodio. Non è insicuro — è testo del kernel, e solo su una
+riga che l'owner ha stretto — ma è la ragione per cui questa sezione esiste.
+Non è una svista ed è presidiata altrove: `decideProactive`
 (`core/scheduler/proactivity.ts`) rifiuta `tier > 1` alla fonte, quindi una
 consegna proattiva nasce solo da un innesco pulito, e ha in più le sue quiet
 hours e il suo budget. Portarla dentro la stessa porta è lavoro successivo, non
@@ -163,9 +172,12 @@ forma che il percorso `draft` di ADR-0022 rifiuta.
   otterrebbe un'installazione che a volte non risponde. È il suo diritto ed è
   ciò che ha chiesto; il testo che legge è del kernel e nomina il codice del
   rifiuto, non un errore del modello.
-- **Resta scoperta** la consegna proattiva di `cli/observe.ts` (§5 qui sopra), e
-  resta scoperto il verso opposto della memoria: la *lettura* di recall passa
-  già da `memory.read`, la consolidazione che riscrive ciò che deriva no.
+- **Restano scoperte** la consegna proattiva di `cli/observe.ts` e il suo
+  episodio scritto da `agent/observe-run.ts` (§5 qui sopra), l'episodio di
+  ingest del vault (`core/vault/vault.ts`, `kind: 'document'`), e il verso
+  opposto della memoria: la *lettura* di recall passa già da `memory.read`, la
+  consolidazione che riscrive ciò che deriva no. «L'episodio passa dal kernel»
+  è vero del **turno**, non di ogni riga che finisce nella memoria.
 - La domanda aperta di `docs/SECURITY.md` §13 non è toccata: se l'eval mostra
   che il taint ambientale non paga la sua complessità, cambiano le colonne e
   queste due righe restano dove sono.
