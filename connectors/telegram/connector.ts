@@ -599,6 +599,19 @@ export class TelegramConnector {
    * Telegram: `citazione` la legge come «non lo so», che è il ramo che recinta.
    */
   private meId: number | undefined;
+  /**
+   * Da quando dura il 409 in corso, o `null` se non ce n'e' uno.
+   *
+   * Esiste per non ripetere. Il 03/09/2026, sulla macchina dell'owner, aprire
+   * il REPL con un gateway attivo riempiva il terminale della stessa riga ogni
+   * pochi secondi, per sempre: un fatto solo, scritto a timer. La causa vera
+   * (due poller) e' chiusa dal cancello in `cli/surface.ts`; questa e' l'altra
+   * meta', perche' un 409 puo' capitare comunque — il processo di prima che se
+   * ne va, un secondo Muffin su un'altra macchina — e allora va detto **una
+   * volta**, e poi va detto *per quanto e' durato* quando rientra. Un diario
+   * di soli fallimenti dice quanti, mai per quanto.
+   */
+  private conflictSince: string | null = null;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(private readonly deps: ConnectorDeps) {
@@ -667,6 +680,11 @@ export class TelegramConnector {
       // one. Same rule as `drain`'s own per-update `try` — report, continue.
       try {
         const updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset());
+        if (this.conflictSince !== null) {
+          const durata = Math.max(0, Math.round((Date.parse(this.now()) - Date.parse(this.conflictSince)) / 1000));
+          log(`telegram: 409 rientrato dopo ${durata}s — ricevo di nuovo`);
+          this.conflictSince = null;
+        }
         // Dopo la chiamata, non prima: un battito e' riuscito quando la
         // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
         // e' lavoro nostro, non la prova che Telegram risponde.
@@ -699,8 +717,20 @@ export class TelegramConnector {
         if (error instanceof TelegramError && error.status === 409) {
           // Another poller holds the token — usually the previous process not
           // yet gone. Waiting is the correct move; racing it is not.
-          log('telegram: 409, un altro getUpdates è attivo — attendo');
+          //
+          // Una riga per **stato**, non per tentativo: la prima volta che il
+          // 409 comincia, e poi piu' niente finche' dura. La riga che chiude
+          // (sopra, al primo `getUpdates` riuscito) porta la durata, che e' il
+          // fatto nuovo — «da quanto» e' esattamente cio' che una riga ripetuta
+          // non dice.
+          if (this.conflictSince === null) {
+            this.conflictSince = this.now();
+            log('telegram: 409, un altro getUpdates è attivo — attendo (non lo ripeto finché dura)');
+          }
         } else {
+          // Un guasto diverso chiude lo stato precedente: il prossimo 409 e' un
+          // 409 nuovo e va detto.
+          this.conflictSince = null;
           log(`telegram: polling fallito (${causa})`);
         }
         await this.sleep(5000, signal);

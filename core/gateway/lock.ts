@@ -168,3 +168,42 @@ export function readGateway(
     lastBeat: new Date(row.takenAt ?? now.toISOString()),
   };
 }
+
+/**
+ * «Chi serve, adesso?» — chiesto a ogni giro, detto una volta per cambio.
+ *
+ * Estratto il 03/09/2026 da `gatewayStandDown` (`cli/repl.ts`) quando è
+ * servito un secondo consumatore della stessa domanda: le **superfici**. Fino a
+ * quel giorno il REPL cedeva allo scheduler e non cedeva le superfici, quindi
+ * con un gateway sotto supervisore due processi chiamavano `getUpdates` sullo
+ * stesso token e Telegram rispondeva 409 al perdente — che lo scriveva a
+ * timer, per sempre, sull'installazione dell'owner.
+ *
+ * Un solo posto risponde, perché due risposte divergono: il gateway «vivo» del
+ * lucchetto (heartbeat + `STALE_AFTER_MS`, che copre il coperchio del portatile
+ * e il `kill -9`) e un qualsiasi secondo criterio inventato accanto sarebbero
+ * d'accordo ovunque tranne che intorno a un crash, cioè esattamente dove conta.
+ *
+ * Annuncia sulla **transizione** e non sullo stato: la riga di avvio resta
+ * l'unica cosa detta all'avvio (`servingAtBoot` è ciò che quella riga ha già
+ * riportato) e una condizione che dura non produce una riga al secondo. In
+ * entrambe le direzioni, perché un gateway che muore e un processo che
+ * riprende in silenzio sono lo stesso difetto con il cappello scambiato.
+ */
+export function gatewayTransition(
+  db: Database.Database,
+  say: (line: string) => void,
+  servingAtBoot: boolean,
+  words: { taken: (pid: number) => string; released: () => string },
+): () => GatewayInfo | null {
+  let serving = servingAtBoot;
+  return () => {
+    const gateway = readGateway(db);
+    const now = gateway !== null;
+    if (now !== serving) {
+      serving = now;
+      say(gateway ? words.taken(gateway.pid) : words.released());
+    }
+    return gateway;
+  };
+}
