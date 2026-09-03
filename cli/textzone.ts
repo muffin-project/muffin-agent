@@ -56,6 +56,18 @@ export type TextzoneDeps = {
   comandi?: readonly string[];
   /** Il fondo fisso dello schermo, se l'altezza è nota. Assente o inattivo = riquadro in fondo allo scrollback. */
   fondo?: Fondo | undefined;
+  /**
+   * Dove scrive `readLine` — il prompt `[s/N]` di un'approvazione.
+   *
+   * Assente = `output`, per compatibilità con chi non lo passa (i test di
+   * questo file). `cli/repl.ts` passa **stderr**: `readLine` è cornice, non
+   * la risposta del turno, e fino al 03/09/2026 scriveva su `output` = stdout
+   * come il resto della textzone — l'unico punto della CLI a violare B11
+   * (`docs/evidence/forma-delle-superfici-2026-09-03.md` §3.1). Un campo a
+   * parte e non un secondo argomento di `readLine`: il chiamante che
+   * costruisce la textzone lo sa una volta sola, non ad ogni domanda.
+   */
+  promptOutput?: NodeJS.WriteStream;
 };
 
 /**
@@ -112,6 +124,7 @@ export function posizioneCursore(
 
 export function makeTextzone(deps: TextzoneDeps) {
   const { input, output } = deps;
+  const promptOutput = deps.promptOutput ?? output;
   /** Il fondo, se lo schermo ha un'altezza. Che sia *agganciato* è un'altra cosa, e si decide a ogni lettura. */
   const fondoDisponibile = deps.fondo !== undefined && deps.fondo.attivo ? deps.fondo : undefined;
   let storia = leggiStoria(deps.historyFile);
@@ -354,13 +367,14 @@ export function makeTextzone(deps: TextzoneDeps) {
       input.setRawMode(true);
       input.resume();
       let riga = '';
-      output.write(prompt);
+      // Cornice, non risposta (B11): vedi `TextzoneDeps.promptOutput`.
+      promptOutput.write(prompt);
 
       const finisci = (esito: Esito): void => {
         input.off('keypress', onKey);
         input.setRawMode(false);
         input.pause();
-        output.write('\n');
+        promptOutput.write('\n');
         resolve(esito);
       };
       const onKey = (_ch: string | undefined, key: Key | undefined): void => {
@@ -371,14 +385,14 @@ export function makeTextzone(deps: TextzoneDeps) {
         if (key.name === 'backspace') {
           if (riga.length > 0) {
             riga = riga.slice(0, -1);
-            output.write('\b \b');
+            promptOutput.write('\b \b');
           }
           return;
         }
         const ch = key.sequence ?? '';
         if (ch.length !== 1 || ch.charCodeAt(0) < 0x20 || key.ctrl === true || key.meta === true) return;
         riga += ch;
-        output.write(ch);
+        promptOutput.write(ch);
       };
       input.on('keypress', onKey);
       input.once('end', () => finisci({ tipo: 'fine' }));

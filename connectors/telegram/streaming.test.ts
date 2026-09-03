@@ -183,6 +183,10 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       calls.push({ method: 'editMessageText', text: html, messageId });
       return true;
     },
+    editMessageReplyMarkup: async (_chatId, messageId) => {
+      calls.push({ method: 'editMessageReplyMarkup', messageId });
+      return true;
+    },
     deleteMessage: async (_chatId, messageId) => {
       calls.push({ method: 'deleteMessage', messageId });
       return true;
