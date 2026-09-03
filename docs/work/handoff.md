@@ -31,6 +31,8 @@ conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
 riceve sempre (oggi `drain()` attende il turno). **Test end-to-end veri**:
 corsia reale in locale con modello e Bot API veri (chiave mai stampata),
 accanto al finto. Ordine: critical-path.md#ordine-corrente punto 2 (a→d).
+**Punto 3 (ADR-0055)**: risposta ed episodio sono `surface.reply`/`memory.write`
+dichiarate dal kernel — permessi invariati, ora osservabili e stringibili.
 
 **Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
 `@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.

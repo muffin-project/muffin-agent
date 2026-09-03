@@ -87,7 +87,8 @@ function ask(prompt: string): Decision {
 
 export function createDecide(ctx: PolicyContext): Decide {
   /**
-   * The kernel's own vocabulary, merged under whatever the runtime declared.
+   * The kernel's own vocabulary, consulted **under** whatever the runtime
+   * declared — a fallback, never a merge.
    *
    * The two doors (`doors.ts`) are not tools a feature registers: they are the
    * acts the loop performs by itself — answering, remembering — and the kernel
@@ -96,13 +97,20 @@ export function createDecide(ctx: PolicyContext): Decide {
    * them would answer `no_capability` on every reply the day it forgot; a
    * kernel that owns them cannot forget. A caller's own declaration under the
    * same id still wins, so a harness can tighten a door on purpose.
+   *
+   * **`ctx.capabilities` is read live, on every request, and copying it is a
+   * defect.** `agent/runtime.ts` hands the same `Map` to `createDecide` and to
+   * `Runtime.register`, which mutates it: every MCP tool, and every tool a
+   * test registers after boot, is declared *after* this function ran. A
+   * snapshot taken here makes the kernel answer `no_capability` to all of
+   * them — which is what the first draft of this door did, and what
+   * `agent/todo-wiring.test.ts` and `agent/crash-resume.test.ts` caught.
    */
-  const capabilities = new Map(ctx.capabilities);
-  for (const door of DOORS) if (!capabilities.has(door.id)) capabilities.set(door.id, door);
+  const doors = new Map<CapabilityId, CapabilityDecl>(DOORS.map((d) => [d.id, d]));
   return function decide(req: DecisionRequest): Decision {
     const { principal, tenant, capability, resource, taint } = req;
 
-    const decl = capabilities.get(capability);
+    const decl = ctx.capabilities.get(capability) ?? doors.get(capability);
     if (!decl) {
       return { effect: 'deny', code: 'no_capability', detail: `undeclared capability: ${capability}` };
     }

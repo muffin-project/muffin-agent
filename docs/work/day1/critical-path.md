@@ -34,6 +34,9 @@ vengono prima di allargare capability o architettura.
    2d la corsia end-to-end REALE (modello e Bot API veri, in locale)
         ↓
 3  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
+   — meccanismo sul ramo (ADR-0055): sono capability dichiarate dal kernel e
+     tracciate a ogni giro; nessun permesso è cambiato, e a decidere i permessi
+     resta il punto 4
         ↓
 4  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
         ↓

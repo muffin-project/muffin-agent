@@ -1,7 +1,7 @@
 {
   "kernel": {
     "fn": "decide",
-    "file": "core/policy/decide.ts:92",
+    "file": "core/policy/decide.ts:88",
     "pure": true,
     "inputs": [
       {
@@ -17,7 +17,7 @@
       {
         "name": "capability",
         "type": "CapabilityId",
-        "note": "dotted id; undeclared = deny (decide.ts:96-98)"
+        "note": "dotted id; undeclared = deny (decide.ts:114-116)"
       },
       {
         "name": "resource",
@@ -91,14 +91,14 @@
   "decisionOrder": [
     {
       "n": 1,
-      "rule": "capability must be declared (registered by some tool)",
-      "file": "core/policy/decide.ts:95-98",
+      "rule": "capability must be declared — by a tool that registered it, or by the kernel itself for the two doors a turn walks through without a tool (surface.reply, memory.write; core/policy/doors.ts, ADR-0055). ctx.capabilities is read live on every request, never snapshotted: agent/runtime.ts mutates the same Map when it registers MCP tools",
+      "file": "core/policy/decide.ts:113-116",
       "outcome": "deny no_capability"
     },
     {
       "n": 2,
       "rule": "safeMode true AND risk !== 'low'",
-      "file": "core/policy/decide.ts:103-109",
+      "file": "core/policy/decide.ts:121-127",
       "outcome": "deny safe_mode — checked before anything that could allow, on purpose"
     },
     {
