@@ -15,7 +15,8 @@ import { makeJobRunner } from '../agent/scheduler-run.js';
 import { runTurn, type TurnDelta, type TurnEvent } from '../agent/loop.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
 import { COMANDI as ELENCO_COMANDI, aiuto, debugCommand, eseguiComando, sembraComando, thinkingCommand } from '../agent/comandi.js';
-import type { Verbosity } from '../agent/comandi.js';
+import type { Controlli, Verbosity } from '../agent/comandi.js';
+import { Pausa } from '../core/runtime/pausa.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { cmdModel } from './model.js';
 import { makeStatusLine, type StatusLine } from './status-line.js';
@@ -554,6 +555,25 @@ export async function runRepl(
   let session = runtime.deps.sessions.open();
   let controller: AbortController | null = null;
   let lastInterrupt = 0;
+  const pausa = new Pausa(runtime.db);
+  /**
+   * Le leve di ADR-0054 per il terminale. `/stop` e `/steer` qui rispondono
+   * «nessun turno in corso» per costruzione: la textzone non legge mentre il
+   * modello risponde, quindi un comando arriva sempre fra un turno e l'altro
+   * — il Ctrl+C a turno vivo è il `/stop` del terminale. Leggere anche
+   * durante un turno (la coda del terminale) è il passo dopo, ora che la
+   * casella sta fissa in fondo.
+   */
+  const controlli: Controlli = {
+    vivo: () => controller !== null,
+    stop: () => {
+      if (controller === null) return false;
+      controller.abort();
+      return true;
+    },
+    steer: () => false,
+    pausa: { attiva: () => pausa.attiva(), metti: () => pausa.metti(), togli: () => pausa.togli() },
+  };
 
   /**
    * Ctrl+C **mentre un turno gira**.
@@ -645,6 +665,9 @@ export async function runRepl(
     // B7: same wiring as `cli/gateway.ts`, so a job the REPL runs (no gateway
     // installed yet, or its claim gone stale) gets the same identity bridge.
     (job) => runtime.jobFires.settle(job.id, job.nextFireAt.toISOString()),
+    // ADR-0054 §4: la pausa è del database, non di questo processo — un
+    // `/pause` dato dal telefono ferma anche i job che girano qui.
+    () => pausa.attiva(),
   );
   const ticker = setInterval(() => scheduler.tick(), TICK_MS);
   ticker.unref(); // the timer must not, by itself, keep the process alive
@@ -704,6 +727,7 @@ export async function runRepl(
           sessionId: session.id,
           verbosity,
           puoiUscire: true,
+          controlli,
           model: (argv, out) => cmdModel(home, argv, { out }),
         });
         if (esito.esci === true) break;

@@ -174,6 +174,12 @@ verso la chat dell'owner. Il finto resta per determinismo e mutazioni; il vero
 è la prova che «si vede bene». Le righe user-facing dell'inventario dichiarano
 quale delle due le prova.
 
+*Costruita lo stesso giorno:* `evals/e2e/telegram.ts` (`npm run e2e:telegram`,
+`evals/e2e/README.md`). Un proxy locale registra il filo fra il gateway e
+`api.telegram.org`; tre passi guidati — trascrizione/ASK, coda, `/stop` —
+con le asserzioni sul filo. Serve un bot di prova e un telefono: la esegue
+l'owner, e il suo verde si scrive nelle righe B11/B13/B2/D12 con la data.
+
 ### 5.5 Librerie (giro del 03/09, `npm outdated`)
 
 | pacchetto | ora | latest | nota |
