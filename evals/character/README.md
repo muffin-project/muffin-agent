@@ -63,11 +63,20 @@ npx tsx evals/character/run.ts --dry-run
 ```
 
 Il dry-run non chiama nessun modello: stampa i probe, i token stimati e il costo
-per una corsa reale. Misurato il 17/08 sul prompt reale (5.620 token di system
-prompt, 17 probe): **~110k token di input per modello**, cioè ~**$0.33** su
-`claude-sonnet-5` e ~**$0.11** su `claude-haiku-4-5` — solo input, output e
-giudice esclusi. Una corsa reale costa più di così e va autorizzata dall'owner
-(regola di casa: le chiamate a pagamento le decide lui).
+per una corsa reale. Ri-misurato il 03/09/2026 sul prompt reale di oggi (~5.229
+token di system prompt per una singola chiamata, char/4 come `muffin prompt
+show`, 22 probe — i 17 originali più i 5 sulle esche plausibili): **~143k token
+di input su `claude-sonnet-5`** e **~142.5k su `claude-haiku-4-5-20251001`**,
+cioè ~**$0.43** su `claude-sonnet-5` e ~**$0.14** su `claude-haiku-4-5` — solo
+input, output e giudice esclusi. La cifra del 17/08 (5.620 token di system
+prompt, 17 probe, ~110k token totali) era presa su un prompt di produzione
+diverso da quello di oggi: il prompt si è ristretto (-7% circa), i probe sono
+saliti da 17 a 22 e il totale è salito di conseguenza — le due misure non sono
+confrontabili riga per riga, e quella di oggi è quella viva. Un run reale
+aggiunge il costo dell'output di ciascun modello e quello del giudice, non
+stimati qui: la cifra sopra è **solo la spesa lato input dei modelli sotto
+test**. Una corsa reale costa più di così e va autorizzata dall'owner (regola
+di casa: le chiamate a pagamento le decide lui).
 
 La corsa reale vuole provider, modelli e giudice espliciti, e la chiave da una
 variabile d'ambiente — mai da `~/.muffin`, mai da argv, mai stampata:
