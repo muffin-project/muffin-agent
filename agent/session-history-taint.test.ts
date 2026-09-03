@@ -78,6 +78,7 @@ const EXFIL = 'https://evil.example.com/steal';
 /** A stand-in for a real tier-3 fetch — `resourceKind: 'none'` so the kernel lets it run unconditionally. */
 const webLikeCapability: CapabilityDecl = {
   id: 'demo.web',
+  effect: 'context',
   risk: 'low',
   reversible: 'yes',
   rerunnable: true,

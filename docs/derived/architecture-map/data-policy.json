@@ -4,18 +4,66 @@
     "file": "core/policy/decide.ts:92",
     "pure": true,
     "inputs": [
-      { "name": "principal", "type": "Principal", "note": "owner|member|system|agent — types.ts:11-24; never inferred from message content" },
-      { "name": "tenant", "type": "TenantId", "note": "types.ts:27; checked for coherence against principal at decide.ts:120-123" },
-      { "name": "capability", "type": "CapabilityId", "note": "dotted id; undeclared = deny (decide.ts:96-98)" },
-      { "name": "resource", "type": "Resource", "note": "path|url|tenant|none — types.ts:40-44; url resources are the only ones gated against the egress allowlist" },
-      { "name": "args", "type": "Readonly<Record<string,unknown>>", "note": "types.ts:67 'already validated against the tool's input schema — never raw model output'" },
-      { "name": "taint", "type": "TrustTier (0-3)", "note": "types.ts:69-70 'Recomputed at every call, never frozen for the turn'" },
-      { "name": "ctx.capabilities", "type": "ReadonlyMap<CapabilityId,CapabilityDecl>", "note": "boot-time closure input, decide.ts:20" },
-      { "name": "ctx.matrix", "type": "PolicyMatrix", "note": "boot-time closure input from rot/policy.json, decide.ts:45; POLICY_FLOOR is the compiled fallback (matrix.ts:94-102)" },
-      { "name": "ctx.budgetExhausted", "type": "(tenant:string)=>boolean", "note": "boot-time closure, decide.ts:55; sync so the kernel stays sync" },
-      { "name": "ctx.hardened", "type": "boolean", "note": "decide.ts:60; gates whether a high-risk owner call can silently allow" },
-      { "name": "ctx.safeMode", "type": "boolean|undefined", "note": "decide.ts:67; RoT-diverged flag, checked first of all" },
-      { "name": "ctx.egressAllowed", "type": "(host:string)=>boolean|undefined", "note": "decide.ts:74; ABSENT means deny-all, not allow-all" }
+      {
+        "name": "principal",
+        "type": "Principal",
+        "note": "owner|member|system|agent — types.ts:11-24; never inferred from message content"
+      },
+      {
+        "name": "tenant",
+        "type": "TenantId",
+        "note": "types.ts:27; checked for coherence against principal at decide.ts:120-123"
+      },
+      {
+        "name": "capability",
+        "type": "CapabilityId",
+        "note": "dotted id; undeclared = deny (decide.ts:96-98)"
+      },
+      {
+        "name": "resource",
+        "type": "Resource",
+        "note": "path|url|tenant|none — types.ts:40-44; url resources are the only ones gated against the egress allowlist"
+      },
+      {
+        "name": "args",
+        "type": "Readonly<Record<string,unknown>>",
+        "note": "types.ts:67 'already validated against the tool's input schema — never raw model output'"
+      },
+      {
+        "name": "taint",
+        "type": "TrustTier (0-3)",
+        "note": "types.ts:69-70 'Recomputed at every call, never frozen for the turn'"
+      },
+      {
+        "name": "ctx.capabilities",
+        "type": "ReadonlyMap<CapabilityId,CapabilityDecl>",
+        "note": "boot-time closure input, decide.ts:20"
+      },
+      {
+        "name": "ctx.matrix",
+        "type": "PolicyMatrix",
+        "note": "boot-time closure input from rot/policy.json, decide.ts:45; POLICY_FLOOR is the compiled fallback (matrix.ts:94-102)"
+      },
+      {
+        "name": "ctx.budgetExhausted",
+        "type": "(tenant:string)=>boolean",
+        "note": "boot-time closure, decide.ts:55; sync so the kernel stays sync"
+      },
+      {
+        "name": "ctx.hardened",
+        "type": "boolean",
+        "note": "decide.ts:60; gates whether a high-risk owner call can silently allow"
+      },
+      {
+        "name": "ctx.safeMode",
+        "type": "boolean|undefined",
+        "note": "decide.ts:67; RoT-diverged flag, checked first of all"
+      },
+      {
+        "name": "ctx.egressAllowed",
+        "type": "(host:string)=>boolean|undefined",
+        "note": "decide.ts:74; ABSENT means deny-all, not allow-all"
+      }
     ],
     "effects": [
       {
@@ -41,34 +89,144 @@
     ]
   },
   "decisionOrder": [
-    { "n": 1, "rule": "capability must be declared (registered by some tool)", "file": "core/policy/decide.ts:95-98", "outcome": "deny no_capability" },
-    { "n": 2, "rule": "safeMode true AND risk !== 'low'", "file": "core/policy/decide.ts:103-109", "outcome": "deny safe_mode — checked before anything that could allow, on purpose" },
-    { "n": 3, "rule": "capability covered by matrix.neverAtRuntime (rot.write, rot.*)", "file": "core/policy/decide.ts:111-117", "outcome": "deny rot_violation" },
-    { "n": 4, "rule": "tenant on the request must equal tenantOf(principal)", "file": "core/policy/decide.ts:119-123", "outcome": "deny tenant_mismatch" },
-    { "n": 5, "rule": "capability.hostOnly AND principal.kind === 'member'", "file": "core/policy/decide.ts:127-130", "outcome": "deny principal_forbidden" },
-    { "n": 6, "rule": "principal.kind === 'system' AND capability covered by matrix.forbiddenForSystem (outward.*, config.ratchet)", "file": "core/policy/decide.ts:132-134", "outcome": "deny principal_forbidden — NOTE: does not check principal.kind==='agent', only 'system'" },
-    { "n": 7, "rule": "taint > ceiling, where ceiling = decl.maxTaint ?? matrix.defaultMaxTaint[decl.risk]", "file": "core/policy/decide.ts:136-143", "outcome": "deny taint_exceeded" },
-    { "n": 8, "rule": "decl.risk !== 'low' AND budgetExhausted(tenant)", "file": "core/policy/decide.ts:145-147", "outcome": "deny budget_exhausted" },
-    { "n": 9, "rule": "resourceKind === 'url': resource must actually be kind:'url' (else refuse rather than skip), host must parse, host checked against egress allowlist; off-list → ask if owner+taint<=1, else deny", "file": "core/policy/decide.ts:149-193", "outcome": "deny resource_denied OR ask(owner prompt) OR pass through" },
-    { "n": 10, "rule": "principal.kind is 'system' or 'agent' AND decl.risk === 'high'", "file": "core/policy/decide.ts:195-199", "outcome": "ask 'queued: <capability> requested by <kind>' — autonomous principals never auto-approve high risk" },
-    { "n": 11, "rule": "final switch on decl.risk", "file": "core/policy/decide.ts:201-214", "outcome": "low -> allow; medium+undoable -> draft, medium+other -> allow; high -> allow only if hardened && owner && taint===0, else ask" }
+    {
+      "n": 1,
+      "rule": "capability must be declared (registered by some tool)",
+      "file": "core/policy/decide.ts:95-98",
+      "outcome": "deny no_capability"
+    },
+    {
+      "n": 2,
+      "rule": "safeMode true AND risk !== 'low'",
+      "file": "core/policy/decide.ts:103-109",
+      "outcome": "deny safe_mode — checked before anything that could allow, on purpose"
+    },
+    {
+      "n": 3,
+      "rule": "capability covered by matrix.neverAtRuntime (rot.write, rot.*)",
+      "file": "core/policy/decide.ts:111-117",
+      "outcome": "deny rot_violation"
+    },
+    {
+      "n": 4,
+      "rule": "tenant on the request must equal tenantOf(principal)",
+      "file": "core/policy/decide.ts:119-123",
+      "outcome": "deny tenant_mismatch"
+    },
+    {
+      "n": 5,
+      "rule": "capability.hostOnly AND principal.kind === 'member'",
+      "file": "core/policy/decide.ts:127-130",
+      "outcome": "deny principal_forbidden"
+    },
+    {
+      "n": 6,
+      "rule": "principal.kind === 'system' AND capability covered by matrix.forbiddenForSystem (outward.*, config.ratchet)",
+      "file": "core/policy/decide.ts:132-134",
+      "outcome": "deny principal_forbidden — NOTE: does not check principal.kind==='agent', only 'system'"
+    },
+    {
+      "n": 7,
+      "rule": "taint > ceiling, where ceiling = min(matrix.rows[decl.effect].denyAbove, decl.maxTaint ?? 3) — the effect row, not the risk class (ADR-0053); and after the risk switch, taint > row.askAbove turns any allow/draft into an ask",
+      "file": "core/policy/decide.ts:137-152",
+      "outcome": "deny taint_exceeded"
+    },
+    {
+      "n": 8,
+      "rule": "decl.risk !== 'low' AND budgetExhausted(tenant)",
+      "file": "core/policy/decide.ts:145-147",
+      "outcome": "deny budget_exhausted"
+    },
+    {
+      "n": 9,
+      "rule": "resourceKind === 'url': resource must actually be kind:'url' (else refuse rather than skip), host must parse, host checked against egress allowlist; off-list → ask if owner+taint<=1, else deny",
+      "file": "core/policy/decide.ts:149-193",
+      "outcome": "deny resource_denied OR ask(owner prompt) OR pass through"
+    },
+    {
+      "n": 10,
+      "rule": "principal.kind is 'system' or 'agent' AND decl.risk === 'high'",
+      "file": "core/policy/decide.ts:195-199",
+      "outcome": "ask 'queued: <capability> requested by <kind>' — autonomous principals never auto-approve high risk"
+    },
+    {
+      "n": 11,
+      "rule": "final switch on decl.risk",
+      "file": "core/policy/decide.ts:201-214",
+      "outcome": "low -> allow; medium+undoable -> draft, medium+other -> allow; high -> allow only if hardened && owner && taint===0, else ask"
+    }
   ],
   "taint": {
     "tiers": [
-      { "tier": 0, "name": "owner", "sources": ["agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)", "docs/history/rebuild-2026/03-threat-model.md:21"], "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0" },
-      { "tier": 1, "name": "contatti confermati (confirmed contacts)", "sources": ["docs/history/rebuild-2026/03-threat-model.md:21 (declared only)"], "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope" },
-      { "tier": 2, "name": "gruppo/sconosciuti (group members) — e il disco", "sources": ["agent/loop.ts (principal.kind === 'member' ? 2 : 0, written into the record's taint column)", "agent/tools/fs.ts (DISK_TIER, ADR-0044)"], "meaning": "turn started by a non-owner group member, OR a turn that read from the local filesystem: `stat` cannot separate the owner's own note from a file a stranger sent, so an unprovenanced read lands in the same bucket as a stranger speaking" },
-      { "tier": 3, "name": "web/tool-esterni", "sources": ["agent/tools/http.ts (ToolOutcome.tier: 3 on every sys.http result)"], "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint, which since ADR-0044 is called unconditionally because `tier` is a required field" }
+      {
+        "tier": 0,
+        "name": "owner",
+        "sources": [
+          "agent/loop.ts:449 (a fresh turn's record is written with taint 0 for a non-member principal)",
+          "docs/history/rebuild-2026/03-threat-model.md:21"
+        ],
+        "meaning": "direct owner-authenticated content before any higher-tier block enters context; system/agent remain distinct principals even when the loop initializes their taint at 0"
+      },
+      {
+        "tier": 1,
+        "name": "contatti confermati (confirmed contacts)",
+        "sources": [
+          "docs/history/rebuild-2026/03-threat-model.md:21 (declared only)"
+        ],
+        "meaning": "not sourced to a concrete assignment site within core/policy|rot|vault|sandbox|net|budget|session|tracing — likely assigned in core/memory/recall.ts or a connector, which were out of this scan's scope"
+      },
+      {
+        "tier": 2,
+        "name": "gruppo/sconosciuti (group members) — e il disco",
+        "sources": [
+          "agent/loop.ts (principal.kind === 'member' ? 2 : 0, written into the record's taint column)",
+          "agent/tools/fs.ts (DISK_TIER, ADR-0044)"
+        ],
+        "meaning": "turn started by a non-owner group member, OR a turn that read from the local filesystem: `stat` cannot separate the owner's own note from a file a stranger sent, so an unprovenanced read lands in the same bucket as a stranger speaking"
+      },
+      {
+        "tier": 3,
+        "name": "web/tool-esterni",
+        "sources": [
+          "agent/tools/http.ts (ToolOutcome.tier: 3 on every sys.http result)"
+        ],
+        "meaning": "any tool result whose content came from outside the house; raises the running turn taint via snapshot.raiseTaint, which since ADR-0044 is called unconditionally because `tier` is a required field"
+      }
     ],
     "monotonic": "agent/loop.ts:942-946 — raiseTaint(tier) only assigns when tier > taint, and clears the per-turn decision cache on every raise; there is no lowerTaint anywhere in the codebase (grep confirms). types.ts:104-109 documents the PermissionSnapshot contract this implements.",
     "maxTaintDefaults": "core/policy/matrix.ts:94-102 (POLICY_FLOOR.defaultMaxTaint = { low: 3, medium: 1, high: 1 }), mirrored verbatim in the shipped seal at defaults/rot/policy.json:4. A sealed rot/policy.json may only tighten these (core/policy/matrix.ts:162-165 tighter(), 181-185 merge()) — never raise them, even if the file says so."
   },
   "denyPaths": [
-    { "pattern": "~/.muffin/rot/ (p.rot)", "file": "core/rot/guards.ts:69", "enforced": true, "note": "enforced in agent/tools/fs.ts:315-345 (resolveInScope) and core/sandbox/executor.ts:118-120,139 (filesystem.denyWrite, both base and per-call config)" },
-    { "pattern": "config (p.config)", "file": "core/rot/guards.ts:71", "enforced": true, "note": "same two enforcement sites as above" },
-    { "pattern": "secrets — both ADR-0039 links: secretDir('home'), secretDir('persistent')", "file": "core/rot/guards.ts:73-74", "enforced": true, "note": "in BOTH denyWrite and denyRead (guards.ts:82-83); also fed into SandboxExecutor.denyRead" },
-    { "pattern": ".git/hooks (join(cwd,'.git','hooks'))", "file": "core/rot/guards.ts:76", "enforced": true, "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites" },
-    { "pattern": "shell dotfiles — 9 named files (.zshrc/.zshenv/.zprofile/.zlogin/.bashrc/.bash_profile/.bash_login/.profile/.kshrc) + fish config", "file": "core/rot/guards.ts:47-57,77-79", "enforced": true, "note": "named individually rather than globbed, by design (guards.ts:41-46)" }
+    {
+      "pattern": "~/.muffin/rot/ (p.rot)",
+      "file": "core/rot/guards.ts:69",
+      "enforced": true,
+      "note": "enforced in agent/tools/fs.ts:315-345 (resolveInScope) and core/sandbox/executor.ts:118-120,139 (filesystem.denyWrite, both base and per-call config)"
+    },
+    {
+      "pattern": "config (p.config)",
+      "file": "core/rot/guards.ts:71",
+      "enforced": true,
+      "note": "same two enforcement sites as above"
+    },
+    {
+      "pattern": "secrets — both ADR-0039 links: secretDir('home'), secretDir('persistent')",
+      "file": "core/rot/guards.ts:73-74",
+      "enforced": true,
+      "note": "in BOTH denyWrite and denyRead (guards.ts:82-83); also fed into SandboxExecutor.denyRead"
+    },
+    {
+      "pattern": ".git/hooks (join(cwd,'.git','hooks'))",
+      "file": "core/rot/guards.ts:76",
+      "enforced": true,
+      "note": "previously missing from the runtime's deny list per the file's own history comment (guards.ts:9-23); now enforced at both sites"
+    },
+    {
+      "pattern": "shell dotfiles — 9 named files (.zshrc/.zshenv/.zprofile/.zlogin/.bashrc/.bash_profile/.bash_login/.profile/.kshrc) + fish config",
+      "file": "core/rot/guards.ts:47-57,77-79",
+      "enforced": true,
+      "note": "named individually rather than globbed, by design (guards.ts:41-46)"
+    }
   ],
   "denyPathsSummary": "5 of 5 mandatory categories from docs/history/rebuild-2026/03-threat-model.md:69 are declared in core/rot/guards.ts and all 5 are enforced at both consumers (agent/tools/fs.ts fs_write path resolution, core/sandbox/executor.ts sandbox filesystem config) via the single shared mandatoryGuards() object passed to both from agent/runtime.ts:258-259,301. Tested directly: core/rot/guards.test.ts:38-61 ('the five mandatory deny paths ... names all five, so a category cannot be dropped silently') and :63-86 ('the deny paths beat an allow-write that contains them').",
   "surfaces": [
@@ -133,9 +291,9 @@
     {
       "claim": "Shell / filesystem host / processi ... taint 2 -> ASK (shell; emendamento owner 2026-08-15/16, ADR-0044 §revisione) · taint 3 -> DENY. The row label still spans three capability families; the amended cell, its note (docs/history/rebuild-2026/03-threat-model.md:51) and ADR-0044 §Revisione name only sys.shell ('tocca solo il soffitto di sys.shell ... non quella che legge').",
       "doc": "docs/history/rebuild-2026/03-threat-model.md:45; docs/decisions/0044-il-disco-non-ha-provenienza.md:180",
-      "real": "Measured 2026-08-16 by running createDecide() with the production declarations against the shipped matrix (defaults/rot/policy.json:4 == POLICY_FLOOR core/policy/matrix.ts:95: low 3 / medium 1 / high 1). sys.shell: maxTaint pinned to 2 (agent/tools/shell.ts:53) so taint 2 passes the ceiling check (core/policy/decide.ts:136-143) and lands in the high branch, which is ask unless hardened && owner && taint===0 (core/policy/decide.ts:208-213) — ASK for the owner, queued-ASK for system/agent (core/policy/decide.ts:197-199); taint 3 is deny/taint_exceeded. The shell half of the row now HOLDS. fs.read and fs.list: risk low, no maxTaint (agent/tools/fs.ts:105-121) -> ceiling 3 -> ALLOW at taint 2 AND 3, contradicting both cells — deliberate (ADR-0039; agent/tools/fs.ts:69-80: the read itself pays by tainting the turn to DISK_TIER=2, agent/tools/fs.ts:65). fs.write: medium, no maxTaint (agent/tools/fs.ts:123-124) -> ceiling 1 -> deny/taint_exceeded at 2 and 3, stricter than the row's ASK. sys.process.list pins maxTaint 1 (agent/tools/process.ts:24-28) and sys.process.kill is high with no maxTaint (agent/tools/process.ts:34-35) -> both deny/taint_exceeded at 2 and 3, stricter than ASK. All six are hostOnly, so a member@group principal gets deny/principal_forbidden before taint is read (core/policy/decide.ts:128-130): for groups the 'qualunque' column is DENY whatever the cell says. Net: one row, three families, three different behaviours at taint 2 (ASK / ALLOW / DENY) — the amendment fixed the sys.shell drift and left the reads over-claimed in both columns and writes/processes under-claimed at 2.",
-      "verdict": "PARTIAL",
-      "evidence": "agent/tools/shell.ts:45-53; agent/tools/fs.ts:65; agent/tools/fs.ts:69-80; agent/tools/fs.ts:105-124; agent/tools/process.ts:24-36; core/policy/decide.ts:128-130; core/policy/decide.ts:136-143; core/policy/decide.ts:197-199; core/policy/decide.ts:208-213; core/policy/matrix.ts:95; defaults/rot/policy.json:4"
+      "real": "Re-measured 2026-09-02 after ADR-0053: the row now HOLDS for all three families, and the repair was structural rather than a number. Until then the kernel derived the ceiling from the risk class plus a maxTaint pinned by hand per declaration, so this one printed row produced three different behaviours at taint 2 — sys.shell ASK (it alone had received the 2026-08-16 amendment as maxTaint: 2), fs.write and sys.process.kill DENY/taint_exceeded (inheriting the class default of 1, stricter than the cell), fs.read and fs.list ALLOW (low class, deliberate: the read pays by tainting the turn, agent/tools/fs.ts:86). The ceiling now comes from the capability's declared effect row (core/policy/decide.ts:137-152, core/policy/matrix.ts ROW_FLOOR): fs.write, sys.shell and sys.process.kill all declare effect 'host' (askAbove 1, denyAbove 2), so taint 2 is ASK for all three and taint 3 is deny/taint_exceeded for all three; the reads declare 'context' and stay ALLOW, which is the same deliberate over-claim as before and still deliberate. A declaration may only tighten its row, never widen it. Every cell is asserted against this table by core/policy/effect-rows.test.ts, and the three surfaces are measured on the real binary by evals/acceptance/scenarios/b-parita-superfici.accept.ts. All of these are hostOnly, so a member@group principal still gets deny/principal_forbidden before taint is read (core/policy/decide.ts:128-130): for groups the 'qualunque' column is DENY whatever the cell says.",
+      "verdict": "HOLDS",
+      "evidence": "agent/tools/shell.ts:34-35; agent/tools/fs.ts:182-184; agent/tools/process.ts:34-36; core/policy/decide.ts:137-152; core/policy/matrix.ts ROW_FLOOR; core/policy/effect-rows.test.ts; docs/decisions/0053-la-matrice-normativa-e-eseguibile.md"
     },
     {
       "claim": "hardened: RoT owned by another OS user, runtime cannot write it — Prevention",

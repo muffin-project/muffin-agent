@@ -30,18 +30,13 @@ export type PolicyContext = {
    * Tests pass `POLICY_FLOOR`, which is those same constants under their own
    * name; production that forgets does not compile.
    *
-   * On `defaultMaxTaint`: it is the ceiling for declarations that state no
-   * `maxTaint` of their own, and a declaration's own value is authoritative in
-   * **both** directions — it may narrow the default and it may widen it. That
-   * is not an oversight. The threat model's taint-2/3 row reads "solo read-only
-   * su allowlist pubblica": having read a web page, the agent may read another
-   * one, which is why `sys.http` is medium risk (default ceiling 1) and
-   * deliberately declares 3. What the ceiling exists to stop is a tainted
-   * context reaching a capability that *acts*, and those pin a low ceiling
-   * explicitly (`sys.process` and the skill reader both pin 1). Widening is a
-   * deliberate, reviewable act per capability, not an accident the type system
-   * prevents: a declaration that widens without a comment saying why is the
-   * thing to catch in review.
+   * On the ceiling: it comes from `matrix.rows[decl.effect]`, and a
+   * declaration's own `maxTaint` may only narrow it (ADR-0053). The paragraph
+   * that stood here until 2026-09-02 described the opposite arrangement — a
+   * class default a declaration could widen in both directions — and that
+   * arrangement is exactly what let the kernel and the threat model's printed
+   * matrix disagree, one capability at a time, for a month. `defaultMaxTaint`
+   * is still on `PolicyMatrix` and is read by nothing here.
    */
   matrix: PolicyMatrix;
   /**
@@ -134,12 +129,20 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' };
     }
 
-    const ceiling = decl.maxTaint ?? ctx.matrix.defaultMaxTaint[decl.risk];
+    // The ceiling comes from the capability's **effect row** — where the bytes
+    // land — and not from its risk class. ADR-0053: the risk class default was
+    // a per-capability knob, and widening it one capability at a time is how
+    // the kernel and the threat model's printed matrix stopped agreeing on the
+    // row that reads `ASK` at taint 2. A declaration may still tighten its own
+    // row and never widen it; `core/policy/effect-rows.test.ts` asserts every
+    // shipped cell against the document.
+    const row = ctx.matrix.rows[decl.effect];
+    const ceiling = Math.min(row.denyAbove, decl.maxTaint ?? 3);
     if (taint > ceiling) {
       return {
         effect: 'deny',
         code: 'taint_exceeded',
-        detail: `context taint ${taint} exceeds ${ceiling} for ${capability}`,
+        detail: `context taint ${taint} exceeds ${ceiling} for ${capability} (${decl.effect})`,
       };
     }
 
@@ -232,20 +235,33 @@ export function createDecide(ctx: PolicyContext): Decide {
       if (decl.risk === 'high') return ask(`queued: ${capability} requested by ${principal.kind}`);
     }
 
-    switch (decl.risk) {
-      case 'low':
-        return { effect: 'allow' };
-      case 'medium':
-        return decl.reversible === 'undoable'
-          ? { effect: 'draft', undo: { capability, windowSeconds: 300 } }
-          : { effect: 'allow' };
-      case 'high':
-        // Without OS-level prevention of RoT tampering, a high-risk capability
-        // is never a silent allow — see docs/decisions/0003-root-of-trust.md (revision).
-        return ctx.hardened && isOwnerPrincipal(principal) && taint === 0
-          ? { effect: 'allow' }
-          : ask(describe(capability, resource));
+    const byRisk = ((): Decision => {
+      switch (decl.risk) {
+        case 'low':
+          return { effect: 'allow' };
+        case 'medium':
+          return decl.reversible === 'undoable'
+            ? { effect: 'draft', undo: { capability, windowSeconds: 300 } }
+            : { effect: 'allow' };
+        case 'high':
+          // Without OS-level prevention of RoT tampering, a high-risk capability
+          // is never a silent allow — see docs/decisions/0003-root-of-trust.md (revision).
+          return ctx.hardened && isOwnerPrincipal(principal) && taint === 0
+            ? { effect: 'allow' }
+            : ask(describe(capability, resource));
+      }
+    })();
+
+    // The row's second threshold, and the half a ceiling alone cannot express.
+    // The matrix says `ASK` at taint 2 for the host row: not "reachable", but
+    // "reachable **and never unattended**". Without this a `draft` — which
+    // executes, journalled but unasked — would satisfy the ceiling and
+    // contradict the cell. It only ever tightens: an `ask` stays an `ask`, a
+    // `deny` was already returned above.
+    if (taint > row.askAbove && byRisk.effect !== 'ask') {
+      return ask(describe(capability, resource));
     }
+    return byRisk;
   };
 }
 

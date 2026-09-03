@@ -292,6 +292,7 @@ describe('the price of the same rule, through the same turn', () => {
     // how sys.http or sys.search themselves get to tier 3 (covered elsewhere).
     const demoWebCapability: CapabilityDecl = {
       id: 'demo.web',
+      effect: 'context',
       risk: 'low',
       reversible: 'yes',
       rerunnable: true,
@@ -414,6 +415,7 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
     ]);
     const evilCapability: CapabilityDecl = {
       id: 'mcp.evil',
+      effect: 'context',
       risk: 'low', // unconditionally allowed, so the handler actually runs and throws
       reversible: 'yes',
       rerunnable: false,
@@ -577,6 +579,7 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     // vuota, quindi nemmeno una fetch. Stessa forma del describe della shell.
     const webish: CapabilityDecl = {
       id: 'demo.web',
+      effect: 'context',
       risk: 'low',
       reversible: 'yes',
       rerunnable: true,

@@ -23,25 +23,52 @@ vengono prima di allargare capability o architettura.
 ## Ordine corrente
 
 ```text
-1  decisione owner: il soffitto di fs.write dopo una lettura
+0  dogfood reale — parte subito, in parallelo
         ↓
-2  undo semantico (l'altra metà di D11, raggiungibile solo dopo 1)
+1  le righe: il soffitto viene dalla riga di effetto (ADR-0053) — fatto
         ↓
-3  promozione dev → main e `muffin update` sull'installazione reale
+2  le superfici che il dogfood ha bocciato (memo dogfood-superfici 03/09):
+   2a Telegram: una bolla per segmento, ASK intero, `description` su shell_run
+   2b CLI: scroll region, casella e stato in fondo
+   2c input mentre un turno è vivo: coda, /steer, /stop, /pause, /resume (ADR-0054)
+   2d la corsia end-to-end REALE (modello e Bot API veri, in locale)
         ↓
-4  dogfood reale e backlog guidato dai fallback
+3  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
         ↓
-5  battery finale e revisione indipendente del dev integrato
+4  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
+        ↓
+5  undo semantico (l'altra metà di D11)
+        ↓
+6  battery finale e revisione indipendente del dev integrato
 ```
 
-I prerequisiti vocali (whisper.cpp, ffmpeg, modello) sono sulla macchina
-dell'owner dal 02/09 e `doctor` li controlla prima che servano: non sono più
-un passo.
+Il punto 2 precede le porte perché è ciò che rende il dogfood **sopportabile**:
+senza, l'owner torna al vecchio agente prima che il punto 3 serva a qualcuno.
+2d va costruita con 2a e non dopo: è la prova che 2a e 2b chiedono.
 
-L'ordine 1 → 2 si è invertito il 02/09 per una misura, non per gusto: sul
-database dell'owner `fs.write` non è mai stata eseguita, e la metà di undo che
-riallinea il turno ripara un percorso che oggi nessun turno raggiunge. Prima si
-apre la porta, poi si ripara ciò che c'è dietro.
+Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
+**riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa
+eseguibile: la matrice normativa era prosa, il kernel decideva da una classe di
+rischio più un numero appuntato a mano, e le due erano divergiute su una cella
+che il documento chiamava `ASK` da un mese. La **colonna** è il taint
+ambientale, ed è l'ipotesi non falsificata di `docs/SECURITY.md` §13: si chiude
+con l'eval comparativo, non con una decisione scritta prima. Le righe
+sopravvivono a qualunque risposta l'eval dia.
+
+I prerequisiti vocali sono sulla macchina dell'owner dal 02/09 e `doctor` li
+controlla; la promozione `dev → main` e `muffin update` sono stati eseguiti lo
+stesso giorno (build installata `dd38d40`): non sono più passi.
+
+L'ordine è cambiato di nuovo il 02/09, e stavolta la causa è più a monte: il
+soffitto di `fs.write` non è più il primo passo perché **non è chiaro che sia il
+difetto**. La memo di decisione
+(`docs/evidence/decision-memo-taint-2026-09-02.md`) misura che il gate più
+stretto sta sulla porta più innocua — la scrittura locale reversibile con
+journal — mentre la risposta in chat e la scrittura di memoria non passano
+affatto dal kernel. Finché l'eval non dice se il segnale di autorità è
+sbagliato o solo tarato male, spostare un numero sarebbe rispondere prima di
+aver misurato. La metà di undo di D11 resta dietro quella decisione per la
+ragione di prima: ripara un percorso che oggi nessun turno raggiunge.
 
 ### Chiudere la compensazione, non solo il restore
 
@@ -71,7 +98,16 @@ PR #186 è chiusa senza merge (30/08, SALVAGE: miniera, non rebase) e il ramo
 
 ### Decidere il workflow locale read → write
 
-**È un bivio dell'owner, e il 02/09 è istruito.** `sys.shell` è `high` con
+**CHIUSO il 02/09 da ADR-0053, e non scegliendo fra A, B e C.** Le tre opzioni
+erano varianti della stessa forma — tieni lo scalare, sposta il numero — cioè
+la forma che aveva prodotto il guasto. La memo
+`docs/evidence/decision-memo-taint-2026-09-02.md` ha misurato che il gate più
+stretto stava sulla porta più innocua; la ricostruzione ha poi trovato la causa
+a monte: la matrice normativa dà a `fs.write` una riga che a taint 2 dice `ASK`,
+e il kernel non eseguiva quella tabella. Ora la esegue, e la cella non è stata
+scelta: era già scritta. Il testo qui sotto resta come storia della decisione.
+
+**Il bivio, come era istruito il 02/09.** `sys.shell` è `high` con
 `maxTaint: 2` (revisione ADR-0044 del 16/08): dopo una lettura è un ASK.
 `fs.write` è `medium` + `undoable` con il soffitto di classe 1: dopo una
 lettura è un DENY. Quindi oggi, in un turno che ha letto un file, l'unico modo
@@ -90,6 +126,27 @@ Il taint non nasce solo dalla lettura del turno: la history reiniettata
 prima che l'owner scriva — misurato sulla sessione Telegram reale, 17 messaggi
 tier-2 su 40 — e la sessione Telegram è una per chat, quindi solo `/new` la
 pulisce. La CLI lo evita solo perché ogni `muffin` apre una sessione nuova.
+
+**Misurato il 02/09, prima di toccare qualunque soffitto**
+(`evals/acceptance/scenarios/b-parita-superfici.accept.ts`, binario vero): a
+parità di principal, tenant, history e richiesta, `leggi dati.txt` → `scrivi
+esito.txt` decide **identico** su CLI, REPL e Telegram — taint 2,
+`taint_exceeded`, file non scritto. Non c'è nessuna divergenza
+superficie/kernel: la sola variabile è la sessione, e infatti la stessa CLI
+con una sessione nuova al secondo turno scrive a taint 0. Il finding si
+enuncia così:
+
+> *Surface-specific session lifetime → different context → different ambient taint.*
+
+Ma la stessa misura chiude anche la domanda successiva, ed è la ragione per
+cui il bivio resta: `leggi → scrivi` **dentro un turno solo, su una sessione
+appena aperta e senza un byte di history**, è ugualmente `taint_exceeded`. Il
+taint sale dentro il turno alla lettura (`DISK_TIER` = 2) e il soffitto della
+capability che scrive è 1. Quindi nessuna riforma di *quale* conversazione
+viene reiniettata — una `Conversation` distinta dalla `Surface`, per dire —
+può aprire questo percorso: cambierebbe il taint **ambiente**, non quello che
+la lettura stessa produce. La vita della sessione spiega perché la CLI
+sembrava sana e Telegram no; non spiega il fallimento. Il soffitto sì.
 
 Le opzioni restano dell'owner (confine di sicurezza):
 

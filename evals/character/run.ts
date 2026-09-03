@@ -151,7 +151,7 @@ function registerFakeTool(runtime: Runtime, spec: FakeTool): void {
       return { content: `${spec.name}: eseguito (fixture eval, non un vero MCP/tool)`, tier: 3 };
     },
   };
-  const decl: CapabilityDecl = { id, risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true };
+  const decl: CapabilityDecl = { id, effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'none', policyArgs: [], hostOnly: true };
   runtime.register(tool, decl);
 }
 

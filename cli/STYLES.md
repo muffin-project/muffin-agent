@@ -138,3 +138,36 @@ vale quanto la cornice.
    di dieci ridisegni sono dieci riquadri anche quando a schermo ce n'è sempre
    stato uno. `cli/schermo.ts` applica quei byte e restituisce la griglia; è
    l'unica cosa che risponde alla domanda «quanti riquadri vede l'owner».
+
+## Il fondo fisso (03/09/2026)
+
+Owner: *«dovrebbe effettivamente tenere la box di testo sotto, le notifiche in
+alto, il testo scrollabile senza muovere ste due sezioni»*. Da lì `cli/fondo.ts`.
+
+**Cosa c'è.** Su un terminale che dichiara la sua altezza, una scroll region
+(DECSTBM) tiene la casella nelle ultime righe: la risposta scorre sopra, e
+quello che esce dall'alto va nello scrollback. È il modo di Codex
+(`insert_history.rs`: la cronologia si inserisce sopra un viewport in fondo)
+e di Claude Code (la zona dinamica in fondo, `<Static>` sopra). Il messaggio
+spedito entra nella storia come riquadro, così si vede ancora dove finisce.
+
+**Le notifiche stanno sopra la casella, non in cima allo schermo.** Nessun
+peer tiene una zona fissa in alto, e il motivo è tecnico: un margine superiore
+fisso fa perdere lo scrollback nella maggior parte dei terminali, un margine
+inferiore no. La regola di questo file vale più della cornice; se un giorno si
+vuole davvero una riga in cima, è una rinuncia da scrivere qui.
+
+**Due fasi, come Ink.** Finché il riquadro entra sotto il contenuto si disegna
+lì, e l'intestazione resta in alto; quando il contenuto arriva in fondo, la
+casella si aggancia (`fondo.aggancia`) e da lì non si muove più. Dove finisce
+il contenuto lo dice il terminale (`ESC[6n`), chiesto prima di ogni lettura
+finché non è agganciato. La prima versione saltava in fondo all'avvio, e
+provata in tmux mostrava uno schermo vuoto con il «personaggio in alto» già
+scorso via. Senza altezza — una pipe, `script`, i test — il riquadro vive in
+fondo allo scrollback come prima: due percorsi, una `disponi`.
+
+**Cosa si sbaglia, e chi lo tiene chiuso.** Cambiare i margini manda il
+cursore a casa; il fondo che cresce deve prima scorrere e poi stringere; le
+sequenze di posizione vanno su stderr, mai su stdout (B11). `cli/schermo.ts`
+capisce i margini e `cli/fondo.test.ts` misura una risposta di venti righe su
+uno schermo di dodici.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fsCapabilities } from '../../agent/tools/fs.js';
 import { httpCapability } from '../../agent/tools/http.js';
 import { shellCapability } from '../../agent/tools/shell.js';
+import { POLICY_FLOOR } from '../../core/policy/matrix.js';
 import { makeBaselineHarness } from './baseline.js';
 import { SECURITY_BASELINE_CAPABILITIES, SECURITY_BASELINE_SCENARIOS } from './scenarios.js';
 
@@ -114,9 +115,16 @@ describe('la baseline misura la produzione, non una copia', () => {
 
   it('lo scalino che misura e quello vero: sys.shell accetta taint 2 e non 3', () => {
     // Ogni scenario S1/S3 misura questo gradino, deciso dall owner il 16/08
-    // (ADR-0044 §revisione). Se la produzione lo ripinna, questa riga cade
+    // (ADR-0044 §revisione). Se la produzione lo sposta, questa riga cade
     // insieme agli scenari, invece di lasciarli verdi a raccontare ieri.
-    expect(shellCapability.maxTaint).toBe(2);
+    //
+    // Dal 02/09 il gradino non è più un numero appuntato su questa capability:
+    // è la riga `host` della matrice normativa (ADR-0053), che lo dà a
+    // `sys.shell` e a `fs.write` insieme — le due porte allo stesso disco, che
+    // prima avevano due regole opposte.
+    expect(shellCapability.effect).toBe('host');
+    expect(shellCapability.maxTaint).toBeUndefined();
+    expect(POLICY_FLOOR.rows.host.denyAbove).toBe(2);
     expect(shellCapability.risk).toBe('high');
   });
 });
