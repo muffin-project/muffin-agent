@@ -70,6 +70,9 @@ describe('who is speaking', () => {
     expect(principalFor(parsed, OWNER)).toEqual({
       principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
       tenant: 'host',
+      // Senza connector, e non `telegram:<chatId>`: è la chiave che il
+      // terminale e Discord aprono per lo stesso owner (ADR-0056).
+      sessionKey: 'owner',
     });
   });
 
