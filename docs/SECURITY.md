@@ -386,6 +386,27 @@ after `started` but before outcome must remain uncertain; it must not become
 
 ## 12. Root of Trust
 
+**In two questions, before the formal prose** — because "root of trust",
+"seal", "safe mode" and "harden" are really the answer to only two questions,
+and `muffin doctor` (`cli/doctor.ts`) has to say it in these terms, not the
+four below, before it says anything else:
+
+1. *Has anything touched these files?* If yes, and nobody confirmed it, Muffin
+   restricts itself rather than trust a file it cannot vouch for — that is
+   "safe mode". `reseal` is the owner saying "I changed that file on purpose;
+   take the new version as true" — only he can say it, because that is exactly
+   what distinguishes his edit from an intrusion.
+2. *Can anything touch these files?* Today, in `single-user`, Muffin
+   *detects* tampering but cannot *prevent* it, because a process running as
+   the owner can undo the read-only bits by itself. `rot harden` prints the OS
+   commands that make prevention real — it needs `sudo`, which is why it
+   prints them instead of running them. The consequence the owner feels every
+   day: without real prevention, no high-risk capability can ever become a
+   silent allow — `sys.shell` always asks.
+
+The rest of this section formalises those two questions for whoever
+implements or verifies the mechanism, not for whoever reads `muffin doctor`.
+
 The Root of Trust contains constitutional material the runtime may not silently
 weaken: identity floor, policy floors/ceilings, hard deny lists, egress/budget
 configuration and other sealed material explicitly designated as such.

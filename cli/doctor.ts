@@ -315,7 +315,8 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     worst(
       'rot readers',
       readers.violations.map((v) => `${v.id}: ${v.sample.join(', ')}`).join(' · '),
-      'un file dentro il sigillo che nessuno legge sembra vincolante e non lo è: dagli un lettore, oppure toglilo da rot/ e rifai `muffin rot reseal`',
+      "sembra vincolante ma non lo è, perché nessun modulo lo legge davvero: dagli un lettore, oppure toglilo da rot/ " +
+        '— poi rifai `muffin rot reseal` (è dentro il sigillo: per questo serve la tua conferma)',
     );
   }
 
@@ -327,10 +328,10 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
-      'single-user: le manomissioni sono rilevate, non impedite — un processo che gira come questo utente può ' +
-        'disfare i bit read-only da solo. Conseguenza che si sente ogni giorno: senza prevenzione vera, ogni ' +
-        'capability ad alto rischio (`sys.shell` in testa) ti chiede sempre conferma, mai un allow silenzioso',
-      '`muffin rot harden` stampa i comandi per rendere vera la prevenzione su questa macchina, e cosa cambia una volta fatto',
+      'ogni capability ad alto rischio (`sys.shell` in testa) ti chiede sempre conferma e non diventa mai un allow ' +
+        'silenzioso: se qualcosa modifica questi file mentre gira come te, Muffin se ne accorge solo dopo, non lo ' +
+        "impedisce prima — è la modalità single-user: le manomissioni sono rilevate, non impedite",
+      '`muffin rot harden` stampa i comandi per rendere vero il blocco su questa macchina, e cosa cambia una volta fatto',
     );
   } else {
     const hardening = hardeningHolds(home);
@@ -370,7 +371,15 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'esegui da un checkout Git di questo repository per un confronto affidabile',
     );
   } else {
-    for (const d of drift) defaultsDriftCheck(ok, warn, d);
+    // Several sealed files drifting together get one grouped remedy instead
+    // of the same "dentro il sigillo" paragraph once per file — see
+    // `sealedDriftGroupCheck`. A single one still goes through
+    // `defaultsDriftCheck`, which already produces that same shape for one
+    // file.
+    const sealedAdoptable = drift.filter((d) => d.sealed && d.status === 'adoptable');
+    const rest = sealedAdoptable.length >= 2 ? drift.filter((d) => !(d.sealed && d.status === 'adoptable')) : drift;
+    for (const d of rest) defaultsDriftCheck(ok, warn, d);
+    if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
   }
 
   // The caps that bind, and which file they came from. Same shape of invisible
@@ -1143,6 +1152,52 @@ export function formatReport(report: DoctorReport, style: Style = PLAIN): string
 }
 
 /**
+ * The remedy text for one or more sealed (`rot/`) files that are both
+ * safe to adopt: what happens, what to type, only then the word for it.
+ *
+ * Consequence first, action second, vocabulary last — an owner who does not
+ * know what "the seal" is must still know what to do, per the 03/09/2026 UX
+ * pass (he called this exact line confusing while reading real `doctor`
+ * output). Truthful, not softened: adopting genuinely drops the install into
+ * `safe mode` until `muffin rot reseal`, and that word is who decides — never
+ * automatic, same posture as `core/rot/harden.ts`'s printed-not-run plan.
+ *
+ * Takes a list so `sealedDriftGroupCheck` below can reuse it for several
+ * files at once: one explanation, one list, one command sequence — not the
+ * same paragraph repeated per file.
+ */
+function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
+  const commands = files.map((f) => f.cmd).join(' — poi ');
+  return (
+    `aggiornarl${files.length === 1 ? 'o' : 'i'} blocca l'installazione in safe mode finché non dici tu che va bene ` +
+    `così — mai in automatico. Per farlo, in ordine: ${commands} — quindi \`muffin rot reseal\` una sola volta, alla ` +
+    `fine (${files.length === 1 ? 'questo file è' : 'sono'} dentro il sigillo, rot/: per questo serve la tua parola esplicita)`
+  );
+}
+
+/**
+ * Several sealed files drifting at once used to print the same explanation
+ * N times over — one `defaultsDriftCheck` call per file, each opening with
+ * "questo file è dentro il sigillo" again. Same consequence, same remedy
+ * shape every time, so one grouped check replaces the repetition: one
+ * explanation, one list of files, one command sequence in the order the
+ * owner runs it, `muffin rot reseal` exactly once at the end.
+ *
+ * Only called for 2+ files (see the call site in `runDoctor`) — a single
+ * diverging sealed file already gets this shape from `defaultsDriftCheck`
+ * itself, unrepeated by construction.
+ */
+function sealedDriftGroupCheck(warn: (name: string, detail: string, remedy: string) => void, group: DefaultDrift[]): void {
+  const files = group.map((d) => ({ path: d.path, cmd: d.adoptCommand ?? `(comando non disponibile per ${d.path})` }));
+  warn(
+    'default rot/*',
+    `${String(group.length)} file dentro il sigillo sono cambiati da come li ha copiati \`muffin init\`, e HEAD è ` +
+      `andato avanti: ${files.map((f) => f.path).join(', ')}`,
+    sealedAdoptRemedy(files),
+  );
+}
+
+/**
  * One `DefaultDrift` (core/config/defaults-drift.ts) turned into one line.
  *
  * `'up-to-date'` and `'owner-modified'` are both `ok`: there is nothing to
@@ -1156,7 +1211,9 @@ export function formatReport(report: DoctorReport, style: Style = PLAIN): string
  * `verify()`'s hash check diverge (`core/rot/verify.ts`), which drops the
  * install into safe mode until `muffin rot reseal` — an act of the owner's
  * own authority, so this only ever names it, never runs it (same posture as
- * `core/rot/harden.ts`'s printed plan).
+ * `core/rot/harden.ts`'s printed plan). When several such files drift
+ * together, the caller in `runDoctor` routes them to `sealedDriftGroupCheck`
+ * instead of calling this once per file — see there for why.
  */
 function defaultsDriftCheck(
   ok: (name: string, detail: string) => void,
@@ -1205,9 +1262,7 @@ function defaultsDriftCheck(
       // `cli/adopt.ts`. Nominare per primo il comando che fa la cosa giusta è
       // l'unico modo per cui la cosa giusta è anche quella comoda.
       const remedy = d.sealed
-        ? `questo file è dentro il sigillo (rot/): adottarlo fa divergere l'hash sigillato e manda l'installazione in ` +
-          `safe mode — conseguenza da decidere tu, mai automatica. Se la vuoi: ${cmd} — quindi \`muffin rot reseal\` ` +
-          "(atto della tua autorità: solo lui fa uscire l'installazione dalla safe mode)"
+        ? sealedAdoptRemedy([{ path: d.path, cmd }])
         : `\`muffin adopt ${d.path}\` (o \`muffin adopt --tutto\`) — copia e registra. Il ${cmd} equivalente copia e basta.`;
       warn(name, d.detail, remedy);
       return;
