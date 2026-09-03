@@ -1,7 +1,7 @@
 import DatabaseCtor from 'better-sqlite3';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPdf, pagesWithoutText } from '../documents/fixtures/pdf.js';
 import type { Embedder } from '../memory/embed.js';
@@ -29,8 +29,18 @@ class FakeEmbedder implements Embedder {
 const HOST = 'host';
 const NOW = () => new Date('2026-08-05T10:00:00Z');
 
+/**
+ * Un vault della **forma di produzione**: `<tmp>/.muffin/vault`.
+ *
+ * La home di Muffin è `~/.muffin`, quindi ogni percorso assoluto del vault
+ * reale contiene il segmento `.muffin`. Finché il fixture creava la radice
+ * direttamente in `tmpdir()` questa suite provava una macchina che non esiste:
+ * il filtro dei dotfile girava anche sul percorso assoluto risolto e in
+ * produzione rifiutava *ogni* file come «nascosto», mentre qui restava verde.
+ */
 function fixture(withVectors = false) {
-  const root = mkdtempSync(join(tmpdir(), 'muffin-vault-'));
+  const root = join(mkdtempSync(join(tmpdir(), 'muffin-vault-')), '.muffin', 'vault');
+  mkdirSync(root, { recursive: true });
   const db = new DatabaseCtor(':memory:');
   const store = new MemoryStore(db);
   const vectors = withVectors ? new VectorIndex(db, new FakeEmbedder()) : undefined;
@@ -170,6 +180,40 @@ describe('vault', () => {
     expect((await f.vault.audit(HOST)).orphaned).toEqual(['a.md']);
   });
 
+  it('indicizza un documento in una home che è essa stessa una dotdir', async () => {
+    // Il difetto misurato il 2026-09-03 sull'installazione dell'owner: la home
+    // è `~/.muffin`, il filtro dei dotfile girava sul percorso assoluto
+    // risolto, e quindi *ogni* file mai inviato è stato rifiutato come
+    // «nascosto». Tre file nel vault, zero episodi `document` nel database.
+    const f = fixture();
+    expect(f.root).toContain(`${sep}.muffin${sep}`);
+    write(f.root, 'inbox/cv.md', '# CV\n\nParola RARISSIMA nel curriculum.\n');
+
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.skipped).toEqual([]);
+    expect(report).toMatchObject({ scanned: 1, added: 1 });
+    const rows = f.store.episodesForVaultPath(HOST, 'inbox/cv.md');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(f.store.episodeById(HOST, rows[0]!.id)!.kind).toBe('document');
+    expect(f.store.searchEpisodes(HOST, 'RARISSIMA').length).toBeGreaterThan(0);
+  });
+
+  it('non conta come «dentro il vault» una directory sorella con lo stesso prefisso', async () => {
+    // `/a/vault-evil` non è dentro `/a/vault`: un `startsWith` sulla stringa
+    // direbbe di sì. Il confronto deve essere per segmenti di percorso.
+    const f = fixture();
+    mkdirSync(`${f.root}-evil`, { recursive: true });
+    writeFileSync(join(`${f.root}-evil`, 'segreti.md'), '# Segreti\n\nPAROLADORDINE\n');
+    symlinkSync(join(`${f.root}-evil`, 'segreti.md'), join(f.root, 'innocuo.md'));
+
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.scanned).toBe(0);
+    expect(report.skipped.find((s) => s.path === 'innocuo.md')?.why).toContain('link esterno');
+    expect(f.store.searchEpisodes(HOST, 'PAROLADORDINE')).toHaveLength(0);
+  });
+
   it('never indexes a dotfile, and says it did not', async () => {
     // The previous rule skipped hidden *directories* only, so a `.env` became
     // episodes, entered full-text search, and was sent to the embedder.
@@ -185,8 +229,8 @@ describe('vault', () => {
   });
 
   it('does not index a secret hiding behind an innocent symlink name', async () => {
-    // The filter runs on the resolved path, so what the link is *called* here
-    // buys the attacker nothing.
+    // Il link è *fuori* dal vault, quindi a fermarlo è il contenimento — un
+    // rifiuto migliore di «nascosto», perché nomina la ragione vera.
     const f = fixture();
     mkdirSync(join(f.root, '..', 'altrove', '.ssh'), { recursive: true });
     writeFileSync(join(f.root, '..', 'altrove', '.ssh', 'id_ed25519'), 'CHIAVE PRIVATA\n');
@@ -195,7 +239,35 @@ describe('vault', () => {
 
     expect(report.scanned).toBe(0);
     expect(f.store.searchEpisodes(HOST, 'CHIAVE')).toHaveLength(0);
-    expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('nascosto');
+    expect(report.skipped.find((s) => s.path === 'appunti')?.why).toContain('link esterno');
+  });
+
+  it('guarda il percorso risolto: un link interno a una dotdir resta nascosto', async () => {
+    // Questa è la proprietà per cui il filtro girava sul percorso risolto:
+    // ciò che il link è *chiamato* qui non compra nulla. Vale ancora, ma sul
+    // percorso relativo alla radice — non su quello assoluto.
+    const f = fixture();
+    mkdirSync(join(f.root, '.ssh'), { recursive: true });
+    writeFileSync(join(f.root, '.ssh', 'id_ed25519'), 'CHIAVE INTERNA\n');
+    symlinkSync(join(f.root, '.ssh'), join(f.root, 'appunti'));
+    const report = await f.vault.reindex(HOST, { now: NOW });
+
+    expect(report.scanned).toBe(0);
+    expect(f.store.searchEpisodes(HOST, 'CHIAVE')).toHaveLength(0);
+    const why = report.skipped.find((s) => s.path === 'appunti')?.why;
+    expect(why).toContain('nascosto');
+    // Il motivo nomina il segmento vero, non una frase generica sui dotfile.
+    expect(why).toContain('.ssh');
+  });
+
+  it('rifiuta i nomi che non sono mai contenuto anche via reindexPath', async () => {
+    const f = fixture();
+    write(f.root, 'credentials.json', '{"token":"SEGRETISSIMO"}\n');
+    const report = await f.vault.reindexPath(HOST, 'credentials.json', { now: NOW });
+
+    expect(report.scanned).toBe(0);
+    expect(report.skipped[0]!.why).toContain('credentials.json');
+    expect(f.store.searchEpisodes(HOST, 'SEGRETISSIMO')).toHaveLength(0);
   });
 
   it('refuses an external symlink instead of indexing a source document_read cannot reopen', async () => {
