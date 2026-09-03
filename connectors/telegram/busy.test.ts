@@ -209,6 +209,31 @@ describe('il poller riceve mentre un turno gira', () => {
     }
   });
 
+  it('/steer di un turno che nessun giro consuma resta, e apre il turno dopo', async () => {
+    // Il caso comune: una risposta senza tool è **un** giro, e l'owner scrive
+    // `/steer` proprio mentre quella chiamata è in corso. Non c'è nessun
+    // confine di giro successivo, quindi la correzione non viene mai letta dal
+    // loop: se sparisse, la conferma «ricevuto» sarebbe una bugia.
+    const primo = tenuta(testo('risposta finale'));
+    const h = harness([primo.risposta, testo('seconda')]);
+    try {
+      h.manda(msg(1, 'una cosa lunga'));
+      await until(() => h.chiamate.length === 1);
+      h.manda(msg(2, '/steer in italiano, per favore'));
+      await until(() => h.sent.some((s) => s.text.includes('ricevuto')), () => h.sent);
+      primo.rilascia();
+      await until(() => h.sent.some((s) => s.text === 'risposta finale'), () => h.sent);
+      // Un giro solo: la correzione non è entrata in nessuna chiamata di questo turno.
+      expect(h.chiamate).toHaveLength(1);
+
+      h.manda(msg(3, 'e adesso?'));
+      await until(() => h.chiamate.length === 2, () => h.sent);
+      expect(testiUtente(h.chiamate[1]!).join('\n')).toContain('in italiano, per favore');
+    } finally {
+      await h.chiudi();
+    }
+  });
+
   it('/steer senza turno vivo lo dice, e non lascia niente in giro', async () => {
     const h = harness([testo('ciao')]);
     try {
@@ -237,6 +262,27 @@ describe('/pause e /resume', () => {
       expect(h.pausa.attiva()).toBe(false);
       // Confermato una volta sola, anche se il drain lo ha rivisto più volte.
       expect(h.sent.filter((s) => s.text.includes('⏸'))).toHaveLength(1);
+    } finally {
+      await h.chiudi();
+    }
+  });
+
+  it('/pause e /resume nello stesso batch: due risposte, non tre', async () => {
+    // I due comandi arrivano in un `getUpdates` solo. `controlla` serve il
+    // primo e, mentre lo attende, un drain partito nel frattempo legge lo
+    // stesso batch dall'inbox e serve il secondo una seconda volta: il
+    // `/resume` doppio risponde «non ero in pausa.» a un owner che ha scritto
+    // un comando solo.
+    const h = harness([testo('eccomi')]);
+    try {
+      h.manda(msg(1, '/pause'), msg(2, '/resume'));
+      await until(() => h.sent.some((s) => s.text.includes('ripreso')), () => h.sent);
+      await new Promise((r) => setTimeout(r, 200));
+      const risposte = h.sent.map((s) => s.text);
+      expect(risposte).not.toContain('non ero in pausa.');
+      expect(risposte.filter((t) => t.includes('in pausa:'))).toHaveLength(1);
+      expect(risposte.filter((t) => t.includes('ripreso'))).toHaveLength(1);
+      expect(h.pausa.attiva()).toBe(false);
     } finally {
       await h.chiudi();
     }

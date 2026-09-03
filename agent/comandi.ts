@@ -145,8 +145,15 @@ export async function eseguiComando(riga: string, ctx: ContestoComandi): Promise
       if (ctx.controlli === undefined) return { testo: 'qui non c\'è un turno da correggere.' };
       if (arg === '') return { testo: '/steer <cosa cambiare> — senza testo non so cosa correggere.' };
       return {
+        // Onesto in tutti e due i casi, perche' nel momento in cui si risponde
+        // non si sa quale sara' vero: la correzione entra al prossimo confine
+        // di giro **se** un giro arriva, e una risposta senza tool e' un giro
+        // solo. Quando nessun giro la consuma non sparisce — `agent/loop.ts`
+        // la scrive in conversazione a fine turno (ADR-0054 §2, emendamento
+        // 03/09) — e dire soltanto «dal prossimo passo» prometterebbe il caso
+        // che non c'e' stato.
         testo: ctx.controlli.steer(arg)
-          ? 'ricevuto: lo tengo presente dal prossimo passo.'
+          ? 'ricevuto: lo uso al prossimo passo di questo turno; se finisce prima, resta in conversazione per il turno dopo.'
           : 'nessun turno in corso: dimmelo come messaggio normale.',
       };
     }

@@ -2477,6 +2477,42 @@ async function drive(
     used: TurnResult['usage'],
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
+    // ADR-0054 §2 (emendamento 03/09): l'ultima svuotata della porta di steer.
+    //
+    // Le correzioni si leggono in cima al giro, quindi una risposta senza tool
+    // — **un** giro — non ne consuma nessuna: un `/steer` scritto mentre quella
+    // sola chiamata era in corso spariva con il turno, dopo che la superficie
+    // aveva risposto «ricevuto». Qui la correzione non viene buttata: entra nel
+    // transcript della sessione come parole dell'owner, così è il turno dopo a
+    // vederla — la history reinjection (`reinjectedHistory`) la rimette nel
+    // primo messaggio del prossimo modello.
+    //
+    // Non su `aborted`: lì l'owner ha detto `/stop`, e ripescare una correzione
+    // dentro un turno che ha chiesto di fermare sarebbe l'opposto di quello che
+    // ha chiesto. Fuori dal `try` di nessuno: una scrittura di sessione che
+    // fallisce non deve trasformare un turno riuscito in un errore.
+    if (stopped !== 'aborted') {
+      for (const residua of input.steer?.() ?? []) {
+        try {
+          deps.sessions.append(input.session, {
+            role: 'user',
+            content: residua,
+            surface: input.surface,
+            createdAt: now().toISOString(),
+            traceId: span.traceId,
+            // Parole dell'owner, come il messaggio che ha aperto il turno:
+            // `record.taint` — lo stesso valore, e per la stessa ragione, che
+            // l'append del messaggio utente qui sopra usa al posto di
+            // `initialTaint(input)` (che su un turno ripreso non vedrebbe
+            // `contentTaint`). Mai `snapshot.currentTaint()`: la correzione è
+            // testo dell'owner, non qualcosa che il turno ha derivato.
+            tier: record.taint,
+          });
+        } catch (error) {
+          span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+        }
+      }
+    }
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
