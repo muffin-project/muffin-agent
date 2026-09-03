@@ -36,8 +36,11 @@ export type SearchDeps = {
    * Chiede la chiave al terminale, senza eco. Assente = non c'è un terminale a
    * cui chiederla (uno script, la CI, un test), ed è l'unico caso in cui il
    * comando stampa un rimedio invece di risolvere la cosa da sé.
+   *
+   * La domanda la passa chi chiede, non chi apre il terminale: le parole che
+   * l'owner legge sono di questo comando, e stanno accanto alle altre sue.
    */
-  chiediChiave?: () => Promise<string | undefined>;
+  chiediChiave?: (domanda: string) => Promise<string | undefined>;
 };
 
 function stato(home: string, out: (l: string) => void): number {
@@ -94,20 +97,24 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
   if (chiave === '') {
     // Poi il terminale, che è il caso dell'owner. Senza eco, e il valore non
     // passa mai da una riga di comando: né history, né `ps`.
+    //
+    // Due righe, e la divisione non è arbitraria. Dove si prende la chiave
+    // resta stampato a sé: un URL sulla riga in cui si scrive andrebbe a capo
+    // in mezzo al segreto, e non si copia. L'invito invece è sceso *dentro* la
+    // domanda, dove sta il cursore — dal 03/09/2026 può starci.
+    //
+    // Fino a quel giorno non poteva: `promptSecret` scriveva la domanda e
+    // readline la cancellava un istante dopo, ridisegnando la riga. L'invito
+    // viveva quindi qui sopra come terza riga stampata, e sotto restava un
+    // vuoto che sembrava un comando piantato. Ora la domanda resta
+    // (`cli/prompt.ts` dice come), e tenere anche quella riga vorrebbe dire
+    // far leggere all'owner la stessa frase due volte, una sopra l'altra.
     out(`serve la chiave di ${entry.label} — prendila da ${entry.keysUrl}.`);
     if (deps.chiediChiave !== undefined) {
-      /**
-       * L'invito sta qui, in una riga già stampata, e non dentro il prompt.
-       *
-       * `promptSecret` scrive la domanda e poi lascia parlare readline, che per
-       * disegnare la riga fa `cursorTo(0)` + `clearScreenDown` **fuori** dal
-       * `_writeToOutput` che quella funzione intercetta: la domanda viene
-       * cancellata un istante dopo essere comparsa. Misurato in `tmux
-       * capture-pane` il 03/09/2026 — sotto la riga qui sopra restava una riga
-       * vuota, e un terminale che aspetta senza dirlo sembra piantato.
-       */
-      out(`Incollala qui: non si vede mentre la scrivi, e invio a vuoto lascia tutto com'è.`);
-      chiave = ((await deps.chiediChiave()) ?? '').trim();
+      chiave = (
+        (await deps.chiediChiave(`Incollala qui (non si vede mentre la scrivi; invio a vuoto lascia tutto com'è): `)) ??
+        ''
+      ).trim();
     }
   }
   if (chiave === '') {

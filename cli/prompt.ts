@@ -49,7 +49,32 @@ const finiti = new WeakSet<NodeJS.ReadStream>();
  *
  * readline runs the line discipline for us — backspace works and arrow-key
  * escape sequences are absorbed as cursor moves rather than captured into the
- * value — so we only suppress the per-character echo it would otherwise print.
+ * value — so all we need from it is that it writes nothing at all.
+ *
+ * **Nothing at all is the fix, and it took a second measurement to find.** Up
+ * to 03/09/2026 this suppressed the echo by overriding readline's internal
+ * `_writeToOutput` and then printed the question with `output.write(question)`.
+ * Under `tmux capture-pane` on `muffin init` the question was **not there**:
+ * the row was blank and the cursor sat in column 0, so a terminal that was in
+ * fact accepting input looked hung. `rl.question(q, cb)` sets the prompt and
+ * calls `prompt()`, which on a terminal redraws the line — and the redraw
+ * (Node's `internal/readline/interface.js`, `kRefreshLine`) sends
+ * `cursorTo(this.output, 0)` and `clearScreenDown(this.output)` **straight to
+ * the stream**. Only `kWriteToOutput` goes through the hook; those two do not.
+ * So the override could hide the echo and could not stop the erase.
+ *
+ * Therefore readline gets **no output stream**: `createInterface` documents
+ * `output` as optional, and every place the interface touches it is guarded —
+ * `kWriteToOutput` checks for null/undefined, and `cursorTo`/`moveCursor`/
+ * `clearScreenDown` (`internal/readline/callbacks.js`) return early on a null
+ * stream. The line discipline lives on `input` and is untouched. This is a
+ * public option instead of an internal, and it is strictly *more* silent than
+ * the override was: not the characters, not their number, not even the cursor
+ * drifting right one column per keystroke, which the override still leaked.
+ *
+ * The question is then simply written to `output` by us, once, and nobody
+ * erases it. The trade-off is that we own the newline too — see the `close`
+ * listener, which writes it on both paths.
  *
  * input/output are injectable so the read path is testable without a real TTY.
  */
@@ -61,15 +86,11 @@ export function promptSecret(
   if (!input.isTTY || finiti.has(input)) return Promise.resolve(undefined);
   return new Promise((resolve) => {
     let risposto = false;
-    const rl = createInterface({ input, output, terminal: true });
-    const internal = rl as unknown as { _writeToOutput?: (s: string) => void };
-    const echo = internal._writeToOutput?.bind(rl);
-    let visible = true;
-    internal._writeToOutput = (s: string) => {
-      if (visible) echo?.(s);
-    };
+    // Senza `output`: readline non scrive un byte, quindi non c'è un'eco da
+    // sopprimere e non c'è il ridisegno che cancellava la domanda.
+    const rl = createInterface({ input, terminal: true });
+    // La domanda la scriviamo noi, e resta: nessuno la ridisegna sopra.
     output.write(question);
-    visible = false; // everything the user types from here is not echoed
     // Prima di `question`, non dopo: un input già chiuso emette `close` subito,
     // e un ascoltatore registrato dopo non lo sentirebbe mai.
     rl.on('close', () => {
@@ -78,6 +99,10 @@ export function promptSecret(
       // Ma `risposto` distingue i due casi, ed è la distinzione che conta: solo
       // una chiusura **senza risposta** è un EOF, e solo un EOF va ricordato.
       if (!risposto) finiti.add(input);
+      // L'a capo è nostro perché l'eco non c'è: readline non scrive niente,
+      // nemmeno il `\r\n` dell'invio. Vale su entrambi i percorsi — questo
+      // ascoltatore scatta anche dopo una risposta, dove la promise è già
+      // decisa e resta solo la riga da chiudere.
       output.write('\n');
       resolve(undefined);
     });
