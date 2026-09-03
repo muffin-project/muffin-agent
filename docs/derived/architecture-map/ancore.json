@@ -721,12 +721,12 @@
   },
   "agent/tools/search.ts:48": {
     "path": "agent/tools/search.ts",
-    "line": 55,
+    "line": 56,
     "testo": "export const searchCapability: CapabilityDecl = {"
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 69,
+    "line": 70,
     "testo": "hostOnly: true,"
   },
   "agent/tools/shell.ts:106": {
@@ -961,67 +961,67 @@
   },
   "cli/main.ts:198": {
     "path": "cli/main.ts",
-    "line": 340,
+    "line": 345,
     "testo": "return cmdRot(rest);"
   },
   "cli/main.ts:202": {
     "path": "cli/main.ts",
-    "line": 344,
+    "line": 349,
     "testo": "return cmdMemory(rest);"
   },
   "cli/main.ts:245": {
     "path": "cli/main.ts",
-    "line": 462,
+    "line": 467,
     "testo": "options: {"
   },
   "cli/main.ts:258": {
     "path": "cli/main.ts",
-    "line": 481,
+    "line": 486,
     "testo": "if (providerFlag && providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') {"
   },
   "cli/main.ts:297": {
     "path": "cli/main.ts",
-    "line": 660,
+    "line": 665,
     "testo": "// change exists to preserve would start writing `anthropic` for an OpenRouter"
   },
   "cli/main.ts:308": {
     "path": "cli/main.ts",
-    "line": 706,
+    "line": 711,
     "testo": "...(values.hardened ? { hardened: true } : {}),"
   },
   "cli/main.ts:317": {
     "path": "cli/main.ts",
-    "line": 716,
+    "line": 721,
     "testo": "for (const s of steps) process.stderr.write(`${s.done ? '✓' : '!'} ${s.name.padEnd(16)} ${s.detail}\\n`);"
   },
   "cli/main.ts:340": {
     "path": "cli/main.ts",
-    "line": 747,
+    "line": 752,
     "testo": "* a TTY it prints the command instead and installs nothing: `promptLine`"
   },
   "cli/main.ts:505": {
     "path": "cli/main.ts",
-    "line": 965,
+    "line": 970,
     "testo": "const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });"
   },
   "cli/mcp.ts:142": {
     "path": "cli/mcp.ts",
-    "line": 142,
+    "line": 167,
     "testo": "export function cmdMcpRemove(home: string, name: string): number {"
   },
   "cli/mcp.ts:150": {
     "path": "cli/mcp.ts",
-    "line": 150,
+    "line": 175,
     "testo": "process.stdout.write(`${name} rimosso. I suoi tool spariscono al prossimo avvio.\\n`);"
   },
   "cli/mcp.ts:32": {
     "path": "cli/mcp.ts",
-    "line": 32,
+    "line": 47,
     "testo": "export async function cmdMcpAdd("
   },
   "cli/mcp.ts:89": {
     "path": "cli/mcp.ts",
-    "line": 89,
+    "line": 114,
     "testo": "export async function cmdMcpList(home: string, verify: boolean): Promise<number> {"
   },
   "cli/memory.ts:175": {
@@ -2791,17 +2791,17 @@
   },
   "search.ts:29": {
     "path": "agent/tools/search.ts",
-    "line": 32,
+    "line": 33,
     "testo": "*  - `hostOnly: true`, unlike `sys.http`. Reading an allowlisted public page"
   },
   "search.ts:61": {
     "path": "agent/tools/search.ts",
-    "line": 67,
+    "line": 68,
     "testo": "resourceKind: 'query',"
   },
   "search.ts:63": {
     "path": "agent/tools/search.ts",
-    "line": 69,
+    "line": 70,
     "testo": "hostOnly: true,"
   },
   "skill.ts:114": {
