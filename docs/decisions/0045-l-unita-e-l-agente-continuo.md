@@ -174,3 +174,22 @@ del mandato DAY-1 (`gate1/MANDATO-DAY-1.md` §4):
 Non si aprono slice «refactor per imporre i piani»: si estraggono i confini
 quando una garanzia del DAY-1 li richiede.
 
+
+## Revisione — 2026-09-03: il primo criterio è scattato, ed è stato applicato
+
+La prima riga di §Reversibilità e falsificazione — *«cambiare modello o
+superficie spezza identità, memoria, policy o lavoro»* — è diventata vera dopo
+uso reale, misurata dall'owner sulla propria installazione il 2026-09-03:
+parlando dal terminale, Muffin non sapeva niente di ciò che era stato detto
+nella DM Telegram. «Non sembra di star parlando allo stesso muffin»
+(`docs/evidence/continuita-e-provenienza-2026-09-03.md` §1).
+
+Il criterio ha fatto il suo lavoro e **la Decisione non cambia**: §1 diceva già
+che le surface sono porte e che nessuna può possedere una persona, una memoria o
+una policy separata. Ciò che mancava era l'applicazione: l'id di sessione era una
+stringa scritta a mano in due connector, non una conseguenza dell'identità.
+**ADR-0056** la sposta dentro `identify` e chiude il failure; nessuna riga di
+questa ADR diventa falsa, e la sua §Revisione 2026-08-17 sul `SessionStore` come
+Evidence letta direttamente come Context **resta aperta** — ADR-0056 non la
+contraddice, la prepara: dopo, c'è una finestra sola da rendere con provenienza
+invece di due.
