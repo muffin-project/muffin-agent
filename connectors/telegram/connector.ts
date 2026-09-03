@@ -1,6 +1,7 @@
 import type { CallbackQuery, Message, MessageOrigin, Update } from '@grammyjs/types';
 import { randomBytes } from 'node:crypto';
 import { runTurn, type LoopDeps, type TurnDelta, type TurnEvent } from '../../agent/loop.js';
+import type { AttachStream } from '../../agent/turn-lane.js';
 import { COMANDI, sembraComando, type Controlli } from '../../agent/comandi.js';
 import { recoveredText } from '../../agent/recovered-text.js';
 import { checkPairing, type PendingPairing } from '../../core/config/pairing.js';
@@ -36,7 +37,7 @@ type Arrivo = { line: string; image?: ImageBlock; audio?: AudioBlock };
 type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok' | 'already' | 'unknown';
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
-import { startTranscript } from './transcript.js';
+import { startTranscript, type Transcript } from './transcript.js';
 import { escapeHtml, renderForTelegram } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
@@ -613,6 +614,28 @@ export class TelegramConnector {
    */
   private conflictSince: string | null = null;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * The transcript of a turn that suspended on an approval, kept open —
+   * never `.stop()`-ed — instead of finalised like every other turn's.
+   *
+   * Why this exists: `resolveAsk` (`transcript.ts`) rewrites the `⏸ …
+   * aspetto la tua approvazione` step in place, but it can only do that on
+   * the *same* `Transcript` object that wrote the step — a fresh instance
+   * has no memory of the message the old one already sent. `handleCallback`
+   * reads this map to resolve the step the moment the owner answers, and
+   * `resumeStream` reads it again when the lane actually resumes the turn,
+   * so the tool calls that run *after* the approval land in the very
+   * segment that was waiting rather than opening a message of their own —
+   * `docs/evidence/forma-delle-superfici-2026-09-03.md` §5's «una riga `⏸`,
+   * poi `✓`/`✗`, poi il resto», carried over to the surface where the
+   * approval and the tool call are not even the same process invocation.
+   *
+   * In-memory only, and that is an accepted, bounded degradation: a crash or
+   * restart between suspend and resume loses the entry, `resumeStream` then
+   * opens a brand new segment, and the old `⏸` line stays frozen — no worse
+   * than before this slice, never worse than "one extra message".
+   */
+  private readonly transcriptInSospeso = new Map<string, Transcript>();
 
   constructor(private readonly deps: ConnectorDeps) {
     this.sleep = deps.sleep ?? sleep;
@@ -816,6 +839,62 @@ export class TelegramConnector {
     );
     return deliverTelegram(this.deps.delivery, this.deps.api, turnId, plan, () => this.now());
   }
+
+  /**
+   * `AttachStream` (`agent/turn-lane.ts`), per Telegram: quello che
+   * `makeLaneRunner` chiama prima di riprendere un turno sospeso, così
+   * l'esecuzione dopo un'approvazione torna a vivere invece di sparire fino
+   * alla risposta finale — la meta' del difetto che
+   * `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3 chiama «per il
+   * tratto fra l'approvazione e la risposta, lo streaming non esiste».
+   *
+   * Riusa la trascrizione lasciata aperta in `transcriptInSospeso` quando
+   * c'è (stesso segmento, stesso messaggio: i passi del tool che gira dopo
+   * l'approvazione si accodano sotto la riga già risolta da `resolveAsk`,
+   * non aprono un messaggio nuovo). Quando non c'è — un crash, un riavvio, un
+   * turno arrivato da fuori questo processo — ne apre una fresca: un
+   * messaggio in più, mai zero streaming.
+   *
+   * `undefined` solo quando `replyTo` non porta un `chatId` numerico: un
+   * turno di questa superficie non dovrebbe mai trovarsi in questo caso, ma
+   * `AttachStream` promette silenzio e non un'eccezione per l'indirizzo che
+   * manca.
+   */
+  resumeStream: AttachStream = (record) => {
+    const chatId = record.replyTo?.['chatId'];
+    if (typeof chatId !== 'number') return undefined;
+    // Convenzione del Bot API: un id di chat privata è positivo, un id di
+    // gruppo/supergruppo/canale è negativo (`connectors/telegram/surface.ts`
+    // lo usa già per la stessa domanda).
+    const isPrivate = chatId > 0;
+    const transcript = this.transcriptInSospeso.get(record.id) ?? startTranscript(this.deps.api, chatId, { isPrivate, ...(this.deps.log ? { log: this.deps.log } : {}) });
+    this.transcriptInSospeso.delete(record.id);
+    const presencePromise = startPresence(this.deps.api, chatId, { isPrivate, placeholder: 'sto guardando…' });
+
+    let deltaText = '';
+    const onDelta = (delta: TurnDelta): void => {
+      if (delta.type === 'boundary') {
+        transcript.spoke(deltaText, delta.reason);
+        deltaText = '';
+        return;
+      }
+      deltaText += delta.text;
+      void presencePromise.then((presence) => presence.streamText(deltaText));
+    };
+    const onProgress = (event: TurnEvent): void => {
+      transcript.report(event);
+    };
+
+    return {
+      onDelta,
+      onProgress,
+      stop: async () => {
+        const presence = await presencePromise;
+        await presence.stop();
+        await transcript.stop();
+      },
+    };
+  };
 
   /**
    * Uno svuotamento alla volta, in background. Un secondo `scheduleDrain`
@@ -1099,6 +1178,19 @@ export class TelegramConnector {
       isPrivate: incoming.isPrivate,
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
+    /**
+     * Set the moment this turn suspends, and read by the outer `finally`
+     * below — which existed before this slice and unconditionally called
+     * `transcript.stop()` as a safety net. `stop()` is idempotent, so that
+     * second call was harmless for every turn that *answers*; for one that
+     * *suspends* it was the actual bug: it froze the segment (`stopped =
+     * true`) an instant after `transcriptInSospeso.set(...)` handed it out
+     * to be kept open, so `resolveAsk` later found `stopped` already true
+     * and did nothing — the render stayed on the pre-approval `⏸` line
+     * forever, measured against the fake Bot API in D12
+     * (`b-telegram-journey.accept.ts`) before this flag existed.
+     */
+    let lasciataAperta = false;
 
     try {
       // What this message's content adds on top of the sender's own tier —
@@ -1218,15 +1310,29 @@ export class TelegramConnector {
         onProgress,
       });
 
-      // B11/B13: no more live updates once the turn itself is over. Called
-      // here, explicitly, before any finalisation network call below — not
-      // only in the `finally` — because `stop()` is idempotent and this is
-      // what cancels a coalesced, still-pending live update before it can
-      // race the final edit and land after it with stale, mid-turn text (and,
-      // for `transcript`, what makes the last edit — counter gone, an
-      // abandoned step marked — land *above* the real answer, never after).
+      // B11/B13: no more live *draft* updates once this attempt is over —
+      // `presence` is always ephemeral, suspended or not. Called here,
+      // explicitly, before any finalisation network call below — not only in
+      // the `finally` — because `stop()` is idempotent and this is what
+      // cancels a coalesced, still-pending live update before it can race
+      // the final edit and land after it with stale, mid-turn text.
       await presence.stop();
-      await transcript.stop();
+      // `transcript` is different: a turn suspended **on an approval**
+      // keeps its segment open, kept in `transcriptInSospeso`, so
+      // `resolveAsk` can rewrite its `⏸ …` step in place the moment the
+      // owner answers, and so `resumeStream` can keep appending to the same
+      // message once the lane actually resumes execution — see that map's
+      // own docstring and `docs/evidence/forma-delle-superfici-2026-09-03.md`
+      // §5. A turn suspended for any other reason (`wait`, on a pid) has
+      // nothing waiting on a button and no `resolveAsk` to receive — it
+      // finalises exactly as before: counter gone, the step the turn left
+      // running marked, the last edit landing *above* whatever comes next.
+      if (result.stopped === 'suspended' && result.suspendedUntil?.waitFor?.kind === 'approval') {
+        lasciataAperta = true;
+        this.transcriptInSospeso.set(turnId, transcript);
+      } else {
+        await transcript.stop();
+      }
 
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
@@ -1286,7 +1392,11 @@ export class TelegramConnector {
     } finally {
       if (this.vivi.get(incoming.chatId)?.controller !== undefined) this.vivi.delete(incoming.chatId);
       await presence.stop();
-      await transcript.stop();
+      // Non su un turno lasciato aperto per l'approvazione (`lasciataAperta`):
+      // `stop()` è idempotente, ma qui vorrebbe dire congelare per sempre
+      // proprio il segmento che `transcriptInSospeso.set(...)`, poche righe
+      // sopra, ha appena promesso di tenere vivo per `resolveAsk`.
+      if (!lasciataAperta) await transcript.stop();
     }
   }
 
@@ -1436,12 +1546,27 @@ export class TelegramConnector {
           testo.message_id,
           `${escapeHtml(testo.text)}\n\n<b>${decisione === 'allow' ? '✓ consentito' : '✗ rifiutato'}</b>`,
         );
+        // Esplicito, non per omissione: `editMessageText` non dice cosa
+        // succede alla tastiera quando `reply_markup` non è passato — non è
+        // documentato dalla fonte primaria (`api.ts`'s
+        // `editMessageReplyMarkup`, letta il 03/09/2026). Una seconda
+        // chiamata dedicata la toglie per costruzione.
+        await this.deps.api.editMessageReplyMarkup(testo.chat.id, testo.message_id);
       } catch {
         /* il messaggio può essere troppo vecchio per essere modificato: la decisione è già presa */
       }
     }
 
     const riga = this.deps.approvals.get(id);
+    // Il verdetto rientra nel passo che lo aveva chiesto — vedi
+    // `transcriptInSospeso`. Assente per un turno che non aveva mai una
+    // trascrizione aperta (un crash nel mezzo, un altro processo che l'aveva
+    // presa): `resolveAsk` sul suo `Transcript` è l'unico modo di trovare
+    // quel passo, e senza il riferimento non c'è niente da correggere qui —
+    // il turno riprende comunque, solo con la riga `⏸` rimasta com'era.
+    if (riga !== null) {
+      this.transcriptInSospeso.get(riga.turnId)?.resolveAsk(riga.capability, decisione === 'allow');
+    }
     if (riga !== null && this.deps.loop.turns.wake(riga.turnId, now)) {
       // Solo se la riga si è davvero mossa: svegliare la corsia per un turno
       // che qualcun altro ha già preso è lavoro per niente.
