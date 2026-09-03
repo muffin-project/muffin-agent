@@ -297,6 +297,19 @@ prodotto, non di architettura.
    capability dichiarate — anche solo per poterle misurare. La seconda cambia
    cosa è osservabile, non cosa è permesso; se cambiasse un permesso, è già §5-B
    e aspetta l'eval.
+
+   **Addendum 03/09/2026 — la seconda metà è fatta: ADR-0055.** La risposta e la
+   scrittura di memoria sono `surface.reply` e `memory.write`, dichiarate dal
+   kernel (`core/policy/doors.ts`, consultate da `core/policy/decide.ts`) e
+   interrogate da `agent/loop.ts` a ogni giro e a ogni episodio. Nessun permesso
+   è cambiato: il pavimento risponde `allow` su entrambe le righe a ogni taint.
+   Cambia cosa è osservabile e regolabile — uno span `muffin.policy_decision`
+   per ogni risposta e ogni episodio, e un `policy.json` sigillato che stringe
+   la riga viene obbedito — e cambia che il seam di eval ha finalmente i nomi
+   che gli mancavano: `evals/security/scenarios.ts` ha la famiglia `sink` che il
+   punto 3 della §7 chiedeva. Resta fuori la consegna proattiva di
+   `cli/observe.ts`, che non è un turno. La prima metà del punto — far dire alla
+   decisione *perché* — resta da fare.
 5. **DAY-1 non è READY** e la ragione cambia nome: non «l'owner deve scegliere un
    soffitto», ma «il segnale di autorità è un'ipotesi non ancora falsificata, e
    il gate non è proporzionato al sink».
