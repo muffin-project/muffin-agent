@@ -65,6 +65,15 @@ export const inspectCapability: CapabilityDecl = {
  */
 export type InspectSources = {
   config: Config;
+  /**
+   * Dove atterra la scrittura di questo turno — `Runtime.workspace`, cioè
+   * l'esatto risultato di `resolveWorkspace` (ADR-0059), non una seconda
+   * lettura. `muffin doctor` (`cli/doctor.ts`) risponde alla stessa domanda
+   * per l'installazione in generale, tramite `describeWorkspace`; questo campo
+   * è quello vivo, per questo processo, e può differire quando l'owner ha
+   * scelto una cwd propria (`muffin run`/REPL fuori dalla casa).
+   */
+  workspace: string;
   profile: Profile;
   /** `null` quando il RoT è integro: è la condizione, non un errore. */
   safeMode: { reason: string; diverged: string[] } | null;
@@ -175,6 +184,10 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `build: ${build ? `${build.sha.slice(0, 12)} (${build.date})${build.dirty ? ' +modificato' : ''}` : 'sconosciuta — non è un checkout git'}`,
         `provider: ${sources.config.provider.kind}${sources.config.provider.baseUrl ? ` · ${sources.config.provider.baseUrl}` : ''}`,
         `modello: ${sources.config.models.main} (main) · ${sources.config.models.light} (light)`,
+        // Dove atterra la scrittura di *questo* turno — non «l'installazione»
+        // in generale, che è la domanda a cui risponde `muffin doctor`. Stessa
+        // fonte di `Runtime.workspace`: mai una seconda cartella calcolata qui.
+        `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
         `profilo: ${sources.profile.name} — max ${sources.profile.maxToolsExposed} tool esposti, ${sources.profile.maxToolCallsPerTurn} call/turno, thinking ${sources.profile.thinking}`,

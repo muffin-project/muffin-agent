@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { isSameOrNestedPath, resolveLocalHome, runInit } from './init.js';
 import { paths } from '../core/config/config.js';
+import { muffinWorkspace } from '../core/config/workspace.js';
 import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { sha256 } from '../core/rot/verify.js';
 
@@ -203,6 +204,28 @@ describe('il nome della chiave dice di chi è', () => {
  * cui `installTree` legge — e tolto in `finally`, perché lasciarlo lì
  * riprodurrebbe il difetto invece di provarlo.
  */
+/**
+ * ADR-0059: `runInit` non crea più il workspace — lo crea `resolveWorkspace`
+ * al primo `buildRuntime`, e può non farlo mai se l'owner lancia sempre
+ * `muffin run`/la REPL dentro un proprio progetto. Ma "pigro" non deve voler
+ * dire "muto": prima di questo test l'unica cosa a nominare il workspace era
+ * una riga di boot su stderr, e un'installazione appena fatta non diceva
+ * niente a riguardo.
+ */
+describe('runInit nomina il workspace di ADR-0059, senza crearlo', () => {
+  it('nomina la cartella di default e non la crea', () => {
+    const dir = scratchDir('muffin-init-workspace-');
+    const steps = runInit({ home: dir, apiKey: 'sk-never-called' });
+
+    const step = steps.find((s) => s.name === 'workspace');
+    expect(step).toBeDefined();
+    expect(step?.done).toBe(true);
+    expect(step?.detail).toContain(muffinWorkspace(dir));
+    // Pigro per davvero: nessun mkdirSync in runInit.
+    expect(existsSync(muffinWorkspace(dir))).toBe(false);
+  });
+});
+
 describe('init non installa la spazzatura del sistema operativo', () => {
   it('un .DS_Store in defaults/rot/ non entra nel sigillo', () => {
     const junk = join(dirname(fileURLToPath(import.meta.url)), '..', 'defaults', 'rot', '.DS_Store');
