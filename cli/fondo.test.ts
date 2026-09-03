@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { makeFondo } from './fondo.js';
 import { applica } from './schermo.js';
 import { makeTextzone, rigaDelCursore } from './textzone.js';
+import { makeReplLog } from './repl.js';
 import type { Cornice } from './riquadro.js';
 
 /**
@@ -296,5 +297,60 @@ describe('il fondo cresce e si stringe senza perdere il cursore della regione', 
     expect(fondo.aggancia(11, 4)).toBe(false);
     fondo.disegna(['a'], null);
     expect(output.scritture).toHaveLength(1);
+  });
+});
+
+/**
+ * Una riga di log di un connettore è una scrittura fuori banda come le altre.
+ *
+ * Osservato sullo schermo dell'owner il 03/09/2026, in `tmux capture-pane`
+ * sull'installazione vera: `telegram: connesso come @…` e `discord: connesso
+ * come @…` scritti **dentro** la casella, con il bordo destro mangiato. Le
+ * righe le scriveva `rigaDiLog` dritte su stderr — `\r`, la riga, un a capo —
+ * cioè senza passare dal togli/scrivi/rimetti che il REPL ha già per le
+ * consegne. Risultato doppio: la casella si rompe e la riga non arriva mai
+ * nella regione che scorre, quindi nemmeno nello scrollback.
+ */
+describe('un log di connettore, mentre la casella è agganciata', () => {
+  const DATATA = '2026-09-03T10:10:05.099Z telegram: connesso come @MuffinAgentTestBot';
+
+  it('scritto nudo su stderr finisce dentro la casella, e nella regione non ci arriva', async () => {
+    const { input, output, tz } = apparecchia();
+    const letto = tz.read(CORNICE);
+    await batti(input, 'sto scriv');
+    // `rigaDiLog` alla lettera: nessuno toglie il riquadro prima.
+    output.write(`\r${DATATA}\n`);
+    const s = schermo(output.scritture);
+
+    // La riga del testo digitato non c'è più: al suo posto c'è il log.
+    expect(s.righe[RIGHE - 3]).toContain('telegram: connesso come');
+    expect(s.righe[RIGHE - 3]).not.toContain('› sto scriv');
+    // E sopra la casella — dove l'owner andrebbe a cercarla — non c'è niente.
+    expect(s.righe.slice(0, RIGHE - 4).join('\n')).not.toContain('telegram: connesso come');
+    await spedisci(input, letto);
+  });
+
+  it('passato da `makeReplLog` sta sopra la casella, e ciò che stavi scrivendo resta', async () => {
+    const { input, output, tz } = apparecchia();
+    const letto = tz.read(CORNICE);
+    await batti(input, 'sto scriv');
+    // Il sink che il REPL passa a `connectSurfaces`, non una sua imitazione.
+    const log = makeReplLog(
+      { cancella: () => tz.cancella(), redraw: () => tz.redraw() },
+      (s) => output.write(s),
+    );
+    log('telegram: connesso come @MuffinAgentTestBot');
+    await batti(input, 'endo');
+    const s = schermo(output.scritture);
+
+    expect(riquadri(s.righe)).toBe(1);
+    expect(ultimoRiquadro(s.righe)).toBe(RIGHE - 4);
+    expect(s.righe[RIGHE - 3]).toContain('› sto scrivendo');
+    // Sopra la casella, datata, e con la casella ancora tutta lì.
+    expect(s.righe.slice(0, RIGHE - 4).join('\n')).toMatch(
+      /\d{4}-\d{2}-\d{2}T[\d:.]+Z telegram: connesso come @MuffinAgentTestBot/,
+    );
+    expect(s.riga).toBe(RIGHE - 3);
+    await spedisci(input, letto);
   });
 });
