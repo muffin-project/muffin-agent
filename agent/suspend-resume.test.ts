@@ -13,7 +13,7 @@ import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
 import { resumeTurn, runTurn, MAX_RESUMES, type LoopDeps, type RegisteredTool } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
-import type { ChatCall, ChatResult, Message, Provider } from './providers/types.js';
+import type { ChatCall, ChatResult, Message, Provider, StreamEvent } from './providers/types.js';
 
 /**
  * A turn that releases the runtime, and comes back.
@@ -43,6 +43,23 @@ class Scripted implements Provider {
     const next = this.script[this.calls++];
     if (!next) throw new Error('lo script è finito');
     return next;
+  }
+  /**
+   * Solo per il test §4.3 qui sotto: `agent/loop.ts` chiede `chatStream`
+   * (`stream: Boolean(input.onDelta && deps.provider.chatStream)`) **solo**
+   * quando qualcuno ha attaccato un `onDelta` — nessun altro test di questo
+   * file lo fa, quindi per loro questo metodo non cambia niente. Due metà, non
+   * un unico chunk: senza, un turno che stream-a non si distinguerebbe da uno
+   * che non lo fa nel momento in cui si concatenano i delta.
+   */
+  async *chatStream(request: ChatCall): AsyncIterable<StreamEvent> {
+    const result = await this.chat(request);
+    if (result.text) {
+      const meta = Math.ceil(result.text.length / 2);
+      yield { type: 'text_delta', text: result.text.slice(0, meta) };
+      yield { type: 'text_delta', text: result.text.slice(meta) };
+    }
+    yield { type: 'done', result };
   }
 }
 
@@ -299,6 +316,43 @@ describe('e poi torna', () => {
     expect(!('why' in resumed) && resumed.turnId).toBe(first.turnId);
     expect(w.turns.get(first.turnId)?.status).toBe('done');
   });
+
+  it(
+    'porta i delta e il progress fino al chiamante di resumeTurn — la ' +
+      'riparazione di docs/evidence/forma-delle-superfici-2026-09-03.md §4.3',
+    async () => {
+      // Prima di quella riparazione `resumeTurn` ignorava del tutto un terzo
+      // argomento — non esisteva nemmeno — e un turno ripreso non aveva modo
+      // di far arrivare `onDelta`/`onProgress` a chi lo aveva rimesso in moto:
+      // per il tratto fra la sospensione e la risposta finale, niente
+      // streaming. Questo test prova la wiring, non l'intenzione: mutare la
+      // chiamata a `drive(...)` dentro `resumeTurn` per non passare più
+      // `stream.onDelta`/`stream.onProgress` lo fa fallire.
+      const w = world([call('wait', { seconds: 3600 }), answer('ecco, adesso te lo dico')]);
+      const first = await runTurn(w.deps, start(w));
+
+      const deltas: string[] = [];
+      const progressTypes: string[] = [];
+      const resumed = await resumeTurn(w.deps, first.turnId, {
+        onDelta: (d) => {
+          if (d.type === 'text') deltas.push(d.text);
+        },
+        onProgress: (e) => {
+          progressTypes.push(e.type);
+        },
+      });
+
+      expect('why' in resumed).toBe(false);
+      expect(!('why' in resumed) && resumed.stopped).toBe('answered');
+      // La risposta del giro ripreso è arrivata anche come delta — non solo
+      // nel risultato finale, che il codice vecchio produceva comunque.
+      expect(deltas.join('')).toBe('ecco, adesso te lo dico');
+      // E il fatto che un giro sia partito è arrivato come progress, esattamente
+      // come per un turno fresco.
+      expect(progressTypes).toContain('round');
+      expect(progressTypes).toContain('model');
+    },
+  );
 
   it('conta le riprese sulla riga, non nel processo che muore', async () => {
     // Un **crash**, non un `wait`: il contatore conta le recovery, e provarlo

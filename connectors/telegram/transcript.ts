@@ -108,6 +108,25 @@ export type Transcript = {
   /** One fact about the turn's progress — see `TurnInput.onProgress`. */
   report(event: TurnEvent): void;
   /**
+   * The wait `report`'s `'ask'` case opened is over — the owner answered,
+   * from a button this transcript never sent (`cli/surface.ts`'s
+   * `approvatoreTelegram`, a message of its own). Without this the `⏸ …
+   * aspetto la tua approvazione` line freezes for the life of the segment,
+   * which is exactly the «bolla che resta» the owner described
+   * (`docs/evidence/forma-delle-superfici-2026-09-03.md` §4.2-§4.3): the
+   * decision lands somewhere else entirely, and nothing ever tells *this*
+   * step about it.
+   *
+   * Same vocabulary as `tool_end`, on purpose — an approval that resolves is
+   * not a new kind of fact, it is the same `⏸`→done transition a running
+   * tool already gets. Finds the **last** `'waiting'` step across every
+   * still-open segment (never a closed one — `stop()` already finalised
+   * those) and rewrites it in place; a segment with no such step does
+   * nothing, which is the ordinary case for every step in every OTHER turn
+   * that never asked.
+   */
+  resolveAsk(capability: string, allowed: boolean): void;
+  /**
    * Last edit, then silence. Idempotent: the caller invokes it once right
    * after the turn and once more from its `finally`.
    */
@@ -336,6 +355,22 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           return assertNever(event);
       }
       if (hasContent(current())) schedule();
+    },
+
+    resolveAsk(capability, allowed) {
+      if (stopped || disabled) return;
+      // Dall'ultimo segmento al primo, perché è dove vive quasi sempre
+      // l'unico passo `waiting` di un turno — ma non si assume: un turno può
+      // aver chiesto due approvazioni prima che la prima tornasse.
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const seg = segments[i]!;
+        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting');
+        if (step === undefined) continue;
+        step.state = allowed ? 'done' : 'error';
+        step.line = escapeHtml(`${capability}: ${allowed ? 'consentito' : 'rifiutato'}`);
+        schedule();
+        return;
+      }
     },
 
     async stop() {

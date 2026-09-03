@@ -13,7 +13,12 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { hardeningHolds, verify, type HardeningCheck } from '../core/rot/verify.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { buildSystemPromptBlocks, renderSystemPrompts, type SystemPromptBlocks } from './context/assemble.js';
+import {
+  buildSystemPromptBlocks,
+  renderSystemPrompts,
+  type IstanzaFacts,
+  type SystemPromptBlocks,
+} from './context/assemble.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry } from './loop.js';
 import { ApprovalStore } from '../core/approvals/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
@@ -21,7 +26,7 @@ import type { Provider } from './providers/types.js';
 import { loadProfiles, selectProfile, withThinking } from './profiles/profile.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
-import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
+import { fsCapabilities, fsList, makeFsTools, type FsScope } from './tools/fs.js';
 import { documentCapability, makeDocumentTool } from './tools/document.js';
 import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { Vault } from '../core/vault/vault.js';
@@ -29,7 +34,8 @@ import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { makeShellTool, shellCapability } from './tools/shell.js';
 import { hostAllowed, loadEgress, type EgressPolicy } from '../core/net/egress.js';
 import { httpCapability, makeHttpTool } from './tools/http.js';
-import { makeSearchTool, searchCapability, tavilyBackend } from './tools/search.js';
+import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
+import { formatCapabilityGap, truncationGap, type CapabilityGap } from './tools/capability-status.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { buildMcpTools } from './tools/mcp.js';
@@ -151,6 +157,16 @@ export type Runtime = {
    */
   bootLines: string[];
   /**
+   * Every capability this assembly switched off or truncated, structured —
+   * `web_search` disabled, `shell_run` disabled, any tool `profile.
+   * maxToolsExposed` cut. The producer `bootLines` above is *rendered from*
+   * (agent/tools/capability-status.ts), and the same array `sys.inspect`
+   * (agent/tools/inspect.ts) and `muffin doctor` (cli/doctor.ts's own search
+   * check) read from — one source, so a turn and the owner's terminal cannot
+   * disagree about why a tool is missing.
+   */
+  capabilityGaps: CapabilityGap[];
+  /**
    * Late registration for tools that arrive asynchronously (MCP servers).
    * Registers the capability too: a tool the kernel does not know is a tool
    * the loop cannot ever be allowed to call.
@@ -170,6 +186,44 @@ function msFromEnv(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * The order `buildRuntime` registers built-in tools in, named without
+ * building any of them — the fact `muffin doctor` needs to say which ones a
+ * profile's ceiling would cut without opening a database or a sandbox to get
+ * it, so the ceiling reads the same as `sys.inspect`'s (which does hold the
+ * real, live array).
+ *
+ * `sandboxAvailable` and `searchOn` are the only two conditionals in the
+ * literal build below; every other position is unconditional. MCP tools are
+ * never part of this: they attach after `buildRuntime` returns
+ * (`attachMcp`), which is also why they never counted toward `tagliati`
+ * there.
+ *
+ * `agent/runtime-exposure.test.ts` asserts this against the real, constructed
+ * array — the same de-drift discipline as `capabilityGaps` above: a second
+ * hand-typed order would be exactly the kind of copy this repository has
+ * already paid for once (`slice/turno-sospeso`, cited in that test).
+ */
+export function baseToolOrder(input: { sandboxAvailable: boolean; searchOn: boolean }): string[] {
+  return [
+    'fs_read',
+    'fs_list',
+    'fs_search',
+    'fs_write',
+    'memory_search',
+    'document_read',
+    ...(input.sandboxAvailable ? ['shell_run'] : []),
+    'process_list',
+    'process_kill',
+    'skill_read',
+    'http_get',
+    ...(input.searchOn ? ['web_search'] : []),
+    'wait',
+    'todo',
+    'sys_inspect',
+  ];
 }
 
 export function buildRuntime(
@@ -459,6 +513,14 @@ export function buildRuntime(
   // owner commits, or opens a shell.
   const guards = mandatoryGuards(home, cwd);
   const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
+  /**
+   * Ogni capacità spenta o tagliata a questo assemblaggio, riempito via `push`
+   * man mano che ogni pezzo sotto scopre il proprio motivo — mai riassegnato,
+   * per lo stesso motivo per cui `tools` non lo è: `sys.inspect`
+   * (agent/tools/inspect.ts) ne tiene lo stesso riferimento e legge quello che
+   * c'è al momento della chiamata, non una copia presa a questo punto del boot.
+   */
+  const capabilityGaps: CapabilityGap[] = [];
   const tools: RegisteredTool[] = [
     ...makeFsTools(scope),
     {
@@ -493,9 +555,25 @@ export function buildRuntime(
   // missing the same two categories — so the hole was in neither copy's
   // divergence but in both of them agreeing on an incomplete list.
   const executor = new SandboxExecutor(guards);
-  const contained = executor.status().available;
+  const sandboxStatus = executor.status();
+  const contained = sandboxStatus.available;
   if (contained) {
     tools.push(makeShellTool(executor, { root: cwd }));
+  }
+  // The absent case used to produce nothing at all here — no boot line, no
+  // structured record, not even the generic degrade note the search failures
+  // got. `sys.shell` simply was not in the tool list, and the only way to
+  // learn why was `muffin doctor`'s own, separate sandbox probe (line ~999),
+  // which nothing pointed a turn at. Same `SandboxProbe` shape doctor reads,
+  // read here instead of re-probed, so the two never describe two different
+  // machines.
+  if (!contained) {
+    capabilityGaps.push({
+      capability: 'shell_run',
+      kind: 'disabled',
+      reason: `${sandboxStatus.mechanism} non disponibile (${sandboxStatus.reason}): ${sandboxStatus.detail}`,
+      remedy: sandboxStatus.remedy,
+    });
   }
 
   // Process inspection/management is a host operation, not sandboxed execution:
@@ -524,55 +602,17 @@ export function buildRuntime(
   // Search is registered only when it is configured, so an unconfigured install
   // has no `web_search` in its tool list rather than one that fails at the first
   // call. The key is read here and never leaves this closure — the same handling
-  // the model key gets.
-  let searchOn = false;
-  const searchNotes: string[] = [];
-  if (config.search) {
-    // The key is read inside the try for the same reason the endpoint check is
-    // below it: a half-configured search must switch search off, not refuse to
-    // boot. Editing config.json and running `muffin secret set` are two steps,
-    // and between them every command that builds a runtime used to die —
-    // `muffin`, `muffin run`, `muffin memory why`. The sibling misconfiguration
-    // three lines down already degrades to a boot line; this one did not.
-    let backend;
-    try {
-      const opzioni = {
-        apiKey: readSecret(config.search.apiKeyRef, home),
-        ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
-      };
-      // Uno `switch` esaustivo e non un `tavilyBackend` incondizionato: con un
-      // solo caso il codice generato è lo stesso, ma aggiungere un id al
-      // catalogo diventa un **errore di compilazione qui** invece di un motore
-      // scelto in config e ignorato a runtime.
-      switch (config.search.provider) {
-        case 'tavily':
-          backend = tavilyBackend(opzioni);
-          break;
-        default:
-          throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
-      }
-    } catch (error) {
-      searchNotes.push(
-        `! web_search spento: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      backend = undefined;
-    }
-
-    // The endpoint is a constant, so it gets checked once here rather than on
-    // every call — but it does get checked. Skipping it because "the model
-    // cannot choose the host anyway" is how egress.json stops describing where
-    // this process actually talks.
-    if (backend) {
-      const endpointHost = new URL(backend.endpoint).hostname;
-      if (hostAllowed(endpointHost, egress)) {
-        tools.push(makeSearchTool(backend));
-        searchOn = true;
-      } else {
-        searchNotes.push(
-          `! web_search spento: ${endpointHost} non è in rot/egress.json — aggiungilo e rifai \`muffin rot reseal\``,
-        );
-      }
-    }
+  // the model key gets. `diagnoseSearch` (agent/tools/search.ts) is the one
+  // producer of "on, or off and why" — `sys.inspect` and `muffin doctor` call
+  // the same function rather than re-deriving the sentence, which is the
+  // defect this whole slice exists to close (the owner's 03/09/2026 turn: three
+  // retries against a reason that was sitting in `gateway.err` the whole time).
+  const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));
+  const searchOn = searchDiagnosis.on;
+  if (searchDiagnosis.on) {
+    tools.push(makeSearchTool(searchDiagnosis.backend));
+  } else if (searchDiagnosis.gap) {
+    capabilityGaps.push(searchDiagnosis.gap);
   }
 
   /**
@@ -738,6 +778,7 @@ export function buildRuntime(
       tools,
       capabilities,
       promptBlocks,
+      capabilityGaps,
       /**
        * La stessa funzione che esegue `muffin doctor`, importata al momento
        * della chiamata.
@@ -773,6 +814,36 @@ export function buildRuntime(
    * questo file.
    */
   const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
+  // Stessa lista, riformattata come le altre due capacità spente qui sopra —
+  // `kind: 'truncated'` invece di `'disabled'`, perché «esiste ma il tetto
+  // del profilo la taglia» e «non esiste per questa installazione» sono due
+  // domande diverse, e confonderle è esattamente il difetto misurato.
+  for (const tool of tagliati) {
+    capabilityGaps.push(truncationGap({ tool, profileName: profile.name, maxToolsExposed: profile.maxToolsExposed }));
+  }
+
+  /**
+   * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
+   * Parte 0, letti dalle **stesse fonti** che `makeInspectTool` sopra passa a
+   * `sys_inspect`: `scope`/`cwd` (la stessa `FsScope` dei tool fs), `config`,
+   * `jobs`, `safeMode`. Nessuna seconda copia — se una di quelle cambia
+   * definizione, questa la eredita senza essere toccata.
+   *
+   * Una funzione, richiamata da `agent/loop.ts` a ogni turno (`deps.istanza?.()`),
+   * non un valore congelato al boot: `fsList` è la stessa lettura di sola
+   * lettura che il tool `fs_list` farebbe, quindi un file creato a metà
+   * sessione o un job aggiunto da un'altra finestra non restano un fatto
+   * stantio fino al prossimo riavvio.
+   */
+  const leggiIstanza = (): IstanzaFacts => ({
+    cwd,
+    voci: fsList(scope, '.')
+      .split('\n')
+      .filter((riga) => riga.length > 0),
+    provider: config.provider.kind,
+    jobAttivi: jobs.list().filter((j) => j.active).length,
+    safeMode: safeMode ? { reason: safeMode.reason } : null,
+  });
 
   return {
     executor: contained ? executor : null,
@@ -786,18 +857,17 @@ export function buildRuntime(
     safeMode,
     approvers,
     promptBlocks,
+    capabilityGaps,
     bootLines: [
       ...turnNotes,
       ...waitingNotes,
       ...undeliverableNotes,
       ...skillScan.problems.map((p) => `! ${p}`),
       ...profileProblems.map((p) => `! ${p}`),
-      ...(tagliati.length === 0
-        ? []
-        : [
-            `! profilo ${profile.name}: ${tagliati.length} tool registrati oltre il tetto di ${profile.maxToolsExposed} e quindi invisibili al modello — ${tagliati.join(', ')}`,
-          ]),
-      ...searchNotes,
+      // Una riga per capacità spenta/tagliata, dalla stessa lista strutturata
+      // che `sys.inspect` e `muffin doctor` leggono — non più una frase per
+      // ognuna scritta qui a mano.
+      ...capabilityGaps.map((gap) => `! ${formatCapabilityGap(gap)}`),
       ...matrixNotes,
       ...budgetNotes,
       ...rotNotes,
@@ -856,6 +926,7 @@ export function buildRuntime(
       // stay at zero and recall stays keyword-only for its whole life.
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       systemPrompts: renderSystemPrompts(promptBlocks),
+      istanza: leggiIstanza,
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
