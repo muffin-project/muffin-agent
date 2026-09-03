@@ -16,29 +16,39 @@ import { paths } from '../config/config.js';
  * model cannot forge, never on a flag it could pass (there is no `--yes` on
  * `muffin search`/`muffin mcp add`; none was added for this reason).
  *
- * Two independent facts close that path, and this file proves both against a
- * real sandbox rather than a stub — same gating discipline as
- * `core/sandbox/executor.test.ts`, because a security guarantee asserted
- * against a fake executor only proves the fake agrees with itself.
+ * **Revision, 03/09/2026, after an independent judge's review.** The first
+ * version of this file claimed "stdin is never a TTY inside `sys.shell`'s
+ * child" was the barrier. That claim is FALSE on Linux: the judge ran the
+ * production `SandboxExecutor` under bwrap and allocated a real pty for the
+ * grandchild with `script -qc "…" /dev/null` — present, working, and not a
+ * privileged operation. That grandchild observes `process.stdin.isTTY ===
+ * true`. macOS/seatbelt denies the pty allocation outright (`openpty:
+ * Operation not permitted`), which is why the original test passed here —
+ * for the wrong reason, on the one platform this repository does not ship to
+ * (`docs/decisions/*` — Muffin runs on a Linux VPS).
  *
- * 1. **stdin is never a TTY inside `sys.shell`'s child.** `agent/tools/
- *    shell.ts` declares "no PTY" and `core/sandbox/executor.ts`'s own
- *    `ExecRequest.command` doc says the same; `spawnCollect` spawns with
- *    `stdio: ['ignore', 'pipe', 'pipe']`. `cli/main.ts` wires
- *    `chiediConferma`/`chiediChiave` into `muffin search`/`muffin mcp add`
- *    **only** when `isatty(0)` is true at the moment `main()` runs — not from
- *    a parameter, an env var, or anything a spawned child controls. Without
- *    that callback, `widenEgressForCapability` (`core/rot/egress-writer.ts`)
- *    refuses unconditionally and writes nothing — proved directly below by
- *    running the exact non-interactive probe through the real sandbox.
+ * The barrier that actually holds, proven below on **both** platforms and
+ * **regardless of whether a pty was allocated**, is the write-deny on
+ * `~/.muffin/rot`:
  *
- * 2. **Even a write attempted straight at the file, bypassing this CLI
- *    entirely, is denied by the sandbox itself.** `core/rot/guards.ts`'s
- *    `mandatoryGuards` puts `paths(home).rot` in `denyWrite` unconditionally
- *    — "whatever the per-call scope says" (`agent/runtime.ts`) — and that is
- *    the same `Guards` object the production `SandboxExecutor` in
- *    `agent/runtime.ts` is built with. So the belt holds even if the
- *    suspenders (the TTY gate) were ever bypassed.
+ * 1. **`mandatoryGuards` (`core/rot/guards.ts`) puts `paths(home).rot` in
+ *    `denyWrite` unconditionally** — "whatever the per-call scope says"
+ *    (`agent/runtime.ts`) — and that is the same `Guards` object the
+ *    production `SandboxExecutor` in `agent/runtime.ts` is built with. It
+ *    fails a write with `EPERM` under seatbelt and `EROFS` under bwrap, holds
+ *    through a pty, a grandchild, and a freshly `exec`'d interpreter, and
+ *    cannot be lifted by naming the same path in that call's own
+ *    `writeScope` (mandatory beats explicit).
+ * 2. **The `isatty(0)` gate in `cli/main.ts` is ergonomics, not a security
+ *    boundary.** It keeps a script or a non-interactive invocation from
+ *    hanging on a question nobody can answer — genuinely useful, and still
+ *    the reason `widenEgressForCapability` (`core/rot/egress-writer.ts`)
+ *    refuses unconditionally on the ordinary, no-pty path (test below). It is
+ *    not what stops a determined attempt: that is barrier 1.
+ *
+ * Both are proved against a real sandbox rather than a stub — same gating
+ * discipline as `core/sandbox/executor.test.ts`, because a security guarantee
+ * asserted against a fake executor only proves the fake agrees with itself.
  */
 const host = platform();
 
@@ -68,12 +78,74 @@ describe('la suite di contenimento dichiara se è girata', () => {
   });
 });
 
+/**
+ * Un piccolo script Python, non una riga di shell: `pty.fork()` è nella
+ * libreria standard con la stessa API su Linux e macOS, mentre `script(1)`
+ * ha due sintassi incompatibili (BSD su macOS non ha nemmeno `-c`; util-linux
+ * su Linux sì) — usarlo avrebbe reso questo test dipendente dalla piattaforma
+ * proprio nella parte che deve girare ovunque. Il figlio è lanciato con
+ * `os.execvp` e un argv esplicito, mai una stringa di shell: niente
+ * escaping annidato fra Python, shell e il sorgente node.
+ *
+ * Il figlio, attaccato al lato slave del pty, stampa `TTY=<bool>
+ * WRITE=<ok|denied:CODICE>` — un solo tentativo di scrittura su
+ * `rot/egress.json`, mai eseguito due volte, mai eseguito se l'allocazione
+ * del pty stessa fallisce (in quel caso il genitore lo dice con
+ * `PTY_DENIED:<errore>` e non lancia il figlio affatto).
+ */
+function ptyProbeSource(): string {
+  return [
+    'import pty, os, sys',
+    'egress_path = sys.argv[1]',
+    "js = (\"const fs=require('fs');\"",
+    '      "const tty=!!process.stdin.isTTY;"',
+    '      "let wrote=\'ok\';"',
+    "      \"try{fs.writeFileSync(process.argv[2], 'PWNED');}catch(e){wrote='denied:'+e.code;}\"",
+    "      \"process.stdout.write('TTY='+tty+' WRITE='+wrote);\")",
+    'try:',
+    '    pid, fd = pty.fork()',
+    'except OSError as e:',
+    "    sys.stdout.write('PTY_DENIED:' + str(e))",
+    '    sys.exit(0)',
+    'if pid == 0:',
+    "    os.execvp('node', ['node', '-e', js, 'placeholder', egress_path])",
+    'else:',
+    "    out = b''",
+    '    while True:',
+    '        try:',
+    '            chunk = os.read(fd, 4096)',
+    '        except OSError:',
+    '            break',
+    '        if not chunk:',
+    '            break',
+    '        out += chunk',
+    '    os.waitpid(pid, 0)',
+    '    sys.stdout.buffer.write(out)',
+  ].join('\n');
+}
+
+type PtyProbeOutcome =
+  | { kind: 'denied-at-alloc'; reason: string }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'ran'; tty: boolean; write: string };
+
+function parsePtyProbe(code: number | null, stdout: string, stderr: string): PtyProbeOutcome {
+  const testo = stdout.trim();
+  if (testo.startsWith('PTY_DENIED:')) {
+    return { kind: 'denied-at-alloc', reason: testo.slice('PTY_DENIED:'.length) };
+  }
+  const m = /TTY=(true|false) WRITE=(\S+)/.exec(testo);
+  if (m) return { kind: 'ran', tty: m[1] === 'true', write: m[2]! };
+  return { kind: 'unavailable', reason: `exit ${code} · stdout=${JSON.stringify(testo)} · stderr=${JSON.stringify(stderr.trim())}` };
+}
+
 describe.runIf(gate.run)(`sys.shell non può allargare l egress (contenimento reale — ${gate.why})`, () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-shell-escalation-'));
   const home = join(base, 'home');
   const cwd = join(base, 'workspace');
   mkdirSync(cwd, { recursive: true });
   runInit({ home, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
+  writeFileSync(join(cwd, 'pty_probe.py'), ptyProbeSource(), 'utf8');
 
   // Stessi guards della produzione (`agent/runtime.ts`, `mandatoryGuards`):
   // non un elenco scritto apposta per questo test.
@@ -84,7 +156,7 @@ describe.runIf(gate.run)(`sys.shell non può allargare l egress (contenimento re
     await executor.close();
   });
 
-  it('lo stdin del figlio sandboxato non è mai un TTY — la condizione che chiude la domanda', async () => {
+  it('sul percorso ordinario (nessun pty) lo stdin del figlio non è un TTY — ergonomia, non la barriera', async () => {
     const r = await executor.run({
       command: `${process.execPath} -e "process.stdout.write(String(!!process.stdin.isTTY))"`,
       cwd,
@@ -94,7 +166,7 @@ describe.runIf(gate.run)(`sys.shell non può allargare l egress (contenimento re
     expect(r.stdout.trim()).toBe('false');
   });
 
-  it('un tentativo diretto di scrivere rot/egress.json dal sandbox è negato — la seconda barriera', async () => {
+  it('un tentativo diretto di scrivere rot/egress.json dal sandbox è negato — la barriera vera', async () => {
     const egressPath = join(paths(home).rot, 'egress.json');
     const prima = readFileSync(egressPath, 'utf8');
     const r = await executor.run({
@@ -106,18 +178,50 @@ describe.runIf(gate.run)(`sys.shell non può allargare l egress (contenimento re
     expect(readFileSync(egressPath, 'utf8')).toBe(prima);
   });
 
-  it('e un tentativo di lanciare il binario muffin per riavviare la conferma non aiuta: nessun terminale dentro il sandbox', async () => {
-    // Non serve costruire davvero il binario per questa proprietà: la riga
-    // sopra ha già misurato che `process.stdin.isTTY` è falso per qualunque
-    // comando lanciato attraverso questo executor, quindi qualunque programma
-    // — `muffin` incluso — vedrebbe la stessa cosa e prenderebbe lo stesso
-    // ramo non-interattivo di `cli/main.ts`. Questo test rende esplicita la
-    // catena: `sh -c` dentro il sandbox eredita lo stesso stdin.
+  /**
+   * La prova diretta della revisione: anche con un pty vero — quindi
+   * `process.stdin.isTTY === true`, la condizione che su Linux/bwrap rende
+   * falsa la frase "stdin non è mai un TTY" — la scrittura su
+   * `rot/egress.json` resta negata. Non un doppio del test sopra: qui il
+   * gate ergonomico (`isatty(0)`) è esplicitamente battuto, e la barriera che
+   * regge è ancora e solo `mandatoryGuards`.
+   *
+   * Dove un pty non si può allocare per niente (macOS/seatbelt nega
+   * `openpty`, o l'ambiente non ha `python3`) il test si salta esplicitamente
+   * — `t.skip()`, non un `return` silenzioso, quindi compare come "saltato"
+   * e non come "passato" nel report — con la ragione stampata. Sotto
+   * `MUFFIN_REQUIRE_SANDBOX=1` (il runner Linux di CI) uno skip diventa un
+   * fallimento: lì un pty deve potersi allocare, perché è la piattaforma su
+   * cui questa proprietà deve essere vera.
+   */
+  it('anche con un pty vero (isTTY===true) la scrittura su rot/egress.json resta negata', async (t) => {
+    const egressPath = join(paths(home).rot, 'egress.json');
+    const prima = readFileSync(egressPath, 'utf8');
+
     const r = await executor.run({
-      command: `${process.execPath} -e "process.exit(process.stdin.isTTY ? 1 : 0)"`,
+      command: `python3 pty_probe.py '${egressPath}'`,
       cwd,
-      writeScope: [cwd],
+      writeScope: [cwd, paths(home).rot], // esplicito nello scope: il deny mandatorio deve battere anche questo
+      timeoutMs: 15_000,
     });
-    expect(r.code).toBe(0);
-  });
+    const esito = parsePtyProbe(r.code, r.stdout, r.stderr);
+
+    if (esito.kind !== 'ran') {
+      const motivo = esito.kind === 'denied-at-alloc' ? `allocazione del pty negata: ${esito.reason}` : esito.reason;
+      if (containmentRequired) {
+        throw new Error(
+          `MUFFIN_REQUIRE_SANDBOX=1 e nessun pty è stato allocato qui — ${motivo}. Su questo runner deve potersi.`,
+        );
+      }
+      console.warn(`[sandbox] prova col pty SALTATA — ${motivo}`);
+      t.skip();
+      return;
+    }
+
+    // Prova che il pty era vero prima di appoggiarci sopra qualunque cosa:
+    // un TTY falso qui renderebbe il resto dell'asserzione senza senso.
+    expect(esito.tty).toBe(true);
+    expect(esito.write).toMatch(/^denied:/);
+    expect(readFileSync(egressPath, 'utf8')).toBe(prima);
+  }, 20_000);
 });

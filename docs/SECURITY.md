@@ -410,12 +410,28 @@ four below, before it says anything else:
 function (`widenEgressForCapability`, `core/rot/egress-writer.ts`) that: asks
 one question naming the exact host(s) about to be added, answers it only when
 a real interactive terminal is wired in (never from a flag — none exists to
-skip it), and refuses with a printed manual remedy otherwise. `sys.shell`'s
-sandboxed child never reaches the question — its stdin is never a TTY — and
-even a direct write at the file is denied by `mandatoryGuards`
-(`core/rot/guards.ts`), the same mandatory deny-write list the production
-sandbox is built with. Every widening is still an addition the owner named
-explicitly; nothing is inferred from a URL or pre-filled.
+skip it), and refuses with a printed manual remedy otherwise.
+
+**The `isatty(0)` gate is ergonomics, not the security boundary — say this
+precisely, because the first version of this section did not.** An
+independent review ran the production `SandboxExecutor` under bwrap on Linux
+and allocated a real pty for `sys.shell`'s grandchild with `script -qc
+"…" /dev/null`: the grandchild then observes `process.stdin.isTTY === true`.
+macOS/seatbelt denies that pty allocation outright (`openpty: Operation not
+permitted`), which is why the original claim ("stdin is never a TTY") tested
+green there for the wrong reason. The boundary that actually holds, on both
+platforms, pty or no pty, is the write-deny on `~/.muffin/rot`
+(`mandatoryGuards`, `core/rot/guards.ts`) — the same mandatory deny-write list
+`agent/runtime.ts` builds the production sandbox with, which the sandboxed
+child cannot lift even by naming `paths(home).rot` explicitly in its own
+write scope (mandatory beats explicit), and which fails with `EPERM` under
+seatbelt and `EROFS` under bwrap. `core/rot/egress-shell-escalation.test.ts`
+proves both the pty (where a pty can be allocated at all — it skips cleanly,
+loudly, and fails instead of skipping under `MUFFIN_REQUIRE_SANDBOX=1`) and
+the write-deny that holds regardless. Every widening is still an addition the
+owner named explicitly, validated as a bare hostname before anything is asked
+or written (`isValidEgressHost`); nothing is inferred from a URL or
+pre-filled.
 
 The rest of this section formalises those two questions for whoever
 implements or verifies the mechanism, not for whoever reads `muffin doctor`.

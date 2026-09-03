@@ -109,6 +109,37 @@ describe('muffin mcp add --host', () => {
     expect(egressAllow(h)).toEqual([]);
     expect(out.join('\n')).toContain('nessun terminale interattivo');
   });
+
+  /**
+   * `--host ''` — tipicamente `--host "$MCP_HOST"` con la variabile non
+   * impostata, un incidente di shell ordinario, non un attacco. Prima della
+   * validazione in `widenEgressForCapability` questo finiva scritto e
+   * sigillato tale e quale: `loadEgress()` fallisce su una stringa vuota, e
+   * il catch muto in `agent/runtime.ts` azzera OGNI host già approvato al
+   * prossimo avvio. Il server MCP resta comunque approvato: la variabile
+   * vuota è un problema dell host, non dell approvazione dei suoi tool.
+   */
+  it('--host \'\' (una variabile di shell non impostata): rifiuta l host, non scrive, non sigilla nulla', async () => {
+    const h = home();
+    const { out, sink } = (() => {
+      const buf: string[] = [];
+      return { out: buf, sink: (l: string) => void buf.push(l) };
+    })();
+    let chiesto = 0;
+    const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, [''], {
+      out: sink,
+      chiediConferma: () => {
+        chiesto += 1;
+        return Promise.resolve('s');
+      },
+    });
+    expect(code).toBe(0); // il server è comunque approvato
+    expect(loadMcpRegistry(h).servers.echo).toBeDefined();
+    expect(chiesto).toBe(0);
+    expect(egressAllow(h)).toEqual([]);
+    expect(out.join('\n')).toMatch(/non è un host valido/);
+    expect(verify(h, 'single-user').ok).toBe(true);
+  });
 });
 
 

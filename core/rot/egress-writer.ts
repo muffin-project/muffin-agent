@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../config/config.js';
 import { EgressFileSchema, hostAllowed, loadEgress, type EgressPolicy } from '../net/egress.js';
-import { seal } from './verify.js';
+import { seal, type RotManifest } from './verify.js';
 
 /**
  * The one function that widens `rot/egress.json` for an owner-approved
@@ -29,18 +29,32 @@ import { seal } from './verify.js';
  * funzione non inferisce mai un host da un URL passato dal chiamante: prende
  * l'host esatto che il chiamante nomina (l'endpoint fisso di un provider dal
  * catalogo, o un host che l'owner ha scritto lui con `--host`), e nessun
- * altro.
+ * altro — e verifica che sia sintatticamente un host prima di chiedere o
+ * scrivere qualunque cosa (`isValidEgressHost` sotto): `--host` è testo
+ * scritto a mano, o una variabile di shell non impostata, non un valore già
+ * fidato.
  *
- * **Perché l'autorità è solo un terminale reale.** `deps.chiediConferma` è
- * assente a meno che il chiamante non lo cablasse da `isatty(0)` sul processo
- * reale — mai da un flag che un chiamante automatico potrebbe passare. Vedi
- * `core/rot/egress-shell-escalation.test.ts` per la prova che `sys.shell` (lo
- * strumento sandboxato del modello) non può mai costruire quella condizione:
- * il suo child gira con `stdio: ['ignore', 'pipe', 'pipe']`
- * (`core/sandbox/executor.ts`) — stdin non è mai un TTY — e anche se lo fosse,
- * `~/.muffin/rot` è un percorso a scrittura negata sempre nel sandbox
- * (`core/rot/guards.ts`, `mandatoryGuards`), indipendentemente dallo scope
- * passato per quella singola chiamata.
+ * **Dove sta davvero l'autorità, e cosa è solo ergonomia (revisione
+ * 03/09/2026, dopo la review del giudice indipendente).** La prima stesura di
+ * questo modulo diceva che il gate `isatty(0)` FOSSE la barriera contro
+ * `sys.shell`. È falso su Linux: dentro bwrap uno strumento come `script` può
+ * allocare un vero pty per il grande-figlio, e quel processo vede
+ * `process.stdin.isTTY === true` — provato dal giudice, e riprodotto in
+ * `core/rot/egress-shell-escalation.test.ts`. Su macOS/seatbelt l'allocazione
+ * di un pty è negata dalla policy (`openpty: Operation not permitted`), il
+ * che aveva reso il test precedente verde per il motivo sbagliato.
+ *
+ * La barriera vera è **la scrittura negata su `~/.muffin/rot`**
+ * (`core/rot/guards.ts`, `mandatoryGuards`) — la stessa lista con cui
+ * `agent/runtime.ts` costruisce il `SandboxExecutor` di produzione, e regge a
+ * un pty, a un grande-figlio, a un interprete lanciato di fresco, con lo
+ * stesso deny sia sotto seatbelt (`EPERM`) sia sotto bwrap (`EROFS`), anche
+ * quando `paths(home).rot` è esplicitamente dentro `writeScope` per quella
+ * chiamata (mandatorio batte esplicito). `deps.chiediConferma` cablato solo
+ * da `isatty(0)` (`cli/main.ts`) resta un buon gate ergonomico — evita che
+ * uno script resti appeso su una domanda a cui nessuno risponde — ma non è
+ * la ragione per cui il modello non può allargare l'egress: quella ragione è
+ * il file system, non il terminale.
  */
 
 export type EgressWidenDeps = {
@@ -51,6 +65,7 @@ export type EgressWidenDeps = {
    * a cui chiedere (uno script, un test, o il figlio non-TTY di `sys.shell`):
    * in quel caso questa funzione non scrive mai nulla e stampa il rimedio a
    * mano, la stessa regola di `promptSecret`/`promptLine` (`cli/prompt.ts`).
+   * Ergonomia, non contenimento — vedi la nota sopra.
    */
   readonly chiediConferma?: (domanda: string) => Promise<string | undefined>;
 };
@@ -60,6 +75,58 @@ export type EgressWidenOutcome =
   | { readonly ok: false };
 
 const SI_NO = /^(s(i|ì)?|y(es)?)$/i;
+
+/**
+ * Un'etichetta DNS: lettere/cifre/trattino, mai un trattino agli estremi, 1-63
+ * caratteri — RFC 1123, senza inventare una sintassi più permissiva di quella
+ * che un host può davvero avere.
+ */
+const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+/**
+ * Un host valido per `rot/egress.json`: un hostname nudo, o un pattern
+ * `*.dominio` con un solo livello di wildcard iniziale — mai uno schema
+ * (`https://`), una porta (`:443`), un percorso (`/search`), un utente
+ * (`user@`), un elenco (`a.example,b.example`) o un attraversamento di
+ * percorso (`../../etc/passwd`, che comunque non contiene i caratteri di un
+ * host).
+ *
+ * Prima di questo controllo, `--host` finiva scritto e sigillato **tale e
+ * quale** in `rot/egress.json`: `hostAllowed()` confronta contro
+ * `new URL(...).hostname`, quindi un valore come `https://api.tavily.com/`
+ * non avrebbe mai fatto match — l'owner leggeva "aggiunto", il seal era
+ * valido, e la capability restava spenta. Lo stesso difetto misurato per
+ * questa ADR, con un messaggio di successo sopra. Peggio, una stringa vuota
+ * (`--host ''`, tipicamente una variabile di shell non impostata) scritta in
+ * `allow` fa fallire `loadEgress()` al prossimo avvio, e il `catch` muto in
+ * `agent/runtime.ts` la trasforma in `{ allow: [] }` — **ogni** host prima
+ * approvato sparisce, senza una riga in nessun log.
+ */
+export function isValidEgressHost(raw: string): boolean {
+  const h = raw.trim();
+  if (h === '') return false;
+  // Un carattere di questi non compare mai in un hostname vero: se c'è, chi
+  // ha scritto `--host` ha messo uno schema, una porta, un percorso, un
+  // utente, un elenco o spazio — non un host.
+  if (/[/:@,\s]/.test(h)) return false;
+  const senzaWildcard = h.startsWith('*.') ? h.slice(2) : h;
+  if (senzaWildcard === '' || senzaWildcard.includes('..')) return false;
+  const labels = senzaWildcard.split('.');
+  return labels.every((l) => DNS_LABEL.test(l));
+}
+
+const MANIFEST_FILENAME = 'manifest.json'; // Lo stesso letterale privato di `core/rot/verify.ts`.
+
+/** Il `rotVersion` corrente, se il manifest esiste e si legge — mai inventato. */
+function currentRotVersion(manifestFile: string): string {
+  if (!existsSync(manifestFile)) return '1';
+  try {
+    const parsed = JSON.parse(readFileSync(manifestFile, 'utf8')) as Partial<RotManifest>;
+    return typeof parsed.rotVersion === 'string' && parsed.rotVersion !== '' ? parsed.rotVersion : '1';
+  } catch {
+    return '1';
+  }
+}
 
 /**
  * `hosts` sono nomi esatti, mai wildcard dedotti qui: chi chiama decide la
@@ -78,6 +145,20 @@ export async function widenEgressForCapability(
   const { out } = deps;
   const rotDir = paths(home).rot;
   const egressFile = join(rotDir, 'egress.json');
+  const manifestFile = join(rotDir, MANIFEST_FILENAME);
+
+  const normalizzati = [...new Set(hosts.map((h) => h.toLowerCase().replace(/\.$/, '')))];
+
+  // Prima di ogni domanda o scrittura: un host che non può essere un host si
+  // rifiuta subito, con il motivo — mai chiesto, mai scritto, mai sigillato.
+  const invalidi = normalizzati.filter((h) => !isValidEgressHost(h));
+  if (invalidi.length > 0) {
+    out(
+      `${invalidi.map((h) => `"${h}"`).join(', ')} non ${invalidi.length > 1 ? 'sono host validi' : 'è un host valido'} ` +
+        `— niente schema, porta, percorso, utente, elenco o spazio: solo il nome dell'host.`,
+    );
+    return { ok: false };
+  }
 
   let policy: EgressPolicy;
   try {
@@ -87,7 +168,6 @@ export async function widenEgressForCapability(
     return { ok: false };
   }
 
-  const normalizzati = [...new Set(hosts.map((h) => h.toLowerCase().replace(/\.$/, '')))];
   const mancanti = normalizzati.filter((h) => !hostAllowed(h, policy));
   if (mancanti.length === 0) return { ok: true, added: [] };
 
@@ -111,9 +191,16 @@ export async function widenEgressForCapability(
     return { ok: false };
   }
 
+  let egressRawPrima: string;
+  try {
+    egressRawPrima = readFileSync(egressFile, 'utf8');
+  } catch (error) {
+    out(`${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`);
+    return { ok: false };
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(egressFile, 'utf8'));
+    raw = JSON.parse(egressRawPrima);
   } catch (error) {
     out(`${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`);
     return { ok: false };
@@ -124,12 +211,42 @@ export async function widenEgressForCapability(
     return { ok: false };
   }
 
+  // Il manifest PRIMA della scrittura: `seal()` lo riscrive per primo e
+  // l'anchor per secondo, quindi un fallimento sull'anchor lascia il manifest
+  // già puntato ai nuovi hash mentre l'anchor punta ancora ai vecchi —
+  // `verify()` legge questo come `anchor_mismatch` (modalità sicura, o un
+  // boot rifiutato in hardened) anche se l'owner non ha mai visto un errore
+  // che dicesse "fatto". Tenere i byte di prima e rimetterli se il sigillo
+  // fallisce è l'unico modo per non lasciare quello stato a metà.
+  const manifestRawPrima = existsSync(manifestFile) ? readFileSync(manifestFile, 'utf8') : undefined;
+  const rotVersion = currentRotVersion(manifestFile);
+
   // Ogni altra voce (e `_comment`) resta com'era: si aggiunge, non si sostituisce.
   const next = { ...parsed.data, allow: [...parsed.data.allow, ...mancanti] };
   try {
     writeFileSync(egressFile, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-    seal(home, '1', new Date());
+    seal(home, rotVersion, new Date());
   } catch (error) {
+    // Rollback, best-effort: se uno di questi due write torna a fallire (per
+    // esempio perché è mancato lo stesso permesso che ha fatto fallire il
+    // primo tentativo) non c'è altro da fare — ma è esattamente il caso in
+    // cui non serve, perché allora anche la scrittura sopra non è mai
+    // avvenuta. Quello che questo rollback chiude è il caso intermedio: la
+    // scrittura di `egress.json` è riuscita, `seal()` ha riscritto
+    // `manifest.json` ed è fallito solo sull'anchor.
+    try {
+      writeFileSync(egressFile, egressRawPrima, 'utf8');
+    } catch {
+      /* niente da fare di più: vedi sopra */
+    }
+    if (manifestRawPrima !== undefined) {
+      try {
+        writeFileSync(manifestFile, manifestRawPrima, 'utf8');
+      } catch {
+        /* idem */
+      }
+    }
+
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EACCES' || code === 'EPERM') {
       out(
