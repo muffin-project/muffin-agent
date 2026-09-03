@@ -57,49 +57,13 @@ export function resolveLocalHome(dirArg: string | undefined): string {
 }
 
 /**
- * The realpath of `target`, resolved even when it — or an ancestor — does not
- * exist yet: walks up to the deepest entry that does, resolves *that* through
- * any symlink, and re-attaches whatever was still missing. `isSameOrNestedPath`
- * needs this because the directory `--local` names is usually about to be
- * created, so a plain `realpathSync` would throw `ENOENT` on the one case that
- * matters most (a first rehearsal of a fresh install).
- *
- * Exported for `cli/update.ts`'s launcher-identity check: a launcher symlink
- * can legitimately point at a release whose `dist/` a failed build never
- * finished writing, and the same "resolve as far as it exists" need applies —
- * `realpathSync` alone throws `ENOENT` on that dangling target exactly when
- * the caller most needs an answer, not an exception.
+ * Re-exported, not defined here: both moved to `core/config/workspace.ts`, where
+ * `resolveWorkspace` needs the same symlink-aware containment test this file's
+ * `--local` guard needs, and `core/` may not import `cli/`. The spelling stays
+ * available from here because `cli/update.ts` and `cli/main.ts` import it from
+ * this module and the question they ask has not changed.
  */
-export function realishPath(target: string): string {
-  let current = resolve(target);
-  const missing: string[] = [];
-  while (!existsSync(current)) {
-    const parent = dirname(current);
-    if (parent === current) return current; // filesystem root: nothing left to resolve against
-    missing.unshift(basename(current));
-    current = parent;
-  }
-  return missing.length > 0 ? join(realpathSync(current), ...missing) : realpathSync(current);
-}
-
-// macOS and Windows volumes are case-insensitive by default — `~/.Muffin` and
-// `~/.muffin` name the same directory, and a plain string compare would miss it.
-const CASE_BLIND = process.platform === 'darwin' || process.platform === 'win32';
-
-/**
- * True when `candidate` is `base`, or sits somewhere inside it — compared
- * through symlinks, never the literal strings. The guard `--local` runs
- * before it ever calls `mkdirSync`: a throwaway rehearsal home must never be
- * able to land on, or under, the real home it exists to leave untouched.
- */
-export function isSameOrNestedPath(candidate: string, base: string): boolean {
-  const norm = (p: string): string => (CASE_BLIND ? p.toLowerCase() : p);
-  const c = norm(realishPath(candidate));
-  const b = norm(realishPath(base));
-  if (c === b) return true;
-  const rel = relative(b, c);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
-}
+export { isSameOrNestedPath, realishPath } from '../core/config/workspace.js';
 
 export function runInit(options: InitOptions = {}): InitStep[] {
   const home = options.home ?? paths().home;
