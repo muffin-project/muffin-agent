@@ -33,7 +33,9 @@ vengono prima di allargare capability o architettura.
    2c input mentre un turno è vivo: coda, /steer, /stop, /pause, /resume (ADR-0054)
    2d la corsia end-to-end REALE (modello e Bot API veri, in locale)
         ↓
-3  le due porte ancora fuori dal kernel: risposta e scrittura di memoria
+3  le due porte fuori dal kernel: risposta e memoria — fatto (ADR-0055):
+     capability dichiarate dal kernel e tracciate a ogni giro; nessun permesso
+     è cambiato, e a decidere i permessi resta il punto 4
         ↓
 4  le colonne: eval di sicurezza, adapter B + corpus avversariale sul binario
         ↓
@@ -46,10 +48,11 @@ Il punto 2 precede le porte perché è ciò che rende il dogfood **sopportabile*
 senza, l'owner torna al vecchio agente prima che il punto 3 serva a qualcuno.
 2d va costruita con 2a e non dopo: è la prova che 2a e 2b chiedono.
 
-Stato al 03/09: 2a (#298) e 2b (#299) su `dev`; 2c in PR (#300, profilo
-CRITICAL, aspetta la revisione indipendente); 2d **costruita**
+Stato al 03/09: 2a, 2b, 2c e il punto 3 sono integrati e promossi su `main`
+(#298, #299, #300 con due giudici, #303 con uno); 2d **costruita**
 (`evals/e2e/telegram.ts`) e da eseguire dall'owner — il passo che chiude
-B11/B13/B2 è quella corsa, non un'altra PR.
+B11/B13/B2 è quella corsa, non un'altra PR. Il punto **4**, l'eval comparativo
+sulle colonne, è quindi il prossimo lavoro di codice.
 
 Righe e colonne sono domande separate, e questa è la ragione dell'ordine. La
 **riga** dice dove finiscono i byte di un effetto, e ADR-0053 l'ha resa

@@ -137,6 +137,17 @@ The policy kernel is pure and deterministic. It decides from typed facts such as
   tighten its own row and never widen it; `core/policy/effect-rows.test.ts`
   asserts every shipped cell;
 - capability risk/reversibility/rerunnability metadata;
+- the two acts the turn performs **without a tool** — replying on the
+  originating channel and writing a memory episode — which since ADR-0055 are
+  declared capabilities (`surface.reply`, `memory.write`) the kernel itself
+  owns rather than a runtime registers. The shipped floor allows both at every
+  taint: what this buys is a decision that exists, tunable by a sealed
+  `policy.json` and visible as `muffin.policy_decision` on every reply and
+  every episode of a turn. A proactive nudge composes inside a turn and so is
+  decided, but its final delivery (`cli/observe.ts`) and its episode
+  (`agent/observe-run.ts`) happen outside the loop and pass no door;
+  `decideProactive` refuses a trigger above tier 1 at the source, and vault
+  ingest writes its own episodes outside this boundary too;
 - sealed policy and egress configuration;
 - budget state;
 - Root-of-Trust health.
@@ -427,7 +438,11 @@ status lives only in `docs/work/day1/requirements-status.md`.
   `docs/history/design-notes/security-v2-eval-contract-2026-08-29.md`; the
   2026-09-02 measurement of what the incumbent actually gates — including the
   sink asymmetry between `fs.write`, `surface.send_file` and a plain reply — is
-  in `docs/evidence/decision-memo-taint-2026-09-02.md`.
+  in `docs/evidence/decision-memo-taint-2026-09-02.md`. Two thirds of that
+  asymmetry are since closed: ADR-0053 put `surface.send_file` on the `reply`
+  row, and since ADR-0055 the plain reply passes through the kernel as
+  `surface.reply` — semantics unchanged, the floor allows it at every taint, but
+  the act is now decided, tunable and traced rather than unwatched.
 
 ## 14. What this document does not own
 
