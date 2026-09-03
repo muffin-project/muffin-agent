@@ -9,6 +9,8 @@ import { UndoJournal } from '../core/undo/journal.js';
 import { cmdUndo } from '../cli/undo.js';
 import { seal } from '../core/rot/verify.js';
 import { buildRuntime } from './runtime.js';
+import { runDoctor } from '../cli/doctor.js';
+import { muffinWorkspace } from '../core/config/workspace.js';
 import { runTurn, type LoopDeps, type ToolContext } from './loop.js';
 import type { ChatResult, Provider } from './providers/types.js';
 import type { Principal } from '../core/policy/types.js';
@@ -526,6 +528,42 @@ describe('sys_inspect legge le fonti vere, non le sue', () => {
       // `describeBuild` ha girato davvero: o uno SHA o la frase dichiarata.
       expect(out.content).toMatch(/build: ([0-9a-f]{12}|sconosciuta)/);
       expect(out.tier).toBe(0);
+    } finally {
+      runtime.close();
+    }
+  }, 30_000);
+});
+
+/**
+ * ADR-0059's legibility follow-up: «dove atterra il lavoro» ha due porte,
+ * `muffin doctor` e `sys.inspect`, e questo repository ha già pagato il prezzo
+ * di due porte che rispondono a domande apparentemente uguali con letture
+ * indipendenti che possono divergere (vedi la nota su `web_search` sopra).
+ * Questo test attraversa entrambe le porte contro lo **stesso** runtime reale,
+ * costruito con cwd = home apposta: è esattamente lo scenario misurato
+ * nell'ADR (il gateway supervisionato, la cui unit fissa `WorkingDirectory`
+ * sulla casa), quindi `resolveWorkspace` rilocalizza davvero e non risponde
+ * semplicemente con la cwd passata.
+ */
+describe('doctor e sys.inspect nominano la stessa cartella di lavoro, dalla stessa fonte', () => {
+  it('non possono divergere: stesso path, per lo stesso runtime', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-ws-doors-'));
+    runInit({ home, apiKey: 'sk-or-v1-never-called' });
+    const runtime = buildRuntime(home, home); // cwd = home: il caso rilocalizzato
+    try {
+      expect(runtime.workspace).toBe(muffinWorkspace(home));
+
+      const tool = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
+      const out = await tool!.handler({}, {
+        tenant: 'host',
+        principal: { kind: 'owner', connector: 'cli', externalId: 'test' },
+        turnId: 't', sessionId: 's', taint: () => 0, intrinsicTaint: () => 0, suspend: () => {}, replyChannel: null,
+      } as ToolContext);
+      expect(out.content).toContain(`cartella di lavoro: ${runtime.workspace}`);
+
+      const report = await runDoctor(home);
+      const workspaceCheck = report.checks.find((c) => c.name === 'workspace');
+      expect(workspaceCheck?.detail).toContain(runtime.workspace);
     } finally {
       runtime.close();
     }
