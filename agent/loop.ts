@@ -2326,12 +2326,44 @@ async function drive(
    * cannot be kept. So it falls back to finishing the turn and saying so.
    */
   function suspendHere(spec: WaitSpec): TurnResult {
+    /**
+     * `/steer` pendente al momento della sospensione (ADR-0054 §2,
+     * emendamento 03/09b).
+     *
+     * Un turno sospeso **non è finito**: ha rilasciato il runtime e gli è
+     * dovuto un risveglio. Quindi la correzione non va nella sessione per il
+     * turno *dopo* — va consegnata a **questo** turno quando si sveglia, che è
+     * letteralmente «il prossimo confine di giro» che la conferma promette.
+     *
+     * La strada è la riga: `suspend` persiste `messages`, e un turno ripreso
+     * riparte da `[...record.messages]`. Perciò la correzione entra
+     * nell'array che sta per essere scritto, e la prima chiamata al modello
+     * del risveglio la vede.
+     *
+     * Drenato **qui** e non in cima al giro perché la barriera si onora prima
+     * di quel drain, nello stesso giro: una correzione arrivata durante il
+     * giro N veniva saltata quando il turno si sospendeva in cima al giro N+1,
+     * e `suspendHere` — a differenza di `finish` — non svuotava mai la porta.
+     * Il `finally` del connettore cancella la voce `vivi` (con il suo array di
+     * correzioni) appena `runTurn` torna: nessuno dei due casi promessi
+     * all'owner avveniva, e la correzione spariva.
+     *
+     * `messages` non viene mutato: il ramo che fallisce la scrittura non deve
+     * proseguire con una correzione che non è su nessuna riga, e su quello che
+     * riesce si torna subito.
+     */
+    const correzioniPendenti = input.steer?.() ?? [];
+    const conCorrezioni: Message[] =
+      correzioniPendenti.length === 0
+        ? messages
+        : [...messages, ...correzioniPendenti.map((testo): Message => ({ role: 'user', content: [{ type: 'text', text: testo }] }))];
+
     const wrote = (() => {
       try {
         return deps.turns.suspend(
           record.id,
           {
-            messages,
+            messages: conCorrezioni,
             taint: snapshot.currentTaint(),
             counters: counters(),
             wakeAt: spec.wakeAt,
@@ -2353,6 +2385,14 @@ async function drive(
       // claim really is gone, `finish`'s own write fails too and it returns
       // the honest lost-claim result instead of this text — so the message
       // here only ever reaches an owner when the *first* case is what happened.
+      //
+      // Le correzioni drenate qui sopra sono già uscite dall'array del
+      // connettore — il drain è distruttivo — e sono finite in un `messages`
+      // che nessuno ha scritto: l'ultimo drain di `finish` troverebbe la porta
+      // vuota e la correzione svanirebbe proprio dove il codice sta già
+      // ammettendo di aver fallito. Scritte in conversazione con la stessa
+      // provenienza che usa `finish`, così è il turno dopo a vederle.
+      scriviCorrezioniInSessione(turn, correzioniPendenti);
       return finish(
         turn,
         'error',
@@ -2575,6 +2615,39 @@ async function drive(
     return true;
   }
 
+  /**
+   * Le correzioni che nessun giro ha consumato, scritte in conversazione come
+   * parole dell'owner (ADR-0054 §2, emendamento 03/09).
+   *
+   * Una funzione sola, e non due copie, perché i due chiamanti — `finish` a
+   * turno finito e `suspendHere` quando la scrittura di sospensione fallisce —
+   * devono dare alla correzione la **stessa** provenienza. Fuori da qualunque
+   * `try` del chiamante: una scrittura di sessione che fallisce non deve
+   * trasformare un turno riuscito in un errore.
+   */
+  function scriviCorrezioniInSessione(span: SpanHandle, correzioni: readonly string[]): void {
+    for (const residua of correzioni) {
+      try {
+        deps.sessions.append(input.session, {
+          role: 'user',
+          content: residua,
+          surface: input.surface,
+          createdAt: now().toISOString(),
+          traceId: span.traceId,
+          // Parole dell'owner, come il messaggio che ha aperto il turno:
+          // `record.taint` — lo stesso valore, e per la stessa ragione, che
+          // l'append del messaggio utente nel preambolo usa al posto di
+          // `initialTaint(input)` (che su un turno ripreso non vedrebbe
+          // `contentTaint`). Mai `snapshot.currentTaint()`: la correzione è
+          // testo dell'owner, non qualcosa che il turno ha derivato.
+          tier: record.taint,
+        });
+      } catch (error) {
+        span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
   function finish(
     span: SpanHandle,
     stopped: TurnOutcome,
@@ -2595,30 +2668,13 @@ async function drive(
     //
     // Non su `aborted`: lì l'owner ha detto `/stop`, e ripescare una correzione
     // dentro un turno che ha chiesto di fermare sarebbe l'opposto di quello che
-    // ha chiesto. Fuori dal `try` di nessuno: una scrittura di sessione che
-    // fallisce non deve trasformare un turno riuscito in un errore.
-    if (stopped !== 'aborted') {
-      for (const residua of input.steer?.() ?? []) {
-        try {
-          deps.sessions.append(input.session, {
-            role: 'user',
-            content: residua,
-            surface: input.surface,
-            createdAt: now().toISOString(),
-            traceId: span.traceId,
-            // Parole dell'owner, come il messaggio che ha aperto il turno:
-            // `record.taint` — lo stesso valore, e per la stessa ragione, che
-            // l'append del messaggio utente qui sopra usa al posto di
-            // `initialTaint(input)` (che su un turno ripreso non vedrebbe
-            // `contentTaint`). Mai `snapshot.currentTaint()`: la correzione è
-            // testo dell'owner, non qualcosa che il turno ha derivato.
-            tier: record.taint,
-          });
-        } catch (error) {
-          span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
-        }
-      }
-    }
+    // ha chiesto.
+    //
+    // Consegnata una volta sola, su ogni strada che esce da `drive`: il drain
+    // è distruttivo, quindi ciò che un giro ha già consumato — o che
+    // `suspendHere` ha già messo nella riga — non è più nella porta quando si
+    // arriva qui. E il ramo che sospende davvero non passa da `finish`.
+    if (stopped !== 'aborted') scriviCorrezioniInSessione(span, input.steer?.() ?? []);
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.

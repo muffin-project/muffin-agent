@@ -61,11 +61,11 @@ prima di costruirlo. Non DAY-1.
 **Harness:** il finto Bot API non serve `getFile` (B10, C8 senza scenario).
 Accettazione ~5 min, tetto 10.
 
-**Code dei giudici (03/09), non bloccanti:** un `/steer` in coda si perde se il
-turno finisce `suspended` (la ripesca sta in `finish`, non in `suspendHere`), e
-la conferma promette il contrario; un `sessions.append` fallito lì è silenzioso;
-`gestiti` nel connettore Telegram non si svuota mai; l'esaustività della porta
-della risposta la garantisce solo il type checker.
+**Code dei giudici (03/09), non bloccanti:** un `sessions.append` fallito nella
+ripesca dello `/steer` è silenzioso; `gestiti` nel connettore Telegram non si
+svuota mai; l'esaustività della porta della risposta la garantisce solo il type
+checker; un turno **ripreso dalla corsia** non è in `vivi`, quindi uno `/steer`
+mandato durante l'attesa risponde «nessun turno in corso».
 
 **Altro:** `gateway.err` non data le righe; `pricing.ts` sottostima 5
 famiglie su 8; il `try` di `recall.ts` avvolge anche la provenienza.
