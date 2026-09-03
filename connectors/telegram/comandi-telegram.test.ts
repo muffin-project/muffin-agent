@@ -117,9 +117,10 @@ describe('un comando dell owner non passa dal modello', () => {
 
     expect(h.turns).toEqual([]);
     expect(h.sent[0]?.text).toContain('$0.0031');
-    // La sessione è quella della chat: `/session` deve dire l'id vero, non
-    // uno inventato per l'occasione.
-    expect(visti[0]).toBe(`/spend telegram:${OWNER}`);
+    // La sessione è quella che il turno aprirebbe, e da ADR-0056 per la DM
+    // dell'owner è `owner`: `/new` da qui deve archiviare la conversazione che
+    // il terminale riaprirà, non un'altra con lo stesso nome.
+    expect(visti[0]).toBe('/spend owner');
   });
 
   /**

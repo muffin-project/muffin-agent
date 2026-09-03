@@ -6,7 +6,7 @@ import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { loadProfiles, selectProfile } from '../agent/profiles/profile.js';
 import { Scheduler, type Deliver, type ForegroundGate, type StandDown } from '../core/scheduler/scheduler.js';
 import { ModelLane } from '../core/turns/model-lane.js';
-import { readGateway } from '../core/gateway/lock.js';
+import { gatewayTransition, readGateway } from '../core/gateway/lock.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
 import { reviewBootLine } from '../core/memory/maintenance.js';
 import type Database from 'better-sqlite3';
@@ -23,6 +23,7 @@ import { makeStatusLine, type StatusLine } from './status-line.js';
 import { styleFor } from './ui.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { attachSendFile, connectSurfaces, rigaDatata } from './surface.js';
+import { OWNER_SESSION_KEY } from '../core/surface/types.js';
 
 /**
  * The REPL.
@@ -305,20 +306,54 @@ export function gatewayStandDown(
   say: (line: string) => void,
   ownedAtBoot: boolean,
 ): StandDown {
-  let owned = ownedAtBoot;
-  return () => {
-    const gateway = readGateway(db);
-    const now = gateway !== null;
-    if (now !== owned) {
-      owned = now;
-      say(
-        gateway
-          ? `scheduler: passato al gateway (pid ${gateway.pid}) — i job girano lì adesso, non più in questa finestra`
-          : `scheduler: il gateway non risponde più — i job tornano a girare in questa finestra`,
-      );
-    }
-    return now;
-  };
+  const watch = gatewayTransition(db, say, ownedAtBoot, {
+    taken: (pid) => `scheduler: passato al gateway (pid ${pid}) — i job girano lì adesso, non più in questa finestra`,
+    released: () => `scheduler: il gateway non risponde più — i job tornano a girare in questa finestra`,
+  });
+  return () => watch() !== null;
+}
+
+/**
+ * La stessa domanda, per le **superfici**: le sta gia' servendo il gateway?
+ *
+ * Il difetto, visto il 03/09/2026 sulla macchina dell'owner: con un gateway
+ * sotto supervisore, aprire il REPL riempiva il terminale di
+ *
+ *     telegram: 409, un altro getUpdates e' attivo — attendo
+ *
+ * ogni pochi secondi, per sempre. Due processi chiamavano `getUpdates` sullo
+ * stesso token; Telegram ne serve uno solo e risponde 409 all'altro. ADR-0022
+ * dice **un processo**, e il REPL cedeva gia' lo scheduler senza cedere la
+ * bocca.
+ *
+ * Stessa identica ragione dello stand-down dello scheduler, e infatti stesso
+ * meccanismo (`gatewayTransition`) e non un secondo: due letture divergenti di
+ * «il gateway e' vivo» andrebbero d'accordo ovunque tranne intorno a un crash.
+ *
+ * **Decisione: le superfici tornano.** Se il gateway sparisce (crash, `gateway
+ * stop`, claim scaduta dopo dieci battiti mancati), questa finestra ricomincia
+ * a ricevere, e se ricompare le ricede — nella stessa direzione in cui gia' si
+ * muovono i job. L'alternativa (tacere fino al riavvio) lascerebbe un terminale
+ * aperto da prima del crash con Muffin irraggiungibile da Telegram e nessuna
+ * riga che lo dica: e' proprio la classe di guasto che ADR-0035 chiama
+ * «continuita' a Muffin, non al pid». Ogni passaggio si annuncia una volta, in
+ * entrambe le direzioni, cosi' l'owner sa sempre quale delle due finestre ha la
+ * bocca.
+ *
+ * Ritorna il gateway e non un booleano perche' la riga di avvio ne nomina il
+ * pid: «lo serve il gateway» senza dire *quale processo* e' la meta' della
+ * frase che non si puo' agire.
+ */
+export function surfaceStandDown(
+  db: Database.Database,
+  say: (line: string) => void,
+  servingAtBoot: boolean,
+): () => { pid: number } | null {
+  return gatewayTransition(db, say, servingAtBoot, {
+    taken: (pid) =>
+      `superfici: le serve il gateway (pid ${pid}) — questa finestra smette di ricevere, ma manda ancora`,
+    released: () => `superfici: il gateway non risponde più — questa finestra ricomincia a ricevere`,
+  });
 }
 
 export async function runRepl(
@@ -427,6 +462,16 @@ export async function runRepl(
   // delivery that lands before the prompt exists simply does not redraw one.
   let redrawPrompt: () => void = () => {};
   let cancellaPrompt: () => void = () => {};
+  /**
+   * Chi serve, all'avvio — letto **una volta** e usato da entrambi gli
+   * stand-down (superfici qui sotto, scheduler piu' giu').
+   *
+   * Una sola lettura perche' una sola domanda: due `readGateway` a qualche
+   * riga di distanza potrebbero rispondere diverso proprio nell'istante che
+   * conta (il gateway che parte adesso), e la finestra si troverebbe a cedere
+   * i job senza cedere la bocca — che e' il difetto del 03/09.
+   */
+  const gateway = readGateway(runtime.db);
   const surfaces = connectSurfaces(
     runtime,
     home,
@@ -442,6 +487,16 @@ export async function runRepl(
       { cancella: () => cancellaPrompt(), redraw: () => redrawPrompt() },
       (s) => process.stderr.write(s),
       () => status.clear(),
+    ),
+    // Una bocca sola su ogni superficie (ADR-0022): se il gateway c'e', questa
+    // finestra manda e non riceve. Il passaggio si annuncia su stderr come
+    // quello dello scheduler — la stessa riga fuori banda, la stessa strada.
+    surfaceStandDown(
+      runtime.db,
+      (line) => {
+        process.stderr.write(`\n${line}\n`);
+      },
+      gateway !== null,
     ),
   );
   // DAY-1 requirement B14: a file the model produces can now reach the owner as a real
@@ -605,7 +660,19 @@ export async function runRepl(
     return allowed ? 'allow' : 'deny';
   });
 
-  let session = runtime.deps.sessions.open();
+  /**
+   * La conversazione dell'owner, non una per lancio.
+   *
+   * Il terminale è owner per costruzione (`tenant: 'host'` più sotto), quindi
+   * apre la stessa chiave che `identify` dà alla sua DM su Telegram e su
+   * Discord — un id casuale qui era ciò che faceva del terminale una
+   * conversazione a parte, e per di più senza continuità nemmeno con sé stesso
+   * fra due lanci (ADR-0056, il failure del 03/09).
+   *
+   * `const`, non `let`: `/new` non apre più un id nuovo, lo ruota — vedi il
+   * ramo `nuovaSessione` più sotto.
+   */
+  const session = runtime.deps.sessions.open(OWNER_SESSION_KEY);
   let controller: AbortController | null = null;
   let lastInterrupt = 0;
   const pausa = new Pausa(runtime.db);
@@ -679,7 +746,6 @@ export async function runRepl(
    * And a gateway killed with -9 does not wedge this forever — its claim goes
    * stale after ten missed heartbeats and the tick after that runs jobs again.
    */
-  const gateway = readGateway(runtime.db);
   const standDown = gatewayStandDown(
     runtime.db,
     (line) => {
@@ -788,7 +854,15 @@ export async function runRepl(
           process.stderr.write(`comando sconosciuto.\n${aiuto(true)}\n`);
           continue;
         }
-        if (esito.nuovaSessione === true) session = runtime.deps.sessions.open();
+        if (esito.nuovaSessione === true) {
+          // `/new` è una rotazione, non un id nuovo: con una chiave condivisa
+          // fra le porte «una conversazione nuova» non può essere una chiave
+          // diversa — sarebbe una conversazione altrui. È ciò che `/new`
+          // significa già su Telegram (`cli/surface.ts`), e ora le due porte
+          // dicono la stessa cosa. Il file di prima viene archiviato con la
+          // data, mai cancellato.
+          runtime.deps.sessions.rotate(session);
+        }
         if (esito.verbosity !== undefined) verbosity = esito.verbosity;
         // `status.line` e non `stderr.write`: lo spinner possiede il terminale
         // mentre gira, e una riga scritta sotto di lui gli finisce dentro.

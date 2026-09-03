@@ -34,6 +34,7 @@ import { cmdModel } from './model.js';
 import type { Approver } from '../agent/loop.js';
 import { escapeHtml, splitHtml } from '../connectors/telegram/render.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
+import { HEARTBEAT_MS } from '../core/gateway/lock.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -550,8 +551,51 @@ export function connectSurfaces(
    * un file e una sequenza di escape sarebbe sporcizia dentro `gateway.err`.
    */
   log: SinkDiLog = rigaDiLog,
+  /**
+   * «Le superfici le sta gia' servendo il gateway?» — e chi.
+   *
+   * Il difetto che ha prodotto questo parametro, 03/09/2026, macchina
+   * dell'owner: con un gateway sotto supervisore, aprire il REPL stampava
+   * `telegram: 409, un altro getUpdates e' attivo — attendo` ogni pochi
+   * secondi, per sempre. Questa funzione veniva chiamata da **entrambi** i
+   * processi senza che nessuno dei due si chiedesse se l'altro c'era gia': due
+   * `getUpdates` sullo stesso token, Telegram ne serve uno e risponde 409
+   * all'altro. ADR-0022 dice un processo; il REPL cedeva gia' lo scheduler
+   * (ADR-0035) e non cedeva la bocca.
+   *
+   * E' un **cancello, non un muro**, e distingue ricevere da mandare. Chi cede
+   * non fa partire il poller: niente `getUpdates`, niente websocket, nessuna
+   * riga a timer. Ma la superficie entra lo stesso nel `SurfaceRegistry`, la
+   * porta della corsia resta registrata e l'approvatore pure — cioe' consegne,
+   * approvazioni e `send_file` da un turno del REPL continuano ad arrivare,
+   * perche' mandare non e' contendere: `sendMessage` non ha nessun 409, ce
+   * l'ha solo il long-poll.
+   *
+   * Ri-chiesto ogni `HEARTBEAT_MS`, non solo all'avvio, perche' entrambi gli
+   * ordini sono ordinari: un gateway installato mentre il terminale e' aperto,
+   * e un gateway che muore (o un coperchio chiuso che gli fa scadere la
+   * claim). Chi passa la funzione decide anche come si annuncia il passaggio —
+   * `surfaceStandDown` in `cli/repl.ts`. Assente = «sono io il processo che
+   * serve», che e' il caso del gateway stesso e di `observe`.
+   */
+  gatewayServes?: () => { pid: number } | null,
 ): { lines: string[]; stop: () => void; registry: SurfaceRegistry; deliver: LaneDeliver; salute: SaluteSuperfici } {
   const lines: string[] = [];
+  /**
+   * Letto una volta qui, e poi solo dal sorvegliante in fondo: le righe di
+   * avvio devono dire *la stessa cosa* che il cancello ha deciso, e due
+   * letture a distanza di qualche riga potrebbero non dirla.
+   */
+  const gatewayAtBoot = gatewayServes?.() ?? null;
+  /**
+   * I poller che il cancello governa — uno per superficie che ne ha uno.
+   *
+   * Registrati invece che avviati sul posto, perche' il passaggio avviene in
+   * due direzioni: `start` viene richiamata quando il gateway se ne va, `stop`
+   * quando arriva. Sono le stesse due funzioni dell'avvio e della chiusura, non
+   * una seconda coppia.
+   */
+  const pollers: { start: () => void; stop: () => void }[] = [];
   /**
    * Chi sta rispondendo, adesso.
    *
@@ -668,12 +712,16 @@ export function connectSurfaces(
         // e il primo battito passano fino a due minuti se la rete e' lenta, e
         // in quella finestra l'assenza di una riga non deve poter essere letta
         // come «non e' stata nemmeno tentata».
-        salute.inAvvio('telegram', adesso());
-        void connector.run().catch((error: unknown) => {
-          const causa = error instanceof Error ? error.message : String(error);
-          salute.caduta('telegram', causa, adesso());
-          log(`telegram: caduta — ${causa}`);
-        });
+        const avviaTelegram = (): void => {
+          salute.inAvvio('telegram', adesso());
+          void connector.run().catch((error: unknown) => {
+            const causa = error instanceof Error ? error.message : String(error);
+            salute.caduta('telegram', causa, adesso());
+            log(`telegram: caduta — ${causa}`);
+          });
+        };
+        pollers.push({ start: avviaTelegram, stop: () => connector.stop() });
+        if (gatewayAtBoot === null) avviaTelegram();
         stops.push(() => connector.stop());
         // The door for the lane. Registered next to the connector that owns it,
         // so a surface that did not come up simply has none — the honest state,
@@ -688,9 +736,11 @@ export function connectSurfaces(
         // which is the honest answer while nobody is the owner yet.
         surfaces.push(telegramSurface(api, ownerChatId));
         lines.push(
-          ownerUserId === undefined
-            ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
-            : `telegram: connessa (owner ${ownerUserId})`,
+          gatewayAtBoot !== null
+            ? `telegram: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
+            : ownerUserId === undefined
+              ? 'telegram: connessa, in attesa del codice — nessuno è owner finché non arriva'
+              : `telegram: connessa (owner ${ownerUserId})`,
         );
       }
     } catch (error) {
@@ -755,12 +805,18 @@ export function connectSurfaces(
         // e il primo battito passano fino a due minuti se la rete e' lenta, e
         // in quella finestra l'assenza di una riga non deve poter essere letta
         // come «non e' stata nemmeno tentata».
-        salute.inAvvio('discord', adesso());
-        void connector.run().catch((error: unknown) => {
-          const causa = error instanceof Error ? error.message : String(error);
-          salute.caduta('discord', causa, adesso());
-          log(`discord: caduta — ${causa}`);
-        });
+        const avviaDiscord = (): void => {
+          salute.inAvvio('discord', adesso());
+          void connector.run().catch((error: unknown) => {
+            const causa = error instanceof Error ? error.message : String(error);
+            salute.caduta('discord', causa, adesso());
+            log(`discord: caduta — ${causa}`);
+          });
+        };
+        pollers.push({ start: avviaDiscord, stop: () => connector.stop() });
+        // Stessa ragione di Telegram: una sola gateway websocket per token,
+        // altrimenti ogni messaggio viene servito due volte.
+        if (gatewayAtBoot === null) avviaDiscord();
         stops.push(() => connector.stop());
         surfaces.push(discordSurface(api, ownerUserId));
         // N2 (judge, PR #42): this used to say "connessa" before `api.me()` —
@@ -773,9 +829,11 @@ export function connectSurfaces(
         // this line only ever claims what it can see synchronously: that the
         // connector was started, not that Discord has answered it.
         lines.push(
-          ownerUserId === undefined
-            ? 'discord: in connessione, in attesa del codice — nessuno è owner finché non arriva'
-            : `discord: in connessione (owner ${ownerUserId})`,
+          gatewayAtBoot !== null
+            ? `discord: la riceve il gateway (pid ${gatewayAtBoot.pid}) — questa finestra manda soltanto`
+            : ownerUserId === undefined
+              ? 'discord: in connessione, in attesa del codice — nessuno è owner finché non arriva'
+              : `discord: in connessione (owner ${ownerUserId})`,
         );
       }
     } catch (error) {
@@ -789,6 +847,33 @@ export function connectSurfaces(
       );
       lines.push(`discord: abilitata ma non parte — ${(error as ConfigError).message}`);
     }
+  }
+
+  /**
+   * Il passaggio della bocca, mentre il processo gira.
+   *
+   * Un poller non e' un tick: non basta una condizione ri-chiesta a ogni giro,
+   * perche' il giro qui e' un long-poll che dura. Quindi il cancello si rilegge
+   * a `HEARTBEAT_MS` — lo stesso ritmo con cui il gateway batte, cioe' il piu'
+   * fitto che possa dire qualcosa di nuovo — e sul cambio si passa la bocca:
+   * il gateway compare e questa finestra smette di ricevere, il gateway sparisce
+   * e ricomincia. `gatewayServes` annuncia da se' il passaggio (una riga per
+   * cambio, mai a timer).
+   *
+   * `unref` perche' questo timer non e' una ragione per restare vivi: un
+   * processo che ha finito deve poter uscire, e un test non deve restare
+   * appeso a un intervallo di trenta secondi.
+   */
+  if (gatewayServes !== undefined && pollers.length > 0) {
+    let served = gatewayAtBoot !== null;
+    const vigile = setInterval(() => {
+      const now = gatewayServes() !== null;
+      if (now === served) return;
+      served = now;
+      for (const p of pollers) (now ? p.stop : p.start)();
+    }, HEARTBEAT_MS);
+    vigile.unref();
+    stops.push(() => clearInterval(vigile));
   }
 
   return {

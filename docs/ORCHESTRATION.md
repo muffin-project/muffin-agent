@@ -265,6 +265,34 @@ Repeat evidence when:
 Merging `dev` invalidates only evidence materially affected by that change, not
 the entire epistemic history of the PR.
 
+### A stand-in cannot close a row the owner can see (2026-09-03)
+
+The acceptance harness answers with a fake provider and a fake Bot API so the
+suite is deterministic and free. That buys regression, and it is worth keeping.
+It does **not** buy the claim that a thing works, and this repository has now
+measured the difference twice in one day:
+
+- B11/B13 were green on the fake harness while the Telegram surface was, to the
+  owner's eye, deleting the steps of the turn it was reporting;
+- the vault ingest was green in every test and **dead in production** — the
+  hidden-file filter was applied to the resolved absolute path, the Muffin home
+  is `~/.muffin`, and so every file the owner ever sent was refused as
+  "hidden". Zero documents indexed, ever. The tests passed because a test home
+  is a temp directory with no dot segment: they proved a machine nobody runs.
+
+So, for any requirement whose subject is something the owner **sees or hands to
+Muffin** — a surface's shape, an attachment, a voice note, a fetch, a search —
+fake-harness green is a *precondition*, never the evidence that closes the row.
+The row closes on an observation of the real thing: the local end-to-end lane
+(`evals/e2e/`), or a capture of the real screen, or a query against a real
+installation, dated in the row.
+
+Two corollaries, both learned the same day. A fixture must be shaped like
+production where the shape is what fails — a test home lives under a dot
+directory because the real one does. And when a stand-in cannot reach the happy
+path at all (no `getFile`, no real network), that is not a reason to call the
+row proven by the parts it can reach: say what remains unproven, in the row.
+
 ## Scope firewall
 
 A finding enters the current slice only if it:

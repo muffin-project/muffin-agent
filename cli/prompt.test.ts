@@ -1,12 +1,36 @@
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { promptLine, promptSecret } from './prompt.js';
+import { applica } from './schermo.js';
 
 /** A writable/readable pair that claims to be a TTY, so the prompts engage. */
 function fakeTty(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream } {
   const input = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.ReadStream;
   const output = Object.assign(new PassThrough(), { isTTY: true, columns: 80 }) as unknown as NodeJS.WriteStream;
   return { input, output };
+}
+
+/**
+ * Come `fakeTty`, ma l'output ricorda ogni byte: `applica` (cli/schermo.ts) li
+ * rende in griglia, ed è l'unica cosa che risponde a «cosa vede l'owner».
+ */
+function fakeTtyRegistrato(): { input: NodeJS.ReadStream; output: NodeJS.WriteStream; scritture: string[] } {
+  const scritture: string[] = [];
+  const input = Object.assign(new PassThrough(), { isTTY: true }) as unknown as NodeJS.ReadStream;
+  const output = Object.assign(new PassThrough(), {
+    isTTY: true,
+    columns: 80,
+    write: (chunk: unknown) => {
+      scritture.push(String(chunk));
+      return true;
+    },
+  }) as unknown as NodeJS.WriteStream;
+  return { input, output, scritture };
+}
+
+/** Lascia girare gli eventi degli stream: readline legge l'input in I/O, non in sincrono. */
+function respiro(): Promise<void> {
+  return new Promise((r) => setImmediate(r));
 }
 
 describe('terminal prompts fall back when there is no TTY', () => {
@@ -129,5 +153,48 @@ describe('un EOF vale per il processo, una risposta no', () => {
     const secondo = promptSecret('chiave: ', input, output);
     input.write('sk-or-v1-poi\n');
     await expect(secondo).resolves.toBe('sk-or-v1-poi');
+  });
+});
+
+/**
+ * **Una domanda che il terminale cancella un istante dopo averla stampata.**
+ *
+ * `promptSecret` scriveva la domanda con `output.write(question)` e poi
+ * chiamava `rl.question('')`. `rl.question` imposta il prompt e *ridisegna la
+ * riga*, e il ridisegno di readline manda `cursorTo(0)` e `clearScreenDown`
+ * **direttamente** sullo stream — fuori dal `_writeToOutput` che quella
+ * funzione intercettava per togliere l'eco. Quindi la domanda spariva e sotto
+ * restava una riga vuota: un terminale che aspetta senza dirlo sembra piantato.
+ * Misurato con `tmux capture-pane` su `muffin init` il 03/09/2026, e nella
+ * sorgente di Node (`internal/readline/interface.js`, `kRefreshLine`: le due
+ * scritture dirette, e `kWriteToOutput` che è l'unica intercettabile).
+ *
+ * I byte non si leggono, si applicano: dieci ridisegni sono dieci copie in un
+ * log e una sola riga a schermo. `cli/schermo.ts` è il misuratore.
+ */
+describe('la domanda di un prompt nascosto resta a schermo', () => {
+  it('si vede la domanda, e non si vede niente di ciò che si scrive', async () => {
+    // readline ridisegna la riga solo su un terminale vero: con `TERM=dumb`
+    // stampa il prompt e basta, e il difetto non esisterebbe. Fissarlo qui è
+    // ciò che rende questo test la prova di un terminale, non della macchina
+    // che lo esegue.
+    vi.stubEnv('TERM', 'xterm-256color');
+    try {
+      const { input, output, scritture } = fakeTtyRegistrato();
+      const pending = promptSecret('Chiave API (nascosta): ', input, output);
+      input.write('sk-or-v1-non-deve-vedersi');
+      await respiro();
+
+      const schermo = applica(scritture).righe.join('\n');
+      expect(schermo).toContain('Chiave API (nascosta):');
+      expect(schermo).not.toContain('sk-or-v1-non-deve-vedersi');
+      // Nemmeno la *lunghezza*: né asterischi, né una fila di segnaposto.
+      expect(schermo.replace('Chiave API (nascosta): ', '').trim()).toBe('');
+
+      input.write('\n');
+      await expect(pending).resolves.toBe('sk-or-v1-non-deve-vedersi');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
