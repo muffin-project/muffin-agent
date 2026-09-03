@@ -100,10 +100,18 @@ export async function cmdMcpAdd(
 
     // Stessa porta di `muffin search`: l'owner nomina gli host con --host, e
     // solo quelli — mai dedotti dal comando o dagli argomenti del server.
-    // Un fallimento qui (nessun terminale, l'owner ha detto no) non disfa
-    // l'approvazione appena scritta.
+    // Un fallimento qui (nessun terminale, l'owner ha detto no, un host non
+    // valido, il risigillo negato) non disfa l'approvazione appena scritta —
+    // il server resta registrato. Ma un `--host` nominato e non aggiunto è
+    // un esito diverso da "tutto fatto", e lo status di uscita deve dirlo: uno
+    // script che lancia `mcp add --host "$X"` e guarda solo l'exit code (mai
+    // l'output, che è per un terminale) altrimenti non ha modo di accorgersi
+    // che l'egress non si è allargato — la stessa convenzione che `mcp list
+    // --verify` usa già qui sotto (pulito → 0, qualcosa da rivedere → 1), non
+    // una seconda inventata per questo verbo.
     if (hosts.length > 0) {
-      await widenEgressForCapability(home, hosts, `il server MCP «${name}»`, egressDeps);
+      const esito = await widenEgressForCapability(home, hosts, `il server MCP «${name}»`, egressDeps);
+      if (!esito.ok) return 1;
     }
     return 0;
   } finally {

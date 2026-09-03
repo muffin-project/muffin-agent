@@ -97,14 +97,19 @@ describe('muffin mcp add --host', () => {
     expect(verify(h, 'single-user').ok).toBe(true);
   });
 
-  it('senza chiediConferma (nessun terminale): approva il server comunque, ma non allarga l egress', async () => {
+  it('senza chiediConferma (nessun terminale): approva il server comunque, ma non allarga l egress — e lo dice con l exit code', async () => {
     const h = home();
     const { sink, out } = (() => {
       const buf: string[] = [];
       return { out: buf, sink: (l: string) => void buf.push(l) };
     })();
     const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, ['a.example'], { out: sink });
-    expect(code).toBe(0);
+    // Il server è comunque registrato (verificato sotto), ma l'host nominato
+    // non è stato aggiunto: uno script che guarda solo l'exit code deve
+    // accorgersene, quindi non è 0. Coerente con `mcp list --verify` un
+    // paio di test più su: "pulito" esce 0, "c'è ancora qualcosa da
+    // guardare" no.
+    expect(code).toBe(1);
     expect(loadMcpRegistry(h).servers.echo).toBeDefined();
     expect(egressAllow(h)).toEqual([]);
     expect(out.join('\n')).toContain('nessun terminale interattivo');
@@ -119,7 +124,7 @@ describe('muffin mcp add --host', () => {
    * prossimo avvio. Il server MCP resta comunque approvato: la variabile
    * vuota è un problema dell host, non dell approvazione dei suoi tool.
    */
-  it('--host \'\' (una variabile di shell non impostata): rifiuta l host, non scrive, non sigilla nulla', async () => {
+  it('--host \'\' (una variabile di shell non impostata): rifiuta l host, non scrive, non sigilla nulla, ed esce non-zero', async () => {
     const h = home();
     const { out, sink } = (() => {
       const buf: string[] = [];
@@ -133,7 +138,11 @@ describe('muffin mcp add --host', () => {
         return Promise.resolve('s');
       },
     });
-    expect(code).toBe(0); // il server è comunque approvato
+    // Il server è comunque approvato (verificato sotto) — ma un `--host`
+    // nominato e mai aggiunto non può leggersi come "tutto fatto" nell'exit
+    // code, altrimenti uno script che guarda solo quello non si accorge mai
+    // che l'allowlist non si è mossa.
+    expect(code).toBe(1);
     expect(loadMcpRegistry(h).servers.echo).toBeDefined();
     expect(chiesto).toBe(0);
     expect(egressAllow(h)).toEqual([]);
@@ -165,7 +174,7 @@ function muffin(dir: string, args: string[]): { code: number; out: string; err: 
  * un argomento che un chiamante automatico potrebbe scrivere.
  */
 describe('muffin mcp add --host, dal binario vero e senza terminale', () => {
-  it('approva il server ma non allarga rot/egress.json — nessuna domanda può arrivare a un flag', () => {
+  it('approva il server ma non allarga rot/egress.json — nessuna domanda può arrivare a un flag, ed esce non-zero', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-mcphost-real-'));
     try {
       runInit({ home: dir, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
@@ -182,7 +191,10 @@ describe('muffin mcp add --host, dal binario vero e senza terminale', () => {
         process.execPath,
         FIXTURE,
       ]);
-      expect(r.code).toBe(0);
+      // Il binario vero, capo a capo: registrazione riuscita, egress non
+      // toccato, e l'exit code (non solo l'output, che uno script non legge)
+      // dice che `--host` non è stato onorato.
+      expect(r.code).toBe(1);
       expect(readFileSync(egressPath, 'utf8')).toBe(prima);
       expect(r.err + r.out).toContain('nessun terminale interattivo');
       expect(verify(dir, 'single-user').ok).toBe(true);
