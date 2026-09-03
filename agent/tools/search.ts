@@ -194,14 +194,14 @@ export type SearchDiagnosis =
 export function diagnoseSearch(
   config: Pick<Config, 'search'>,
   egress: EgressPolicy,
-  readSecret: (ref: string) => string,
+  resolveApiKey: (ref: string) => string,
 ): SearchDiagnosis {
   if (!config.search) return { on: false, gap: null };
 
   let backend: SearchBackend;
   try {
     const opzioni = {
-      apiKey: readSecret(config.search.apiKeyRef),
+      apiKey: resolveApiKey(config.search.apiKeyRef),
       ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
     };
     // Uno `switch` esaustivo, per lo stesso motivo di `agent/runtime.ts`: un
@@ -216,10 +216,12 @@ export function diagnoseSearch(
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    // `readSecret` throws `ConfigError`, which carries its own remedy
-    // (`cli/doctor.ts`'s api-key check reads the same field the same way).
-    // Duck-typed rather than imported: the error's shape is the contract, not
-    // its class.
+    // `resolveApiKey` is `readSecret`, core/config/config.ts, at every real call
+    // site — passed in, never imported here: `agent/tools/*.ts` may not resolve a
+    // secret itself (core/config/secret-boundary.test.ts, ADR-0048). It throws
+    // `ConfigError`, which carries its own remedy (`cli/doctor.ts`'s api-key check
+    // reads the same field the same way). Duck-typed rather than imported: the
+    // error's shape is the contract, not its class.
     const remedy = (error as { remedy?: unknown }).remedy;
     return {
       on: false,
