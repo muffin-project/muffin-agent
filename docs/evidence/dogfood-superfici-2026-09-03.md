@@ -149,6 +149,13 @@ in cima allo schermo**: in cima costerebbero lo scrollback, e la regola di
 rinuncia da scrivere lì. `cli/schermo.ts` impara `r` e resta il misuratore.
 Zero librerie; `string-width` è l'unica piccola che chiude un difetto vero.
 
+*Addendum, stesso giorno, dopo la prova in tmux:* la regione non si apre
+all'avvio. Saltare in fondo su uno schermo fresco scorreva via
+l'intestazione e lasciava un vuoto; ora la casella **segue** il contenuto
+finché ci entra sotto (come Ink) e si aggancia quando arriva in fondo —
+il terminale dice dove sta il cursore (`ESC[6n`) prima di ogni lettura,
+finché non è agganciata. `cli/fondo.ts`, `cli/STYLES.md` §«Il fondo fisso».
+
 Profilo: STANDARD.
 
 ### 5.3 Input mentre un turno è vivo

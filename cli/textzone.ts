@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
 import { premi, statoIniziale, testo, type Key, type Stato } from './editor.js';
+import type { Fondo } from './fondo.js';
 import { disponi, type Cornice } from './riquadro.js';
 
 /**
@@ -25,10 +26,14 @@ import { disponi, type Cornice } from './riquadro.js';
  *
  * ## Niente schermo alternato
  *
- * `cli/STYLES.md` lo esclude, e continua a valere: si disegna **in fondo allo
- * scrollback**, cancellando e ridisegnando solo le righe del prompt. Quello che
- * è già scorso sopra resta selezionabile e copiabile, che è la ragione per cui
- * quella regola esiste.
+ * `cli/STYLES.md` lo esclude, e continua a valere. Dal 03/09/2026 il riquadro
+ * ha due case: con un `Fondo` attivo (`cli/fondo.ts`, uno schermo di cui si
+ * conosce l'altezza) sta **fermo nelle ultime righe** e il testo scorre sopra
+ * di lui in una scroll region; senza — una larghezza ma nessuna altezza, come
+ * sotto `script`, o i test che misurano il disegno — si disegna **in fondo
+ * allo scrollback**, cancellando e ridisegnando solo le righe del prompt. In
+ * entrambi i casi quello che è già scorso sopra resta selezionabile e
+ * copiabile, che è la ragione per cui quella regola esiste.
  */
 
 /** Attiva il bracketed paste: il terminale recinta ciò che viene incollato. */
@@ -49,6 +54,8 @@ export type TextzoneDeps = {
   historyFile?: string | undefined;
   /** I comandi che il Tab completa. */
   comandi?: readonly string[];
+  /** Il fondo fisso dello schermo, se l'altezza è nota. Assente o inattivo = riquadro in fondo allo scrollback. */
+  fondo?: Fondo | undefined;
 };
 
 /**
@@ -105,6 +112,8 @@ export function posizioneCursore(
 
 export function makeTextzone(deps: TextzoneDeps) {
   const { input, output } = deps;
+  /** Il fondo, se lo schermo ha un'altezza. Che sia *agganciato* è un'altra cosa, e si decide a ogni lettura. */
+  const fondoDisponibile = deps.fondo !== undefined && deps.fondo.attivo ? deps.fondo : undefined;
   let storia = leggiStoria(deps.historyFile);
   /**
    * Come ridisegnare cio' che si sta scrivendo, quando qualcosa scrive fuori
@@ -117,6 +126,8 @@ export function makeTextzone(deps: TextzoneDeps) {
   let disegnaCorrente: (() => void) | undefined;
   /** E come **toglierlo**, che è la metà senza la quale il ridisegno non serve. */
   let cancellaCorrente: (() => void) | undefined;
+  /** L'ultima cornice letta: con il fondo fisso serve anche fra una lettura e l'altra. */
+  let corniceUltima: Cornice | undefined;
 
   /**
    * Legge un messaggio.
@@ -127,6 +138,20 @@ export function makeTextzone(deps: TextzoneDeps) {
    */
   async function read(cornice: Cornice): Promise<Esito> {
     if (input.isTTY !== true) return leggiSenzaTty(input);
+    corniceUltima = cornice;
+
+    // Il fondo si aggancia quando il riquadro non entra più sotto il
+    // contenuto — e dove finisce il contenuto lo dice il terminale
+    // (`ESC[6n`). Prima di ogni lettura, finché non è agganciato; poi mai
+    // più, perché una volta fisso resta fisso. Se il terminale non risponde
+    // (un pty senza terminale dietro), questa lettura va come sempre.
+    if (fondoDisponibile !== undefined && !fondoDisponibile.aperto) {
+      const w = output.columns ?? 80;
+      const altezza = disponi([''], 0, 0, cornice, w).righe.length + (cornice.suggerimenti === '' ? 1 : 0);
+      const riga = await rigaDelCursore(input, output);
+      if (riga !== null) fondoDisponibile.aggancia(riga, altezza);
+    }
+    const fondo = fondoDisponibile !== undefined && fondoDisponibile.aperto ? fondoDisponibile : undefined;
 
     let stato = statoIniziale(storia);
     let righeDisegnateOra = 0;
@@ -162,17 +187,28 @@ export function makeTextzone(deps: TextzoneDeps) {
      */
     const disegna = (finale = false): void => {
       const w = output.columns ?? 80;
-      // Si risale da dove sta il cursore adesso fino alla prima riga del
-      // riquadro, poi si cancella tutto ciò che sta sotto.
-      if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
-      output.write('\r\x1b[0J');
-
       const conElenco = finale
         ? { ...cornice, suggerimenti: '' }
         : candidati.length === 0
           ? cornice
           : { ...cornice, suggerimenti: candidati.join('  ') };
       const d = disponi(stato.righe, stato.riga, stato.colonna, conElenco, w);
+
+      if (fondo !== undefined) {
+        // Nel fondo fisso: il riquadro sta nelle ultime righe e non si
+        // cancella niente — `fondo.disegna` riscrive ogni riga sua e mette il
+        // cursore dove sta il testo. La riga dei suggerimenti c'è sempre,
+        // vuota quando non serve, così l'altezza del fondo non balla a ogni
+        // turno (e ogni ballo è uno scorrimento della regione).
+        const righe = conElenco.suggerimenti === '' ? [...d.righe, ''] : d.righe;
+        fondo.disegna(righe, { riga: d.cursore.riga, colonna: d.cursore.colonna });
+        return;
+      }
+
+      // Si risale da dove sta il cursore adesso fino alla prima riga del
+      // riquadro, poi si cancella tutto ciò che sta sotto.
+      if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
+      output.write('\r\x1b[0J');
       output.write(d.righe.join('\n'));
       righeDisegnateOra = d.righe.length;
 
@@ -200,6 +236,12 @@ export function makeTextzone(deps: TextzoneDeps) {
        * qualcuno.
        */
       const cancella = (): void => {
+        if (fondo !== undefined) {
+          // Il riquadro resta dov'è: chi consegna scrive nella regione,
+          // sopra di lui, e `redraw` riporta il cursore nel riquadro.
+          fondo.nellaRegione();
+          return;
+        }
         if (cursoreRigaOra > 0) output.write(`\x1b[${String(cursoreRigaOra)}A`);
         output.write('\r\x1b[0J');
         // Il riquadro non è più a schermo: il prossimo disegno non deve
@@ -209,18 +251,33 @@ export function makeTextzone(deps: TextzoneDeps) {
       };
 
       const finisci = (esito: Esito): void => {
-        disegna(true);
+        if (fondo !== undefined) {
+          // Il messaggio spedito va nella storia **come riquadro**, così nello
+          // scrollback si vede dove finisce quello che hai scritto tu
+          // (`cli/STYLES.md`); il fondo resta con un riquadro vuoto e
+          // inattivo, e la risposta comincia nella regione, sopra di lui.
+          const w = output.columns ?? 80;
+          const spedito = disponi(stato.righe, stato.riga, stato.colonna, { ...cornice, suggerimenti: '' }, w);
+          fondo.nellaRegione();
+          output.write(`${spedito.righe.join('\n')}\n`);
+          const vuoto = disponi([''], 0, 0, { ...cornice, suggerimenti: '' }, w);
+          fondo.disegna([...vuoto.righe, ''], null);
+        } else {
+          disegna(true);
+        }
         disegnaCorrente = undefined;
         cancellaCorrente = undefined;
         input.off('keypress', onKey);
         output.write(PASTE_OFF);
         input.setRawMode(false);
         input.pause();
-        // Sotto tutto il riquadro, non sotto la riga del cursore: uscire da
-        // metà riquadro farebbe cominciare la risposta dentro la cornice.
-        const giu = righeDisegnateOra - 1 - cursoreRigaOra;
-        if (giu > 0) output.write(`\x1b[${String(giu)}B`);
-        output.write('\r\n');
+        if (fondo === undefined) {
+          // Sotto tutto il riquadro, non sotto la riga del cursore: uscire da
+          // metà riquadro farebbe cominciare la risposta dentro la cornice.
+          const giu = righeDisegnateOra - 1 - cursoreRigaOra;
+          if (giu > 0) output.write(`\x1b[${String(giu)}B`);
+          output.write('\r\n');
+        }
         resolve(esito);
       };
 
@@ -331,7 +388,18 @@ export function makeTextzone(deps: TextzoneDeps) {
   return {
     read,
     readLine,
-    redraw: () => disegnaCorrente?.(),
+    /**
+     * Ridisegna il riquadro. Mentre si legge, quello che si sta scrivendo;
+     * nel fondo fisso anche fra un turno e l'altro, vuoto e inattivo — è la
+     * casella che l'owner vede sempre giù, e dopo un SIGWINCH va rimessa.
+     */
+    redraw: () => {
+      if (disegnaCorrente !== undefined) return disegnaCorrente();
+      if (fondoDisponibile !== undefined && fondoDisponibile.aperto && corniceUltima !== undefined) {
+        const vuoto = disponi([''], 0, 0, { ...corniceUltima, suggerimenti: '' }, output.columns ?? 80);
+        fondoDisponibile.disegna([...vuoto.righe, ''], null);
+      }
+    },
     /**
      * Toglie il riquadro, se ce n'è uno. `redraw` lo rimette.
      *
@@ -342,6 +410,48 @@ export function makeTextzone(deps: TextzoneDeps) {
      */
     cancella: () => cancellaCorrente?.(),
   };
+}
+
+/**
+ * Chiede al terminale dove sta il cursore: `ESC[6n`, risposta `ESC[r;cR` su
+ * stdin. Torna la riga 1-based, o `null` se non risponde entro poco.
+ *
+ * Si legge in raw mode, con un ascoltatore `data` proprio e **prima** che
+ * `emitKeypressEvents` sia in ascolto per questa lettura: fra una lettura e
+ * l'altra non c'è nessun `keypress` registrato, quindi i byte arrivano qui
+ * crudi. Quello che arriva e non è la risposta — un tasto premuto in
+ * anticipo — torna nello stream con `unshift`, non si perde.
+ *
+ * Il tempo massimo è corto perché la risposta di un terminale vero è
+ * immediata, e un pty senza terminale dietro (`script`, un test) non
+ * risponde mai: aspettare di più renderebbe lenta ogni lettura proprio
+ * dove il fondo non serve.
+ */
+export function rigaDelCursore(input: NodeJS.ReadStream, output: Pick<NodeJS.WriteStream, 'write'>, attesaMs = 250): Promise<number | null> {
+  return new Promise((resolve) => {
+    let buffer = '';
+    let chiuso = false;
+    const fine = (riga: number | null, resto: string): void => {
+      if (chiuso) return;
+      chiuso = true;
+      clearTimeout(timer);
+      input.off('data', onData);
+      input.pause();
+      if (resto.length > 0) input.unshift(Buffer.from(resto));
+      resolve(riga);
+    };
+    const onData = (chunk: Buffer | string): void => {
+      buffer += String(chunk);
+      const m = /\x1b\[(\d+);(\d+)R/.exec(buffer);
+      if (!m) return;
+      fine(Number(m[1]), buffer.slice(0, m.index) + buffer.slice(m.index + m[0].length));
+    };
+    const timer = setTimeout(() => fine(null, buffer), attesaMs);
+    input.setRawMode(true);
+    input.on('data', onData);
+    input.resume();
+    output.write('\x1b[6n');
+  });
 }
 
 /** Il prefisso più lungo che tutte le stringhe date hanno in comune. */
