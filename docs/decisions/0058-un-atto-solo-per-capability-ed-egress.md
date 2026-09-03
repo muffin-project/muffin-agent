@@ -80,18 +80,34 @@ usata da entrambi i chiamanti — non una copia per `search` e una per `mcp`
 (lo stesso difetto già registrato una volta,
 `docs/decisions/0055-le-due-porte-passano-dal-kernel.md`):
 
-1. Se ogni host nominato è già nell'allowlist: niente da fare, niente
-   domanda.
-2. Altrimenti, se non c'è un `chiediConferma` cablato (nessun terminale
+1. **Prima di tutto**, ogni host nominato deve essere sintatticamente un host
+   (`isValidEgressHost`): niente schema, porta, percorso, utente, elenco o
+   stringa vuota. Un valore che non lo è si rifiuta subito — mai chiesto, mai
+   scritto, mai sigillato — con il perché nel messaggio. Aggiunta dopo la
+   review indipendente (vedi "Cosa il giudice ha corretto" sotto): prima di
+   questo controllo un `--host` malformato (`https://api.tavily.com/`,
+   `api.tavily.com:443`, o una variabile di shell vuota, `--host "$X"` con
+   `$X` non impostata) finiva scritto e sigillato **con un messaggio di
+   successo sopra**, e la stringa vuota in particolare fa fallire
+   `loadEgress()` al prossimo boot: il catch muto in `agent/runtime.ts`
+   azzera allora ogni host già approvato.
+2. Se ogni host (valido) nominato è già nell'allowlist: niente da fare,
+   niente domanda.
+3. Altrimenti, se non c'è un `chiediConferma` cablato (nessun terminale
    interattivo): stampa esattamente quali host mancano, dove sta il file, e
    il comando a mano — **candidata B**. Non scrive nulla.
-3. Se c'è: una sola domanda, che nomina ogni host mancante e dice cosa
+4. Se c'è: una sola domanda, che nomina ogni host mancante e dice cosa
    succede ("lo aggiungo e risigillo il root of trust adesso?"). Solo un
    "sì" esplicito procede.
-4. Alla conferma: legge `rot/egress.json`, **aggiunge** gli host nominati
+5. Alla conferma: legge `rot/egress.json`, **aggiunge** gli host nominati
    (mai ne infierisce altri, mai sostituisce l'array, `_comment` e ogni
    altra voce restano), scrive, chiama `seal()` (`core/rot/verify.ts`) — la
-   stessa funzione che usa `muffin rot reseal`.
+   stessa funzione che usa `muffin rot reseal`. Se il sigillo fallisce **dopo**
+   che `egress.json`/`manifest.json` sono già stati riscritti (`seal()` scrive
+   il manifest per primo e l'anchor per secondo: un permesso negato solo
+   sull'anchor lascia i due file già cambiati), entrambi vengono rimessi
+   esattamente com'erano prima di rispondere — mai uno stato a metà che
+   `verify()` leggerebbe come `anchor_mismatch` la prossima volta.
 
 `cli/search-setup.ts` chiama la funzione con l'host derivato
 dall'`endpoint` del provider nel catalogo (`core/config/providers.ts`,
@@ -107,32 +123,56 @@ a un secondo produttore invece di restare vera solo per `sys.http`/
 
 ## Come il modello ne resta fuori — l'asserzione più importante
 
+> **Revisione, 03/09/2026 — dopo la review di un giudice indipendente.** La
+> stesura originaria di questa sezione diceva che lo stdin mai-TTY del figlio
+> di `sys.shell` FOSSE la barriera. È falso su Linux: il giudice ha fatto
+> girare il `SandboxExecutor` di produzione sotto bwrap e ha allocato un pty
+> vero per il grande-figlio con `script -qc "…" /dev/null` — presente e non
+> privilegiato — e quel processo osserva `process.stdin.isTTY === true`.
+> Su macOS/seatbelt l'allocazione del pty è negata dalla policy (`openpty:
+> Operation not permitted`), il che aveva reso il test originale verde per il
+> motivo sbagliato, sull'unica piattaforma che questo repository non serve in
+> produzione. Il testo sotto è la versione corretta: la barriera vera era già
+> la seconda, non la prima, e la relazione fra le due va invertita. Codice e
+> test corretti nella stessa PR che ha portato questa nota.
+
 `sys.shell` (`agent/tools/shell.ts`) è l'unico modo in cui il modello fa
-girare un comando arbitrario. Il suo esecutore
-(`core/sandbox/executor.ts`, `spawnCollect`) lancia il figlio con
-`stdio: ['ignore', 'pipe', 'pipe']` — **mai un TTY**, e la dichiarazione del
-tool lo dice esplicitamente ("no PTY — upstream #419 cluster"). `cli/main.ts`
-cablabla `chiediConferma`/`chiediChiave` in `SearchDeps`/l'invocazione di
-`cmdMcpAdd` **solo quando `isatty(0)` è vero nel processo reale in quel
-momento** — non da un parametro, non da una variabile d'ambiente, non da un
-flag: `muffin search`/`muffin mcp add` non hanno un `--yes`/`--force` che
-salti la domanda, e questa slice non ne ha aggiunto uno apposta. Senza quella
-callback, `widenEgressForCapability` rifiuta incondizionatamente e non
-scrive un byte.
+girare un comando arbitrario. La barriera che regge, su Linux e su macOS, con
+o senza un pty allocato, è **la scrittura negata su `~/.muffin/rot`**:
+`core/rot/guards.ts` (`mandatoryGuards`) mette `paths(home).rot` in
+`denyWrite` sempre, "whatever the per-call scope says" — la stessa lista con
+cui `agent/runtime.ts` costruisce il `SandboxExecutor` di produzione. Fallisce
+con `EPERM` sotto seatbelt e `EROFS` sotto bwrap, regge a un pty, a un
+grande-figlio, a un interprete lanciato di fresco, e non si aggira
+dichiarando lo stesso percorso nel proprio `writeScope` per quella singola
+chiamata (mandatorio batte esplicito).
 
-Due barriere indipendenti, entrambe provate contro un sandbox vero (non un
-finto) in `core/rot/egress-shell-escalation.test.ts`:
+`cli/main.ts` cabla `chiediConferma`/`chiediChiave` in `SearchDeps`/
+l'invocazione di `cmdMcpAdd` solo quando `isatty(0)` è vero nel processo reale
+in quel momento — non da un parametro, non da una variabile d'ambiente, non
+da un flag: `muffin search`/`muffin mcp add` non hanno un `--yes`/`--force`
+che salti la domanda. Questo resta un gate utile — un `sys.shell` ordinario
+(nessun pty allocato: `stdio: ['ignore', 'pipe', 'pipe']`, mai il caso comune)
+non arriva mai alla domanda, e senza quella callback
+`widenEgressForCapability` rifiuta incondizionatamente — ma è **ergonomia**,
+non la ragione di fondo per cui il modello non può allargare l'egress: quella
+ragione è il file system.
 
-1. **stdin non è mai un TTY** dentro il figlio sandboxato — misurato
-   lanciando `node -e "process.stdout.write(String(!!process.stdin.isTTY))"`
-   attraverso lo stesso `SandboxExecutor` che `agent/runtime.ts` costruisce
-   in produzione: stampa `false`.
-2. **Anche un tentativo diretto di scrivere `rot/egress.json` dal sandbox è
-   negato**, indipendentemente da questo CLI: `core/rot/guards.ts`
-   (`mandatoryGuards`) mette `paths(home).rot` in `denyWrite` sempre,
-   "whatever the per-call scope says" — la stessa lista con cui
-   `agent/runtime.ts` costruisce l'esecutore di produzione. La cintura regge
-   anche se le bretelle (il TTY) venissero mai bypassate.
+Due barriere, entrambe provate contro un sandbox vero (non un finto) in
+`core/rot/egress-shell-escalation.test.ts`:
+
+1. **Un tentativo diretto di scrivere `rot/egress.json` dal sandbox è
+   negato**, indipendentemente da questo CLI — la barriera vera, provata sia
+   sul percorso ordinario sia con un pty allocato apposta (`isTTY===true`),
+   dove un pty si può allocare; altrove il test si salta esplicitamente
+   (`t.skip()`, mai un `return` silenzioso) con la ragione stampata, e
+   `MUFFIN_REQUIRE_SANDBOX=1` (il runner Linux di CI) trasforma quello skip
+   in un fallimento.
+2. **Sul percorso ordinario (nessun pty), stdin non è mai un TTY** dentro il
+   figlio sandboxato — misurato lanciando `node -e
+   "process.stdout.write(String(!!process.stdin.isTTY))"`: stampa `false`.
+   Vero, utile, e — come sopra — non la ragione per cui il modello non può
+   arrivare a scrivere.
 
 `core/rot/egress-writer.test.ts` prova il terzo pezzo, a livello di unità:
 senza `chiediConferma`, senza consenso esplicito ("sì"/variazioni), o con un
@@ -152,12 +192,43 @@ resta pulito dopo.
   (`hostAllowed(endpointHost, egress)`) resta lì, invariato, ed è quello che
   ora trova l'host già presente nel caso comune.
 
+## Cosa il giudice indipendente ha corretto (03/09/2026)
+
+Una prima versione di questa slice è tornata con verdetto ADJUST, non
+REJECT: l'esito (un atto solo, l'owner resta l'unica autorità) reggeva, ma
+tre punti della prova no. Registrati qui perché il file di codice e i test
+cambiano, ma il perché merita di restare leggibile senza riaprire la PR:
+
+1. **La barriera contro `sys.shell` era descritta al contrario.** Vedi la
+   revisione in cima a "Come il modello ne resta fuori" sopra — il gate
+   `isatty(0)` è ergonomia, la scrittura negata su `rot/` è la barriera.
+2. **`--host` non veniva validato come host prima di scrivere e sigillare.**
+   `isValidEgressHost` (punto 1 di "Il meccanismo" sopra) chiude sia
+   l'iniezione (`https://…`, `…:443`, un elenco, un utente) sia l'incidente
+   ordinario (`--host ''` da una variabile di shell non impostata, che senza
+   il controllo azzerava silenziosamente ogni host già approvato al prossimo
+   boot).
+3. **La scrittura e il sigillo non erano atomici.** Un permesso negato solo
+   sull'ultimo dei due file che `seal()` scrive (l'anchor, dopo il manifest)
+   lasciava `egress.json`/`manifest.json` già cambiati mentre il messaggio
+   diceva "niente scritto" — punto 5 di "Il meccanismo" sopra ripristina i
+   byte di prima quando questo succede.
+
+Due note più piccole, non bloccanti: il test "non inferisce host non
+nominati" usava un host a due sole etichette, che non avrebbe distinto una
+mutazione verso un wildcard sul genitore — ora ne usa tre; e `seal(home, '1',
+…)` regredisce `rotVersion` a `"1"` a ogni chiamata invece di preservare
+quello corrente — corretto leggendo il manifest esistente prima di
+risigillare, invece di lasciarlo come nota.
+
 ## Cosa lo farebbe rivedere
 
 - Un futuro modello di estensione (§10, "network destinations... should be
   declared and reviewable") che dia a un server MCP un vero perimetro di
   rete renderebbe `--host` un input strutturato invece che una dichiarazione
   best-effort — a quel punto questa ADR si aggiorna, non si riscrive da capo.
-- Se mai comparisse un secondo modo di eseguire un comando arbitrario del
-  modello con uno stdin diverso da `stdio: ['ignore', 'pipe', 'pipe']`, la
-  prima barriera di questa ADR andrebbe rimisurata su quel percorso.
+- Se mai la scrittura negata su `~/.muffin/rot` smettesse di essere
+  mandatoria per qualunque `writeScope` — per esempio un cambiamento a monte
+  in `@anthropic-ai/sandbox-runtime` che facesse vincere l'allow esplicito sul
+  deny — la barriera vera di questa ADR sparirebbe e andrebbe ricostruita,
+  non solo ri-testata.
