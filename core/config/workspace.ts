@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { muffinHome } from './config.js';
+import { ConfigError, muffinHome } from './config.js';
 
 /**
  * Where a turn works, which is never where Muffin is installed.
@@ -139,17 +139,24 @@ export function muffinWorkspace(home = muffinHome()): string {
   return join(dirname(resolve(home)), `${basename(resolve(home)).replace(/^\./, '')}-workspace`);
 }
 
-/** What `resolveWorkspace` decided, and whether the caller has to say so. */
+/** What `resolveWorkspace` decided, and what the caller has to say about it. */
 export type WorkspaceChoice = {
   /** Absolute, existing. Becomes `FsScope.root` and the sandbox write scope. */
   workspace: string;
   /**
-   * The rejected directory, when one was rejected — an owner-facing line
-   * belongs in `bootLines` whenever this is not `null`. Silence here would be
-   * the failure mode this repository is named for: a mechanism that works and
-   * a surface that never says it did anything.
+   * The rejected directory, when one was rejected — kept as data, separate from
+   * `notes`, because tests assert the decision and surfaces print the sentence.
    */
   relocatedFrom: string | null;
+  /**
+   * Owner-facing lines a surface must print, already written. Silence here
+   * would be the failure mode this repository is named for: a mechanism that
+   * works and a surface that never says it did anything.
+   *
+   * Rendered here rather than at the call site so the sentence exists once. A
+   * second surface that needs it gets the same words instead of its own.
+   */
+  notes: string[];
 };
 
 /**
@@ -166,14 +173,62 @@ export type WorkspaceChoice = {
  * (`agent/tools/fs.ts`) calls `realpathSync(scope.root)` on **every** fs tool
  * call: a workspace that does not exist is not an empty workspace, it is an
  * ENOENT on the first `fs_list`.
+ *
+ * @throws ConfigError when the workspace cannot be created at all. Permanent by
+ * construction — a file sitting where the directory must go, or a parent nobody
+ * may write, does not repair itself — and `cli/gateway.ts` maps a `ConfigError`
+ * to `EXIT_PERMANENT`, which the unit's `RestartPreventExitStatus` names. Left
+ * as a raw `EEXIST`/`EACCES` from Node it would still fail closed, but under
+ * `Restart=always` it would fail closed once every `RestartSec` forever, with a
+ * five-word errno for a reason.
  */
 export function resolveWorkspace(home: string, requested: string): WorkspaceChoice {
   const inside = isSameOrNestedPath(requested, home);
   const workspace = inside ? muffinWorkspace(home) : requested;
+  const notes: string[] = [];
+
   // Unconditional and idempotent. `process.cwd()` always exists, so this is a
   // no-op for the interactive surfaces; the gateway names a workspace that has
   // never been used yet, and on that path the directory has to be here before
   // the first `fs_list` calls `realpathSync` on it.
-  mkdirSync(workspace, { recursive: true });
-  return { workspace, relocatedFrom: inside ? requested : null };
+  try {
+    mkdirSync(workspace, { recursive: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? '?';
+    throw new ConfigError(
+      `non riesco a creare la cartella di lavoro ${workspace} (${code})`,
+      code === 'EEXIST' || code === 'ENOTDIR'
+        ? `c'è già un file con quel nome: spostalo o rinominalo, oppure indica un'altra cartella con ${WORKSPACE_ENV}`
+        : `controlla i permessi della cartella che la contiene, oppure indica un'altra cartella con ${WORKSPACE_ENV}`,
+    );
+  }
+
+  if (inside) {
+    notes.push(
+      `! la cartella di lavoro era l'installazione stessa (${requested}): lavoro in ${workspace}. ` +
+        `Dentro ~/.muffin ci sono memoria, sessioni e il sigillo — non è uno spazio di lavoro, ` +
+        `e nessun turno ci scrive.`,
+    );
+  }
+
+  // The result, checked against the same question the input was checked
+  // against. `muffinWorkspace` already refuses a `MUFFIN_WORKSPACE` that names
+  // the home, and it computes a default that is a sibling by construction —
+  // but neither fact survives the directory itself being a **symlink** into
+  // the home, which `mkdirSync` follows without complaint.
+  //
+  // Legibility, not security: the belt (`mandatoryGuards` denies the home)
+  // still refuses every write, so nothing gets through. What the owner would
+  // otherwise get is an agent whose hands do not work and no sentence anywhere
+  // saying why — which is the same defect as a silent mechanism, wearing the
+  // other face.
+  if (isSameOrNestedPath(workspace, home)) {
+    notes.push(
+      `! la cartella di lavoro ${workspace} porta dentro l'installazione (${home}), probabilmente per un collegamento: ` +
+        `nessun turno può scriverci, e finché resta così Muffin non ha le mani. ` +
+        `Rimuovi il collegamento, oppure indica un'altra cartella con ${WORKSPACE_ENV}.`,
+    );
+  }
+
+  return { workspace, relocatedFrom: inside ? requested : null, notes };
 }

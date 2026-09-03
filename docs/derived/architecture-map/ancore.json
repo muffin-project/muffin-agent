@@ -406,112 +406,112 @@
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 286,
+    "line": 278,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 375,
+    "line": 367,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 424,
+    "line": 416,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 426,
+    "line": 418,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 455,
+    "line": 447,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 475,
+    "line": 467,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 477,
+    "line": 469,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 504,
+    "line": 496,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 509,
+    "line": 501,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 360,
+    "line": 358,
     "testo": "*"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 527,
+    "line": 519,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 540,
+    "line": 532,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 553,
+    "line": 545,
     "testo": "...makeFsTools(scope),"
   },
   "agent/runtime.ts:439": {
     "path": "agent/runtime.ts",
-    "line": 615,
+    "line": 607,
     "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 680,
+    "line": 672,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 687,
+    "line": 679,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 718,
+    "line": 710,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 739,
+    "line": 731,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 777,
+    "line": 769,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 806,
+    "line": 798,
     "testo": "tools,"
   },
   "agent/runtime.ts:638": {
     "path": "agent/runtime.ts",
-    "line": 638,
+    "line": 630,
     "testo": "const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 956,
+    "line": 948,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -2726,37 +2726,37 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 460,
+    "line": 452,
     "testo": "* legal on the wire."
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 539,
+    "line": 531,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 656,
+    "line": 648,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 680,
+    "line": 672,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 718,
+    "line": 710,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 737,
+    "line": 729,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:642": {
     "path": "agent/runtime.ts",
-    "line": 642,
+    "line": 634,
     "testo": "} else if (searchDiagnosis.gap) {"
   },
   "runtime.ts:98": {
