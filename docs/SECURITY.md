@@ -478,6 +478,15 @@ status lives only in `docs/work/day1/requirements-status.md`.
   local/cloud privacy policy yet.
 - **The Node protocol does not exist in the current runtime.** ADR-0050 defines
   its future authority/security contract; current code does not yet enforce it.
+- **Surface and Node execution placement are still the same `cwd`, found
+  2026-09-03.** ADR-0050 §3 separates them on paper. The supervised gateway
+  does not: `WorkingDirectory=${home}` (`core/gateway/unit.ts`) with no `cwd`
+  override in `cli/gateway.ts` means the shell tool's write scope is the
+  Muffin home on that surface, and the same request from a REPL elsewhere on
+  the same machine gets a different answer. This is an open design question
+  requiring a `docs/RESEARCH.md` pass and an ADR, not a decided direction —
+  see `docs/ROADMAP.md` "First Mac capability Node" and
+  `docs/evidence/il-lavoro-che-viene-2026-09-03.md`.
 - **Intentional agent memory write is not implemented yet.** ADR-0051 requires a
   proposal/reconciliation boundary; current `memory_search` read surface should
   not be mistaken for that future capability.

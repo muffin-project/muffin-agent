@@ -92,6 +92,134 @@ ACK / started / outcome separation
 
 Candidate first capabilities come from actual use: contained `system.run`, a narrow filesystem scope, notification, local inference or another concrete Mac-local need.
 
+**Open design question, found 2026-09-03, not yet decided.** ADR-0050 §3
+already separates Node from Surface on paper. The runtime does not yet keep
+them separate: the supervised gateway pins `WorkingDirectory=${home}`
+(`core/gateway/unit.ts:278`, and the plist equivalent at line 376),
+`cli/gateway.ts:602` calls `buildRuntime(home)` with no `cwd`, and
+`agent/runtime.ts:231` defaults `cwd` to `process.cwd()` — so on the
+supervised surface `scope.root` and the shell tool's `writeScope`
+(`agent/tools/shell.ts:148`) are always the Muffin home, never a repository
+checkout elsewhere on the same machine. A REPL started inside that checkout
+works, because there `cwd` already is the checkout. The same request from the
+owner succeeds or fails depending on which surface it arrived through, and
+Muffin cannot tell the difference itself. Full trace in
+`docs/evidence/il-lavoro-che-viene-2026-09-03.md`.
+
+The owner's answer names the direction without deciding it yet: **capability
+must not depend on the surface, but on where Muffin lives — the node.**
+«anche se sta in una vps, e io scrivo da telegram, e il nodo del macbook sta
+acceso, deve poter lavorare su quei file». Today's repository conflates two
+different meanings of "surface": where a message arrives, and where work
+executes. Separating them is this section's Node, made concrete — and it
+reopens a security question in the same breath, not after: a forwarded
+message at taint 2 arriving on Telegram would, under that separation, be able
+to reach a laptop's filesystem. The boundary has to be designed before the
+capability — the owner said so himself: «ovviamente tutto questo va gestito
+bene e specialmente in modo sicuro, quindi approcciamo tutte queste cose con
+il nostro modo di lavorare» — a `docs/RESEARCH.md` pass and an ADR, not a
+patch to this section.
+
+This touches two existing ADRs without contradicting either: **ADR-0021** has
+already had to amend itself once (§revisione 2026-09-03) for conflating a
+delivery channel with conversation identity — the same class of mistake is
+the risk here, on the execution axis instead of the conversation axis.
+**ADR-0056** ties `sessionKey` to `identify()` regardless of port, which is a
+claim about conversation identity, not about where a capability executes; a
+future Node ADR must keep the two claims distinct rather than collapsing them.
+
+**Sequencing: this cannot start before the sandbox write scope already in
+flight lands** (observed Git/PR state owns whether that work is open right
+now, not this file). A shell command in a turn can today write `muffin.db`,
+`sessions/`, `.rot-anchor` and `voice.md`, because none of the four sit under
+the paths `core/rot/guards.ts`
+denies (`rot/`, `config.json`, the two secret directories, `.git/hooks`,
+shell dotfiles) and `scope.root` is the whole Home. Widening *where* work can
+run while the write scope is already this loose would widen the blast radius
+before the boundary is narrowed — narrow the scope first.
+
+### Five items from the owner's conversation, 2026-09-03
+
+Recorded in `docs/evidence/il-lavoro-che-viene-2026-09-03.md`. All five queue
+behind what is already in flight — the sandbox write scope above, the
+derived architecture map's rebase conflicts, and the character eval
+(`requirements-status.md` A2/A3, `evals/character/`, never yet on a path in
+`docs/work/day1/critical-path.md`) — because none of the five change what
+closes the dogfood in progress. Ordered below by what unblocks what, not by
+which feels most wanted; no effort estimate is claimed for any of them.
+
+#### A maintenance tick, not a heartbeat conversation
+
+First, because in the owner's own words a capability nobody ever re-checks
+does not exist for him — the other four assume a Muffin that is still there
+to use them. Measured today on the owner's live database: `todos` holds seven
+rows still `pending` from 2026-08-27, a plan written and never surfaced
+again. `B4` (READY) reads the plan on every turn of a session; nothing today
+starts a turn on its own to do that reading when no one has written to the
+session.
+
+This is not `COGNITIVE-DESIGN.md` §5's rejected "proactivity as regular
+heartbeat conversation" — elapsed time is still not a reason to interrupt the
+owner. The gap is narrower: whether the runtime's own scheduler tick
+re-checks durable `pending`/`waiting` state (todos, `interrupted` turns, due
+jobs) at all when nothing is due, so it does not rot silently, independent of
+whether anything is ever surfaced to the owner. Adjacent to, not the same as,
+"Background process ownership" and "Proactivity beyond explicit jobs" below —
+those are about owning a long-lived process and about initiating dialogue;
+this is about the runtime's own liveness cadence over its own durable state.
+Record repeats of this pain the same way as any other dogfood signal
+(`docs/work/day1/critical-path.md` "Da qui ordina l'uso" already asks for
+"lavoro promesso e dimenticato").
+
+#### GitHub delivery: plan, implement, test, commit, PR
+
+Second, because it is the cheapest large step and the item after it depends
+on the same egress door. What is missing for coding is delivery, not
+authorship: Muffin can already write code, run tests and commit locally.
+Missing is push/PR — no network egress exists today (`defaults/rot/egress.json`
+ships an empty allow list) — and, secondarily, parallelism through subagents,
+which the runtime has no mechanism for yet either. The candidate shape is a
+coding skill in the existing sense (`defaults/skills/`, D9 — plan → implement
+→ test → commit → PR) plus `github.com` added through the existing
+capability-setup widen-and-reseal flow (ADR-0058,
+`widenEgressForCapability`), not a new mechanism.
+
+#### Issues are plans; without read-back Muffin is a blind planner
+
+Third, because it opens the same egress door as the item above, for reading
+instead of writing, and has no reason to land before it. Muffin's own
+framing: writing a GitHub issue is a plan, not code, and reversible — it fits
+inside a revocable boundary. But without reading back the resulting pull
+request, comments and reviews, Muffin is a blind planner: it writes, the plan
+vanishes, and it never learns whether the work was done well. The item is
+"write issues **and** read back their consequences," never just the first
+half — the read-back needs the same `github.com` door the section above
+would open for writing.
+
+#### Per-task egress boundaries, not one flat allowlist
+
+Fourth: no stated dependency on the other four, and generalizing egress ahead
+of the item above would be answering a question dogfood has not asked yet.
+Today `rot/egress.json` is a single sealed allow-only list — in or out, with
+no perimeter scoped to a task. This is the technical form of the owner's own
+boundary: «se giri nel perimetro hai governance e quindi puoi fare cose più
+liberamente». It changes authority/egress semantics, so it needs a
+`docs/RESEARCH.md` pass before any implementation, not a direct patch to
+`core/rot/egress-writer.ts`. It is a different axis from ADR-0050's Node
+ceiling: that intersection (`Home ∩ Node ∩ OS`) narrows what a *paired
+device* may do; this would narrow what a *single task/turn* may reach on the
+same Home. Read the two together when the research pass happens — do not
+conflate them into one mechanism by default.
+
+#### New senses: calendar, email, half-finished projects
+
+Last: purely additive, nothing else in this list unblocks or is unblocked by
+it. Today Muffin senses the vault and messages. Not the calendar, not email,
+not half-finished projects. Candidate capabilities follow the same rules
+already governing every other source: consumer-before-schema (ADR-0045) and
+the typed multipart ingress model (ADR-0052) for whatever a new source
+parses into.
+
 ### Intentional memory proposals
 
 ADR-0051 owns the architecture: many producers, one semantic writer.
