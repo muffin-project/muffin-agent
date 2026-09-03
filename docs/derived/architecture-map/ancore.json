@@ -791,12 +791,12 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 327,
+    "line": 328,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 444,
+    "line": 453,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -1851,8 +1851,8 @@
   },
   "core/policy/decide.ts:208": {
     "path": "core/policy/decide.ts",
-    "line": 268,
-    "testo": "case 'high':"
+    "line": 208,
+    "testo": "const allowed = ctx.egressAllowed?.(host) ?? false;"
   },
   "core/policy/decide.ts:88": {
     "path": "core/policy/decide.ts",
