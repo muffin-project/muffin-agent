@@ -418,6 +418,55 @@ function migrationsDetail(dbPath: string, newVersion: number | null): string {
   return `database a v${have}, il codice nuovo arriva solo a v${newVersion} — non dovrebbe succedere dopo un aggiornamento: non avviarlo finché non controlli`;
 }
 
+/**
+ * Le due conseguenze di un aggiornamento riuscito che il comando non diceva.
+ *
+ * Misurato sulla macchina dell'owner il 03/09/2026: `muffin update` è uscito 0,
+ * il launcher puntava alla release nuova, e l'owner ha concluso che non avesse
+ * funzionato. Aveva ragione a metà, per due fatti che il comando taceva:
+ *
+ *  1. **il checkout resta dov'era.** È la proprietà per cui questo comando
+ *     esiste (`origin/main` finisce in `refs/remotes/origin/main`, la release
+ *     si costruisce da lì, l'albero vivo non si tocca) e non deve cambiare —
+ *     ma la conseguenza è che tutto ciò che si lancia *dal repository* è
+ *     ancora il commit del checkout. Concretamente: `npm run e2e:telegram`
+ *     falliva perché a quel commit lo script non esisteva ancora.
+ *  2. **un processo già avviato continua col vecchio.** Node risolve il
+ *     symlink all'avvio del processo, quindi una REPL lasciata aperta in tmux
+ *     da giorni esegue ancora la release precedente. È la cosa che *sembrava*
+ *     «non aggiornato».
+ *
+ * Il gateway supervisionato non entra in questa nota: `offerGatewayRestart`,
+ * subito dopo, propone (o esegue, con `--yes`) il suo riavvio. Dirlo qui
+ * sarebbe falso.
+ *
+ * Funzione pura — decide le righe, non le stampa: l'unità che il test legge
+ * senza dover arrivare in fondo a un aggiornamento vero.
+ */
+export function noteDopoLoSwing(args: {
+  releaseSha: string;
+  /** `null` quando `rev-parse HEAD` nel checkout non risponde: non si sa, e non si inventa. */
+  checkoutSha: string | null;
+  /** Quanti commit separano l'HEAD del checkout dalla release. */
+  behind: number;
+  checkoutRoot: string;
+}): string[] {
+  const righe: string[] = [];
+  if (args.checkoutSha !== null && args.checkoutSha !== args.releaseSha) {
+    const quanto = args.behind > 0 ? `indietro di ${args.behind} commit` : 'su un commit diverso';
+    righe.push(
+      `il checkout resta a ${args.checkoutSha.slice(0, 7)}, ${quanto} dalla release ${args.releaseSha.slice(0, 7)}: ` +
+        `quello che lanci dal repository (npm run …, i test) è ancora il codice vecchio.\n` +
+        `  → git -C ${args.checkoutRoot} pull`,
+    );
+  }
+  righe.push(
+    'quello che era già in esecuzione continua sul codice vecchio: il symlink si risolve all\'avvio del processo. ' +
+      'Una REPL aperta (anche in un tmux di giorni fa) va chiusa e rilanciata.',
+  );
+  return righe;
+}
+
 function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
@@ -717,6 +766,21 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
 
   const readNewSchemaVersion = deps.readNewSchemaVersion ?? defaultReadNewSchemaVersion;
   step('schema', migrationsDetail(p.db, readNewSchemaVersion(releaseDir)));
+
+  // Le due conseguenze che il comando taceva — vedi `noteDopoLoSwing`. Lo stato
+  // si legge qui, dallo stesso `gitRunner` di tutto il resto; la decisione sta
+  // nella funzione pura.
+  const headRes = gitRunner(['rev-parse', 'HEAD'], checkoutRoot);
+  const checkoutSha = headRes.status === 0 && headRes.stdout.trim() !== '' ? headRes.stdout.trim() : null;
+  const dietroRes = checkoutSha === null ? null : gitRunner(['rev-list', '--count', `${checkoutSha}..${newSha}`], checkoutRoot);
+  for (const riga of noteDopoLoSwing({
+    releaseSha: newSha,
+    checkoutSha,
+    behind: Number(dietroRes?.stdout.trim() || '0'),
+    checkoutRoot,
+  })) {
+    step('dopo', riga);
+  }
 
   return { steps, code: 0 };
 }
