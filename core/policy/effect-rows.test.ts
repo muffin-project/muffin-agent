@@ -18,6 +18,7 @@ import { inspectCapability } from '../../agent/tools/inspect.js';
 import { todoCapability } from '../../agent/tools/todo.js';
 import { waitCapability } from '../../agent/tools/wait.js';
 import { mcpCapabilityFor } from '../../agent/tools/mcp.js';
+import { DOORS } from './doors.js';
 
 /**
  * The normative matrix, executed.
@@ -65,6 +66,9 @@ const ALL: readonly CapabilityDecl[] = [
   todoCapability,
   waitCapability,
   mcpCapabilityFor('esempio'),
+  // The two doors: declared without a tool, asserted against their rows like
+  // everything else (ADR-0055).
+  ...DOORS,
 ];
 
 function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {

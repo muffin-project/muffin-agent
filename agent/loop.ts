@@ -13,6 +13,7 @@ import { decodeWaitFor, encodeWaitFor, satisfied, wakeReport, type WaitSpec } fr
 import { APPROVAL_WINDOW_MS, type ApprovalStore } from '../core/approvals/store.js';
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
+import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
 import { redactText } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import { ambienteSection, tenantClass, todoSection, visibleTools, type SystemPrompts } from './context/assemble.js';
@@ -993,6 +994,17 @@ export function denyText(decision: Extract<Decision, { effect: 'deny' }>): strin
   return `Rifiutato dal kernel dei permessi (${decision.code}). Non insistere: serve una decisione dell'owner.`;
 }
 
+/**
+ * What the owner reads when the reply row itself refuses — a sentence the
+ * kernel wrote, never one the model did. The shipped floor never produces it;
+ * a sealed `rot/policy.json` that tightened the `reply` row does, and the
+ * owner who tightened it is the one reading this.
+ */
+export function replyRefusedText(decision: Exclude<Decision, { effect: 'allow' }>): string {
+  const why = decision.effect === 'deny' ? `${decision.code}${decision.detail ? `: ${decision.detail}` : ''}` : decision.effect;
+  return `La risposta è stata trattenuta dal kernel dei permessi (${why}). Una conversazione nuova riparte con il contesto pulito.`;
+}
+
 export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnResult> {
   const turn = deps.tracer.start(
     'muffin.turn',
@@ -1351,6 +1363,49 @@ async function drive(
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
   const turnClass = tenantClass(input.principal, input.tenant);
 
+  /**
+   * The two doors the turn walks through without a tool — the reply and the
+   * episode — asked of the kernel the same way a tool call is (ADR-0055).
+   *
+   * Same span name and attributes as `runTool`'s decision below, so a trace
+   * reader sees one vocabulary: `muffin.policy_decision` with the capability,
+   * the taint it was decided at, and the effect. The shipped floor answers
+   * `allow` on both rows at every taint, and the memoised `check` makes the
+   * per-round question free; what this buys is a decision that *exists* — a
+   * sealed policy.json that tightens the row is obeyed, and the eval seam can
+   * put a sink scene on a capability production really declares.
+   */
+  const door = (capability: CapabilityId, resource: DecisionRequest['resource']): Decision => {
+    const span = deps.tracer.start(
+      'muffin.policy_decision',
+      { [ATTR.capability]: capability, [ATTR.taint]: snapshot.currentTaint() },
+      turn,
+    );
+    const decision = snapshot.check(capability, resource, {});
+    span.setAttributes({
+      [ATTR.policyEffect]: decision.effect,
+      ...(decision.effect === 'deny' ? { [ATTR.policyDenyCode]: decision.code } : {}),
+    });
+    span.end();
+    return decision;
+  };
+  /**
+   * May this turn write an episode into its tenant's memory right now?
+   *
+   * Anything but `allow` is a no: a `draft` or an `ask` has no meaning for a
+   * memory row (see `memoryWriteCapability`), and treating either as a yes
+   * would be the implicit-allow fall-through `runTool`'s switch exists to
+   * forbid. The refusal is counted on the turn, not swallowed: an episode
+   * that was not written is a fact about this turn a reader of the trace must
+   * be able to see.
+   */
+  const memoryDoorOpen = (): boolean => {
+    const decision = door(memoryWriteCapability.id, { kind: 'tenant', value: input.tenant });
+    if (decision.effect === 'allow') return true;
+    turn.setAttributes({ 'muffin.memory.write_refused': decision.effect === 'deny' ? decision.code : decision.effect });
+    return false;
+  };
+
   const usage = { ...record.counters.usage };
   let spentUsd = record.counters.spentUsd;
   const cap = iterationCap(deps.profile);
@@ -1464,7 +1519,7 @@ async function drive(
     // Evidence first: what was said is recorded before anything is generated, so
     // a crash mid-turn cannot lose the input that caused it.
     let currentEpisodeId: number | undefined;
-    if (deps.memory) {
+    if (deps.memory && memoryDoorOpen()) {
       currentEpisodeId = deps.memory.store.addEpisode({
         tenantId: input.tenant,
         connector: input.surface,
@@ -1660,6 +1715,26 @@ async function drive(
       }
       if (input.signal?.aborted) {
         return finish(turn, 'aborted', 'Interrotto.', iterations, usage);
+      }
+      /**
+       * May what this round produces reach the channel? Asked **before** the
+       * model call, because the text of a round streams out of it as it is
+       * generated (`onDelta`): a decision taken after the call would be taken
+       * about bytes already on the owner's screen. Everything the round's text
+       * can derive from is already in context here — tool results raise the
+       * taint before the next round, never during this one's streaming — so
+       * the taint this decides at is the taint the text will carry.
+       *
+       * The notice is fixed text, not model output, which is why delivering it
+       * does not contradict the refusal: the row gates what the model says,
+       * and the kernel's own sentence is not that. `answered` and not
+       * `error`: the turn ended the way the policy told it to, and the trace
+       * carries the decision that ended it.
+       */
+      const reply = door(replyCapability.id, { kind: 'none' });
+      if (reply.effect !== 'allow') {
+        turn.setAttributes({ 'muffin.reply.refused': reply.effect === 'deny' ? reply.code : reply.effect });
+        return finish(turn, 'answered', replyRefusedText(reply), iterations, usage);
       }
       iterations += 1;
       // Reports the number this line just committed to — the same counter
@@ -1971,7 +2046,7 @@ async function drive(
           // the ratchet, not the provenance rule.
           tier: snapshot.intrinsicTaint(),
         });
-        if (deps.memory) {
+        if (deps.memory && memoryDoorOpen()) {
           deps.memory.store.addEpisode({
             tenantId: input.tenant,
             connector: input.surface,
