@@ -14,6 +14,7 @@ import { composeTurnText, contentTaintOf, parseUpdate, principalFor, TelegramCon
 import type { TelegramApi } from './api.js';
 import { UpdateInbox } from './updates.js';
 import { TelegramDeliveryStore } from './delivery.js';
+import { OWNER_SESSION_KEY } from '../../core/surface/types.js';
 
 /**
  * DAY-1 requirement B16 minimum (PC 1.4, audit P14): a message the owner *forwards* is
@@ -163,9 +164,16 @@ const toolResultsText = (call: ChatCall): string =>
     .map((b) => (b.type === 'tool_result' ? b.content : ''))
     .join('\n');
 
-/** The one durable record of what tier this message's own line was written at — the exact place a forwarded message used to launder back to 0. */
-function ownLineTier(h: ReturnType<typeof harness>, chatId: number): number | undefined {
-  const ref = h.runtime.deps.sessions.open(`telegram:${chatId}`);
+/**
+ * The one durable record of what tier this message's own line was written at —
+ * the exact place a forwarded message used to launder back to 0.
+ *
+ * `OWNER_SESSION_KEY` e non `telegram:<chatId>`: da ADR-0056 la chiave la
+ * decide `identify`, e per la DM dell'owner è la stessa su ogni porta. Il tier
+ * della riga non cambia con la chiave — cambia solo dove andarlo a leggere.
+ */
+function ownLineTier(h: ReturnType<typeof harness>): number | undefined {
+  const ref = h.runtime.deps.sessions.open(OWNER_SESSION_KEY);
   return h.runtime.deps.sessions.read(ref).find((m) => m.role === 'user')?.tier;
 }
 
@@ -214,7 +222,7 @@ describe('(a) a forwarded, hostile message — red before the fix, per docs/JUDG
       // And the row itself: the message this turn is built from was written
       // at tier 2, not laundered back to the owner's own tier 0 — the exact
       // failure the audit named ("entra in memoria... giustificare azioni").
-      expect(ownLineTier(h, OWNER)).toBe(2);
+      expect(ownLineTier(h)).toBe(2);
       // E la stessa cosa nel piano Evidence: l'episodio di questo messaggio non
       // entra come parola dell'owner (reperto del judge, via A).
       expect(episodeTier(h, HOSTILE_TEXT.slice(0, 24))).toBe(2);
@@ -247,7 +255,7 @@ describe('(b) a normal owner message — anti-regression', () => {
       expect(text).not.toMatch(/<<<didascalia/);
       expect(text).not.toMatch(/<<<nomefile/);
 
-      expect(ownLineTier(h, OWNER)).toBe(0);
+      expect(ownLineTier(h)).toBe(0);
     } finally {
       h.runtime.close();
     }
