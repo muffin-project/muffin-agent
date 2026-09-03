@@ -178,6 +178,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     "e2e owner journey: clean machine to a delivered reply on a real surface — `secret set --persist` warns when a home copy shadows it, `doctor` is honest about exactly which warnings are expected at each step, `gateway install`'s unit passes the platform's own parser (systemd-analyze on Linux, plutil on macOS — never the real launchd label on this machine), a live gateway pairs Telegram and delivers a real turn, a second process recalls it, and `uninstall` leaves only the `--persist`ed secret behind",
   ),
   verde('B1', 'continuity: what was said in one process is recalled by a later one, same session'),
+  verde(
+    'B2',
+    'busy input: a message sent while a turn is alive is acknowledged at once and answered after it, and /stop interrupts the live turn (ADR-0054)',
+  ),
   verde('B3', 'wait: a turn that asks to wait persists and RELEASES the process instead of holding it'),
   verde('B4', 'todo: a plan written by one process is shown, unasked, to the next one in the session'),
   verde('B5', 'resume: a process killed mid-turn leaves a row the next boot names and the gateway finishes'),

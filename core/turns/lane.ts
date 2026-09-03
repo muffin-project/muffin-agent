@@ -58,7 +58,7 @@ export type LaneEvent =
   | { kind: 'undeliverable'; turnId: string; surface: string; text: string }
   | { kind: 'refused'; turnId: string; why: string }
   | { kind: 'failed'; turnId: string; error: string }
-  | { kind: 'deferred'; reason: 'in_flight' | 'foreground' | 'handover' };
+  | { kind: 'deferred'; reason: 'in_flight' | 'foreground' | 'handover' | 'paused' };
 
 export type LaneDeps = {
   /** Only what the lane touches, so a test can drive it with three methods. */
@@ -77,6 +77,12 @@ export type LaneDeps = {
    * for tests that do not exercise this axis.
    */
   stillOwner?: () => boolean;
+  /**
+   * «L'owner ha detto di fermarsi» (ADR-0054 §4, `core/runtime/pausa.ts`).
+   * Letta a ogni tick, prima di prendere una riga: le barriere si spazzano
+   * comunque — svegliare una riga non fa partire niente — ma niente inizia.
+   */
+  paused?: () => boolean;
   onEvent?: (e: LaneEvent) => void;
   clock?: () => Date;
   /** Injected for the same reason the store injects it: a test needs a dead pid. */
@@ -151,6 +157,11 @@ export class TurnLane {
     }
 
     this.sweepBarriers();
+
+    if (this.deps.paused?.() === true) {
+      this.onEvent({ kind: 'deferred', reason: 'paused' });
+      return;
+    }
 
     // The shared lane, not a flag of our own: the thing that must not happen
     // twice is a model call, and the scheduler makes them too.
