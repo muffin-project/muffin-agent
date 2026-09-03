@@ -529,6 +529,10 @@ export async function runRepl(
   // in quel momento nessuno guarda.
   runtime.approvers.set('cli', async (request) => {
     status.line(`\n⚠ ${request.prompt}`);
+    // The model's own account first, the exact bytes after: one reads the
+    // sentence to know whether to look, and the command to decide. Never
+    // the sentence alone — a paraphrase is where a request sounds smaller.
+    if (request.description) process.stderr.write(`   cosa fa: ${request.description}\n`);
     if (request.resource) process.stderr.write(`   su: ${request.resource}\n`);
     // Taint 0 is the quiet default; anything above it means untrusted content
     // already steered this turn, and that changes the answer more often than
