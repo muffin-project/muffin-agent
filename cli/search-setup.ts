@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, writeSecret, locateSecret } from '../core/config/config.js';
 import { SEARCH_PROVIDERS, SEARCH_PROVIDER_IDS, type SearchProviderId } from '../core/config/providers.js';
+import { widenEgressForCapability } from '../core/rot/egress-writer.js';
 
 /**
  * `muffin search` — accendere la ricerca web senza editare un JSON.
@@ -26,6 +27,16 @@ import { SEARCH_PROVIDERS, SEARCH_PROVIDER_IDS, type SearchProviderId } from '..
  * Il motore si sceglie dal catalogo (`core/config/providers.ts`): Tavily è una
  * voce, non un letterale, ed è tutto ciò che serviva perché non fosse più
  * cablato — l'interfaccia `SearchBackend` a valle esisteva già.
+ *
+ * **Accenderla era anche un secondo atto scollegato, ed era quello che si
+ * scopriva per ultimo.** Chiave e config scrivevano subito; `rot/egress.json`
+ * restava quello che era — vuoto, o senza Tavily — e `agent/runtime.ts`
+ * spegneva `web_search` al boot con un avviso che nessuno leggeva nel momento
+ * in cui contava. Chiedere Tavily *è* l'autorizzazione a parlarle: da
+ * 03/09/2026 (ADR-0058) questo comando chiude anche quella porta, con
+ * `widenEgressForCapability` (`core/rot/egress-writer.ts`) — la stessa
+ * funzione che usa `muffin mcp add`, non una seconda copia. Una sola domanda,
+ * solo a un terminale vero, e solo per l'host esatto di questo motore.
  */
 
 export type SearchDeps = {
@@ -41,6 +52,13 @@ export type SearchDeps = {
    * l'owner legge sono di questo comando, e stanno accanto alle altre sue.
    */
   chiediChiave?: (domanda: string) => Promise<string | undefined>;
+  /**
+   * Chiede sì/no a un terminale vero, per l'unica conferma che allarga
+   * `rot/egress.json` — vedi `widenEgressForCapability`. Assente con la stessa
+   * regola di `chiediChiave`: niente terminale, niente domanda, solo il
+   * rimedio stampato.
+   */
+  chiediConferma?: (domanda: string) => Promise<string | undefined>;
 };
 
 function stato(home: string, out: (l: string) => void): number {
@@ -133,5 +151,16 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
   saveConfig({ ...config, search: { provider: entry.id, apiKeyRef: `secret://${entry.secretName}` } }, home);
   out(`ricerca web: ${entry.label} · chiave (${chiave.length} caratteri, 0600) → ${at}`);
   out('Vale dal prossimo avvio: il tool `web_search` si registra al boot del runtime.');
+
+  // La stessa domanda, chiesta subito e non scoperta al boot: chiedere questo
+  // motore È l'autorizzazione a parlargli. Un fallimento qui (nessun
+  // terminale, l'owner ha detto no, il risigillo non riesce) non disfa la
+  // config appena scritta — resta scritta, e `widenEgressForCapability` ha
+  // già stampato perché e cosa fare a mano.
+  const host = new URL(entry.endpoint).hostname;
+  await widenEgressForCapability(home, [host], `la ricerca web (${entry.label})`, {
+    out,
+    ...(deps.chiediConferma !== undefined ? { chiediConferma: deps.chiediConferma } : {}),
+  });
   return 0;
 }

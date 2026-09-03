@@ -5,6 +5,7 @@ import { BudgetEngine } from '../core/budget/budget.js';
 import { migrate } from '../core/db/migrate.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { loadConfig, paths, readSecret, secretDir, type Config } from '../core/config/config.js';
+import { resolveWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
 import { createDecide } from '../core/policy/decide.js';
@@ -228,6 +229,14 @@ export function baseToolOrder(input: { sandboxAvailable: boolean; searchOn: bool
 
 export function buildRuntime(
   home = paths().home,
+  /**
+   * The directory the caller is *proposing* as the turn's workspace, not the
+   * workspace itself: `resolveWorkspace` below refuses it when it is the
+   * installation. The default stays `process.cwd()` because for `muffin run`
+   * and the REPL the owner chose that directory by standing in it — and it is
+   * exactly the surfaces where nobody chose it (a supervised gateway, whose
+   * cwd its unit pins to the home on purpose) that the refusal is for.
+   */
   cwd = process.cwd(),
   opts: {
     /**
@@ -246,6 +255,17 @@ export function buildRuntime(
   } = {},
 ): Runtime {
   const p = paths(home);
+  /**
+   * Where this turn may write — never where Muffin is installed.
+   *
+   * One call site, deliberately: every surface builds its runtime through this
+   * function, so the guarantee holds for `muffin run` and the REPL as well as
+   * for the gateway, and a surface added next year cannot forget it. See
+   * `core/config/workspace.ts` for the measurement that made this necessary
+   * and for why the workspace is a sibling of the home rather than a
+   * subdirectory of it.
+   */
+  const { workspace, notes: workspaceNotes } = resolveWorkspace(home, cwd);
   const exporter = new JsonlExporter(home);
   const tracer = new SimpleTracer(exporter);
 
@@ -511,8 +531,8 @@ export function buildRuntime(
   // and the shell dotfiles were in neither, and both are the same escape: a
   // contained write that becomes an uncontained execution the next time the
   // owner commits, or opens a shell.
-  const guards = mandatoryGuards(home, cwd);
-  const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
+  const guards = mandatoryGuards(home, workspace);
+  const scope: FsScope = { root: workspace, denyWrite: guards.denyWrite, denyRead: guards.denyRead };
   /**
    * Ogni capacità spenta o tagliata a questo assemblaggio, riempito via `push`
    * man mano che ogni pezzo sotto scopre il proprio motivo — mai riassegnato,
@@ -558,7 +578,7 @@ export function buildRuntime(
   const sandboxStatus = executor.status();
   const contained = sandboxStatus.available;
   if (contained) {
-    tools.push(makeShellTool(executor, { root: cwd }));
+    tools.push(makeShellTool(executor, { root: workspace }));
   }
   // The absent case used to produce nothing at all here — no boot line, no
   // structured record, not even the generic degrade note the search failures
@@ -836,7 +856,7 @@ export function buildRuntime(
    * stantio fino al prossimo riavvio.
    */
   const leggiIstanza = (): IstanzaFacts => ({
-    cwd,
+    cwd: workspace,
     voci: fsList(scope, '.')
       .split('\n')
       .filter((riga) => riga.length > 0),
@@ -847,7 +867,7 @@ export function buildRuntime(
 
   return {
     executor: contained ? executor : null,
-    workspace: cwd,
+    workspace,
     config,
     budget,
     jobs,
@@ -859,6 +879,7 @@ export function buildRuntime(
     promptBlocks,
     capabilityGaps,
     bootLines: [
+      ...workspaceNotes,
       ...turnNotes,
       ...waitingNotes,
       ...undeliverableNotes,
