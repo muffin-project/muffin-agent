@@ -36,22 +36,22 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1876,
+    "line": 1924,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 1977,
+    "line": 2025,
     "testo": "// model at all."
   },
   "agent/loop.ts:1405": {
     "path": "agent/loop.ts",
-    "line": 1766,
+    "line": 1814,
     "testo": "// with it — the transcript, the taint it has climbed to, and how much of"
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 2682,
+    "line": 2730,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
@@ -61,37 +61,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 3029,
+    "line": 3077,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 3054,
+    "line": 3102,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3380,
+    "line": 3428,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3444,
+    "line": 3492,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 3074,
+    "line": 3122,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3556,
+    "line": 3604,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3560,
+    "line": 3608,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -241,22 +241,22 @@
   },
   "agent/loop.ts:696": {
     "path": "agent/loop.ts",
-    "line": 1263,
+    "line": 1289,
     "testo": "const detail ="
   },
   "agent/loop.ts:720": {
     "path": "agent/loop.ts",
-    "line": 1306,
+    "line": 1348,
     "testo": "options: {"
   },
   "agent/loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1366,
+    "line": 1414,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "agent/loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1390,
+    "line": 1438,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "agent/loop.ts:792": {
@@ -266,22 +266,22 @@
   },
   "agent/loop.ts:798": {
     "path": "agent/loop.ts",
-    "line": 1479,
+    "line": 1527,
     "testo": "let transportRetriesLeft = record.counters.transportRetriesLeft;"
   },
   "agent/loop.ts:805": {
     "path": "agent/loop.ts",
-    "line": 1488,
+    "line": 1536,
     "testo": "iterations,"
   },
   "agent/loop.ts:817": {
     "path": "agent/loop.ts",
-    "line": 1500,
+    "line": 1548,
     "testo": "* The barrier `wait` arms, honoured between iterations and never inside one."
   },
   "agent/loop.ts:819": {
     "path": "agent/loop.ts",
-    "line": 1502,
+    "line": 1550,
     "testo": "* `null` until a handler asks. See `ToolContext.suspend` for why it is armed"
   },
   "agent/loop.ts:848": {
@@ -291,17 +291,17 @@
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1614,
+    "line": 1662,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1672,
+    "line": 1720,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1723,
+    "line": 1771,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -776,7 +776,7 @@
   },
   "agent/turn-lane.ts:47": {
     "path": "agent/turn-lane.ts",
-    "line": 47,
+    "line": 61,
     "testo": "export function makeLaneRunner("
   },
   "budget.ts:127": {
@@ -1086,27 +1086,27 @@
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 740,
+    "line": 753,
     "testo": "* `gatewayStandDown` arbitrates each tick — which is also what lets this"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 775,
+    "line": 788,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 777,
+    "line": 790,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 778,
+    "line": 791,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 798,
+    "line": 811,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
@@ -1176,7 +1176,7 @@
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 655,
+    "line": 672,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
@@ -1191,7 +1191,7 @@
   },
   "connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1126,
+    "line": 1218,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "connectors/discord/connector.ts:139": {
@@ -1201,47 +1201,47 @@
   },
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
-    "line": 452,
+    "line": 453,
     "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
   "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
-    "line": 580,
+    "line": 581,
     "testo": "export class TelegramConnector {"
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 640,
+    "line": 663,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
-    "line": 223,
+    "line": 224,
     "testo": "*"
   },
   "connectors/telegram/connector.ts:230": {
     "path": "connectors/telegram/connector.ts",
-    "line": 341,
+    "line": 230,
     "testo": "*"
   },
   "connectors/telegram/connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
-    "line": 301,
+    "line": 302,
     "testo": "}"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1328,
+    "line": 1438,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1334,
+    "line": 1444,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1126,
+    "line": 1218,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
@@ -2386,17 +2386,17 @@
   },
   "loop.ts:1542": {
     "path": "agent/loop.ts",
-    "line": 1938,
+    "line": 1986,
     "testo": "input.onDelta({ type: 'text', text: out });"
   },
   "loop.ts:1544": {
     "path": "agent/loop.ts",
-    "line": 1940,
+    "line": 1988,
     "testo": "} catch (error) {"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2772,
+    "line": 2820,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2406,7 +2406,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3733,
+    "line": 3781,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
@@ -2471,22 +2471,22 @@
   },
   "loop.ts:744": {
     "path": "agent/loop.ts",
-    "line": 1332,
-    "testo": "* holding whatever REPL or Telegram chat asked the *previous* attempt to"
+    "line": 744,
+    "testo": "* **A second sink, not a wider `onDelta`.** The two exist for opposite"
   },
   "loop.ts:747": {
     "path": "agent/loop.ts",
-    "line": 1335,
-    "testo": "* to suspend."
+    "line": 747,
+    "testo": "* text, which a surface must never have to *un-show* once printed — so"
   },
   "loop.ts:769": {
     "path": "agent/loop.ts",
-    "line": 1366,
+    "line": 1414,
     "testo": "session: options.session ?? deps.sessions.open(record.sessionId),"
   },
   "loop.ts:777": {
     "path": "agent/loop.ts",
-    "line": 1390,
+    "line": 1438,
     "testo": "// ---- Pre-loop: deterministic, no model call. ------------------------------"
   },
   "loop.ts:792": {
@@ -2496,12 +2496,12 @@
   },
   "loop.ts:806": {
     "path": "agent/loop.ts",
-    "line": 1489,
+    "line": 1537,
     "testo": "recoveriesUsed,"
   },
   "loop.ts:842": {
     "path": "agent/loop.ts",
-    "line": 1526,
+    "line": 1574,
     "testo": "},"
   },
   "maintenance.ts:21": {
