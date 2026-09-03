@@ -401,112 +401,117 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 158,
+    "line": 159,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 258,
+    "line": 286,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 347,
+    "line": 375,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 396,
+    "line": 424,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 398,
+    "line": 426,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 427,
+    "line": 455,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 447,
+    "line": 475,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 449,
+    "line": 477,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 476,
+    "line": 504,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 481,
+    "line": 509,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 332,
+    "line": 360,
     "testo": "*"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 499,
+    "line": 527,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 512,
+    "line": 540,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 525,
+    "line": 553,
     "testo": "...makeFsTools(scope),"
   },
   "agent/runtime.ts:439": {
     "path": "agent/runtime.ts",
-    "line": 587,
+    "line": 615,
     "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 652,
+    "line": 680,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 659,
+    "line": 687,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 690,
+    "line": 718,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 711,
+    "line": 739,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 749,
+    "line": 777,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 778,
+    "line": 806,
     "testo": "tools,"
+  },
+  "agent/runtime.ts:638": {
+    "path": "agent/runtime.ts",
+    "line": 638,
+    "testo": "const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 927,
+    "line": 956,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -821,7 +826,7 @@
   },
   "cli/gateway.ts:363": {
     "path": "cli/gateway.ts",
-    "line": 651,
+    "line": 670,
     "testo": "const scheduler = new Scheduler("
   },
   "cli/gateway.ts:375": {
@@ -831,42 +836,42 @@
   },
   "cli/gateway.ts:381": {
     "path": "cli/gateway.ts",
-    "line": 680,
+    "line": 699,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/gateway.ts:388": {
     "path": "cli/gateway.ts",
-    "line": 698,
+    "line": 717,
     "testo": "* The turn lane, on the gateway's own beat."
   },
   "cli/init.ts:104": {
     "path": "cli/init.ts",
-    "line": 206,
+    "line": 170,
     "testo": "rot: { mode: options.hardened ? 'hardened' : 'single-user' },"
   },
   "cli/init.ts:136": {
     "path": "cli/init.ts",
-    "line": 248,
+    "line": 212,
     "testo": "main: options.mainModel ?? (compat ? 'anthropic/claude-sonnet-5' : 'claude-sonnet-5'),"
   },
   "cli/init.ts:137": {
     "path": "cli/init.ts",
-    "line": 249,
+    "line": 213,
     "testo": "light: options.lightModel ?? (compat ? 'anthropic/claude-haiku-4.5' : 'claude-haiku-4-5-20251001'),"
   },
   "cli/init.ts:163": {
     "path": "cli/init.ts",
-    "line": 163,
+    "line": 127,
     "testo": "const nomeChiave = apiKeyNameFor(provider);"
   },
   "cli/init.ts:46": {
     "path": "cli/init.ts",
-    "line": 104,
+    "line": 68,
     "testo": "export function runInit(options: InitOptions = {}): InitStep[] {"
   },
   "cli/init.ts:99": {
     "path": "cli/init.ts",
-    "line": 201,
+    "line": 165,
     "testo": "kind: options.provider ?? 'anthropic',"
   },
   "cli/jobs.ts:63": {
@@ -1911,27 +1916,27 @@
   },
   "core/rot/guards.ts:69": {
     "path": "core/rot/guards.ts",
-    "line": 69,
+    "line": 95,
     "testo": "p.rot,"
   },
   "core/rot/guards.ts:71": {
     "path": "core/rot/guards.ts",
-    "line": 71,
+    "line": 97,
     "testo": "p.config,"
   },
   "core/rot/guards.ts:73": {
     "path": "core/rot/guards.ts",
-    "line": 73,
+    "line": 99,
     "testo": "secretDir('home', home),"
   },
   "core/rot/guards.ts:76": {
     "path": "core/rot/guards.ts",
-    "line": 76,
+    "line": 102,
     "testo": "join(cwd, '.git', 'hooks'),"
   },
   "core/rot/guards.ts:81": {
     "path": "core/rot/guards.ts",
-    "line": 81,
+    "line": 107,
     "testo": "denyRead: ["
   },
   "core/rot/harden.ts:106": {
@@ -2361,7 +2366,7 @@
   },
   "guards.ts:82": {
     "path": "core/rot/guards.ts",
-    "line": 82,
+    "line": 99,
     "testo": "secretDir('home', home),"
   },
   "guards.ts:9": {
@@ -2721,42 +2726,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 432,
+    "line": 460,
     "testo": "* legal on the wire."
-  },
-  "runtime.ts:349": {
-    "path": "agent/runtime.ts",
-    "line": 515,
-    "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 511,
+    "line": 539,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 628,
+    "line": 656,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 652,
+    "line": 680,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 690,
+    "line": 718,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 709,
+    "line": 737,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
+  },
+  "runtime.ts:642": {
+    "path": "agent/runtime.ts",
+    "line": 642,
+    "testo": "} else if (searchDiagnosis.gap) {"
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 132,
+    "line": 133,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {

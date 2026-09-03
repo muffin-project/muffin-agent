@@ -599,6 +599,25 @@ export async function cmdGatewayRun(
   }
   let runtime;
   try {
+    /**
+     * No cwd argument, and that is now a decision rather than an omission.
+     *
+     * Under launchd/systemd `process.cwd()` **is** `~/.muffin` — the unit pins
+     * `WorkingDirectory` there on purpose (ADR-0035: a unit anchored to a
+     * checkout that moves fails at CHDIR before the runtime loads, and
+     * `Restart=always` crash-loops on a dead directory), measured on the
+     * owner's live gateway on 2026-09-03. `buildRuntime` refuses that cwd and
+     * works in `muffinWorkspace(home)` instead (ADR-0059).
+     *
+     * An earlier draft named the workspace here, so the gateway would not
+     * depend on that guard firing. It was wrong, and the acceptance suite said
+     * so: `muffin gateway run` also runs in a terminal, in a directory the
+     * owner chose by standing in it, and naming the workspace here overrode
+     * that choice — `b-parita-superfici` and `b-una-conversazione` both went
+     * red because the turn read `dati.txt` somewhere the test had not put it.
+     * One door decides where a turn works, for every surface, and a second
+     * spelling of the same rule is a second rule.
+     */
     runtime = buildRuntime(home);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
