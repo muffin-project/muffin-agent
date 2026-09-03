@@ -783,6 +783,7 @@ export function buildRuntime(
   tools.push(
     makeInspectTool({
       config,
+      workspace,
       profile,
       safeMode,
       // Stesso import dinamico, stessa ragione: `describeBuild` sta in

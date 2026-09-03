@@ -24,6 +24,7 @@ const finto = (over: Partial<InspectSources> = {}): InspectSources => ({
     traces: { retentionDays: 90 },
     surfaces: { default: 'cli', enabled: ['cli'] },
   } as InspectSources['config'],
+  workspace: '/home/mario/muffin-workspace',
   profile: CONSERVATIVE,
   safeMode: null,
   build: async () => ({ sha: 'abcdef0123456789', date: '2026-08-27', dirty: false }),
@@ -102,6 +103,11 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
 
   it("è host-only: la configurazione dell'installazione non è di un gruppo", () => {
     expect(inspectCapability.hostOnly).toBe(true);
+  });
+
+  it('nomina la cartella di lavoro di questo turno, non quella dell\'installazione', async () => {
+    const testo = await chiedi({ workspace: '/home/mario/muffin-workspace' });
+    expect(testo).toContain('cartella di lavoro: /home/mario/muffin-workspace');
   });
 
   it('elenca solo i tool esposti a questo principal', async () => {
