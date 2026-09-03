@@ -11,6 +11,16 @@ import { downloadToVault } from './media.js';
 import { startPresence } from './presence.js';
 import { renderForDiscord } from './render.js';
 import type { DiscordAttachment, DiscordMessage } from './api.js';
+import { awaitWithBudget } from '../shared/stop-budget.js';
+import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
+
+/**
+ * Same fallback `connector.ts` (Telegram) documents next to its own copy of
+ * this constant: only reached by a bare `connector.stop()` (a test, or the
+ * REPL/gateway mouth handoff, which never awaits it) — the real shutdown path
+ * always passes the gateway's own `drainBudgetMs`.
+ */
+const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 
 /**
  * Discord as an adapter over the one loop — the second proof of
@@ -175,6 +185,19 @@ export class DiscordConnector {
   /** D2 guard — see `drain()`. */
   private draining = false;
   private redrainRequested = false;
+  /**
+   * The drain currently in flight, if any — same shape as
+   * `TelegramConnector`'s own `draining` field, and for the same reason:
+   * `stop()` needs something to await, not just the `draining` boolean `drain`
+   * already guards re-entrancy with. Read live (not snapshotted) in `stop()`'s
+   * wait loop, because `drain()`'s own `redrainRequested` chain can replace it
+   * with a fresh promise while the wait is still going.
+   */
+  private drainInFlight: Promise<void> | null = null;
+  /** Same meaning as `TelegramConnector.stopping` — see there. */
+  private stopping = false;
+  /** Same meaning as `TelegramConnector.runDone` — resolves once `run()` itself has returned. */
+  private runDone: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: ConnectorDeps) {}
 
@@ -194,63 +217,101 @@ export class DiscordConnector {
    */
   async run(signal?: AbortSignal): Promise<void> {
     const log = this.deps.log ?? (() => {});
-    const me = await this.deps.api.me();
-    // Nessuna registrazione di salute qui, e la mancanza e' la riparazione:
-    // `me()` che risponde prova che il token vale e che la rete c'e', **non**
-    // che arrivino i messaggi — quelli dipendono dal socket. Dirlo qui e'
-    // costato un ✓ verde su un Discord provatamente morto, perche' `run()` si
-    // risolve anche quando rinuncia (4004/4013/4014) e nessuno lo contraddiceva
-    // piu'. A dire «connessa» e' READY, sotto; `connectSurfaces` ha gia'
-    // dichiarato l'attesa prima di arrivare qui.
-    log(`discord: connesso come @${me.username} (${me.id})`);
-
-    // Anything left pending from a previous life comes first, before new work.
-    await this.drain();
-
-    this.gateway = new DiscordGateway({
-      token: this.deps.config.token,
-      intents: 1 << 12, // DIRECT_MESSAGES only
-      gatewayUrl: async () => {
-        const { url } = await this.deps.api.gatewayUrl();
-        return url;
-      },
-      onDispatch: (event, data) => {
-        if (event !== 'MESSAGE_CREATE') return;
-        // U1 — `data` is `unknown` here (the gateway's own `onDispatch`
-        // signature says so); the id used as the inbox's primary key comes
-        // from the same schema `drainOnce()` validates against below, not
-        // from an `as DiscordMessage` cast. A payload that fails to parse has
-        // no id this file can trust to store it under, so it is refused at
-        // the door — logged, never promoted — rather than accepted under a
-        // borrowed or synthetic key.
-        const parsed = DiscordMessageSchema.safeParse(data);
-        if (!parsed.success) {
-          log(`discord: MESSAGE_CREATE scartato all'ingresso, payload non valido — ${describeZodIssues(parsed.error)}`);
-          return;
-        }
-        const stored = this.deps.inbox.accept(parsed.data.id, parsed.data, this.now());
-        // A duplicate (RESUMED replay, or a rare Discord-side redelivery) is
-        // silently absorbed by the inbox's primary key; only a genuinely new
-        // arrival triggers a drain, so a busy resume does not re-walk the
-        // whole pending set once per event.
-        if (stored) void this.drain();
-      },
-      ...(this.deps.wsFactory === undefined ? {} : { wsFactory: this.deps.wsFactory }),
-      onLog: (line) => log(line),
-      // Il battito vero di questa superficie. La `connessa` qui sopra dice
-      // soltanto che `me()` ha risposto una volta; da qui in avanti a parlare
-      // e' il socket, che e' l'unica cosa che porta i messaggi.
-      onStato: (viva, causa) => {
-        if (viva) this.deps.salute?.connessa('discord', new Date(this.now()));
-        else this.deps.salute?.caduta('discord', causa ?? 'gateway giu', new Date(this.now()));
-      },
+    this.stopping = false;
+    let resolveRunDone!: () => void;
+    this.runDone = new Promise<void>((resolve) => {
+      resolveRunDone = resolve;
     });
+    try {
+      const me = await this.deps.api.me();
+      // Nessuna registrazione di salute qui, e la mancanza e' la riparazione:
+      // `me()` che risponde prova che il token vale e che la rete c'e', **non**
+      // che arrivino i messaggi — quelli dipendono dal socket. Dirlo qui e'
+      // costato un ✓ verde su un Discord provatamente morto, perche' `run()` si
+      // risolve anche quando rinuncia (4004/4013/4014) e nessuno lo contraddiceva
+      // piu'. A dire «connessa» e' READY, sotto; `connectSurfaces` ha gia'
+      // dichiarato l'attesa prima di arrivare qui.
+      log(`discord: connesso come @${me.username} (${me.id})`);
+      // `stop()` may have been called while `me()` was still in flight — the
+      // same window `TelegramConnector.run` guards after its own `getMe()`.
+      // Without this a stop requested during boot is silently ignored and the
+      // socket connects anyway, moments after the process was told to leave.
+      if (this.stopping) return;
 
-    await this.gateway.run(signal);
+      // Anything left pending from a previous life comes first, before new work.
+      await this.drain();
+      if (this.stopping) return;
+
+      this.gateway = new DiscordGateway({
+        token: this.deps.config.token,
+        intents: 1 << 12, // DIRECT_MESSAGES only
+        gatewayUrl: async () => {
+          const { url } = await this.deps.api.gatewayUrl();
+          return url;
+        },
+        onDispatch: (event, data) => {
+          if (event !== 'MESSAGE_CREATE') return;
+          // U1 — `data` is `unknown` here (the gateway's own `onDispatch`
+          // signature says so); the id used as the inbox's primary key comes
+          // from the same schema `drainOnce()` validates against below, not
+          // from an `as DiscordMessage` cast. A payload that fails to parse has
+          // no id this file can trust to store it under, so it is refused at
+          // the door — logged, never promoted — rather than accepted under a
+          // borrowed or synthetic key.
+          const parsed = DiscordMessageSchema.safeParse(data);
+          if (!parsed.success) {
+            log(`discord: MESSAGE_CREATE scartato all'ingresso, payload non valido — ${describeZodIssues(parsed.error)}`);
+            return;
+          }
+          const stored = this.deps.inbox.accept(parsed.data.id, parsed.data, this.now());
+          // A duplicate (RESUMED replay, or a rare Discord-side redelivery) is
+          // silently absorbed by the inbox's primary key; only a genuinely new
+          // arrival triggers a drain, so a busy resume does not re-walk the
+          // whole pending set once per event.
+          if (stored) void this.drain();
+        },
+        ...(this.deps.wsFactory === undefined ? {} : { wsFactory: this.deps.wsFactory }),
+        onLog: (line) => log(line),
+        // Il battito vero di questa superficie. La `connessa` qui sopra dice
+        // soltanto che `me()` ha risposto una volta; da qui in avanti a parlare
+        // e' il socket, che e' l'unica cosa che porta i messaggi.
+        onStato: (viva, causa) => {
+          if (viva) this.deps.salute?.connessa('discord', new Date(this.now()));
+          else this.deps.salute?.caduta('discord', causa ?? 'gateway giu', new Date(this.now()));
+        },
+      });
+
+      await this.gateway.run(signal);
+    } finally {
+      resolveRunDone();
+    }
   }
 
-  stop(): void {
+  /**
+   * Same contract as `TelegramConnector.stop`, over the websocket instead of a
+   * long poll: signal the gateway to close, then wait for `run()` to actually
+   * return — which for Discord means the socket's own `close` event fired,
+   * `gateway.ts`'s `connectOnce` — and for any drain already under way (a
+   * queued message, possibly a whole turn) to finish or be abandoned, bounded
+   * by `budgetMs` (`connectors/shared/stop-budget.ts`). `cli/surface.ts` calls
+   * this with the gateway's own drain budget, same as Telegram's — one number,
+   * not two.
+   */
+  async stop(budgetMs = DEFAULT_STOP_BUDGET_MS): Promise<boolean> {
+    const log = this.deps.log ?? (() => {});
+    this.stopping = true;
     this.gateway?.stop();
+    const deadline = Date.now() + budgetMs;
+    let finished = await awaitWithBudget(this.runDone, Math.max(0, deadline - Date.now()));
+    while (finished && this.drainInFlight !== null) {
+      finished = await awaitWithBudget(this.drainInFlight, Math.max(0, deadline - Date.now()));
+    }
+    if (!finished) {
+      log(
+        `discord: fermata non confermata entro ${Math.round(budgetMs / 1000)}s — un messaggio potrebbe essere rimasto a metà, riprende al prossimo avvio`,
+      );
+    }
+    return finished;
   }
 
   /**
@@ -275,24 +336,33 @@ export class DiscordConnector {
    * been read would sit answered by nobody until some unrelated later
    * dispatch happened to trigger a fresh drain.
    */
-  private async drain(): Promise<void> {
+  private drain(): Promise<void> {
     if (this.draining) {
       this.redrainRequested = true;
-      return;
+      // Not a fresh promise: the caller (`stop()` included) that wants "done"
+      // means "whatever is currently the tail of this chain", and the in-flight
+      // walk already guarded by `this.draining` is exactly that.
+      return this.drainInFlight ?? Promise.resolve();
     }
     this.draining = true;
-    try {
-      do {
-        this.redrainRequested = false;
-        await this.drainOnce();
-      } while (this.redrainRequested);
-    } finally {
-      this.draining = false;
-    }
+    const run = (async () => {
+      try {
+        do {
+          this.redrainRequested = false;
+          await this.drainOnce();
+        } while (this.redrainRequested);
+      } finally {
+        this.draining = false;
+        this.drainInFlight = null;
+      }
+    })();
+    this.drainInFlight = run;
+    return run;
   }
 
   /** One pass over whatever `inbox.pending()` returns right now. */
   private async drainOnce(): Promise<void> {
+    const log = this.deps.log ?? (() => {});
     for (const stored of this.deps.inbox.pending()) {
       // U1 — validated against the same schema `onDispatch` uses, not
       // `JSON.parse(...) as DiscordMessage`. A row can only get here via
@@ -306,27 +376,48 @@ export class DiscordConnector {
         // Marked processed, not retried: the same bytes would fail the same
         // way forever, so leaving it pending would only make `doctor` see a
         // queue that never empties. Never promoted to `parseMessage`/`handle`.
-        this.deps.inbox.markProcessed(stored.messageId, this.now());
-        (this.deps.log ?? (() => {}))(
-          `discord: messaggio ${stored.messageId} scartato, payload non valido — ${describeZodIssues(parsed.error)}`,
-        );
+        this.markProcessedQuietly(stored.messageId, log);
+        log(`discord: messaggio ${stored.messageId} scartato, payload non valido — ${describeZodIssues(parsed.error)}`);
         continue;
       }
       const incoming = parseMessage(parsed.data);
 
       if (!incoming) {
-        this.deps.inbox.markProcessed(stored.messageId, this.now());
+        this.markProcessedQuietly(stored.messageId, log);
         continue;
       }
 
       try {
         await this.handle(incoming);
-        this.deps.inbox.markProcessed(stored.messageId, this.now());
+        this.markProcessedQuietly(stored.messageId, log);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.deps.inbox.markFailed(stored.messageId, reason);
-        (this.deps.log ?? (() => {}))(`discord: messaggio ${stored.messageId} fallito — ${reason}`);
+        // `this.stopping` checked before touching `error.message` for the same
+        // reason `TelegramConnector.drain` does: past `stop()`'s budget the
+        // database is closed underneath this turn, and the raw message is the
+        // driver's own `The database connection is not open` — not a sentence
+        // for the owner.
+        const reason = this.stopping
+          ? 'interrotto dallo spegnimento — resta da elaborare al prossimo avvio'
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        try {
+          this.deps.inbox.markFailed(stored.messageId, reason);
+        } catch {
+          // Nothing left to record it in; the log line below is what survives.
+        }
+        log(`discord: messaggio ${stored.messageId} fallito — ${reason}`);
       }
+    }
+  }
+
+  /** `markProcessed`, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
+  private markProcessedQuietly(messageId: string, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.markProcessed(messageId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`discord: messaggio ${messageId} interrotto dallo spegnimento — resta da elaborare al prossimo avvio`);
     }
   }
 
