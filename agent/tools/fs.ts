@@ -116,7 +116,7 @@ export const DISK_TIER: TrustTier = 2;
  * **No tier moves.** `DISK_TIER` is what it was, the effect rows are what they
  * were, and nothing became more or less allowed: the kernel decides on
  * `capability`, `resourceKind` and the turn's taint, never on the shape of a
- * tool's `content` string. `agent/tools/fence-non-sposta-decisioni.test.ts`
+ * tool's `content` string. `agent/decisioni-invariate-col-recinto.test.ts`
  * is the thing that fails if that stops being true.
  */
 export const DISK_FENCE_LABEL = 'file';

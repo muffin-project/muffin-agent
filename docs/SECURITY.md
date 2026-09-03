@@ -120,12 +120,28 @@ through the same function (`fenceDisk`, `agent/tools/fs.ts`, imported by
 `shell.ts`), and no tier or effect row moved with them.
 
 Two doors stay outside the fence on purpose, and the reasons are recorded where
-they are enforced: `skill_read` (tier 1) returns owner-installed skill files,
-which are instructions by design; `process_list` (tier 1) returns the host
-describing itself, where naming an entry already costs an attacker code
-execution. So **the absence of a fence is not a statement that content is
-trusted**, and the operating block of the system prompt says so to the model in
-those words.
+they are enforced. `skill_read` (tier 1) returns owner-installed skill files,
+which are instructions by design — and ADR-0059 strengthened rather than
+weakened that: skills live under the Muffin home, `mandatoryGuards` puts the
+home in `denyWrite`, and the workspace is outside it, so neither `fs_write` nor
+`shell_run` can plant a skill file. `process_list` (tier 1) returns the host
+describing itself; the cost to an attacker is an approved `shell_run`, not code
+execution on the host, and on macOS `ps -eo comm` is a full executable path
+(measured: lines up to ~205 characters) rather than the 15-character `comm`
+Linux gives. It stays a marginal channel — whoever holds `shell_run` already has
+its stdout, which *is* fenced now — and it is written down at its real width
+rather than at a flattering one.
+
+Two more doors carry bytes off the disk that **cannot** be fenced at all:
+`loadImage` (`agent/images.ts`) and the voice path
+(`connectors/telegram/connector.ts`) hand the model an image or audio block, and
+a block of media has no text frame to put a marker in. Their tier is right
+(`maxTier(tierOf(principal), contentTaint)`), and that is the whole defence.
+
+So **the absence of a fence is not a statement that content is trusted**, and
+the operating block of the system prompt says so to the model in those words —
+which is the load-bearing half of that sentence, precisely because these four
+doors exist.
 
 History must preserve the taint of content that is reinjected later. A session
 transcript is not a trust laundromat. Speaker/actor metadata must also survive

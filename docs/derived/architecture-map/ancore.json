@@ -1681,7 +1681,7 @@
   },
   "core/memory/spotlight.ts:58": {
     "path": "core/memory/spotlight.ts",
-    "line": 58,
+    "line": 70,
     "testo": "export function fence(label: string, body: string, note?: string, nonce_?: string): Fence {"
   },
   "core/memory/store.test.ts:124": {
