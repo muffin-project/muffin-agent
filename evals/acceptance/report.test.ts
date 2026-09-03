@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { promoteMarker } from './manifest.js';
-import { chiaviEsito, outcomesOf, summarize, type InventoryRow, type TestOutcome } from './report.js';
+import { chiaviEsito, outcomesOf, parseInventoryRows, summarize, type InventoryRow, type TestOutcome } from './report.js';
 import type { ScenarioEntry } from './manifest.js';
 
 /**
@@ -534,5 +534,32 @@ describe('outcomesOf — i modi rimasti di perdere un rosso', () => {
         ],
       }),
     ).not.toThrow();
+  });
+});
+
+describe('parseInventoryRows — una barra dentro una cella non fa sparire la riga', () => {
+  const riga = (stato: string) => `| A6 | Upgrade | Aggiornare il codice non distrugge dati? | ${stato} |`;
+
+  it('legge una riga il cui stato contiene un `\\|` sfuggito, che in Markdown è legale', () => {
+    const rows = parseInventoryRows(riga(String.raw`READY — chiuso da ADR-0057: \|--channel <main\|dev>\|`), 'finto.md');
+    expect(rows.map((r) => r.id)).toEqual(['A6']);
+    expect(rows[0]!.stato).toBe('READY');
+    expect(rows[0]!.rawStato).toContain('main');
+    expect(rows[0]!.rawStato).toContain('dev');
+  });
+
+  it('e la stessa riga senza barre si legge identica — la tolleranza non cambia il caso normale', () => {
+    const rows = parseInventoryRows(riga('READY — chiuso da ADR-0057'), 'finto.md');
+    expect(rows.map((r) => r.id)).toEqual(['A6']);
+    expect(rows[0]!.area).toBe('Upgrade');
+    expect(rows[0]!.question).toBe('Aggiornare il codice non distrugge dati?');
+  });
+
+  it('una barra NON sfuggita resta un separatore di colonna: la riga ha troppe celle e non è una riga di dati', () => {
+    expect(parseInventoryRows(`${riga('READY — a | b')}\n${riga('READY — sano')}`, 'finto.md').length).toBe(1);
+  });
+
+  it('il separatore `|---|` continua a non essere una riga di dati', () => {
+    expect(() => parseInventoryRows('|---|---|---|---|', 'finto.md')).toThrow(/parser è disallineato/);
   });
 });

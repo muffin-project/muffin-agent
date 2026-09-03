@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { atomicSymlink, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
+import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, runUpdate, describeBuild } from './update.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -848,5 +848,216 @@ describe('gli script fanno quello che dice il loro nome', () => {
    */
   it('e `compile` resta, perché è quello che install.sh e update chiamano', () => {
     expect(scripts.compile).toContain('tsconfig.build.json');
+  });
+});
+
+/**
+ * Il canale, e la riga che il 03/09/2026 non c'era.
+ *
+ * Misurato quel giorno sulla macchina dell'owner: il launcher puntava a
+ * `5c49f1e`, che **era** la testa di `origin/main`, quindi `muffin update`
+ * usciva 0 e diceva «già aggiornato». Era vero. Nello stesso istante
+ * `origin/dev` era avanti di sette commit non-merge, compresa la correzione
+ * che l'owner stava aspettando, e nessuno aveva ancora aperto la PR di
+ * promozione. Il comando stampava gli stessi byte per «non c'è niente di
+ * nuovo» e per «c'è parecchio, nessuno l'ha promosso».
+ *
+ * Il `git` finto è la stessa forma già usata da `describeBuild` qui sopra —
+ * una mappa `argomenti → risposta` — con una scelta in più: **una chiamata non
+ * mappata esce 1**. Un fake permissivo direbbe «0 commit» a una domanda che
+ * nessuno ha fatto, ed è precisamente la classe di bugia che questi test
+ * esistono per impedire.
+ */
+describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
+  const MAIN = 'a'.repeat(40);
+
+  const canaleRunner =
+    (map: Record<string, { status: number; stdout: string }>, root: string): FakeGit =>
+    (args: string[]): FakeResult => {
+      const key = args.join(' ');
+      const r = map[key];
+      if (r) return { ...r, stderr: '' };
+      if (key === 'worktree list --porcelain') return { status: 0, stdout: `worktree ${root}\n`, stderr: '' };
+      return { status: 1, stdout: '', stderr: `git finto: nessuna risposta mappata per \`git ${key}\`` };
+    };
+
+  /** Il canale `main` non ha niente di nuovo, e `dev` è avanti di sette: il caso dell'owner. */
+  const settePronti = (root: string): FakeGit =>
+    canaleRunner(
+      {
+        'fetch origin +refs/heads/main:refs/remotes/origin/main': { status: 0, stdout: '' },
+        'rev-parse refs/remotes/origin/main': { status: 0, stdout: `${MAIN}\n` },
+        'rev-parse --short refs/remotes/origin/main': { status: 0, stdout: '5c49f1e\n' },
+        'rev-parse HEAD': { status: 0, stdout: `${MAIN}\n` },
+        [`rev-list --count ${MAIN}..${MAIN}`]: { status: 0, stdout: '0\n' },
+        'fetch origin +refs/heads/dev:refs/remotes/origin/dev': { status: 0, stdout: '' },
+        'rev-list --count refs/remotes/origin/main..refs/remotes/origin/dev': { status: 0, stdout: '7\n' },
+      },
+      root,
+    );
+
+  it('«già aggiornato» nomina quanti commit aspettano, e su quale ramo', () => {
+    const root = dir('muffin-canale-');
+    const result = runUpdate({ moduleDir: root, home: dir('muffin-canale-home-'), git: settePronti(root) });
+
+    expect(result.code).toBe(0);
+    expect(result.steps.some((s) => /già aggiornato/.test(s.detail))).toBe(true);
+
+    // Il numero E il ramo: senza uno dei due la riga torna a essere il
+    // silenzio con cui l'owner ha concluso la cosa sbagliata.
+    const canale = result.steps.find((s) => s.name === 'canale');
+    expect(canale, 'nessun passo `canale`: il silenzio del 03/09 è tornato').toBeDefined();
+    expect(canale?.detail).toContain('7');
+    expect(canale?.detail).toContain('origin/dev');
+    expect(canale?.detail).toContain('muffin update --channel dev');
+  });
+
+  it('la riga arriva anche a chi legge i passi mentre succedono, non solo nel riepilogo', () => {
+    const root = dir('muffin-canale-live-');
+    const vivi: string[] = [];
+    runUpdate({ moduleDir: root, home: dir('muffin-canale-home-'), git: settePronti(root), onStep: (s) => void vivi.push(s.name) });
+    expect(vivi).toContain('canale');
+  });
+
+  it('se il ramo a monte non si legge, dichiara di non saperlo invece di stampare zero', () => {
+    const root = dir('muffin-canale-cieco-');
+    const result = runUpdate({
+      moduleDir: root,
+      home: dir('muffin-canale-home-'),
+      git: canaleRunner(
+        {
+          'fetch origin +refs/heads/main:refs/remotes/origin/main': { status: 0, stdout: '' },
+          'rev-parse refs/remotes/origin/main': { status: 0, stdout: `${MAIN}\n` },
+          'rev-parse --short refs/remotes/origin/main': { status: 0, stdout: '5c49f1e\n' },
+          'rev-parse HEAD': { status: 0, stdout: `${MAIN}\n` },
+          [`rev-list --count ${MAIN}..${MAIN}`]: { status: 0, stdout: '0\n' },
+          // il fetch di `dev` fallisce: rete, permessi, o il ramo non c'è.
+          'fetch origin +refs/heads/dev:refs/remotes/origin/dev': { status: 1, stdout: '' },
+        },
+        root,
+      ),
+    });
+
+    expect(result.code).toBe(0); // il canale letto è a posto: l'update non fallisce per l'altro
+    const canale = result.steps.find((s) => s.name === 'canale');
+    expect(canale?.detail).toMatch(/non riesco a leggere origin\/dev/);
+    expect(canale?.detail).not.toMatch(/\d+ commit/); // nessun numero inventato
+  });
+
+  it('leggendo `dev` dice che non c\'è nessun canale più avanti', () => {
+    const root = dir('muffin-canale-dev-');
+    const result = runUpdate({
+      moduleDir: root,
+      home: dir('muffin-canale-home-'),
+      channel: 'dev',
+      git: canaleRunner(
+        {
+          'fetch origin +refs/heads/dev:refs/remotes/origin/dev': { status: 0, stdout: '' },
+          'rev-parse refs/remotes/origin/dev': { status: 0, stdout: `${MAIN}\n` },
+          'rev-parse --short refs/remotes/origin/dev': { status: 0, stdout: 'aaaaaaa\n' },
+          'rev-parse HEAD': { status: 0, stdout: `${MAIN}\n` },
+          [`rev-list --count ${MAIN}..${MAIN}`]: { status: 0, stdout: '0\n' },
+        },
+        root,
+      ),
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.steps.find((s) => s.name === 'fetch')?.detail).toContain('origin/dev');
+    expect(result.steps.find((s) => s.name === 'canale')?.detail).toMatch(/non c'è nessun canale più avanti/);
+  });
+});
+
+describe('channelLagNote', () => {
+  it('con lavoro in attesa porta numero, ramo e il comando che lo installa', () => {
+    const t = channelLagNote({ channel: 'main', upstream: 'dev', ahead: 7 });
+    expect(t).toContain('7');
+    expect(t).toContain('origin/dev');
+    expect(t).toContain('origin/main');
+    expect(t).toContain('--channel dev');
+  });
+
+  it('quando non c\'è niente in attesa lo dice, invece di tacere', () => {
+    expect(channelLagNote({ channel: 'main', upstream: 'dev', ahead: 0 })).toMatch(/niente in attesa/);
+  });
+
+  it('una distanza non misurata resta non misurata', () => {
+    const t = channelLagNote({ channel: 'main', upstream: 'dev', ahead: null });
+    expect(t).toMatch(/non riesco a leggere/);
+    expect(t).not.toMatch(/\d/);
+  });
+});
+
+/**
+ * Cosa è appena stato installato.
+ *
+ * Fino al 03/09/2026 un aggiornamento riuscito diceva dove punta il symlink e
+ * nient'altro: l'owner non imparava niente su ciò che aveva appena messo sulla
+ * propria macchina. I soggetti stanno fra il marker vecchio e quello nuovo, e
+ * il comando li aveva già entrambi in mano.
+ */
+describe('runUpdate — l\'elenco di cosa è arrivato', () => {
+  it('porta i soggetti veri fra il marker vecchio e quello nuovo', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    pushNewVersion(f, 'v3');
+    pushNewVersion(f, 'v4');
+    const { bindir } = seedLauncher(f.installed);
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home: dir('muffin-novita-home-'),
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    });
+
+    expect(result.code).toBe(0);
+    const novita = result.steps.find((s) => s.name === 'novità');
+    expect(novita?.detail).toContain('3 commit installati');
+    // I soggetti veri, non un conteggio travestito da elenco.
+    for (const label of ['v2', 'v3', 'v4']) expect(novita?.detail).toContain(label);
+  });
+
+  it('quando `git log` non risponde degrada al conteggio, e l\'update resta riuscito', () => {
+    const f = makeFixture();
+    pushNewVersion(f, 'v2');
+    const { bindir, entry0 } = seedLauncher(f.installed);
+    // Il caso vero: un marker che punta a un commit che non c'è più (potato,
+    // o scritto da una release più vecchia). L'elenco manca; la release no.
+    const senzaLog: FakeGit = (args, cwd) => (args[0] === 'log' ? { status: 1, stdout: '', stderr: 'fatal: bad revision' } : realGit(args, cwd));
+
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home: dir('muffin-novita-home-'),
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+      git: senzaLog,
+    });
+
+    expect(result.code).toBe(0);
+    const novita = result.steps.find((s) => s.name === 'novità');
+    expect(novita?.done).toBe(true);
+    expect(novita?.detail).toMatch(/1 commit installati/);
+    expect(novita?.detail).toMatch(/non riesco a elencarli/);
+    // e lo scambio è avvenuto lo stesso: l'elenco è un racconto, non un gate.
+    expect(readlinkSync(join(bindir, 'muffin'))).not.toBe(entry0);
+  });
+});
+
+describe('arrivalsSummary', () => {
+  it('taglia a un numero sano e conta il resto', () => {
+    const subjects = Array.from({ length: 25 }, (_, i) => `soggetto ${i + 1}`);
+    const t = arrivalsSummary({ subjects, fallbackCount: 25, max: 10 });
+    expect(t.split('\n').filter((l) => l.startsWith('  · ')).length).toBe(10);
+    expect(t).toContain('… e altri 15');
+  });
+
+  it('senza elenco degrada al conteggio invece di saltare', () => {
+    expect(() => arrivalsSummary({ subjects: null, fallbackCount: 4 })).not.toThrow();
+    expect(arrivalsSummary({ subjects: null, fallbackCount: 4 })).toMatch(/4 commit/);
   });
 });
