@@ -33,12 +33,40 @@ const USAGE = `usage: tsx evals/character/run.ts [options]
   --base-url <url>                       optional, provider endpoint
   --model <id> | --models <a,b,c>        model(s) under test, comma-separated
   --api-key-env <VAR>                    env var holding the API key (never printed, never argv)
+                                         default: LLM_API_KEY, else OPENROUTER_API_KEY
   --judge-model <id>                     judge model, same provider/base-url/api-key-env
   --config <file.json>                   alternative to the flags above, outside any home — see README
   --probes <a,b,c>                       optional filter, default: all 17
   --out <dir>                            default: evals/character/out
   --dry-run                              fake provider only, prints a token estimate, no judge, no network
-Never reads or writes ~/.muffin. Requires --judge-model (or "judge" in --config) unless --dry-run.`;
+Never reads or writes ~/.muffin. Requires --judge-model (or "judge" in --config) unless --dry-run.
+Senza una chiave nell'ambiente il comando esce 78 e dice quale variabile serve: la chiave
+non si passa mai in argv, e non viene mai stampata.`;
+
+/**
+ * L'uscita quando manca l'ambiente, non quando la misura va male.
+ *
+ * 78 è `EX_CONFIG` di `sysexits.h`, ed è la stessa cifra che `evals/e2e/telegram.ts`
+ * usa per la stessa cosa — «non ho di che partire», distinto da 1, che qui vuol
+ * dire «sono partito e la corsa ha perso delle misure». Uno script che lancia
+ * questa corsa deve poter distinguere «non configurato» da «rosso» senza leggere
+ * il testo su stderr.
+ */
+export const EXIT_MISSING_ENV = 78;
+
+/** Le variabili da cui la chiave si legge quando `--api-key-env` non la nomina, nell'ordine. */
+export const DEFAULT_KEY_ENVS = ['LLM_API_KEY', 'OPENROUTER_API_KEY'] as const;
+
+/**
+ * L'ambiente non c'è. Un tipo, non una stringa: `main` deve poter uscire 78 su
+ * questa e 1 su tutto il resto, e distinguere leggendo il messaggio è
+ * esattamente il gate-che-è-una-stampa che questo repository ha già pagato.
+ *
+ * Il messaggio nomina **la variabile**, mai il suo contenuto: qui una chiave non
+ * c'è per definizione, ma la classe è anche quella che si usa quando una c'è ed
+ * è sbagliata, e la regola vale prima che serva.
+ */
+export class MissingApiKey extends Error {}
 
 export type ProviderKind = 'anthropic' | 'openai-compat';
 
@@ -63,7 +91,16 @@ export type RunConfig = {
 
 const DRY_RUN_DEFAULT_MODELS = ['claude-sonnet-5', 'claude-haiku-4-5-20251001'];
 
-/** Pure — no filesystem beyond an explicit `--config` path, no env reads beyond `--config`. Testable without a home. */
+/**
+ * Argv → configurazione. Nessun filesystem oltre a un `--config` esplicito, e
+ * mai `~/.muffin`.
+ *
+ * L'unica lettura d'ambiente è **la presenza** di `LLM_API_KEY`/`OPENROUTER_API_KEY`
+ * quando `--api-key-env` non nomina una variabile: serve a scegliere il nome da
+ * cui leggere, e il valore non viene toccato qui. Un `--api-key-env` esplicito
+ * salta del tutto questa strada — la porta stretta resta aperta e resta la
+ * preferibile per una corsa che va riprodotta.
+ */
 export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   const { values } = parseArgs({
     args: argv,
@@ -103,8 +140,7 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
     if (provider !== 'anthropic' && provider !== 'openai-compat') {
       throw new Error(`${USAGE}\n\nserve --provider anthropic|openai-compat (o --config)`);
     }
-    const apiKeyEnv = values['api-key-env'];
-    if (!apiKeyEnv) throw new Error(`${USAGE}\n\nserve --api-key-env <NOME_VAR> (o --config)`);
+    const apiKeyEnv = values['api-key-env'] ?? defaultApiKeyEnv();
     const modelsRaw = values.models ?? values.model;
     if (!modelsRaw) throw new Error(`${USAGE}\n\nserve --model o --models (o --config)`);
     const ids = modelsRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
@@ -119,9 +155,32 @@ export function parseCli(argv: string[], defaultOutDir: string): RunConfig {
   return { models, judge, dryRun, probeIds, outDir };
 }
 
+/**
+ * Il nome della variabile da cui leggere la chiave, quando nessuno l'ha detto.
+ *
+ * Stesse due variabili di `evals/e2e/telegram.ts`, nello stesso ordine, perché
+ * chi ha già una corsa reale in piedi non deve impararne un terzo nome. Il
+ * messaggio d'errore continua a citare `--api-key-env`: la porta esplicita
+ * resta quella da usare in uno script, e chi legge l'errore deve trovarla.
+ */
+function defaultApiKeyEnv(): string {
+  const found = DEFAULT_KEY_ENVS.find((name) => (process.env[name] ?? '') !== '');
+  if (found) return found;
+  throw new MissingApiKey(
+    `serve la chiave del modello nell'ambiente: né ${DEFAULT_KEY_ENVS.join(' né ')} sono impostate. ` +
+      "Esportane una nella shell (mai in argv, mai in un file del repo), oppure indica con --api-key-env <NOME_VAR> " +
+      'quale variabile leggere.',
+  );
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`variabile d'ambiente ${name} non impostata — serve la chiave del provider per la corsa reale`);
+  if (!value) {
+    throw new MissingApiKey(
+      `variabile d'ambiente ${name} non impostata — serve la chiave del provider per la corsa reale. ` +
+        'Esportala nella shell: non si passa in argv e non viene stampata.',
+    );
+  }
   return value;
 }
 
@@ -491,7 +550,23 @@ export async function runEval(
    * `ChatCall` che la corsa costruisce, che è l'anello che si è rotto.
    */
   overrides: { judgeProvider?: Provider } = {},
-): Promise<{ reportPath: string; report: string; summary: RunSummary }> {
+): Promise<{
+  reportPath: string;
+  report: string;
+  summary: RunSummary;
+  /** Le home create da `runInit`, una per modello, nell'ordine. Non vengono cancellate: sono ciò contro cui si verifica che il prompt inviato sia l'assemblaggio reale. */
+  homes: string[];
+  /** Il blocco `system` di ogni chiamata registrata dal provider finto — vuoto fuori da `--dry-run`, dove la rete è vera e non c'è niente da registrare. */
+  sentSystemPrompts: string[];
+}> {
+  // La chiave si risolve **prima** di creare qualunque cosa: una corsa che
+  // scopre a metà di non avere l'ambiente ha già scritto una directory di
+  // output, una home e un workspace, e chi la rilancia non sa quali buttare.
+  if (!config.dryRun) {
+    for (const target of config.models) requireEnv(target.apiKeyEnv);
+    if (config.judge && overrides.judgeProvider === undefined) requireEnv(config.judge.apiKeyEnv);
+  }
+
   const probes = config.probeIds ? PROBES.filter((p) => config.probeIds!.includes(p.id)) : PROBES;
   if (probes.length === 0) throw new Error('nessun probe corrisponde a --probes');
 
@@ -500,6 +575,7 @@ export async function runEval(
   mkdirSync(runOutDir, { recursive: true });
 
   const fake: FakeProvider | null = config.dryRun ? await startFakeProvider({ main: [{ text: 'Ok, capito.' }] }) : null;
+  const homes: string[] = [];
   const judgeProvider = overrides.judgeProvider ?? (!config.dryRun && config.judge ? buildProvider(config.judge) : null);
   const reportRows: ReportRow[] = [];
   const tokenRows: TokenRow[] = [];
@@ -507,6 +583,7 @@ export async function runEval(
   try {
     for (const target of config.models) {
       const home = mkdtempSync(join(tmpdir(), 'muffin-character-home-'));
+      homes.push(home);
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-character-ws-'));
       const modelOutDir = join(runOutDir, target.label);
       mkdirSync(modelOutDir, { recursive: true });
@@ -576,7 +653,13 @@ export async function runEval(
   // Anche sotto `--dry-run`, dove `reportRows` è vuoto: zero misure perse su
   // zero misure, `failed: false`. Un dry-run non giudica niente, quindi non può
   // perdere niente — e non deve poter far uscire il comando rosso.
-  return { reportPath, report, summary: summarizeVerdicts(reportRows) };
+  return {
+    reportPath,
+    report,
+    summary: summarizeVerdicts(reportRows),
+    homes,
+    sentSystemPrompts: fake ? fake.requests.map((r) => r.system) : [],
+  };
 }
 
 async function main(): Promise<void> {
@@ -606,6 +689,8 @@ const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathTo
 if (isEntrypoint) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    // 78 solo per «manca l'ambiente». Una corsa partita che perde misure esce 1
+    // dal `main`, e le due cose non devono confondersi in uno script.
+    process.exitCode = error instanceof MissingApiKey ? EXIT_MISSING_ENV : 1;
   });
 }
