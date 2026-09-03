@@ -202,6 +202,15 @@ export type SearchProviderEntry = {
   keysUrl: string;
   /** Il nome che `muffin search` propone per il segreto, quando l'owner non ne ha già uno. */
   secretName: string;
+  /**
+   * L'endpoint fisso a cui questo motore parla — la stessa stringa che
+   * `SearchBackend.endpoint` espone a runtime (`agent/tools/search.ts`), qui e
+   * non lì perché `muffin search <id>` deve sapere quale host proporre per
+   * `rot/egress.json` **prima** di costruire un backend, che vuole già una
+   * chiave. Una fonte sola: `tavilyBackend` legge questo stesso campo invece
+   * di ripetere l'URL.
+   */
+  endpoint: string;
 };
 
 export const SEARCH_PROVIDERS: Readonly<Record<SearchProviderId, SearchProviderEntry>> = {
@@ -210,6 +219,7 @@ export const SEARCH_PROVIDERS: Readonly<Record<SearchProviderId, SearchProviderE
     label: 'Tavily',
     keysUrl: 'https://app.tavily.com/home',
     secretName: 'tavily_api_key',
+    endpoint: 'https://api.tavily.com/search',
   },
 };
 
