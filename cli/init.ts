@@ -93,6 +93,15 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const voiceInstalled = installFile('voice.md', p.voice, options.force ?? false);
   step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
 
+  // La v2 del prompt, accanto alla v1 e non al posto suo. Copiata come le
+  // skill — stesso `installTree`, stessa regola «copia, non sovrascrivere» —
+  // perché sono file che l'owner riscriverà: `defaults/v2/` senza questa riga
+  // resterebbe leggibile solo dal pacchetto, e `muffin doctor` segnalerebbe due
+  // default per sempre `missing`. Copiarli non li **usa**: l'assemblaggio resta
+  // su v1 finché `config.prompt.version` non dice altro.
+  const v2 = installTree('v2', join(p.home, 'v2'), options.force ?? false);
+  step('prompt v2', v2.length > 0 ? `installed ${v2.length} files (non attivi: config.prompt.version resta v1)` : 'already present');
+
   // Pure muffin: the same character for every install, which is what stops a
   // fresh one from having none at all. identity.md ships empty by design — it
   // is the owner's — so without this file a first run had three bullet points
@@ -113,6 +122,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // esattamente la distinzione che il registro esiste per tenere —
   // «di serie, mai toccata» contro «modificata da chi la usa».
   for (const f of skills) copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
+  for (const f of v2) copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
