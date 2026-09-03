@@ -32,10 +32,11 @@ riceve sempre. **Test end-to-end veri**: corsia reale in locale con modello e
 Bot API veri (chiave mai stampata), accanto al finto. Ordine:
 critical-path.md#ordine-corrente punto 2 (a→d).
 
-**Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c
-busy-input in PR (`slice/busy-input`: `controlla`+`scheduleDrain`,
-`core/runtime/pausa.ts`, `steer` nel loop, abort → `aborted`); **2d la corsia
-reale è la prossima** — B11/B13/B2 restano BLOCKER finché non è provata lì.
+**Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c+2d in
+PR #300 (CRITICAL: **serve il giudice** prima del merge). **Il prossimo passo
+è dell'owner:** `npm run e2e:telegram` con un bot di prova
+(`evals/e2e/README.md`) — B11/B13/B2 restano BLOCKER finché quella corsa non è
+verde e datata nelle righe. Poi `dev → main` e `muffin update`.
 
 **Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
 `@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
