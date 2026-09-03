@@ -286,9 +286,24 @@ rinforzi:
    script. Abbiamo scelto l'**exit code**, non un output più vistoso: `muffin
    mcp list --verify` già usa questa convenzione in questo stesso file
    ("pulito" → 0, "qualcosa da rivedere" → 1) — coerenza con un precedente
-   già scritto, non una seconda regola inventata qui. `cmdMcpAdd` ora esce 1
-   quando `--host` è stato nominato ma `widenEgressForCapability` non
-   aggiunge tutto; la registrazione del server non viene toccata.
+   già scritto, non una seconda regola inventata qui. **La stessa regola vale
+   per entrambe le porte**, non solo per `mcp add`: `cmdSearch`
+   (`cli/search-setup.ts`) ha esattamente lo stesso schema — chiave e config
+   si scrivono comunque, `widenEgressForCapability` può fallire per la
+   stessa ragione (nessun terminale, l'owner dice no, il risigillo negato),
+   e prima di questa correzione tornava sempre 0. La prima stesura di questo
+   punto ha corretto solo `cmdMcpAdd` e non `cmdSearch`: due porte con lo
+   stesso meccanismo condiviso (`widenEgressForCapability`) che rispondevano
+   in modo diverso allo stesso evento — esattamente il difetto «un
+   meccanismo, due porte» che questo repository ha già registrato altrove,
+   riapparso dentro la correzione che chiudeva un follow-up su quel difetto.
+   Un secondo giro lo ha chiuso: `cmdSearch` ora esce 1 nello stesso caso, e
+   `cli/egress-widen-exit-symmetry.test.ts` prova la simmetria stessa —
+   invocando entrambe le porte con lo stesso fallimento nello stesso test, e
+   asserendo lo stesso exit code — non solo che ciascuna sia corretta per
+   conto proprio, che i test di `mcp.test.ts` e `search-setup.test.ts` già
+   provavano separatamente e che da soli non avrebbero mai potuto accorgersi
+   della divergenza fra le due.
 
 Nessuna di queste sei tocca `mandatoryGuards`, `core/sandbox/**`, la
 conferma o la regola "solo interattivo" — sono rinforzi sopra un meccanismo
