@@ -22,21 +22,17 @@ vocali: meccanismo su `dev`, macchina pronta, `doctor` verde.
 
 Memo `docs/evidence/dogfood-superfici-2026-09-03.md` — **non ripensare quello
 che c'è scritto.** B11/B13 tornano BLOCKER: il finto provider e il finto Bot
-API provavano il meccanismo, non la forma. Decisioni: **Telegram** una bolla
-per segmento (nuovo messaggio solo quando il modello riparla dopo dei tool;
-passi appesi e mai cancellati; mai testo tagliato; ASK intero; `description`
-su `shell_run`). **CLI** scroll region DECSTBM, casella e stato in fondo, mai
-in cima (costa lo scrollback). **ADR-0054**: messaggio a turno vivo → coda con
-conferma; `/steer` al confine di giro; `/stop`; `/pause`/`/resume`; il poller
-riceve sempre. **Test end-to-end veri**: corsia reale in locale con modello e
-Bot API veri (chiave mai stampata), accanto al finto. Ordine:
-critical-path.md#ordine-corrente punto 2 (a→d).
+API provavano il meccanismo, non la forma. Le decisioni sono nel memo e
+implementate: bolla per segmento su Telegram, scroll region in fondo sulla CLI,
+ADR-0054 (coda a turno vivo, `/steer` `/stop` `/pause` `/resume`), corsia e2e
+reale accanto al finto, e ADR-0055 — risposta ed episodio sono
+`surface.reply`/`memory.write` dichiarate dal kernel, permessi invariati, ora
+osservabili e stringibili.
 
-**Stato delle slice:** 2a Telegram (#298) e 2b CLI (#299) su `dev`; 2c+2d in
-PR #300 (CRITICAL: **serve il giudice** prima del merge). **Il prossimo passo
-è dell'owner:** `npm run e2e:telegram` con un bot di prova
-(`evals/e2e/README.md`) — B11/B13/B2 restano BLOCKER finché quella corsa non è
-verde e datata nelle righe. Poi `dev → main` e `muffin update`.
+**Stato:** 2a→2d e il punto 3 sono su `dev` e su `main`; due giudici hanno
+chiuso ADR-0054, uno ADR-0055. **Il prossimo passo è dell'owner:**
+`npm run e2e:telegram` con un bot di prova (`evals/e2e/README.md`) — B11/B13/B2
+restano BLOCKER finché quella corsa non è verde e datata nelle righe.
 
 **Librerie** (`npm outdated` 03/09): TS 7, vitest 4, better-sqlite3 13,
 `@grammyjs/types` 5 — una major per PR, con l'accettazione Linux.
@@ -55,7 +51,7 @@ prima di costruirlo. Non DAY-1.
 
 **Azioni owner senza codice:** chiave Tavily + `rot/egress.json` ·
 `muffin rot harden` · togliere `discord` da `surfaces.enabled` finché flappa ·
-mergiare #296 (`dev → main`, check verdi) e `muffin update`.
+`muffin update` (main è avanti).
 
 ## Aperto, non bloccante
 
@@ -64,6 +60,12 @@ mergiare #296 (`dev → main`, check verdi) e `muffin update`.
 
 **Harness:** il finto Bot API non serve `getFile` (B10, C8 senza scenario).
 Accettazione ~5 min, tetto 10.
+
+**Code dei giudici (03/09), non bloccanti:** un `/steer` in coda si perde se il
+turno finisce `suspended` (la ripesca sta in `finish`, non in `suspendHere`), e
+la conferma promette il contrario; un `sessions.append` fallito lì è silenzioso;
+`gestiti` nel connettore Telegram non si svuota mai; l'esaustività della porta
+della risposta la garantisce solo il type checker.
 
 **Altro:** `gateway.err` non data le righe; `pricing.ts` sottostima 5
 famiglie su 8; il `try` di `recall.ts` avvolge anche la provenienza.
