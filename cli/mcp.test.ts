@@ -1,10 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadMcpRegistry } from '../core/mcp/registry.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove } from './mcp.js';
+import { runInit } from './init.js';
+import { paths } from '../core/config/config.js';
+import { verify } from '../core/rot/verify.js';
 
 const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -55,6 +58,90 @@ describe('muffin mcp verbs', () => {
   });
 });
 
+/**
+ * `--host` — la stessa porta di `muffin search` (ADR-0058), attraversata da
+ * `widenEgressForCapability`. Il server MCP di prova non parla mai davvero
+ * con quegli host: quello che conta qui è solo se `rot/egress.json` cambia.
+ */
+describe('muffin mcp add --host', () => {
+  function home(): string {
+    const h = mkdtempSync(join(tmpdir(), 'muffin-mcphost-'));
+    runInit({ home: h, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
+    return h;
+  }
+
+  function egressAllow(h: string): string[] {
+    return JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8')).allow;
+  }
+
+  it('senza --host non tocca affatto l egress', async () => {
+    const h = home();
+    expect(await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {})).toBe(0);
+    expect(egressAllow(h)).toEqual([]);
+  });
+
+  it('con --host e conferma, aggiunge esattamente gli host nominati e risigilla', async () => {
+    const h = home();
+    const domande: string[] = [];
+    const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, ['a.example', 'b.example'], {
+      out: () => {},
+      chiediConferma: (d) => {
+        domande.push(d);
+        return Promise.resolve('s');
+      },
+    });
+    expect(code).toBe(0);
+    expect(domande).toHaveLength(1);
+    expect(domande[0]).toContain('«echo»');
+    expect(egressAllow(h)).toEqual(['a.example', 'b.example']);
+    expect(verify(h, 'single-user').ok).toBe(true);
+  });
+
+  it('senza chiediConferma (nessun terminale): approva il server comunque, ma non allarga l egress', async () => {
+    const h = home();
+    const { sink, out } = (() => {
+      const buf: string[] = [];
+      return { out: buf, sink: (l: string) => void buf.push(l) };
+    })();
+    const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, ['a.example'], { out: sink });
+    expect(code).toBe(0);
+    expect(loadMcpRegistry(h).servers.echo).toBeDefined();
+    expect(egressAllow(h)).toEqual([]);
+    expect(out.join('\n')).toContain('nessun terminale interattivo');
+  });
+
+  /**
+   * `--host ''` — tipicamente `--host "$MCP_HOST"` con la variabile non
+   * impostata, un incidente di shell ordinario, non un attacco. Prima della
+   * validazione in `widenEgressForCapability` questo finiva scritto e
+   * sigillato tale e quale: `loadEgress()` fallisce su una stringa vuota, e
+   * il catch muto in `agent/runtime.ts` azzera OGNI host già approvato al
+   * prossimo avvio. Il server MCP resta comunque approvato: la variabile
+   * vuota è un problema dell host, non dell approvazione dei suoi tool.
+   */
+  it('--host \'\' (una variabile di shell non impostata): rifiuta l host, non scrive, non sigilla nulla', async () => {
+    const h = home();
+    const { out, sink } = (() => {
+      const buf: string[] = [];
+      return { out: buf, sink: (l: string) => void buf.push(l) };
+    })();
+    let chiesto = 0;
+    const code = await cmdMcpAdd(h, 'echo', process.execPath, [FIXTURE], {}, [''], {
+      out: sink,
+      chiediConferma: () => {
+        chiesto += 1;
+        return Promise.resolve('s');
+      },
+    });
+    expect(code).toBe(0); // il server è comunque approvato
+    expect(loadMcpRegistry(h).servers.echo).toBeDefined();
+    expect(chiesto).toBe(0);
+    expect(egressAllow(h)).toEqual([]);
+    expect(out.join('\n')).toMatch(/non è un host valido/);
+    expect(verify(h, 'single-user').ok).toBe(true);
+  });
+});
+
 
 import { spawnSync } from 'node:child_process';
 
@@ -67,6 +154,43 @@ function muffin(dir: string, args: string[]): { code: number; out: string; err: 
   });
   return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
+
+/**
+ * Il binario vero, invocato senza terminale — esattamente la condizione di
+ * `spawnSync` (stdin è una pipe, mai un TTY) e la stessa condizione che il
+ * figlio sandboxato di `sys.shell` produce sempre (`stdio: ['ignore', 'pipe',
+ * 'pipe']`, `core/sandbox/executor.ts`). Non c'è un `--yes`/`--force` da
+ * passare: il flag non esiste, e non ne aggiungiamo uno — la conferma dipende
+ * solo da `isatty(0)` misurato dentro `main()` al momento in cui gira, non da
+ * un argomento che un chiamante automatico potrebbe scrivere.
+ */
+describe('muffin mcp add --host, dal binario vero e senza terminale', () => {
+  it('approva il server ma non allarga rot/egress.json — nessuna domanda può arrivare a un flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-mcphost-real-'));
+    try {
+      runInit({ home: dir, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
+      const egressPath = join(paths(dir).rot, 'egress.json');
+      const prima = readFileSync(egressPath, 'utf8');
+
+      const r = muffin(dir, [
+        'mcp',
+        'add',
+        'echo',
+        '--host',
+        'api.example.com',
+        '--',
+        process.execPath,
+        FIXTURE,
+      ]);
+      expect(r.code).toBe(0);
+      expect(readFileSync(egressPath, 'utf8')).toBe(prima);
+      expect(r.err + r.out).toContain('nessun terminale interattivo');
+      expect(verify(dir, 'single-user').ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
 
 describe('una chiave di un server MCP non passa per argv (correzione owner 18/08)', () => {
   it('rifiuta --env K=valore e insegna il riferimento', () => {
