@@ -171,6 +171,60 @@ const SUPERFICI: Readonly<Record<string, string>> = {
 };
 
 /**
+ * I fatti d'istanza a bassa cardinalità che `ambienteSection` aggiunge, per
+ * `docs/evidence/orizzonte-del-turno-2026-09-03.md` Parte 0.
+ *
+ * **Non una seconda fonte.** Ogni campo qui è lo stesso valore che
+ * `agent/tools/inspect.ts` (`sys_inspect`) legge dalla stessa sorgente —
+ * `FsScope.root`, `config.provider.kind`, `jobs.list()`, il `safeMode`
+ * calcolato al boot. Questo tipo non ricalcola niente; raccoglie un
+ * sottoinsieme cheap di quegli stessi valori per non pagare 31 letture
+ * ridondanti a sessione dello stesso dato (`sys_inspect` era il 13% delle 238
+ * chiamate misurate sull'installazione dell'owner).
+ *
+ * **Perché proprio questi, e non il resto del report di `sys_inspect`.** La
+ * misura di Parte 0 separa due bisogni diversi dietro le quattro chiamate di
+ * orientamento: la navigazione del *workspace* (`fs_list`/`fs_read`/`fs_search`,
+ * 38,7%, inerentemente specifica del compito — non c'è un solo «dove sono» che
+ * valga per sempre, quindi resta un tool) e i fatti sull'**istanza**
+ * (`sys_inspect`, 13%, che cambiano raramente dentro una sessione). Solo il
+ * secondo bisogno si presta a un fatto cacheable-per-turno; il primo qui
+ * riceve solo il primo livello della working directory — la `fs_list` "quasi
+ * certa" di ogni turno che tocca file, non un sostituto della navigazione.
+ * Doctor checks, blocchi del prompt e job in dettaglio restano dietro il tool:
+ * quello è il "voglio i dettagli adesso", questo è il "non farmelo chiedere
+ * ogni turno".
+ */
+export type IstanzaFacts = {
+  /** `FsScope.root` — la stessa working directory che `fs_list`/`fs_read`/`sys.shell` usano. */
+  cwd: string;
+  /**
+   * Le voci di primo livello di `cwd`, **non** ancora tagliate: `ambienteSection`
+   * applica il limite (vedi `MAX_VOCI_CWD`) così il tetto vive in un posto solo,
+   * accanto al testo che lo spiega.
+   */
+  voci: readonly string[];
+  /** `config.provider.kind` — lo stesso campo che `sys_inspect` stampa come `provider:`. */
+  provider: string;
+  /** Job attivi, stesso conteggio di `sys_inspect` (`jobs.list().filter(active)`). */
+  jobAttivi: number;
+  /** `null` quando il root of trust è integro — stessa condizione di `sys_inspect`, non un errore. */
+  safeMode: { reason: string } | null;
+};
+
+/**
+ * Quante voci della working directory entrano nel blocco volatile.
+ *
+ * Un numero, non un "tutte": la sezione vive nella coda di **ogni** turno, e
+ * un elenco senza limite ricrea nel budget dei token esattamente il problema
+ * che questa slice chiude nel budget dei tool. 12 è l'ordine di grandezza di
+ * una working directory di progetto (sorgenti, non `node_modules` espanso —
+ * `fs_list` mostra comunque le directory come tali, non il loro contenuto), e
+ * il resto si dice come conteggio, non si nasconde.
+ */
+export const MAX_VOCI_CWD = 12;
+
+/**
  * Dove sei, quando, e con cosa stai rispondendo.
  *
  * **Il difetto che chiude, misurato il 28/08/2026:** chiesto «che giorno e che
@@ -230,6 +284,20 @@ export function ambienteSection(a: {
   model: string;
   profilo: string;
   timeZone?: string;
+  /**
+   * I fatti d'istanza di Parte 0. Assente = niente di nuovo aggiunto (i test
+   * esistenti su questa funzione non li passano, e continuano a valere).
+   *
+   * **Mostrati solo alla classe `owner`, mai a `group`** — stessa ragione di
+   * `inspectCapability.hostOnly`: `cwd`, il provider e quanti job gira questa
+   * installazione sono l'inventario della macchina dell'owner, non qualcosa
+   * che serve a un membro di un gruppo su Telegram per la conversazione che
+   * sta avendo. `sys_inspect` rifiuta un membro con lo stesso identico
+   * ragionamento; qui non c'è un secondo controllo da tenere allineato al
+   * kernel — la classe è già quella che decide quale `systemPrompts` un turno
+   * riceve.
+   */
+  istanza?: IstanzaFacts;
 }): string {
   const zona = a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
@@ -248,7 +316,7 @@ export function ambienteSection(a: {
     a.classe === 'owner'
       ? "in privato con l'owner"
       : 'in un gruppo, dove ci sono altre persone oltre a chi ti ha scritto';
-  return [
+  const righe = [
     // `## Questo turno` e non `## Dove sei`: `GROUP_PERSONA` ha già una
     // `## Dove sei adesso` — la postura da ospite in una stanza — e due sezioni
     // quasi omonime, una stabile e una che cambia a ogni turno, sono confuse
@@ -258,7 +326,28 @@ export function ambienteSection(a: {
     `- Adesso: ${quando} — ${zona}, ${offsetUtc(a.adesso, zona)}.`,
     `- Superficie: ${dove}, ${conChi}.`,
     `- Ti sta eseguendo: ${a.model} (profilo ${a.profilo}).`,
-  ].join('\n');
+  ];
+  if (a.istanza && a.classe === 'owner') {
+    righe.push(...istanzaRighe(a.istanza));
+  }
+  return righe.join('\n');
+}
+
+/**
+ * Le due righe di Parte 0: la working directory (con un tetto sulle voci
+ * mostrate, `MAX_VOCI_CWD`) e una riga di stato istanza a bassissima
+ * cardinalità — non un dump di `sys_inspect`, quella resta il tool per «voglio
+ * i dettagli adesso».
+ */
+function istanzaRighe(f: IstanzaFacts): string[] {
+  const mostrate = f.voci.slice(0, MAX_VOCI_CWD);
+  const oltre = f.voci.length - mostrate.length;
+  const elenco = mostrate.length === 0 ? '(vuota)' : mostrate.join(', ') + (oltre > 0 ? `, +${oltre} altre` : '');
+  const rot = f.safeMode ? `SAFE MODE (${f.safeMode.reason})` : 'RoT integro';
+  return [
+    `- Cartella di lavoro: ${f.cwd} — ${f.voci.length} element${f.voci.length === 1 ? 'o' : 'i'} di primo livello: ${elenco}.`,
+    `- Istanza: ${f.provider} · ${f.jobAttivi} job attiv${f.jobAttivi === 1 ? 'o' : 'i'} · ${rot}.`,
+  ];
 }
 
 /**
