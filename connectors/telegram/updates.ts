@@ -229,8 +229,18 @@ export class UpdateInbox {
    * it). Advancing without writing loses a message permanently, so those two
    * writes are never separable.
    */
-  accept(updates: { update_id: number }[], receivedAt: string): { stored: number; duplicates: number } {
-    if (updates.length === 0) return { stored: 0, duplicates: 0 };
+  /**
+   * `accepted` sono gli `update_id` che questa chiamata ha davvero inserito —
+   * non l'intero batch. Il chiamante ha bisogno di distinguerli perche' un
+   * update gia' visto (un `getUpdates` ripetuto dopo un offset non avanzato)
+   * e' gia' stato servito: rileggerlo come nuovo vorrebbe dire eseguire un
+   * comando dell'owner due volte.
+   */
+  accept(
+    updates: { update_id: number }[],
+    receivedAt: string,
+  ): { stored: number; duplicates: number; accepted: number[] } {
+    if (updates.length === 0) return { stored: 0, duplicates: 0, accepted: [] };
 
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO telegram_updates (update_id, payload, received_at)
@@ -241,18 +251,19 @@ export class UpdateInbox {
        ON CONFLICT(connector) DO UPDATE SET next_offset = excluded.next_offset, updated_at = excluded.updated_at`,
     );
 
-    let stored = 0;
+    const accepted: number[] = [];
     const tx = this.db.transaction(() => {
+      accepted.length = 0;
       for (const update of updates) {
         const info = insert.run(update.update_id, JSON.stringify(update), receivedAt);
-        if (info.changes > 0) stored += 1;
+        if (info.changes > 0) accepted.push(update.update_id);
       }
       const highest = Math.max(...updates.map((u) => u.update_id));
       setOffset.run(this.connector, highest + 1, receivedAt);
     });
     tx();
 
-    return { stored, duplicates: updates.length - stored };
+    return { stored: accepted.length, duplicates: updates.length - accepted.length, accepted };
   }
 
   /** Where to resume. Zero on a fresh install, which asks Telegram for its backlog. */
