@@ -38,6 +38,17 @@ type ApprovalDecide = (id: string, decision: 'allow' | 'deny', now: Date) => 'ok
 type ApprovalGet = (id: string) => { turnId: string; capability: string; resource: string | null } | null;
 import { startPresence } from './presence.js';
 import { startTranscript, type Transcript } from './transcript.js';
+import { awaitWithBudget } from '../shared/stop-budget.js';
+import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
+
+/**
+ * `stop()`'s own fallback when nobody passes a budget — only ever a test
+ * calling `connector.stop()` bare, or the REPL/gateway mouth handoff in
+ * `cli/surface.ts`'s `pollers` (not a real shutdown, so nothing there awaits
+ * this anyway). The real shutdown path always passes the gateway's own
+ * `drainBudgetMs` — see `stop()`'s doc comment.
+ */
+const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
 import { escapeHtml, renderForTelegram } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
@@ -581,6 +592,35 @@ function originLabel(origin: ForwardedOrigin): string {
 export class TelegramConnector {
   private running = false;
   /**
+   * True from the moment `stop()` is called until a fresh `run()` starts.
+   *
+   * `running` alone used to be the only signal, and it only says "don't start
+   * a new poll" — the catch blocks below need to tell "Telegram genuinely
+   * failed" from "I asked this to stop and it did", or a deliberate abort logs
+   * as a fault (`update … fallito — The database connection is not open`,
+   * verbatim from `~/.muffin/gateway.err` on the owner's machine, 2026-09-03)
+   * instead of the honest sentence a shutdown deserves.
+   */
+  private stopping = false;
+  /**
+   * Aborts the in-flight `getUpdates` long poll on `stop()`, instead of
+   * leaving it to return on its own up to `REQUEST_TIMEOUT_MS` later — against
+   * a database `runtime.close()` may already have closed by then. Recreated at
+   * the top of every `run()`, so a connector stopped and later restarted (the
+   * REPL/gateway mouth handoff, `cli/surface.ts`) gets a fresh one rather than
+   * one already aborted from its previous life.
+   */
+  private abortController = new AbortController();
+  /**
+   * Resolves once the current `run()` call has actually returned — not when
+   * `stop()` is asked for, when it is granted. `stop()` awaits this (bounded
+   * by the caller's budget) instead of only flipping `running` and hoping: the
+   * former let `close()` in `cli/gateway.ts` proceed to `runtime.close()`
+   * while this loop's current iteration was still going to write to the
+   * database on its way out.
+   */
+  private runDone: Promise<void> = Promise.resolve();
+  /**
    * I turni vivi, per chat (ADR-0054): la leva per `/stop` e la coda delle
    * correzioni per `/steer`. Una chat, un turno alla volta — è la corsia.
    */
@@ -665,104 +705,171 @@ export class TelegramConnector {
     // Set before the first `getMe()`, not after: `stop()` has to be observable
     // by the retry loop below even if it is called while still connecting.
     this.running = true;
-    // A function, not the inline comparison repeated at each call site: `tsc`
-    // narrows `signal.aborted` from the first check and (wrongly — an abort
-    // can land during the `await` in between) treats it as still narrowed at
-    // the second, which is a real `--strict` false positive on this exact
-    // shape. A call is opaque to that narrowing; the property is re-read live
-    // either way.
-    const shouldStop = (): boolean => !this.running || signal?.aborted === true;
+    this.stopping = false;
+    // Fresh every call: a connector `stop()`-ed once and later `run()` again
+    // (the REPL/gateway mouth handoff in `cli/surface.ts`) must not inherit an
+    // already-aborted signal from its previous life.
+    this.abortController = new AbortController();
+    // Whichever caller's signal *and* our own — `stop()` triggers the second
+    // one, and either aborting is the same "stop now" to everything below.
+    const combinedSignal = signal === undefined ? this.abortController.signal : AbortSignal.any([signal, this.abortController.signal]);
+    let resolveRunDone!: () => void;
+    this.runDone = new Promise<void>((resolve) => {
+      resolveRunDone = resolve;
+    });
+    try {
+      // A function, not the inline comparison repeated at each call site: `tsc`
+      // narrows `signal.aborted` from the first check and (wrongly — an abort
+      // can land during the `await` in between) treats it as still narrowed at
+      // the second, which is a real `--strict` false positive on this exact
+      // shape. A call is opaque to that narrowing; the property is re-read live
+      // either way.
+      const shouldStop = (): boolean => !this.running || combinedSignal.aborted === true;
 
-    let me: Awaited<ReturnType<TelegramApiLike['getMe']>> | undefined;
-    for (let attempt = 0; me === undefined; attempt++) {
-      if (shouldStop()) return;
-      try {
-        me = await this.deps.api.getMe();
-      } catch (error) {
+      let me: Awaited<ReturnType<TelegramApiLike['getMe']>> | undefined;
+      for (let attempt = 0; me === undefined; attempt++) {
         if (shouldStop()) return;
-        const wait = backoffMs(attempt);
-        const causa = error instanceof Error ? error.message : String(error);
-        this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
-        log(`telegram: connessione fallita (${causa}) — riprovo fra ${Math.round(wait / 1000)}s`);
-        await this.sleep(wait, signal);
+        try {
+          me = await this.deps.api.getMe();
+        } catch (error) {
+          if (shouldStop()) return;
+          const wait = backoffMs(attempt);
+          const causa = error instanceof Error ? error.message : String(error);
+          this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
+          log(`telegram: connessione fallita (${causa}) — riprovo fra ${Math.round(wait / 1000)}s`);
+          await this.sleep(wait, combinedSignal);
+        }
       }
-    }
-    this.meId = me.id;
-    this.deps.salute?.connessa('telegram', new Date(this.now()));
-    log(`telegram: connesso come @${me.username ?? me.id}`);
-    await this.publishCommands(log);
+      if (shouldStop()) return;
+      this.meId = me.id;
+      this.deps.salute?.connessa('telegram', new Date(this.now()));
+      log(`telegram: connesso come @${me.username ?? me.id}`);
+      await this.publishCommands(log);
 
-    // Anything left pending from a previous life comes first, before new work
-    // — in background, come ogni drain da oggi: il poller non aspetta.
-    this.scheduleDrain();
+      // Anything left pending from a previous life comes first, before new work
+      // — in background, come ogni drain da oggi: il poller non aspetta.
+      this.scheduleDrain();
 
-    while (this.running && signal?.aborted !== true) {
-      // Everything the beat does lives in one `try`, not only the network call:
-      // `inbox.accept`/`drain()` throwing used to escape uncaught too, and a
-      // bookkeeping error is exactly as unfit to kill the poller as a network
-      // one. Same rule as `drain`'s own per-update `try` — report, continue.
-      try {
-        const updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset());
-        if (this.conflictSince !== null) {
-          const durata = Math.max(0, Math.round((Date.parse(this.now()) - Date.parse(this.conflictSince)) / 1000));
-          log(`telegram: 409 rientrato dopo ${durata}s — ricevo di nuovo`);
-          this.conflictSince = null;
-        }
-        // Dopo la chiamata, non prima: un battito e' riuscito quando la
-        // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
-        // e' lavoro nostro, non la prova che Telegram risponde.
-        this.deps.salute?.connessa('telegram', new Date(this.now()));
-        if (updates.length > 0) {
-          const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
-          if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
-          if (stored > 0) {
-            // Solo i nuovi, non il batch grezzo: un update gia' nell'inbox e'
-            // gia' stato servito (o e' in coda per il drain), e ripassarlo a
-            // `controlla` vorrebbe dire eseguire lo stesso comando dell'owner
-            // una seconda volta.
-            const nuovi = new Set(accepted);
-            // ADR-0054 §5: il poller riceve sempre. Fino al 03/09 questa riga
-            // era `await this.drain()`, e mentre un turno girava `getUpdates`
-            // non veniva chiamato: un `/stop` arrivava a turno finito. Ora i
-            // comandi di controllo si servono **qui**, subito, e il resto va
-            // in coda — con una conferma, così l'owner sa che è arrivato.
-            await this.controlla(updates.filter((u) => nuovi.has(u.update_id)));
-            this.scheduleDrain();
+      while (this.running && !combinedSignal.aborted) {
+        // Everything the beat does lives in one `try`, not only the network call:
+        // `inbox.accept`/`drain()` throwing used to escape uncaught too, and a
+        // bookkeeping error is exactly as unfit to kill the poller as a network
+        // one. Same rule as `drain`'s own per-update `try` — report, continue.
+        try {
+          const updates = await this.deps.api.getUpdates(this.deps.inbox.nextOffset(), undefined, combinedSignal);
+          if (this.conflictSince !== null) {
+            const durata = Math.max(0, Math.round((Date.parse(this.now()) - Date.parse(this.conflictSince)) / 1000));
+            log(`telegram: 409 rientrato dopo ${durata}s — ricevo di nuovo`);
+            this.conflictSince = null;
           }
-        }
-      } catch (error) {
-        // Registrato prima di scegliere come dirlo: un 409 che dura e' un
-        // guasto quanto una rete che non risponde — due gateway sullo stesso
-        // token, e nessuno dei due riceve niente. E' la durata a distinguerlo
-        // dal 409 di mezzo secondo mentre il processo di prima se ne va.
-        const causa = error instanceof Error ? error.message : String(error);
-        this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
-        if (error instanceof TelegramError && error.status === 409) {
-          // Another poller holds the token — usually the previous process not
-          // yet gone. Waiting is the correct move; racing it is not.
-          //
-          // Una riga per **stato**, non per tentativo: la prima volta che il
-          // 409 comincia, e poi piu' niente finche' dura. La riga che chiude
-          // (sopra, al primo `getUpdates` riuscito) porta la durata, che e' il
-          // fatto nuovo — «da quanto» e' esattamente cio' che una riga ripetuta
-          // non dice.
-          if (this.conflictSince === null) {
-            this.conflictSince = this.now();
-            log('telegram: 409, un altro getUpdates è attivo — attendo (non lo ripeto finché dura)');
+          // Dopo la chiamata, non prima: un battito e' riuscito quando la
+          // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
+          // e' lavoro nostro, non la prova che Telegram risponde.
+          this.deps.salute?.connessa('telegram', new Date(this.now()));
+          if (updates.length > 0) {
+            const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
+            if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
+            if (stored > 0) {
+              // Solo i nuovi, non il batch grezzo: un update gia' nell'inbox e'
+              // gia' stato servito (o e' in coda per il drain), e ripassarlo a
+              // `controlla` vorrebbe dire eseguire lo stesso comando dell'owner
+              // una seconda volta.
+              const nuovi = new Set(accepted);
+              // ADR-0054 §5: il poller riceve sempre. Fino al 03/09 questa riga
+              // era `await this.drain()`, e mentre un turno girava `getUpdates`
+              // non veniva chiamato: un `/stop` arrivava a turno finito. Ora i
+              // comandi di controllo si servono **qui**, subito, e il resto va
+              // in coda — con una conferma, così l'owner sa che è arrivato.
+              await this.controlla(updates.filter((u) => nuovi.has(u.update_id)));
+              this.scheduleDrain();
+            }
           }
-        } else {
-          // Un guasto diverso chiude lo stato precedente: il prossimo 409 e' un
-          // 409 nuovo e va detto.
-          this.conflictSince = null;
-          log(`telegram: polling fallito (${causa})`);
+        } catch (error) {
+          // Un abort **nostro**, non un guasto: solo quando è stato `stop()` ad
+          // annullare la `fetch` in corso — `combinedSignal.aborted` **e**
+          // un errore che `api.ts` non ha impacchettato in `TelegramError`
+          // (`request()` rilancia grezzo solo su un abort deliberato, mai su un
+          // rifiuto di Telegram). Un `TelegramError` vero (409, ECONNRESET) che
+          // capita mentre `stopping` è già true — un test lo simula chiamando
+          // `stop()` prima del lancio — resta un guasto reale e va registrato
+          // come sempre: `stopping` da solo non basta a distinguerlo.
+          if (combinedSignal.aborted && !(error instanceof TelegramError)) {
+            // Mai il testo grezzo dell'errore (una volta, verbatim sulla
+            // macchina dell'owner: `The database connection is not open`,
+            // perché il giro continuava e il database si era già chiuso sotto
+            // di lui). `stop()` stesso è quello che aspetta, più sotto; qui non
+            // serve dormire prima di uscire.
+            log('telegram: ricezione interrotta per lo spegnimento — riprende al prossimo avvio');
+            break;
+          }
+          // Registrato prima di scegliere come dirlo: un 409 che dura e' un
+          // guasto quanto una rete che non risponde — due gateway sullo stesso
+          // token, e nessuno dei due riceve niente. E' la durata a distinguerlo
+          // dal 409 di mezzo secondo mentre il processo di prima se ne va.
+          const causa = error instanceof Error ? error.message : String(error);
+          this.deps.salute?.caduta('telegram', causa, new Date(this.now()));
+          if (error instanceof TelegramError && error.status === 409) {
+            // Another poller holds the token — usually the previous process not
+            // yet gone. Waiting is the correct move; racing it is not.
+            //
+            // Una riga per **stato**, non per tentativo: la prima volta che il
+            // 409 comincia, e poi piu' niente finche' dura. La riga che chiude
+            // (sopra, al primo `getUpdates` riuscito) porta la durata, che e' il
+            // fatto nuovo — «da quanto» e' esattamente cio' che una riga ripetuta
+            // non dice.
+            if (this.conflictSince === null) {
+              this.conflictSince = this.now();
+              log('telegram: 409, un altro getUpdates è attivo — attendo (non lo ripeto finché dura)');
+            }
+          } else {
+            // Un guasto diverso chiude lo stato precedente: il prossimo 409 e' un
+            // 409 nuovo e va detto.
+            this.conflictSince = null;
+            log(`telegram: polling fallito (${causa})`);
+          }
+          await this.sleep(5000, combinedSignal);
         }
-        await this.sleep(5000, signal);
       }
+    } finally {
+      resolveRunDone();
     }
   }
 
-  stop(): void {
+  /**
+   * Signals the poll to stop and waits for it to genuinely be gone — the
+   * current `getUpdates` aborted rather than outlived, and any drain already
+   * under way (a queued update, possibly a whole turn) finished or abandoned —
+   * before returning, bounded by `budgetMs` so a stuck turn cannot hang the
+   * gateway's shutdown forever (`connectors/shared/stop-budget.ts`).
+   *
+   * `cli/surface.ts` calls this with the gateway's own drain budget, the same
+   * number the owner is told about in `gateway: SIGTERM — drenaggio…`: no
+   * second budget invented next to it.
+   *
+   * Returns `true` when everything this connector owned actually finished in
+   * time, `false` when the budget ran out first — the caller decides what to
+   * say to the owner from that, `connector.ts` only reports what happened to
+   * *its own* poll and drain.
+   */
+  async stop(budgetMs = DEFAULT_STOP_BUDGET_MS): Promise<boolean> {
+    const log = this.deps.log ?? (() => {});
     this.running = false;
+    this.stopping = true;
+    this.abortController.abort();
+    const deadline = Date.now() + budgetMs;
+    let finished = await awaitWithBudget(this.runDone, Math.max(0, deadline - Date.now()));
+    // `this.draining` can be reassigned by `scheduleDrain()`'s own chained
+    // restart (`drainAgain`) while we wait — read live, in a loop, rather than
+    // snapshotting a single promise that could be stale by the time it settles.
+    while (finished && this.draining !== null) {
+      finished = await awaitWithBudget(this.draining, Math.max(0, deadline - Date.now()));
+    }
+    if (!finished) {
+      log(
+        `telegram: fermata non confermata entro ${Math.round(budgetMs / 1000)}s — un messaggio potrebbe essere rimasto a metà, riprende al prossimo avvio`,
+      );
+    }
+    return finished;
   }
 
   /**
@@ -993,6 +1100,7 @@ export class TelegramConnector {
 
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
+    const log = this.deps.log ?? (() => {});
     for (const stored of this.deps.inbox.pending()) {
       if (this.gestiti.has(stored.updateId)) continue;
       const update = JSON.parse(stored.payload) as Update;
@@ -1004,11 +1112,9 @@ export class TelegramConnector {
         try {
           await this.handleCallback(premuto);
         } catch (error) {
-          (this.deps.log ?? (() => {}))(
-            `telegram: pulsante non gestito — ${error instanceof Error ? error.message : String(error)}`,
-          );
+          log(`telegram: pulsante non gestito — ${error instanceof Error ? error.message : String(error)}`);
         }
-        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        this.markProcessedQuietly(stored.updateId, log);
         continue;
       }
 
@@ -1017,7 +1123,7 @@ export class TelegramConnector {
       if (!incoming) {
         // Nothing to do with it, and saying so is better than leaving it pending
         // for ever: a queue that never empties hides the ones that matter.
-        this.deps.inbox.markProcessed(stored.updateId, this.now());
+        this.markProcessedQuietly(stored.updateId, log);
         continue;
       }
 
@@ -1030,10 +1136,38 @@ export class TelegramConnector {
         // a *delivery* attempt can still fail here (fresh or recovered), so a
         // retry on the next drain redelivers a durable result rather than
         // recomputing one (fault point 6).
-        const reason = error instanceof Error ? error.message : String(error);
-        this.deps.inbox.markFailed(stored.updateId, reason);
-        (this.deps.log ?? (() => {}))(`telegram: update ${stored.updateId} fallito — ${reason}`);
+        //
+        // `this.stopping` is checked *before* touching `error.message`: past
+        // the drain budget the database is closed underneath this turn, and
+        // `error.message` is then the driver's own `The database connection is
+        // not open` — the exact sentence found verbatim in
+        // `~/.muffin/gateway.err` on the owner's machine (2026-09-03) reaching
+        // him raw instead of a line that says what it means for his message.
+        const reason = this.stopping
+          ? 'interrotto dallo spegnimento — resta da elaborare al prossimo avvio'
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        // `markFailed` is itself a write, and can fail the same way `resolve`
+        // just did if the database closed between the two — the safety net for
+        // whatever slips past `stop()`'s own budget, not the common case.
+        try {
+          this.deps.inbox.markFailed(stored.updateId, reason);
+        } catch {
+          // Nothing left to record it in; the log line below is what survives.
+        }
+        log(`telegram: update ${stored.updateId} fallito — ${reason}`);
       }
+    }
+  }
+
+  /** `markProcessed`, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
+  private markProcessedQuietly(updateId: number, log: (line: string) => void): void {
+    try {
+      this.deps.inbox.markProcessed(updateId, this.now());
+    } catch (error) {
+      if (!this.stopping) throw error;
+      log(`telegram: update ${updateId} interrotto dallo spegnimento — resta da elaborare al prossimo avvio`);
     }
   }
 

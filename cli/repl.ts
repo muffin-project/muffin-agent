@@ -1012,8 +1012,12 @@ export async function runRepl(
     // cosa a un comando che è già uscito.
     if (process.stdin.isTTY === true) process.stdin.setRawMode(false);
     // Surfaces first, then the runtime: the connector must stop polling before
-    // the database under it goes away.
-    surfaces.stop();
+    // the database under it goes away — and now genuinely **waited for**, not
+    // only signalled (the same fix `cli/gateway.ts`'s `close` needed, and the
+    // same bug shape: this used to be `surfaces.stop()` unawaited, with
+    // `runtime.close()` on the very next line regardless of whether a
+    // `getUpdates` or a drain was still going).
+    await surfaces.stop();
     runtime.close();
     // I margini tornano com'erano e il cursore scende sotto il riquadro,
     // che resta nello scrollback come l'ultima cosa scritta.

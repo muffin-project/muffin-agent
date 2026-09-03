@@ -1161,67 +1161,67 @@
   },
   "cli/surface.ts:199": {
     "path": "cli/surface.ts",
-    "line": 221,
+    "line": 222,
     "testo": "* controls via an OAuth2 URL with the `bot` scope and no permissions, then"
   },
   "cli/surface.ts:233": {
     "path": "cli/surface.ts",
-    "line": 255,
+    "line": 256,
     "testo": "`  https://discord.com/oauth2/authorize?client_id=${me.id}&scope=bot&permissions=0\\n` +"
   },
   "cli/surface.ts:291": {
     "path": "cli/surface.ts",
-    "line": 505,
+    "line": 506,
     "testo": "* never arrived even on a home where Telegram was connected and answering"
   },
   "cli/surface.ts:295": {
     "path": "cli/surface.ts",
-    "line": 509,
+    "line": 510,
     "testo": "export function connectSurfaces("
   },
   "cli/surface.ts:344": {
     "path": "cli/surface.ts",
-    "line": 672,
+    "line": 688,
     "testo": "const connector = new TelegramConnector({"
   },
   "cli/surface.ts:52": {
     "path": "cli/surface.ts",
-    "line": 62,
+    "line": 63,
     "testo": "export function cmdSurfaceList(home: string): number {"
   },
   "cli/surface.ts:77": {
     "path": "cli/surface.ts",
-    "line": 87,
+    "line": 88,
     "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
   "connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1218,
+    "line": 1352,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
-    "line": 148,
+    "line": 158,
     "testo": "};"
   },
   "connectors/telegram/connector.ts:153": {
     "path": "connectors/telegram/connector.ts",
-    "line": 453,
+    "line": 464,
     "testo": "export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {"
   },
   "connectors/telegram/connector.ts:165": {
     "path": "connectors/telegram/connector.ts",
-    "line": 581,
+    "line": 592,
     "testo": "export class TelegramConnector {"
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 663,
+    "line": 703,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
     "path": "connectors/telegram/connector.ts",
-    "line": 224,
+    "line": 230,
     "testo": "*"
   },
   "connectors/telegram/connector.ts:230": {
@@ -1231,22 +1231,22 @@
   },
   "connectors/telegram/connector.ts:255": {
     "path": "connectors/telegram/connector.ts",
-    "line": 302,
+    "line": 291,
     "testo": "}"
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1438,
+    "line": 1572,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1444,
+    "line": 1578,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1218,
+    "line": 1352,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
@@ -1366,17 +1366,17 @@
   },
   "core/gateway/service.ts:252": {
     "path": "core/gateway/service.ts",
-    "line": 252,
+    "line": 260,
     "testo": "this.deps.turnLane.tick(now);"
   },
   "core/gateway/service.ts:264": {
     "path": "core/gateway/service.ts",
-    "line": 264,
+    "line": 272,
     "testo": "*/"
   },
   "core/gateway/service.ts:332": {
     "path": "core/gateway/service.ts",
-    "line": 332,
+    "line": 340,
     "testo": "}"
   },
   "core/gateway/service.ts:57": {
