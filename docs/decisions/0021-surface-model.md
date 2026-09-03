@@ -35,3 +35,52 @@ Direttiva owner (16/08 sera, sulla slice `slice/streaming`): niente slop, e Herm
 **Cosa NON cambia.** Il modello di registro (§Decisione sopra) resta invariato: nessuna surface è privilegiata, `streaming` è dichiarata come `limits` lo è già, e una surface che non implementa nulla di progressivo dichiara onestamente `'off'` invece di lasciare il campo assente — lo stesso principio che tiene `deliverFile` obbligatorio (non opzionale) da quando è stato aggiunto.
 
 **Reversibilità** invariata per il modello di registro. Specifica per questo campo: alta — è un valore dichiarato per surface, aggiungerne un quarto transport o toglierne uno è una modifica locale a un tipo, non un'architettura da disfare.
+
+---
+
+## §revisione 2026-09-03 — il canale è un indirizzo di consegna, non l'identità della conversazione
+
+Questa ADR si contraddiceva, e il codice ha seguito la metà sbagliata. Le due
+frasi, verbatim:
+
+- §Decisione punto 2 (**inbound**): *«la stessa conversazione continua cambiando
+  canale, senza che il canale sia parte dell'identità»*;
+- §Conseguenze: *«Il modello di sessione diventa `(tenant, surface, thread)`
+  ovunque, senza scorciatoie»*.
+
+Non possono valere entrambe: se la superficie è una componente della tupla di
+sessione, allora il canale **è** parte dell'identità, e la conversazione non
+continua cambiando canale. Due connector hanno implementato la seconda —
+`telegram:<chatId>` e `discord:<channelId>` scritti a mano come id di sessione —
+e l'owner ha misurato il risultato il 2026-09-03: *«non sembra di star parlando
+allo stesso muffin»* (`docs/evidence/continuita-e-provenienza-2026-09-03.md` §1).
+
+**Si risolve in favore della regola inbound.** Il canale è un **indirizzo di
+consegna**, mai identità di conversazione. ADR-0056 rende la distinzione
+eseguibile invece che scritta: `sessionKey` esce da `identify` ed è `owner` per
+il principal owner, qualunque porta usi; `replyTo.channel` e `replyChannel`
+restano `telegram:<chatId>` pienamente qualificati, ed è la loro separazione da
+quella chiave che impedisce a una risposta di uscire dalla porta sbagliata.
+
+**La riga corretta**, che sostituisce quella di §Conseguenze:
+
+> Il modello di sessione è `(tenant, conversazione)`, dove la conversazione la
+> decide `identify` e non il connector: `owner` per il principal owner — una
+> sola, attraverso tutte le porte — e `<connector>:<conversationId>` per un
+> `member`, cioè una per stanza. La superficie resta nell'indirizzo di consegna
+> e nella resa (§5 sopra), mai nell'identità.
+
+Nulla del registro cambia: le surface restano tutte connesse, nessuna
+privilegiata, i target dei job restano `default` o una surface esplicita (§3-§4).
+
+**Le «alternative scartate» qui sopra lo avevano previsto** — *«un'astrazione che
+privilegia un canale produce codice che assume quel canale ovunque»* — e la
+previsione si è avverata dentro questa stessa ADR. Misurato su `dev` il
+2026-09-03: `connectors/telegram/` sono 9453 righe contro le 2739 di
+`connectors/discord/` (3796 contro 1567 escludendo i test), e tutta la
+macchineria dell'input mentre un turno è vivo — coda, ack, `/steer`, `/stop`,
+`/pause` di ADR-0054 — esiste **solo** su Telegram (`connectors/telegram/connector.ts`,
+`connectors/telegram/busy.test.ts`; in `connectors/discord/` non c'è né il tipo
+`Controlli` né un turno vivo da fermare). La lezione non è che l'astrazione fosse
+sbagliata: è che una frase ambigua in §Conseguenze è bastata a far crescere il
+canale privilegiato che §Contesto voleva impedire.
