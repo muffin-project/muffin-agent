@@ -401,52 +401,52 @@
   },
   "agent/runtime.ts:104": {
     "path": "agent/runtime.ts",
-    "line": 157,
+    "line": 158,
     "testo": "bootLines: string[];"
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 209,
+    "line": 258,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 298,
+    "line": 347,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 347,
+    "line": 396,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 349,
+    "line": 398,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 378,
+    "line": 427,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 398,
+    "line": 447,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 400,
+    "line": 449,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 427,
+    "line": 476,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 432,
+    "line": 481,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
@@ -456,57 +456,57 @@
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 450,
+    "line": 499,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 463,
+    "line": 512,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 468,
+    "line": 525,
     "testo": "...makeFsTools(scope),"
   },
   "agent/runtime.ts:439": {
     "path": "agent/runtime.ts",
-    "line": 514,
+    "line": 587,
     "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 617,
+    "line": 652,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 624,
+    "line": 659,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 655,
+    "line": 690,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 676,
+    "line": 711,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 714,
+    "line": 749,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 743,
+    "line": 778,
     "testo": "tools,"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 885,
+    "line": 927,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -721,12 +721,12 @@
   },
   "agent/tools/search.ts:48": {
     "path": "agent/tools/search.ts",
-    "line": 52,
+    "line": 55,
     "testo": "export const searchCapability: CapabilityDecl = {"
   },
   "agent/tools/search.ts:59": {
     "path": "agent/tools/search.ts",
-    "line": 66,
+    "line": 69,
     "testo": "hostOnly: true,"
   },
   "agent/tools/shell.ts:106": {
@@ -791,17 +791,17 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 328,
+    "line": 331,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 453,
+    "line": 456,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
     "path": "cli/doctor.ts",
-    "line": 64,
+    "line": 67,
     "testo": "supervisorProbes?: Partial<SupervisorProbes>;"
   },
   "cli/gateway.ts:27": {
@@ -2721,42 +2721,42 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 383,
+    "line": 432,
     "testo": "* legal on the wire."
   },
   "runtime.ts:349": {
     "path": "agent/runtime.ts",
-    "line": 466,
+    "line": 515,
     "testo": "const scope: FsScope = { root: cwd, denyWrite: guards.denyWrite, denyRead: guards.denyRead };"
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 462,
+    "line": 511,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 593,
+    "line": 628,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 617,
+    "line": 652,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 655,
+    "line": 690,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 674,
+    "line": 709,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:98": {
     "path": "agent/runtime.ts",
-    "line": 131,
+    "line": 132,
     "testo": "/** Set when the root of trust diverged and we are running degraded. */"
   },
   "schema.ts:130": {
@@ -2791,17 +2791,17 @@
   },
   "search.ts:29": {
     "path": "agent/tools/search.ts",
-    "line": 29,
+    "line": 32,
     "testo": "*  - `hostOnly: true`, unlike `sys.http`. Reading an allowlisted public page"
   },
   "search.ts:61": {
     "path": "agent/tools/search.ts",
-    "line": 64,
+    "line": 67,
     "testo": "resourceKind: 'query',"
   },
   "search.ts:63": {
     "path": "agent/tools/search.ts",
-    "line": 66,
+    "line": 69,
     "testo": "hostOnly: true,"
   },
   "skill.ts:114": {
