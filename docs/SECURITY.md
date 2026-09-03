@@ -444,6 +444,28 @@ status lives only in `docs/work/day1/requirements-status.md`.
   `surface.reply` — semantics unchanged, the floor allows it at every taint, but
   the act is now decided, tunable and traced rather than unwatched.
 
+  **The comparative evaluation now exists, and it does not settle the
+  hypothesis.** `evals/security/` holds the three artefacts the 2026-09-02 memo
+  listed as missing: an executable candidate-B adapter deciding on
+  `(effect class × sink × who chose the resource × reversibility)` — an
+  experiment, unreachable from the runtime by construction and asserted so — an
+  adversarial corpus that runs the real binary and measures whether an injection
+  *succeeds* rather than which verdict is printed, and predeclared metrics with
+  the kill criterion. The 2026-09-03 run
+  (`docs/evidence/eval-taint-corpus-avversariale-2026-09-03.md`) found: four of
+  seven attacks complete with no human at all, six of seven if the owner answers
+  the approval the way the real installation's owner answered 32 of 35 times,
+  and **candidate B beats the incumbent on none of them**. By the kill criterion
+  the incumbent stays. The corpus also located the guards that actually stopped
+  things, and none of them was the ambient scalar: the egress allowlist, the
+  tool's own SSRF floor, and a single approval prompt. Two sinks —
+  `surface.reply` and `memory.write` — have no guard at all and the corpus
+  observes attacks completing through both, which is the floor those rows
+  declare rather than a regression. Nothing here adopts or retires the
+  hypothesis: the numbers are one macOS corpus with no observable network
+  exfiltration, and a material reversal would be an ADR, not an edit to this
+  paragraph.
+
 ## 14. What this document does not own
 
 - Exact policy numbers or lists — `defaults/rot/*.json` and capability
