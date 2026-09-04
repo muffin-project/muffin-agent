@@ -1,0 +1,16 @@
+# Descrittivo, non prescrittivo: registra lo stile che il codice ha già (2
+# spazi, virgolette singole via biome.json), non ne impone uno nuovo. Vedi
+# docs/evidence/forma-del-repo-2026-09-04.md §D.3-D.5 per il perché di questo
+# file e di biome.json arrivano insieme, senza un riformattamento totale.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

@@ -257,7 +257,7 @@ export type ExtractionResult = {
  * channel this path does not read.
  */
 /** The same three numbers `JudgeOutcome.usage` carries, and for the same reason. */
-export type ExtractionUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+type ExtractionUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 
 function whyUnusable(result: {
   stopReason: string;
