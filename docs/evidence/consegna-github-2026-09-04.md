@@ -186,16 +186,16 @@ modello è un invio.
 
 ## 2.3 Dove sta la credenziale, oggi, sulla macchina dell'owner
 
-Sonda con `mandatoryGuards('/Users/giusto/.muffin', <workspace>)` — i guardiani
+Sonda con `mandatoryGuards('/home/user/.muffin', <workspace>)` — i guardiani
 di produzione, non una lista di prova. **Nessun contenuto di credenziale è
 stato letto o stampato: solo `test -r` e un conteggio di byte.**
 
 ```text
-denyRead: ["/Users/giusto/.muffin/secrets",
-           "/Users/giusto/.config/muffin/secrets",
+denyRead: ["/home/user/.muffin/secrets",
+           "/home/user/.config/muffin/secrets",
            "<workspace>/.env"]
 
-$ echo $HOME                                    → /Users/giusto
+$ echo $HOME                                    → /home/user
 $ ls -1 ~/.ssh                                  → 11 voci, fra cui id_ed25519 e config
 $ test -r ~/.ssh/id_ed25519                     → READABLE 444 bytes
 $ test -r ~/.config/gh/hosts.yml                → READABLE 100 bytes
