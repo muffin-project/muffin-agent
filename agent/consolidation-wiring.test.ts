@@ -131,6 +131,7 @@ function harness(script: ChatResult[]) {
       budgetExhausted: () => budget.exhausted(),
       hardened: true,
     }),
+    capabilities: new Map(),
     tracer,
     sessions: new SessionStore(home),
     turns: new TurnStore(db),

@@ -229,6 +229,43 @@ function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARC
   return found;
 }
 
+/**
+ * Quanti esecutori hanno inizializzato `SandboxManager` e non si sono ancora
+ * chiusi.
+ *
+ * Esiste perche' `SandboxManager` **non e' per istanza**: e' stato di modulo,
+ * uno per processo. Su Linux la sua `reset()` ammazza i due processi `socat`
+ * del bridge di rete e fa `fs.rmSync` sui loro socket
+ * (`sandbox-manager.js`, ramo `managerContext.linuxBridge`). Quindi un
+ * `close()` — che e' un'operazione **per istanza** — smontava la rete di
+ * *tutti* gli esecutori vivi nello stesso processo, e quelli restavano con il
+ * loro `initPromise` risolto, convinti di essere inizializzati, fino al
+ * comando dopo:
+ *
+ *   contain_failed — Linux HTTP bridge socket does not exist:
+ *   /tmp/claude-http-<hex>.sock. The bridge process may have died.
+ *
+ * Misurato il 04/09/2026 nella CI locale, job `verifica`: in
+ * `evals/system/acceptance.test.ts` un runtime di lunga vita convive con
+ * runtime usa-e-getta che si chiudono nel `finally` di ogni caso, e il primo
+ * moriva per mano dei secondi. Su macOS non si vedeva **e non si poteva
+ * vedere**: senza bridge Linux, quella `reset()` non ha niente da smontare.
+ *
+ * Il conteggio sta qui e non nell'istanza per la stessa ragione per cui il
+ * guasto stava li': la risorsa e' del processo, non dell'oggetto.
+ */
+let esecutoriVivi = 0;
+
+/**
+ * `reset()` solo quando l'ultimo se ne va — altrimenti si smonta la rete a chi
+ * sta ancora lavorando. Non lasciarla mai a un `catch` muto: se il conteggio
+ * scendesse senza reset resterebbero due `socat` orfani per processo.
+ */
+async function rilascia(): Promise<void> {
+  esecutoriVivi = Math.max(0, esecutoriVivi - 1);
+  if (esecutoriVivi === 0) await SandboxManager.reset();
+}
+
 export class SandboxExecutor {
   private initPromise: Promise<void> | null = null;
   private cachedProbe: SandboxProbe | null = null;
@@ -328,11 +365,37 @@ export class SandboxExecutor {
 
       if (failure) {
         // A throwaway/failed init leaves no live session worth keeping —
-        // reset() before handing back control, same as `close()` would.
-        await SandboxManager.reset().catch(() => {});
+        // reset() before handing back control, same as `close()` would. Ma
+        // solo se non c'e' nessun altro dentro: questo esecutore non e' mai
+        // entrato nel conteggio, e resettare qui con altri vivi e' proprio il
+        // guasto che `esecutoriVivi` esiste per chiudere.
+        if (esecutoriVivi === 0) await SandboxManager.reset().catch(() => {});
         this.cachedProbe = { available: false, mechanism: status.mechanism, ...failure };
-        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.remedy}`);
+        // Il `detail` entra nel messaggio, non solo nella sonda in cache.
+        //
+        // Fino al 04/09/2026 qui usciva `reason — remedy`, e il rimedio del
+        // caso generico dice testualmente *«see detail»* — cioe' rimandava a
+        // una cosa che non mostrava. Misurato quel giorno dentro il container
+        // della CI locale: la causa vera era *«Linux HTTP bridge socket does
+        // not exist … The bridge process may have died»*, e per leggerla e'
+        // servito modificare questa riga a mano. `cli/doctor.ts` il `detail`
+        // lo stampa gia (righe ~1053 e ~1091): era **solo** il percorso di
+        // esecuzione — quello che vedono il modello e l'owner quando un
+        // comando fallisce davvero — a perderlo.
+        //
+        // Conta anche perche' `classifyContainmentError` fa cadere su
+        // `contain_failed` tutto cio' che non riconosce: un banale TypeError
+        // dentro l'init si presentava come «il sandbox non contiene su questo
+        // host», con un rimedio su AppArmor che non c'entrava niente.
+        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.detail} — ${failure.remedy}`);
       }
+
+      // Da qui il manager globale e' inizializzato **per conto di questo
+      // esecutore**: entra nel conteggio, e ne esce solo in `close()`. Fuori
+      // dal ramo di guasto di proposito — un init fallito non lascia niente da
+      // rilasciare, e contarlo lascerebbe il conteggio sopra lo zero per
+      // sempre, cioe' due `socat` orfani a fine processo.
+      esecutoriVivi += 1;
     }
   }
 
@@ -611,7 +674,7 @@ export class SandboxExecutor {
     }
     if (this.initPromise) {
       this.initPromise = null;
-      await SandboxManager.reset();
+      await rilascia();
     }
   }
 }

@@ -104,6 +104,7 @@ function harness(script: ChatResult[], conVettori = false) {
       budgetExhausted: () => false,
       hardened: true,
     }),
+    capabilities: new Map(decls.map((d) => [d.id, d])),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions,
     turns: new TurnStore(new DatabaseCtor(':memory:')),
