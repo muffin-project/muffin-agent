@@ -57,11 +57,11 @@ Stato al 04/09: 2a, 2b, 2c e il punto 3 sono integrati e promossi su `main`
 (#298, #299, #300 con due giudici, #303 con uno); 2d **costruita**
 (`evals/e2e/telegram.ts`) e da eseguire dall'owner — il passo che chiude
 B11/B13/B2 è quella corsa, non un'altra PR. Il punto **4** è stato eseguito, e il
-**4-bis** che il suo risultato ha creato è stato eseguito il 04/09 (ADR-0068):
+**4-bis** che il suo risultato ha creato è stato eseguito il 04/09 (ADR-0069):
 un floor deterministico sul nome della risorsa chiude `s6-sink-risposta`
 (4/7→3/7 senza umano, 6/7→5/7 col riflesso) e cabla il choke point sulla
 risposta che PR #351 aveva lasciato scoperto. `s7-memoria-e-ricordo` resta
-aperta — dichiarato con reperto in ADR-0068, non un residuo taciuto: la
+aperta — dichiarato con reperto in ADR-0069, non un residuo taciuto: la
 provenienza dell'episodio è già corretta (misurato in
 `i-sink-scoperti-2026-09-04.md` §5.2), ciò che manca è un floor per
 l'obbedienza del modello a un'istruzione recintata, e nessuno dei due
