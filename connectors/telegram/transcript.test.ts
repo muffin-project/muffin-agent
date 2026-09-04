@@ -246,3 +246,181 @@ describe('a Bot API failure is swallowed and disables the rest of the turn', () 
     expect(calls[0]!.text).not.toContain('<b>x</b>');
   });
 });
+
+/**
+ * `live()` — B11 moved here from `presence.ts`'s retired `sendMessageDraft`
+ * bubble (2026-09-04, `docs/evidence/turno-sospendibile.md`). The claim this
+ * block exists to prove: the growing answer lives in the same *real*,
+ * *durable* message this file already owns — never a second, expiring
+ * channel — so a process that stops running never has anything to lose.
+ */
+describe('live() streams into the same real message, never a second channel', () => {
+  it('opens one real message on the first non-empty call, and edits it as the text grows', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('Sto');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('sendMessage');
+    expect(calls[0]!.text).toBe('Sto');
+
+    t.live('Sto preparando la risposta');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(calls.at(-1)!.method).toBe('editMessageText');
+    expect(calls.at(-1)!.text).toBe('Sto preparando la risposta');
+    expect(calls.at(-1)!.messageId).toBe(calls[0]!.messageId);
+
+    await t.stop();
+  });
+
+  it('coalesces rapid calls into the latest value, same rate floor as steps', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('a');
+    await vi.advanceTimersByTimeAsync(0);
+    t.live('a b');
+    t.live('a b c');
+    t.live('a b c d');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(calls).toHaveLength(2); // create, then one coalesced edit — not four
+    expect(calls.at(-1)!.text).toBe('a b c d');
+    await t.stop();
+  });
+
+  it('a boundary promotes the live text into the segment and clears the buffer — no duplicate render', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('Prima controllo');
+    await vi.advanceTimersByTimeAsync(0);
+    t.spoke('Prima controllo', 'tool-call');
+    t.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(1_500);
+    await t.stop();
+    const last = calls.at(-1)!.text!;
+    // Exactly one occurrence: `live()`'s own buffer was cleared by `spoke()`,
+    // so the final render never shows the preamble twice.
+    expect(last.split('Prima controllo')).toHaveLength(2);
+  });
+
+  it('a tool-free turn still opens exactly one message, finished with an edit — never a second sendMessage for the answer', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('Fatto');
+    await vi.advanceTimersByTimeAsync(0);
+    t.live('Fatto, eccolo.');
+    await vi.advanceTimersByTimeAsync(1_500);
+    await t.stop();
+    const sends = calls.filter((c) => c.method === 'sendMessage');
+    expect(sends).toHaveLength(1);
+    expect(calls.at(-1)!.method).toBe('editMessageText');
+    expect(calls.at(-1)!.text).toBe('Fatto, eccolo.');
+  });
+
+  it('overflow past one Telegram message stops live-updating instead of forcing a split mid-round', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('x'.repeat(100));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    t.live('x'.repeat(TELEGRAM_MAX + 500)); // now overflows on its own
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(calls).toHaveLength(1); // no further attempt while it does not fit
+    await t.stop();
+  });
+
+  it('groups get no live preview — same scope the retired draft always had (private chats only)', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { isPrivate: false });
+    t.live('qualcosa');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls).toHaveLength(0);
+    await t.stop();
+  });
+});
+
+/**
+ * The other measured defect this same slice closes: a `sendMessageDraft`
+ * bubble is a Bot API *"temporary 30-second preview"* — it needs a live
+ * process renewing it to stay visible, and a crash mid-turn stops that
+ * renewal for good (measured 2026-09-04T02:31Z,
+ * `docs/evidence/turno-sospendibile.md`: the owner's own words were
+ * "written, then deleted, then rewritten" three minutes and fifty seconds
+ * later). `live()` never opens that kind of bubble at all — every message it
+ * touches is a real `sendMessage`/`editMessageText`, which Telegram never
+ * expires on its own. These tests are the falsifier for exactly that
+ * property: no renewal timer exists, and none is needed.
+ */
+describe('a process that stops calling this file leaves a real message, never an orphaned draft', () => {
+  it('once sent, a live message needs no renewal to stay visible — long silence, zero further calls', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('Sto scrivendo la risposta');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    const messageId = calls[0]!.messageId;
+
+    // The process "dies" here: nothing else ever calls this transcript again
+    // — no `live()`, no `report()`, no `stop()`. The old draft needed a
+    // renewal at least every ~30s to survive this; simulate several minutes
+    // of silence and prove nothing was needed, because nothing here expires.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(calls).toHaveLength(1); // no renewal call exists to make, or to miss
+    expect(calls.some((c) => c.method === 'deleteMessage')).toBe(false);
+    expect(messageId).toBeDefined(); // a real, addressable message — not a preview
+  });
+
+  it('a turn interrupted mid-round leaves its last real message exactly as last shown — nothing to edit, nothing to lose', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.live('Sto');
+    await vi.advanceTimersByTimeAsync(0);
+    t.live('Sto preparando');
+    await vi.advanceTimersByTimeAsync(1_500);
+    const shownBeforeDeath = calls.at(-1)!.text;
+
+    // Interrupted here — no `stop()` ever runs, mirroring a process that
+    // dies mid-turn (the measured incident: SIGTERM while a turn was live).
+    // A resumed process picks the row back up and eventually calls
+    // `deliverTo` for the real answer; this file only has to guarantee that
+    // in the meantime nothing makes the message disappear on its own.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls.at(-1)!.text).toBe(shownBeforeDeath); // still there, unchanged — not vanished
+  });
+});
+
+describe('handoff() — what deliverTo extends instead of sending beside', () => {
+  it('is null when nothing this turn ever produced a real message', () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1);
+    expect(t.handoff()).toBeNull();
+  });
+
+  it('names the last segment\'s message and its settled, non-live text once stop() has resolved', async () => {
+    const { api } = recordingApi();
+    const t = startTranscript(api, 1);
+    t.spoke('Prima leggo.', 'tool-call');
+    t.report(start('fs_read', { path: 'x' }));
+    await vi.advanceTimersByTimeAsync(0);
+    t.report(end('fs_read'));
+    await vi.advanceTimersByTimeAsync(1_500);
+    await t.stop();
+
+    const handoff = t.handoff();
+    expect(handoff).not.toBeNull();
+    expect(handoff!.stepsText).toContain('Prima leggo.');
+    expect(handoff!.stepsText).toContain('✓ leggo un file: x');
+    // The live tail (there was none here) is deliberately excluded —
+    // `deliverTo` supplies the authoritative, freshly split answer itself.
+    expect(handoff!.stepsText).not.toMatch(/⏳|· \d+s/);
+  });
+
+  it('is null once a Bot API failure has disabled this transcript — deliverTo must not edit a message it cannot trust', async () => {
+    const { api, calls } = recordingApi({ send: true });
+    const t = startTranscript(api, 1);
+    t.live('qualcosa');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([]); // the send failed and was swallowed
+    await t.stop();
+    expect(t.handoff()).toBeNull();
+  });
+});
