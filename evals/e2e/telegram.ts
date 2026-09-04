@@ -252,6 +252,27 @@ function muffin(args: string[], stdin?: string): Promise<{ code: number; out: st
 
 type Passo = { nome: string; ok: boolean; dettaglio: string };
 const passi: Passo[] = [];
+/**
+ * A quale messaggio risponde questa scrittura.
+ *
+ * Due campi, e leggerne uno solo e' costato una corsa: `reply_to_message_id`
+ * e' il campo storico, `reply_parameters.message_id` quello attuale (Bot API
+ * 7.0). Muffin manda il secondo — correttamente — e il banco cercava il
+ * primo, quindi confrontava `NaN` e dichiarava rotto un prodotto che
+ * funzionava. Si leggono entrambi: il banco deve reggere la Bot API che c'e',
+ * non quella che ricordava.
+ */
+function rispondeA(c: Chiamata): number | undefined {
+  const diretto = c.payload['reply_to_message_id'];
+  if (typeof diretto === 'number') return diretto;
+  const params = c.payload['reply_parameters'];
+  if (params !== null && typeof params === 'object' && 'message_id' in params) {
+    const id = (params as { message_id: unknown }).message_id;
+    if (typeof id === 'number') return id;
+  }
+  return undefined;
+}
+
 function esito(nome: string, ok: boolean, dettaglio: string): void {
   passi.push({ nome, ok, dettaglio });
   process.stderr.write(`${ok ? '✓' : '✗'} ${nome}\n    ${dettaglio}\n`);
@@ -349,6 +370,7 @@ try {
        */
       const nato = c.find((x) => x.method === 'sendMessage' && /✓ leggo un file/.test(testo(x)));
       const idTrascrizione = nato?.messageId;
+      let ultima: (typeof c)[number] | undefined;
       if (nato === undefined || idTrascrizione === undefined) {
         esito(
           'trascrizione · i passi ci sono ancora alla fine',
@@ -359,7 +381,7 @@ try {
         const suQuelMessaggio = c.filter(
           (x) => x.method === 'editMessageText' && x.payload['message_id'] === idTrascrizione,
         );
-        const ultima = suQuelMessaggio.at(-1) ?? nato;
+        ultima = suQuelMessaggio.at(-1) ?? nato;
         esito(
           'trascrizione · i passi ci sono ancora alla fine, non solo durante',
           /✓ leggo un file/.test(testo(ultima)),
@@ -374,9 +396,28 @@ try {
         ask !== undefined && /command: echo ciao/.test(testo(ask)) && /<i>.+<\/i>/.test(testo(ask)),
         ask === undefined ? 'nessun ASK con tastiera' : testo(ask).slice(0, 200).replace(/\n/g, ' ⏎ '),
       );
-      const ultimaTrascrizione = Math.max(0, ...trascrizioni.map((x) => x.n));
-      const risposta = c.find((x) => x.method === 'sendMessage' && x.payload['reply_markup'] === undefined && /ciao/i.test(testo(x)) && !/[✓✗⏳]/.test(testo(x)));
-      esito('risposta · dopo l\'ultima edit della trascrizione, come messaggio a parte', finito && risposta !== undefined && risposta.n > ultimaTrascrizione, risposta === undefined ? 'nessuna risposta finale' : `risposta #${String(risposta.n)}, ultima trascrizione #${String(ultimaTrascrizione)}`);
+      /**
+       * La risposta arriva **nello stesso messaggio** dei passi, non a parte.
+       *
+       * Fino al 04/09 questo caso pretendeva un `sendMessage` separato dopo
+       * l'ultima edit — ed era giusto per il disegno di allora. #388 l'ha
+       * cambiato di proposito, per chiudere la lamentela dell'owner «mi sta
+       * rispondendo due volte»: c'erano due bolle per turno, la scia dei tool
+       * e la consegna durevole, e ora la risposta finale **edita** il
+       * messaggio che la scia gia' possiede.
+       *
+       * Quindi la promessa non e' piu' «due messaggi in ordine» ma «un
+       * messaggio solo che alla fine contiene entrambe le cose» — ed e'
+       * quella che si misura qui. Il caso e' rimasto rosso una corsa intera
+       * su un prodotto corretto: un banco che porta avanti la specifica di
+       * ieri accusa il codice di oggi.
+       */
+      const rispostaNelloStesso = /Totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
+      esito(
+        'risposta · nello stesso messaggio dei passi, dopo di essi (#388)',
+        finito && rispostaNelloStesso,
+        rispostaNelloStesso ? 'passi e risposta nello stesso messaggio' : 'la risposta non e\' finita nel messaggio della trascrizione',
+      );
     }
   }
 
@@ -393,7 +434,7 @@ try {
       const rispostaAlPrimo = dopo(da).find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined && !/in coda|[✓✗⏳⏸]/.test(testo(c)) && testo(c).length > 80);
       esito(
         'coda · confermata subito, prima della prima risposta',
-        conferma && ack !== undefined && Number(ack.payload['reply_to_message_id']) === secondo!.messageId && (rispostaAlPrimo === undefined || ack.n < rispostaAlPrimo.n),
+        conferma && ack !== undefined && rispondeA(ack) === secondo!.messageId && (rispostaAlPrimo === undefined || ack.n < rispostaAlPrimo.n),
         ack === undefined ? 'nessuna conferma «in coda» (il secondo messaggio è arrivato a turno finito?)' : `ack #${String(ack.n)} in risposta a ${String(secondo!.messageId)}; prima risposta ${rispostaAlPrimo === undefined ? 'non ancora' : `#${String(rispostaAlPrimo.n)}`}`,
       );
       const entrambe = await aspetta(() => dopo(da).filter((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined && !/in coda|[✓✗⏳⏸]/.test(testo(c))).length >= 2);

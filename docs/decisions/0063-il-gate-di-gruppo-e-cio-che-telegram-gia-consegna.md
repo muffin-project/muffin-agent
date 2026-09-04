@@ -1,32 +1,54 @@
-# ADR-0063 — Il gate di gruppo è ciò che Telegram già consegna, non un'euristica nuova
+# ADR-0063 — Il gate di gruppo è nostro, perché l'owner spegne quello di Telegram
 
-**Stato:** proposto · 2026-09-04 · esegue la raccomandazione di
-`docs/evidence/muffin-nei-gruppi-2026-09-04.md` §4
+**Stato:** accettato · 2026-09-04 · sostituisce la stesura del mattino, il cui
+perno è caduto per una decisione dell'owner nello stesso giorno
 
-> **Proposto, non accettato.** Nessuna riga di codice cambia con questo
-> documento, e nessuna riga di codice regge questa decisione finché non è
-> implementata. Diventa `accettato` solo con una decisione dell'owner, nello
-> stesso commit che implementa il gate in `connectors/telegram/connector.ts`.
-> Se l'owner decide diversamente, questo file diventa lineage in
-> `docs/history/design-notes/` e la ricerca resta come evidence.
+> La prima stesura si intitolava «il gate è ciò che Telegram già consegna» e
+> concludeva che metà del filtro era gratis **a patto di non spegnere la
+> privacy mode**. L'owner l'ha spenta di proposito. La ricerca resta valida; la
+> conclusione no.
 
 ## Contesto
 
-L'owner ha chiesto un gate «devo rispondere?» in tre forme — reply, tag,
-caso generale — deterministico, mai un LLM. Oggi **non esiste nessun gate**:
-`connectors/telegram/connector.ts:1096-1160` (`drain()`) apre un turno vero
-per ogni update che `parseUpdate` non scarta, gruppo o privata, menzionato o
-no (`docs/evidence/muffin-nei-gruppi-2026-09-04.md` §1.2).
+Fino al 04/09/2026 **non esisteva nessun gate**: `drain()` apriva un turno vero
+— modello, memoria, tool — per ogni update che `parseUpdate` non scartasse,
+gruppo o privata, menzionato o no.
 
-La ricerca ha trovato un fatto che cambia la forma della domanda:
-`core.telegram.org/bots/features`, sezione *Privacy Mode* (consultata
-2026-09-04), elenca ciò che un bot con privacy attiva (il default) e non admin
-riceve in un gruppo — comandi, comandi generici se il bot ha appena parlato,
-messaggi inline, reply — e **una menzione nuda non è nella lista**. Con la
-configurazione di default, un messaggio «@nomebot fai X» senza reply non
-arriva **al server del connettore**, non solo al gate: Telegram stesso non lo
-consegna. Il gate per (1) e per metà di (2) esiste già, fuori dal codice di
-questo repository, a costo zero — a patto di non spegnerlo.
+A proteggere l'owner era la *privacy mode* di Telegram, accesa per default, che
+a un bot non-admin non consegna nemmeno una menzione nuda
+(`core.telegram.org/bots/features`, letta il 04/09/2026). Il filtro esisteva
+fuori dal nostro codice, a costo zero.
+
+**L'owner ha deciso di spegnerla.** Vuole che Muffin *veda* la conversazione e
+scelga quando parlare, non che riceva solo ciò che gli è indirizzato — perché il
+passo successivo è l'intervento spontaneo, e un agente che non vede non può
+scegliere. Quella decisione sposta il filtro dentro il nostro codice, e da quel
+momento questa funzione è l'unica cosa fra un gruppo attivo e un turno per
+messaggio.
+
+**L'ordine è vincolante**: il gate prima, la privacy mode dopo. Al contrario,
+ogni riga del gruppo apre un turno vero.
+
+## Due modi di vedere tutto, e non sono equivalenti
+
+La ricerca sulla fonte primaria (04/09/2026) ne dà due:
+
+- **`/setprivacy` su BotFather.** Richiede di **ri-aggiungere il bot al gruppo**
+  perché il cambio abbia effetto — *«the bot will need to be re-added to the
+  group for this change to take effect»*.
+- **Promuovere il bot ad amministratore.** *«bot admins always receive all
+  messages»*: un bot admin bypassa la privacy mode a prescindere dal flag.
+
+La seconda strada sblocca anche i **messaggi effimeri** (Bot API 10.2/10.3):
+un bot non-admin può mandarne solo entro 15 secondi da un'azione, mentre *«if
+the bot is a chat administrator, it can send an ephemeral message to any
+non-bot member of the chat at any time»*. È la risposta vera alla richiesta
+dell'owner «Telegram permette di ricevere il messaggio solo tu» — un ASK
+visibile a lui soltanto dentro un gruppo. Non implementato qui; nominato perché
+la scelta admin/non-admin lo decide.
+
+Un tetto da tenere presente per il passo successivo: **20 messaggi al minuto**
+per gruppo (`core.telegram.org/bots/faq`).
 
 ## Decisione
 
@@ -62,6 +84,24 @@ questo repository, a costo zero — a patto di non spegnerlo.
    non è un restringimento, è già la logica di oggi, resa esplicita qui perché
    il codice del gate deve poter distinguere i due casi per non richiedere
    una reply/menzione anche in privato.
+
+## Una divergenza dichiarata: la menzione si riconosce sul testo
+
+Il punto 3 prescriveva di leggere `message.entities` di tipo `mention` e
+confrontare per `offset`/`length`. L'implementazione confronta invece lo
+username sul testo, con un confine di parola
+(`@nome(?![A-Za-z0-9_])`, case-insensitive).
+
+La ragione è che `Incoming` non porta le entities, e portarle solo per questo
+avrebbe allargato la fetta. La differenza pratica: un `@nomebot` dentro un
+blocco di codice apre un turno, dove le entities non lo farebbero. È un falso
+positivo che costa un turno in più, non un falso negativo che perde un
+messaggio — la direzione accettabile fra le due. Il confine di parola copre il
+caso che conta davvero, `@nomebot2` che non deve risvegliare `@nomebot`, ed è
+provato.
+
+Se un giorno le entities entrano in `Incoming` per un'altra ragione, questo
+confronto va sostituito: è la forma che la fonte primaria rende esatta.
 
 ## Cosa questa decisione NON afferma
 
