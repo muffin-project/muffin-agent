@@ -406,112 +406,112 @@
   },
   "agent/runtime.ts:135": {
     "path": "agent/runtime.ts",
-    "line": 330,
+    "line": 374,
     "testo": "const rot = verify(home, config.rot.mode);"
   },
   "agent/runtime.ts:209": {
     "path": "agent/runtime.ts",
-    "line": 419,
+    "line": 463,
     "testo": "* the lane (`core/turns/lane.ts`). Merging them would resume a turn inside"
   },
   "agent/runtime.ts:258": {
     "path": "agent/runtime.ts",
-    "line": 468,
+    "line": 512,
     "testo": "// One connection, two lanes: the endpoint is the same, the model id is not."
   },
   "agent/runtime.ts:260": {
     "path": "agent/runtime.ts",
-    "line": 470,
+    "line": 514,
     "testo": "config.provider.kind === 'anthropic'"
   },
   "agent/runtime.ts:279": {
     "path": "agent/runtime.ts",
-    "line": 499,
+    "line": 543,
     "testo": "return usd;"
   },
   "agent/runtime.ts:299": {
     "path": "agent/runtime.ts",
-    "line": 519,
+    "line": 563,
     "testo": "// Memory. The vector half is optional and its absence is reported rather than"
   },
   "agent/runtime.ts:301": {
     "path": "agent/runtime.ts",
-    "line": 521,
+    "line": 565,
     "testo": "// search, and the difference has to be visible in `doctor` and in the traces."
   },
   "agent/runtime.ts:310": {
     "path": "agent/runtime.ts",
-    "line": 548,
+    "line": 592,
     "testo": "store: memoryStore,"
   },
   "agent/runtime.ts:315": {
     "path": "agent/runtime.ts",
-    "line": 553,
+    "line": 597,
     "testo": "// One vault per runtime, shared by the tool that reads documents and by the"
   },
   "agent/runtime.ts:327": {
     "path": "agent/runtime.ts",
-    "line": 312,
+    "line": 292,
     "testo": "*"
   },
   "agent/runtime.ts:333": {
     "path": "agent/runtime.ts",
-    "line": 571,
+    "line": 615,
     "testo": "// telling them to create one."
   },
   "agent/runtime.ts:346": {
     "path": "agent/runtime.ts",
-    "line": 584,
+    "line": 628,
     "testo": "// contained write that becomes an uncontained execution the next time the"
   },
   "agent/runtime.ts:392": {
     "path": "agent/runtime.ts",
-    "line": 597,
+    "line": 641,
     "testo": "...makeFsTools(scope),"
   },
   "agent/runtime.ts:439": {
     "path": "agent/runtime.ts",
-    "line": 659,
+    "line": 703,
     "testo": "// silently half-loaded one."
   },
   "agent/runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 724,
+    "line": 768,
     "testo": "...processCapabilities,"
   },
   "agent/runtime.ts:494": {
     "path": "agent/runtime.ts",
-    "line": 731,
+    "line": 775,
     "testo": "// built-ins get the same treatment."
   },
   "agent/runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 762,
+    "line": 806,
     "testo": "safeMode: safeMode !== null,"
   },
   "agent/runtime.ts:533": {
     "path": "agent/runtime.ts",
-    "line": 783,
+    "line": 827,
     "testo": "* Built here and not in the gateway, deliberately: turns happen in whichever"
   },
   "agent/runtime.ts:614": {
     "path": "agent/runtime.ts",
-    "line": 821,
+    "line": 865,
     "testo": "// calls that could drift apart."
   },
   "agent/runtime.ts:619": {
     "path": "agent/runtime.ts",
-    "line": 855,
+    "line": 899,
     "testo": "tools,"
   },
   "agent/runtime.ts:638": {
     "path": "agent/runtime.ts",
-    "line": 682,
+    "line": 726,
     "testo": "const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));"
   },
   "agent/runtime.ts:640": {
     "path": "agent/runtime.ts",
-    "line": 1007,
+    "line": 1090,
     "testo": "onTurnEnd: ({ tenant }) => consolidation.notify(tenant),"
   },
   "agent/scheduler-run.ts:31": {
@@ -796,12 +796,12 @@
   },
   "cli/doctor.ts:195": {
     "path": "cli/doctor.ts",
-    "line": 357,
+    "line": 363,
     "testo": "if (config.rot.mode === 'single-user') {"
   },
   "cli/doctor.ts:248": {
     "path": "cli/doctor.ts",
-    "line": 482,
+    "line": 488,
     "testo": "if (options.online) {"
   },
   "cli/doctor.ts:52": {
@@ -1091,27 +1091,27 @@
   },
   "cli/repl.ts:255": {
     "path": "cli/repl.ts",
-    "line": 754,
+    "line": 760,
     "testo": "* `gatewayStandDown` arbitrates each tick — which is also what lets this"
   },
   "cli/repl.ts:286": {
     "path": "cli/repl.ts",
-    "line": 800,
+    "line": 806,
     "testo": "(turnId, state) => runtime.deps.turns.delivered(turnId, state),"
   },
   "cli/repl.ts:288": {
     "path": "cli/repl.ts",
-    "line": 802,
+    "line": 808,
     "testo": "// so there is nothing to share this token with — a fresh instance still"
   },
   "cli/repl.ts:289": {
     "path": "cli/repl.ts",
-    "line": 803,
+    "line": 809,
     "testo": "// serialises this scheduler against itself, which is the whole property"
   },
   "cli/repl.ts:300": {
     "path": "cli/repl.ts",
-    "line": 829,
+    "line": 835,
     "testo": ": `scheduler: del gateway (pid ${gateway.pid}) — i job girano anche senza di te\\n`,"
   },
   "cli/run.ts:26": {
@@ -1131,32 +1131,32 @@
   },
   "cli/run.ts:54": {
     "path": "cli/run.ts",
-    "line": 57,
+    "line": 62,
     "testo": "const session = runtime.deps.sessions.open("
   },
   "cli/run.ts:63": {
     "path": "cli/run.ts",
-    "line": 82,
+    "line": 87,
     "testo": "let result: TurnResult;"
   },
   "cli/run.ts:65": {
     "path": "cli/run.ts",
-    "line": 84,
+    "line": 89,
     "testo": "result = await runTurn(runtime.deps, {"
   },
   "cli/run.ts:66": {
     "path": "cli/run.ts",
-    "line": 85,
+    "line": 90,
     "testo": "principal: { kind: 'owner', connector: 'cli', externalId: 'local' },"
   },
   "cli/run.ts:73": {
     "path": "cli/run.ts",
-    "line": 93,
+    "line": 98,
     "testo": "} catch (error) {"
   },
   "cli/run.ts:96": {
     "path": "cli/run.ts",
-    "line": 116,
+    "line": 121,
     "testo": "switch (result.stopped) {"
   },
   "cli/surface.ts:199": {
@@ -1691,72 +1691,72 @@
   },
   "core/memory/store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 149,
+    "line": 150,
     "testo": "*"
   },
   "core/memory/store.ts:162": {
     "path": "core/memory/store.ts",
-    "line": 199,
+    "line": 200,
     "testo": "private readonly ingestLock: IngestLock;"
   },
   "core/memory/store.ts:218": {
     "path": "core/memory/store.ts",
-    "line": 265,
+    "line": 291,
     "testo": "pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {"
   },
   "core/memory/store.ts:237": {
     "path": "core/memory/store.ts",
-    "line": 290,
+    "line": 316,
     "testo": "markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {"
   },
   "core/memory/store.ts:256": {
     "path": "core/memory/store.ts",
-    "line": 309,
+    "line": 335,
     "testo": "releaseIngestLock(pid: number = process.pid): void {"
   },
   "core/memory/store.ts:295": {
     "path": "core/memory/store.ts",
-    "line": 348,
+    "line": 374,
     "testo": "upsertEntity(tenantId: string, name: string, kind: string, recordedAt: string): number {"
   },
   "core/memory/store.ts:38": {
     "path": "core/memory/store.ts",
-    "line": 46,
+    "line": 47,
     "testo": "export type FactInput = {"
   },
   "core/memory/store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 489,
     "testo": "/**"
   },
   "core/memory/store.ts:572": {
     "path": "core/memory/store.ts",
-    "line": 572,
+    "line": 568,
     "testo": "/**"
   },
   "core/memory/store.ts:610": {
     "path": "core/memory/store.ts",
-    "line": 562,
+    "line": 558,
     "testo": "FROM facts f"
   },
   "core/memory/store.ts:637": {
     "path": "core/memory/store.ts",
-    "line": 764,
+    "line": 790,
     "testo": "searchEpisodes("
   },
   "core/memory/store.ts:700": {
     "path": "core/memory/store.ts",
-    "line": 834,
+    "line": 860,
     "testo": "episodeNeighbourhood("
   },
   "core/memory/store.ts:829": {
     "path": "core/memory/store.ts",
-    "line": 970,
+    "line": 996,
     "testo": "episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {"
   },
   "core/memory/store.ts:958": {
     "path": "core/memory/store.ts",
-    "line": 1120,
+    "line": 1146,
     "testo": "f.superseded_by AS supersededBy"
   },
   "core/memory/vectors.ts:106": {
@@ -2726,37 +2726,37 @@
   },
   "runtime.ts:284": {
     "path": "agent/runtime.ts",
-    "line": 504,
+    "line": 548,
     "testo": "* legal on the wire."
   },
   "runtime.ts:384": {
     "path": "agent/runtime.ts",
-    "line": 583,
+    "line": 627,
     "testo": "// and the shell dotfiles were in neither, and both are the same escape: a"
   },
   "runtime.ts:464": {
     "path": "agent/runtime.ts",
-    "line": 700,
+    "line": 744,
     "testo": "* able to run a multi-turn plan in the first place. Nothing said so: the two"
   },
   "runtime.ts:488": {
     "path": "agent/runtime.ts",
-    "line": 724,
+    "line": 768,
     "testo": "...processCapabilities,"
   },
   "runtime.ts:525": {
     "path": "agent/runtime.ts",
-    "line": 762,
+    "line": 806,
     "testo": "safeMode: safeMode !== null,"
   },
   "runtime.ts:531": {
     "path": "agent/runtime.ts",
-    "line": 781,
+    "line": 825,
     "testo": "* The thing that makes memory fill itself (ADR-0038)."
   },
   "runtime.ts:642": {
     "path": "agent/runtime.ts",
-    "line": 686,
+    "line": 730,
     "testo": "} else if (searchDiagnosis.gap) {"
   },
   "runtime.ts:98": {
@@ -2826,17 +2826,17 @@
   },
   "store.ts:116": {
     "path": "core/memory/store.ts",
-    "line": 141,
+    "line": 142,
     "testo": "since?: string | undefined;"
   },
   "store.ts:147": {
     "path": "core/memory/store.ts",
-    "line": 149,
+    "line": 150,
     "testo": "*"
   },
   "store.ts:179": {
     "path": "core/memory/store.ts",
-    "line": 217,
+    "line": 218,
     "testo": "`origin TEXT NOT NULL DEFAULT 'said' CHECK (origin IN ('said','inferred','imported'))`,"
   },
   "store.ts:21": {
@@ -2846,27 +2846,27 @@
   },
   "store.ts:228": {
     "path": "core/memory/store.ts",
-    "line": 228,
+    "line": 229,
     "testo": "// `MemoryStore` straight from a file, exactly the gap `jobs.kind`'s own"
   },
   "store.ts:503": {
     "path": "core/memory/store.ts",
-    "line": 499,
+    "line": 489,
     "testo": "/**"
   },
   "store.ts:740": {
     "path": "core/memory/store.ts",
-    "line": 881,
+    "line": 907,
     "testo": "entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {"
   },
   "store.ts:903": {
     "path": "core/memory/store.ts",
-    "line": 1044,
+    "line": 1070,
     "testo": "* Where a recalled chunk came from and how much it is worth."
   },
   "store.ts:935": {
     "path": "core/memory/store.ts",
-    "line": 1097,
+    "line": 1123,
     "testo": "// recall has nothing else to read it from. Without it an inferred"
   },
   "tracer.ts:94": {
