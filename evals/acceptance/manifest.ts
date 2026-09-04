@@ -398,8 +398,8 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // "LAUNDERED" finding, closed and pinned to the real binary.
   verde(
     'D10',
-    'security: a turn that read untrusted content cannot use it to reach an unlisted host, and a later ' +
-      'clean turn in the same session still carries the inherited taint',
+    'security: a turn that read untrusted content may still read a page (ADR-0066) but cannot leave with ' +
+      'bytes it composed (ADR-0071), and a later clean turn in the same session still carries the inherited taint',
   ),
   verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
