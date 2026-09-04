@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from './decide.js';
-import { POLICY_FLOOR } from './matrix.js';
+import { POLICY_FLOOR, ROW_FLOOR } from './matrix.js';
 import type { CapabilityDecl, Decision, DecisionRequest, Principal, TrustTier } from './types.js';
 import { fsCapabilities } from '../../agent/tools/fs.js';
 import { shellCapability } from '../../agent/tools/shell.js';
@@ -233,5 +233,35 @@ describe('la matrice normativa è eseguibile', () => {
     expect(decisionAt(write, 2).effect).toBe('ask');
     expect(decisionAt(kill, 2).effect).toBe('ask');
     expect(decisionAt(sendFileCapability, 2).effect).toBe('allow');
+  });
+});
+
+/**
+ * ADR-0062 — "il modello non deve poter cambiare le impostazioni", eseguita.
+ *
+ * `muffin config set` (e `/config` in `agent/comandi.ts`) scrivono
+ * `config.json` senza passare da qui: sono comandi che i connector
+ * intercettano prima di interrogare il modello, non tool che il modello può
+ * scegliere di chiamare. Questo test legge la stessa affermazione dal lato del
+ * kernel — `ALL` è l'enumerazione che il file sopra usa per provare la
+ * matrice cella per cella, cioè ogni `CapabilityDecl` che un turno può
+ * davvero invocare — e prova che nessuna vi appartiene sulla riga `config`.
+ *
+ * Falsificato a mano il 04/09/2026: aggiunta una `CapabilityDecl` finta con
+ * `effect: 'config'` all'array `ALL` qui sopra, e questo test è diventato
+ * rosso su `expected [...] to not contain 'config'` — l'unica asserzione che
+ * lo nota, perché è l'unica che guarda questo campo su ogni dichiarazione. Il
+ * resto della suite (compreso il file sopra) non si accorge di una capability
+ * sulla riga `config`: la matrice sa deciderla, ma nessun test le negava
+ * l'esistenza prima di questo.
+ */
+describe('il modello non ha una porta sulla riga "config" (ADR-0062)', () => {
+  it('nessuna CapabilityDecl spedita dichiara effect: "config"', () => {
+    const righe = ALL.map((d) => d.effect);
+    expect(righe).not.toContain('config');
+  });
+
+  it('la riga "config" della matrice resta riservata: ASK sopra taint 0, DENY sopra taint 1 — invariata da ADR-0053', () => {
+    expect(ROW_FLOOR.config).toEqual({ askAbove: 0, denyAbove: 1 });
   });
 });

@@ -34,6 +34,7 @@ import { cmdAdopt } from './adopt.js';
 import { cmdJobsAdd, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
 import {
   cmdGatewayInstall,
+  cmdGatewayRestart,
   cmdGatewayRun,
   cmdGatewayStart,
   cmdGatewayStatus,
@@ -114,6 +115,9 @@ comandi operatore:
               [--local [DIR]]  home di prova separata (default ~/.muffin-local),
                                 riusa il segreto persistito — mai una copia
   muffin config [--json]        ogni manopola: valore, dove vive, se è sigillata
+  muffin config set <chiave> <valore>
+                                cambia una delle poche manopole scrivibili da qui
+                                (le altre hanno un comando dedicato, o si toccano a mano)
   muffin doctor [--json]
   muffin adopt [<file>|--tutto] i file di defaults/ (persona.md, voice.md, le
                                 skill) che l'installazione ha lasciato indietro.
@@ -138,10 +142,12 @@ comandi operatore:
                                 torna alla release precedente (flip inverso)
   muffin surface list | enable telegram [--owner <chat-id>] | disable telegram
   muffin surface default <id>   dove Muffin parla quando nessuno ha chiesto
-  muffin gateway status | stop | install [--write]
+  muffin gateway status | stop | start | restart | install [--write]
                                 il processo che tiene vivi i job quando non hai
                                 nessuna finestra aperta. \`muffin init\` propone
                                 di installarlo; \`run\` lo lancia il supervisore.
+                                \`restart\` fa kickstart/systemctl restart e
+                                verifica lo stato dopo, non l'exit code.
   muffin mcp list [--verify] | add <name> [--env K=V]... -- <cmd> [args...] | remove <name>
   muffin prompt show [--surface cli|telegram|discord] [--member] [--tenant ID] [--blocks]
                                 il system prompt che il modello riceverebbe
@@ -1110,6 +1116,7 @@ async function cmdGateway(argv: string[]): Promise<number> {
   if (sub === 'status' || sub === undefined) return cmdGatewayStatus(home);
   if (sub === 'stop') return cmdGatewayStop(home);
   if (sub === 'start') return cmdGatewayStart(home);
+  if (sub === 'restart') return cmdGatewayRestart(home);
   if (sub === 'install') return cmdGatewayInstall(home, rest);
   process.stderr.write(GATEWAY_USAGE);
   return 78;

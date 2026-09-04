@@ -19,7 +19,7 @@ import { ModelLane } from '../core/turns/model-lane.js';
 import { TurnStore } from '../core/turns/store.js';
 import { gatewayStandDown } from './repl.js';
 import { cmdGatewayInstall, cmdGatewayStatus, EXIT_NOT_ACTIVATED } from './gateway.js';
-import { cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
+import { cmdGatewayRestart, cmdGatewayRun, stopCaveat, tickMsFromEnv } from './gateway.js';
 import { runInit } from './init.js';
 
 /**
@@ -869,6 +869,112 @@ describe('muffin gateway stop admits what it cannot do', () => {
     // E non promette più il contrario di quello che fa.
     expect(caveat).not.toContain('riavvia');
     expect(caveat).not.toContain('bootout');
+  });
+});
+
+/**
+ * `muffin gateway restart` (ADR-0062) — l'owner l'ha chiesto per non dover
+ * fare `launchctl kickstart` più `muffin gateway status` a mano ogni volta.
+ * `restartCommand`/`waitForGatewayPid`/`restartVerdict` sono gli stessi tre
+ * pezzi di `cli/update.ts`'s `offerGatewayRestart` — questi test rispecchiano
+ * apposta i tre casi di `describe('verifying the restart by state, not by
+ * exit code')` in `cli/update.test.ts`, sullo stesso meccanismo importato.
+ */
+describe('muffin gateway restart', () => {
+  /** Returns `seq[i]` on the i-th call, then repeats the last value forever — stessa forma di update.test.ts. */
+  function pidSequence(seq: (number | null)[]): () => number | null {
+    let i = 0;
+    return () => seq[Math.min(i++, seq.length - 1)] ?? null;
+  }
+  const noSleep = async (): Promise<void> => {};
+  const engaged = {
+    unitFileExists: () => true,
+    systemdEnabled: () => true,
+    systemdFailed: () => false,
+    lingerEnabled: () => true,
+  };
+
+  it('nessun supervisore installato: esce diverso da zero e nomina il rimedio, senza tentare niente', async () => {
+    const err: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await cmdGatewayRestart(home(), {
+        platform: 'linux',
+        supervisorProbes: { unitFileExists: () => false },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).not.toBe(0);
+    expect(err.join('')).toMatch(/nessun gateway supervisionato/);
+    expect(err.join('')).toContain('muffin gateway install');
+  });
+
+  it('riavviato e verificato: pid diverso dopo, esce 0 — anche se il comando avesse detto altro', async () => {
+    const code = await cmdGatewayRestart(home(), {
+      platform: 'linux',
+      supervisorProbes: engaged,
+      restart: () => ({ status: 0, stdout: '', stderr: '' }),
+      readGatewayPid: pidSequence([88175, 88175, 65671]),
+      sleep: noSleep,
+    });
+    expect(code).toBe(0);
+  });
+
+  it('comando fallito e nessun pid nuovo: esce diverso da zero — verificato sullo STATO, non sull exit code del comando', async () => {
+    const out: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      out.push(String(chunk));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await cmdGatewayRestart(home(), {
+        platform: 'linux',
+        supervisorProbes: engaged,
+        restart: () => ({ status: 1, stdout: '', stderr: 'Failed to restart muffin-gateway.service: Unit is masked.' }),
+        readGatewayPid: pidSequence([88175]),
+        sleep: noSleep,
+        verifyAttempts: 2,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(code).not.toBe(0);
+    expect(out.join('')).toMatch(/il riavvio non è avvenuto/);
+    expect(out.join('')).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
+  });
+
+  it('comando "fallito" ma un pid nuovo serve comunque (scontro transitorio): esce 0', async () => {
+    const code = await cmdGatewayRestart(home(), {
+      platform: 'linux',
+      supervisorProbes: engaged,
+      restart: () => ({ status: 1, stdout: '', stderr: '' }),
+      readGatewayPid: pidSequence([88175, 88175, 65671]),
+      sleep: noSleep,
+    });
+    expect(code).toBe(0);
+  });
+
+  it('su darwin usa launchctl kickstart -k — lo stesso comando di offerGatewayRestart, non una seconda stringa', async () => {
+    let restarted: string[] | null = null;
+    await cmdGatewayRestart(home(), {
+      platform: 'darwin',
+      supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
+      restart: (argv) => {
+        restarted = argv;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      readGatewayPid: pidSequence([1111, 2222]),
+      sleep: noSleep,
+    });
+    expect(restarted?.[0]).toBe('launchctl');
+    expect(restarted?.[1]).toBe('kickstart');
+    expect(restarted?.[2]).toBe('-k');
   });
 });
 
