@@ -206,6 +206,45 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 6,
+    description:
+      "jobs.per_job_usd, spend.job_id, turns.job_id — un job rotto non può più mangiarsi il mese intero (DAY-1 E1)",
+    up: (db) => {
+      // La stessa guardia della migrazione 2, per la stessa ragione: `jobs` e
+      // `spend` sono create dai rispettivi store, che girano **dopo** questo
+      // runner. Su un'installazione fresca le tabelle non esistono ancora e
+      // le creeranno i loro `SCHEMA` con le colonne già dentro; su
+      // un'installazione con tenure ci sono e mancano le colonne.
+      const haTabella = (nome: string): boolean =>
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(nome) !== undefined;
+      const haColonna = (tabella: string, colonna: string): boolean =>
+        (db.prepare(`PRAGMA table_info(${tabella})`).all() as Array<{ name: string }>).some((c) => c.name === colonna);
+
+      // Additiva e nullable: nessun job esistente acquisisce un tetto per
+      // effetto di questa migrazione. La direzione conta — il contrario
+      // spegnerebbe di sua iniziativa job che l'owner non ha toccato.
+      if (haTabella('jobs') && !haColonna('jobs', 'per_job_usd')) {
+        db.exec(`ALTER TABLE jobs ADD COLUMN per_job_usd REAL`);
+      }
+      // Il contatore che il tetto consuma. Le righe di spesa già scritte
+      // restano `NULL`: nessuna di esse sa a quale job apparteneva, e
+      // inventare un'attribuzione a posteriori è peggio che non averne — il
+      // primo mese dopo l'aggiornamento un job parte da zero, che è la
+      // direzione indulgente e non quella che spegne qualcosa per sbaglio.
+      if (haTabella('spend') && !haColonna('spend', 'job_id')) {
+        db.exec(`ALTER TABLE spend ADD COLUMN job_id TEXT`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_spend_job_month ON spend(job_id, month)`);
+      }
+      // E la stessa appartenenza sulla riga del turno, che è ciò che la fa
+      // sopravvivere a una ripresa: `drive` ricostruisce il `TurnInput` dal
+      // record, quindi senza questa colonna la spesa della seconda metà di un
+      // turno di job sospeso non apparterrebbe più a nessun job.
+      if (haTabella('turns') && !haColonna('turns', 'job_id')) {
+        db.exec(`ALTER TABLE turns ADD COLUMN job_id TEXT`);
+      }
+    },
+  },
 ];
 
 const BASELINE_VERSION = 1;

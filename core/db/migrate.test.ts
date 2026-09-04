@@ -1,5 +1,5 @@
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -251,7 +251,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -271,7 +271,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(5);
+    expect(schemaVersionOf(db)).toBe(6);
   });
 });
 
@@ -314,7 +314,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as { id: number }[];
     expect(pinned.map((r) => r.id)).toEqual([1, 2, 3]);
     // Rows survive untouched — this is a backfill, not a rewrite.
@@ -362,7 +362,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(5);
+    expect(schemaVersionOf(db)).toBe(6);
   });
 });
 
@@ -390,7 +390,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_at');
     expect(colonne).toContain('due_tier');
@@ -433,7 +433,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5]);
+    expect(res.applied).toEqual([5, 6]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(colonne).toContain('due_tier');
     // La query che moriva: è questa a rendere l'asserzione un comportamento e
@@ -443,5 +443,58 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
     ).not.toThrow();
     const righe = db.prepare(`SELECT count(*) AS n FROM todos`).get() as { n: number };
     expect(righe.n).toBe(200);
+  });
+});
+
+/**
+ * Migrazione 6 — il tetto per-job su una casa con tenure (DAY-1 E1).
+ *
+ * Non «la migrazione gira»: che una casa scritta con lo schema **vecchio** —
+ * `jobs` senza `per_job_usd`, `spend` senza `job_id`, `turns` senza `job_id`,
+ * con dentro righe vere — arrivi dall'altra parte con le colonne, **senza
+ * perdere una riga** e senza che nessun job acquisti un tetto che l'owner non
+ * ha chiesto.
+ */
+describe('migrazione 6 — jobs.per_job_usd, spend.job_id, turns.job_id', () => {
+  it('aggiunge le tre colonne a una casa con tenure, e non tocca le righe che ci sono', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-migrate-6-'));
+    const db = new DatabaseCtor(join(dir, 'muffin.db'));
+    try {
+      db.exec(`
+        CREATE TABLE jobs (
+          id TEXT PRIMARY KEY, cron TEXT NOT NULL, timezone TEXT NOT NULL, goal TEXT NOT NULL,
+          channel TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'goal', created_at TEXT NOT NULL,
+          next_fire_at TEXT NOT NULL, last_run_at TEXT, active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE spend (
+          id INTEGER PRIMARY KEY, tenant TEXT NOT NULL, capability TEXT NOT NULL, model TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, usd REAL NOT NULL,
+          day TEXT NOT NULL, month TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE turns (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+        INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, active)
+          VALUES ('j1', '0 8 * * *', 'Europe/Rome', 'brief', 'cli', 'goal', '2026-06-01', '2026-06-15', 1);
+        INSERT INTO spend (tenant, capability, model, input_tokens, output_tokens, usd, day, month, created_at)
+          VALUES ('host', 'llm.chat', 'test', 1, 1, 2.5, '2026-06-01', '2026-06', '2026-06-01');
+        INSERT INTO turns (id, created_at) VALUES ('t1', '2026-06-01');
+      `);
+
+      const res = migrate(db, { backupDir: join(dir, 'backups') });
+      expect(res.applied).toContain(6);
+
+      const colonne = (t: string) =>
+        (db.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>).map((c) => c.name);
+      expect(colonne('jobs')).toContain('per_job_usd');
+      expect(colonne('spend')).toContain('job_id');
+      expect(colonne('turns')).toContain('job_id');
+
+      // Nessuna riga persa, nessun tetto inventato, nessuna spesa riscritta.
+      expect(db.prepare(`SELECT per_job_usd FROM jobs WHERE id = 'j1'`).get()).toEqual({ per_job_usd: null });
+      expect(db.prepare(`SELECT usd, job_id FROM spend`).get()).toEqual({ usd: 2.5, job_id: null });
+      expect(db.prepare(`SELECT job_id FROM turns WHERE id = 't1'`).get()).toEqual({ job_id: null });
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
