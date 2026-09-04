@@ -225,6 +225,27 @@ export type Runtime = {
    * the loop cannot ever be allowed to call.
    */
   register(tool: RegisteredTool, decl: CapabilityDecl): void;
+  /**
+   * Redo the `profile.maxToolsExposed` cut against the tools registered *so
+   * far*, in place of the one `buildRuntime` computed before any late
+   * registration existed.
+   *
+   * `send_file` (`cli/surface.ts#attachSendFile`) and MCP tools
+   * (`attachMcp`) both arrive after `buildRuntime` returns — the first
+   * `computeExposureGaps` pass inside it cannot see either, so its
+   * `capabilityGaps`/`bootLines` describe a tool list that is already stale
+   * by the time a surface prints them. `cli/gateway.ts` and `cli/repl.ts`
+   * call this once, right after every `attach*` call for that boot has run,
+   * and print what it returns next to `bootLines` rather than trusting the
+   * frozen array. `cli/run.ts` calls it after its own `attachMcp`, having
+   * never attached `send_file` at all.
+   *
+   * Returns the `'truncated'` lines only (already formatted, `capability
+   * tagliato: …`), for a caller to print — `capabilityGaps` itself is
+   * mutated in place, so `sys.inspect`'s own live read of it stays correct
+   * without calling this.
+   */
+  recomputeExposure(): string[];
   /** Awaited by close(); attachments park their teardown here. */
   onClose(hook: () => Promise<void>): void;
   close(): void;
@@ -259,7 +280,29 @@ function msFromEnv(raw: string | undefined): number | undefined {
  * hand-typed order would be exactly the kind of copy this repository has
  * already paid for once (`slice/turno-sospeso`, cited in that test).
  */
-export function baseToolOrder(input: { sandboxAvailable: boolean; searchOn: boolean }): string[] {
+export function baseToolOrder(input: {
+  sandboxAvailable: boolean;
+  searchOn: boolean;
+  /**
+   * Whether `send_file` will exist for this install (DAY-1 requirement B14,
+   * `cli/surface.ts#attachSendFile`) — `false` by default because
+   * `buildRuntime` genuinely does not know yet: the gateway and the REPL
+   * attach it after `buildRuntime` returns (they hold the `SurfaceRegistry`
+   * it needs), `muffin run` never does.
+   *
+   * Placed **before** `wait`/`todo`/`sys_inspect` on purpose: those three are
+   * the tools this list already names, deliberately, as the ones a cut may
+   * take first (comment below, and `runtime-exposure.test.ts`'s +1 for
+   * `fs_search` names `sys_inspect` as "the first of the list to fall"). A
+   * tool an owner's turn actually depends on for getting an artifact back —
+   * DAY-1, not scaffolding — must not rank below the harness's own
+   * self-inspection merely because it happens to attach later in the boot
+   * sequence. That was the measured defect: `send_file` used to land after
+   * `sys_inspect` in the live array for no reason anyone chose, which made it
+   * the *first* casualty of a cut, not the last.
+   */
+  sendFileAvailable?: boolean;
+}): string[] {
   return [
     'fs_read',
     'fs_list',
@@ -273,6 +316,7 @@ export function baseToolOrder(input: { sandboxAvailable: boolean; searchOn: bool
     'skill_read',
     'http_get',
     ...(input.searchOn ? ['web_search'] : []),
+    ...(input.sendFileAvailable ? ['send_file'] : []),
     'wait',
     'todo',
     'sys_inspect',
@@ -892,15 +936,50 @@ export function buildRuntime(
    * ADR-0008: degradare dichiarando. Chi chiede a Muffin di ispezionarsi e
    * riceve una risposta recitata deve poter vedere **perché** senza leggere
    * questo file.
+   *
+   * **Chiamata qui una volta, e richiamabile.** `attachSendFile`/`attachMcp`
+   * (`cli/gateway.ts`, `cli/repl.ts`) registrano tool **dopo** che `buildRuntime`
+   * è tornato — `send_file` ha bisogno del `SurfaceRegistry` che a questo punto
+   * del boot non esiste ancora (verificato: `registry` in `cli/gateway.ts` è
+   * `null` fino a `connectSurfaces`, molte righe dopo la chiamata a
+   * `buildRuntime`). Il calcolo qui sotto, da solo, non può vedere quei tool —
+   * per questo `recomputeExposure()` nell'oggetto restituito rifà lo stesso
+   * calcolo sul registro live, e i due chiamanti lo invocano di nuovo dopo che
+   * *tutte* le registrazioni del boot sono finite. Un `muffin run` che non
+   * allega mai `send_file` resta corretto con questa sola chiamata.
    */
-  const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
-  // Stessa lista, riformattata come le altre due capacità spente qui sopra —
-  // `kind: 'truncated'` invece di `'disabled'`, perché «esiste ma il tetto
-  // del profilo la taglia» e «non esiste per questa installazione» sono due
-  // domande diverse, e confonderle è esattamente il difetto misurato.
-  for (const tool of tagliati) {
-    capabilityGaps.push(truncationGap({ tool, profileName: profile.name, maxToolsExposed: profile.maxToolsExposed }));
-  }
+  const computeExposureGaps = (): void => {
+    // Ordina per priorità dichiarata, non per ordine di `push`/`register`:
+    // così ciò che il tetto taglia è sempre la stessa coda scelta
+    // (`baseToolOrder`), mai un artefatto di quale superficie ha chiamato
+    // `register()` per ultima. Un tool non elencato (MCP: dinamico per
+    // natura, nessuna priorità dichiarabile qui) resta dopo tutti i nomi
+    // dichiarati, nell'ordine relativo in cui è arrivato — `sort` è stabile.
+    const priorita = new Map(
+      baseToolOrder({
+        sandboxAvailable: contained,
+        searchOn,
+        sendFileAvailable: tools.some((t) => t.spec.name === 'send_file'),
+      }).map((name, i) => [name, i] as const),
+    );
+    tools.sort(
+      (a, b) =>
+        (priorita.get(a.spec.name) ?? Number.MAX_SAFE_INTEGER) - (priorita.get(b.spec.name) ?? Number.MAX_SAFE_INTEGER),
+    );
+    // Idempotente: una rilettura aggiorna le righe `truncated`, non le accumula.
+    for (let i = capabilityGaps.length - 1; i >= 0; i -= 1) {
+      if (capabilityGaps[i]?.kind === 'truncated') capabilityGaps.splice(i, 1);
+    }
+    const tagliati = tools.slice(profile.maxToolsExposed).map((t) => t.spec.name);
+    // Stessa lista, riformattata come le altre due capacità spente qui sopra —
+    // `kind: 'truncated'` invece di `'disabled'`, perché «esiste ma il tetto
+    // del profilo la taglia» e «non esiste per questa installazione» sono due
+    // domande diverse, e confonderle è esattamente il difetto misurato.
+    for (const tool of tagliati) {
+      capabilityGaps.push(truncationGap({ tool, profileName: profile.name, maxToolsExposed: profile.maxToolsExposed }));
+    }
+  };
+  computeExposureGaps();
 
   /**
    * I fatti d'istanza di `docs/evidence/orizzonte-del-turno-2026-09-03.md`
@@ -959,6 +1038,10 @@ export function buildRuntime(
     register: (tool, decl) => {
       capabilities.set(decl.id, decl);
       tools.push(tool);
+    },
+    recomputeExposure: () => {
+      computeExposureGaps();
+      return capabilityGaps.filter((g) => g.kind === 'truncated').map((g) => formatCapabilityGap(g));
     },
     onClose: (hook) => {
       closeHooks.push(hook);
