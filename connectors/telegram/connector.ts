@@ -1625,26 +1625,36 @@ export class TelegramConnector {
     });
     if (decision.effect !== 'allow') return;
 
-    memory.store.addEpisode({
-      tenantId: tenant,
-      connector: 'telegram',
-      threadKey: sessionKey,
-      role: 'user',
-      kind: 'message',
-      content,
-      trustTier,
-      // Non `actorId: incoming.fromId`: `episodes.actor_id` è una foreign key
-      // verso `identities.id` — una riga del *grafo*, risolta da chi collega
-      // un id di piattaforma a un'identità (estrazione/consolidamento), mai
-      // il numero grezzo che Telegram manda. Nessun altro punto di scrittura
-      // in produzione la valorizza (`agent/loop.ts`, due volte) per la stessa
-      // ragione, ed è comunque irraggiungibile qui: un tenant di gruppo non
-      // viene mai estratto (`CONSOLIDATION_TENANT`), quindi non esisterà mai
-      // una riga `identities` per questo mittente. Passare il numero grezzo
-      // fallisce il vincolo — misurato: `SqliteError: FOREIGN KEY constraint
-      // failed`.
-      createdAt: this.now(),
-    });
+    // Nel suo `try`, perche' questa chiamata vive dentro il ciclo di `drain()`
+    // e fuori da ogni altro `try`: un errore di SQLite qui — un vincolo, un
+    // disco pieno — risalirebbe fino a `drain()` e fermerebbe **tutti** gli
+    // update Telegram, non solo questo. Un effetto collaterale a costo zero
+    // che puo' spegnere la superficie ha invertito la sua priorita'.
+    try {
+      memory.store.addEpisode({
+        tenantId: tenant,
+        connector: 'telegram',
+        threadKey: sessionKey,
+        role: 'user',
+        kind: 'message',
+        content,
+        trustTier,
+        // Non `actorId: incoming.fromId`: `episodes.actor_id` è una foreign key
+        // verso `identities.id` — una riga del *grafo*, risolta da chi collega
+        // un id di piattaforma a un'identità (estrazione/consolidamento), mai
+        // il numero grezzo che Telegram manda. Nessun altro punto di scrittura
+        // in produzione la valorizza (`agent/loop.ts`, due volte) per la stessa
+        // ragione, ed è comunque irraggiungibile qui: un tenant di gruppo non
+        // viene mai estratto (`CONSOLIDATION_TENANT`), quindi non esisterà mai
+        // una riga `identities` per questo mittente. Passare il numero grezzo
+        // fallisce il vincolo — misurato: `SqliteError: FOREIGN KEY constraint
+        // failed`.
+        createdAt: this.now(),
+      });
+    } catch (error) {
+      log(`telegram: messaggio di gruppo ${incoming.chatId} non ricordato — ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     // Mai il contenuto nel log: solo la stanza e il tier, come ogni altra
     // riga di `drain()`.
     log(`telegram: messaggio di gruppo ${incoming.chatId} ricordato senza rispondere (tier ${trustTier})`);
