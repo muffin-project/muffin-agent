@@ -57,7 +57,11 @@ describe('gli ADR', () => {
     const doppi = [...per.entries()]
       .filter(([, f]) => f.length > 1)
       .map(([n, f]) => `${n}: ${f.join(' e ')}`);
-    expect(doppi).toEqual([]);
+    // Questo test vede la collisione solo quando entrambi gli ADR sono già
+    // qui, cioè quando `dev` è rosso e ogni ramo aperto è rosso con lui:
+    // due PR verdi separatamente bastano a produrla (04/09/2026, due volte).
+    // Il numero si chiede *prima*, e a chi guarda anche i rami non integrati.
+    expect(doppi, 'numeri ADR doppi — prendi il prossimo con `node docs/decisions/prossimo-numero.mjs`').toEqual([]);
   });
 
   it('portano nel titolo il numero che hanno nel nome', () => {
