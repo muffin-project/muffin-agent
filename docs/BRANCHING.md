@@ -110,3 +110,29 @@ or per thought.
 
 The PR tells reviewers what claim is being promoted; Git history tells them what
 changed; evidence tells them why the claim should be believed.
+
+## La stash è condivisa, quindi non è un posto dove lasciare lavoro
+
+`git stash` non appartiene al worktree in cui lo esegui: la pila è **una sola
+per repository** e la vedono tutti i worktree, compresi quelli di altre
+sessioni che lavorano in parallelo. Un `git stash pop` fatto altrove estrae la
+*tua* voce, in un albero che non è il tuo.
+
+Misurato il 2026-09-04: una fetta aveva parcheggiato in `stash@{0}` la metà di
+due lavori che non poteva integrare (il file era in riscrittura altrove) e
+l'aveva dichiarata in una PR come se fosse un luogo di conservazione. Nella
+stessa notte, un'altra fetta si era già accorta di aver lasciato una voce non
+ripresa, perdendo dal proprio albero quattordici file di correzioni già fatte.
+
+Quindi:
+
+- **Per mettere via del lavoro, fai un commit WIP su un ramo e spingilo.** Un
+  ramo remoto è l'unica forma durevole; un file di patch in `/tmp` non lo è, e
+  la stash nemmeno.
+- **Se devi proprio usare la stash**, mai `git stash` e `git stash pop` nudi:
+  `git stash push -u -m "<etichetta-unica>"`, prendi subito lo SHA della tua
+  voce con `git stash list --format='%H %gs'`, e recupera con
+  `git stash apply <sha>` — mai `pop`, che prende la cima della pila e la cima
+  può non essere tua.
+- **Una PR non può rimandare alla stash.** `stash@{0}` non è un riferimento
+  stabile: cambia numero a ogni push altrui e sparisce a ogni pop altrui.

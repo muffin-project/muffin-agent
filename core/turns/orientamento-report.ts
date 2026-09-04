@@ -14,9 +14,9 @@ import type Database from 'better-sqlite3';
  */
 export const ORIENTATION_TOOLS: readonly string[] = ['fs_list', 'fs_read', 'fs_search', 'sys_inspect'];
 
-export type ToolShare = { tool: string; count: number; quota: number };
+type ToolShare = { tool: string; count: number; quota: number };
 
-export type TurnDistribution = {
+type TurnDistribution = {
   turni: number;
   min: number;
   max: number;

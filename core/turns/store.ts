@@ -375,6 +375,12 @@ CREATE TABLE IF NOT EXISTS turn_tool_calls (
   content     TEXT,
   is_error    INTEGER,
   tier        INTEGER,
+  -- D11, the half that PR #186 measured missing: the moment "muffin undo"
+  -- put this call's file back. Additive (ensureColumn below, for a database
+  -- that already has this table) and never cleared once set -- an undo that
+  -- gets undone ("muffin undo annulla-<turno>") is a *different* row's
+  -- undone_at, on the reversing turn, not an erasure of this one's.
+  undone_at   TEXT,
   PRIMARY KEY (turn_id, call_id)
 );
 CREATE INDEX IF NOT EXISTS idx_turn_tool_calls_open ON turn_tool_calls(turn_id, ended_at);
@@ -501,6 +507,7 @@ export class TurnStore {
   private readonly suspendedCountStmt: Database.Statement;
   private readonly outcomesStmt: Database.Statement;
   private readonly undeliverableCountStmt: Database.Statement;
+  private readonly markUndoneStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -512,6 +519,9 @@ export class TurnStore {
     // Additive, for a database written before `claim_token` existed — see
     // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
     ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
+    // Additive, for a database written before D11's undo-realigns-the-turn
+    // half existed. See the column's own comment in `SCHEMA` above.
+    ensureColumn(db, 'turn_tool_calls', 'undone_at', 'undone_at TEXT');
     // `@status` and a nullable `@pid`, where both used to be the literal
     // `'running'` and this process: a connector that creates the row and
     // returns (B2) writes a turn nobody is executing yet, and a row claimed by
@@ -717,6 +727,13 @@ export class TurnStore {
     );
     /** Turns whose answer has nowhere to go (D2) — read by `health`. */
     this.undeliverableCountStmt = db.prepare(`SELECT count(*) AS n FROM turns WHERE delivery = 'undeliverable'`);
+    // Guarded on `ended_at IS NOT NULL`: a call still open has no outcome to
+    // mislabel yet, and `muffin undo` only ever names calls that finished
+    // (the journal only records a snapshot for a capability that ran).
+    this.markUndoneStmt = db.prepare(
+      `UPDATE turn_tool_calls SET undone_at = @now
+       WHERE turn_id = @turnId AND call_id = @callId AND ended_at IS NOT NULL`,
+    );
   }
 
   /**
@@ -1023,9 +1040,14 @@ export class TurnStore {
    * — cioe proprio il caso in cui il giro a vuoto e piu lungo.
    *
    * Solo le chiamate **finite bene**: una fallita e ripetuta e un'altra classe
-   * di guasto, e nel corpus dogfood del 30/08/2026 non se ne trova nemmeno una
-   * (10 errori in tutto lo store, zero ripetuti). Non si costruisce un
-   * rilevatore per un guasto che nessuno ha visto.
+   * di guasto — vedi `identicalFailuresDone` qui sotto, che la copre.
+   *
+   * Quel taglio di portata risaliva al corpus dogfood del 30/08/2026 (10
+   * errori in tutto lo store, zero ripetuti) ed e stato riverificato il
+   * 04/09/2026 su uno snapshot dal vivo: nel frattempo il corpus e cresciuto
+   * e una coppia e comparsa (`fs_read` sullo stesso path, stesso errore «no
+   * such file», sei minuti e tre altre chiamate di distanza). Il buco era
+   * reale; non lo si vede piu perche `identicalFailuresDone` adesso lo copre.
    */
   identicalCallsDone(turnId: string, tool: string, args: unknown): number {
     const row = this.db
@@ -1035,6 +1057,47 @@ export class TurnStore {
            AND ended_at IS NOT NULL AND is_error = 0`,
       )
       .get(turnId, tool, argsDigest(args)) as { n: number };
+    return row.n;
+  }
+
+  /**
+   * Quante volte questo turno ha **gia** fatto questa identica chiamata, con
+   * lo stesso esito **cattivo**.
+   *
+   * La meta gemella di `identicalCallsDone`, con due differenze deliberate.
+   *
+   * **Nessun gate su `progress: 'idempotent_read'`.** Quel campo esiste per
+   * distinguere, sul successo, una capability per cui rifare la stessa
+   * chiamata e informazione ripetuta (`fs_read`) da una per cui e effetto o
+   * tempo che passa (`fs_write`, `sys.wait` — vedi `core/policy/types.ts`).
+   * Sul fallimento quella distinzione non si applica: un effetto fallito non
+   * e mai atterrato, e un'attesa fallita non ha mai fatto passare il tempo
+   * che l'avrebbe resa progresso. Un fallimento identico e privo di
+   * progresso qualunque sia la capability, quindi qui non serve — e non
+   * sarebbe corretto ereditare — l'opt-in che serve al caso riuscito.
+   *
+   * **Confronta anche il contenuto, non solo tool+argomenti.** Due chiamate
+   * con lo stesso `args_digest` possono fallire per muri diversi — un
+   * timeout e un permesso negato hanno la stessa chiamata e risposte
+   * diverse, e la seconda e informazione nuova, non un giro a vuoto. Senza
+   * questo confronto il rilevatore avviserebbe anche li, insegnando al
+   * modello a ignorare l'avviso — il guasto che questo repo nomina per
+   * primo. Il confronto usa `content` cosi come e gia scritto da
+   * `endToolCall` (redatto a monte in `agent/loop.ts`): nessuna seconda
+   * nozione di «stesso errore», nessuna colonna nuova.
+   *
+   * Stesso motivo di durevolezza di `identicalCallsDone`: legge le righe che
+   * il turno scrive comunque, quindi sopravvive alla ripresa senza un
+   * contatore in memoria che si azzererebbe a meta del giro a vuoto.
+   */
+  identicalFailuresDone(turnId: string, tool: string, args: unknown, content: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT count(*) AS n FROM turn_tool_calls
+         WHERE turn_id = ? AND tool = ? AND args_digest = ? AND content = ?
+           AND ended_at IS NOT NULL AND is_error = 1`,
+      )
+      .get(turnId, tool, argsDigest(args), content) as { n: number };
     return row.n;
   }
 
@@ -1072,6 +1135,49 @@ export class TurnStore {
       this.taintStmt.run({ id: turnId, taint: result.tier, now });
     });
     write();
+  }
+
+  /**
+   * D11's other half: `muffin undo` put these calls' files back, so the
+   * history they are recorded in must stop reading as current.
+   *
+   * `content` is left exactly as the tool wrote it — the row is not a lie,
+   * it is a **stale** truth, the same distinction `episodes.superseded_at`
+   * and `facts.expired_at` already make in `core/memory`. Only `undone_at`
+   * changes; a reader (`buildContext`, `recordedOutcomes`) decides what that
+   * means for presentation, this method only says when it happened.
+   *
+   * The caller (`cli/undo.ts`) passes exactly the `callId`s the restore
+   * actually put back — never "every call this turn made" — so a partial
+   * restore marks only its own partial truth.
+   */
+  markUndone(turnId: string, callIds: readonly string[]): void {
+    const now = this.clock().toISOString();
+    const run = this.db.transaction(() => {
+      for (const callId of new Set(callIds)) this.markUndoneStmt.run({ turnId, callId, now });
+    });
+    run();
+  }
+
+  /**
+   * Which of these turns (named by `traceId`, the same identity `taintForIds`
+   * resolves) have at least one call `muffin undo` has put back.
+   *
+   * One query for the whole reinjected window, same shape as `taintForIds`
+   * right below — a long session can hand this dozens of `traceId`s, and this
+   * is read on every turn `buildContext` assembles, not once at boot.
+   */
+  undoneTraceIds(traceIds: readonly string[]): Set<string> {
+    const unique = [...new Set(traceIds)];
+    if (unique.length === 0) return new Set();
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT turn_id AS turnId FROM turn_tool_calls
+         WHERE turn_id IN (${placeholders}) AND undone_at IS NOT NULL`,
+      )
+      .all(...unique) as { turnId: string }[];
+    return new Set(rows.map((r) => r.turnId));
   }
 
   /**

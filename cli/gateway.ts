@@ -14,7 +14,8 @@ import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
-import { describeBuild } from './update.js';
+import { currentGatewayPid, describeBuild, restartCommand, restartVerdict, run, waitForGatewayPid } from './update.js';
+import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING, EXIT_STOPPED, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
@@ -64,6 +65,8 @@ export const GATEWAY_USAGE = `usage:
   muffin gateway stop           drena i turni in volo e lo ferma — e lo tiene
                                 giù, anche su macOS
   muffin gateway start          lo riaccende dopo uno stop
+  muffin gateway restart        kickstart/systemctl restart e verifica lo stato
+                                dopo (pid cambiato), non l'exit code del comando
   muffin gateway install        genera la unit del supervisore (stdout)
                                 [--write] scrivila al suo posto [--force]
                                 [--start] e poi accendila davvero (implica
@@ -187,7 +190,18 @@ export function cmdGatewayStatus(home: string): number {
  * su macOS, `systemctl --user start` su Linux — perché il PathState riarma il
  * KeepAlive per il *futuro*, non fa partire un processo adesso.
  */
-export function cmdGatewayStart(home: string, deps: { run?: StepRunner } = {}): number {
+export async function cmdGatewayStart(
+  home: string,
+  deps: {
+    run?: StepRunner;
+    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
+    readGatewayPid?: () => number | null;
+    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid` (`cli/update.ts`). */
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
+  } = {},
+): Promise<number> {
   const semaforo = paths(home).gatewayStopped;
   const cera = existsSync(semaforo);
   if (cera) rmSync(semaforo, { force: true });
@@ -219,7 +233,30 @@ export function cmdGatewayStart(home: string, deps: { run?: StepRunner } = {}): 
     );
     return 2;
   }
-  process.stdout.write(`gateway riacceso\n`);
+
+  // Regola della casa, la stessa di `restartVerdict` (`cli/update.ts`): il
+  // successo lo decide lo STATO — un pid comparso — mai l'exit status del
+  // comando che ha appena toccato il supervisore. Prima di questa riga
+  // `launchctl kickstart`/`systemctl --user start` uscito 0 bastava a
+  // stampare "gateway riacceso", anche quando il servizio falliva ad
+  // avviarsi un istante dopo (unit rotta, porta occupata, build che non
+  // parte) — `kickstart`/`start` sono asincroni per natura: dicono "ricevuto
+  // l'ordine", non "è in piedi". `cli/update.ts` già faceva questa verifica
+  // per il riavvio; questo comando, che accende lo stesso servizio, no.
+  const readGatewayPid = deps.readGatewayPid ?? ((): number | null => currentGatewayPid(home));
+  const pid = await waitForGatewayPid(readGatewayPid, null, {
+    ...(deps.verifyAttempts !== undefined ? { attempts: deps.verifyAttempts } : {}),
+    ...(deps.verifyIntervalMs !== undefined ? { intervalMs: deps.verifyIntervalMs } : {}),
+    ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+  });
+  if (pid === null) {
+    process.stderr.write(
+      `${supervisore.join(' ')} è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa\n` +
+        `→ \`muffin gateway status\` per il dettaglio, i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché\n`,
+    );
+    return 2;
+  }
+  process.stdout.write(`gateway riacceso — pid ${pid}\n`);
   return 0;
 }
 
@@ -307,6 +344,73 @@ export async function cmdGatewayStop(home: string): Promise<number> {
 }
 
 /**
+ * `muffin gateway restart` — l'owner l'ha chiesto testuale: *«mettiamo anche
+ * muffin gateway restart, cosi da non dover fare due comandi ogni volta»*.
+ * Prima erano due passi a mano: `launchctl kickstart -k …` (o `systemctl
+ * --user restart …`) e poi guardare `muffin gateway status` per credergli.
+ *
+ * Non un comando nuovo che parla al supervisore a modo suo: `restartCommand`,
+ * `waitForGatewayPid` e `restartVerdict` sono gli stessi tre pezzi che
+ * `cli/update.ts`'s `offerGatewayRestart` usa dopo uno `swing` — importati, non
+ * riscritti — così un `launchctl kickstart` scritto storto si romperebbe in un
+ * solo posto, non in due che potrebbero disallinearsi. La sola differenza è la
+ * cornice: `offerGatewayRestart` chiede il permesso (o lo dà per scontato con
+ * `--yes`) dentro il flusso di un aggiornamento e parla di "codice nuovo";
+ * questo è il comando che l'owner digita apposta per riavviare adesso, quindi
+ * parte senza chiedere, come `gateway start`.
+ *
+ * **Verificato sullo stato, mai sull'exit code** — la regola di casa
+ * ("verifica lo stato dopo, non l'output"), e il difetto che l'ha resa
+ * esplicita è lo stesso `restartVerdict` già ripara: le tre frasi diverse per
+ * pid-cambiato / comando-ok-ma-pid-uguale / comando-fallito, decise da un pid
+ * letto DOPO e confrontato con quello di PRIMA, mai dal solo `status === 0`
+ * del comando che ha toccato il supervisore.
+ */
+export async function cmdGatewayRestart(
+  home: string,
+  deps: {
+    platform?: NodeJS.Platform;
+    supervisorProbes?: Partial<SupervisorProbes>;
+    restart?: (argv: string[]) => { status: number; stdout: string; stderr: string };
+    readGatewayPid?: () => number | null;
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
+  } = {},
+): Promise<number> {
+  const platform = deps.platform ?? process.platform;
+  const readGatewayPid = deps.readGatewayPid ?? (() => currentGatewayPid(home));
+  const restart = deps.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
+
+  const status = checkSupervisor(platform, home, readGatewayPid() !== null, {
+    ...realSupervisorProbes(),
+    ...deps.supervisorProbes,
+  });
+  if (!status.engaged) {
+    process.stderr.write(`nessun gateway supervisionato: ${status.detail}\n  → ${status.remedy}\n`);
+    return 1;
+  }
+
+  const { printable, argv } = restartCommand(platform);
+  process.stderr.write(`${printable}\n`);
+  const pidBefore = readGatewayPid();
+  const r = restart(argv);
+  const commandDetail = (r.stderr || r.stdout).trim();
+  const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
+    attempts: deps.verifyAttempts,
+    intervalMs: deps.verifyIntervalMs,
+    sleep: deps.sleep,
+  });
+  const verdict = restartVerdict({ pidBefore, pidAfter, commandOk: r.status === 0, commandDetail });
+  if (verdict.restarted) {
+    process.stdout.write(`${verdict.line}\n`);
+    return 0;
+  }
+  process.stderr.write(`${verdict.line}\n`);
+  return 1;
+}
+
+/**
  * Come `--start` esegue un passo di attivazione.
  *
  * Iniettabile perché la cosa che fa è accendere un servizio sulla macchina di
@@ -329,7 +433,7 @@ const REAL_RUNNER: StepRunner = (argv) => {
 /** Esce 3 quando la unit è al suo posto e il servizio no: né rifiuto (2) né avvertenza (1). */
 export const EXIT_NOT_ACTIVATED = 3;
 
-export function cmdGatewayInstall(
+export async function cmdGatewayInstall(
   home: string,
   argv: string[],
   deps: {
@@ -345,8 +449,14 @@ export function cmdGatewayInstall(
      */
     homeDir?: string;
     configHome?: string;
+    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
+    readGatewayPid?: () => number | null;
+    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid` (`cli/update.ts`). */
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
   } = {},
-): number {
+): Promise<number> {
   let values: { write?: boolean; force?: boolean; start?: boolean };
   try {
     ({ values } = parseArgs({
@@ -454,7 +564,29 @@ export function cmdGatewayInstall(
         return EXIT_NOT_ACTIVATED;
       }
     }
-    process.stderr.write(`\nil gateway è un servizio adesso — \`muffin gateway status\` lo vede.\n`);
+    // Regola della casa, la stessa di `restartVerdict` (`cli/update.ts`) e di
+    // `cmdGatewayStart` qui sopra: ogni passo di `plan.activation` è uscito 0
+    // (altrimenti si sarebbe già tornati sopra), ma `enable --now`/`load` è
+    // "ho dato l'ordine", non "il processo gira" — un `ExecStart` sbagliato o
+    // una porta occupata fa fallire l'avvio un istante dopo, exit 0 di
+    // `systemctl`/`launchctl` compreso. Verificato con lo STATO — un pid
+    // comparso — prima di dire che il gateway è un servizio adesso.
+    const readGatewayPid = deps.readGatewayPid ?? ((): number | null => currentGatewayPid(home));
+    const pid = await waitForGatewayPid(readGatewayPid, null, {
+      ...(deps.verifyAttempts !== undefined ? { attempts: deps.verifyAttempts } : {}),
+      ...(deps.verifyIntervalMs !== undefined ? { intervalMs: deps.verifyIntervalMs } : {}),
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+    });
+    if (pid === null) {
+      process.stderr.write(
+        `\nogni passo è uscito 0, ma nessun gateway risulta attivo entro il tempo di attesa.\n` +
+          `la unit è scritta e caricata in ${plan.path}; il processo no — \`muffin gateway status\` per il dettaglio, ` +
+          `i log del supervisore (\`journalctl --user -u muffin\`/Console.app) per il perché.\n`,
+      );
+      for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
+      return EXIT_NOT_ACTIVATED;
+    }
+    process.stderr.write(`\nil gateway è un servizio adesso — pid ${pid}, \`muffin gateway status\` lo vede.\n`);
     for (const w of plan.warnings) process.stderr.write(`\n! ${w}\n`);
     if (launcher.warning) {
       process.stderr.write(`\n! ${launcher.warning}\n`);

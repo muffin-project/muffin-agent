@@ -62,7 +62,7 @@ import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
  * in due passi. Aggiungere una superficie senza toccarla è il modo in cui i due
  * elenchi finiscono per non essere d'accordo.
  */
-export const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
+const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
 
 export const SURFACE_USAGE = `usage:
   muffin surface list                     le superfici e il loro stato
@@ -1051,7 +1051,22 @@ export function connectSurfaces(
     // after another would let two slow connectors add their waits together
     // instead of sharing one clock.
     stop: (budgetMs = DRAIN_BUDGET_MS) => Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
-    registry: new SurfaceRegistry(surfaces),
+    // Re-reads `config.json` on every call, not once at boot — the same
+    // freshness `readDefaultChannel` already keeps for `surfaces.default`, and
+    // for the same reason: a surface enabled by `muffin surface enable` after
+    // this gateway started must be told apart from one that was never
+    // configured, and a value captured here at boot would make this callback
+    // just as stale as `surfaces` itself already is. Tolerant of a config that
+    // fails to parse mid-edit, same as `readDefaultChannel`: an unreadable
+    // config answers "nothing else is enabled" rather than throwing out of a
+    // delivery path.
+    registry: new SurfaceRegistry(surfaces, () => {
+      try {
+        return loadConfig(home).surfaces.enabled;
+      } catch {
+        return [];
+      }
+    }),
     /**
      * The lane's delivery, over whichever surfaces are up.
      *
