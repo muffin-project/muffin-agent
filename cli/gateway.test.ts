@@ -873,7 +873,7 @@ describe('muffin gateway stop admits what it cannot do', () => {
 });
 
 /**
- * `muffin gateway restart` (ADR-0062) — l'owner l'ha chiesto per non dover
+ * `muffin gateway restart` (ADR-0070) — l'owner l'ha chiesto per non dover
  * fare `launchctl kickstart` più `muffin gateway status` a mano ogni volta.
  * `restartCommand`/`waitForGatewayPid`/`restartVerdict` sono gli stessi tre
  * pezzi di `cli/update.ts`'s `offerGatewayRestart` — questi test rispecchiano

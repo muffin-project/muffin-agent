@@ -9,7 +9,7 @@ import { loadConfig } from './config.js';
 import { formatSetOutcome, setConfigKnob } from './settings.js';
 
 /**
- * "Una funzione sola, la stessa risposta per tutte le porte" (ADR-0062),
+ * "Una funzione sola, la stessa risposta per tutte le porte" (ADR-0070),
  * provato confrontando le porte fra loro — non ciascuna contro se stessa, che
  * è ciò che `cli/config.test.ts` e `agent/comandi.test.ts` già fanno.
  *
@@ -69,7 +69,7 @@ function captureStderr(fn: () => number): { err: string; code: number } {
   }
 }
 
-describe('le tre porte convergono sulla stessa funzione (ADR-0062)', () => {
+describe('le tre porte convergono sulla stessa funzione (ADR-0070)', () => {
   it('una scrittura riuscita: CLI e /config producono lo stesso valore scritto e lo stesso testo', async () => {
     const dirCli = home();
     const dirComando = home();
