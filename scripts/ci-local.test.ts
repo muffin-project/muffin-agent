@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
+import { contesa,
   buildJobScript,
   chooseDockerPrivileges,
   creaScannerPassi,
@@ -372,5 +372,23 @@ describe('lo scanner dei passi caduti', () => {
     const s = creaScannerPassi();
     s.consuma('2026-09-04T12:00:00Z  !!! STEP FAILED: vitest run   \n');
     expect(s.passoCaduto()).toBe('vitest run');
+  });
+});
+
+describe('un verdetto su host conteso non e\' un verdetto', () => {
+  const cpu = 8;
+  it('host libero: nessuna contesa', () => {
+    expect(contesa([{ quando: 'inizio', load1: 2.1, cpu, altriVitest: 0 }, { quando: 'fine', load1: 3.0, cpu, altriVitest: 0 }])).toBeNull();
+  });
+  it('un altro vitest sull\'host, anche solo alla fine, e\' contesa', () => {
+    const r = contesa([{ quando: 'inizio', load1: 1, cpu, altriVitest: 0 }, { quando: 'fine', load1: 1, cpu, altriVitest: 1 }]);
+    expect(r).toContain('fine');
+    expect(r).toContain('vitest');
+  });
+  it('load sopra il numero di cpu e\' contesa', () => {
+    expect(contesa([{ quando: 'inizio', load1: 9.4, cpu, altriVitest: 0 }])).toContain('load 9.4 su 8');
+  });
+  it('senza cpu note non inventa una soglia', () => {
+    expect(contesa([{ quando: 'inizio', load1: 99, cpu: 0, altriVitest: 0 }])).toBeNull();
   });
 });
