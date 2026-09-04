@@ -653,6 +653,29 @@ export class TelegramConnector {
    * di soli fallimenti dice quanti, mai per quanto.
    */
   private conflictSince: string | null = null;
+  /**
+   * Da quando dura la serie di guasti di rete in corso su `getUpdates`, o
+   * `null` se non ce n'e' una — lo stesso disegno di `conflictSince` sopra,
+   * per una classe di guasto diversa: non un altro poller sullo stesso token,
+   * ma la rete stessa che non risponde (DNS, connessione, socket).
+   *
+   * Il 30/08 e il 03/09/2026, sulla macchina dell'owner, un solo guasto di
+   * rete durato undici minuti (misurato: 02:16:07Z → oltre 02:17:07Z) aveva
+   * scritto la stessa riga `polling fallito` decine di volte, ogni 5 secondi
+   * fissi — un diario di soli fallimenti, mai *per quanto*. Questo campo
+   * segna l'inizio della serie; `pollFailAttempt` sotto fa crescere l'attesa
+   * mentre dura; la riga che chiude (al primo `getUpdates` riuscito) porta la
+   * durata, sul modello esatto del 409.
+   */
+  private pollFailingSince: string | null = null;
+  /**
+   * Quanti guasti di rete consecutivi su `getUpdates`, per `backoffMs` —
+   * lo stesso backoff, capped e con jitter, che il reconnect loop di `getMe`
+   * usa già più sopra: un meccanismo solo, non due formule divergenti nello
+   * stesso file. Azzerato al primo successo, cosi' un guasto nuovo dopo una
+   * ripresa riparte dall'attesa più corta, non da dove l'ultimo era arrivato.
+   */
+  private pollFailAttempt = 0;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   /**
    * The transcript of a turn that suspended on an approval, kept open —
@@ -762,6 +785,16 @@ export class TelegramConnector {
             log(`telegram: 409 rientrato dopo ${durata}s — ricevo di nuovo`);
             this.conflictSince = null;
           }
+          // Stessa riga di chiusura del 409, per la stessa ragione: un guasto
+          // di rete che si e' appena chiuso val la pena dirlo *per quanto*,
+          // non solo che e' finito — ed e' proprio il fatto che 4748 righe
+          // identiche sulla macchina dell'owner non dicevano mai.
+          if (this.pollFailingSince !== null) {
+            const durata = Math.max(0, Math.round((Date.parse(this.now()) - Date.parse(this.pollFailingSince)) / 1000));
+            log(`telegram: rete tornata dopo ${durata}s — ricevo di nuovo`);
+            this.pollFailingSince = null;
+          }
+          this.pollFailAttempt = 0;
           // Dopo la chiamata, non prima: un battito e' riuscito quando la
           // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
           // e' lavoro nostro, non la prova che Telegram risponde.
@@ -817,17 +850,56 @@ export class TelegramConnector {
             // (sopra, al primo `getUpdates` riuscito) porta la durata, che e' il
             // fatto nuovo — «da quanto» e' esattamente cio' che una riga ripetuta
             // non dice.
+            //
+            // Un guasto di rete in corso non conta come parte di questa serie
+            // (e viceversa, sotto): sono due classi diverse — un altro poller
+            // sullo stesso token, non la rete che non risponde — e mischiarle
+            // farebbe dire una durata che non e' mai stata misurata davvero.
+            this.pollFailingSince = null;
+            this.pollFailAttempt = 0;
             if (this.conflictSince === null) {
               this.conflictSince = this.now();
               log('telegram: 409, un altro getUpdates è attivo — attendo (non lo ripeto finché dura)');
             }
-          } else {
-            // Un guasto diverso chiude lo stato precedente: il prossimo 409 e' un
-            // 409 nuovo e va detto.
-            this.conflictSince = null;
-            log(`telegram: polling fallito (${causa})`);
+            await this.sleep(5000, combinedSignal);
+            continue;
           }
-          await this.sleep(5000, combinedSignal);
+          // Un guasto diverso chiude lo stato precedente: il prossimo 409 e' un
+          // 409 nuovo e va detto.
+          this.conflictSince = null;
+
+          if (!(error instanceof TelegramError) && erroreDiDatabaseChiuso(error)) {
+            // Non e' un guasto di rete, e aspettare non lo ripara: il database
+            // e' chiuso sotto il processo — la stessa firma esatta che
+            // `core/memory/consolidator.ts` e `core/scheduler/scheduler.ts`
+            // trattano gia' come «il processo sta uscendo», non come un
+            // fallimento transitorio da ritentare. Ogni `inbox.accept`
+            // successivo fallirebbe identico, per sempre: dormire 5 secondi e
+            // ripetere — il comportamento di prima — non e' prudenza, e' un
+            // giro che non puo' piu' avere successo da solo. Il giro finisce
+            // qui; un riavvio, non questo loop, e' quello che lo rimette in
+            // piedi.
+            log(`telegram: ricezione fermata — ${causa} (non è la rete: riprende solo a un riavvio)`);
+            break;
+          }
+
+          // Una riga per **stato**, non per tentativo, sullo stesso modello del
+          // 409 sopra: solo al primo guasto della serie, non a ogni ripetizione
+          // — sono le 4748 righe identiche sulla macchina dell'owner (03/09) a
+          // dire perche' questo conta.
+          if (this.pollFailingSince === null) {
+            this.pollFailingSince = this.now();
+            log(`telegram: polling fallito (${causa}) — riprovo con attesa crescente`);
+          }
+          // Stesso backoff — capped, con jitter — del reconnect loop di
+          // `getMe()` qui sopra: un meccanismo solo, non un'attesa fissa a 5
+          // secondi che sia undici minuti sia mezzo secondo di guasto pagano
+          // allo stesso modo. Azzerato al successo (sopra), cosi' che quando
+          // la rete torna il prossimo `getUpdates` riparte subito, non dopo
+          // fino a 30 secondi ereditati dal guasto appena chiuso.
+          const wait = backoffMs(this.pollFailAttempt);
+          this.pollFailAttempt++;
+          await this.sleep(wait, combinedSignal);
         }
       }
     } finally {
@@ -1900,15 +1972,36 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Backoff for the `getMe()` reconnect loop. Capped, with jitter so a shared
- * outage (the owner's router rebooting, a DNS blip) does not make every retry
- * land in the same instant. Same shape as `connectors/discord/gateway.ts`'s
- * own `backoffMs`, kept local rather than shared: two three-line functions
- * across two connectors is not yet a module.
+ * Backoff for a reconnect loop — `getMe()`'s above, and `getUpdates()`'s in
+ * the main poll loop since 04/09/2026, both against the same failure class:
+ * the network, not Telegram's own rejections (409, 429). Capped, with jitter
+ * so a shared outage (the owner's router rebooting, a DNS blip) does not make
+ * every retry land in the same instant. Same shape as
+ * `connectors/discord/gateway.ts`'s own `backoffMs`, kept local rather than
+ * shared: two three-line functions across two connectors is not yet a
+ * module — and now one function inside this file serving both of its own
+ * retry loops, not two divergent formulas for the same problem.
  */
 function backoffMs(attempt: number): number {
   const base = Math.min(1000 * 2 ** attempt, 30_000);
   return base + Math.floor(Math.random() * 1000);
+}
+
+/**
+ * `better-sqlite3` throws exactly this `TypeError` — verbatim string from
+ * `node_modules/better-sqlite3/src/util/macros.cpp` — when a query runs
+ * against a handle `runtime.close()` already closed. Not a guess: the exact
+ * same signature `core/memory/consolidator.ts` ("an insert against a closed
+ * handle throws `TypeError: The database connection is not open` — from a
+ * floating promise, which is a process exit") and
+ * `core/scheduler/scheduler.ts` already treat as "the process is exiting",
+ * never as a fault to retry. Matched on the full message rather than a
+ * substring: this string is a stable literal from a native addon, not
+ * `error.message` on a `fetch` failure — nothing here carries a bot token,
+ * so there is no reason to weaken the match the way `causaDiRete` has to.
+ */
+function erroreDiDatabaseChiuso(error: unknown): boolean {
+  return error instanceof Error && error.message === 'The database connection is not open';
 }
 
 /**
