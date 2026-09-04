@@ -1002,17 +1002,24 @@ describe('muffin gateway install --start', () => {
     return { righe, ripristina: () => { spy.mockRestore(); spyOut.mockRestore(); } };
   };
 
-  it('esegue la sequenza systemd nell ordine, linger compreso', () => {
+  it('esegue la sequenza systemd nell ordine, linger compreso', async () => {
     const dir = home();
     const visti: string[][] = [];
     const s = zitto();
     try {
-      const code = cmdGatewayInstall(dir, ['--start'], {
+      const code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
         run: (argv) => { visti.push(argv); return { status: 0, stderr: '' }; },
+        // Lo STATO che la verifica post-attivazione (regola della casa,
+        // `cli/update.ts`) legge: un pid comparso. Un `run` finto che esce 0
+        // non fa girare niente sul serio, quindi senza questa riga
+        // `currentGatewayPid` leggerebbe sempre `null` e il test aspetterebbe
+        // il tempo di attesa reale per un esito che non è quello che sta
+        // provando.
+        readGatewayPid: () => 4242,
       });
       // 0 oppure 1: sotto tsx il launcher non è il symlink installato e
       // `currentLauncher()` lo dice — è vero, ed è un avvertimento, non un
@@ -1027,15 +1034,20 @@ describe('muffin gateway install --start', () => {
     expect(s.righe.join('')).toContain('è un servizio adesso');
   });
 
-it('stampa il passo prima di eseguirlo, non dopo', () => {
+it('stampa il passo prima di eseguirlo, non dopo', async () => {
     // `systemctl --user` su una macchina senza bus di sessione non fallisce:
     // aspetta. Se la riga si stampasse dopo, l'owner guarderebbe un cursore
     // fermo senza sapere su quale dei tre comandi. Un runner che lancia è il
     // modo di chiedere «eri già passato dalla stampa?» senza appendere il test.
+    //
+    // `cmdGatewayInstall` è `async` (la verifica post-attivazione aspetta un
+    // pid): una funzione async non lancia mai in modo sincrono, un `throw`
+    // dentro diventa sempre una promise rifiutata — `expect(() =>
+    // ...).toThrow(...)` non vedrebbe più niente da catturare.
     const dir = home();
     const s = zitto();
     try {
-      expect(() =>
+      await expect(
         cmdGatewayInstall(dir, ['--start'], {
           platform: 'linux',
           homeDir: dir,
@@ -1043,18 +1055,18 @@ it('stampa il passo prima di eseguirlo, non dopo', () => {
           identity: { user: 'owner', uid: 1000 },
           run: () => { throw new Error('come se non tornasse mai'); },
         }),
-      ).toThrow('come se non tornasse mai');
+      ).rejects.toThrow('come se non tornasse mai');
     } finally { s.ripristina(); }
     expect(s.righe.join('')).toContain('systemctl --user daemon-reload');
   });
 
-  it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', () => {
+  it('si ferma al primo che fallisce, invece di abilitare una unit non riletta', async () => {
     const dir = home();
     const visti: string[][] = [];
     const s = zitto();
     let code: number;
     try {
-      code = cmdGatewayInstall(dir, ['--start'], {
+      code = await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
@@ -1073,16 +1085,21 @@ it('stampa il passo prima di eseguirlo, non dopo', () => {
     expect(detto).toContain('loginctl enable-linger');
   });
 
-  it('scrive la unit anche senza --write, perché non si accende un file che non c è', () => {
+  it('scrive la unit anche senza --write, perché non si accende un file che non c è', async () => {
     const dir = home();
     const s = zitto();
     try {
-      cmdGatewayInstall(dir, ['--start'], {
+      await cmdGatewayInstall(dir, ['--start'], {
         platform: 'linux',
         homeDir: dir,
         configHome: join(dir, '.config'),
         identity: { user: 'owner', uid: 1000 },
         run: () => ({ status: 0, stderr: '' }),
+        // Questo test prova solo la scrittura del file, non l'esito
+        // dell'accensione — un tentativo solo, senza attesa reale.
+        readGatewayPid: () => null,
+        verifyAttempts: 1,
+        verifyIntervalMs: 0,
       });
     } finally { s.ripristina(); }
     expect(existsSync(join(dir, '.config', 'systemd', 'user', 'muffin-gateway.service'))).toBe(true);

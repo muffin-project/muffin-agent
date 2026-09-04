@@ -10,6 +10,7 @@ import { TodoStore } from '../turns/todo.js';
 import { DELIVERED, notDelivered, type DeliveryOutcome } from '../surface/types.js';
 import { JobStore } from './jobs.js';
 import { FireLog } from './firelog.js';
+import { SendLock } from './sendlock.js';
 import { CommitmentLane, commitmentMessage, observeCommitments, type CommitmentEvent } from './commitments.js';
 import { cliSurface } from '../surface/cli.js';
 import { SurfaceRegistry } from '../surface/registry.js';
@@ -169,7 +170,7 @@ describe('un impegno datato torna da solo', () => {
     expect(sent).toEqual([
       {
         channel: 'cli',
-        text: 'Promemoria in ritardo: chiamare il commercialista — era per martedì 6 ottobre alle 09:00.',
+        text: 'Promemoria in ritardo: chiamare il commercialista — era per martedì 6 ottobre 2026 alle 09:00.',
       },
     ]);
   });
@@ -285,7 +286,7 @@ describe('le rotaie che c erano già', () => {
 
     scheduler.tick(new Date('2026-10-06T08:00:30+02:00'));
     await lane.idle();
-    expect(sent[0]!.text).toBe('Promemoria in ritardo: auguri a Marco — era per martedì 6 ottobre alle 03:00.');
+    expect(sent[0]!.text).toBe('Promemoria in ritardo: auguri a Marco — era per martedì 6 ottobre 2026 alle 03:00.');
   });
 
   it('sopra il tetto di spesa rimanda', async () => {
@@ -353,11 +354,11 @@ describe('la frase che legge l owner', () => {
 
   it('in ritardo dice che è in ritardo e per quando era, nel fuso dell owner', () => {
     expect(commitmentMessage(commitment, LATE, 'Europe/Rome')).toBe(
-      'Promemoria in ritardo: mandare la tesi — era per martedì 6 ottobre alle 09:00.',
+      'Promemoria in ritardo: mandare la tesi — era per martedì 6 ottobre 2026 alle 09:00.',
     );
     // Lo stesso istante, un altro fuso: la frase segue l'owner, non la macchina.
     expect(commitmentMessage(commitment, LATE, 'UTC')).toBe(
-      'Promemoria in ritardo: mandare la tesi — era per martedì 6 ottobre alle 07:00.',
+      'Promemoria in ritardo: mandare la tesi — era per martedì 6 ottobre 2026 alle 07:00.',
     );
   });
 });
@@ -420,7 +421,7 @@ describe('B1 — dove finisce la promessa, e quando l ancora si brucia', () => {
     expect(h.sent).toEqual([
       {
         channel: 'telegram',
-        text: 'Promemoria in ritardo: chiamare il commercialista — era per martedì 6 ottobre alle 09:00.',
+        text: 'Promemoria in ritardo: chiamare il commercialista — era per martedì 6 ottobre 2026 alle 09:00.',
       },
     ]);
   });
@@ -620,4 +621,96 @@ describe('il cablaggio nelle due porte di produzione', () => {
       expect(args).toContain('commitments,');
     });
   }
+});
+
+/**
+ * ADR-0060 §Limiti noti, item 1 — closed here (2026-09-04).
+ *
+ * `fires.has(anchor)` (inside `observeCommitments`), `deliver`, and
+ * `recordCommitmentFired` used to span an `await` with nothing serialising
+ * them across processes: two gateways racing the same home's database both
+ * read "not yet fired" and both delivered. `cli/observe.ts` already wraps
+ * the identical shape in `SendLock` for `muffin observe --send`; this proves
+ * `CommitmentLane` now shares that same lock, not a differently-shaped
+ * repair.
+ *
+ * Two REAL `CommitmentLane`s, sharing one database — not one lane ticked
+ * twice, which `running` already guards and would prove nothing about a
+ * second PROCESS. `deliver` is held open with a controllable promise so the
+ * second lane's `tick` happens while the first is provably still inside its
+ * critical section, mirroring the actual failure: a delivery is not
+ * instantaneous, and the second gateway's tick does not wait for the first
+ * gateway's network call to know to back off.
+ */
+describe('due corsie sulla stessa casa non consegnano la stessa promessa due volte', () => {
+  it('la seconda aspetta la prima, invece di leggere lo stesso "non ancora" e consegnare anche lei', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const todos = new TodoStore(db, () => WROTE);
+    const fires = new FireLog(db);
+    promise(todos, 'pagare l’affitto', 0);
+
+    const sent: Sent[] = [];
+    let releaseDelivery: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    // Only the FIRST delivery in this test blocks on `held` — the second
+    // lane, if it reaches `deliver` at all, must not need a release to
+    // finish, or the test itself would hang instead of failing.
+    let deliveries = 0;
+    const deliver: Deliver = async (channel, text) => {
+      deliveries += 1;
+      if (deliveries === 1) await held;
+      sent.push({ channel, text });
+      return DELIVERED;
+    };
+
+    // One `SendLock`, one underlying `send_lock` row — exactly what two
+    // gateway PROCESSES share by pointing at the same `muffin.db`. Two
+    // instances, not one shared reference, so the wiring under test is
+    // `acquireSendLock` itself and not a fixture-level shortcut.
+    const makeLane = (): CommitmentLane => {
+      const sendLock = new SendLock(db);
+      return new CommitmentLane({
+        todos,
+        tenant: 'host',
+        fires,
+        deliver,
+        channel: () => 'cli',
+        reachesOwner: () => true,
+        timezone: 'Europe/Rome',
+        context: (now) => ({ now, quietHours: QUIET, budgetExhausted: false }),
+        acquireSendLock: (now) => sendLock.acquire(now),
+      });
+    };
+    const gatewayA = makeLane();
+    const gatewayB = makeLane();
+
+    // Synchronous up to `deliver`'s own first `await` (see the module under
+    // test: `acquireSendLock` and everything before the network call run
+    // without yielding) — so by the time this line returns, gateway A holds
+    // the lock and is parked inside `deliver`, mid-send.
+    gatewayA.tick(ON_TIME);
+    // Gateway B's tick, started while A is still inside its critical
+    // section — the exact overlap a 30-second beat on two processes makes
+    // real.
+    gatewayB.tick(ON_TIME);
+    await gatewayB.idle();
+
+    // B must not have delivered anything: the lock was held, so its pass
+    // returned without ever reaching `deliver` a second time.
+    expect(sent).toHaveLength(0);
+    expect(deliveries).toBe(1);
+
+    releaseDelivery!();
+    await gatewayA.idle();
+
+    // Exactly one message reached the owner, from A. `fires` now has the
+    // anchor recorded, so a THIRD pass (either gateway, next beat) finds it
+    // already fired rather than delivering again.
+    expect(sent).toHaveLength(1);
+    gatewayB.tick(new Date(ON_TIME.getTime() + 1000));
+    await gatewayB.idle();
+    expect(sent).toHaveLength(1);
+  });
 });
