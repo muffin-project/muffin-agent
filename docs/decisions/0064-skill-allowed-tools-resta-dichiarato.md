@@ -1,4 +1,4 @@
-# ADR-0062 — `allowed-tools` resta dichiarato e non applicato; `skills-ref` entra come controllo
+# ADR-0064 — `allowed-tools` resta dichiarato e non applicato; `skills-ref` entra come controllo
 
 **Stato:** proposto · 2026-09-04 · esegue la raccomandazione di
 `docs/evidence/skill-standard-2026-09-04.md` §Raccomandazione
@@ -75,7 +75,7 @@ core/skills/skills.ts — SkillInfo.allowedTools:
   itself broad tool access"). Se un giorno serve una skill che pre-autorizza
   uno strumento per il proprio turno, il meccanismo passa dal kernel — una
   policy che il turno dichiara e che decide.ts valuta con lo stesso rigore di
-  ogni altra ask-gate — non da un parser di frontmatter. ADR-0062.
+  ogni altra ask-gate — non da un parser di frontmatter. ADR-0064.
 ```
 
 Nessun comportamento cambia: il campo resta nel tipo (serve al report — "quali
@@ -113,7 +113,7 @@ Scartata: il confronto va fatto come test, non come sostituzione runtime.
 ## Conseguenze
 
 - Il commento "NOT enforced in v1" smette di essere una promessa implicita e
-  diventa una decisione citabile (`ADR-0062`), nello stesso punto del codice.
+  diventa una decisione citabile (`ADR-0064`), nello stesso punto del codice.
 - Un nuovo controllo CI (costo: una dev-dependency, uno script, un job) alza
   la fiducia che `FrontmatterSchema` non stia derivando dallo standard senza
   che nessuno se ne accorga — lo stesso rischio di drift silenzioso che
