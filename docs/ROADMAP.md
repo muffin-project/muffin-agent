@@ -144,7 +144,7 @@ before the boundary is narrowed — narrow the scope first.
 only because the roadmap is where an authority change is looked for. The
 ordering authority is the critical path; do not duplicate it.
 
-**Status (2026-09-04, ADR-0068):** the reply sink half is closed — a
+**Status (2026-09-04, ADR-0069):** the reply sink half is closed — a
 resource-name floor (`core/tracing/redact.ts`) plus a choke point on
 `agent/loop.ts`'s finished text moves the corpus from 4/7→3/7 without a
 human, 6/7→5/7 with the owner's real answering behaviour, `s6` fermato. The
@@ -152,7 +152,7 @@ memory sink half is not: the corpus's own attack lives inside a resource the
 owner did name, so a name-based floor has nothing to catch, and a broader
 "any tainted echo" floor was rejected for breaking the ordinary "read this
 file back to me" request. `s7` stays open with a reason on record, not a
-silent residual — see ADR-0068 §«Cosa non copre».
+silent residual — see ADR-0069 §«Cosa non copre».
 
 Point 4 of the critical path — the security eval — has run on the real binary
 and produced a result rather than an opinion
