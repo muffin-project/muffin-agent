@@ -10,7 +10,7 @@ import type { RegisteredTool } from '../loop.js';
 /**
  * sys.http — reading is open; the allowlist governs acting, not reading.
  *
- * ADR-0062 (owner decision, 2026-09-04): *"tu leggi qualsiasi sito vuoi …
+ * ADR-0065 (owner decision, 2026-09-04): *"tu leggi qualsiasi sito vuoi …
  * viene riportato come fonte esterna e quindi sai che non sono istruzioni"*.
  * Before this the kernel gated the first hop against `rot/egress.json`
  * (`decide.ts`, the `url` branch), which meant Muffin could not open a page
@@ -74,7 +74,7 @@ export const httpCapability: CapabilityDecl = {
 const httpSpec: ToolSpec = {
   name: 'http_get',
   description:
-    'Fetch a URL with GET. Any public host is reachable — reading is open (ADR-0062) — but the ' +
+    'Fetch a URL with GET. Any public host is reachable — reading is open (ADR-0065) — but the ' +
     'request never reaches loopback, private, or link-local/metadata addresses, on the first hop ' +
     'or after a redirect. A query string or fragment carrying bytes the model chose may still ask ' +
     'the owner at higher taint. An HTML page is reduced to its main content (as Markdown) before ' +
@@ -159,7 +159,7 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
         if (current.protocol !== 'http:' && current.protocol !== 'https:') {
           return { content: `scheme not allowed: ${current.protocol}`, isError: true, tier: 0 };
         }
-        // Reading is open (ADR-0062): there is no allowlist left for a redirect
+        // Reading is open (ADR-0065): there is no allowlist left for a redirect
         // hop to leave. What every hop still cannot do — first or Nth — is
         // resolve into the house, which the address veto below enforces
         // unconditionally, before this loop ever calls `fetchFn`.
