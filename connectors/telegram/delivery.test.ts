@@ -17,6 +17,7 @@ function sendPart(html: string, index: number): TelegramDeliveryPlanPart {
   return {
     operation: 'send',
     chatId: 42,
+    threadId: null,
     replyTo: index === 0 ? 7 : null,
     editMessageId: null,
     html,
