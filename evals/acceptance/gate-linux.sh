@@ -63,8 +63,57 @@ COPYFILE_DISABLE=1 tar cf "$OUT/repo.tar" -C "$OUT/src" .
 # blocca unshare(CLONE_NEWUSER), quindi bwrap non crea il namespace e il probe
 # — correttamente — rifiuta di dire che il sandbox contiene. Su una VPS Linux
 # vera non servono queste due: serve il profilo AppArmor per bwrap.
+#
+# ## Perche puo servirne una terza, e perche va detto invece che aggiunta
+#
+# Su Docker Desktop per macOS quelle due non bastano. Misurato il 04/09/2026
+# sull'immagine del gate, root e non-root allo stesso modo:
+#
+#   bwrap --unshare-all --dev-bind / / true              OK
+#   bwrap --unshare-all --proc /proc --dev-bind / / true bwrap: Can't mount proc
+#                                                        on /newroot/proc:
+#                                                        Operation not permitted
+#
+# E' il **mount di /proc** dentro il namespace a essere rifiutato, non la
+# creazione del namespace. `--cap-add SYS_ADMIN` non lo sblocca: solo
+# `--privileged`. Senza, la gamba Linux e' rossa su una diagnosi che non
+# riguarda Muffin — l'owner ha visto esattamente questo, e un rosso che non
+# nomina un difetto del codice e' peggio di un gate assente.
+#
+# Percio': si **prova** cosa questo host permette, e si sceglie di conseguenza.
+# `--privileged` non indebolisce cio' che il gate misura — l'oggetto sotto
+# esame e' il sandbox di Muffin, non l'isolamento di Docker, e bwrap esegue lo
+# stesso percorso in entrambi i casi — ma e' una differenza reale rispetto al
+# runner di GitHub, quindi la riga finale la porta sempre invece di tacerla.
+# >>> SCELTA PRIVILEGI PROVATA DA gate-linux.test.ts
+# Una funzione e non righe sciolte: e' una decisione che puo far uscire lo
+# script, e una decisione non provata e' esattamente cio' che questa repo
+# continua a pagare.
+scegli_privilegi() {
+  PRIVILEGI=()
+  MODO="senza privilegi (come il runner GitHub)"
+  if docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+     "$IMAGE" bwrap --unshare-all --proc /proc --dev-bind / / true >/dev/null 2>&1; then
+    return 0
+  fi
+  if docker run --rm --privileged --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+     "$IMAGE" bwrap --unshare-all --proc /proc --dev-bind / / true >/dev/null 2>&1; then
+    PRIVILEGI=(--privileged)
+    MODO="CON --privileged: questo host non monta /proc in un namespace annidato"
+    echo "gate-linux: $MODO" >&2
+    return 0
+  fi
+  echo "gate-linux: bwrap non monta /proc nemmeno con --privileged su questo host." >&2
+  echo "gate-linux: la gamba Linux NON e' eseguibile qui — non e' un difetto del codice." >&2
+  return 2
+}
+# <<< SCELTA PRIVILEGI PROVATA DA gate-linux.test.ts
+
+scegli_privilegi || exit $?
+
 set +e
 docker run --rm \
+  "${PRIVILEGI[@]}" \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   -v "$OUT/repo.tar:/repo.tar:ro" \
@@ -154,6 +203,8 @@ set -e
 if [ "$GATE_EXIT" -ne 0 ]; then
   echo "GATE LINUX ROSSO (exit $GATE_EXIT) — vedi ACCEPT_EXIT/REPORT_EXIT qui sopra" >&2
 else
-  echo "GATE LINUX VERDE"
+  # Il modo entra nella riga verde, non solo nel rumore sopra: chi rilegge il
+  # verdetto domani deve sapere in che condizioni e' stato ottenuto.
+  echo "GATE LINUX VERDE — $MODO"
 fi
 exit "$GATE_EXIT"
