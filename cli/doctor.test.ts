@@ -238,7 +238,10 @@ describe('doctor names which profile the configured model resolves to', () => {
     // named — not merely "something changed".
     expect(c?.detail).toContain('sampling deterministic');
     expect(c?.detail).toContain('10 tool esposti');
-    expect(c?.detail).toContain('orizzonte 15');
+    // Etichettato come su `sys_inspect`, non "orizzonte N" — i due numeri si
+    // somigliano (qui: 10 e 15) e vanno distinti per quello che sono, quanti
+    // tool si vedono contro quante call si fanno, non con un termine indefinito.
+    expect(c?.detail).toContain('15 call/turno');
     expect(report.exitCode).toBe(2);
 
     rmSync(dir, { recursive: true, force: true });
