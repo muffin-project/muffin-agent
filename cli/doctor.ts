@@ -278,7 +278,13 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
         `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
-        `${resolvedProfile.maxToolsExposed} tool esposti (orizzonte ${resolvedProfile.maxToolCallsPerTurn}), ` +
+        // Due numeri distinti, spesso uguali di valore (`consumer-local.json`:
+        // 15 e 15) e per questo confondibili se non nominati per ciò che sono:
+        // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
+        // è quante *chiamate* fa in un turno. "orizzonte" qui accanto a "tool
+        // esposti" leggeva come un terzo numero indefinito — stessa etichetta
+        // di `sys_inspect` (agent/tools/inspect.ts), non una nuova.
+        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn} call/turno, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
       'ripara o rimuovi il profilo scartato sopra, sotto agent/profiles/',
     );
@@ -1094,7 +1100,15 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
   // (agent/runtime.ts) è la stessa lista ordinata che il boot usa per
   // `capabilityGaps` e che `runtime-exposure.test.ts` tiene allineata al
   // registro reale — non un secondo elenco scritto qui a mano.
-  const ordineBase = baseToolOrder({ sandboxAvailable: sandbox.available, searchOn: ricerca.on });
+  //
+  // `sendFileAvailable: true` perché `doctor` non costruisce un runtime intero
+  // e non sa se questa invocazione precede un gateway o un REPL — ma
+  // entrambi i processi persistenti lo allegano sempre (`cli/surface.ts#
+  // attachSendFile`, DAY-1 B14), e solo `muffin run` non lo fa mai. Ometterlo
+  // qui era esattamente il difetto misurato altrove (`agent/runtime.ts`): il
+  // tool più a rischio di un taglio silenzioso reso invisibile alla diagnosi
+  // che dovrebbe segnalarlo.
+  const ordineBase = baseToolOrder({ sandboxAvailable: sandbox.available, searchOn: ricerca.on, sendFileAvailable: true });
   const tagliatiDalTetto = ordineBase.slice(resolvedProfile.maxToolsExposed);
   if (tagliatiDalTetto.length === 0) {
     ok(
