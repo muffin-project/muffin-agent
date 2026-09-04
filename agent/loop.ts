@@ -14,7 +14,7 @@ import { APPROVAL_WINDOW_MS, type ApprovalStore } from '../core/approvals/store.
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
-import { redactText } from '../core/tracing/redact.js';
+import { isSensitiveResourceName, redactText, scrubResourceEchoes } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import {
   ambienteSection,
@@ -1829,6 +1829,37 @@ async function guidaIlTurno(
     replyChannel: input.replyChannel ?? null,
   };
 
+  /**
+   * The full content of every resource this turn read whose own name says
+   * "secret" (`isSensitiveResourceName` — a file path or URL, not what it
+   * contains: `segreto.txt`, `credenziali.json`, `.../id_rsa`). Accumulates
+   * for the whole turn, across every round of tool calls, the same way
+   * `snapshot`'s taint does — an echo in the answering round three calls
+   * after the read is still the same shape of leak.
+   *
+   * The sink, `scrubResourceEchoes` below at the one place `text` is
+   * finalised, strips any verbatim reproduction of these out of both the
+   * reply and the memory episode: see that call site for why it is one
+   * choke point and not one call per connector.
+   */
+  const sensitiveResourceEchoes: string[] = [];
+  /**
+   * Tool names whose single argument (`path` or `url`) names one resource
+   * and whose successful result *is* that resource's content — as opposed to
+   * `fs_write` (same `path` shape, opposite direction: nothing to echo from
+   * an argument the tool never reads back) or `fs_search`/`web_search` (many
+   * results, no single resource this call named).
+   */
+  const RESOURCE_READ_TOOLS = new Set(['fs_read', 'http_get', 'document_read', 'skill_read']);
+  const noteSensitiveResourceEcho = (call: { name: string; args: unknown }, outcome: ContentBlock): void => {
+    if (!RESOURCE_READ_TOOLS.has(call.name)) return;
+    if (outcome.type !== 'tool_result' || outcome.isError) return;
+    const args = (call.args ?? {}) as Record<string, unknown>;
+    const resourceId = typeof args.path === 'string' ? args.path : typeof args.url === 'string' ? args.url : undefined;
+    if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
+    if (typeof outcome.content === 'string') sensitiveResourceEchoes.push(outcome.content);
+  };
+
   const messages: Message[] = [...record.messages];
 
   // What this turn is shown, decided from who is speaking and where — never
@@ -2383,7 +2414,35 @@ async function guidaIlTurno(
       }
 
       if (result.toolCalls.length === 0) {
-        const text = result.text ?? '';
+        /**
+         * The one place the turn's final answer is computed, and the one
+         * place both sinks the 03/09 corpus found unguarded — the reply
+         * (`result.text`, read by every connector: CLI stdout, Telegram
+         * `sendMessage`, Discord, `SurfaceRegistry.deliver`) and the memory
+         * episode a few lines down — draw from the **same string**. Scrubbing
+         * it here once, before either sink reads it, is a single choke point
+         * instead of one call per connector: `redactText` already lived at
+         * two of those doors (`core/surface/registry.ts#deliver`,
+         * `core/memory/store.ts#addEpisode`) and at neither of the
+         * connectors that actually carry a live turn's reply — measured
+         * 2026-09-04, `grep -rn redactText cli/ connectors/` finds only
+         * `cli/prompt-show.ts`, an unrelated command. `scrubResourceEchoes`
+         * is the new floor (`core/tracing/redact.ts`): it strips a verbatim
+         * copy of anything this turn read from a secret-flavoured resource
+         * name, closing `s6-sink-risposta`/`s7-memoria-e-ricordo`'s shared
+         * mechanic without adding a question anywhere (ROW_FLOOR keeps both
+         * rows `allow`) and without depending on the model refusing to
+         * repeat what it read.
+         *
+         * Known gap, stated rather than hidden: a **streaming** reply
+         * (`input.onDelta`, used by the interactive REPL and by Telegram's
+         * live-edited message) has already shown unscrubbed characters to the
+         * screen by the time this line runs — this closes what is durably
+         * written (the episode, the session transcript, a headless `muffin
+         * run`'s stdout, and the final settled text of a streamed reply) and
+         * does not retroactively unsend a frame that already rendered.
+         */
+        const text = scrubResourceEchoes(redactText(result.text ?? ''), sensitiveResourceEchoes);
 
         // The completion gate: did the answer describe a call this turn never
         // made? Deterministic, tool-aware, and it only fires when *nothing* was
@@ -2591,7 +2650,9 @@ async function guidaIlTurno(
         }
         toolCallsMade += 1;
         try {
-          results.push(await runTool(deps, snapshot, turn, call_, input, exposed, toolContext));
+          const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
+          results.push(outcome);
+          noteSensitiveResourceEcho(call_, outcome);
         } catch (error) {
           if (error instanceof ApprovalRequired) {
             turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
@@ -2861,17 +2922,10 @@ async function guidaIlTurno(
       // through `runTool`, so the kernel rules on them again and the intent row
       // is written again — `ON CONFLICT DO NOTHING` absorbs the second write.
       try {
-        repaired.push(
-          await runTool(
-            deps,
-            snapshot,
-            turn,
-            { id: block.id, name: block.name, args: block.input },
-            input,
-            exposed,
-            toolContext,
-          ),
-        );
+        const call = { id: block.id, name: block.name, args: block.input };
+        const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext);
+        repaired.push(outcome);
+        noteSensitiveResourceEcho(call, outcome);
       } catch (error) {
         // An `ask` that cannot be asked on this surface is not a reason to
         // abandon a repair half-done: the block gets an honest result and the
