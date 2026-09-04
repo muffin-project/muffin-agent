@@ -44,7 +44,7 @@ La **prima** esecuzione del corpus è uscita non-zero con `Test Files 1 passed`:
 ```
 Startup Error
 Error: la suite ha toccato la casa vera — un test è uscito dalla sua home temporanea:
-  /Users/giusto/.muffin — è stato riscritto durante la suite
+  /home/user/.muffin — è stato riscritto durante la suite
 ```
 
 Non era il corpus. Misurato: una seconda corsa dello stesso comando è pulita, e
