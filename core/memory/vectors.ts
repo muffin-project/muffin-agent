@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { toVectorBlob, type Embedder } from './embed.js';
+import { requestPredicateSql } from './schema.js';
 
 /**
  * The vector side of recall.
@@ -42,6 +43,18 @@ CREATE INDEX IF NOT EXISTS idx_chunks_tenant ON chunks(tenant_id, source_kind);
  * Il tenant si interpola invece di legarsi: la clausola deve **sparire** dalla
  * query globale, non diventare un `:tenant IS NULL OR …` che cambia il piano
  * anche sul percorso caldo.
+ *
+ * Un fatto-richiesta (`asked_to`, `asks_to`, …) non entra mai in questa metà.
+ * Non è un secondo filtro di fiducia: è che un fatto del genere non ha una
+ * verità che regge finché qualcuno non la corregge, come `lives_in` — ha un
+ * *momento*, quello del turno che l'ha prodotto, e imbeddarlo come vettore
+ * indipendente lo rende pescabile per pura somiglianza semantica da qualunque
+ * turno futuro somigli abbastanza nelle parole, senza nessun limite di
+ * recency: la stessa richiesta esaudita l'8/27 risale su una domanda dell'8/30
+ * che non la riguarda. Il grafo (recency-capped, `EXPANSION_SLOTS` in
+ * `recall.ts`) e il testo dell'episodio originale restano entrambi
+ * raggiungibili — è solo l'indice vettoriale *per-fatto* a scartarla. Misurato
+ * in `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md`.
  */
 function sqlBacklog(perTenant: boolean): string {
   const e = perTenant ? 'e.tenant_id = :tenant AND ' : '';
@@ -60,6 +73,7 @@ function sqlBacklog(perTenant: boolean): string {
            JOIN entities s ON s.id = f.subject_id
            LEFT JOIN entities o ON o.id = f.object_id
           WHERE ${f}f.expired_at IS NULL
+            AND NOT (${requestPredicateSql('f.predicate')})
             AND NOT EXISTS (SELECT 1 FROM chunks c
                              WHERE c.tenant_id = f.tenant_id AND c.source_kind = 'fact'
                                AND c.source_id = f.id AND c.embedding_v = :ev)`;
@@ -359,6 +373,42 @@ export class VectorIndex {
     });
     tx(sourceIds);
     return removed;
+  }
+
+  /**
+   * Retracts the standalone vector chunk of every request-family fact
+   * (`asked_to`, `asks_to`, …) that already has one — the corpus written
+   * before `sqlBacklog` learned to skip that family, on any install that has
+   * been consolidating since before this existed.
+   *
+   * Same non-destructive shape the rest of this file uses: `forget()` drops a
+   * row from the *derived* `chunks`/`chunks_vec` planes only. The fact itself,
+   * in `facts`, is untouched — it stays exactly as alive, and exactly as
+   * gradable by `muffin memory why`, as it always was. Only its reachability
+   * through one retrieval channel — direct semantic match, with no recency
+   * discipline — changes. The entity graph hop and the original episode's own
+   * text stay open, both still gated by `EXPANSION_SLOTS`' recency cap where
+   * the graph hop applies.
+   *
+   * Idempotent and cheap to call on every consolidation round: the query
+   * finds nothing once an install has converged, which on a tenant with no
+   * pre-existing request chunks is immediately — the common case for a fresh
+   * install, since `indexBacklog` never offers one a vector to begin with.
+   */
+  forgetRequestFacts(tenantId: string): number {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT c.source_id AS id
+           FROM chunks c
+           JOIN facts f ON f.id = c.source_id AND f.tenant_id = c.tenant_id
+          WHERE c.tenant_id = ? AND c.source_kind = 'fact' AND (${requestPredicateSql('f.predicate')})`,
+      )
+      .all(tenantId) as { id: number }[];
+    return this.forget(
+      tenantId,
+      'fact',
+      rows.map((r) => r.id),
+    );
   }
 
   indexBacklog(tenantId: string, limit = 200): { kind: ChunkSource; sourceId: number; text: string }[] {
