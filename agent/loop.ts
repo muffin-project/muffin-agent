@@ -509,6 +509,21 @@ export type LoopDeps = {
    */
   istanza?: (() => IstanzaFacts) | undefined;
   /**
+   * Il fuso dell'owner, dal root of trust sigillato — mai quello del processo.
+   *
+   * `ambienteSection` (`agent/context/assemble.ts`) cade su
+   * `Intl.DateTimeFormat().resolvedOptions().timeZone` quando questo campo
+   * manca, cioè sul fuso di **chi esegue il processo** — la VPS, non l'owner.
+   * `core/scheduler/commitments.ts` e `cli/jobs.ts` calcolano già "che ora è
+   * per l'owner" dallo stesso `budgets.quietHours.timezone` con la stessa
+   * frase nel commento — "mai quello dell'host" — ma prima di questo campo
+   * nessuno lo portava fin qui: il turno diceva al modello l'ora della
+   * macchina, non quella dell'owner, ogni volta che le due differiscono.
+   * `agent/runtime.ts` la cabla da `budgets.quietHours.timezone`, la stessa
+   * lettura di `Runtime.quietHours` — nessuna seconda fonte.
+   */
+  timeZone?: string | undefined;
+  /**
    * Absent in tests and before M2 is configured. When present the turn both
    * remembers what was said and recalls what is relevant — and inherits the
    * taint of whatever it recalled.
@@ -1745,7 +1760,9 @@ async function drive(
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
 
     messages.length = 0;
-    messages.push(...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name, deps.istanza?.()));
+    messages.push(
+      ...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name, deps.istanza?.(), deps.timeZone),
+    );
 
     // `record.taint`, the same substitution and for the same reason as the
     // episode write above: `initialTaint(input)` here would read `drive`'s
@@ -3674,6 +3691,12 @@ function buildContext(
    * `agent/runtime.ts` legge le stesse fonti di `sys_inspect`.
    */
   istanza: IstanzaFacts | undefined,
+  /**
+   * Il fuso dell'owner dal RoT sigillato (`deps.timeZone`). `undefined` solo
+   * nei test minimi che non lo cablano — `ambienteSection` cade allora sul
+   * fuso del processo, lo stesso comportamento di prima di questo campo.
+   */
+  timeZone: string | undefined,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -3747,6 +3770,7 @@ function buildContext(
     model: modello,
     profilo,
     ...(istanza ? { istanza } : {}),
+    ...(timeZone !== undefined ? { timeZone } : {}),
   });
 
   // Recalled memory rides in the same turn as the message it is context for, not
