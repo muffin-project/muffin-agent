@@ -58,7 +58,18 @@ CREATE TABLE IF NOT EXISTS episodes (
   -- vault can be edited and a message can be withdrawn, and the old text should
   -- stop coming back in recall while remaining on record. This is that line: it
   -- retires an episode without pretending it never existed.
-  superseded_at TEXT
+  superseded_at TEXT,
+  -- Quando "muffin undo" ha rimesso indietro il turno che ha prodotto questo
+  -- episodio (D11, l'altra meta di superseded_at accanto). Diversa da
+  -- superseded_at per il significato che porta: superseded dice "non e piu
+  -- l'ultima parola su questo", undone dice "l'effetto che descrive non e piu
+  -- sul disco". Un episodio puo avere l'uno, l'altro, o nessuno dei due, e
+  -- confonderli marcherebbe un cambio di idea come un annullamento o viceversa.
+  --
+  -- Marcata, non esclusa dal recall (a differenza di superseded_at): dopo un
+  -- undo il modello deve sapere che ci aveva provato, non trovarsi un buco che
+  -- lo fa dedurre in silenzio.
+  undone_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_tenant_time ON episodes(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_episodes_pending ON episodes(extraction_v, tenant_id);
