@@ -49,11 +49,12 @@
  *
  * measured 2026-09-04, root and non-root alike. `chooseDockerPrivileges`
  * reuses that exact probe — the same lesson `evals/acceptance/gate-linux.sh`
- * applied for PR #389's Linux leg (read there, not copied: that script is bash
- * and lives on an open PR this work must not touch; this is an independent
- * TypeScript implementation of the same idea, named here rather than silently
- * duplicated). It tries with no extra privileges first (what the GitHub
- * runner actually has), then `--privileged`, and if neither lets `bwrap` mount
+ * applied for its own Linux leg in PR #389 (read there, not copied: that
+ * script is bash, this is an independent TypeScript implementation of the
+ * same idea, named here rather than silently duplicated — see this file's PR
+ * description for whether the two are worth unifying behind one shared
+ * probe). It tries with no extra privileges first (what the GitHub runner
+ * actually has), then `--privileged`, and if neither lets `bwrap` mount
  * `/proc`, the job is reported NOT EXECUTABLE — never green, and never a red
  * that blames Muffin's code for a Docker limitation.
  *
