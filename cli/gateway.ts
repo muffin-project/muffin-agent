@@ -14,7 +14,8 @@ import { ModelLane } from '../core/turns/model-lane.js';
 import { ConfigError, paths } from '../core/config/config.js';
 import { GatewayLock, readGateway, type GatewayInfo } from '../core/gateway/lock.js';
 import { CONTROL_PROTOCOL, serveControlSocket, type ControlServer } from '../core/gateway/control-socket.js';
-import { describeBuild } from './update.js';
+import { currentGatewayPid, describeBuild, restartCommand, restartVerdict, run, waitForGatewayPid } from './update.js';
+import { checkSupervisor, realSupervisorProbes, type SupervisorProbes } from '../core/gateway/supervisor.js';
 import { createNotifier, describeSupervision } from '../core/gateway/notify.js';
 import { Gateway, EXIT_ALREADY_RUNNING, EXIT_STOPPED, type GatewayDeps } from '../core/gateway/service.js';
 import { consolidationBootLine, CONSOLIDATION_TENANT } from '../core/memory/consolidator.js';
@@ -64,6 +65,8 @@ export const GATEWAY_USAGE = `usage:
   muffin gateway stop           drena i turni in volo e lo ferma — e lo tiene
                                 giù, anche su macOS
   muffin gateway start          lo riaccende dopo uno stop
+  muffin gateway restart        kickstart/systemctl restart e verifica lo stato
+                                dopo (pid cambiato), non l'exit code del comando
   muffin gateway install        genera la unit del supervisore (stdout)
                                 [--write] scrivila al suo posto [--force]
                                 [--start] e poi accendila davvero (implica
@@ -303,6 +306,73 @@ export async function cmdGatewayStop(home: string): Promise<number> {
   process.stderr.write(
     `il gateway (pid ${info.pid}) non è uscito entro ${STOP_TIMEOUT_SEC}s — sta ancora drenando, oppure è piantato\n`,
   );
+  return 1;
+}
+
+/**
+ * `muffin gateway restart` — l'owner l'ha chiesto testuale: *«mettiamo anche
+ * muffin gateway restart, cosi da non dover fare due comandi ogni volta»*.
+ * Prima erano due passi a mano: `launchctl kickstart -k …` (o `systemctl
+ * --user restart …`) e poi guardare `muffin gateway status` per credergli.
+ *
+ * Non un comando nuovo che parla al supervisore a modo suo: `restartCommand`,
+ * `waitForGatewayPid` e `restartVerdict` sono gli stessi tre pezzi che
+ * `cli/update.ts`'s `offerGatewayRestart` usa dopo uno `swing` — importati, non
+ * riscritti — così un `launchctl kickstart` scritto storto si romperebbe in un
+ * solo posto, non in due che potrebbero disallinearsi. La sola differenza è la
+ * cornice: `offerGatewayRestart` chiede il permesso (o lo dà per scontato con
+ * `--yes`) dentro il flusso di un aggiornamento e parla di "codice nuovo";
+ * questo è il comando che l'owner digita apposta per riavviare adesso, quindi
+ * parte senza chiedere, come `gateway start`.
+ *
+ * **Verificato sullo stato, mai sull'exit code** — la regola di casa
+ * ("verifica lo stato dopo, non l'output"), e il difetto che l'ha resa
+ * esplicita è lo stesso `restartVerdict` già ripara: le tre frasi diverse per
+ * pid-cambiato / comando-ok-ma-pid-uguale / comando-fallito, decise da un pid
+ * letto DOPO e confrontato con quello di PRIMA, mai dal solo `status === 0`
+ * del comando che ha toccato il supervisore.
+ */
+export async function cmdGatewayRestart(
+  home: string,
+  deps: {
+    platform?: NodeJS.Platform;
+    supervisorProbes?: Partial<SupervisorProbes>;
+    restart?: (argv: string[]) => { status: number; stdout: string; stderr: string };
+    readGatewayPid?: () => number | null;
+    sleep?: (ms: number) => Promise<void>;
+    verifyAttempts?: number;
+    verifyIntervalMs?: number;
+  } = {},
+): Promise<number> {
+  const platform = deps.platform ?? process.platform;
+  const readGatewayPid = deps.readGatewayPid ?? (() => currentGatewayPid(home));
+  const restart = deps.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
+
+  const status = checkSupervisor(platform, home, readGatewayPid() !== null, {
+    ...realSupervisorProbes(),
+    ...deps.supervisorProbes,
+  });
+  if (!status.engaged) {
+    process.stderr.write(`nessun gateway supervisionato: ${status.detail}\n  → ${status.remedy}\n`);
+    return 1;
+  }
+
+  const { printable, argv } = restartCommand(platform);
+  process.stderr.write(`${printable}\n`);
+  const pidBefore = readGatewayPid();
+  const r = restart(argv);
+  const commandDetail = (r.stderr || r.stdout).trim();
+  const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
+    attempts: deps.verifyAttempts,
+    intervalMs: deps.verifyIntervalMs,
+    sleep: deps.sleep,
+  });
+  const verdict = restartVerdict({ pidBefore, pidAfter, commandOk: r.status === 0, commandDetail });
+  if (verdict.restarted) {
+    process.stdout.write(`${verdict.line}\n`);
+    return 0;
+  }
+  process.stderr.write(`${verdict.line}\n`);
   return 1;
 }
 

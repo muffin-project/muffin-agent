@@ -219,7 +219,21 @@ describe('acceptance · fondere non lava · il soffitto attraversa le porte, il 
         const gw = await pairOwner(inst, tg);
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'leggi dati.txt e dimmi la somma'));
-          await until(() => tg.messages().some((m) => m.text.includes('somma è 6')), 30_000);
+          // The answer follows a tool call (`fs_read`), so it joins that
+          // tool's own transcript message as an edit rather than arriving as
+          // a fresh `sendMessage` (`connector.ts#deliverTo`'s merge) — wait
+          // on `tg.sent()` directly, not `tg.messages()`.
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes('somma è 6'),
+                ),
+            30_000,
+          );
         } finally {
           await gw.stop();
         }
