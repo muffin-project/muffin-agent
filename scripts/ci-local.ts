@@ -340,42 +340,64 @@ export function buildJobScript(job: JobSpec, opts: { runnerTemp: string; appDir?
 export const CI_USER = 'ci-runner';
 
 /**
- * The bootstrap that stands in for the `uses:` steps: install `sudo` (every
- * `run:` step below assumes it, like the real runner ships it preinstalled),
- * install the requested Node version from NodeSource (`actions/setup-node`),
- * unpack the repository tarball into `/app` (`actions/checkout`), and create
+ * The bootstrap that stands in for the `uses:` steps: install the requested
+ * Node version into its own directory (`actions/setup-node`), unpack the
+ * repository tarball into `/app` (`actions/checkout`), and create
  * {@link CI_USER} with passwordless sudo — the user the job's own steps
  * actually run as (see that constant's comment for why). Runs as root, before
- * {@link buildJobScript}'s output, which runs as `ci-runner`.
+ * {@link buildJobScript}'s output, which runs as `ci-runner`. It is *sourced*
+ * (`. bootstrap.sh`, not `bash bootstrap.sh`) by its caller so the `PATH`
+ * export below survives into the `runuser` invocation that follows it.
  *
- * `curl`, `ca-certificates`, `sudo`, `git` and `systemd` are not things any
- * `run:` step asks for — they are declared, not-silent compensation for
- * `ubuntu:24.04`'s Docker image being far thinner than the real
- * `ubuntu-latest` VM. `systemd` is specifically for `systemd-analyze`, which
- * `core/gateway/unit.test.ts` needs under `MUFFIN_REQUIRE_SYSTEMD=1` and which
- * a real GitHub runner ships preinstalled; `evals/acceptance/gate-linux.sh`
+ * Node is installed from the official tarball into `/opt/node`, not via
+ * `apt-get install nodejs` — deliberately: `apt`'s NodeSource package puts the
+ * binary at `/usr/bin/node`, and `cli/gateway.test.ts`'s "sceglie la
+ * directory stabile del PATH" makes assertions about *which* directory a
+ * discovered interpreter lives in, against a fixed, generic fallback PATH
+ * list that already contains `/usr/bin`. `/usr/bin` from `apt` collided with
+ * that fallback and made the test fail for a reason that has nothing to do
+ * with the code under test — measured 2026-09-04, this exact test, this exact
+ * cause. `/opt/node/bin` cannot collide, and it is also what
+ * `actions/setup-node` itself does on the real runner (a dedicated
+ * tool-cache directory, never a system path).
+ *
+ * `curl`, `ca-certificates`, `xz-utils`, `sudo`, `git` and `systemd` are not
+ * things any `run:` step asks for — they are declared, not-silent
+ * compensation for `ubuntu:24.04`'s Docker image being far thinner than the
+ * real `ubuntu-latest` VM. `systemd` is specifically for `systemd-analyze`,
+ * which `core/gateway/unit.test.ts` needs under `MUFFIN_REQUIRE_SYSTEMD=1` and
+ * which a real GitHub runner ships preinstalled; `evals/acceptance/gate-linux.sh`
  * installs the same package for the identical reason (read there, not
  * copied).
  */
-export function buildBootstrapScript(nodeVersion: string): string {
+export function buildBootstrapScript(nodeVersion: string, opts: { runnerTemp: string }): string {
   return [
     'set -e',
     'export DEBIAN_FRONTEND=noninteractive',
     echoLine(
-      '=== bootstrap: emulating uses: actions/checkout + actions/setup-node, plus base-image gap-fill (sudo/curl/git/systemd — see header comment) ===',
+      '=== bootstrap: emulating uses: actions/checkout + actions/setup-node, plus base-image gap-fill (curl/xz-utils/sudo/git/systemd — see header comment) ===',
     ),
     'apt-get update -qq >/dev/null',
-    'apt-get install -y -qq curl ca-certificates sudo git systemd >/dev/null',
-    `curl -fsSL https://deb.nodesource.com/setup_${nodeVersion}.x | bash - >/dev/null 2>&1`,
-    'apt-get install -y -qq nodejs >/dev/null',
-    echoLine(`node-version requested by actions/setup-node: ${nodeVersion}`),
+    'apt-get install -y -qq curl ca-certificates xz-utils sudo git systemd >/dev/null',
+    echoLine(`node-version requested by actions/setup-node: ${nodeVersion} (installed into /opt/node, not /usr/bin)`),
+    'NODE_ARCH="$(uname -m)"',
+    'case "$NODE_ARCH" in aarch64) NODE_ARCH=arm64 ;; x86_64) NODE_ARCH=x64 ;; ' +
+      '*) echo "unsupported architecture for the Node tarball: $NODE_ARCH" >&2; exit 1 ;; esac',
+    `NODE_LISTING="$(curl -fsSL https://nodejs.org/dist/latest-v${nodeVersion}.x/)"`,
+    `NODE_FILE="$(echo "$NODE_LISTING" | grep -oE 'node-v${nodeVersion}\\.[0-9]+\\.[0-9]+-linux-'"$NODE_ARCH"'\\.tar\\.xz' | head -1)"`,
+    '[ -n "$NODE_FILE" ] || { echo "could not find a linux-$NODE_ARCH tarball for Node ' +
+      `${nodeVersion}.x on nodejs.org" >&2; exit 1; }`,
+    `curl -fsSL "https://nodejs.org/dist/latest-v${nodeVersion}.x/$NODE_FILE" -o /tmp/node.tar.xz`,
+    'mkdir -p /opt/node && tar xJf /tmp/node.tar.xz -C /opt/node --strip-components=1',
+    'export PATH="/opt/node/bin:$PATH"',
     'node --version',
     'mkdir -p /app && tar xf /repo.tar -C /app',
+    `mkdir -p ${shSingleQuote(opts.runnerTemp)}`,
     echoLine(`creating non-root user '${CI_USER}' with passwordless sudo (matches the GitHub runner user)`),
     `useradd -m -s /bin/bash ${CI_USER}`,
     `echo '${CI_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CI_USER}`,
     `chmod 0440 /etc/sudoers.d/${CI_USER}`,
-    `chown -R ${CI_USER}:${CI_USER} /app`,
+    `chown -R ${CI_USER}:${CI_USER} /app ${shSingleQuote(opts.runnerTemp)}`,
     echoLine('=== bootstrap done — the workflow-derived steps run below, as a non-root user ==='),
     'echo "===BOOTSTRAP_OK==="',
   ].join('\n');
@@ -453,10 +475,13 @@ function runContainer(opts: {
 }): Promise<RunResult> {
   return new Promise((resolvePromise) => {
     // Bootstrap runs as root (it needs to be: creating a user, apt-get,
-    // /etc/sudoers). The workflow-derived job steps then run as CI_USER —
-    // see that constant's comment for why this is not optional.
+    // /etc/sudoers) and is *sourced*, not executed as a subprocess, so its
+    // `export PATH=/opt/node/bin:$PATH` (see buildBootstrapScript) survives
+    // into the `env PATH="$PATH"` below. The workflow-derived job steps then
+    // run as CI_USER — see that constant's comment for why this is not
+    // optional.
     const launcher =
-      `set -e; bash /bootstrap.sh; ` +
+      `set -e; . /bootstrap.sh; ` +
       `exec runuser -u ${CI_USER} -- env HOME=/home/${CI_USER} PATH="$PATH" bash /job.sh`;
     const args = [
       'run',
@@ -575,7 +600,7 @@ async function main(): Promise<void> {
 
       const bootstrapFile = join(scratch, `${job.jobId}.bootstrap.sh`);
       const jobScriptFile = join(scratch, `${job.jobId}.job.sh`);
-      writeFileSync(bootstrapFile, buildBootstrapScript(nodeVersion));
+      writeFileSync(bootstrapFile, buildBootstrapScript(nodeVersion, { runnerTemp: RUNNER_TEMP }));
       writeFileSync(jobScriptFile, buildJobScript(job, { runnerTemp: RUNNER_TEMP }));
       chmodSync(bootstrapFile, 0o755);
       chmodSync(jobScriptFile, 0o755);
