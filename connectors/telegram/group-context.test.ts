@@ -54,7 +54,11 @@ const groupMsg = (id: number): Update =>
       date: 0,
       chat: { id: GROUP, type: 'supergroup' },
       from: { id: STRANGER, is_bot: false, first_name: 'x' },
-      text: 'ciao a tutti',
+      // Menzionato di proposito: dal 04/09/2026 un messaggio di gruppo che non
+      // nomina Muffin non apre nessun turno (`apreUnTurno`, ADR-0063), quindi
+      // un `groupMsg` nudo qui non proverebbe piu' niente — arriverebbe verde
+      // perche' il turno non parte, non perche' il prompt e' quello giusto.
+      text: '@MuffinBot ciao a tutti',
     },
   }) as unknown as Update;
 
@@ -107,6 +111,12 @@ function harness(config: TelegramConfig, script: ChatResult[] = []) {
     api,
     config,
   });
+
+  // Lo username che `connect()` prenderebbe da `getMe`. Il banco chiama
+  // `drain()` senza connettersi, quindi va messo a mano: senza, il gate di
+  // gruppo non puo' riconoscere una menzione e fallisce chiuso — corretto in
+  // produzione, inutile qui.
+  (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
 
   return { connector, seen, runtime, prompts: runtime.deps.systemPrompts };
 }
@@ -241,6 +251,50 @@ describe('a group turn arriving off the wire', () => {
     } finally {
       h.runtime.close();
     }
+  });
+});
+
+describe('il gate di gruppo, dal filo', () => {
+  /**
+   * La prova del **cablaggio**, non del criterio: `gate-di-gruppo.test.ts`
+   * prova gia' `apreUnTurno` come funzione pura. Questo prova che `drain()` la
+   * chiama davvero — la distinzione che questo repository continua a trovare
+   * come difetto, e che una suite verde non nota.
+   */
+  it('un messaggio di gruppo che non chiama Muffin non arriva mai al modello', async () => {
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
+    const nudo = {
+      update_id: 900,
+      message: {
+        message_id: 900,
+        date: 0,
+        chat: { id: GROUP, type: 'supergroup' },
+        from: { id: STRANGER, is_bot: false, first_name: 'x' },
+        text: 'ragazzi che si fa stasera',
+      },
+    } as unknown as Update;
+
+    await deliver(h, [nudo]);
+
+    expect(h.seen).toHaveLength(0);
+  });
+
+  it('lo stesso messaggio, con la menzione, il modello lo vede', async () => {
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
+    const chiamato = {
+      update_id: 901,
+      message: {
+        message_id: 901,
+        date: 0,
+        chat: { id: GROUP, type: 'supergroup' },
+        from: { id: STRANGER, is_bot: false, first_name: 'x' },
+        text: '@MuffinBot ragazzi che si fa stasera',
+      },
+    } as unknown as Update;
+
+    await deliver(h, [chiamato]);
+
+    expect(h.seen.length).toBeGreaterThan(0);
   });
 });
 

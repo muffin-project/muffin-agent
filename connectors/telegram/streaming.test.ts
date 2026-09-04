@@ -73,7 +73,9 @@ const groupMsg = (id: number): Update =>
       date: 0,
       chat: { id: GROUP, type: 'supergroup' },
       from: { id: STRANGER, is_bot: false, first_name: 'x' },
-      text: 'raccontami qualcosa',
+      // Menzionato: dal 04/09 un messaggio di gruppo che non chiama Muffin non
+      // apre nessun turno (`apreUnTurno`, ADR-0063).
+      text: '@MuffinBot raccontami qualcosa',
     },
   }) as unknown as Update;
 
@@ -85,7 +87,9 @@ const privateMsg = (id: number): Update =>
       date: 0,
       chat: { id: OWNER, type: 'private' },
       from: { id: OWNER, is_bot: false, first_name: 'o' },
-      text: 'raccontami qualcosa',
+      // Menzionato: dal 04/09 un messaggio di gruppo che non chiama Muffin non
+      // apre nessun turno (`apreUnTurno`, ADR-0063).
+      text: '@MuffinBot raccontami qualcosa',
     },
   }) as unknown as Update;
 
@@ -230,6 +234,11 @@ function harness(config: TelegramConfig, provider: Provider, api: TelegramApiLik
     api,
     config,
   });
+  // Lo username che `connect()` prenderebbe da `getMe`: il banco chiama
+  // `drain()` senza connettersi, e senza questo il gate di gruppo non puo'
+  // riconoscere una menzione e fallisce chiuso.
+  (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
+
   return { connector, runtime };
 }
 
