@@ -264,7 +264,23 @@ export class SandboxExecutor {
         // reset() before handing back control, same as `close()` would.
         await SandboxManager.reset().catch(() => {});
         this.cachedProbe = { available: false, mechanism: status.mechanism, ...failure };
-        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.remedy}`);
+        // Il `detail` entra nel messaggio, non solo nella sonda in cache.
+        //
+        // Fino al 04/09/2026 qui usciva `reason — remedy`, e il rimedio del
+        // caso generico dice testualmente *«see detail»* — cioe' rimandava a
+        // una cosa che non mostrava. Misurato quel giorno dentro il container
+        // della CI locale: la causa vera era *«Linux HTTP bridge socket does
+        // not exist … The bridge process may have died»*, e per leggerla e'
+        // servito modificare questa riga a mano. `cli/doctor.ts` il `detail`
+        // lo stampa gia (righe ~1053 e ~1091): era **solo** il percorso di
+        // esecuzione — quello che vedono il modello e l'owner quando un
+        // comando fallisce davvero — a perderlo.
+        //
+        // Conta anche perche' `classifyContainmentError` fa cadere su
+        // `contain_failed` tutto cio' che non riconosce: un banale TypeError
+        // dentro l'init si presentava come «il sandbox non contiene su questo
+        // host», con un rimedio su AppArmor che non c'entrava niente.
+        throw new Error(`sandbox unavailable: ${failure.reason} — ${failure.detail} — ${failure.remedy}`);
       }
     }
   }
