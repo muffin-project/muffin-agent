@@ -471,6 +471,58 @@ connettore. Va detto perché altrimenti restano due meccanismi che dicono la
 stessa cosa a ritmi diversi — e `presence.ts:14-18` racconta già la storia del
 vecchio Muffin che tolse il keepalive e lo rimise due settimane dopo.
 
+#### Fatto il 2026-09-04, e cosa resta aperto
+
+Questa sezione prevedeva il difetto prima che fosse misurato: il 2026-09-04 il
+gateway ha ricevuto un SIGTERM a metà turno, il draft (mai rinnovato dopo che
+`silenceHeartbeats()` lo spegneva proprio all'inizio dello streaming) è scaduto
+da solo, e la risposta vera è arrivata tre minuti e cinquanta secondi dopo dal
+processo ripreso — «scritto, poi cancellato, poi riscritto», nelle parole
+dell'owner.
+
+La correzione applicata prende la direzione di questa sezione — **un
+segnaposto materializzato come messaggio vero, mai un timer che deve reggere
+una promessa che sopravvive al processo** — ma non l'intera Domanda 4. Non
+c'è ancora un ACK sincrono (`handle()` continua a chiamare il modello nello
+stesso processo, non torna entro ~500 ms), non c'è un `editMessageId` scritto
+sul record durevole del turno, e la corsia (`agent/turn-lane.ts`) non possiede
+ancora l'indirizzo del segnaposto — resta una struttura in memoria sul
+connettore (`TelegramConnector#transcriptHandoff`), non una colonna. Quella è
+la Domanda 4 intera: un cambio di forma del turno (accetta-poi-consegna),
+fuori misura per una fetta che doveva chiudere due difetti misurati, non
+riprogettare come i turni Telegram vengono creati.
+
+Quello che *è* cambiato, dentro i confini di `connectors/telegram/`:
+
+- **`presence.ts` non manda più `sendMessageDraft`.** È rimasto solo il
+  battito `sendChatAction` (`presence.ts`, riscritto da zero — non ha più un
+  timer di rinnovo da poter dimenticare di far ripartire, perché non ha più
+  niente di effimero da rinnovare).
+- **`transcript.ts` guadagna `live()`**: la stessa DAY-1 B11 ("la risposta
+  come si forma"), ma scritta nello stesso messaggio reale e durevole in cui
+  già vivono i passi dei tool — mai un secondo canale. Un messaggio vero non
+  scade: un processo che muore lo lascia esattamente com'era, invece di
+  farlo sparire. Solo in chat private, stesso perimetro che il draft aveva
+  sempre avuto.
+- **`transcript.ts` guadagna `handoff()`**, e `connector.ts#deliverTo` lo usa
+  per **editare** il messaggio della trascrizione con la risposta finale
+  invece di mandarne uno a parte — questo chiude anche l'*altro* dei due
+  difetti misurati (le due bolle: `docs/evidence/dogfood-superfici-2026-09-03.md`
+  aveva introdotto un messaggio persistente per i passi apposta, ma senza
+  fonderlo con la risposta finale un turno con tool restava comunque due
+  messaggi). La scrittura resta attraverso `TelegramDeliveryStore`/
+  `deliverTelegram`, lo stesso ledger durevole già scritto-prima-dell'effetto
+  di ogni altra consegna — **non** un secondo canale non tracciato.
+
+Il gap residuo che questa forma accetta, esplicitamente: `transcriptHandoff`
+vive solo in memoria per la durata del processo. Un crash fra la chiusura
+della trascrizione e la chiamata a `deliverTo` (finestra strettissima, niente
+I/O in mezzo) perde la fusione — la risposta arriva comunque, ma come
+messaggio a parte anziché come edit. È lo stesso genere di degradazione
+accettata già in uso per `transcriptInSospeso` poche righe più giù nel
+codice: mai una risposta persa, nel peggiore dei casi un messaggio in più —
+mai peggio di prima di questa correzione.
+
 ### Il vincolo che non va rotto, e come si traduce
 
 > `markRan` avanza **anche su consegna fallita, di proposito**: *«un fallimento

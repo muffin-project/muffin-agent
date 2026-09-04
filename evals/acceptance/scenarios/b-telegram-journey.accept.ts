@@ -226,14 +226,23 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
 
 describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
   /**
-   * Since 03/09/2026 the shape is the owner's (`docs/evidence/dogfood-superfici-2026-09-03.md`
-   * §5.1): one message per segment, steps appended to it, **never deleted**.
+   * Since 03/09/2026 the steps live in one message per segment, never
+   * deleted (`docs/evidence/dogfood-superfici-2026-09-03.md` §5.1). Since
+   * 04/09/2026 (`docs/evidence/turno-sospendibile.md`) the real answer joins
+   * that **same** message instead of arriving as a second `sendMessage`
+   * beside it — the two-bubble defect measured on the owner's own chat: a
+   * stray message id sitting between the question and the answer on every
+   * turn that used a tool.
    *
    * Falsifier: delete the `seg.messageId === null` branch in
    * `transcript.ts#sendSegment` (always call `sendMessage`) and the "exactly
    * one create" assertion below breaks. Delete the `await transcript.stop()`
    * in `connector.ts` and the "no live counter left" assertion breaks. Put a
    * `deleteMessage` back into `stop()` and the "never deleted" one does.
+   * Drop the `handoff` branch of `deliverTo`'s plan in `connector.ts` and the
+   * "exactly one sendMessage total" / "the answer is the transcript's own
+   * last edit" assertions below break — the answer goes back to being a
+   * second, separate `sendMessage`.
    */
   scenario(
     'B13',
@@ -256,11 +265,24 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'fammi un resoconto dei miei appunti'));
-          await until(() => tg.messages().some((m) => m.text.includes('niente di nuovo da ieri a oggi')), 30_000);
+          // The answer now lands as an edit, not a fresh `sendMessage` —
+          // `tg.messages()` only ever sees genuinely new messages
+          // (`evals/acceptance/telegram.ts`'s own contract), so this scenario
+          // waits on `tg.sent()` directly instead.
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes('niente di nuovo da ieri a oggi'),
+                ),
+            30_000,
+          );
 
           // A transcript message carries the steps in the owner's own words
-          // (`agent/tool-phrase.ts`) — distinct from the pairing confirmation
-          // and from the real answer.
+          // (`agent/tool-phrase.ts`) — distinct from the pairing confirmation.
           const sent = tg.sent();
           const creates = sent.filter(
             (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('cerco in memoria'),
@@ -273,6 +295,17 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           }
           const transcriptId = creates[0]!.messageId;
           if (transcriptId === undefined) throw new Error('il sendMessage di trascrizione non ha un id registrato');
+
+          // Exactly one message a person would ever have read reached this
+          // chat for the whole turn — the pairing confirmation plus this one
+          // create, nothing else. The answer is not a second one.
+          const allCreates = sent.filter((c) => c.method === 'sendMessage');
+          if (allCreates.length !== 2) {
+            throw new Error(
+              `attesi esattamente 2 sendMessage in tutto lo scenario (pairing + trascrizione), trovati ${allCreates.length}:\n` +
+                JSON.stringify(allCreates, null, 2),
+            );
+          }
 
           const edits = sent.filter((c) => c.method === 'editMessageText' && Number(c.payload['message_id']) === transcriptId);
           if (edits.length === 0) {
@@ -297,18 +330,11 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
             throw new Error(`qualcosa è stato cancellato — la trascrizione deve restare:\n${JSON.stringify(sent, null, 2)}`);
           }
 
-          // The real answer is a distinct message, not an edit of the
-          // transcript — and it comes after the transcript's last edit.
-          const answerCall = sent.find(
-            (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('niente di nuovo da ieri a oggi'),
-          );
-          if (!answerCall) throw new Error('nessuna risposta finale trovata fra i sendMessage');
-          if (answerCall.messageId === transcriptId) {
-            throw new Error('la risposta finale ha riusato lo stesso id della trascrizione invece di essere un messaggio a parte');
-          }
-          const lastEditAt = sent.lastIndexOf(edits[edits.length - 1]!);
-          if (lastEditAt > sent.indexOf(answerCall)) {
-            throw new Error('la trascrizione è stata editata DOPO la risposta: transcript.stop() non è atteso prima di deliverTo');
+          // The real answer is the transcript's OWN last edit — one visible
+          // response, not a message beside it — and it carries the steps
+          // above it, not just the bare answer text.
+          if (!finale.includes('niente di nuovo da ieri a oggi')) {
+            throw new Error(`l'ultimo edit della trascrizione non porta la risposta:\n${finale}`);
           }
         } finally {
           await gw.stop();
@@ -354,7 +380,21 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'mandami il report.txt come allegato'));
-          await until(() => tg.messages().some((m) => m.text.includes("l'ho mandato come allegato")), 30_000);
+          // The text answer follows a tool call (`send_file`), so it lands as
+          // an edit of that tool's own transcript message, not a fresh
+          // `sendMessage` (B13's merge, `connector.ts#deliverTo`) — wait on
+          // `tg.sent()` directly rather than `tg.messages()`.
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes("l'ho mandato come allegato"),
+                ),
+            30_000,
+          );
 
           const docs = tg.documents();
           if (docs.length !== 1) {
@@ -483,7 +523,21 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // === now the owner's press ========================================
           tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, `ok:${approvalId}`, { messageId: askMessageId, chatId: OWNER_ID, text: askText }));
 
-          await until(() => tg.messages().some((m) => m.text.includes('ha risposto ciao')), 30_000);
+          // The resumed turn's answer follows a tool call, so it joins that
+          // tool's own transcript message as an edit (B13's merge,
+          // `connector.ts#deliverTo`) rather than arriving as a fresh
+          // `sendMessage` — wait on `tg.sent()` directly.
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes('ha risposto ciao'),
+                ),
+            30_000,
+          );
 
           const finalRow = inst.db(
             (db) =>
@@ -557,6 +611,15 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             throw new Error(
               `il passo del tool rieseguito dopo l'approvazione non è nello stesso segmento risolto:\n${ultimoTestoTrascrizione}`,
             );
+          }
+          // (c) La risposta finale è proprio quest'ultimo edit — un turno,
+          // una risposta visibile come una cosa sola — non un `sendMessage`
+          // a parte accanto alla trascrizione.
+          if (!ultimoTestoTrascrizione.includes('ha risposto ciao')) {
+            throw new Error(`la risposta finale non è finita nell'ultimo edit della trascrizione:\n${ultimoTestoTrascrizione}`);
+          }
+          if (tg.sent().some((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('ha risposto ciao'))) {
+            throw new Error('la risposta finale è arrivata anche come sendMessage a parte, non solo come edit della trascrizione');
           }
         } finally {
           await gw.stop();
