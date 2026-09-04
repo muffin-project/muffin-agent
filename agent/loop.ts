@@ -1992,12 +1992,34 @@ async function guidaIlTurno(
      * `check()` below — only the *stamp this turn leaves for the next one* no
      * longer inherits a tier this turn did not itself produce.
      */
-    const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
+    const traceIdsInWindow = spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined);
+    const taintByTrace = deps.turns.taintForIds(traceIdsInWindow);
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
+
+    /**
+     * D11's other half: which turns in this window `muffin undo` has already
+     * put back. Resolved through the same `traceId` join as `taintByTrace`
+     * immediately above, one query for the whole window, and read by
+     * `buildContext` so a turn re-reading its own past does not believe an
+     * effect that is no longer on disk (`docs/work/day1/critical-path.md`
+     * §"Chiudere la compensazione, non solo il restore").
+     */
+    const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
     messages.length = 0;
     messages.push(
-      ...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name, deps.istanza?.(), deps.timeZone),
+      ...buildContext(
+        input,
+        recalled,
+        open,
+        spoken,
+        now(),
+        deps.model,
+        deps.profile.name,
+        deps.istanza?.(),
+        deps.timeZone,
+        undoneTraceIds,
+      ),
     );
 
     // `record.taint`, the same substitution and for the same reason as the
@@ -3934,6 +3956,17 @@ function buildContext(
    * fuso del processo, lo stesso comportamento di prima di questo campo.
    */
   timeZone: string | undefined,
+  /**
+   * D11's other half: the `traceId`s of turns whose effects `muffin undo`
+   * has already put back — resolved once by the caller (`drive`), same
+   * shape as `taintByTrace`/`historyTaint` immediately above it there.
+   *
+   * Read only against `m.role === 'assistant'`: the agent's own claim is
+   * what can go stale, and marking a `user` line here would be marking the
+   * owner's own words as something that needs correcting, which is the
+   * wrong direction entirely.
+   */
+  undoneTraceIds: ReadonlySet<string>,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -3975,9 +4008,25 @@ function buildContext(
    */
   for (const m of kept) {
     const altrove = m.surface !== undefined && m.surface !== '' && m.surface !== input.surface;
+    const testo = altrove ? `[${m.surface}] ${m.content}` : m.content;
+    /**
+     * D11: la stessa riga che «ho scritto nota.md» smette di leggersi come
+     * corrente dopo un `muffin undo` di quel turno. Non riscritta e non
+     * tolta — è ancora ciò che il modello ha detto — ma marcata *qui*, alla
+     * lettura, così una sessione che ha già scritto la riga su disco (JSONL,
+     * append-only) non deve mai essere toccata per restare vera.
+     */
+    const disfatto = m.role === 'assistant' && m.traceId !== undefined && undoneTraceIds.has(m.traceId);
     messages.push({
       role: m.role as 'user' | 'assistant',
-      content: [{ type: 'text' as const, text: altrove ? `[${m.surface}] ${m.content}` : m.content }],
+      content: [
+        {
+          type: 'text' as const,
+          text: disfatto
+            ? `${testo}\n[quel turno è stato disfatto con \`muffin undo\`: i file che dice di aver toccato sono tornati com'erano prima. Non trattarla come stato attuale del disco.]`
+            : testo,
+        },
+      ],
     });
   }
   /**

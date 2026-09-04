@@ -862,6 +862,51 @@ describe('recall', () => {
   });
 });
 
+describe('recall porta `undone` (D11) e `role` sull\'item, marcati non esclusi', () => {
+  it('un episodio agente disfatto torna con undone: true e nel testo del prompt', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho scritto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-1',
+    });
+    store.markEpisodesUndone(HOST, 'turn-1', '2026-08-04T11:00:00Z');
+
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('agent');
+    expect(item?.undone).toBe(true);
+    expect(renderForPrompt(result)).toContain('disfatto con muffin undo');
+    // Il testo resta quello vero — marcato, non riscritto.
+    expect(item?.text).toBe('Fatto: ho scritto nota-vela.md.');
+  });
+
+  it('un episodio non disfatto non porta undone', async () => {
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'agent', kind: 'message',
+      content: 'Fatto: ho letto nota-vela.md.', trustTier: 0, createdAt: NOW, turnId: 'turn-2',
+    });
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.undone).toBeUndefined();
+  });
+
+  it('un episodio dell\'owner non è mai undone, anche col turno marcato', async () => {
+    // markEpisodesUndone filtra su role: 'agent' — questo prova il lato
+    // recall della stessa garanzia, non solo lo store.
+    const { store, vectors } = harness();
+    const epId = store.addEpisode({
+      tenantId: HOST, connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
+      content: 'scrivi nota-vela.md', trustTier: 0, createdAt: NOW, turnId: 'turn-3',
+    });
+    store.markEpisodesUndone(HOST, 'turn-3', '2026-08-04T11:00:00Z');
+    const result = await recall({ store, vectors }, HOST, 'nota-vela.md');
+    const item = result.items.find((i) => i.id === epId);
+    expect(item?.role).toBe('user');
+    expect(item?.undone).toBeUndefined();
+  });
+});
+
 describe('checkTemporalWindow', () => {
   const NOW_ISO = '2026-08-16T12:00:00.000Z';
 
