@@ -237,7 +237,7 @@ describe('la matrice normativa è eseguibile', () => {
 });
 
 /**
- * ADR-0062 — "il modello non deve poter cambiare le impostazioni", eseguita.
+ * ADR-0070 — "il modello non deve poter cambiare le impostazioni", eseguita.
  *
  * `muffin config set` (e `/config` in `agent/comandi.ts`) scrivono
  * `config.json` senza passare da qui: sono comandi che i connector
@@ -255,7 +255,7 @@ describe('la matrice normativa è eseguibile', () => {
  * sulla riga `config`: la matrice sa deciderla, ma nessun test le negava
  * l'esistenza prima di questo.
  */
-describe('il modello non ha una porta sulla riga "config" (ADR-0062)', () => {
+describe('il modello non ha una porta sulla riga "config" (ADR-0070)', () => {
   it('nessuna CapabilityDecl spedita dichiara effect: "config"', () => {
     const righe = ALL.map((d) => d.effect);
     expect(righe).not.toContain('config');
