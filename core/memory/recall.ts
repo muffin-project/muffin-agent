@@ -66,6 +66,24 @@ export type RecallItem = {
    */
   turnId?: string;
   /**
+   * Present on episodes: who produced the bytes.
+   *
+   * Already folded into `source` as a word for a human («Muffin», «tu»); here
+   * as a value too, because one consumer branches on it rather than printing
+   * it — `undone` immediately below is legitimate for the agent's own claim
+   * and a lie for the owner's request, and marking that distinction needs the
+   * same field `describeEpisodeSource` already reads.
+   */
+  role?: EpisodeRole;
+  /**
+   * Present on an episode whose turn `muffin undo` has put back (D11).
+   *
+   * Marked, not filtered out — the way `expired` is: an episode that was
+   * undone is still on record, and the model needs to see it *and* know it no
+   * longer describes the disk, not find a gap it has to explain by guessing.
+   */
+  undone?: boolean;
+  /**
    * Set on an item that is here as *context* for another one, never as a
    * result of its own. Neighbours are attached after the cut and never enter
    * the fusion: they did not match the query and must not displace something
@@ -329,7 +347,7 @@ export type RecallResult = {
 const K = 60;
 
 /** The durable episode role. Trust and speaker are deliberately separate axes. */
-type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
+export type EpisodeRole = NonNullable<ReturnType<MemoryStore['episodeById']>>['role'];
 
 /** How many of an entity's facts the graph expansion carries. */
 const EXPANSION_SLOTS = 6;
@@ -474,17 +492,32 @@ export async function recall(
   // `superseded_at` is for.
   const includeSuperseded = when !== undefined;
 
-  // `role` lives on the durable episode row. Do not duplicate it into every
-  // retrieval projection just to render provenance: FTS, vector and
-  // neighbourhood all converge here, so one cached lookup per unique episode
-  // is the single seam that decides who actually said the text. Missing role
+  // `role` and `undone_at` live on the durable episode row. Do not duplicate
+  // them into every retrieval projection just to render provenance: FTS,
+  // vector and neighbourhood all converge here, so one cached lookup per
+  // unique episode is the single seam that decides who actually said the
+  // text, and whether `muffin undo` has since put it back. Missing role
   // fails closed as unattributed; tier 0 alone can never manufacture "tu".
-  const episodeRoles = new Map<number, EpisodeRole | null>();
-  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string => {
-    if (!episodeRoles.has(id)) {
-      episodeRoles.set(id, deps.store.episodeById(tenantId, id)?.role ?? null);
-    }
-    return describeEpisodeSource(episodeRoles.get(id) ?? null, tier, at, surface);
+  const episodeDurables = new Map<number, { role: EpisodeRole | null; undoneAt: string | null }>();
+  const durable = (id: number): { role: EpisodeRole | null; undoneAt: string | null } => {
+    const cached = episodeDurables.get(id);
+    if (cached !== undefined) return cached;
+    const row = deps.store.episodeById(tenantId, id);
+    const fresh = { role: row?.role ?? null, undoneAt: row?.undoneAt ?? null };
+    episodeDurables.set(id, fresh);
+    return fresh;
+  };
+  const episodeSource = (id: number, tier: TrustTier, at: string, surface?: string): string =>
+    describeEpisodeSource(durable(id).role, tier, at, surface);
+  /**
+   * Chi ha prodotto la riga e se il turno che l'ha scritta e stato disfatto —
+   * sull'item, non solo nella stringa di provenienza, perche' `renderForPrompt`
+   * deve poter *decidere* (marcare `undone` in `temporalLabel`) invece di solo
+   * stampare. Stessa lettura cachata di `episodeSource`: una riga letta sola.
+   */
+  const episodeOrigin = (id: number): { role?: EpisodeRole; undone?: boolean } => {
+    const { role, undoneAt } = durable(id);
+    return { ...(role === null ? {} : { role }), ...(undoneAt === null ? {} : { undone: true }) };
   };
 
   const fuse = (key: string, item: RecallItem, rank: number): void => {
@@ -526,6 +559,7 @@ export async function recall(
       score: 0,
       surface: hit.connector,
       ...(hit.turnId === null ? {} : { turnId: hit.turnId }),
+      ...episodeOrigin(hit.id),
       // Retired evidence comes back only when the past was asked for, and it
       // arrives marked. An episode that was withdrawn or a vault note that has
       // since been edited is still true of *then*, and false of now; handing it
@@ -660,6 +694,7 @@ export async function recall(
           score: 0,
           surface: connector,
           ...(provenance.turnId == null ? {} : { turnId: provenance.turnId }),
+          ...episodeOrigin(hit.sourceId),
           ...(provenance.supersededAt == null ? {} : { expired: true }),
         }, rank);
       } catch {
@@ -835,6 +870,7 @@ export async function recall(
           surface: near.connector,
           neighbourOf: anchor.id,
           ...(near.turnId === null ? {} : { turnId: near.turnId }),
+          ...episodeOrigin(near.id),
           ...(near.supersededAt === null ? {} : { expired: true }),
         });
       }
@@ -1052,6 +1088,12 @@ function temporalLabel(item: RecallItem): string {
     parts.push(
       item.kind === 'fact' && !item.validTo ? 'riga ritirata (duplicato)' : 'non più attuale — era vero prima',
     );
+  }
+  if (item.undone) {
+    // D11: marcato, non escluso — la stessa scelta di `expired` sopra, e per
+    // la stessa ragione. Il testo resta quello che l'agente ha detto davvero;
+    // solo la lettura "questo è ancora sul disco" smette di essere implicita.
+    parts.push('disfatto con muffin undo — i file che descrive sono tornati com\'erano prima');
   }
   return parts.length === 0 ? '' : `, ${parts.join(', ')}`;
 }

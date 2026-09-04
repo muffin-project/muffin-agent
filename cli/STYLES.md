@@ -88,7 +88,7 @@ Una riga, il nome del comando in ciano grassetto, e ciò su cui sta lavorando
 smorzato dopo un `·`:
 
 ```
-muffin doctor · /Users/giusto/.muffin
+muffin doctor · /home/user/.muffin
 ```
 
 Risolve la lamentela alla lettera: senza, l'output di un comando e quello del
