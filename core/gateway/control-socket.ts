@@ -47,7 +47,7 @@ export type Identify = {
   startedAt: string;
 };
 
-export type ControlAnswer = { ok: true; verb: string; data: unknown } | { ok: false; error: string };
+type ControlAnswer = { ok: true; verb: string; data: unknown } | { ok: false; error: string };
 
 /**
  * Dove vive il socket, e il rimedio a un limite del sistema operativo che

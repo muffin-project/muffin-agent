@@ -102,17 +102,37 @@ export function tenantClass(principal: Principal, tenant: TenantId): TenantClass
  *
  * An **undeclared** capability is hidden from a member. It costs nothing — the
  * kernel answers `no_capability` to everyone — and it keeps the failure
- * fail-closed. Absent declarations altogether means no filtering at all: that
- * is the documented minimal-deps case on `LoopDeps.capabilities`, production
- * always passes the map (`agent/runtime.ts`), and the kernel still refuses.
+ * fail-closed.
+ *
+ * **`capabilities` is required, not optional with a fallback.** It used to be
+ * optional "so existing tests can build a minimal deps object", with the
+ * absence documented as safe because "production always passes the map". That
+ * was true only as long as every construction site remembered to — the same
+ * shape of defect `LoopDeps.turns`/`.todos` were hardened against in this same
+ * file's neighbourhood, for the same reason: an optional field with a
+ * documented safe degradation is still a field someone can forget, and the
+ * forgetting compiles. Here the forgetting was worse than for those two,
+ * because absence degraded its **other** consumer (the kernel's own
+ * `resourceKind` lookup) fail-closed but this one fail-*open*: no
+ * declarations meant no filtering, and a member would see every host-only
+ * tool by name. The kernel still refuses the call — this function is defence
+ * in depth, not the enforcement — but a menu that lies about what is safe to
+ * ask for is its own defect even when nothing behind it can be reached.
+ *
+ * Making the parameter mandatory turns "a caller forgot" into "the build
+ * fails", which is the direction every other seam in `LoopDeps` already
+ * degrades. The `if (!capabilities)` branch stays, fail-**closed** instead of
+ * fail-open, only as a second, independent line of defence against a caller
+ * that reaches this function from outside the type checker (a `.js` caller, an
+ * `as any`) — not as the primary guarantee.
  */
 export function visibleTools<T extends { capability: CapabilityId }>(
   tools: T[],
   principal: Principal,
-  capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined,
+  capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>,
 ): T[] {
   if (principal.kind !== 'member') return tools;
-  if (!capabilities) return tools;
+  if (!capabilities) return [];
   return tools.filter((tool) => capabilities.get(tool.capability)?.hostOnly === false);
 }
 

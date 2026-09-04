@@ -14,42 +14,51 @@ import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
 /**
- * The real wiring, B11 — through the actual `TelegramConnector.handle()`,
+ * The real wiring, B11/B13 — through the actual `TelegramConnector.handle()`,
  * `buildRuntime`, and a scripted provider that streams, not a `Provider`
  * stub that only implements `chat()`. Same shape as `group-context.test.ts`'s
  * own proof for group prompts: the entry point production actually uses (an
  * `Update` off the wire, through `drain()` → `handle()` → `runTurn()`), so a
- * defect in the *composition* — `onDelta` never reaching `presence.streamText`,
- * `presence.stop()` racing the final edit — shows up here even though each
+ * defect in the *composition* — `onDelta` never reaching `transcript.ts#live()`,
+ * `transcript.stop()` racing `deliverTo` — shows up here even though each
  * piece is correct in isolation.
+ *
+ * **Since 2026-09-04 (`docs/evidence/turno-sospendibile.md`), one message per
+ * turn, not two.** Before this date, `presence.ts` streamed the growing
+ * answer into an ephemeral `sendMessageDraft` bubble while `transcript.ts`
+ * sent the tool trail as a *separate* real message, and the durable answer
+ * landed as a *third*, distinct `sendMessage` — measured on the owner's own
+ * chat as a stray message id between the question and the answer on every
+ * turn that used a tool. The scenarios below now assert the opposite of what
+ * they asserted before that date: a tool-using turn produces **exactly one**
+ * `sendMessage` a person would read, extended by edits, never a second
+ * `sendMessage` for the answer — and `sendMessageDraft` never appears at all,
+ * because there is no more ephemeral bubble to expire out from under a dead
+ * process.
  *
  * **What this file does not attempt, and why**: a scenario asserting several
  * genuinely time-spaced live edits from one round. `agent/loop.ts` buffers a
  * whole round and releases it in one synchronous burst once `done` confirms
  * no tool call (its own `TurnInput.onDelta` docstring explains why — no
  * earlier point is knowable, and "stream then retract" was rejected). A
- * burst has no gaps for `presence.ts`'s rate limiter to space out, so a
+ * burst has no gaps for `transcript.ts`'s rate limiter to space out, so a
  * single round collapses to exactly one live update in practice — proven
  * below. The rate limiter's own multi-update behaviour is real and is
- * proven where it can actually be observed: `presence.test.ts`, driving
- * `streamText` directly across fake-clock time, independent of how
+ * proven where it can actually be observed: `transcript.test.ts`, driving
+ * `live()`/`report()` directly across fake-clock time, independent of how
  * `loop.ts` happens to call it today.
  *
- * **DAY-1 requirement B13 lives here too**, same reasoning: `progress.test.ts` drives
- * `startProgress` directly and proves the throttle/coalescing/disable-on-
- * failure mechanics; the two scenarios below prove the *composition* —
- * `onProgress` actually reaches `TelegramConnector`'s real Telegram calls,
- * and the status message is gone before the durable answer goes out. Unlike
- * the scenarios above, these need `streamingProviderWithRealGap`: every
- * other provider here resolves through pure microtasks with no real I/O
- * anywhere in the turn, so `progress.ts`'s own `setTimeout(fn, 0)` (armed by
- * the turn's first `round` event) would never get a turn to run before
- * `progress.stop()` cancels it — proven by the fact this file's *other*
- * three scenarios show zero progress-related calls at all, on purpose (see
- * `progress.ts`'s `stop()`: no forced final flush, unlike `presence.ts`'s —
- * the reasoning is in that file). A genuine model call always has this gap
- * in production (real network I/O); this fake reproduces the gap rather
- * than the race.
+ * **DAY-1 requirement B13 lives here too**, same reasoning: `transcript.test.ts`
+ * drives `startTranscript` directly and proves the throttle/coalescing/
+ * disable-on-failure mechanics; the scenarios below prove the *composition* —
+ * `onProgress`/`onDelta` actually reach `TelegramConnector`'s real Telegram
+ * calls, and the merge into one message actually happens end to end. Some
+ * need `streamingProviderWithRealGap`: every other provider here resolves
+ * through pure microtasks with no real I/O anywhere in the turn, so a
+ * `setTimeout(fn, 0)` armed by the turn's first event would never get a turn
+ * to run before `stop()` cancels it. A genuine model call always has this gap
+ * in production (real network I/O); this fake reproduces the gap rather than
+ * the race.
  */
 
 const OWNER = 4242;
@@ -247,7 +256,7 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
     }
   });
 
-  it('keeps the tool round\'s "thinking aloud" text in a transcript message of its own, and the answer stays a separate durable send', async () => {
+  it('keeps the tool round\'s "thinking aloud" text and the final answer in the SAME message — one sendMessage, then an edit, never a second send', async () => {
     const finalText = 'Ecco cosa ho trovato.';
     // A name the model invented — deliberately not registered. `runTool`
     // (`agent/loop.ts`) answers an unknown tool with a `tool_result` telling
@@ -255,10 +264,11 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
     // needs: a real tool round that resolves on its own, without this test
     // having to reach into the connector to register one.
     //
-    // Until 03/09/2026 this test asserted the opposite — that the preamble
-    // never reached the surface. The owner asked for it («non voglio perdere
-    // gli step»); the guarantee that survives is that it never becomes *the
-    // answer*: the durable delivery is the final text alone.
+    // Until 03/09/2026 the preamble never reached the surface at all. From
+    // 03/09 it reached a transcript message of its own, but the answer was a
+    // *second*, separate `sendMessage` — the exact two-bubble defect
+    // measured on the owner's chat (`docs/evidence/turno-sospendibile.md`).
+    // Since 04/09: one real message for the whole turn, extended by edits.
     const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ecco ', 'cosa ho trovato.'], finalText);
     const { api, calls } = recordingApi();
     const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
@@ -266,22 +276,34 @@ describe('a group turn uses ephemeral presence and durably sends only the final 
     try {
       await deliver(connector, [groupMsg(2)]);
 
+      // MUTATION-PROVABLE: exactly one `sendMessage` reaches this chat for a
+      // turn that used a tool — not two. Revert `deliverTo`'s handoff merge
+      // in `connector.ts` (drop the `handoff` branch of its plan) and this
+      // goes back to 2.
       const sent = calls.filter((c) => c.method === 'sendMessage');
-      expect(sent.map((e) => e.text)).toEqual([expect.stringContaining('lascia che controlli'), finalText]);
-      // An unknown tool never emits `tool_start` (`agent/loop.ts#runTool`),
-      // so the transcript here is the words alone; the step line under them
-      // is `transcript.test.ts`'s and the acceptance B13's job. What this
-      // wiring test proves: the words reached a real message, and nothing
-      // deleted it.
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.text).toContain('lascia che controlli');
+      const transcriptId = sent[0]!.messageId;
+
+      // The answer lands as an edit of that same message, carrying the
+      // preamble/steps above it — never a sendMessage of its own.
+      const edits = calls.filter((c) => c.method === 'editMessageText');
+      expect(edits.length).toBeGreaterThanOrEqual(1);
+      const last = edits[edits.length - 1]!;
+      expect(last.messageId).toBe(transcriptId);
+      expect(last.text).toContain('lascia che controlli');
+      expect(last.text).toContain(finalText);
+
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
+      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
     } finally {
       runtime.close();
     }
   });
 });
 
-describe('a private turn streams the draft as the answer forms (B11)', () => {
-  it('updates the draft live, then sends the finished answer as a real message — never an edit', async () => {
+describe('a private turn streams into a real message as the answer forms (B11)', () => {
+  it('opens one real message on the first token and finishes it with an edit — never a draft, never a second message', async () => {
     const finalText = 'Ciao! Ecco una storia breve.';
     const provider = streamingProvider(['Ciao! ', 'Ecco una storia breve.'], finalText);
     const { api, calls } = recordingApi();
@@ -290,17 +312,20 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
     try {
       await deliver(connector, [privateMsg(3)]);
 
-      const liveDrafts = calls.filter((c) => c.method === 'sendMessageDraft' && c.text !== '');
-      expect(liveDrafts.length).toBeGreaterThanOrEqual(1);
-      expect(liveDrafts[liveDrafts.length - 1]!.text).toBe(finalText);
+      // Since 04/09/2026 (`docs/evidence/turno-sospendibile.md`): B11's live
+      // preview is a real, durable message (`transcript.ts#live()`), never a
+      // `sendMessageDraft` — a "temporary 30-second preview" that a dead
+      // process cannot keep renewing, which is exactly how a turn's answer
+      // used to vanish on its own after a crash and reappear minutes later.
+      expect(calls.filter((c) => c.method === 'sendMessageDraft')).toHaveLength(0);
 
-      // The draft never persists on its own (DAY-1 requirement B11 research finding,
-      // api.ts#sendMessageDraft): the real answer always arrives as a
-      // proper sendMessage, never an edit of the ephemeral preview.
       const sent = calls.filter((c) => c.method === 'sendMessage');
-      expect(sent).toHaveLength(1);
-      expect(sent[0]!.text).toBe(finalText);
-      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+      expect(sent).toHaveLength(1); // one real message for the whole turn, not a preview plus an answer
+
+      const edits = calls.filter((c) => c.method === 'editMessageText');
+      expect(edits.length).toBeGreaterThanOrEqual(1);
+      expect(edits[edits.length - 1]!.text).toBe(finalText);
+      expect(edits.every((e) => e.messageId === sent[0]!.messageId)).toBe(true);
     } finally {
       runtime.close();
     }
@@ -308,7 +333,13 @@ describe('a private turn streams the draft as the answer forms (B11)', () => {
 });
 
 describe('the transcript of a turn stays above the answer (DAY-1 requirement B13, the owner\'s shape)', () => {
-  it('a turn with no tool call produces no transcript message at all — only the answer', async () => {
+  it('a turn with no tool call still streams into one real message, finished by a single edit', async () => {
+    // Until 04/09/2026 a tool-free turn produced no transcript message at
+    // all — only the (draft-previewed, then separately sent) answer. Since
+    // B11's preview moved into `transcript.ts#live()`, that same real
+    // message *is* now where the answer streams and finalises: the private
+    // case's own invariant (this scenario's own file, "a private turn
+    // streams…") applies here too, tool call or not.
     const finalText = 'Fatto, eccolo.';
     const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);
     const { api, calls } = recordingApi();
@@ -316,15 +347,19 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
 
     try {
       await deliver(connector, [privateMsg(30)]);
-      expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.text)).toEqual([finalText]);
-      expect(calls.filter((c) => c.method === 'editMessageText')).toHaveLength(0);
+      const sent = calls.filter((c) => c.method === 'sendMessage');
+      expect(sent).toHaveLength(1);
+      const edits = calls.filter((c) => c.method === 'editMessageText');
+      expect(edits.length).toBeGreaterThanOrEqual(1);
+      expect(edits[edits.length - 1]!.text).toBe(finalText);
+      expect(edits.every((e) => e.messageId === sent[0]!.messageId)).toBe(true);
       expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
     } finally {
       runtime.close();
     }
   });
 
-  it('in a group too the transcript is a real message, sent strictly before the durable answer', async () => {
+  it('in a group too the transcript is the one real message, and the durable answer extends it rather than arriving beside it', async () => {
     const finalText = 'Ecco.';
     const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ec', 'co.'], finalText);
     const { api, calls } = recordingApi();
@@ -333,12 +368,15 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     try {
       await deliver(connector, [groupMsg(31)]);
       const sends = calls.filter((c) => c.method === 'sendMessage');
-      expect(sends.map((c) => c.text)).toEqual([expect.stringContaining('lascia che controlli'), finalText]);
-      // The last touch on the transcript (its closing edit, if any) lands
-      // before the answer goes out: `connector.ts` awaits `transcript.stop()`
-      // ahead of `deliverTo`.
-      const lastTranscriptTouch = calls.map((c) => c.messageId).lastIndexOf(sends[0]!.messageId);
-      expect(lastTranscriptTouch).toBeLessThan(calls.indexOf(sends[1]!));
+      expect(sends).toHaveLength(1);
+      expect(sends[0]!.text).toContain('lascia che controlli');
+      // The answer is the *last* touch on this same message, an edit —
+      // `connector.ts` awaits `transcript.stop()` ahead of `deliverTo`, and
+      // `deliverTo` itself edits the transcript's own message rather than
+      // sending the answer as a message of its own.
+      const edits = calls.filter((c) => c.method === 'editMessageText' && c.messageId === sends[0]!.messageId);
+      expect(edits.length).toBeGreaterThanOrEqual(1);
+      expect(edits[edits.length - 1]!.text).toContain(finalText);
     } finally {
       runtime.close();
     }
@@ -351,7 +389,11 @@ describe('the transcript of a turn stays above the answer (DAY-1 requirement B13
     let sendAttempts = 0;
     // The first `sendMessage` a tool turn ever makes is the transcript
     // (before any real answer exists to send) — failing exactly that one
-    // proves rule 5 without reaching into `transcript.ts`'s internals.
+    // proves rule 5 without reaching into `transcript.ts`'s internals. Once
+    // that first create fails, `transcript.ts` disables itself for the rest
+    // of the turn (`disabled`), so `handoff()` returns `null` and `deliverTo`
+    // falls back to its ordinary, un-merged send — the same shape it always
+    // had for a turn with no transcript at all.
     const failingApi: TelegramApiLike = {
       ...baseApi,
       sendMessage: async (chatId, html, options) => {
