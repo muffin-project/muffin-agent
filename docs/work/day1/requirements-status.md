@@ -200,9 +200,22 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > l'owner vede; B2 ha la forma decisa (ADR-0054). Da qui ogni riga user-facing
 > dichiara se è provata sul finto o sulla corsia **reale** (memo §5.4).
 >
-> **Conteggio: 34 READY · 15 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 15
+> **E1 chiusa 04/09/2026 (`slice/e1-budget-per-job`, issue #368).** Il tetto
+> per-job esiste ed è sul percorso di produzione: `jobs.per_job_usd` (nullable,
+> migrazione 6), il contatore su `spend.job_id`/`turns.job_id`, e il rifiuto in
+> `agent/scheduler-run.ts` `runFresh` — l'unico punto che chiama il modello.
+> Misurato prima di implementare: ADR-0035 emendamento №2 chiedeva questa cosa
+> per nome (*«è la differenza fra un job rotto che costa €0,50 e uno che si
+> mangia il mese prima delle 7»*) e chiedeva anche che il conto stesse **fuori
+> dal turno** — sta nel registro, una riga per chiamata al modello, non in una
+> colonna contatore che si aggiorna solo se il giro torna. Un guasto trovato
+> dai test e non a mano: `TurnInput` non basta, perché `drive` ricostruisce
+> l'input dal record — senza `turns.job_id` la spesa non veniva attribuita a
+> nessun job e il tetto non sarebbe scattato mai.
+>
+> **Conteggio: 35 READY · 14 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 14
 > BLOCKER: B11/B13 (forma dello streaming e dei passi, dogfood), B2/B16
-> (busy-input, forma decisa), A2/A3, B10, B15, C5, C8, D6/D7, E1, E5, E6 —
+> (busy-input, forma decisa), A2/A3, B10, B15, C5, C8, D6/D7, E5, E6 —
 > D11 non è più bloccata dal soffitto e resta per l'undo semantico.
 
 > **Conteggio precedente (02/09): 36 READY · 14 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). I 14
@@ -570,7 +583,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 
 | # | Area | Domanda DAY-1 | Stato |
 |---|---|---|---|
-| E1 | Budget | Cap globale **e** per-job? | BLOCKER — il per-job non esiste: solo `monthlyUsd` e `perTenantDailyUsd` (quest'ultimo escluso per `host`, `core/budget/budget.ts`); nessuna colonna `perJobUsd` su `jobs` → PC 3.7 `slice/budget-per-job` → tracked in issue #368 |
+| E1 | Budget | Cap globale **e** per-job? | READY — `slice/e1-budget-per-job` (issue #368): `jobs.per_job_usd` (nullable, additiva, migrazione 6) più `spend.job_id`/`turns.job_id` come contatore, e l'enforcement su `agent/scheduler-run.ts` `runFresh` — l'unico punto del file che chiama il modello — **prima** del ramo `script` e prima della sessione; un giro rifiutato scrive una riga durevole con esito `budget` e modello `(tetto per-job: nessun modello)`, e l'owner la riceve sul canale del job. Porte: `muffin jobs add --per-job-usd`, `muffin jobs cap <id> <dollari|none>`, e `jobs list` mostra tetto **e** speso. Lo scenario `E1` copre ora entrambe le metà della domanda della riga (`evals/acceptance/scenarios/e-cost.accept.ts`, gateway vero + `jobs add` vero): mutation-testato — tolto il controllo in `runFresh`, il rosso è *«il modello è stato chiamato 1 volte per un job già oltre il proprio tetto»* e la risposta del modello arriva davvero all'owner. Il tetto può solo stringere: il tetto mensile resta sigillato (ADR-0039) e limita tutto sopra di lui. |
 | E2 | Cost | So quanto costa una giornata? | READY — `/spend` (`cli/repl.ts`) stampa ora anche `oggi: $X`, letto da `tenantTodayUsd('host')` (`core/budget/budget.ts`, esisteva già senza chiamante); lo scenario `E2` aggiornato (`evals/acceptance/scenarios/e-cost.accept.ts`) prova entrambe le righe — mensile e di oggi — non-zero dopo un turno reale che ha speso, verde: `npx vitest run --config vitest.acceptance.config.ts evals/acceptance/scenarios/e-cost.accept.ts` (3/3) |
 | E3 | Tracing | Posso ricostruire cosa è successo? | READY — scenario `E3` esteso (`e-cost.accept.ts`, #285): oltre alla redazione dei segreti (ADR-0048), `muffin trace turn <id>` / `trace grep` ricostruiscono un turno qualunque dai file di trace veri, e la ricostruzione del turno B non mostra le tool call del turno A (isolamento asserito in entrambe le direzioni) |
 | E4 | Tests | Acceptance test **reali**, non solo unit? | READY (`evals/acceptance/`) — è il meccanismo: harness contro il binario vero, provider finto deterministico, ogni verde visto rosso prima. La PR #54 aggiunge nel manifest la specie provata dal meccanismo stesso, chiudendo l'unico "READY senza scenario" rimasto dopo il triage 17/08 |

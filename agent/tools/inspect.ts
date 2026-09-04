@@ -233,7 +233,11 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `# Job (${job.length}):`,
         ...job.map(
           (j) =>
-            `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
+            // Il tetto per-job compare solo quando c'è: è la differenza fra
+            // «questo job può ancora girare» e «questo job è fermo finché non
+            // cambia il mese», e senza la riga il modello che si ispeziona
+            // leggerebbe un job attivo che in realtà non parte più.
+            `  ${j.cron} ${j.timezone} → ${j.channel} · ${j.kind} · ${j.active ? 'attivo' : 'spento'}${j.perJobUsd === null ? '' : ` · tetto $${j.perJobUsd}/mese`} · ultimo ${j.lastRunAt?.toISOString() ?? 'mai'} — ${jobPayload(j).slice(0, 60)}`,
         ),
       ];
       return { content: righe.filter((r) => r !== '').join('\n'), tier: 0 };
