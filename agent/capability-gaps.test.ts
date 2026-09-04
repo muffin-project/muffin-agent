@@ -7,6 +7,7 @@ import { paths, writeSecret } from '../core/config/config.js';
 import { seal } from '../core/rot/verify.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
+import { makeSendFileTool, sendFileCapability } from './tools/deliver.js';
 
 /**
  * A tool that is off can say why — end to end, not just in the formatter.
@@ -128,6 +129,75 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       const out = await inspect!.handler({}, toolContext());
       expect(out.content).toContain('tagliate dal tetto');
       expect(out.content).toContain('maxToolsExposed');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('send_file, registrato dopo buildRuntime come fa cli/gateway.ts, non cade dal tetto per accidente di quando si registra', async () => {
+    /**
+     * Il difetto misurato: `send_file` (`cli/surface.ts#attachSendFile`, DAY-1
+     * B14) si registra **dopo** che `buildRuntime` è tornato — il
+     * `SurfaceRegistry` che gli serve non esiste ancora a quel punto del boot
+     * (`registry` resta `null` in `cli/gateway.ts` fino a `connectSurfaces`,
+     * chiamato dopo `buildRuntime`). Il calcolo del taglio che gira **dentro**
+     * `buildRuntime` non può quindi vederlo, e prima di questa riparazione
+     * restava così per sempre: l'annuncio del taglio era la fotografia di un
+     * boot che non aveva ancora finito di registrare tool.
+     *
+     * `runtime.recomputeExposure()` è la riparazione: rifà il calcolo sul
+     * registro *live*, ordinato per priorità dichiarata (`baseToolOrder`, che
+     * ora include `send_file` prima di `wait`/`todo`/`sys_inspect` — le tre
+     * che il repository dichiara già, per iscritto, come le prime a cadere).
+     */
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capgap-sendfile-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-capgap-sendfile-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+
+    const runtime = buildRuntime(home, workspace);
+    try {
+      const primaDiSendFile = runtime.deps.tools.length;
+      expect(runtime.deps.tools.map((t) => t.spec.name)).not.toContain('send_file');
+
+      // Un tetto che, sul registro base (senza `send_file`), non taglierebbe
+      // niente — esattamente come sull'installazione reale dell'owner
+      // (misurato: 14-15 tool base contro un tetto di 15). L'unico modo per
+      // farlo tagliare è aggiungere il tool che oggi si registra per ultimo.
+      runtime.deps.profile.maxToolsExposed = primaDiSendFile;
+      expect(runtime.capabilityGaps.filter((g) => g.kind === 'truncated')).toEqual([]);
+
+      // La stessa fabbrica e la stessa chiamata di `attachSendFile`, dopo che
+      // `buildRuntime` è già tornato — non un tool finto sostituito al suo posto.
+      const vaultRoot = paths(home).vault;
+      runtime.register(
+        makeSendFileTool({
+          scope: { root: vaultRoot, denyWrite: [], denyRead: [] },
+          deliverFile: async () => ({ delivered: false, why: 'test: nessun registro superfici' }),
+        }),
+        sendFileCapability,
+      );
+      expect(runtime.deps.tools.map((t) => t.spec.name)).toContain('send_file');
+
+      // Il produttore dell'annuncio (`cli/gateway.ts`/`cli/repl.ts`) chiama
+      // questo esattamente qui: dopo ogni `attach*` del boot, mai prima.
+      const righe = runtime.recomputeExposure();
+      const tagliati = runtime.capabilityGaps.filter((g) => g.kind === 'truncated');
+
+      // L'asserzione che deve diventare rossa alla mutazione "rimetti il
+      // calcolo dentro buildRuntime, prima che send_file esista": senza
+      // `recomputeExposure` che rilegge il registro live, `tagliati` qui
+      // resterebbe `[]` (la fotografia di prima, presa quando `send_file` non
+      // esisteva ancora) invece di nominare il tool tagliato per davvero.
+      //
+      // E se invece `baseToolOrder` tornasse a non conoscere `send_file` (la
+      // seconda mutazione, quella di questa stessa riparazione): l'ordinamento
+      // lo spingerebbe in coda a tutto, oltre `sys_inspect`, e sarebbe
+      // `send_file` — il tool DAY-1, non lo scaffolding — a cadere qui al
+      // posto suo. Nessuna delle due mutazioni lascia `['sys_inspect']` come
+      // unico tagliato.
+      expect(tagliati.map((g) => g.capability)).toEqual(['sys_inspect']);
+      expect(righe.some((riga) => riga.startsWith('sys_inspect tagliato'))).toBe(true);
+      expect(righe.some((riga) => riga.includes('send_file'))).toBe(false);
     } finally {
       runtime.close();
     }
