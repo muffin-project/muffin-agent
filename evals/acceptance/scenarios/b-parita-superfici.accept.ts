@@ -208,7 +208,21 @@ describe('acceptance · parità di superficie · stesso principal, stessa histor
         const gw = await pairOwner(tel, tg);
         try {
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, LEGGI));
-          await until(() => tg.messages().some((m) => m.text.includes('somma è 6')), 30_000);
+          // The answer follows a tool call (`fs_read`), so it joins that
+          // tool's own transcript message as an edit rather than arriving as
+          // a fresh `sendMessage` (`connector.ts#deliverTo`'s merge) — wait
+          // on `tg.sent()` directly, not `tg.messages()`.
+          await until(
+            () =>
+              tg
+                .sent()
+                .some(
+                  (c) =>
+                    (c.method === 'sendMessage' || c.method === 'editMessageText') &&
+                    String(c.payload['text'] ?? '').includes('somma è 6'),
+                ),
+            30_000,
+          );
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, SCRIVI));
           // Non più la risposta del modello: il turno si ferma a chiedere. La
           // riga di `approvals` è il segnale che le tre superfici condividono.
