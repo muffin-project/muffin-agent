@@ -1197,22 +1197,22 @@
   "connector.ts:1046": {
     "path": "connectors/telegram/connector.ts",
     "line": 1046,
-    "testo": "const onDelta = (delta: TurnDelta): void => {"
+    "testo": "* byte-for-byte regardless of what this method computes on that later call"
   },
   "connector.ts:1431": {
     "path": "connectors/telegram/connector.ts",
     "line": 1431,
-    "testo": "const onDelta = (delta: TurnDelta): void => {"
+    "testo": "if (outcome === 'deferred') return;"
   },
   "connector.ts:981": {
     "path": "connectors/telegram/connector.ts",
     "line": 981,
-    "testo": "async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {"
+    "testo": "* Il menu dei comandi, dichiarato a Telegram a ogni avvio."
   },
   "connector.ts:989": {
     "path": "connectors/telegram/connector.ts",
     "line": 989,
-    "testo": "const handoff = this.transcriptHandoff.get(turnId);"
+    "testo": "* invisibile, e quello e' il modo in cui il menu smette di essere vero."
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
@@ -1231,7 +1231,7 @@
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 736,
+    "line": 759,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
@@ -1251,17 +1251,17 @@
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1655,
+    "line": 1727,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1661,
+    "line": 1733,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1431,
+    "line": 1503,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
