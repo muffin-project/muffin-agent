@@ -162,6 +162,92 @@ describe('acceptance · D · capability e sicurezza', () => {
     30_000,
   );
 
+  scenario(
+    'D11',
+    async () => {
+      // La meta' che D3 non prova. D3 chiede al disco di tornare com'era;
+      // questa riga chiede *anche* che il turno e la memoria sappiano che e'
+      // successo — «Esiste uno snapshot prima di ogni mutazione, e un
+      // ripristino che disfa **anche il turno**?».
+      //
+      // Perche' uno scenario e non i due test in `runtime-wiring.test.ts` che
+      // gia' coprono il meccanismo: la riga era READY **senza** scenario, e il
+      // gate del rapporto la bocciava — correttamente, ed era rosso senza che
+      // nessuno lo vedesse (CI di GitHub ferma per fatturazione). Il
+      // meccanismo funzionante non e' la stessa affermazione del binario che
+      // lo raggiunge, che e' il guasto ricorrente nominato in `AGENTS.md`.
+      //
+      // Marcatura, non riscrittura (ADR-0067): un `undone_at` che compare, e
+      // le righe che restano dov'erano. Cancellarle renderebbe questa
+      // asserzione verde e la memoria bugiarda.
+      const inst = await install({
+        main: [
+          { tool: { name: 'fs_write', args: { path: 'nota.md', content: 'dopo' } } },
+          { text: 'fatto' },
+        ],
+      });
+      try {
+        const file = join(inst.workspace, 'nota.md');
+        writeFileSync(file, 'prima', 'utf8');
+
+        const r = await inst.muffin(['run', '--timeout', '20', 'riscrivi nota.md']);
+        if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
+
+        const prima = inst.db(
+          (db) =>
+            db
+              .prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE undone_at IS NOT NULL`)
+              .get() as { n: number },
+        );
+        if (prima.n !== 0) {
+          throw new Error(`qualcosa era gia' marcato disfatto prima dell'undo: ${JSON.stringify(prima)}`);
+        }
+
+        const disfa = await inst.muffin(['undo', '--last', '--yes']);
+        if (disfa.code !== 0) throw new Error(`muffin undo esce ${disfa.code}: ${disfa.err}`);
+        if (readFileSync(file, 'utf8') !== 'prima') {
+          throw new Error(`il file non e' tornato com'era: ${JSON.stringify(readFileSync(file, 'utf8'))}`);
+        }
+
+        // Il turno: la chiamata che ha scritto e' marcata, e c'e' ancora.
+        const dopo = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT COUNT(*) AS totali, SUM(undone_at IS NOT NULL) AS marcate
+                 FROM turn_tool_calls WHERE tool = 'fs_write'`,
+              )
+              .get() as { totali: number; marcate: number },
+        );
+        if (dopo.totali === 0 || dopo.marcate !== dopo.totali) {
+          throw new Error(
+            `l'undo non ha marcato la chiamata nel registro del turno: ${JSON.stringify(dopo)}`,
+          );
+        }
+
+        // La memoria: l'episodio dell'agente per quel turno, marcato e non
+        // cancellato. E' la meta' che rende «disfa anche il turno» diverso da
+        // «rimette il file»: senza, il recall continua a raccontare come
+        // avvenuta una cosa che non c'e' piu' sul disco.
+        const memoria = inst.db(
+          (db) =>
+            db
+              .prepare(
+                `SELECT COUNT(*) AS totali, SUM(undone_at IS NOT NULL) AS marcati
+                 FROM episodes WHERE role = 'agent'`,
+              )
+              .get() as { totali: number; marcati: number },
+        );
+        if (memoria.totali === 0 || memoria.marcati !== memoria.totali) {
+          throw new Error(`l'undo non ha marcato l'episodio in memoria: ${JSON.stringify(memoria)}`);
+        }
+      } finally {
+        await inst.cleanup();
+      }
+    },
+    30_000,
+  );
+
   /**
    * L'URL che il modello si compone: la query string non compare in nessun
    * ingresso del turno, che e' esattamente cio' che ADR-0071 chiama
