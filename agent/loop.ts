@@ -531,17 +531,24 @@ export type LoopDeps = {
   memory?: { store: MemoryStore; recall: RecallDeps } | undefined;
   /**
    * The capability declarations, so the resource handed to the kernel comes
-   * from `resourceKind`/`policyArgs` instead of a hardcoded argument name.
-   * Optional only so existing tests can build a minimal deps object — and the
-   * kernel refuses a url capability whose resource never arrived, so a runtime
-   * that forgets to pass this degrades to refusals, not to unguarded allows —
-   * for the RESOURCE consumer. The second consumer (`visibleTools`, filtering a
-   * member's tool menu) degrades the other way on absence: no declarations, no
-   * filtering, and a member sees host-only tools the kernel will refuse. Not an
-   * allow, but a leaky menu — the omission price differs per consumer, and this
-   * line is where a construction site learns both.
+   * from `resourceKind`/`policyArgs` instead of a hardcoded argument name, and
+   * so `visibleTools` can filter a member's tool menu by the same `hostOnly`
+   * field the kernel reads.
+   *
+   * **Required, and that is the decision** — same reasoning as `turns` and
+   * `todos` above, which name this field as the one that used to get the
+   * optional treatment instead. It used to be optional "so existing tests can
+   * build a minimal deps object", on the claim that both consumers degrade
+   * safely on absence. They do not: the kernel's own resource lookup refuses a
+   * url capability whose resource never arrived, but `visibleTools` used to
+   * treat "no declarations" as "no filtering" and hand a member a menu that
+   * named every host-only tool by capability — a leaky menu, not an unguarded
+   * allow (the kernel still refuses the call), but a defect in its own right.
+   * A construction site that forgets this now fails to build rather than
+   * shipping the leaky menu to whichever install runs it. See
+   * `visibleTools` in `agent/context/assemble.ts`.
    */
-  capabilities?: ReadonlyMap<CapabilityId, CapabilityDecl> | undefined;
+  capabilities: ReadonlyMap<CapabilityId, CapabilityDecl>;
   /**
    * Il registro di undo, cioè l'implementazione del verdetto `draft`.
    *
