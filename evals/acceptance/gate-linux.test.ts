@@ -149,6 +149,75 @@ export function codaEsterna(script: string): string {
   return script.slice(inizio.index, fine.index + fine[0].length);
 }
 
+const APRE_SCELTA = /^scegli_privilegi\(\) \{$/m;
+const CHIUDE_SCELTA = /^\}$/m;
+
+/** La funzione che decide con quali privilegi girare, estratta come la coda. */
+export function sceltaPrivilegi(script: string): string {
+  const inizio = APRE_SCELTA.exec(script);
+  if (inizio === null) {
+    throw new Error('gate-linux.sh non ha piu `scegli_privilegi()` a inizio riga: aggiorna questa estrazione.');
+  }
+  const resto = script.slice(inizio.index);
+  const fine = CHIUDE_SCELTA.exec(resto);
+  if (fine === null) throw new Error('`scegli_privilegi()` non si chiude su una riga `}`.');
+  return resto.slice(0, fine.index + fine[0].length);
+}
+
+describe('gate-linux.sh — la scelta dei privilegi, che puo fermare lo script', () => {
+  /**
+   * Un finto `docker` che riesce solo quando la riga di comando contiene
+   * `atteso`. Cosi si simulano i tre host reali senza toccarne nessuno:
+   * quello che monta /proc da solo, quello che lo monta solo con
+   * `--privileged` (Docker Desktop su macOS, misurato il 04/09/2026), e quello
+   * che non lo monta affatto.
+   */
+  function eseguiConDocker(atteso: string | null): { status: number | null; stdout: string; modo: string } {
+    const finto = join(lavoro, 'docker');
+    const condizione =
+      atteso === null ? 'exit 1' : `case " $* " in *" ${atteso} "*) exit 0;; *) exit 1;; esac`;
+    writeFileSync(finto, `#!/usr/bin/env bash\n${condizione}\n`);
+    chmodSync(finto, 0o755);
+    const script = [
+      'IMAGE=immagine-finta',
+      `PATH=${JSON.stringify(lavoro)}:$PATH`,
+      sceltaPrivilegi(readFileSync(GATE, 'utf8')),
+      'scegli_privilegi || exit $?',
+      'echo "MODO=$MODO"',
+      'echo "PRIVILEGI=${PRIVILEGI[*]-}"',
+      '',
+    ].join('\n');
+    const run = spawnSync('bash', ['-uo', 'pipefail', '-c', script], { encoding: 'utf8' });
+    const out = `${run.stdout}${run.stderr}`;
+    return { status: run.status, stdout: out, modo: /MODO=(.*)/.exec(out)?.[1] ?? '' };
+  }
+
+  it('non chiede privilegi quando l host monta /proc da solo', () => {
+    const { status, stdout, modo } = eseguiConDocker('--security-opt');
+    expect(status).toBe(0);
+    expect(stdout).toContain('PRIVILEGI=');
+    expect(stdout).not.toContain('PRIVILEGI=--privileged');
+    expect(modo).toContain('senza privilegi');
+  });
+
+  it('passa a --privileged quando e l unica forma che monta /proc, e lo dichiara', () => {
+    const { status, stdout, modo } = eseguiConDocker('--privileged');
+    expect(status).toBe(0);
+    expect(stdout).toContain('PRIVILEGI=--privileged');
+    // La dichiarazione e il punto: un gate che si concede un privilegio in
+    // silenzio produce un verde che nessuno sa rileggere.
+    expect(modo).toContain('--privileged');
+    expect(stdout).toContain('gate-linux: CON --privileged');
+  });
+
+  it('esce 2 e dice che la gamba non e eseguibile, invece di un rosso che accusa il codice', () => {
+    const { status, stdout } = eseguiConDocker(null);
+    expect(status).toBe(2);
+    expect(stdout).toContain("NON e' eseguibile qui");
+    expect(stdout).toContain("non e' un difetto del codice");
+  });
+});
+
 describe('gate-linux.sh — la coda esterna, quella che decide l-esito dello script', () => {
   function eseguiConDocker(codice: number): { status: number | null; stdout: string } {
     const finto = join(lavoro, 'docker');
@@ -158,6 +227,11 @@ describe('gate-linux.sh — la coda esterna, quella che decide l-esito dello scr
     const script = [
       `OUT=${JSON.stringify(join(lavoro, 'out'))}`,
       'IMAGE=immagine-finta',
+      // La coda cita le due variabili che `scegli_privilegi` imposta piu
+      // sopra; qui si prova la coda, non la scelta, quindi entrano col valore
+      // che la scelta produce nel caso normale.
+      'PRIVILEGI=()',
+      "MODO='senza privilegi (come il runner GitHub)'",
       `PATH=${JSON.stringify(lavoro)}:$PATH`,
       codaEsterna(readFileSync(GATE, 'utf8')),
       '',
