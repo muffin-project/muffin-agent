@@ -29,7 +29,7 @@ import type { Runtime } from './runtime.js';
  * remote tenant can write a row here at all. Naming the constant is what makes
  * that a stated scope instead of a literal nobody would notice changing.
  */
-export const COMMITMENT_TENANT = 'host';
+const COMMITMENT_TENANT = 'host';
 
 export type CommitmentLaneOptions = {
   /**

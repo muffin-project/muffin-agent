@@ -43,7 +43,7 @@ import { OWNER_SESSION_KEY } from '../core/surface/types.js';
  * legge — un comando aggiunto di là e non qui semplicemente non si
  * completerebbe, in silenzio.
  */
-export const COMANDI: readonly string[] = ELENCO_COMANDI.map((c) => `/${c.nome}`);
+const COMANDI: readonly string[] = ELENCO_COMANDI.map((c) => `/${c.nome}`);
 
 /** Ri-esportato: il tipo vive con i comandi (`agent/comandi.ts`), che sono la cosa che lo gira. */
 export type { Verbosity } from '../agent/comandi.js';
