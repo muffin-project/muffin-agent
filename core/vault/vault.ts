@@ -363,12 +363,29 @@ export class Vault {
         continue;
       }
 
-      const identity = identityOf(join(this.root, file.path));
-      if (identity === null) {
+      let identity: Identity;
+      try {
+        identity = identityOf(join(this.root, file.path));
+      } catch (error) {
+        // Listed a moment ago by `list()`, unreadable now: permessi, un errore
+        // di I/O, un file sparito fra l'enumerazione e questa riga. Non è "non
+        // è un formato che sappiamo leggere" — è "non sappiamo se lo sia",
+        // e le due frasi mandano l'owner a riparare cose diverse.
+        report.skipped.push({
+          path: file.path,
+          why: `illeggibile: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
+      if (identity.kind === 'unsupported') {
         // No extractor for these bytes — an image, an archive, a binary. Media
         // handling is a separate pipeline (ADR-0023) and saying so beats
         // indexing an empty document that looks handled.
         report.skipped.push({ path: file.path, why: 'non è testo né PDF né DOCX — serve un estrattore' });
+        continue;
+      }
+      if (identity.kind === 'empty') {
+        report.skipped.push({ path: file.path, why: 'vuoto' });
         continue;
       }
 
@@ -531,6 +548,7 @@ export class Vault {
     const missing: string[] = [];
     const stale: string[] = [];
     const orphaned: string[] = [];
+    const unreadable: string[] = [];
     const onDisk = new Map<string, string>();
 
     // The same enumeration `reindex` uses, including the symlink handling and
@@ -538,10 +556,21 @@ export class Vault {
     // not a comparison.
     for (const file of this.list().files) {
       if (file.bytes > MAX_FILE_BYTES) continue;
-      const identity = identityOf(join(this.root, file.path));
+      let identity: Identity;
+      try {
+        identity = identityOf(join(this.root, file.path));
+      } catch {
+        // Listato, non leggibile: né "assente dall'indice" (`missing`, che
+        // promette che un reindex lo risolve) né "sparito dal disco"
+        // (`orphaned`) — il file c'è, semplicemente non si può aprire. Va
+        // detto a parte, o `audit()` torna pulito su un vault che ha un
+        // documento reale che nessuno vedrà mai indicizzare.
+        unreadable.push(file.path);
+        continue;
+      }
       // Bytes no extractor handles are skipped by reindex too, so their absence
       // from the index is correct rather than drift.
-      if (identity === null) continue;
+      if (identity.kind !== 'ok') continue;
       onDisk.set(file.path, identity.hash);
     }
 
@@ -558,10 +587,14 @@ export class Vault {
     }
 
     for (const path of indexed.keys()) {
-      if (!onDisk.has(path)) orphaned.push(path);
+      // Un file diventato illeggibile dopo essere stato indicizzato non è
+      // "sparito dal disco": è già in `unreadable`, e ripeterlo qui come
+      // `orphaned` direbbe all'owner di cancellare una riga che punta a un
+      // file che esiste ancora.
+      if (!onDisk.has(path) && !unreadable.includes(path)) orphaned.push(path);
     }
 
-    return { files: onDisk.size, indexed: indexed.size, missing, stale, orphaned };
+    return { files: onDisk.size, indexed: indexed.size, missing, stale, orphaned, unreadable };
   }
 
   /**
@@ -604,13 +637,42 @@ export type VaultAudit = {
   stale: string[];
   /** In the index, gone from disk. */
   orphaned: string[];
+  /**
+   * Listed by `list()` — so it exists, and is not a symlink problem — but
+   * `readFileSync` refused it: permissions, an I/O error, a race with
+   * something that deleted the bytes between the listing and this read.
+   *
+   * Kept apart from `missing` on purpose. Before this field existed,
+   * `identityOf` folded this case into the same `null` a merely-unsupported
+   * format returns, so `audit()` dropped it from `onDisk` entirely — it never
+   * became `missing`, `stale`, or `orphaned`, it just did not exist for the
+   * comparison. A vault with a single `chmod 000` note audited as `0 file
+   * leggibili sul disco · 0 indicizzati` / `indice allineato`, exit 0 —
+   * exactly the "index at zero, green everywhere" failure this module's own
+   * header cites Khoj and Reor for, produced here by a permission bit instead
+   * of a path bug.
+   */
+  unreadable: string[];
 };
+
+/** What `identityOf` could establish about a file it could open. */
+type Identity =
+  | { kind: 'ok'; format: DocumentFormat; hash: string }
+  /** Sniffed and named — an image, an archive, a binary `core/documents` does not parse. */
+  | { kind: 'unsupported' }
+  /** A text file with nothing in it once trimmed. */
+  | { kind: 'empty' };
 
 /**
  * What this file is, and what identifies it — without extracting it.
  *
- * `null` means no extractor handles these bytes, which is the same answer
- * `reindex` and `audit` both need before they do anything else.
+ * Throws when the bytes could not be read at all. That case is a different
+ * claim from either `unsupported` or `empty` below — the file might be a
+ * perfectly indexable note — and collapsing all three into one `null` is the
+ * defect this type exists to rule out (see `VaultAudit.unreadable`). Callers
+ * decide what an unreadable file means to *them* (a skip reason during
+ * `reindex`, a separate bucket during `audit`); this function only reports
+ * what it saw.
  *
  * The hash is over **the text for a note and over the bytes for everything
  * else**, and that asymmetry is deliberate rather than an oversight. A note's
@@ -621,25 +683,17 @@ export type VaultAudit = {
  * an attachment lands. Hashing the bytes answers "did this change" for the
  * price of a read, which is what makes the extraction-only-when-changed path
  * above possible at all.
- *
- * An empty note is `null` too: it is what `reindex` skips as `vuoto`, and the
- * two sides of the audit have to agree on that or a blank file reads as drift.
  */
-function identityOf(path: string): { format: DocumentFormat; hash: string } | null {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(path);
-  } catch {
-    return null;
-  }
+function identityOf(path: string): Identity {
+  const bytes = readFileSync(path); // lascia propagare: leggibilità non è la stessa domanda di formato
   const format = sniffFormat(bytes);
-  if (format === null) return null;
+  if (format === null) return { kind: 'unsupported' };
   if (format === 'text') {
     const text = readableText(bytes);
-    if (text === null || text.trim() === '') return null;
-    return { format, hash: hashOf(text) };
+    if (text === null || text.trim() === '') return { kind: 'empty' };
+    return { kind: 'ok', format, hash: hashOf(text) };
   }
-  return { format, hash: hashOf(bytes) };
+  return { kind: 'ok', format, hash: hashOf(bytes) };
 }
 
 /** Content identity. Short because it is compared, never used as a secret. */
