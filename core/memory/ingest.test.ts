@@ -474,7 +474,7 @@ describe('memory ingestion', () => {
       await ingestPending(deps, HOST);
 
       const detail = store.pendingReview(HOST)[0]?.detail ?? '';
-      // eslint-disable-next-line no-control-regex -- asserting these are gone
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting these are gone
       expect(/[\x00-\x08\x0B-\x1F\x7F]/.test(detail)).toBe(false);
       expect(detail).toContain('rosso');
       expect(detail).toContain('fine');

@@ -19,7 +19,7 @@
  * collapsing them into one label is exactly the proprioception defect this
  * file exists to close.
  */
-export type CapabilityGapKind = 'disabled' | 'truncated';
+type CapabilityGapKind = 'disabled' | 'truncated';
 
 export type CapabilityGap = {
   /** The tool or capability name an owner or the model would recognise. */

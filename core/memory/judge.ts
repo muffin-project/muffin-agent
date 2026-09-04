@@ -165,7 +165,7 @@ const RAW_RESPONSE_MAX = 600;
  * classic way to overwrite what was already printed.
  */
 function sanitizeRawResponse(text: string): string {
-  // eslint-disable-next-line no-control-regex -- deliberately matching C0/DEL
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matching C0/DEL
   const clean = text.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
   return clean.length > RAW_RESPONSE_MAX ? `${clean.slice(0, RAW_RESPONSE_MAX)}…` : clean;
 }
