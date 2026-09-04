@@ -36,22 +36,22 @@
   },
   "agent/loop.ts:1027": {
     "path": "agent/loop.ts",
-    "line": 1941,
+    "line": 1972,
     "testo": "stream: Boolean(input.onDelta && deps.provider.chatStream),"
   },
   "agent/loop.ts:1088": {
     "path": "agent/loop.ts",
-    "line": 2042,
+    "line": 2073,
     "testo": "// model at all."
   },
   "agent/loop.ts:1405": {
     "path": "agent/loop.ts",
-    "line": 1831,
+    "line": 1862,
     "testo": "// with it — the transcript, the taint it has climbed to, and how much of"
   },
   "agent/loop.ts:1653": {
     "path": "agent/loop.ts",
-    "line": 2747,
+    "line": 2801,
     "testo": "function finish("
   },
   "agent/loop.ts:172": {
@@ -61,37 +61,37 @@
   },
   "agent/loop.ts:1753": {
     "path": "agent/loop.ts",
-    "line": 3094,
+    "line": 3148,
     "testo": "const resource = resourceFor(deps.capabilities?.get(capability), args);"
   },
   "agent/loop.ts:1771": {
     "path": "agent/loop.ts",
-    "line": 3119,
+    "line": 3173,
     "testo": "// undo model landed after this file did). `Decision['effect']` is a closed"
   },
   "agent/loop.ts:2004": {
     "path": "agent/loop.ts",
-    "line": 3445,
+    "line": 3499,
     "testo": "const safeContent = redactText(outcome.content);"
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3509,
+    "line": 3563,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
     "path": "agent/loop.ts",
-    "line": 3139,
+    "line": 3193,
     "testo": "case 'draft': {"
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3621,
+    "line": 3675,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3625,
+    "line": 3679,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -291,17 +291,17 @@
   },
   "agent/loop.ts:889": {
     "path": "agent/loop.ts",
-    "line": 1677,
+    "line": 1708,
     "testo": "if (deps.memory) {"
   },
   "agent/loop.ts:925": {
     "path": "agent/loop.ts",
-    "line": 1735,
+    "line": 1766,
     "testo": "const open = deps.todos.open(input.tenant, input.session.id);"
   },
   "agent/loop.ts:942": {
     "path": "agent/loop.ts",
-    "line": 1788,
+    "line": 1819,
     "testo": "contextBuilt = true;"
   },
   "agent/observe-run.ts:104": {
@@ -2391,17 +2391,17 @@
   },
   "loop.ts:1542": {
     "path": "agent/loop.ts",
-    "line": 2003,
+    "line": 2034,
     "testo": "input.onDelta({ type: 'text', text: out });"
   },
   "loop.ts:1544": {
     "path": "agent/loop.ts",
-    "line": 2005,
+    "line": 2036,
     "testo": "} catch (error) {"
   },
   "loop.ts:1639": {
     "path": "agent/loop.ts",
-    "line": 2837,
+    "line": 2891,
     "testo": "outcome: TurnOutcome,"
   },
   "loop.ts:299": {
@@ -2411,7 +2411,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3805,
+    "line": 3859,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
