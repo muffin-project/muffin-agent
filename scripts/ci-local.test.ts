@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildJobScript,
   chooseDockerPrivileges,
+  creaScannerPassi,
   deriveJob,
   loadJobs,
   needsSandboxProbe,
@@ -327,5 +328,49 @@ describe('chooseDockerPrivileges', () => {
     if ('unavailable' in result) {
       expect(result.reason).toMatch(/proc/);
     }
+  });
+});
+
+/**
+ * Il 04/09/2026 il verdetto di questo runner diceva «container exited 1» e
+ * basta: un numero, non una causa. Il nome del passo caduto lo stampava già
+ * `buildJobScript`, dentro il container — nessuno lo leggeva.
+ */
+describe('lo scanner dei passi caduti', () => {
+  it('legge il marcatore da una riga intera', () => {
+    const s = creaScannerPassi();
+    s.consuma('qualcosa\n!!! STEP FAILED: npm test\naltro\n');
+    expect(s.passoCaduto()).toBe('npm test');
+  });
+
+  it('tiene l\'ultimo: è quello che ha fermato il job', () => {
+    const s = creaScannerPassi();
+    s.consuma('!!! STEP FAILED: primo\n!!! STEP FAILED: secondo\n');
+    expect(s.passoCaduto()).toBe('secondo');
+  });
+
+  it('regge il marcatore spezzato fra due chunk — `data` non taglia sulle righe', () => {
+    const s = creaScannerPassi();
+    s.consuma('rumore\n!!! STEP FA');
+    s.consuma('ILED: typecheck\n');
+    expect(s.passoCaduto()).toBe('typecheck');
+  });
+
+  it("legge l'ultima riga anche senza newline: il container può morire lì", () => {
+    const s = creaScannerPassi();
+    s.consuma('!!! STEP FAILED: build');
+    expect(s.passoCaduto()).toBe('build');
+  });
+
+  it('senza marcatore non inventa niente', () => {
+    const s = creaScannerPassi();
+    s.consuma('npm ERR! something\nexit 1\n');
+    expect(s.passoCaduto()).toBeNull();
+  });
+
+  it('non si fa ingannare da un prefisso della riga', () => {
+    const s = creaScannerPassi();
+    s.consuma('2026-09-04T12:00:00Z  !!! STEP FAILED: vitest run   \n');
+    expect(s.passoCaduto()).toBe('vitest run');
   });
 });
