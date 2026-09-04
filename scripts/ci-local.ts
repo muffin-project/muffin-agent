@@ -65,6 +65,7 @@
  *
  *   npm run ci:local
  *   MUFFIN_CI_LOCAL_KEEP=1 npm run ci:local     # keep the scratch clone
+ *   MUFFIN_CI_LOCAL_ONLY=collegamenti npm run ci:local   # run one job by id
  *
  * Every command below is `git rev-parse HEAD`'s committed state, copied into
  * the container — like `actions/checkout`, uncommitted changes do not run.
@@ -326,25 +327,56 @@ export function buildJobScript(job: JobSpec, opts: { runnerTemp: string; appDir?
 }
 
 /**
+ * The non-root user the workflow's own steps run as. GitHub's hosted runner
+ * never executes a job as root — it runs as `runner`, with passwordless sudo
+ * for the steps that need it (`sudo apt-get …`). This matters for more than
+ * fidelity: `core/sandbox/probe.ts` *refuses* to report the sandbox available
+ * when called as root ("root bypasses the userns restriction, so the result
+ * would be a false positive" — its own message), so a container that ran
+ * everything as root would make `MUFFIN_REQUIRE_SANDBOX=1` fail for a reason
+ * that has nothing to do with Muffin's code. Measured 2026-09-04: exactly this
+ * failure, on the first version of this runner, before it dropped privileges.
+ */
+export const CI_USER = 'ci-runner';
+
+/**
  * The bootstrap that stands in for the `uses:` steps: install `sudo` (every
  * `run:` step below assumes it, like the real runner ships it preinstalled),
  * install the requested Node version from NodeSource (`actions/setup-node`),
- * and unpack the repository tarball into `/app` (`actions/checkout`). Runs
- * before {@link buildJobScript}'s output, in the same container.
+ * unpack the repository tarball into `/app` (`actions/checkout`), and create
+ * {@link CI_USER} with passwordless sudo — the user the job's own steps
+ * actually run as (see that constant's comment for why). Runs as root, before
+ * {@link buildJobScript}'s output, which runs as `ci-runner`.
+ *
+ * `curl`, `ca-certificates`, `sudo`, `git` and `systemd` are not things any
+ * `run:` step asks for — they are declared, not-silent compensation for
+ * `ubuntu:24.04`'s Docker image being far thinner than the real
+ * `ubuntu-latest` VM. `systemd` is specifically for `systemd-analyze`, which
+ * `core/gateway/unit.test.ts` needs under `MUFFIN_REQUIRE_SYSTEMD=1` and which
+ * a real GitHub runner ships preinstalled; `evals/acceptance/gate-linux.sh`
+ * installs the same package for the identical reason (read there, not
+ * copied).
  */
 export function buildBootstrapScript(nodeVersion: string): string {
   return [
     'set -e',
     'export DEBIAN_FRONTEND=noninteractive',
-    echoLine('=== bootstrap: emulating uses: actions/checkout + actions/setup-node ==='),
+    echoLine(
+      '=== bootstrap: emulating uses: actions/checkout + actions/setup-node, plus base-image gap-fill (sudo/curl/git/systemd — see header comment) ===',
+    ),
     'apt-get update -qq >/dev/null',
-    'apt-get install -y -qq curl ca-certificates sudo git >/dev/null',
+    'apt-get install -y -qq curl ca-certificates sudo git systemd >/dev/null',
     `curl -fsSL https://deb.nodesource.com/setup_${nodeVersion}.x | bash - >/dev/null 2>&1`,
     'apt-get install -y -qq nodejs >/dev/null',
     echoLine(`node-version requested by actions/setup-node: ${nodeVersion}`),
     'node --version',
     'mkdir -p /app && tar xf /repo.tar -C /app',
-    echoLine('=== bootstrap done — the workflow-derived steps run below ==='),
+    echoLine(`creating non-root user '${CI_USER}' with passwordless sudo (matches the GitHub runner user)`),
+    `useradd -m -s /bin/bash ${CI_USER}`,
+    `echo '${CI_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${CI_USER}`,
+    `chmod 0440 /etc/sudoers.d/${CI_USER}`,
+    `chown -R ${CI_USER}:${CI_USER} /app`,
+    echoLine('=== bootstrap done — the workflow-derived steps run below, as a non-root user ==='),
     'echo "===BOOTSTRAP_OK==="',
   ].join('\n');
 }
@@ -415,10 +447,17 @@ function runContainer(opts: {
   dockerArgs: readonly string[];
   containerName: string;
   repoTar: string;
-  scriptFile: string;
+  bootstrapFile: string;
+  jobScriptFile: string;
   timeoutMs: number | null;
 }): Promise<RunResult> {
   return new Promise((resolvePromise) => {
+    // Bootstrap runs as root (it needs to be: creating a user, apt-get,
+    // /etc/sudoers). The workflow-derived job steps then run as CI_USER —
+    // see that constant's comment for why this is not optional.
+    const launcher =
+      `set -e; bash /bootstrap.sh; ` +
+      `exec runuser -u ${CI_USER} -- env HOME=/home/${CI_USER} PATH="$PATH" bash /job.sh`;
     const args = [
       'run',
       '--rm',
@@ -428,10 +467,13 @@ function runContainer(opts: {
       '-v',
       `${opts.repoTar}:/repo.tar:ro`,
       '-v',
-      `${opts.scriptFile}:/run-job.sh:ro`,
+      `${opts.bootstrapFile}:/bootstrap.sh:ro`,
+      '-v',
+      `${opts.jobScriptFile}:/job.sh:ro`,
       opts.image,
       'bash',
-      '/run-job.sh',
+      '-c',
+      launcher,
     ];
     const child = spawn('docker', args, { stdio: ['ignore', 'inherit', 'inherit'] });
     let timedOut = false;
@@ -469,7 +511,14 @@ type JobVerdict =
 
 async function main(): Promise<void> {
   const workflowsDir = join(REPO_ROOT, '.github', 'workflows');
-  const jobs = loadJobs(workflowsDir);
+  const only = process.env['MUFFIN_CI_LOCAL_ONLY'];
+  const allJobs = loadJobs(workflowsDir);
+  const jobs = only ? allJobs.filter((j) => j.jobId === only) : allJobs;
+  if (only && jobs.length === 0) {
+    throw new Error(
+      `MUFFIN_CI_LOCAL_ONLY='${only}' matches no job. Known jobs: ${allJobs.map((j) => j.jobId).join(', ')}`,
+    );
+  }
 
   const sha = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD']).toString().trim();
   console.log(`muffin ci:local — replaces GitHub Actions while billing is off\n`);
@@ -524,16 +573,24 @@ async function main(): Promise<void> {
       console.log(`node version:   ${nodeVersion} (from actions/setup-node)`);
       if (job.timeoutMinutes !== null) console.log(`timeout:        ${job.timeoutMinutes} minutes (respected)`);
 
-      const script = [buildBootstrapScript(nodeVersion), buildJobScript(job, { runnerTemp: RUNNER_TEMP })].join(
-        '\n\n',
-      );
-      const scriptFile = join(scratch, `${job.jobId}.sh`);
-      writeFileSync(scriptFile, script);
-      chmodSync(scriptFile, 0o755);
+      const bootstrapFile = join(scratch, `${job.jobId}.bootstrap.sh`);
+      const jobScriptFile = join(scratch, `${job.jobId}.job.sh`);
+      writeFileSync(bootstrapFile, buildBootstrapScript(nodeVersion));
+      writeFileSync(jobScriptFile, buildJobScript(job, { runnerTemp: RUNNER_TEMP }));
+      chmodSync(bootstrapFile, 0o755);
+      chmodSync(jobScriptFile, 0o755);
 
       const containerName = `muffin-ci-local-${job.jobId}-${Date.now()}`;
       const timeoutMs = job.timeoutMinutes === null ? null : job.timeoutMinutes * 60_000;
-      const result = await runContainer({ image: IMAGE, dockerArgs, containerName, repoTar, scriptFile, timeoutMs });
+      const result = await runContainer({
+        image: IMAGE,
+        dockerArgs,
+        containerName,
+        repoTar,
+        bootstrapFile,
+        jobScriptFile,
+        timeoutMs,
+      });
 
       if (result.timedOut) {
         const reason = `exceeded timeout-minutes: ${job.timeoutMinutes}`;
