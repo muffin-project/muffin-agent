@@ -279,3 +279,33 @@ describe('il costo modello resta zero per un tenant di gruppo', () => {
     }
   });
 });
+
+describe('un errore di memoria non spegne la superficie', () => {
+  it("se addEpisode lancia, l'update viene comunque archiviato e il prossimo elaborato", async () => {
+    const h = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER });
+    try {
+      const store = h.runtime.deps.memory!.store;
+      const originale = store.addEpisode.bind(store);
+      let lanci = 0;
+      // Lancia **una volta sola**, sul ramo silenzioso; poi torna vero.
+      // Altrimenti il turno aperto dal secondo update, che scrive il suo
+      // episodio dal loop, incontrerebbe lo stesso errore e proverebbe
+      // un'altra cosa.
+      (store as unknown as { addEpisode: unknown }).addEpisode = (...args: unknown[]) => {
+        lanci += 1;
+        if (lanci === 1) throw new Error('FOREIGN KEY constraint failed');
+        return (originale as (...a: unknown[]) => unknown)(...args);
+      };
+      await deliver(h, [groupMsg(1, 'prima riga'), groupMsg(2, '@MuffinBot ci sei?')]);
+      (store as unknown as { addEpisode: unknown }).addEpisode = originale;
+
+      expect(lanci).toBeGreaterThanOrEqual(2);
+      // Il secondo update — quello che apre un turno — e' stato elaborato lo
+      // stesso: senza il `try`, l'eccezione del primo fermava `drain()` e il
+      // provider non veniva mai chiamato.
+      expect(h.seen).toHaveLength(1);
+    } finally {
+      h.runtime.close();
+    }
+  });
+});
