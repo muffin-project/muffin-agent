@@ -19,6 +19,7 @@ import {
   type ProviderKind,
   type SecretBackend,
 } from '../core/config/config.js';
+import { describeWorkspace } from '../core/config/workspace.js';
 
 /**
  * Bootstrap.
@@ -92,6 +93,15 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const voiceInstalled = installFile('voice.md', p.voice, options.force ?? false);
   step('voice', voiceInstalled ? 'installed voice.md (modificabile, fuori dal RoT)' : 'already present');
 
+  // La v2 del prompt, accanto alla v1 e non al posto suo. Copiata come le
+  // skill — stesso `installTree`, stessa regola «copia, non sovrascrivere» —
+  // perché sono file che l'owner riscriverà: `defaults/v2/` senza questa riga
+  // resterebbe leggibile solo dal pacchetto, e `muffin doctor` segnalerebbe due
+  // default per sempre `missing`. Copiarli non li **usa**: l'assemblaggio resta
+  // su v1 finché `config.prompt.version` non dice altro.
+  const v2 = installTree('v2', join(p.home, 'v2'), options.force ?? false);
+  step('prompt v2', v2.length > 0 ? `installed ${v2.length} files (non attivi: config.prompt.version resta v1)` : 'already present');
+
   // Pure muffin: the same character for every install, which is what stops a
   // fresh one from having none at all. identity.md ships empty by design — it
   // is the owner's — so without this file a first run had three bullet points
@@ -112,6 +122,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // esattamente la distinzione che il registro esiste per tenere —
   // «di serie, mai toccata» contro «modificata da chi la usa».
   for (const f of skills) copiedForRegistry.push({ path: `skills/${f.relPath}`, content: readFileSync(f.dst) });
+  for (const f of v2) copiedForRegistry.push({ path: `v2/${f.relPath}`, content: readFileSync(f.dst) });
   recordCopied(home, copiedForRegistry);
 
   // The CLI layer (cmdInit) owns key acquisition — flag, env, or the interactive
@@ -187,6 +198,24 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   // including anything the steps above wrote into the root of trust.
   const manifest = seal(home, CONFIG_SCHEMA_VERSION.toString(), new Date());
   step('sealed', `${manifest.files.length} files hashed, anchor written`);
+
+  // ADR-0059: named, not created. `resolveWorkspace` (`core/config/
+  // workspace.ts`) makes the directory lazily, at the first `buildRuntime` —
+  // `muffin run`/the REPL may honour a project directory the owner is already
+  // standing in and never touch this default at all, the same reason `traces/`
+  // is not created here either. But lazy must not mean silent: before this
+  // step the only place that ever named the workspace was a boot line on
+  // stderr that reaches `gateway.err` and nowhere a person looks, so a fresh
+  // install answered "dove hai scritto?" with nothing. `describeWorkspace`
+  // only reads — the same function `muffin doctor` and `sys.inspect` read
+  // through, never a second computation that could name a different folder.
+  const workspace = describeWorkspace(home);
+  step(
+    'workspace',
+    workspace.exists
+      ? `${workspace.workspace} — qui atterrano le scritture di un turno`
+      : `${workspace.workspace} (si crea da sola al primo turno che ci scrive)`,
+  );
 
   return steps;
 }

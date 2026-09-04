@@ -22,6 +22,7 @@ import { makeEmbedder, OllamaEmbedder, type Embedder } from '../core/memory/embe
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 import { readOpenContradictions } from '../core/memory/maintenance.js';
 import { loadConfig, locateSecretAll, paths, readSecret, ConfigError } from '../core/config/config.js';
+import { describeWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { diagnoseDefaultsDrift, type DefaultDrift } from '../core/config/defaults-drift.js';
 import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
@@ -200,6 +201,31 @@ export async function runDoctor(home = paths().home, options: DoctorOptions = {}
     return report(checks);
   }
   ok('home', p.home);
+
+  // ADR-0059: dove atterra il lavoro di un turno, non la casa dell'installazione
+  // — sono due domande diverse da quando `resolveWorkspace` le ha separate, e
+  // fino a questa riga nessuna delle due porte che l'owner guarda (un turno,
+  // `muffin doctor`) rispondeva alla seconda. `describeWorkspace` legge, non
+  // decide: la stessa cartella di default che `resolveWorkspace` userebbe, mai
+  // creata qui — un `mkdirSync` dentro una diagnosi renderebbe "esiste già" e
+  // "non esiste ancora" la stessa risposta.
+  const workspace = describeWorkspace(home);
+  if (workspace.envRejected) {
+    warn(
+      'workspace',
+      `${workspace.workspace} — MUFFIN_WORKSPACE puntava a ${workspace.envRejected.requested}, dentro l'installazione: ignorato, ` +
+        "perché dentro ~/.muffin ci sono memoria, sessioni e il sigillo, non è uno spazio di lavoro e nessun turno ci scrive",
+      `indica una cartella fuori dall'installazione con MUFFIN_WORKSPACE, oppure togli la variabile e lascia il default`,
+    );
+  } else if (!workspace.exists) {
+    // Non un warn: non c'è niente da fare qui, e un warn senza un'azione è
+    // come si insegna a scorrere oltre gli avvisi — questo repository ha già
+    // pagato il prezzo del testo di sicurezza che nessuno legge più. La nota
+    // resta, dentro la riga verde.
+    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno (si crea da sola al primo turno che ci scrive)`);
+  } else {
+    ok('workspace', `${workspace.workspace} — qui atterrano le scritture di un turno`);
+  }
 
   let config;
   const configNotes: string[] = [];

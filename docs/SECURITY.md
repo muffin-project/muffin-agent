@@ -95,6 +95,54 @@ capability declarations, not in this prose. `defaultMaxTaint` is no longer the
 ceiling: ADR-0053 moved that to the effect row, and left the field readable so a
 home sealed before it still parses.
 
+### Fencing: marking, not preventing
+
+Content that did not come from the owner is wrapped in a nonce-carrying fence
+before it reaches the model (`fence()`, `core/memory/spotlight.ts`), and the
+sentinel is stripped from the body so a hostile body cannot close the fence
+early. Two separate claims live here and they must not be merged:
+
+- **Marking is deterministic.** Code wraps the bytes on the way out of the tool,
+  whatever the model is thinking, and the nonce is generated after the content
+  was written.
+- **Obedience is not.** Whether the model treats a fenced block as data is its
+  judgement, and the adversarial corpus has watched it fail. Fencing is
+  provenance, not prevention: it makes "external content arrives marked as
+  external" a true sentence about this system, and it stops there.
+
+Until 2026-09-03 that sentence was true of the network doors and false of the
+disk. `fence()` was called by `agent/tools/http.ts`, `search.ts`, `mcp.ts` and
+`document.ts`; `fs_read`, `fs_list`, `fs_search` and `shell_run` returned
+`tier: DISK_TIER` and nothing else, so a file the owner had been sent and saved
+reached the model indistinguishable from his own prose — the entry point four of
+the seven scenes in `evals/security/attacks` use. Those four doors now go
+through the same function (`fenceDisk`, `agent/tools/fs.ts`, imported by
+`shell.ts`), and no tier or effect row moved with them.
+
+Two doors stay outside the fence on purpose, and the reasons are recorded where
+they are enforced. `skill_read` (tier 1) returns owner-installed skill files,
+which are instructions by design — and ADR-0059 strengthened rather than
+weakened that: skills live under the Muffin home, `mandatoryGuards` puts the
+home in `denyWrite`, and the workspace is outside it, so neither `fs_write` nor
+`shell_run` can plant a skill file. `process_list` (tier 1) returns the host
+describing itself; the cost to an attacker is an approved `shell_run`, not code
+execution on the host, and on macOS `ps -eo comm` is a full executable path
+(measured: lines up to ~205 characters) rather than the 15-character `comm`
+Linux gives. It stays a marginal channel — whoever holds `shell_run` already has
+its stdout, which *is* fenced now — and it is written down at its real width
+rather than at a flattering one.
+
+Two more doors carry bytes off the disk that **cannot** be fenced at all:
+`loadImage` (`agent/images.ts`) and the voice path
+(`connectors/telegram/connector.ts`) hand the model an image or audio block, and
+a block of media has no text frame to put a marker in. Their tier is right
+(`maxTier(tierOf(principal), contentTaint)`), and that is the whole defence.
+
+So **the absence of a fence is not a statement that content is trusted**, and
+the operating block of the system prompt says so to the model in those words —
+which is the load-bearing half of that sentence, precisely because these four
+doors exist.
+
 History must preserve the taint of content that is reinjected later. A session
 transcript is not a trust laundromat. Speaker/actor metadata must also survive
 recall: "trusted" is not equivalent to "the owner said this".

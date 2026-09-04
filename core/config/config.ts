@@ -21,6 +21,36 @@ import { dirname, join } from 'node:path';
  */
 export const CONFIG_SCHEMA_VERSION = 2;
 
+/**
+ * Le versioni del system prompt che questa build sa assemblare.
+ *
+ * `v1` sono i file che `muffin init` copia in `~/.muffin` — `persona.md`,
+ * `voice.md` — con `WORK_RULES`. `v2` sono `defaults/v2/` con `WORK_RULES_V2`:
+ * lo stesso carattere, la metà operativa riscritta perché era 603 caratteri
+ * contro i 19.609 spesi a dire chi è. Convivono di proposito: v1 resta
+ * byte-identico e selezionabile, così il ritorno indietro è un flag e non un
+ * ripristino.
+ *
+ * Prima è il default (`promptVersion` sotto), e l'ordine qui è quello che
+ * `muffin prompt version` stampa.
+ */
+export const PROMPT_VERSIONS = ['v1', 'v2'] as const;
+
+export type PromptVersion = (typeof PROMPT_VERSIONS)[number];
+
+/**
+ * La versione che una config seleziona — l'unico posto che risponde a questa
+ * domanda.
+ *
+ * `buildRuntime` la chiama per assemblare e `muffin prompt version` la chiama
+ * per stampare, quindi il comando non può dire una versione diversa da quella
+ * che il turno riceve davvero. Campo assente → `v1`: un'installazione che non
+ * ha mai sentito parlare di questa manopola tiene il prompt che ha.
+ */
+export function promptVersion(config: Pick<Config, 'prompt'>): PromptVersion {
+  return config.prompt?.version ?? 'v1';
+}
+
 export type ProviderKind = 'anthropic' | 'openai-compat';
 
 /**
@@ -186,6 +216,21 @@ export const ConfigSchema = z.object({
   // carry a second copy of them.
   rot: z.object({ mode: z.enum(['hardened', 'single-user']) }),
   traces: z.object({ retentionDays: z.number().int().positive() }),
+  /**
+   * Quale versione del system prompt questa installazione assembla.
+   *
+   * Opzionale e senza default nello schema, per la stessa ragione di `audio`:
+   * una config che non nomina il prompt deve restare byte per byte quella di
+   * prima, e un campo assente vuol dire **v1** — i file che `muffin init` ha
+   * copiato in casa e che l'owner modifica da allora. Nessuna installazione
+   * adotta v2 perché è arrivato un aggiornamento; il passaggio è una sua
+   * decisione, e si annulla rimettendo `v1`.
+   *
+   * La stessa manopola la gira `muffin prompt version v2`, che scrive
+   * esattamente questo campo: una funzione sola dietro le due porte, invece di
+   * due strade libere di dire cose diverse.
+   */
+  prompt: z.object({ version: z.enum(PROMPT_VERSIONS) }).optional(),
   /**
    * Le note vocali, quando vanno trascritte in casa.
    *
@@ -576,5 +621,31 @@ export class ConfigError extends Error {
   ) {
     super(message);
     this.name = 'ConfigError';
+  }
+}
+
+/**
+ * `surfaces.default` as it is on disk **right now**, or `fallback` if the file
+ * cannot be read or no longer parses.
+ *
+ * A separate door from `loadConfig` because the callers are separate in kind.
+ * `loadConfig` runs at boot, and a bad config there must stop the boot — the
+ * owner is watching, and a home that silently ran on defaults would be worse
+ * than a refusal. This one runs on the scheduler's 30-second beat inside a
+ * process that is already up, to answer one question: where does the owner read
+ * *now*. Turning `muffin surface default telegram` into a remedy that works on
+ * a running gateway is the whole reason it exists (`Runtime.defaultChannel`,
+ * ADR-0060 §1-ter), and taking the process down because the owner is halfway
+ * through hand-editing `config.json` would be a cure worse than the defect.
+ *
+ * No caching and no stat: the read is a few hundred bytes twice a minute, and a
+ * cache keyed on mtime is exactly the kind of cleverness that reintroduces the
+ * staleness this function was written to remove.
+ */
+export function readDefaultChannel(home: string, fallback: string): string {
+  try {
+    return loadConfig(home).surfaces.default;
+  } catch {
+    return fallback;
   }
 }

@@ -13,6 +13,31 @@ The repository and the Muffin home are deliberately different trust domains:
 `MUFFIN_HOME` may relocate the installation, but the semantic contract remains
 the same.
 
+### The workspace is not inside the home (ADR-0059)
+
+Where a turn may **write** is a separate question from where the installation
+lives, decided in `core/config/workspace.ts` and explained in full in
+[ADR-0059](decisions/0059-la-casa-non-e-uno-spazio-di-lavoro.md). This section
+states only what "where does my stuff live" needs, not the reasoning.
+
+- The workspace is `~/muffin-workspace` by default — a **sibling** of the
+  home, not a subdirectory of it (`/var/lib/muffin` → `/var/lib/muffin-workspace`).
+  It is the one directory an owner is expected to open in a file manager,
+  because it is where the agent's own files land.
+- `MUFFIN_WORKSPACE` moves it, the same way `MUFFIN_HOME` moves the home. A
+  value that names the home, or anywhere inside it, is ignored — an
+  environment variable is not a capability that can turn the sealed home into
+  a scratch directory.
+- It is created lazily, at the first turn that needs it (`resolveWorkspace`,
+  called once from `buildRuntime`), not by `muffin init` — an install that
+  always runs against a project directory the owner chose may never touch the
+  default at all. `muffin doctor` and `sys.inspect` both name it (same
+  function, `describeWorkspace`), and say plainly when it does not exist yet.
+- The home stays **readable** by a contained command — `voice.md`, `persona.md`
+  and the rest can still be read back to the owner — but is **denied for
+  writes** (`mandatoryGuards`, category 0): nothing a turn does can land inside
+  `rot/`, `muffin.db`, `sessions/`, or any other file this document maps above.
+
 ## 1. Why one home exists
 
 Muffin intentionally keeps personal/runtime state under one root so backup,

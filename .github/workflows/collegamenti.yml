@@ -68,7 +68,15 @@ permissions:
 jobs:
   collegamenti:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Dieci, e il lavoro di questo job è **un secondo e mezzo**: misurato il
+    # 04/09/2026, `docs/collegamenti` chiude in 0,69s e le ancore della mappa in
+    # 0,79s. Tutto il resto del run è `checkout` + `setup-node` + `npm ci`, cioè
+    # rete e cache che non appartengono a questo repo. Con il tetto a cinque
+    # minuti il gate misurava npm: due run sono arrivati a 4,6 e 5,3 minuti
+    # contro una norma di 0,4–0,7, e il secondo è morto sul tetto senza che una
+    # sola asserzione fosse in dubbio. Stessa ragione scritta per esteso in
+    # `accettazione.yml`: un tetto uccide un run appeso, non fa da budget.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

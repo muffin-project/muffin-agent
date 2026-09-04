@@ -35,6 +35,7 @@ import type { Approver } from '../agent/loop.js';
 import { escapeHtml, splitHtml } from '../connectors/telegram/render.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
 import { HEARTBEAT_MS } from '../core/gateway/lock.js';
+import { DRAIN_BUDGET_MS } from '../core/gateway/service.js';
 
 /**
  * Surfaces are enabled, not launched.
@@ -52,18 +53,89 @@ import { HEARTBEAT_MS } from '../core/gateway/lock.js';
  * verbs about the registry, not ways of running the agent.
  */
 
+/**
+ * Le superfici che questa build conosce.
+ *
+ * Una lista sola, perché `surface list` la percorreva con un letterale suo e
+ * `surface default` non ce l'aveva affatto: chiedere `default pippo` rimandava
+ * a `enable pippo`, che rispondeva «superficie sconosciuta» — un vicolo cieco
+ * in due passi. Aggiungere una superficie senza toccarla è il modo in cui i due
+ * elenchi finiscono per non essere d'accordo.
+ */
+export const SUPERFICI_NOTE: readonly string[] = ['cli', 'telegram', 'discord'];
+
 export const SURFACE_USAGE = `usage:
   muffin surface list                     le superfici e il loro stato
   muffin surface enable telegram [--owner <chat-id>]
   muffin surface enable discord [--owner <user-id>]
   muffin surface disable telegram|discord
+  muffin surface default <id>             dove Muffin parla quando nessuno ha chiesto
 `;
+
+/**
+ * `surfaces.default` era una manopola senza porta, e la porta mancante costava
+ * una promessa.
+ *
+ * Il campo si dichiara da sempre come *«dove Muffin parla quando nessuno ha
+ * chiesto»* — ed e' cio' che leggono sia `muffin observe` sia la corsia degli
+ * impegni (ADR-0060) — ma `DEFAULT_CONFIG` lo mette a `cli`, `muffin surface
+ * enable telegram` non lo tocca, e non esisteva nessun comando per cambiarlo.
+ * Sull'installazione reale dell'owner: `default: "cli"` con `enabled:
+ * ["cli","telegram","discord"]`. Sotto un supervisore quel `cli` e' il journal,
+ * quindi un messaggio non richiesto finiva in un log e nessuno poteva
+ * spostarlo senza aprire `config.json` a mano.
+ *
+ * Non lo cambia nessun altro comando, di proposito: `enable` che sposta il
+ * canale predefinito sarebbe un effetto che l'owner non ha chiesto sul verbo
+ * che usa per fare tutt'altro. Quello che `enable` fa adesso e' **dirlo**.
+ */
+export function cmdSurfaceDefault(home: string, id: string): number {
+  const config = loadConfig(home);
+  // `cli` e' sempre abilitata (L0-1) e non compare necessariamente in `enabled`
+  // di ogni config scritta a mano: l'unica superficie che non ha bisogno del
+  // permesso di essere scelta.
+  // Una superficie che non esiste si dice qui. Prima il ramo era uno solo e
+  // mandava a `surface enable pippo`, che risponde «superficie sconosciuta»:
+  // un vicolo cieco in due passi, trovato da un giudice.
+  if (!SUPERFICI_NOTE.includes(id)) {
+    process.stderr.write(`superficie sconosciuta: ${id}\n  quelle che esistono: ${SUPERFICI_NOTE.join(', ')}\n`);
+    return 78;
+  }
+  if (id !== 'cli' && !config.surfaces.enabled.includes(id)) {
+    process.stderr.write(
+      `${id} non è abilitata: non può essere la superficie predefinita
+` +
+        `→ muffin surface enable ${id}
+`,
+    );
+    return 78;
+  }
+  if (config.surfaces.default === id) {
+    process.stdout.write(`${id} è già la superficie predefinita
+`);
+    return 0;
+  }
+  saveConfig({ ...config, surfaces: { ...config.surfaces, default: id } }, home);
+  process.stdout.write(
+    `superficie predefinita: ${id}
+` +
+      `  è dove finisce ciò che Muffin dice di sua iniziativa — promemoria scaduti, osservazioni.
+` +
+      // Vero perché la corsia rilegge `config.json` a ogni giro
+      // (`Runtime.defaultChannel`). Prima non lo era, e il giudice l'ha
+      // misurato: l'owner girava la manopola, il gateway continuava per giorni
+      // a rispondere `cli`, e niente distingueva il rimedio da un difetto.
+      `  un gateway già in esecuzione la prende al giro dopo, senza riavvio.
+`,
+  );
+  return 0;
+}
 
 export function cmdSurfaceList(home: string): number {
   const config = loadConfig(home);
   const lines: string[] = [];
 
-  for (const id of ['cli', 'telegram', 'discord']) {
+  for (const id of SUPERFICI_NOTE) {
     const enabled = config.surfaces.enabled.includes(id);
     const isDefault = config.surfaces.default === id;
     let detail = '';
@@ -93,6 +165,24 @@ export function cmdSurfaceList(home: string): number {
     }
 
     lines.push(`${enabled ? '●' : '○'} ${id.padEnd(10)}${isDefault ? ' (default)' : ''}${detail}`);
+  }
+
+  /**
+   * La riga che mancava, e non e' cosmetica.
+   *
+   * `default: "cli"` con una superficie remota accesa e' la configurazione
+   * dell'owner, ed e' quella in cui un promemoria scaduto finisce sul
+   * terminale — cioe' nel journal, sotto un supervisore. Detto qui perche'
+   * `surface list` e' il posto dove si va a guardare, e perche' fino a questa
+   * slice non esisteva nemmeno il comando per cambiarlo.
+   */
+  const remote = config.surfaces.enabled.filter((s) => s !== 'cli');
+  if (config.surfaces.default === 'cli' && remote.length > 0) {
+    lines.push(
+      '',
+      `! ciò che Muffin dice di sua iniziativa va su "cli": in un processo senza terminale`,
+      `  finisce nel log e nessuno lo legge — \`muffin surface default ${remote[0]}\``,
+    );
   }
 
   process.stdout.write(`${lines.join('\n')}\n`);
@@ -201,6 +291,7 @@ async function enableTelegram(home: string, ownerFlag?: string, apiBaseFlag?: st
   saveConfig(next, home);
   process.stdout.write(`telegram abilitata: @${me.username ?? me.id}, owner ${ownerChatId}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
+  ricordaLaPredefinita(home, 'telegram');
   return 0;
 }
 
@@ -275,8 +366,26 @@ async function enableDiscord(home: string, ownerFlag?: string): Promise<number> 
   saveConfig(next, home);
   process.stdout.write(`discord abilitata: @${me.username} (${me.id})${ownerUserId ? `, owner ${ownerUserId}` : ''}\n`);
   process.stdout.write(`si connette al prossimo \`muffin\`\n`);
+  ricordaLaPredefinita(home, 'discord');
   return 0;
 }
+/**
+ * Detto, mai fatto di nascosto.
+ *
+ * `enable` non sposta `surfaces.default` — spostarlo sarebbe un effetto che
+ * l'owner non ha chiesto sul verbo che sta usando per altro — ma tacere e'
+ * come si e' arrivati a un'installazione con Telegram acceso e i messaggi non
+ * richiesti diretti al terminale. Una riga, con il comando esatto.
+ */
+function ricordaLaPredefinita(home: string, id: string): void {
+  const config = loadConfig(home);
+  if (config.surfaces.default === id) return;
+  process.stdout.write(
+    `ciò che Muffin dice di sua iniziativa continua ad andare su "${config.surfaces.default}"\n` +
+      `  → muffin surface default ${id}\n`,
+  );
+}
+
 
 export function cmdSurfaceDisable(home: string, id: string): number {
   if (id === 'cli') {
@@ -289,11 +398,30 @@ export function cmdSurfaceDisable(home: string, id: string): number {
     process.stderr.write(`${id} non è abilitata\n`);
     return 1;
   }
+  // Spegnere la superficie predefinita la riporta a `cli`, e lo dice. Lasciarla
+  // puntata a una superficie ora spenta era uno stato che nessun comando poteva
+  // produrre di proposito: `reachesOwner` avrebbe risposto «sì» (non è `cli`) e
+  // la consegna sarebbe tornata `{ delivered: false }` a ogni giro, con
+  // l'impegno dovuto per sempre e nessuna riga che nominasse la causa.
+  const eraPredefinita = config.surfaces.default === id;
   saveConfig(
-    { ...config, surfaces: { ...config.surfaces, enabled: config.surfaces.enabled.filter((s) => s !== id) } },
+    {
+      ...config,
+      surfaces: {
+        ...config.surfaces,
+        enabled: config.surfaces.enabled.filter((s) => s !== id),
+        ...(eraPredefinita ? { default: 'cli' } : {}),
+      },
+    },
     home,
   );
   process.stdout.write(`${id} disabilitata\n`);
+  if (eraPredefinita) {
+    process.stdout.write(
+      `  era la superficie predefinita: torna a cli\n` +
+        `  → muffin surface default <id> per mandarla altrove\n`,
+    );
+  }
   return 0;
 }
 
@@ -581,7 +709,22 @@ export function connectSurfaces(
   gatewayServes?: () => { pid: number } | null,
 ): {
   lines: string[];
-  stop: () => void;
+  /**
+   * Stops every connector this call started, and — unlike the `void` fire-
+   * and-forget `stop()` this used to be — **waits** for each of them to be
+   * genuinely gone: no `getUpdates` still in flight, no drain still writing,
+   * before the caller (`cli/gateway.ts`'s `close`) lets the database under
+   * them close. `budgetMs` is the gateway's own drain budget, passed through
+   * rather than a second one invented here — a connector that does not answer
+   * in time gives up honestly (each connector's own `stop()` logs the line)
+   * instead of hanging this past the drain the owner was already told about.
+   *
+   * `budgetMs` defaults to the same `DRAIN_BUDGET_MS` the gateway's own drain
+   * uses, for the callers that are not the gateway (`muffin observe --send`,
+   * `cli/repl.ts`'s own shutdown) and so have no `remainingMs` of their own to
+   * pass through.
+   */
+  stop: (budgetMs?: number) => Promise<void>;
   registry: SurfaceRegistry;
   deliver: LaneDeliver;
   attachStream: AttachStream;
@@ -615,7 +758,7 @@ export function connectSurfaces(
    */
   const salute = new SaluteSuperfici();
   const adesso = (): Date => new Date();
-  const stops: (() => void)[] = [];
+  const stops: ((budgetMs: number) => Promise<void>)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
   /**
    * How a turn the **lane** finished gets back to whoever asked for it.
@@ -737,9 +880,12 @@ export function connectSurfaces(
             log(`telegram: caduta — ${causa}`);
           });
         };
-        pollers.push({ start: avviaTelegram, stop: () => connector.stop() });
+        // Fire-and-forget on purpose here: the mouth handoff is not a
+        // shutdown, nothing downstream is about to close the database, and
+        // the interval callback that calls this must not block on it.
+        pollers.push({ start: avviaTelegram, stop: () => void connector.stop() });
         if (gatewayAtBoot === null) avviaTelegram();
-        stops.push(() => connector.stop());
+        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
         // The door for the lane. Registered next to the connector that owns it,
         // so a surface that did not come up simply has none — the honest state,
         // rather than a door onto a dead poller.
@@ -831,11 +977,12 @@ export function connectSurfaces(
             log(`discord: caduta — ${causa}`);
           });
         };
-        pollers.push({ start: avviaDiscord, stop: () => connector.stop() });
+        // Fire-and-forget for the same reason Telegram's poller stop is.
+        pollers.push({ start: avviaDiscord, stop: () => void connector.stop() });
         // Stessa ragione di Telegram: una sola gateway websocket per token,
         // altrimenti ogni messaggio viene servito due volte.
         if (gatewayAtBoot === null) avviaDiscord();
-        stops.push(() => connector.stop());
+        stops.push((budgetMs) => connector.stop(budgetMs).then(() => undefined));
         surfaces.push(discordSurface(api, ownerUserId));
         // N2 (judge, PR #42): this used to say "connessa" before `api.me()` —
         // called inside `connector.run()`, fire-and-forget above — had
@@ -891,13 +1038,19 @@ export function connectSurfaces(
       for (const p of pollers) (now ? p.stop : p.start)();
     }, HEARTBEAT_MS);
     vigile.unref();
-    stops.push(() => clearInterval(vigile));
+    stops.push(async () => {
+      clearInterval(vigile);
+    });
   }
 
   return {
     lines,
     salute,
-    stop: () => stops.forEach((s) => s()),
+    // Concurrent, not sequential: each connector's `stop()` already carries
+    // its own bounded wait against the *same* budget, so running them one
+    // after another would let two slow connectors add their waits together
+    // instead of sharing one clock.
+    stop: (budgetMs = DRAIN_BUDGET_MS) => Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
     registry: new SurfaceRegistry(surfaces),
     /**
      * The lane's delivery, over whichever surfaces are up.

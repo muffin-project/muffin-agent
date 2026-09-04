@@ -242,6 +242,27 @@ export class Scheduler {
      * `/pause` non paga una lettura per tick per sentirsi dire di no.
      */
     private readonly paused: () => boolean = () => false,
+    /**
+     * The dated-commitment pass (ADR-0060), on this same beat.
+     *
+     * It lives **here** rather than beside `scheduler.tick` in `Gateway.tick`
+     * for one reason that is not tidiness: the two conditions that must also
+     * silence a commitment are `standDown` and `paused`, and both are already
+     * resolved above. A second call site would be a second spelling of the same
+     * two rules — and the REPL, which owns a scheduler and no gateway
+     * (ADR-0035), would have got neither.
+     *
+     * It is asked **before** `modelLane.busy()` and the foreground gate, and
+     * that is the other half of the placement: a commitment costs no model call
+     * at all (`commitmentMessage` is deterministic), so a job running for
+     * twenty minutes must not be able to hold a promise past its moment. What
+     * it may not outrun is a handover or a `/pause`.
+     *
+     * A no-op by default: a scheduler built without one behaves exactly as it
+     * did before this pass existed, which is what keeps every existing test and
+     * `agent/scheduler-run.ts`'s own construction untouched.
+     */
+    private readonly commitments: { tick(now: Date): void } | null = null,
   ) {}
 
   /**
@@ -263,6 +284,10 @@ export class Scheduler {
       this.onEvent({ kind: 'deferred', reason: 'paused' });
       return;
     }
+    // Before every lane check below it: see the constructor's own comment —
+    // this pass never calls the model, so nothing that arbitrates the model
+    // lane has any business delaying a promise past the moment it was made for.
+    this.commitments?.tick(now);
     // Asked of the shared lane, not of a flag of our own: the thing that must
     // not happen twice is a *model call*, and the turn lane makes them too.
     if (this.modelLane.busy()) {
