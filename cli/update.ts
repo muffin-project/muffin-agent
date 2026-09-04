@@ -619,7 +619,14 @@ export function noteDopoLoSwing(args: {
   return righe;
 }
 
-function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
+/**
+ * Exported so `cli/gateway.ts`'s `muffin gateway restart` can build the exact
+ * same `launchctl kickstart -k`/`systemctl --user restart` this file's own
+ * `offerGatewayRestart` runs after `muffin update` — one mechanism, not a
+ * second `launchctl` string that could drift from this one on the next macOS
+ * quirk.
+ */
+export function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     const target = `gui/${uid}/${LAUNCHD_LABEL}`;
