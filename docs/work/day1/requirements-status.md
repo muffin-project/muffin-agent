@@ -38,7 +38,7 @@ status DAY-1. La milestone aggiunge una classificazione, non un secondo backlog:
 - **DOGFOOD** (si chiude durante l'uso reale, non prima): tutte le altre righe
   BLOCKER — quelle di sola evidence (A4, B14, C2, C3, C6, C7, D4, D5, D6, D7,
   D9, E3), il character eval A2/A3, le capability fail-closed o oneste (B1,
-  B6, B10, B15, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
+  B6, B15, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
   (B2/B16, metà restante). Nota di sicurezza verificata sul codice: foto e
   vocali sono archiviati come Evidence integra e dichiarati al turno —
   trascrizione/caption sono derivabili retroattivamente, quindi iniziare prima
@@ -281,7 +281,27 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > scenario sulla prima assert ("il risultato di memory_why non porta il
 > connettore").
 >
-> **Conteggio: 21 READY · 29 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). Dei
+> **B10 chiusa 04/09/2026 (slice/b10-immagini-ed-errori, issue #361).** Il gap
+> era solo lo scenario: le immagini arrivavano già al modello (`ingest()`,
+> b815751), ma il finto Bot API dell'accettazione non serviva `getFile`, quindi
+> nessuno scenario poteva mettere byte veri dietro un `file_id`. Il finto Bot
+> API serve ora `getFile` e il download `/file/bot<token>/<file_path>`
+> (`FakeTelegram.plantFile`, `evals/acceptance/telegram.ts`), più un rifiuto
+> one-shot (`FakeTelegram.guasta`) per la metà «errori». Due scenari sul
+> binario vero (`b-immagini-ed-errori.accept.ts`): `B10` (una foto reale
+> attraversa Bot API finto → download → vault → `image_url` con i byte esatti
+> scaricati) e `B10-errori`, non manifestato per la stessa ragione di B1 in
+> `b-telegram-journey.accept.ts` (il manifest è 1:1 per riga) — una
+> `editMessageText` rifiutata a metà consegna resta `rejected`/`failed:<why>`
+> in `telegram_delivery_parts`/`turns.delivery`, mai promossa in silenzio a
+> `sent`, e il messaggio successivo dell'owner ne innesca il retry senza
+> richiamare il modello. Mutazione verificata: rimuovere lo spread
+> `images:` in `connector.ts#ingest` fa cadere `B10`; far saltare
+> `store.rejected(...)` in `delivery.ts#deliverTelegram` fa cadere
+> `B10-errori` su un'asserzione precisa (`part 'attempting'` invece di
+> `'rejected'`), non su un timeout generico.
+>
+> **Conteggio: 22 READY · 28 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). Dei
 > 12 restanti che aspettano una decisione o un meccanismo (13 meno C5): A2/A3
 > (character eval), B1 (metà Telegram), B2/B16 (busy-input), B15 (binding nel
 > RoT), C8 (prerequisiti reali), D6/D7 (percorso felice senza provider veri),
@@ -320,7 +340,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | B7 | Scheduler | I job sopravvivono al riavvio? | READY — l'identità dell'occorrenza è chiusa (`slice/job-fires`, ADR-0035 emendamento №5). `job_fires` (`core/scheduler/job-fires.ts`, additiva, `(job_id, scheduled_for)` UNIQUE) lega ogni occorrenza dovuta a UN `turn_id`: `agent/scheduler-run.ts`'s `makeJobRunner` lo lega **prima** di chiamare il modello, e risolve un fire già legato (turno `done` → recupera testo/settle senza richiamare il modello; `runnable`/`running`/`waiting`/`interrupted` → cede alla corsia dei turni). `core/scheduler/scheduler.ts` guadagna due esiti (`FireDeferred`, `FireSettleOnly`) e un `settleFire` chiamato **prima** di ogni `markRan`, mai dopo. Matrice dei sette punti dell'owner, provata: i cinque interni con lo store/il runner reali (`core/scheduler/job-fires.test.ts`, `agent/scheduler-run.test.ts`, `core/scheduler/scheduler.test.ts` — quest'ultimo con la mutazione dell'ordinamento eseguita a mano, osservata rossa, ripristinata); i due che il mandato chiede col binario vero — crash fra il binding e la creazione del turno, e turno `done` prima di `markRan` — provati da `evals/acceptance/scenarios/job-fires.accept.ts` (riga B7 del manifest), due `SIGKILL` reali su `muffin gateway run` nelle due finestre (rese osservabili da `MUFFIN_JOB_FIRES_STALL_*`, stesso precedente di `MUFFIN_GATEWAY_TICK_MS`), verificato anche contro due mutazioni a mano (identità ignorata del tutto; bind interrotto completato con un id nuovo invece di quello legato) entrambe rosse per la ragione attesa. La proprietà resta occurrence→Work idempotente; ADR-0052 vieta di generalizzarla in “ogni transport event deve avere un Turn proprio”. Telegram riusa le primitive di idempotenza in #78, ma sotto event→composition→Work. |
 | B8 | Delivery | Un job che dice «inviato» è **arrivato**? | READY — canale non connesso → `failed:<why>`, mai `sent`, e `doctor` lo nomina ⚠️ nota sotto |
 | B9 | Proactivity | Agisce spontaneamente secondo i gate? | OUT — post-DAY-1: nessuna capability §5 dei 14 giorni dipende da trigger proattivi; `ProactiveKind` ha oggi 4 valori (non 5, `consolidation` rimosso da ADR-0038), `gone_quiet` ha un produttore reale (`core/scheduler/observe.ts`) cablato solo su invocazione manuale (`muffin observe --send`); `commitment_due` ne ha uno da ADR-0060 (`core/scheduler/commitments.ts`, un `todos.due_at` letto dal tick dello scheduler, prima consegna proattiva che non passa dal dito dell'owner); `deadline_near` e `fact_actionable` restano fuori finché non emerge un consumer reale → `docs/ROADMAP.md` “Proactivity beyond explicit jobs” |
-| B10 | Telegram | Messaggi, file, immagini, **errori** | BLOCKER — solo scenario mancante: messaggi e documenti ok (provato, vedi C7); **le immagini arrivano al modello** (`ImageBlock` in `agent/providers/types.ts`, `ingest()` di `connectors/telegram/connector.ts` → `images:` del turno, da b815751 del 28/08; il vault non le indicizza per scelta — si mostrano, non si trascrivono in testo); errori gestiti a pezzi, non come proprietà unica; nessuno scenario dedicato → PC 3.6 (riconciliato il 02/09: la riga diceva «nessun content-block immagine»). **03/09**: i file *documento* non arrivavano affatto in memoria in produzione — stesso difetto della nota C7/B10/C8 → tracked in issue #361 |
+| B10 | Telegram | Messaggi, file, immagini, **errori** | READY — messaggi e documenti ok (provato, vedi C7); **le immagini arrivano al modello** (`ImageBlock` in `agent/providers/types.ts`, `ingest()` di `connectors/telegram/connector.ts` → `images:` del turno, da b815751 del 28/08; il vault non le indicizza per scelta — si mostrano, non si trascrivono in testo). **04/09** (issue #361): il finto Bot API dell'accettazione serve ora `getFile` e il download `/file/bot<token>/<file_path>` (`FakeTelegram.plantFile`/`guasta`, `evals/acceptance/telegram.ts`), e due scenari sul binario vero lo provano — `B10` (una foto reale attraversa Bot API finto → download → vault → arriva al modello come `image_url` con i byte esatti) e `B10-errori`, non manifestato (una `editMessageText` rifiutata a metà consegna resta `rejected`/`failed:` in `telegram_delivery_parts`/`turns.delivery`, mai promossa in silenzio a `sent`, e il messaggio successivo dell'owner ne innesca il retry senza richiamare il modello) — `evals/acceptance/scenarios/b-immagini-ed-errori.accept.ts`. Il difetto «documenti non indicizzati in produzione» che questa riga citava (nota C7/B10/C8 qui sotto) era già chiuso il 03/09, prima di questa slice. |
 | B11 | Streaming | La risposta arriva mentre si forma, o solo alla fine? | READY — **chiusa il 04/09/2026 dalla corsia reale** (`evals/e2e/telegram.ts`, modello vero, Bot API vera, owner al telefono): 9 asserzioni su 9 verdi sul filo registrato. La risposta si forma dentro un messaggio **vero e durevole**: 7 edit successive sullo stesso messaggio, zero `deleteMessage`, niente oltre i 4096 caratteri. Da #388 la risposta finale **edita** il messaggio della scia invece di aggiungerne uno: una bolla per turno, che era esattamente la lamentela dell'owner («mi sta rispondendo due volte»). Filo e comandi in `docs/evidence/e2e-telegram-2026-09-04.md`. |
 | B12 | Overflow | Un output enorme di un tool va in contesto, o diventa un file richiamabile? | OUT — ROADMAP “Overflow / context-pressure UX”: `agent/context/compact.ts:89-101` sostituisce l'intero payload con un placeholder invece di troncare testa+coda (un difetto noto, non solo una mancanza); nessun overflow-a-file esiste; B11 copre già il segnale di presenza durante l'attesa |
 | B13 | Progress | Un turno lungo dice di essere vivo in modo **strutturale**, non cosmetico? | READY — **chiusa il 04/09/2026 dalla corsia reale** (`evals/e2e/telegram.ts`, modello vero, Bot API vera, owner al telefono): 9 asserzioni su 9 verdi sul filo registrato. I passi ci sono ancora **alla fine**, non solo durante — verificato sullo stato finale del messaggio, non sull'esistenza di una scrittura qualsiasi: l'ultima edit contiene ancora `✓ leggo un file`, `✗ … interrotto`, `✓ sys.shell: consentito`, `✓ eseguo un comando`. La specifica «mai una cronologia» resta rovesciata, come chiesto il 03/09. Filo e comandi in `docs/evidence/e2e-telegram-2026-09-04.md`. |
@@ -550,8 +570,10 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 > percorso con un segmento col punto. Rimettere il percorso assoluto nel filtro,
 > o sostituire `insideRoot` con uno `startsWith`, fa cadere i test nuovi
 > (mutazione verificata il 03/09). Restano vere le riserve già scritte sotto:
-> lo scenario C7 passa dalla CLI e non da `getFile`, e B10/C8 restano senza
-> scenario di accettazione proprio.
+> lo scenario C7 passa dalla CLI e non da `getFile`. **04/09**: il finto Bot
+> API serve ora `getFile` (issue #361), e B10 ha il proprio scenario di
+> accettazione (`b-immagini-ed-errori.accept.ts`); C8 (nota vocale) resta
+> senza, per lo stesso motivo, non affrontato da questa slice.
 
 > **C7 — cosa il meccanismo prova.** Riclassificata `BLOCKER` il 17/08 per
 > mancanza dello scenario di accettazione, non per un difetto nel meccanismo
