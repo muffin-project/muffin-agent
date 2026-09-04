@@ -1,6 +1,6 @@
 import type { TrustTier } from '../policy/types.js';
 import { EmbedderUnavailable } from './embed.js';
-import type { FactOrigin } from './schema.js';
+import { isRequestPredicate, type FactOrigin } from './schema.js';
 import { fence } from './spotlight.js';
 import type { Reranker } from './rerank.js';
 import type { Fact, MemoryStore } from './store.js';
@@ -80,6 +80,15 @@ export type RecallItem = {
    * discipline.
    */
   origin?: FactOrigin;
+  /**
+   * Present on facts. The raw predicate, carried through only so
+   * `temporalLabel` can recognise a request (`asked_to`, `asks_to`, …)
+   * without re-parsing `text` — see `isRequestPredicate` in `schema.ts` and
+   * `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md` for
+   * the argument. Never rendered verbatim; only ever tested against a fixed
+   * predicate family.
+   */
+  predicate?: string;
 };
 
 /**
@@ -583,6 +592,7 @@ export async function recall(
             validFrom: fact.validFrom,
             validTo: fact.validTo,
             expired: fact.expiredAt !== null,
+            predicate: fact.predicate,
             ...(fact.origin === 'inferred' ? { origin: fact.origin } : {}),
             ...(successor ? { replacedBy: { id: successor.id, text: factText(successor) } } : {}),
           }, rank);
@@ -710,6 +720,7 @@ export async function recall(
           expired: fact.expiredAt !== null,
           ...(successor ? { replacedBy: { id: successor.id, text: factText(successor) } } : {}),
           origin: fact.origin,
+          predicate: fact.predicate,
         }, rank);
       });
     }
@@ -853,6 +864,7 @@ export async function recall(
     validFrom: f.validFrom,
     validTo: f.validTo,
     origin: f.origin,
+    predicate: f.predicate,
   }));
   kept = [...pinnedItems, ...kept];
 
@@ -1006,6 +1018,23 @@ function temporalLabel(item: RecallItem): string {
   const parts: string[] = [];
   if (item.validFrom || item.validTo) {
     parts.push(`valido ${item.validFrom?.slice(0, 10) ?? '?'} → ${item.validTo?.slice(0, 10) ?? 'oggi'}`);
+  }
+  // A request-type fact (`asked_to`, `asks_to`, `asks_for`, …) reaching this
+  // function did not come from the model's own extraction of *this* turn —
+  // consolidation always runs after the turn that produced its evidence
+  // (ADR-0038's trailing-edge queue), so by the time a request fact exists at
+  // all, its turn is already over. `vectors.ts` stopped offering this family a
+  // standalone semantic vector for exactly this reason (a paraphrase match has
+  // no recency discipline — see `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md`),
+  // but the graph hop and `--history` are structurally allowed to still carry
+  // one here, when the query names the entity or asks about the past on
+  // purpose. This label is what stops that reader — model or owner — from
+  // mistaking a closed request for a standing instruction. It is deliberately
+  // silent on whether the request was ever satisfied: recall has no signal for
+  // that, and guessing would be the confidence-decay mistake ADR-0040 already
+  // refused, in a render-time costume instead of a schema one.
+  if (item.kind === 'fact' && isRequestPredicate(item.predicate ?? '')) {
+    parts.push('richiesta di un turno già concluso, non di questo');
   }
   if (item.expired) {
     // Two different reasons a fact can be retired, and only one of them is a
