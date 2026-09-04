@@ -786,7 +786,7 @@ export async function runRepl(
   });
   const scheduler = new Scheduler(
     runtime.jobs,
-    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }),
+    makeJobRunner(runtime.deps, runtime.jobFires, runtime.executor, { cwd: runtime.workspace }, runtime.budget),
     deliver,
     foreground,
     (e) => {
