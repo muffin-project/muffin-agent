@@ -198,7 +198,21 @@ Candidate measurements:
 ### H4 — Forgetting can improve usefulness; Muffin should complement human forgetting
 
 **External grounding: STRONG for adaptive forgetting in humans; ANALOGY for Muffin**  
-**Muffin evidence: UNTESTED**
+**Muffin evidence: ONE NARROW INSTANCE SHIPPED (ADR-0068), the rest UNTESTED**
+
+`docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md` is the
+first measured case of the second bullet below, and it draws the line the
+hypothesis asks for exactly: a request-type fact (`asked_to`, `asks_to`, …) is
+canonical and stays exactly as alive as before — nothing decays, nothing is
+retired, no confidence changes — but its *derived, rebuildable* per-fact vector
+stops being written and an already-written one is retracted. Measured on the
+owner's real recall path: an already-answered request from 08/27 no longer
+resurfaces on a same-vocabulary but unrelated query from a later date (was 12
+distinct requests across 15 representative queries, now 0), while the entity
+graph hop, `--history` and the original episode text stay fully reachable. This
+is not general confidence decay — ADR-0040 still refuses that — it is the
+narrow claim that a *retrieval index over a momentary fact* is exactly the kind
+of "low-value derived material" the third bullet already names.
 
 Human memory does not preserve every representation equally, and forgetting can
 reduce interference. That does not imply Muffin should copy a biological
