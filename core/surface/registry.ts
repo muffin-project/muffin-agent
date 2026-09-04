@@ -1,3 +1,4 @@
+import { redactText } from '../tracing/redact.js';
 import { notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from './types.js';
 
 /**
@@ -17,7 +18,32 @@ import { notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from 
  * system lost when its gateway started building Telegram-shaped footers.
  */
 export class SurfaceRegistry {
-  constructor(private readonly surfaces: readonly Surface[]) {}
+  constructor(
+    private readonly surfaces: readonly Surface[],
+    /**
+     * What `config.json` says is enabled, read fresh at call time — not a
+     * snapshot taken when this registry was built.
+     *
+     * The gap this closes, measured: `muffin surface enable discord` writes
+     * `surfaces.enabled` while a gateway from before that command is still
+     * running. `connectSurfaces` only ever runs at boot, so this registry's
+     * `surfaces` array is frozen to the old list — and a job or a `/steer`
+     * addressed to the newly-enabled channel fell through to `noSurface`,
+     * which said "nessuna superficie serve X" as if the channel did not exist
+     * at all, indistinguishable from a typo'd id or a surface never
+     * configured. The owner had enabled it two minutes earlier; the honest
+     * answer is "not yet, in *this* process", not "no".
+     *
+     * A callback rather than a list for the same reason `readDefaultChannel`
+     * (`core/config/config.ts`) rereads `config.json` on every call instead of
+     * caching it: the whole point is to see edits made after this registry was
+     * constructed, and a value captured once would reintroduce the same
+     * staleness one layer up. Defaults to "nothing else is enabled", which
+     * keeps every existing caller — mostly tests — building a registry with
+     * one argument exactly as accurate as before this parameter existed.
+     */
+    private readonly enabledInConfig: () => readonly string[] = () => [],
+  ) {}
 
   /** Registration order, which is also the order `deliver` asks in. */
   all(): readonly Surface[] {
@@ -48,7 +74,21 @@ export class SurfaceRegistry {
   deliver = async (channel: string, text: string): Promise<DeliveryOutcome> => {
     const surface = this.find(channel);
     if (surface === null) return this.noSurface(channel);
-    return this.caught(surface.id, () => surface.deliver(channel, text));
+    // Il sink della risposta è `s6` del corpus avversariale: la scena in cui
+    // l'effetto dell'attaccante esce **osservabile fuori dal testo del modello**
+    // — e la scena che, misurata, non incontrava nessuna guardia, perché la riga
+    // `reply` è `allow/allow/allow` per decisione (rispondere sul canale
+    // d'origine è il modo in cui l'agente funziona).
+    //
+    // Questo non gli mette un gate davanti: aggiungere una domanda dove
+    // l'owner ne concede 32 su 35 peggiorerebbe le cose. Mette il floor
+    // deterministico che il codice può decidere da solo — **una credenziale che
+    // esce è una proprietà dei byte, non dell'intenzione** — sull'unica porta
+    // per cui passa tutto ciò che Muffin dice a chiunque.
+    //
+    // Vale anche per il caso più banale e più probabile: l'owner incolla una
+    // chiave in chat, la chiede a Muffin, e Muffin gliela ripete in un gruppo.
+    return this.caught(surface.id, () => surface.deliver(channel, redactText(text)));
   };
 
   /**
@@ -61,8 +101,32 @@ export class SurfaceRegistry {
     return this.caught(surface.id, () => surface.deliverFile(channel, file));
   };
 
+  /**
+   * The channel's own connector id, read off the `<connectorId>:<address>`
+   * shape every real surface uses (`connectors/telegram/surface.ts`,
+   * `connectors/discord/surface.ts`) — `cli` has no colon and is its own id.
+   * Used only to ask "is *this id* enabled in config", never to decide
+   * `handles()`, which stays each surface's own job.
+   */
+  private static connectorIdOf(channel: string): string {
+    const i = channel.indexOf(':');
+    return i === -1 ? channel : channel.slice(0, i);
+  }
+
   private noSurface(channel: string): DeliveryOutcome {
     const known = this.surfaces.map((s) => s.id).join(', ');
+    const id = SurfaceRegistry.connectorIdOf(channel);
+    // Enabled in config but missing from this process's own registry: a
+    // restart, not a configuration error, and the message says the exact
+    // command rather than "riavvia il gateway", which is the sentence a
+    // scheduled job or `/steer` cannot act on itself and the owner has had to
+    // decode into a command every previous time it appeared.
+    if (this.enabledInConfig().includes(id) && !this.surfaces.some((s) => s.id === id)) {
+      return notDelivered(
+        `"${id}" è abilitata in config.json ma questo processo l'ha avviata senza di lei — ` +
+          'riavvia il gateway per farla entrare nel registro: `muffin gateway stop && muffin gateway start`.',
+      );
+    }
     return notDelivered(
       `nessuna superficie serve "${channel}"` + (known === '' ? ' — nessuna superficie è connessa' : ` — connesse: ${known}`),
     );

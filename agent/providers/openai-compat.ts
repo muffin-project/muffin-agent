@@ -131,7 +131,7 @@ export function speaksStickySession(baseURL?: string): boolean {
   }
 }
 
-export function speaksReasoningEffort(baseURL?: string): boolean {
+function speaksReasoningEffort(baseURL?: string): boolean {
   try {
     if (!baseURL) return false;
     const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');

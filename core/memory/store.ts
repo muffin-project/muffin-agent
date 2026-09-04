@@ -1,3 +1,4 @@
+import { redactText } from '../tracing/redact.js';
 import type Database from 'better-sqlite3';
 import { IngestLock, type LockOutcome } from './ingest-lock.js';
 import {
@@ -41,7 +42,12 @@ export type EpisodeInput = {
   turnId?: string;
 };
 
-export type Episode = EpisodeInput & { id: number; extractionV: number };
+export type Episode = EpisodeInput & {
+  id: number;
+  extractionV: number;
+  /** `episodes.undone_at`: when `markEpisodesUndone` marked it, or absent. */
+  undoneAt?: string;
+};
 
 export type FactInput = {
   tenantId: string;
@@ -231,6 +237,9 @@ export class MemoryStore {
     // Nullable e senza default: un database esistente guadagna la colonna e non
     // perde una riga, e nessuna riga storica riceve un turno che non ha avuto.
     ensureColumn(db, 'episodes', 'turn_id', 'turn_id TEXT');
+    // D11's memory half. Additive next to `turn_id` for the same reason:
+    // nullable, no default, no row loses or gains a fact it never had.
+    ensureColumn(db, 'episodes', 'undone_at', 'undone_at TEXT');
     // The pinned lookup runs on every recall call — every turn with memory
     // enabled — so it earns the same treatment `idx_facts_active` gives
     // `expired_at`. Placed after `ensureColumn`, never before: on a database
@@ -244,6 +253,30 @@ export class MemoryStore {
 
   // ---- evidence -------------------------------------------------------------
 
+  /**
+   * **Il floor sulle credenziali sta qui, non nei chiamanti.**
+   *
+   * `redactText` esisteva già, prendeva cinque forme di credenziale su cinque, e
+   * al 04/09/2026 era cablata a **una** frontiera di scrittura su sei:
+   * `agent/loop.ts` la chiamava sul risultato di un tool e su nient'altro.
+   * Quindi una `sk-ant-…` che l'**owner stesso** digita non passava da nessun
+   * filtro e atterrava in `episodes.content` in chiaro, da dove il richiamo la
+   * rimette in un prompt mesi dopo. È la forma di guasto che `AGENTS.md` nomina
+   * per prima — un meccanismo che esiste e che la produzione non raggiunge.
+   *
+   * Sta dentro `addEpisode` e non nei quattro chiamanti (`agent/loop.ts` ×2,
+   * `core/vault/vault.ts`, `agent/observe-run.ts`) perché una difesa che ogni
+   * nuovo chiamante deve ricordarsi di invocare è già rotta: il quinto nascerà
+   * scoperto. Questa è la porta unica per cui ogni episodio passa.
+   *
+   * **Costa zero, misurato sul corpus vivo dell'owner** (04/09): 1.321 righe,
+   * 168.715 caratteri, **0 toccate**. Non c'è un compromesso fra questa difesa
+   * e la fedeltà di ciò che Muffin ricorda.
+   *
+   * Il limite, detto invece che nascosto: un filtro a forma non sopravvive a
+   * una Base64. Chiude l'eco **accidentale** di una credenziale, mai
+   * un'esfiltrazione deliberata — per quella la difesa è la provenienza.
+   */
   addEpisode(input: EpisodeInput): number {
     const stmt = this.db.prepare(
       `INSERT INTO episodes (tenant_id, connector, thread_key, actor_id, role, kind, content,
@@ -253,6 +286,7 @@ export class MemoryStore {
     );
     const info = stmt.run({
       ...input,
+      content: input.content === null ? null : redactText(input.content),
       actorId: input.actorId ?? null,
       vaultPath: input.vaultPath ?? null,
       turnId: input.turnId ?? null,
@@ -1137,21 +1171,49 @@ export class MemoryStore {
       .prepare(
         `SELECT id, tenant_id AS tenantId, connector, thread_key AS threadKey, actor_id AS actorId,
                 role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
-                created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId
+                created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId,
+                undone_at AS undoneAt
          FROM episodes WHERE tenant_id = ? AND id = ?`,
       )
       .get(tenantId, id) as
-      | (Episode & { actorId: number | null; vaultPath: string | null; turnId: string | null })
+      | (Episode & { actorId: number | null; vaultPath: string | null; turnId: string | null; undoneAt: string | null })
       | undefined;
     if (!row) return null;
     // The optional columns come back NULL from SQLite; the type says absent.
-    const { actorId, vaultPath, turnId, ...rest } = row;
+    const { actorId, vaultPath, turnId, undoneAt, ...rest } = row;
     return {
       ...rest,
       ...(actorId === null ? {} : { actorId }),
       ...(vaultPath === null ? {} : { vaultPath }),
       ...(turnId === null ? {} : { turnId }),
+      ...(undoneAt === null ? {} : { undoneAt }),
     };
+  }
+
+  /**
+   * D11's memory half: the same instant the calling turn's `undo_at` and
+   * `episodes.undone_at` mark, applied to every un-undone `role: 'agent'`
+   * episode this turn produced.
+   *
+   * `role: 'agent'` only — see the field's own comment on `RecallItem` in
+   * `recall.ts`: marking the owner's own request as undone would be a lie in
+   * the other direction, and a `tool`/`system` episode is not a claim anyone
+   * could act on. `undone_at IS NULL` in the `WHERE` makes a second undo of
+   * the same turn (unreachable today — `cli/undo.ts` forgets the journal
+   * entry on success — but not a call this method should assume) a no-op
+   * instead of overwriting the first timestamp.
+   *
+   * Returns how many rows it actually marked, so the caller can tell "this
+   * turn wrote no memory" from "the marking silently missed".
+   */
+  markEpisodesUndone(tenantId: string, turnId: string, at: string): number {
+    const info = this.db
+      .prepare(
+        `UPDATE episodes SET undone_at = @at
+         WHERE tenant_id = @tenantId AND turn_id = @turnId AND role = 'agent' AND undone_at IS NULL`,
+      )
+      .run({ tenantId, turnId, at });
+    return info.changes;
   }
 
   /** Which facts a given episode produced — the other direction of provenance. */

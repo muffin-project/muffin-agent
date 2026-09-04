@@ -34,6 +34,7 @@ const empty = (over: Partial<IngestReport> = {}): IngestReport => ({
   skippedDocuments: 0,
   skippedEmpty: 0,
   indexed: 0,
+  forgottenRequestChunks: 0,
   busy: false,
   needsReview: [],
   errors: [],

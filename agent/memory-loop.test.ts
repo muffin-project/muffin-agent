@@ -135,6 +135,7 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
       budgetExhausted: () => false,
       hardened: true,
     }),
+    capabilities: new Map(decls.map((d) => [d.id, d])),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns: new TurnStore(new DatabaseCtor(':memory:')),

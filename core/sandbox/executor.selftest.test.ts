@@ -241,4 +241,36 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // regge anche quando la seconda arriva prima che la prima abbia risposto.
     expect(initialize).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Il 04/09/2026 la CI locale e' stata rossa per un'ora su un messaggio che
+   * diceva `contain_failed` e un rimedio generico il cui testo e', alla
+   * lettera, *«see detail»*. Il `detail` — «Linux HTTP bridge socket does not
+   * exist … The bridge process may have died» — c'era in `cachedProbe` e lo
+   * stampa `cli/doctor.ts`, e mancava nell'unico posto dove serviva: l'errore
+   * che vede chi ha lanciato il comando. Per leggerlo e' servito modificare
+   * `executor.ts` a mano dentro il container.
+   *
+   * Questo test non prova il contenimento: prova che il messaggio porta la
+   * causa. Se torna a portare solo il rimedio, diventa rosso.
+   */
+  it('il messaggio dell errore porta il detail dell init fallito', async () => {
+    initialize.mockImplementation(async () => {
+      throw new Error('il ponte HTTP non esiste: /tmp/finto.sock');
+    });
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+    const dir = mktempWorkspace();
+
+    const errore = await executor
+      .run({ command: 'true', cwd: dir, writeScope: [dir] })
+      .then(() => null)
+      .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+
+    expect(errore).not.toBeNull();
+    expect(errore).toContain('sandbox unavailable:');
+    // La riga che conta: senza questa asserzione il messaggio puo' tornare a
+    // essere `reason — remedy` e nessuno se ne accorge finche' non serve.
+    expect(errore, `il messaggio non porta la causa: ${errore}`).toContain('il ponte HTTP non esiste');
+  });
 });

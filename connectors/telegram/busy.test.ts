@@ -13,6 +13,7 @@ import type { TelegramApi } from './api.js';
 import { TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
+import type { TurnRecord } from '../../core/turns/store.js';
 
 /**
  * Un messaggio mentre un turno è vivo (ADR-0054), attraverso il **poller
@@ -140,7 +141,7 @@ function harness(script: Risposta[]) {
     await running;
     runtime.close();
   };
-  return { sent, chiamate, manda, chiudi, pausa };
+  return { sent, chiamate, manda, chiudi, pausa, connector };
 }
 
 async function until(check: () => boolean, stato: () => unknown = () => '', ms = 5_000): Promise<void> {
@@ -283,6 +284,113 @@ describe('/pause e /resume', () => {
       expect(risposte.filter((t) => t.includes('in pausa:'))).toHaveLength(1);
       expect(risposte.filter((t) => t.includes('ripreso'))).toHaveLength(1);
       expect(h.pausa.attiva()).toBe(false);
+    } finally {
+      await h.chiudi();
+    }
+  });
+
+  /**
+   * `gestiti` esiste per coprire la finestra fra la registrazione anticipata
+   * di un comando di controllo e `markProcessed` — vedi il commento sopra il
+   * ciclo in `controlla()` (`connectors/telegram/connector.ts`). Una volta
+   * che `markProcessed` è stato chiamato, `inbox.pending()` non restituirà
+   * mai più quell'`updateId`, quindi `drain()` non consulterà mai più quella
+   * voce: tenerla in `gestiti` per sempre non protegge niente, cresce e
+   * basta. Misurato 2026-09-04: senza la `delete` in `controlla()` il set
+   * aveva una voce per ogni `/pause`/`/resume` mai servito, per tutta la vita
+   * del processo — un agente pensato per restare acceso mesi, non un
+   * comando che gira e finisce.
+   */
+  it('`gestiti` non cresce senza fine: un comando di controllo servito lascia il set com era prima', async () => {
+    const h = harness([testo('eccomi'), testo('eccomi'), testo('eccomi')]);
+    try {
+      const gestiti = (h.connector as unknown as { gestiti: Set<number> }).gestiti;
+
+      h.manda(msg(1, '/pause'));
+      await until(() => h.sent.some((s) => s.text.includes('in pausa')));
+      h.manda(msg(2, '/resume'));
+      await until(() => h.sent.some((s) => s.text.includes('ripreso')));
+      const dopoUnGiro = gestiti.size;
+
+      h.manda(msg(3, '/pause'));
+      await until(() => h.sent.filter((s) => s.text.includes('in pausa')).length === 2);
+      h.manda(msg(4, '/resume'));
+      await until(() => h.sent.filter((s) => s.text.includes('ripreso')).length === 2);
+
+      // Non cresciuto: ogni comando servito si toglie da solo, non solo si
+      // aggiunge. Se la `delete` viene tolta questo conta 2 (o più, con più
+      // giri), mai 0/rimasto uguale.
+      expect(gestiti.size).toBe(dopoUnGiro);
+      expect(gestiti.size).toBe(0);
+    } finally {
+      await h.chiudi();
+    }
+  });
+});
+
+/**
+ * ADR-0054's leva, per un turno che la CORSIA sta riprendendo (dopo
+ * un'approvazione, un `wait`, un riavvio) invece di uno che `handle()` ha
+ * appena accettato. Chiuso 2026-09-04.
+ *
+ * `resumeStream` (`AttachStream` di questo connettore) prima non toccava
+ * `vivi` affatto — solo `handle()` lo faceva. Un `/steer`/`/stop` mandato
+ * mentre la corsia eseguiva un turno ripreso trovava quindi
+ * `vivi.has(chatId)` falso e rispondeva «nessun turno in corso», che era
+ * falso: un turno stava esattamente girando, solo non attraverso la porta
+ * che registrava `vivi`. `agent/steer-sospeso.test.ts` prova il livello
+ * sotto (che `resumeTurn` inoltri `steer`/`signal` a `drive`); questo prova
+ * che QUESTO connettore usa quella leva per tenere `vivi` onesto.
+ */
+describe('resumeStream tiene `vivi` onesto per un turno che la corsia riprende', () => {
+  it('registra la chat come viva finché lo stream è attaccato, e la toglie a `stop`', async () => {
+    const h = harness([]);
+    try {
+      const chatId = 555001;
+      const record = { id: 'turno-ripreso-1', replyTo: { chatId } } as unknown as TurnRecord;
+      const vivi = (h.connector as unknown as { vivi: Map<number, { controller: AbortController; correzioni: string[] }> }).vivi;
+
+      expect(vivi.has(chatId)).toBe(false);
+
+      const stream = h.connector.resumeStream(record);
+      expect(stream).toBeDefined();
+      // La stessa leva che `handle()` passa a `runTurn` — ora passata a
+      // `resumeTurn` per un turno che la corsia riprende.
+      expect(vivi.has(chatId)).toBe(true);
+      expect(typeof stream!.steer).toBe('function');
+      expect(stream!.signal).toBeInstanceOf(AbortSignal);
+
+      // La correzione scritta nella riga di `vivi` (quella che `/steer`
+      // scriverebbe attraverso `controlli.steer` in `tryCommand`) arriva
+      // attraverso `stream.steer()`, esattamente come per un turno fresco.
+      vivi.get(chatId)!.correzioni.push('corretto durante la ripresa');
+      expect(stream!.steer!()).toEqual(['corretto durante la ripresa']);
+      expect(vivi.get(chatId)!.correzioni).toEqual([]); // drenata
+
+      await stream!.stop!();
+      expect(vivi.has(chatId)).toBe(false);
+    } finally {
+      await h.chiudi();
+    }
+  });
+
+  it('non spegne una chat già viva per un turno fresco — un `/stop` in quel turno resta il suo', async () => {
+    const h = harness([]);
+    try {
+      const chatId = 555002;
+      const vivi = (h.connector as unknown as { vivi: Map<number, { controller: AbortController; correzioni: string[] }> }).vivi;
+      const controllerDelTurnoFresco = new AbortController();
+      vivi.set(chatId, { controller: controllerDelTurnoFresco, correzioni: [] });
+
+      const record = { id: 'turno-ripreso-2', replyTo: { chatId } } as unknown as TurnRecord;
+      const stream = h.connector.resumeStream(record);
+
+      // La leva restituita è quella del turno fresco già vivo, non una
+      // nuova — spegnerla con `stop()` non deve rimuovere la chat da `vivi`,
+      // che appartiene ancora a quel turno.
+      expect(stream!.signal).toBe(controllerDelTurnoFresco.signal);
+      await stream!.stop!();
+      expect(vivi.has(chatId)).toBe(true);
     } finally {
       await h.chiudi();
     }

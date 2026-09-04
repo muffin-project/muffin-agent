@@ -43,7 +43,7 @@ import { OWNER_SESSION_KEY } from '../core/surface/types.js';
  * legge — un comando aggiunto di là e non qui semplicemente non si
  * completerebbe, in silenzio.
  */
-export const COMANDI: readonly string[] = ELENCO_COMANDI.map((c) => `/${c.nome}`);
+const COMANDI: readonly string[] = ELENCO_COMANDI.map((c) => `/${c.nome}`);
 
 /** Ri-esportato: il tipo vive con i comandi (`agent/comandi.ts`), che sono la cosa che lo gira. */
 export type { Verbosity } from '../agent/comandi.js';
@@ -536,6 +536,11 @@ export async function runRepl(
   } catch (error) {
     mcpLines = [`mcp: ${error instanceof Error ? error.message : String(error)}`];
   }
+  // Same reason as `cli/gateway.ts`: `runtime.bootLines` was rendered inside
+  // `buildRuntime`, before `attachSendFile`/`attachMcp` above registered
+  // anything — `send_file` (DAY-1 B14) could never appear in a cut announced
+  // from that frozen array. Redo the cut against what actually exists now.
+  const exposureLines = runtime.recomputeExposure();
 
   // Only when there is something to decide — see `reviewBootLine`.
   const review = reviewBootLine(runtime.db, CONSOLIDATION_TENANT);
@@ -566,6 +571,7 @@ export async function runRepl(
       surfaces.lines.map((l) => `${l}\n`).join('') +
       mcpLines.map((l) => `${l}\n`).join('') +
       runtime.bootLines.map((l) => `${l}\n`).join('') +
+      exposureLines.map((l) => `! ${l}\n`).join('') +
       `${consolidationBootLine()}\n` +
       (review === null ? '' : `${review}\n`) +
       `\n`,

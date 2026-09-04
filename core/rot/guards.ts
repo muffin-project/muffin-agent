@@ -109,6 +109,48 @@ export function mandatoryGuards(home: string, cwd: string, userHome: string = ho
       secretDir('persistent', home),
       // The working-directory `.env` ADR-0030 tells the owner to create.
       join(cwd, '.env'),
+      // The credentials this machine holds for *other* systems.
+      //
+      // **Measured on the owner's machine, 2026-09-04**, with this very
+      // function's guards and the production `SandboxExecutor`:
+      //
+      //     ~/.ssh/id_ed25519      → LEGGIBILE 444 byte
+      //     ~/.config/gh/hosts.yml → LEGGIBILE 100 byte
+      //     ~/.muffin/secrets      → negato
+      //
+      // Muffin's own secret store held. Everything else did not, because the
+      // sandbox is **allow-by-default on reads** and this list was three
+      // entries long — so it protected the secrets Muffin knows it has and
+      // nothing about the ones the host has.
+      //
+      // That was half an exfiltration waiting for its other half. `shell_run`
+      // could already read these bytes and its stdout reaches the model; what
+      // was missing was an exit. The GitHub-delivery research
+      // (`docs/evidence/consegna-github-2026-09-04.md`) went looking for the
+      // exit — and found that the credential a delivery capability would use is
+      // exactly this one. Closing the read is what stops the two halves from
+      // ever meeting, and it costs nothing today: no capability reaches these
+      // paths on purpose, and the push shape that research recommends runs in
+      // the host process, outside this sandbox, precisely so it never needs to.
+      //
+      // Directories rather than named key files: an SSH private key is
+      // `id_ed25519`, `id_rsa`, `id_ecdsa` or whatever the owner named it when
+      // `ssh-keygen` asked, and a list of filenames would be a list of the keys
+      // we happened to think of. The same argument the shell-dotfile list
+      // above answers the other way, and the difference is that these
+      // directories hold nothing a contained command has a reason to read.
+      join(userHome, '.ssh'),
+      join(userHome, '.aws'),
+      join(userHome, '.gnupg'),
+      join(userHome, '.docker', 'config.json'),
+      join(userHome, '.netrc'),
+      join(userHome, '.npmrc'),
+      join(userHome, '.pypirc'),
+      join(userHome, '.kube'),
+      // `gh` keeps an OAuth token here, and `git push` over HTTPS uses it.
+      join(userHome, '.config', 'gh'),
+      // `git config --global` can carry a credential helper's stored token.
+      join(userHome, '.git-credentials'),
     ],
   };
 }
