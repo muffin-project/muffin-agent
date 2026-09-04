@@ -605,7 +605,7 @@ nascosto):
 **La domanda che ha aperto questa sezione non è nata da un audit, è nata
 dall'owner che usava Telegram per la prima volta sul serio e ha visto
 `fs_write` negato su un "Ciao!".** Misurato sul database reale, non su un
-probe: una sessione Telegram (`telegram:130493441`) bloccata a `taint 2` per
+probe: una sessione Telegram (`telegram:987654321`) bloccata a `taint 2` per
 oltre venti turni consecutivi, ognuno dei quali rifiutato dal kernel con
 `Rifiutato dal kernel dei permessi (taint_exceeded)` — inclusi turni il cui
 unico contenuto era "Ciao!" e "Hai visto dove siamo?".
