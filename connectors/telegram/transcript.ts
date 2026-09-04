@@ -30,10 +30,20 @@ import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js
  * when the model speaks again after tools.** Rounds made of tool calls alone
  * append their lines to the segment that is already open, so a turn with
  * twelve tool calls and two sentences of commentary is two messages plus
- * the answer — never twelve. The answer itself is not a segment: it goes
- * through the durable delivery (`delivery.ts`) exactly as before, and in a
- * private chat it previews in the draft (`presence.ts`) exactly as before.
- * What this file owns is everything *between* the question and the answer.
+ * the answer — never twelve.
+ *
+ * The answer is not a segment of its own, but it is not a message of its own
+ * either (2026-09-04): `live()` streams the growing final round's text into
+ * whichever segment is still open, the same real message the steps already
+ * live in — B11's "as it forms" preview, now durable instead of a
+ * `sendMessageDraft` bubble that expires if a process stops renewing it
+ * (`docs/evidence/turno-sospendibile.md`). `connector.ts#deliverTo` then
+ * `handoff()`s that same message and, when there is one, **extends** it
+ * with the authoritative final text through the durable delivery
+ * (`delivery.ts`) instead of sending a message beside it — one visible
+ * response per turn, not two. A turn with no tool call and a fast answer
+ * still opens exactly this one message; there is never a second one for the
+ * answer to arrive in.
  *
  * ## What is never done here
  *
@@ -49,9 +59,11 @@ import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js
  *   segment past `TELEGRAM_MAX` opens the next one. The old draft *froze*
  *   past one message; the old ASK truncated at 220 characters. Neither
  *   survives.
- * - **A segment with nothing in it is not sent.** A turn that answers
- *   without a single tool call produces no message from this file at all —
- *   the draft is its liveness in private, `sendChatAction` in groups.
+ * - **A segment with nothing in it is not sent.** Until the model's own text
+ *   starts arriving — via `spoke()` (it turned out to be preamble) or
+ *   `live()` (it is still growing, fate unknown) — a turn produces no
+ *   message from this file at all; `sendChatAction` is the only sign of life
+ *   before that, in private chats and in groups alike.
  *
  * ## Rate, and why the counter still moves
  *
@@ -127,6 +139,33 @@ export type Transcript = {
    */
   resolveAsk(capability: string, allowed: boolean): void;
   /**
+   * The turn's own words are still arriving and have not hit a `boundary`
+   * yet — could still turn into preamble (`spoke()`), could still be the
+   * final answer. `text` is the *whole* accumulation so far, replaced not
+   * appended, mirroring `spoke()`'s own contract and the presence-draft
+   * streaming this retires. Written into whichever segment is already open
+   * (opening one, lazily, if this is the turn's first content at all) as a
+   * trailing block, below any steps already there — never touches `seg.html`
+   * or rotates a segment, so it cannot race `spoke()`'s own rotation logic.
+   *
+   * No-ops past this segment's `TELEGRAM_MAX` budget: what is already shown
+   * stays, and `deliverTo`'s own render (through `renderForTelegram`, which
+   * splits) is what makes the final, complete answer correct regardless.
+   */
+  live(text: string): void;
+  /**
+   * The message a finished turn's real answer should extend, if any —
+   * `connector.ts#deliverTo`'s own seam. `null` when there is nothing to
+   * extend: no segment ever got real content this turn (the ordinary,
+   * tool-free case), or the one that did never actually reached Telegram (a
+   * swallowed send failure disabled this transcript first). Meant to be read
+   * once `stop()` has resolved, so `stepsText` is the segment's settled,
+   * non-live rendering — steps and any spoken preamble, deliberately
+   * *without* whatever `live()` last wrote, which `deliverTo` supplies fresh
+   * and properly split from the turn's own authoritative final text.
+   */
+  handoff(): { messageId: number; stepsText: string } | null;
+  /**
    * Last edit, then silence. Idempotent: the caller invokes it once right
    * after the turn and once more from its `finally`.
    */
@@ -145,6 +184,14 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   const now = options.now ?? Date.now;
   const log = options.log ?? ((): void => {});
   const minEditMs = options.isPrivate === false ? MIN_EDIT_GROUP_MS : MIN_EDIT_PRIVATE_MS;
+  // `live()` is B11's replacement for the private-chat-only draft
+  // (`api.ts#sendMessageDraft` "the target **private** chat"): a real
+  // placeholder is not safe to open in a group the same way a draft never
+  // was — see `presence.ts`'s own former docstring on why groups only ever
+  // got the self-expiring chat action. Steps and preamble (`spoke()`,
+  // `report()`) stay unconditional; only the live answer-in-progress text is
+  // private-only.
+  const liveEnabled = options.isPrivate !== false;
   const turnStartedAt = now();
 
   const segments: Segment[] = [];
@@ -153,6 +200,13 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   let disabled = false;
   /** What the turn is doing when no step is running: `sto pensando`, `sto scrivendo la risposta`. */
   let status: string | null = null;
+  /**
+   * The current round's own text, not yet known to be preamble or the
+   * answer — `live()`'s only state. Replaced whole on every call (same
+   * coalescing shape `spoke()` gets from its caller), and cleared the moment
+   * `spoke()` promotes it into `seg.html` — see that method.
+   */
+  let liveText = '';
   let lastCallAt = 0;
   let flushTimer: NodeJS.Timeout | null = null;
   /** The call currently on the wire, so two never overlap and `messageId` is written by one send at a time. */
@@ -176,9 +230,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
 
   /**
    * The message text. `live` includes the running counter and the status
-   * line; the final render (`closed`) leaves only what happened.
+   * line; the final render (`closed`) leaves only what happened. `tail` is
+   * `live()`'s own, still-unsettled text — always last, below the steps,
+   * because chronologically it is the newest thing happening.
    */
-  function render(seg: Segment, live: boolean, at: number): string {
+  function render(seg: Segment, live: boolean, at: number, tail = ''): string {
     const lines: string[] = [];
     for (const step of seg.steps) {
       switch (step.state) {
@@ -201,19 +257,27 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           break;
       }
     }
-    if (live && status !== null && !running(seg)) {
+    // Redundant once the tail itself is visible below: the status line is
+    // for the gap before there is anything real to show.
+    if (live && status !== null && !running(seg) && tail === '') {
       const s = Math.max(0, Math.round((at - turnStartedAt) / 1000));
       lines.push(`<i>${escapeHtml(status)} · ${s}s</i>`);
     }
     const stepsHtml = lines.join('\n');
-    if (seg.html === '') return stepsHtml;
-    return stepsHtml === '' ? seg.html : `${seg.html}\n\n${stepsHtml}`;
+    const base = seg.html === '' ? stepsHtml : stepsHtml === '' ? seg.html : `${seg.html}\n\n${stepsHtml}`;
+    if (tail === '') return base;
+    return base === '' ? tail : `${base}\n\n${tail}`;
   }
 
   /** Whether `seg` can take one more step without leaving one message. */
   function fits(seg: Segment, step: Step): boolean {
     const probe: Segment = { ...seg, steps: [...seg.steps, step] };
     return render(probe, true, now()).length <= TELEGRAM_MAX;
+  }
+
+  /** Whether `seg` can carry `tail` (`live()`'s candidate text) without leaving one message. */
+  function fitsTail(seg: Segment, tail: string): boolean {
+    return render(seg, true, now(), tail).length <= TELEGRAM_MAX;
   }
 
   function addStep(step: Step): void {
@@ -226,9 +290,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   }
 
   /** The one place that talks to Telegram for one segment. */
-  async function sendSegment(seg: Segment, live: boolean): Promise<void> {
-    if (disabled || !hasContent(seg)) return;
-    const text = render(seg, live, now());
+  async function sendSegment(seg: Segment, live: boolean, tail: string): Promise<void> {
+    if (disabled || (!hasContent(seg) && tail === '')) return;
+    const text = render(seg, live, now(), tail);
     if (text === seg.shown) return;
     lastCallAt = now();
     try {
@@ -248,14 +312,16 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   /**
    * Bring every segment up to date, in order: closed ones with their final
    * render (a segment closed before its first send still gets sent, so the
-   * order on screen is the order of events), the open one live.
+   * order on screen is the order of events), the open one live — carrying
+   * `liveText` as its tail, since that buffer only ever belongs to whichever
+   * segment is still open.
    */
   async function syncAll(finalPass: boolean): Promise<void> {
     for (const seg of segments) {
       if (seg.closed) {
-        await sendSegment(seg, false);
+        await sendSegment(seg, false, '');
       } else {
-        await sendSegment(seg, !finalPass);
+        await sendSegment(seg, !finalPass, liveText);
         if (finalPass) seg.closed = true;
       }
       if (disabled) return;
@@ -289,6 +355,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   return {
     spoke(text, reason) {
       if (stopped || disabled) return;
+      // Whatever `live()` was showing for this same round is now either
+      // promoted into `seg.html` below (byte-identical — `text` is the same
+      // accumulation `live()` was already fed) or, for an empty round, moot.
+      // Cleared unconditionally and first, so a flush racing this call can
+      // never render the tail a second time once it is also `seg.html`.
+      liveText = '';
       const trimmed = text.trim();
       if (trimmed !== '') {
         const parts = splitHtml(toTelegramHtml(trimmed));
@@ -371,6 +443,33 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         schedule();
         return;
       }
+    },
+
+    live(text) {
+      if (stopped || disabled || !liveEnabled) return;
+      const trimmed = text.trim();
+      if (trimmed === '') {
+        if (liveText !== '') {
+          liveText = '';
+          schedule();
+        }
+        return;
+      }
+      const rendered = toTelegramHtml(trimmed);
+      const seg = current();
+      // Overflow: stay with whatever is already shown rather than force a
+      // rotation mid-round — `deliverTo`'s own render is what makes the
+      // final, complete, correctly-split answer right regardless.
+      if (!fitsTail(seg, rendered)) return;
+      liveText = rendered;
+      schedule();
+    },
+
+    handoff() {
+      if (disabled || segments.length === 0) return null;
+      const seg = segments[segments.length - 1]!;
+      if (seg.messageId === null) return null;
+      return { messageId: seg.messageId, stepsText: render(seg, false, now()) };
     },
 
     async stop() {
