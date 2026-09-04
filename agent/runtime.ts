@@ -539,6 +539,10 @@ export function buildRuntime(
 
   const recordSpend = (entry: SpendEntry): number => {
     const usd = costUsd(entry.model, entry, config.provider.baseUrl);
+    // `entry` porta già `jobId` quando il turno è il giro di un job
+    // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
+    // niente da tenere in sincrono qui, e nessun secondo posto in cui
+    // l'attribuzione possa perdersi.
     budget.record({ ...entry, usd });
     return usd;
   };
