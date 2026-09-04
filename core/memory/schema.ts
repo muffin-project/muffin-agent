@@ -237,7 +237,7 @@ export const DEFAULT_FUNCTIONAL_PREDICATES = [
  * Consumers: `vectors.ts` (never embeds a request fact as its own standalone,
  * recency-blind vector, and `forgetRequestFacts` retracts one embedded before
  * this existed — see
- * `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md`), and
+ * `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md`), and
  * `recall.ts` (labels one that still reaches the rendered block through the
  * graph hop or `--history`, so it never reads as a live instruction).
  */
