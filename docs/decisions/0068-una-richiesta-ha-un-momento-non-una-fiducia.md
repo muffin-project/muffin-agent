@@ -1,4 +1,4 @@
-# ADR-0067 — Una richiesta ha un momento, non una fiducia
+# ADR-0068 — Una richiesta ha un momento, non una fiducia
 
 **Contesto.** ADR-0040 chiude il decadimento della confidenza con un argomento
 preciso: *"Nothing in this schema changes because a day passed."* Una credenza

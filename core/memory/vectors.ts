@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_tenant ON chunks(tenant_id, source_kind);
  * che non la riguarda. Il grafo (recency-capped, `EXPANSION_SLOTS` in
  * `recall.ts`) e il testo dell'episodio originale restano entrambi
  * raggiungibili — è solo l'indice vettoriale *per-fatto* a scartarla. Misurato
- * in `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md`.
+ * in `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md`.
  */
 function sqlBacklog(perTenant: boolean): string {
   const e = perTenant ? 'e.tenant_id = :tenant AND ' : '';

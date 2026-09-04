@@ -84,7 +84,7 @@ export type RecallItem = {
    * Present on facts. The raw predicate, carried through only so
    * `temporalLabel` can recognise a request (`asked_to`, `asks_to`, …)
    * without re-parsing `text` — see `isRequestPredicate` in `schema.ts` and
-   * `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md` for
+   * `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md` for
    * the argument. Never rendered verbatim; only ever tested against a fixed
    * predicate family.
    */
@@ -1025,7 +1025,7 @@ function temporalLabel(item: RecallItem): string {
   // (ADR-0038's trailing-edge queue), so by the time a request fact exists at
   // all, its turn is already over. `vectors.ts` stopped offering this family a
   // standalone semantic vector for exactly this reason (a paraphrase match has
-  // no recency discipline — see `docs/decisions/0067-una-richiesta-ha-un-momento-non-una-fiducia.md`),
+  // no recency discipline — see `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md`),
   // but the graph hop and `--history` are structurally allowed to still carry
   // one here, when the query names the entity or asks about the past on
   // purpose. This label is what stops that reader — model or owner — from
