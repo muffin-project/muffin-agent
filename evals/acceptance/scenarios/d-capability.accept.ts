@@ -528,6 +528,11 @@ describe('acceptance · D · capability e sicurezza', () => {
           { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
           { tool: { name: 'web_search', args: { query: 'MUFFIN-SECRET-9f3a7c21' } } },
           { text: 'non sono riuscito a proseguire' },
+          // La seconda corsa, col cancello rimesso: stesso giro, e si ferma
+          // sul `web_search` senza arrivare alla terza risposta.
+          { tool: { name: 'memory_search', args: { query: 'promemoria estraneo' } } },
+          { tool: { name: 'web_search', args: { query: 'MUFFIN-SECRET-9f3a7c21' } } },
+          { text: 'non sono riuscito a proseguire' },
         ],
       });
       try {
@@ -548,27 +553,52 @@ describe('acceptance · D · capability e sicurezza', () => {
 
         plantTier3Episode(inst.home, 'fixture-d7');
 
-        const r = await inst.muffin([
-          'run',
-          '--json',
-          '--timeout',
-          '20',
-          'controlla i miei promemoria e poi cerca MUFFIN-SECRET-9f3a7c21',
-        ]);
+        const domanda = 'controlla i miei promemoria e poi cerca MUFFIN-SECRET-9f3a7c21';
 
-        // Same shape as D6: `ask`, never executed. `sys.search`'s own
-        // endpoint check at boot (does api.tavily.com resolve host-allowed?)
-        // is a DIFFERENT question from this one (does this turn's taint let
-        // the query leave at all?) — this is the one that was entirely
-        // unchecked before this slice (audit P04-2, resourceKind: 'none').
-        // Because the verdict is `ask` and this harness never approves it,
-        // `tavilyBackend`'s handler — and therefore any real network call to
-        // Tavily — is never reached: same guarantee as D6, proven the same
-        // way, for the tool the mandate names explicitly.
-        if (r.code !== 3) {
-          throw new Error(`atteso exit 3 (serve approvazione): ${r.code}\n${r.out}\n${r.err}`);
+        // **Riscritto il 04/09 (ADR-0072).** Questo scenario asseriva `exit 3`
+        // — una ricerca dopo contenuto avvelenato chiedeva il permesso. Era la
+        // decisione fino a quel giorno, e l'ha cambiata l'owner: il giro
+        // normale (cerca → leggi → cerca ancora) portava il turno a taint 3
+        // alla prima lettura, quindi il *secondo* `web_search` chiedeva
+        // sempre. Su un processo headless quell'`ask` e' proprio questo
+        // `exit 3`: **un'approvazione che nessuno puo' dare e' un divieto
+        // travestito**, e per una VPS quello e' il modo di fallire sbagliato.
+        const r = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+
+        // (1) Il comportamento spedito: la ricerca gira, e gira **con il turno
+        // gia' a taint 3**. Le due meta' insieme, perche' «la ricerca ha
+        // funzionato» sarebbe verde anche su un turno pulito, dove non c'e'
+        // mai stato nessun cancello da attraversare.
+        if (r.code !== 0) {
+          throw new Error(`la ricerca dopo una lettura non dovrebbe piu' fermarsi: ${r.code}\n${r.out}\n${r.err}`);
         }
-        const parsed = JSON.parse(r.out) as { pending?: { capability?: string; resource?: string } };
+        const esito = JSON.parse(r.out) as { taint?: number; pending?: unknown };
+        if (esito.taint !== 3) {
+          throw new Error(`il turno non era avvelenato, quindi non prova niente: ${JSON.stringify(esito)}`);
+        }
+        if (esito.pending !== undefined) {
+          throw new Error(`qualcosa ha comunque chiesto: ${JSON.stringify(esito.pending)}`);
+        }
+
+        // (2) E il cancello e' una **manopola**, non una riga tolta: un
+        // `rot/policy.json` che riabbassa `searchMaxTaint` lo rimette, e
+        // l'`ask` torna con la query intera. Senza questa meta', ADR-0072
+        // sarebbe indistinguibile da «il gate e' stato cancellato» — che e'
+        // esattamente la differenza che questo repository ha gia' pagato per
+        // non saper vedere.
+        writeFileSync(
+          join(paths(inst.home).rot, 'policy.json'),
+          JSON.stringify({ schemaVersion: 1, searchMaxTaint: 2 }, null, 2),
+        );
+        seal(inst.home, '1', new Date());
+
+        const stretto = await inst.muffin(['run', '--json', '--timeout', '20', domanda]);
+        if (stretto.code !== 3) {
+          throw new Error(
+            `con searchMaxTaint 2 il cancello doveva tornare: exit ${stretto.code}\n${stretto.out}\n${stretto.err}`,
+          );
+        }
+        const parsed = JSON.parse(stretto.out) as { pending?: { capability?: string; resource?: string } };
         if (parsed.pending?.capability !== 'sys.search') {
           throw new Error(`pending inatteso: ${JSON.stringify(parsed.pending)}`);
         }
