@@ -16,7 +16,7 @@ import { formatOrientamentoReport, readOrientamentoReport } from '../core/turns/
  * (`readonly: true`), quindi anche puntato per errore su un database vivo
  * non scrive nulla.
  */
-export const ORIENTAMENTO_USAGE = `usage: muffin orientamento --db <path> [--cap N]
+const ORIENTAMENTO_USAGE = `usage: muffin orientamento --db <path> [--cap N]
   la quota di chiamate "di orientamento" (fs_list, fs_read, fs_search, sys_inspect)
   su turn_tool_calls di un database esplicito — mai la home di default, sola lettura.
   --db   percorso del file sqlite da leggere (obbligatorio)

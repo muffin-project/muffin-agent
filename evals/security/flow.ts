@@ -20,7 +20,7 @@ import type { Decision } from '../../core/policy/types.js';
  * un'annotazione: una scena nuova a monte fa cadere quella riga invece di
  * arrivare a B con un default silenzioso.
  */
-export const FLOW_BY_SCENARIO: Readonly<Record<string, ResourceChooser>> = {
+const FLOW_BY_SCENARIO: Readonly<Record<string, ResourceChooser>> = {
   // L'owner ha nominato `/workspace/result.txt` nel suo messaggio; il file
   // letto ha solo fornito i byte da scrivere.
   's1-local-read-owner-write': 'owner',
@@ -56,7 +56,7 @@ const path = (value: string) => ({ kind: 'path' as const, value });
  * divergere *in favore di B*: A vede lo stesso numero nei due membri e deve
  * rispondere lo stesso, qualunque sia la risposta.
  */
-export const FLOW_SCENARIOS: readonly FlowScenario[] = [
+const FLOW_SCENARIOS: readonly FlowScenario[] = [
   {
     id: 'f1-egress-allowlisted-owner-chosen',
     family: 'external-value',
@@ -174,7 +174,7 @@ export const FLOW_SCENARIOS: readonly FlowScenario[] = [
 ];
 
 /** Ogni scena della baseline, annotata — o un errore, mai un default. */
-export function flowOf(scenario: SecurityBaselineScenario): ResourceChooser {
+function flowOf(scenario: SecurityBaselineScenario): ResourceChooser {
   const found = FLOW_BY_SCENARIO[scenario.id];
   if (found === undefined) {
     throw new Error(

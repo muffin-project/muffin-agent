@@ -45,7 +45,7 @@ import { paths } from './config.js';
  *     declared, never in silence).
  */
 
-export type RegistryEntry = { path: string; sha256: string };
+type RegistryEntry = { path: string; sha256: string };
 
 export type DefaultsRegistry = {
   schemaVersion: 1;
@@ -288,7 +288,7 @@ export function shippedPathOf(checkoutRoot: string, relPath: string): string {
   return join(checkoutRoot, 'defaults', ...relPath.split('/'));
 }
 
-export type DriftStatus = 'up-to-date' | 'adoptable' | 'owner-modified' | 'missing' | 'unknown';
+type DriftStatus = 'up-to-date' | 'adoptable' | 'owner-modified' | 'missing' | 'unknown';
 
 export type DefaultDrift = {
   /** `/`-separated, relative to both `defaults/` and `~/.muffin` — e.g. `"persona.md"`, `"rot/identity.md"`. */
@@ -302,7 +302,7 @@ export type DefaultDrift = {
   adoptCommand?: string;
 };
 
-export type GitLogResult = { ok: true; commits: { sha: string; date: string }[] } | { ok: false; why: string };
+type GitLogResult = { ok: true; commits: { sha: string; date: string }[] } | { ok: false; why: string };
 
 /** The two git operations this module needs — injectable so a test can break "git itself" without a broken repo. */
 export type Git = {
