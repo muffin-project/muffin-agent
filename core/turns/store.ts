@@ -208,6 +208,22 @@ export type TurnRecord = {
   counters: TurnCounters;
   /** Opaque to the loop: each surface owns the shape and validates its own. */
   replyTo: Record<string, unknown> | null;
+  /**
+   * Il job schedulato di cui questo turno è un'occorrenza, o `null`.
+   *
+   * Sta **sulla riga** e non solo nel `TurnInput`, e la ragione è misurata:
+   * `drive` non riceve il `TurnInput` originale — lo *ricostruisce* dal record
+   * (`agent/loop.ts`, `guidaIlTurno`), quindi qualunque cosa passata solo a
+   * `runTurn` sparisce fra le due funzioni senza un errore. È già successo per
+   * le immagini e per l'audio; qui sarebbe sparita l'attribuzione della spesa,
+   * e un tetto per-job che legge un contatore fermo a zero è un tetto che non
+   * scatta mai.
+   *
+   * Ed è anche ciò che la fa sopravvivere a una ripresa: un turno di job che
+   * si sospende su `wait` viene ripreso dalla lane in un altro processo, e la
+   * spesa di quella metà deve contare per lo stesso job.
+   */
+  jobId: string | null;
   status: TurnStatus;
   wakeAt: string | null;
   waitFor: string | null;
@@ -324,6 +340,19 @@ export type InterruptedTurn = {
  */
 export const SCRIPT_MODEL = '(script: nessun modello)';
 
+/**
+ * Il valore di `model` per un giro di job che si è fermato sul proprio tetto.
+ *
+ * Stessa famiglia di `SCRIPT_MODEL` e stessa ragione: la riga in `turns` esiste
+ * — è ciò che rende il rifiuto durevole e leggibile invece che un messaggio
+ * volato via — ma **il modello non l'ha mai vista**, quindi non c'è nessuna
+ * inferenza da riprendere. Un discriminante nominato e non una stringa sparsa,
+ * perché `agent/loop.ts` lo legge per rifiutarsi di riprendere col modello un
+ * turno nato proprio dal non volerlo chiamare: riprenderlo significherebbe
+ * spendere esattamente i soldi che il tetto ha appena rifiutato di spendere.
+ */
+export const CAPPED_MODEL = '(tetto per-job: nessun modello)';
+
 export type NewTurn = {
   /** The trace id of the turn's root span: one identity, so "why" is a join. */
   id: string;
@@ -336,6 +365,8 @@ export type NewTurn = {
   taint: TrustTier;
   counters: TurnCounters;
   replyTo?: Record<string, unknown> | undefined;
+  /** See `TurnRecord.jobId`. Absent on every turn that is not a job's fire. */
+  jobId?: string | undefined;
 };
 
 const SCHEMA = `
@@ -350,6 +381,10 @@ CREATE TABLE IF NOT EXISTS turns (
   taint         INTEGER NOT NULL CHECK (taint BETWEEN 0 AND 3),
   counters      TEXT NOT NULL,
   reply_to      TEXT,
+  -- Il job di cui questo turno è un'occorrenza; NULL per ogni turno
+  -- interattivo, che è la maggioranza. Additiva e nullable: nessuna riga già
+  -- scritta acquisisce un'appartenenza che non aveva.
+  job_id        TEXT,
   status        TEXT NOT NULL CHECK (status IN ('runnable','running','waiting','interrupted','done')),
   wake_at       TEXT,
   wait_for      TEXT,
@@ -409,6 +444,7 @@ type Row = {
   taint: number;
   counters: string;
   reply_to: string | null;
+  job_id: string | null;
   status: string;
   wake_at: string | null;
   wait_for: string | null;
@@ -433,6 +469,7 @@ function toRecord(row: Row): TurnRecord {
     taint: row.taint as TrustTier,
     counters: toCounters(row.counters),
     replyTo: row.reply_to === null ? null : (JSON.parse(row.reply_to) as Record<string, unknown>),
+    jobId: row.job_id ?? null,
     status: row.status as TurnStatus,
     wakeAt: row.wake_at,
     waitFor: row.wait_for,
@@ -519,6 +556,10 @@ export class TurnStore {
     // Additive, for a database written before `claim_token` existed — see
     // `ensureColumn`'s own docstring in `core/lock/durable.ts`.
     ensureColumn(db, 'turns', 'claim_token', 'claim_token TEXT');
+    // Stessa rete, stessa ragione: `CREATE TABLE IF NOT EXISTS` non aggiunge
+    // una colonna a una tabella che esiste già, e `turns` è scritta a ogni
+    // turno — non solo dai job.
+    ensureColumn(db, 'turns', 'job_id', 'job_id TEXT');
     // Additive, for a database written before D11's undo-realigns-the-turn
     // half existed. See the column's own comment in `SCHEMA` above.
     ensureColumn(db, 'turn_tool_calls', 'undone_at', 'undone_at TEXT');
@@ -532,9 +573,9 @@ export class TurnStore {
     // `claim()` hands the lane later — see `insert`.
     this.insertStmt = db.prepare(
       `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters,
-                          reply_to, status, claimed_by, claimed_at, claim_token, delivery, created_at, updated_at)
+                          reply_to, job_id, status, claimed_by, claimed_at, claim_token, delivery, created_at, updated_at)
        VALUES (@id, @principal, @tenant, @surface, @sessionId, @model, @messages, @taint, @counters,
-               @replyTo, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
+               @replyTo, @jobId, @status, @pid, @claimedAt, @claimToken, @delivery, @now, @now)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM turns WHERE id = ?`);
     // Fenced on `claim_token` (P19's second finding): a checkpoint from a
@@ -784,6 +825,9 @@ export class TurnStore {
       taint: spec.taint,
       counters: JSON.stringify(spec.counters),
       replyTo: spec.replyTo === undefined ? null : JSON.stringify(spec.replyTo),
+      // `?? null` esplicito: better-sqlite3 rifiuta un parametro nominato
+      // assente dall'oggetto, e `undefined` non è un valore che sa legare.
+      jobId: spec.jobId ?? null,
       // The address and the delivery state travel together: a turn nobody has
       // to deliver to has no delivery that can fail.
       delivery: spec.replyTo === undefined ? null : 'pending',

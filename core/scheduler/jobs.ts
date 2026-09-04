@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- che esistevano prima di questa colonna sono tutte obiettivi, e la
   -- migrazione 2 la aggiunge con lo stesso default.
   kind         TEXT NOT NULL DEFAULT 'goal',
+  -- Il tetto di spesa di QUESTO job, in dollari per mese solare, e NULL
+  -- quando l'owner non ne ha messo uno. Nullable per costruzione: un default
+  -- numerico qui spegnerebbe di sua iniziativa i job che esistevano prima di
+  -- questa colonna, cioè cambierebbe il comportamento di righe che nessuno ha
+  -- toccato. Il conto che lo consuma sta in spend.job_id
+  -- (core/budget/budget.ts), non qui: una colonna contatore su questa riga
+  -- si aggiornerebbe solo quando il giro torna, ed è esattamente ciò che
+  -- ADR-0035 emendamento №2 dice di non fare.
+  per_job_usd  REAL,
   created_at   TEXT NOT NULL,
   next_fire_at TEXT NOT NULL,
   last_run_at  TEXT,
@@ -51,6 +60,17 @@ type JobCommon = {
   nextFireAt: Date;
   lastRunAt: Date | null;
   active: boolean;
+  /**
+   * USD per calendar month this job may spend on the model, or `null` for "no
+   * ceiling of its own" — which is every job written before this column and
+   * every job added without `--per-job-usd`.
+   *
+   * The gate that reads it is `agent/scheduler-run.ts`, **before** the fire is
+   * allowed to reach the model. It can only tighten: the sealed monthly cap
+   * (`rot/budgets.json`, ADR-0039) still bounds everything above it, so a
+   * value written here can never buy more model time than the seal allows.
+   */
+  perJobUsd: number | null;
 };
 
 /**
@@ -82,6 +102,8 @@ export type NewJob = {
   cron: string;
   timezone: string;
   channel: string;
+  /** See `Job.perJobUsd`. Omitted means no per-job ceiling. */
+  perJobUsd?: number | null;
 } & ({ kind?: 'goal'; goal: string } | { kind: 'script'; script: string });
 
 /** What this job runs, whichever kind it is — for logs and list output. */
@@ -134,6 +156,7 @@ type Row = {
   next_fire_at: string;
   last_run_at: string | null;
   active: number;
+  per_job_usd: number | null;
 };
 
 function toJob(row: Row): Job {
@@ -146,6 +169,13 @@ function toJob(row: Row): Job {
     nextFireAt: new Date(row.next_fire_at),
     lastRunAt: row.last_run_at ? new Date(row.last_run_at) : null,
     active: row.active === 1,
+    // `?? null` e non `row.per_job_usd`: su una riga scritta prima della
+    // colonna SQLite restituisce `null`, ma un database riaperto da codice
+    // vecchio-su-nuovo può non avere la chiave affatto — e `undefined` qui
+    // diventerebbe un tetto che il gate legge come «assente» invece che come
+    // «non impostato». Sono lo stesso valore, e questa riga li rende lo stesso
+    // *tipo*.
+    perJobUsd: row.per_job_usd ?? null,
   };
   // Anything that is not exactly 'script' is a goal. A row with a `kind` this
   // build does not know must not become an executable script by accident —
@@ -162,6 +192,7 @@ export class JobStore {
   private readonly getStmt: Database.Statement;
   private readonly ranStmt: Database.Statement;
   private readonly disableStmt: Database.Statement;
+  private readonly capStmt: Database.Statement;
 
   constructor(
     private readonly db: Database.Database,
@@ -178,9 +209,15 @@ export class JobStore {
     // per `claim_token`, e il suo costo è un PRAGMA. È anche il gap che
     // l'audit P27 aveva già nominato per `turns`/`jobs`/le tabelle di lock.
     ensureColumn(db, 'jobs', 'kind', `kind TEXT NOT NULL DEFAULT 'goal'`);
+    // Stessa rete, stessa ragione, per il tetto per-job: `cli/jobs.ts` apre il
+    // database direttamente e non passa da `migrate()`, quindi senza questa
+    // riga il primo `muffin jobs list` dopo l'aggiornamento morirebbe con
+    // «table jobs has no column named per_job_usd» su un'installazione che
+    // funzionava un minuto prima.
+    ensureColumn(db, 'jobs', 'per_job_usd', 'per_job_usd REAL');
     this.insertStmt = db.prepare(
-      `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, created_at, next_fire_at, last_run_at, active)
-       VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @createdAt, @nextFireAt, NULL, 1)`,
+      `INSERT INTO jobs (id, cron, timezone, goal, channel, kind, per_job_usd, created_at, next_fire_at, last_run_at, active)
+       VALUES (@id, @cron, @timezone, @goal, @channel, @kind, @perJobUsd, @createdAt, @nextFireAt, NULL, 1)`,
     );
     this.listStmt = db.prepare(`SELECT * FROM jobs WHERE active = 1 ORDER BY next_fire_at`);
     this.dueStmt = db.prepare(
@@ -189,11 +226,22 @@ export class JobStore {
     this.getStmt = db.prepare(`SELECT * FROM jobs WHERE id = ?`);
     this.ranStmt = db.prepare(`UPDATE jobs SET last_run_at = @now, next_fire_at = @next WHERE id = @id`);
     this.disableStmt = db.prepare(`UPDATE jobs SET active = 0 WHERE id = ? AND active = 1`);
+    this.capStmt = db.prepare(`UPDATE jobs SET per_job_usd = @cap WHERE id = @id AND active = 1`);
   }
 
   /** Validates, computes the first fire from now, persists. Throws JobError. */
   add(spec: NewJob): Job {
     const now = this.clock();
+    // Prima di qualunque scrittura, come il cron: un tetto NaN entrerebbe in
+    // SQLite come NULL — cioè come «nessun tetto» — e l'owner avrebbe chiesto
+    // un limite ottenendo il contrario, in silenzio. Zero è ammesso e
+    // significa quello che dice: questo job non chiama il modello finché il
+    // tetto non cambia.
+    if (spec.perJobUsd !== undefined && spec.perJobUsd !== null) {
+      if (!Number.isFinite(spec.perJobUsd) || spec.perJobUsd < 0) {
+        throw new JobError(`tetto per-job non valido: "${spec.perJobUsd}" (attesi dollari, es. 0.50)`);
+      }
+    }
     const next = nextFire(spec.cron, spec.timezone, now); // throws before any write
     const common = {
       id: randomUUID(),
@@ -204,6 +252,7 @@ export class JobStore {
       nextFireAt: next,
       lastRunAt: null,
       active: true,
+      perJobUsd: spec.perJobUsd ?? null,
     };
     const job: Job =
       spec.kind === 'script'
@@ -216,6 +265,7 @@ export class JobStore {
       goal: jobPayload(job),
       channel: job.channel,
       kind: job.kind,
+      perJobUsd: job.perJobUsd,
       createdAt: now.toISOString(),
       nextFireAt: next.toISOString(),
     });
@@ -249,6 +299,22 @@ export class JobStore {
     const next = nextFire(job.cron, job.timezone, now);
     this.ranStmt.run({ id, now: now.toISOString(), next: next.toISOString() });
     return { ...job, lastRunAt: now, nextFireAt: next };
+  }
+
+  /**
+   * Change (or clear, with `null`) a job's own spending ceiling.
+   *
+   * The second door the cap needs: without it a ceiling would be a one-way
+   * decision — settable at `add` and never changeable — so the only remedy for
+   * a job stopped by its own cap would be deleting and recreating it, which
+   * loses the id every fire in `job_fires` points at. `active = 1` in the
+   * WHERE because a retired job has nothing to cap.
+   */
+  setPerJobUsd(id: string, capUsd: number | null): boolean {
+    if (capUsd !== null && (!Number.isFinite(capUsd) || capUsd < 0)) {
+      throw new JobError(`tetto per-job non valido: "${capUsd}" (attesi dollari, es. 0.50)`);
+    }
+    return this.capStmt.run({ id, cap: capUsd }).changes > 0;
   }
 
   /** Soft-delete: the row stays (§I-8), it just stops firing. */

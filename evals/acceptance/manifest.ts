@@ -420,7 +420,14 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // copre l'altra meta' della domanda della riga — «e un ripristino che disfa
   // anche il turno?».
   verde('D11', 'checkpoint: `muffin undo` marks the turn and the memory episode, not only the disk'),
-  verde('E1', 'budget: a turn that would cross the monthly cap is stopped before it spends'),
+  // Extended (slice/e1-budget-per-job): the row asks "cap globale **e**
+  // per-job?" and only the first half had a scenario, which the file's own
+  // docstring said out loud. Both halves now run in one test — the monthly cap
+  // stopping an interactive turn, and a scheduled job with its own ceiling
+  // refusing to fire — because `entry()` resolves a row to one manifest line
+  // and two `scenario('E1', …)` calls would register two tests with the same
+  // title for `report.ts` to disambiguate.
+  verde('E1', 'budget: the monthly cap stops a turn, and a job past its own per-job cap never reaches the model'),
   verde('E2', 'cost: the REPL answers how much has been spent this month, in dollars'),
   // Extended (slice/journey-lifecycle): still narrower than E3's own full
   // question in one respect (it does not exercise every span shape the row
