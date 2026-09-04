@@ -25,7 +25,8 @@
     "gate:local": "bash scripts/local-gate.sh",
     "e2e:telegram": "tsx evals/e2e/telegram.ts",
     "eval:character": "tsx evals/character/run.ts",
-    "mappa:regen": "node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs && git add docs/derived/architecture-map/ancore.json docs/derived/architecture-map/mappa.html"
+    "mappa:regen": "node docs/derived/architecture-map/ancore.mjs && node docs/derived/architecture-map/build.mjs && git add docs/derived/architecture-map/ancore.json docs/derived/architecture-map/mappa.html",
+    "igiene": "node scripts/igiene.mjs"
   },
   "devDependencies": {
     "@grammyjs/types": "^4.0.0",
