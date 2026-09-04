@@ -777,7 +777,7 @@ async function offerGateway(): Promise<void> {
   // `--write` and not the enable: writing the file is what the owner just
   // agreed to, and loading it into the supervisor stays their command. The
   // difference matters — one is a file in their home, the other is a service.
-  cmdGatewayInstall(paths().home, ['--write']);
+  await cmdGatewayInstall(paths().home, ['--write']);
 }
 
 /**
