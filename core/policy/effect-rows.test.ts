@@ -77,6 +77,8 @@ function resourceFor(decl: CapabilityDecl): DecisionRequest['resource'] {
       return { kind: 'path', value: '/tmp/scope/nota.txt' };
     case 'url':
       return { kind: 'url', value: 'https://esempio.test/pagina' };
+    case 'url-read':
+      return { kind: 'url-read', value: 'https://esempio.test/pagina' };
     case 'query':
       return { kind: 'query', value: 'il tempo di domani' };
     case 'tenant':

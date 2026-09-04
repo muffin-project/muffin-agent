@@ -2,38 +2,55 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { ToolSpec } from '../providers/types.js';
-import { hostAllowed, isForbiddenAddress, type EgressPolicy } from '../../core/net/egress.js';
+import { isForbiddenAddress } from '../../core/net/egress.js';
 import { fence } from '../../core/memory/spotlight.js';
 import { extractMainContent, isHtmlContentType } from './extract.js';
 import type { RegisteredTool } from '../loop.js';
 
 /**
- * sys.http — read-only egress, hop by hop.
+ * sys.http — reading is open; the allowlist governs acting, not reading.
  *
- * The kernel gates the FIRST url against the allowlist (decide.ts, egress
- * branch); this tool re-applies the same predicate to every redirect target,
- * because a 302 is a way for an allowlisted host to nominate a different one —
- * and the model never gets to approve that mid-flight. Each hop's hostname is
- * also resolved before connecting and every address must be public: the
- * allowlist says which *names* the owner trusts, the address check says no
- * name, trusted or not, is allowed to point into the house (SSRF floor —
- * loopback, RFC1918, link-local metadata, and their v6 relatives).
+ * ADR-0062 (owner decision, 2026-09-04): *"tu leggi qualsiasi sito vuoi …
+ * viene riportato come fonte esterna e quindi sai che non sono istruzioni"*.
+ * Before this the kernel gated the first hop against `rot/egress.json`
+ * (`decide.ts`, the `url` branch), which meant Muffin could not open a page
+ * the owner had not pre-approved by hostname — measured unworkable the day the
+ * owner tried it. This capability now declares `resourceKind: 'url-read'`
+ * (`core/policy/types.ts`), a resource the kernel never checks against the
+ * allowlist: any public host is reachable by construction, no `ask`, no
+ * `rot/egress.json` entry required. The allowlist keeps meaning something —
+ * it still gates every `url` resource (reaching a host to **act**: write,
+ * execute, send) and it still gates *which third-party endpoints get
+ * registered at boot* (`agent/tools/search.ts`'s `api.tavily.com` check).
+ * Reading and acting are two different authorities; this is the tool that
+ * only ever does the first.
  *
- * Declared limit, not silent: the check is resolve-then-connect, so a DNS
- * answer that changes between the two (rebinding) is out of scope for v1 —
- * same posture as the field, compensated by the allowlist being small.
+ * What did NOT move, because opening the allowlist and opening the network are
+ * two different claims:
  *
- * GET only. The taint-2/3 row of the matrix reads "solo read-only su allowlist
- * pubblica": a body-carrying verb is an exfiltration channel and arrives, if
- * ever, with its own capability — not as a parameter here.
+ *  - **The SSRF floor.** Every hop's hostname is resolved before connecting
+ *    and every address must be public (`core/net/egress.ts#isForbiddenAddress`
+ *    — loopback, RFC1918, CGNAT, link-local metadata, and their v6 relatives).
+ *    This is what stands between an open read and the machine's own network,
+ *    and it runs on every hop, allowlist or not, exactly as it did before this
+ *    slice. Declared limit, not silent: the check is resolve-then-connect, so
+ *    a DNS answer that changes between the two (rebinding) is out of scope for
+ *    v1.
+ *  - **`paramsMaxTaint`.** A non-empty query string or fragment is bytes the
+ *    model chose, wherever the host came from, and above the ceiling the owner
+ *    is asked and shown the whole URL, everyone else refused (`core/policy/
+ *    decide.ts`, `gateParams` — mandato inv. 7, audit P04-1). Nothing here had
+ *    to change for that: the gate reads the same `url-read` resource this
+ *    capability already declares.
+ *  - **GET only.** A body-carrying verb is an exfiltration channel and
+ *    arrives, if ever, as its own capability declaring `resourceKind: 'url'`
+ *    — the allowlisted, acting kind — not as a parameter here.
  *
- * The allowlist only ever checked the HOST. On an allowlisted host the kernel
- * additionally asks whether the URL carries bytes the model chose — a
- * non-empty query string or fragment — and above `paramsMaxTaint` the owner is
- * asked and shown the whole URL, everyone else refused (`core/policy/
- * decide.ts`, `gateParams` — mandato inv. 7, audit P04-1). Nothing here has to
- * change for that: the gate reads the same `url` resource this capability
- * already declares.
+ * A redirect is no longer re-checked against the allowlist (there is none to
+ * check): a public page redirecting to another public page is exactly as much
+ * "reading" as the first hop was. What every hop still cannot do is land
+ * inside the house — the address veto below runs before every connect, first
+ * hop included.
  */
 export const httpCapability: CapabilityDecl = {
   id: 'sys.http',
@@ -45,10 +62,10 @@ export const httpCapability: CapabilityDecl = {
   // answers this question with `false`, rather than this line being widened.
   rerunnable: true,
   // The `maxTaint: 3` that used to sit here is now the `egress` row's: the
-  // threat model gives that row's columns to the allowlist and to
+  // threat model gives that row's columns to the allowlist/openness and to
   // `paramsMaxTaint`, not to a ceiling, which is what this pin was working
   // around by widening the medium class default one capability at a time.
-  resourceKind: 'url',
+  resourceKind: 'url-read',
   policyArgs: ['url'],
   hostOnly: false,
   timeoutMs: 20_000,
@@ -57,11 +74,12 @@ export const httpCapability: CapabilityDecl = {
 const httpSpec: ToolSpec = {
   name: 'http_get',
   description:
-    'Fetch a URL with GET. Only hosts on the egress allowlist are reachable without asking; ' +
-    'redirects are re-checked against the same list and stop the request if they leave it. ' +
-    'An HTML page is reduced to its main content (as Markdown) before returning; other content ' +
-    'types (JSON, plain text, …) pass through unchanged. The body is untrusted text (fenced, ' +
-    'tier 3), truncated with a marker when long.',
+    'Fetch a URL with GET. Any public host is reachable — reading is open (ADR-0062) — but the ' +
+    'request never reaches loopback, private, or link-local/metadata addresses, on the first hop ' +
+    'or after a redirect. A query string or fragment carrying bytes the model chose may still ask ' +
+    'the owner at higher taint. An HTML page is reduced to its main content (as Markdown) before ' +
+    'returning; other content types (JSON, plain text, …) pass through unchanged. The body is ' +
+    'untrusted text (fenced, tier 3), truncated with a marker when long.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -103,7 +121,7 @@ export type HttpDeps = {
   extractFn?: (html: string, url: string) => Promise<string | null>;
 };
 
-export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): RegisteredTool {
+export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
   const fetchFn = deps.fetchFn ?? fetch;
   const lookupFn = deps.lookupFn ?? ((hostname: string) => dnsLookup(hostname, { all: true }));
   const extractFn = deps.extractFn ?? extractMainContent;
@@ -141,15 +159,10 @@ export function makeHttpTool(policy: EgressPolicy, deps: HttpDeps = {}): Registe
         if (current.protocol !== 'http:' && current.protocol !== 'https:') {
           return { content: `scheme not allowed: ${current.protocol}`, isError: true, tier: 0 };
         }
-        // Redirect hops answer to the same allowlist as the first URL. The
-        // kernel approved hop 0; nobody approved where a 302 points.
-        if (hop > 0 && !hostAllowed(current.hostname, policy)) {
-          return {
-            content: `redirect left the allowlist at hop ${hop}: ${current.hostname} — stopped before connecting`,
-            isError: true,
-            tier: 0,
-          };
-        }
+        // Reading is open (ADR-0062): there is no allowlist left for a redirect
+        // hop to leave. What every hop still cannot do — first or Nth — is
+        // resolve into the house, which the address veto below enforces
+        // unconditionally, before this loop ever calls `fetchFn`.
         const veto = await addressVeto(current.hostname, lookupFn);
         if (veto !== null) {
           return { content: veto, isError: true, tier: 0 };

@@ -58,15 +58,12 @@ function grammatica(block: string): { etichetta: string; nonce: string; corpo: s
 
 /** Il vero recinto del web, prodotto dal vero `http_get` senza toccare la rete. */
 async function recintoDelWeb(corpo: string): Promise<string> {
-  const http = makeHttpTool(
-    { allow: ['esempio.test'] },
-    {
-      // Un indirizzo pubblico, o il floor SSRF veta l'hop prima del corpo.
-      lookupFn: async () => [{ address: '93.184.216.34' }],
-      fetchFn: (async () =>
-        new Response(corpo, { status: 200, headers: { 'content-type': 'text/plain' } })) as typeof fetch,
-    },
-  );
+  const http = makeHttpTool({
+    // Un indirizzo pubblico, o il floor SSRF veta l'hop prima del corpo.
+    lookupFn: async () => [{ address: '93.184.216.34' }],
+    fetchFn: (async () =>
+      new Response(corpo, { status: 200, headers: { 'content-type': 'text/plain' } })) as typeof fetch,
+  });
   const out = await http.handler({ url: 'https://esempio.test/pagina' }, ctx);
   return out.content;
 }
