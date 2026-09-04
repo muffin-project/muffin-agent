@@ -49,7 +49,7 @@ import { DRAIN_BUDGET_MS } from '../../core/gateway/service.js';
  * `drainBudgetMs` — see `stop()`'s doc comment.
  */
 const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
-import { escapeHtml, renderForTelegram } from './render.js';
+import { escapeHtml, renderForTelegram, splitHtml, toTelegramHtml } from './render.js';
 import { UpdateInbox, type StoredUpdate } from './updates.js';
 
 /**
@@ -677,6 +677,39 @@ export class TelegramConnector {
    */
   private readonly transcriptInSospeso = new Map<string, Transcript>();
 
+  /**
+   * The transcript message a just-finished turn's real answer should
+   * **extend** instead of arriving beside — tool steps happened this turn,
+   * so there is already a real, durable message for the answer to join.
+   * Written by `noteTranscriptHandoff` the moment a transcript closes for
+   * good (never for a turn that is merely pausing — see the two call sites),
+   * read and deleted the one time `deliverTo` builds a plan for that turn.
+   *
+   * This is the fix for the other half of the two-bubble defect
+   * (`docs/evidence/turno-sospendibile.md`): before this slice, the tool
+   * trail (`transcript.ts`) and the final answer (`deliverTo`) were two
+   * independent `sendMessage` calls for the same turn — measured on the
+   * owner's own chat as a stray message id sitting between the question and
+   * the answer on three turns out of eight, exactly the ones that used a
+   * tool. `deliverTo` now **edits** this message into steps-plus-answer
+   * instead, through the same durable, crash-recoverable write-ahead every
+   * other delivery already goes through — `TelegramDeliveryStore.plan()`
+   * freezes the combined text before any network call, so a crash right
+   * after does not lose the merge, only a crash *before* this map even has
+   * the entry does (see `deliverTo`'s own comment).
+   *
+   * In-memory only, same accepted degradation as `transcriptInSospeso` right
+   * above: a process boundary between "transcript closed" and "answer
+   * delivered" loses the entry, and `deliverTo` falls back to a plain new
+   * message — the pre-existing shape, never worse.
+   */
+  private readonly transcriptHandoff = new Map<string, { messageId: number; stepsText: string }>();
+
+  private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
+    const handoff = transcript.handoff();
+    if (handoff) this.transcriptHandoff.set(turnId, handoff);
+  }
+
   constructor(private readonly deps: ConnectorDeps) {
     this.sleep = deps.sleep ?? sleep;
   }
@@ -924,6 +957,26 @@ export class TelegramConnector {
    *
    * Both the fresh inbound path and the lane/recovery path converge here: one
    * frozen wire plan, one first-writer-wins attempt per part.
+   *
+   * **One bubble, not two.** `this.transcriptHandoff` names the message the
+   * tool trail (`transcript.ts`) already sent this turn, if any — read and
+   * cleared here, once. When present, the answer is not a message beside it:
+   * `combineWithHandoff` below prepends the steps' own settled text and the
+   * whole thing is split as one document, so the plan's first part **edits**
+   * that message (steps kept, answer appended) and only an overflow spills
+   * into further `send`s after it — never a `send` of its own for the answer.
+   *
+   * The one gap this cannot close: a crash between `transcript.stop()`
+   * setting the handoff and this method's own `store.plan()` call, which is
+   * what actually freezes it durably. `store.plan()` freezes the *combined*
+   * html the very first time it runs for this `turnId` — every later replay
+   * (a retry, a recovery in a different process) reuses that frozen plan
+   * byte-for-byte regardless of what this method computes on that later call
+   * (`TelegramDeliveryStore.plan`'s own contract) — so once this method has
+   * run once with a handoff, the merge is as durable as any other delivery.
+   * Before that first run, there is nothing durable yet to lose beyond the
+   * handoff map entry itself, and losing it here means exactly what losing
+   * it meant before this slice: one extra message, never a dropped answer.
    */
   async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
@@ -933,17 +986,28 @@ export class TelegramConnector {
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
     const editMessageId = typeof replyTo['editMessageId'] === 'number' ? replyTo['editMessageId'] : undefined;
 
-    const plan: TelegramDeliveryPlanPart[] = renderForTelegram(text).map((html, i) =>
-      i === 0 && editMessageId !== undefined
-        ? { operation: 'edit', chatId, replyTo: null, editMessageId, html }
-        : {
-            operation: 'send',
-            chatId,
-            replyTo: i === 0 && replyToMessage !== undefined ? replyToMessage : null,
-            editMessageId: null,
-            html,
-          },
-    );
+    const handoff = this.transcriptHandoff.get(turnId);
+    if (handoff) this.transcriptHandoff.delete(turnId);
+
+    const parts = handoff
+      ? splitHtml(handoff.stepsText === '' ? toTelegramHtml(text) : `${handoff.stepsText}\n\n${toTelegramHtml(text)}`)
+      : renderForTelegram(text);
+
+    const plan: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
+      if (i === 0 && handoff) {
+        return { operation: 'edit', chatId, replyTo: null, editMessageId: handoff.messageId, html };
+      }
+      if (i === 0 && editMessageId !== undefined) {
+        return { operation: 'edit', chatId, replyTo: null, editMessageId, html };
+      }
+      return {
+        operation: 'send',
+        chatId,
+        replyTo: i === 0 && replyToMessage !== undefined ? replyToMessage : null,
+        editMessageId: null,
+        html,
+      };
+    });
     return deliverTelegram(this.deps.delivery, this.deps.api, turnId, plan, () => this.now());
   }
 
@@ -976,7 +1040,7 @@ export class TelegramConnector {
     const isPrivate = chatId > 0;
     const transcript = this.transcriptInSospeso.get(record.id) ?? startTranscript(this.deps.api, chatId, { isPrivate, ...(this.deps.log ? { log: this.deps.log } : {}) });
     this.transcriptInSospeso.delete(record.id);
-    const presencePromise = startPresence(this.deps.api, chatId, { isPrivate, placeholder: 'sto guardando…' });
+    const presencePromise = startPresence(this.deps.api, chatId);
 
     let deltaText = '';
     const onDelta = (delta: TurnDelta): void => {
@@ -986,7 +1050,10 @@ export class TelegramConnector {
         return;
       }
       deltaText += delta.text;
-      void presencePromise.then((presence) => presence.streamText(deltaText));
+      // B11, durably: the growing text lands in the same real message the
+      // tool trail already owns (`transcript.ts#live()`), not in a second,
+      // expiring preview — see that file's docstring.
+      transcript.live(deltaText);
     };
     const onProgress = (event: TurnEvent): void => {
       transcript.report(event);
@@ -999,6 +1066,21 @@ export class TelegramConnector {
         const presence = await presencePromise;
         await presence.stop();
         await transcript.stop();
+        // Unconditional, same as `runFresh`'s own call: `stop()` here cannot
+        // see whether this resume is about to suspend again (another
+        // approval, another `wait`) — that outcome is `makeLaneRunner`'s, not
+        // this closure's. A resume that *does* suspend again leaves a stale
+        // entry keyed by this same `turnId`; it is overwritten the next time
+        // this turn's transcript stops, before `deliverTo` is ever called for
+        // it (`makeLaneRunner` always stops the stream before delivering) —
+        // and if the process dies with the entry never overwritten, the map
+        // itself is gone with it, so recovery just finds none. The residual
+        // is the rarer case still: this same process resumes the turn again
+        // through a path other than `resumeStream` (no telegram connector at
+        // that moment) — `deliverTo` would then extend a stale message
+        // instead of sending a fresh one. Narrower than, and no worse than,
+        // the pre-existing gap in re-suspension handling this map already had.
+        this.noteTranscriptHandoff(record.id, transcript);
       },
     };
   };
@@ -1296,16 +1378,12 @@ export class TelegramConnector {
    */
   private async runFresh(stored: StoredUpdate, incoming: Incoming, turnId: string): Promise<void> {
     const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
-    const presence = await startPresence(this.deps.api, incoming.chatId, {
-      isPrivate: incoming.isPrivate,
-      placeholder: 'sto guardando…',
-    });
-    // DAY-1 requirements B11/B13, the owner's shape (03/09/2026): what the
+    const presence = await startPresence(this.deps.api, incoming.chatId);
+    // DAY-1 requirements B11/B13, the owner's shape (2026-09-03/04): what the
     // agent said and did on its way to the answer, kept in one message per
-    // segment — see `transcript.ts`'s file docstring. Separate from
-    // `presence` above on purpose: the draft previews the *answer* as it
-    // forms and disappears when the real one lands; the transcript is what
-    // happened before it, and stays. Unconditional, same as `presence`: no
+    // segment, and the answer itself streamed live into that same message
+    // (`transcript.ts#live()`) instead of a separate, expiring preview — see
+    // that file's docstring. Unconditional, same as `presence`: no
     // per-surface gate like the REPL's `isTTY` check, because there is no
     // "non-interactive Telegram" the way there is a piped terminal.
     const transcript = startTranscript(this.deps.api, incoming.chatId, {
@@ -1342,12 +1420,13 @@ export class TelegramConnector {
         ? await this.ingest(incoming, incoming.attachment, tenant, maxTier(tierOf(principal), contentTaint))
         : null;
 
-      // DAY-1 requirement B11: fed to `presence.streamText`, which owns the rate limit,
-      // the coalescing and the transport choice (draft vs. edit) — this
+      // DAY-1 requirement B11: fed to `transcript.live()`, which owns the rate
+      // limit, the coalescing and which real message carries it — this
       // closure only accumulates, exactly like the REPL's own `onDelta` does
-      // for `process.stdout` (`cli/repl.ts`). `deltaText` holds what the draft
-      // currently shows, and by the end of the turn that is `result.text` byte
-      // for byte (`agent/loop.ts`'s `edgeTrimmer` is what makes that true).
+      // for `process.stdout` (`cli/repl.ts`). `deltaText` holds what the
+      // turn's own message currently shows below its steps, and by the end of
+      // the turn that is `result.text` byte for byte (`agent/loop.ts`'s
+      // `edgeTrimmer` is what makes that true).
       let deltaText = '';
       const onDelta = (delta: TurnDelta): void => {
         if (delta.type === 'boundary') {
@@ -1355,14 +1434,14 @@ export class TelegramConnector {
           // tool. Fino al 03/09 veniva solo azzerato dal draft, e l'owner lo
           // perdeva («non voglio perdere gli step»). Ora passa alla
           // trascrizione, che lo mette in un messaggio vero e ci appende
-          // sotto i passi; il draft riparte vuoto per il testo del giro
+          // sotto i passi; il buffer live riparte vuoto per il testo del giro
           // dopo — che, se nessun boundary lo chiude, è la risposta.
           transcript.spoke(deltaText, delta.reason);
           deltaText = '';
           return;
         }
         deltaText += delta.text;
-        presence.streamText(deltaText);
+        transcript.live(deltaText);
       };
       // DAY-1 requirement B13: the sibling sink, same shape — this closure only forwards,
       // `transcript.ts`'s own `report` owns the rate limit, the coalescing and
@@ -1444,12 +1523,10 @@ export class TelegramConnector {
         onProgress,
       });
 
-      // B11/B13: no more live *draft* updates once this attempt is over —
-      // `presence` is always ephemeral, suspended or not. Called here,
+      // B13: the heartbeat has nothing left to say once this attempt is over
+      // — `presence` is always ephemeral, suspended or not. Called here,
       // explicitly, before any finalisation network call below — not only in
-      // the `finally` — because `stop()` is idempotent and this is what
-      // cancels a coalesced, still-pending live update before it can race
-      // the final edit and land after it with stale, mid-turn text.
+      // the `finally` — because `stop()` is idempotent, same shape as before.
       await presence.stop();
       // `transcript` is different: a turn suspended **on an approval**
       // keeps its segment open, kept in `transcriptInSospeso`, so
@@ -1466,14 +1543,20 @@ export class TelegramConnector {
         this.transcriptInSospeso.set(turnId, transcript);
       } else {
         await transcript.stop();
+        // Only when the turn is not merely pausing: a `wait`/pid suspend
+        // still closes this transcript (unchanged), but has nothing yet for
+        // `deliverTo` to extend — recording a handoff here would name a
+        // message that belongs to *this* attempt, not to whichever later one
+        // actually finishes and delivers.
+        if (result.stopped !== 'suspended') this.noteTranscriptHandoff(turnId, transcript);
       }
 
       // A suspended turn has produced nothing to deliver. Rendering `''` would
       // send an empty message (`renderForTelegram('')` is `['']`) and record
       // `sent` on a turn that has not answered — the owner would read it as the
-      // answer. Presence is ephemeral (draft in private chats, chat action in
-      // groups); the lane's `deliverTo` sends the answer when the turn resumes:
-      // the mirror of the guard `agent/turn-lane.ts` already has. Found by the
+      // answer. Presence is ephemeral (the "typing…" heartbeat); the lane's
+      // `deliverTo` sends the answer when the turn resumes: the mirror of the
+      // guard `agent/turn-lane.ts` already has. Found by the
       // integrated judge of the dev→main promotion (#44), between #41 and #42.
       //
       // The *update* is nonetheless fully handled: a turn exists, is bound,
