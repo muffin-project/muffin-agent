@@ -51,6 +51,18 @@ const DEFAULT_STOP_BUDGET_MS = DRAIN_BUDGET_MS;
  *     Telegram calls (`identify`, `core/surface/types.ts`) — never a second,
  *     drifting copy of the same rule.
  *  3. **Nothing is answered twice**, including across a restart.
+ *
+ * **What this file still does not have, named rather than left to be found by
+ * grep.** `agent/comandi.ts` — the `/model`, `/think`, `/config`, `/stop`
+ * family — is wired into `connectors/telegram/connector.ts` (`tryCommand`)
+ * and into the REPL, but not here: there is no `sembraComando`/`eseguiComando`
+ * call anywhere in this file. Wiring it would mean building the whole
+ * owner-only interception Telegram has (`tryCommand`'s `principal.kind !==
+ * 'owner'` gate, the never-creates-a-turn short-circuit in `resolve()`) from
+ * nothing, for a connector whose own scope note above already says "a second
+ * real surface, not a second chat platform's full feature set". Left
+ * unbuilt on purpose (docs/decisions/0062-*.md) rather than reaching `/config`
+ * here through some smaller, divergent path.
  */
 
 export type DiscordConfig = {
