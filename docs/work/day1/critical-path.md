@@ -258,11 +258,14 @@ non un test isolato del valore di taint.
 
 Le diciassette righe che aspettavano solo uno scenario sono state chiuse il
 02/09 da quattro journey sul binario vero (lifecycle, memoria/documenti,
-capability, Telegram su gateway vivo). Restano due righe della stessa famiglia
-che l'harness non raggiunge ancora — B10 (immagini) e C8 (nota vocale) — perché
-il finto Bot API non serve `getFile`: la dipendenza è un'estensione
-dell'harness, non un meccanismo di prodotto. Una riga rossa solo per evidence
-riceve evidence, mai un subsystem.
+capability, Telegram su gateway vivo). Restava una riga della stessa famiglia
+che l'harness non raggiungeva — B10 (immagini) — perché il finto Bot API non
+serviva `getFile`: la dipendenza era un'estensione dell'harness, non un
+meccanismo di prodotto. **04/09** (issue #361): il finto Bot API serve ora
+`getFile` e il download (`evals/acceptance/telegram.ts`), e B10 ha il proprio
+scenario (`b-immagini-ed-errori.accept.ts`) — chiusa. C8 (nota vocale) resta
+nella stessa famiglia, per lo stesso motivo, non affrontata da questa slice.
+Una riga rossa solo per evidence riceve evidence, mai un subsystem.
 
 ### Da qui ordina l'uso
 
