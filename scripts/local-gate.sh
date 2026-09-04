@@ -30,6 +30,25 @@
 #   npm run gate:local
 #   MUFFIN_GATE_TIENI=1 npm run gate:local     # non cancella il clone
 #
+# ## Relazione con `npm run ci:local` (aggiunto 2026-09-04)
+#
+# Sono due gate diversi apposta, non due porte sullo stesso meccanismo. Questo
+# script risponde "questo commit compila davvero un binario (`dist/cli/main.js`
+# scritto, non solo un `tsc --noEmit` che esce zero) e la suite gira pulita da
+# un clone esterno, senza la contaminazione di `.codex/worktrees/`/
+# `.releases/` misurata sopra" — proprietà che nessun workflow GitHub verifica
+# mai. `scripts/ci-local.ts` risponde una domanda diversa: "cosa direbbero i
+# quattro job di `.github/workflows/` su questo commit, oggi, mentre i minuti
+# sono fermi" — derivato dai file di workflow, non riscritto a mano. Fonderli
+# indebolirebbe entrambi: la difesa contro i 945 file non è un passo di CI da
+# derivare da uno YAML, e i quattro job non hanno un passo `npm run build` da
+# cui `ci:local` potrebbe derivare l'assertizione su `dist/cli/main.js` — quel
+# controllo resterebbe comunque scritto a mano, solo nel posto sbagliato.
+# `test:acceptance:linux` (`GATE LINUX` sotto) resta chiamato da qui per
+# `install.sh`/non-root, che nessun workflow prova nemmeno: anche quello non è
+# doppione del job "accettazione" di `ci:local`, che esegue solo i passi che
+# `accettazione.yml` dichiara.
+#
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
