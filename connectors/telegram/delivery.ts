@@ -10,6 +10,8 @@ export type TelegramDeliveryPart = {
   partIndex: number;
   operation: 'send' | 'edit';
   chatId: number;
+  /** Il topic del forum, o `null` fuori da un forum. Vedi `SendOptions.threadId`. */
+  threadId: number | null;
   replyTo: number | null;
   editMessageId: number | null;
   html: string;
@@ -21,7 +23,7 @@ export type TelegramDeliveryPart = {
 
 export type TelegramDeliveryPlanPart = Pick<
   TelegramDeliveryPart,
-  'operation' | 'chatId' | 'replyTo' | 'editMessageId' | 'html'
+  'operation' | 'chatId' | 'threadId' | 'replyTo' | 'editMessageId' | 'html'
 >;
 
 const TELEGRAM_DELIVERY_SCHEMA = `
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
   part_index           INTEGER NOT NULL CHECK (part_index >= 0),
   operation            TEXT NOT NULL CHECK (operation IN ('send','edit')),
   chat_id              INTEGER NOT NULL,
+  thread_id            INTEGER,
   reply_to             INTEGER,
   edit_message_id      INTEGER,
   html                  TEXT NOT NULL,
@@ -57,6 +60,15 @@ CREATE INDEX IF NOT EXISTS idx_telegram_delivery_status
 export class TelegramDeliveryStore {
   constructor(private readonly db: Database.Database) {
     db.exec(TELEGRAM_DELIVERY_SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` non tocca una tabella che esiste già,
+    // quindi su un database installato prima di questa colonna lo schema
+    // sopra è un no-op e ogni INSERT qui sotto fallirebbe. L'ALTER è
+    // idempotente perché la condizione è la presenza della colonna, non il
+    // numero di versione di qualcosa.
+    const colonne = db.prepare(`PRAGMA table_info(telegram_delivery_parts)`).all() as { name: string }[];
+    if (!colonne.some((c) => c.name === 'thread_id')) {
+      db.exec(`ALTER TABLE telegram_delivery_parts ADD COLUMN thread_id INTEGER`);
+    }
     db.prepare(
       `UPDATE telegram_delivery_parts
        SET status = 'possibly_sent',
@@ -83,10 +95,10 @@ export class TelegramDeliveryStore {
 
     const insert = this.db.prepare(
       `INSERT OR IGNORE INTO telegram_delivery_parts
-         (turn_id, part_index, operation, chat_id, reply_to, edit_message_id, html,
+         (turn_id, part_index, operation, chat_id, thread_id, reply_to, edit_message_id, html,
           status, created_at, updated_at)
        VALUES
-         (@turnId, @partIndex, @operation, @chatId, @replyTo, @editMessageId, @html,
+         (@turnId, @partIndex, @operation, @chatId, @threadId, @replyTo, @editMessageId, @html,
           'pending', @at, @at)`,
     );
     this.db.transaction(() => {
@@ -99,6 +111,7 @@ export class TelegramDeliveryStore {
     return this.db
       .prepare(
         `SELECT turn_id AS turnId, part_index AS partIndex, operation, chat_id AS chatId,
+                thread_id AS threadId,
                 reply_to AS replyTo, edit_message_id AS editMessageId, html, status,
                 attempt_id AS attemptId, telegram_message_id AS telegramMessageId, error
          FROM telegram_delivery_parts
@@ -182,6 +195,9 @@ export async function deliverTelegram(
         part.operation === 'edit'
           ? await api.editMessageText(part.chatId, part.editMessageId!, part.html)
           : await api.sendMessage(part.chatId, part.html, {
+              // Su **ogni** pezzo, non solo sul primo: `reply_parameters`
+              // porta nel topic soltanto il messaggio che cita.
+              ...(part.threadId === null ? {} : { threadId: part.threadId }),
               ...(part.replyTo === null ? {} : { replyTo: part.replyTo }),
             });
       const messageId =

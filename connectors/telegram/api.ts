@@ -63,6 +63,14 @@ export type SendOptions = {
    * niente di ciò che chiede conferma era usabile dal telefono.
    */
   keyboard?: InlineButton[][];
+  /**
+   * Il topic del forum in cui deve comparire il messaggio.
+   *
+   * Serve **esplicito** e su ogni pezzo: `reply_parameters` porta nel topic
+   * solo il messaggio che cita, quindi senza questo campo una risposta lunga
+   * si spaccava a metà — la prima parte nel topic, le altre in *General*.
+   */
+  threadId?: number;
 };
 
 /**
@@ -82,7 +90,7 @@ export interface TelegramApiLike {
   editMessageText(chatId: number, messageId: number, html: string): Promise<Message | boolean>;
   editMessageReplyMarkup(chatId: number, messageId: number): Promise<Message | boolean>;
   deleteMessage(chatId: number, messageId: number): Promise<boolean>;
-  sendChatAction(chatId: number, action?: string): Promise<boolean>;
+  sendChatAction(chatId: number, action?: string, threadId?: number): Promise<boolean>;
   sendMessageDraft(chatId: number, draftId: number, text: string): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
@@ -269,6 +277,7 @@ export class TelegramApi implements TelegramApiLike {
       text: html,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: options.preview !== true },
+      ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
       ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
     });
@@ -341,8 +350,15 @@ export class TelegramApi implements TelegramApiLike {
    * The "typing…" indicator. Self-cancels after about five seconds, so it is
    * repeated rather than set once — this is a heartbeat, not a state.
    */
-  sendChatAction(chatId: number, action = 'typing'): Promise<boolean> {
-    return this.call<boolean>('sendChatAction', { chat_id: chatId, action });
+  sendChatAction(chatId: number, action = 'typing', threadId?: number): Promise<boolean> {
+    // Senza `message_thread_id` il «sta scrivendo…» compare in *General*
+    // mentre la persona sta guardando il suo topic: il segnale c'è ed è
+    // invisibile a chi aspetta, che è peggio del segnale assente.
+    return this.call<boolean>('sendChatAction', {
+      chat_id: chatId,
+      action,
+      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+    });
   }
 
   /**

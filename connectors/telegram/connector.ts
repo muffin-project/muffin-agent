@@ -258,6 +258,19 @@ export type Incoming = {
    */
   posizione?: { lat: number; lon: number; live: boolean; luogo?: { titolo: string; indirizzo: string } };
   isPrivate: boolean;
+  /**
+   * Il topic del forum in cui questo messaggio vive, quando ce n'è uno.
+   *
+   * Sul filo `message_thread_id` compare in **due** casi diversi, e solo uno
+   * dei due è un topic: in un forum indica il topic, ma in un supergruppo
+   * normale Telegram lo mette anche sulle catene di risposta e sui thread di
+   * discussione di un canale collegato. `is_topic_message` è il campo che
+   * distingue i due, ed è per questo che il valore si legge solo quando quel
+   * flag è vero: senza, ogni risposta dentro un gruppo normale avrebbe
+   * aperto una sessione nuova, cioè avrebbe rotto la continuità invece di
+   * ripararla.
+   */
+  threadId?: number;
   /** Who sent it. The person, never the room. 0 when Telegram did not say. */
   fromId: number;
   messageId: number;
@@ -396,6 +409,11 @@ export function parseUpdate(update: Update, botId?: number): Incoming | null {
     // Telegram user id — `principalFor` maps it to "the platform did not say".
     fromId: message.from?.id ?? 0,
     messageId: message.message_id,
+    // Vedi `Incoming.threadId`: `is_topic_message` è la condizione, non
+    // `message_thread_id` da solo.
+    ...(message.is_topic_message === true && typeof message.message_thread_id === 'number'
+      ? { threadId: message.message_thread_id }
+      : {}),
     ...(attachment ? { attachment } : {}),
     ...(citato ? { citato } : {}),
     ...(posizione ? { posizione } : {}),
@@ -526,12 +544,31 @@ function assertNeverOrigin(x: never): never {
  * the person, unpaired means nobody is the owner, and the owner speaking in a
  * group is a member of that group's tenant.
  */
+/**
+ * Dove va la risposta a questo messaggio — scritto **una volta**.
+ *
+ * Esisteva in due letterali: quello che finisce sulla riga durevole del turno
+ * e quello che il percorso vivo passa a `deliverTo` subito dopo. Erano uguali
+ * finché nessuno ne toccava uno, e il giorno che è arrivato il topic del
+ * forum solo il primo l'ha imparato: la risposta usciva in *General* quando
+ * il turno finiva in fretta, e nel topic giusto quando passava dalla ripresa.
+ */
+export function indirizzoDi(incoming: Incoming): Record<string, unknown> {
+  return {
+    chatId: incoming.chatId,
+    messageId: incoming.messageId,
+    ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+    channel: `telegram:${incoming.chatId}`,
+  };
+}
+
 export function principalFor(incoming: Incoming, ownerUserId: number | undefined): SurfaceIdentity {
   return identify(
     {
       connector: 'telegram',
       authorId: incoming.fromId === 0 ? '' : String(incoming.fromId),
       conversationId: String(incoming.chatId),
+      threadId: incoming.threadId === undefined ? undefined : String(incoming.threadId),
       direct: incoming.isPrivate,
     },
     ownerUserId === undefined ? undefined : String(ownerUserId),
@@ -1124,6 +1161,10 @@ export class TelegramConnector {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
     const replyToMessage = typeof replyTo['messageId'] === 'number' ? replyTo['messageId'] : undefined;
+    // Sta sulla riga durevole e non su questo stack, perché la ripresa dopo
+    // un riavvio legge la riga: senza, un turno ripescato rispondeva in
+    // *General* invece che nel topic da cui era partita la domanda.
+    const threadId = typeof replyTo['threadId'] === 'number' ? replyTo['threadId'] : null;
     const editMessageId = typeof replyTo['editMessageId'] === 'number' ? replyTo['editMessageId'] : undefined;
 
     const handoff = this.transcriptHandoff.get(turnId);
@@ -1135,14 +1176,15 @@ export class TelegramConnector {
 
     const plan: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
       if (i === 0 && handoff) {
-        return { operation: 'edit', chatId, replyTo: null, editMessageId: handoff.messageId, html };
+        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId: handoff.messageId, html };
       }
       if (i === 0 && editMessageId !== undefined) {
-        return { operation: 'edit', chatId, replyTo: null, editMessageId, html };
+        return { operation: 'edit', chatId, threadId, replyTo: null, editMessageId, html };
       }
       return {
         operation: 'send',
         chatId,
+        threadId,
         replyTo: i === 0 && replyToMessage !== undefined ? replyToMessage : null,
         editMessageId: null,
         html,
@@ -1178,9 +1220,12 @@ export class TelegramConnector {
     // gruppo/supergruppo/canale è negativo (`connectors/telegram/surface.ts`
     // lo usa già per la stessa domanda).
     const isPrivate = chatId > 0;
-    const transcript = this.transcriptInSospeso.get(record.id) ?? startTranscript(this.deps.api, chatId, { isPrivate, ...(this.deps.log ? { log: this.deps.log } : {}) });
+    // Stesso topic della domanda: la riga durevole è l'unica fonte che
+    // sopravvive al riavvio da cui questo percorso riparte.
+    const threadId = typeof record.replyTo?.['threadId'] === 'number' ? record.replyTo['threadId'] : undefined;
+    const transcript = this.transcriptInSospeso.get(record.id) ?? startTranscript(this.deps.api, chatId, { isPrivate, ...(threadId === undefined ? {} : { threadId }), ...(this.deps.log ? { log: this.deps.log } : {}) });
     this.transcriptInSospeso.delete(record.id);
-    const presencePromise = startPresence(this.deps.api, chatId);
+    const presencePromise = startPresence(this.deps.api, chatId, threadId);
 
     let deltaText = '';
     const onDelta = (delta: TurnDelta): void => {
@@ -1342,7 +1387,10 @@ export class TelegramConnector {
     this.avvisati.add(incoming.updateId);
     const testo = inPausa ? '⏸ in pausa: lo leggo al /resume.' : '📥 in coda: rispondo appena finisco con quello di prima.';
     try {
-      await this.deps.api.sendMessage(incoming.chatId, testo, { replyTo: incoming.messageId });
+      await this.deps.api.sendMessage(incoming.chatId, testo, {
+        replyTo: incoming.messageId,
+        ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
+      });
     } catch (error) {
       (this.deps.log ?? (() => {}))(`telegram: conferma di coda non inviata — ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1562,7 +1610,7 @@ export class TelegramConnector {
    */
   private async runFresh(stored: StoredUpdate, incoming: Incoming, turnId: string): Promise<void> {
     const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
-    const presence = await startPresence(this.deps.api, incoming.chatId);
+    const presence = await startPresence(this.deps.api, incoming.chatId, incoming.threadId);
     // DAY-1 requirements B11/B13, the owner's shape (2026-09-03/04): what the
     // agent said and did on its way to the answer, kept in one message per
     // segment, and the answer itself streamed live into that same message
@@ -1572,6 +1620,7 @@ export class TelegramConnector {
     // "non-interactive Telegram" the way there is a piped terminal.
     const transcript = startTranscript(this.deps.api, incoming.chatId, {
       isPrivate: incoming.isPrivate,
+      ...(incoming.threadId === undefined ? {} : { threadId: incoming.threadId }),
       ...(this.deps.log ? { log: this.deps.log } : {}),
     });
     /**
@@ -1691,11 +1740,7 @@ export class TelegramConnector {
         // `channel` is that address in `SurfaceRegistry` terms — added for
         // #41's lane (turno sospeso), the same field `makeJobRunner`
         // (`agent/scheduler-run.ts`) already writes for a scheduled job.
-        replyTo: {
-          chatId: incoming.chatId,
-          messageId: incoming.messageId,
-          channel: `telegram:${incoming.chatId}`,
-        },
+        replyTo: indirizzoDi(incoming),
         // The registry address for *this* conversation — always the fully
         // qualified `telegram:<chatId>`, even for the owner's own private
         // chat: a mid-turn tool addressing a follow-up delivery needs the
@@ -1762,7 +1807,7 @@ export class TelegramConnector {
       try {
         const outcome = await this.deliverTo(
           result.turnId,
-          { chatId: incoming.chatId, messageId: incoming.messageId, channel: `telegram:${incoming.chatId}` },
+          indirizzoDi(incoming),
           result.text,
         );
         if (outcome === 'deferred') return;
@@ -2035,7 +2080,12 @@ export class TelegramConnector {
     // primo: e' li' che si vede a quale messaggio si sta rispondendo.
     const pezzi = renderForTelegram(esito.testo);
     for (const [i, pezzo] of pezzi.entries()) {
-      await this.deps.api.sendMessage(incoming.chatId, pezzo, i === 0 ? { replyTo: incoming.messageId } : {});
+      const topic = incoming.threadId === undefined ? {} : { threadId: incoming.threadId };
+      await this.deps.api.sendMessage(
+        incoming.chatId,
+        pezzo,
+        i === 0 ? { replyTo: incoming.messageId, ...topic } : topic,
+      );
     }
     return true;
   }

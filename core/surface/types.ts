@@ -252,6 +252,25 @@ export type IncomingIdentity = {
   /** The room. A chat id, a channel id. Never used to decide who is speaking. */
   readonly conversationId: string;
   /**
+   * La sotto-conversazione dentro la stanza, quando la piattaforma ne ha una:
+   * un topic di un forum Telegram, e domani un thread Discord.
+   *
+   * **Non è un tenant.** Un topic non ha una lista membri sua, non ha permessi
+   * suoi e non ha un amministratore suo: chi entra nel gruppo li vede tutti.
+   * Trattarlo come tenant moltiplicherebbe i confini di sicurezza per il
+   * numero di topic e darebbe a chiunque apra un topic il potere di creare un
+   * inquilino nuovo. Quindi entra **solo** in `sessionKey`, che decide *quale
+   * conversazione si continua*, e non tocca `tenant`, che decide *cosa si
+   * può fare*.
+   *
+   * Il difetto che l'ha portato dentro: in un forum due topic diversi
+   * producevano la stessa `sessionKey`, cioè una memoria sola. Muffin
+   * rispondeva in «Bug» con il contesto di «Spesa».
+   *
+   * `undefined` quando la piattaforma non ne parla — il caso normale.
+   */
+  readonly threadId?: string | undefined;
+  /**
    * Is this a one-to-one conversation with the bot?
    *
    * Load-bearing for the *tenant*, not only for politeness: the owner speaking
@@ -311,9 +330,15 @@ export function identify(incoming: IncomingIdentity, ownerId: string | undefined
       externalId: incoming.authorId === '' ? incoming.conversationId : incoming.authorId,
     },
     tenant,
-    // Invariata: è la stringa che i connector scrivevano a mano, quindi la
-    // fusione non tocca nemmeno il nome del file di un gruppo.
-    sessionKey: `${incoming.connector}:${incoming.conversationId}`,
+    // Invariata quando non c'è un topic: è la stringa che i connector
+    // scrivevano a mano, quindi la fusione non tocca nemmeno il nome del file
+    // di un gruppo normale. Il suffisso `#<threadId>` arriva solo dove la
+    // piattaforma dichiara una sotto-conversazione, e allora *deve* arrivare:
+    // due topic sono due discorsi, e senza suffisso condividevano memoria.
+    sessionKey:
+      incoming.threadId === undefined || incoming.threadId === ''
+        ? `${incoming.connector}:${incoming.conversationId}`
+        : `${incoming.connector}:${incoming.conversationId}#${incoming.threadId}`,
   };
 }
 
