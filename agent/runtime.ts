@@ -1007,6 +1007,9 @@ export function buildRuntime(
       onTurnEnd: ({ tenant }) => consolidation.notify(tenant),
       systemPrompts: renderSystemPrompts(promptBlocks),
       istanza: leggiIstanza,
+      // Il fuso dell'owner, non quello del processo — la stessa lettura di
+      // `quietHours` poco sopra, mai una seconda. Vedi `LoopDeps.timeZone`.
+      timeZone: budgets.quietHours.timezone,
       memory: { store: memoryStore, recall: recallDeps },
     },
     close: () => {
