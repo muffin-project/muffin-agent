@@ -38,6 +38,8 @@ const PolicyFileSchema = z.object({
     .optional(),
   /** See `PolicyMatrix.paramsMaxTaint` below for what this gates. */
   paramsMaxTaint: Tier.optional(),
+  /** See `PolicyMatrix.searchMaxTaint` below. Tighten-only, unlike its sibling. */
+  searchMaxTaint: Tier.optional(),
   neverAtRuntime: z.array(z.string().min(1)).optional(),
   forbiddenForSystem: z.array(z.string().min(1)).optional(),
   /**
@@ -112,6 +114,41 @@ export type PolicyMatrix = {
    * the value, a non-owner principal is refused, never asked.
    */
   readonly paramsMaxTaint: TrustTier;
+  /**
+   * Lo stesso cancello, ma per il testo di una **ricerca** — separato dal
+   * numero sopra il 04/09/2026, e spedito a **3**, cioè mai.
+   *
+   * Era la stessa soglia, e il commento qui sopra aveva già scritto metà
+   * della ragione per cui non poteva restarlo: *«asking about every search
+   * that follows a file read would make the ASK a reflex to dismiss»*. Quella
+   * frase valeva per il tier 2. Al tier 3 succede la stessa cosa, e succede
+   * nel giro più normale che esista: cerca → leggi una pagina → cerca ancora.
+   * Il secondo `web_search` chiedeva **sempre**, perché una pagina letta
+   * porta il turno a 3 per costruzione.
+   *
+   * La ragione decisiva non è la comodità, ed è la differenza fra un agente
+   * che gira davanti a qualcuno e uno che gira da solo: **un'approvazione che
+   * nessuno può dare è un divieto travestito.** Su un processo headless — la
+   * VPS, un job dello scheduler — quell'`ask` è un `exit 3`, cioè il turno si
+   * ferma per un'azione a basso rischio. Il modo di fallire giusto lì non è
+   * fermarsi.
+   *
+   * Cosa **resta** in piedi, ed è il motivo per cui il rischio è accettabile:
+   * il *dove* non lo sceglie il modello. La destinazione di `sys.search` è
+   * una costante verificata alla registrazione e in `rot/egress.json`, non un
+   * host che un contesto avvelenato possa nominare — al contrario di un URL,
+   * dove il gate sui parametri resta a 2. E `sys.search` è `hostOnly`, quindi
+   * questo numero non concede niente a nessuno tranne l'owner.
+   *
+   * Cosa si **perde**, detto invece che nascosto: un turno che ha letto un
+   * segreto e lo cerca letteralmente non chiede più. Quei byte escono verso
+   * il motore di ricerca configurato, non verso un endpoint scelto da chi ha
+   * scritto la pagina. Decisione owner, 04/09/2026 — ADR-0072.
+   *
+   * Tighten-only nel merge, a differenza di `paramsMaxTaint`: il pavimento è
+   * già il massimo, quindi un file sigillato può solo rimetterlo giù.
+   */
+  readonly searchMaxTaint: TrustTier;
   readonly neverAtRuntime: ReadonlySet<CapabilityId>;
   readonly forbiddenForSystem: ReadonlySet<CapabilityId>;
   /** Which of the two produced these numbers. Surfaced by `doctor`. */
@@ -202,6 +239,8 @@ export const POLICY_FLOOR: PolicyMatrix = {
   rows: ROW_FLOOR,
   defaultMaxTaint: { low: 3, medium: 1, high: 1 },
   paramsMaxTaint: 2,
+  /** 3 = mai. Vedi `PolicyMatrix.searchMaxTaint` e ADR-0072. */
+  searchMaxTaint: 3,
   /** No principal may ever exercise these at runtime, whatever the taint. */
   neverAtRuntime: new Set<CapabilityId>(['rot.write', 'rot.*']),
   /** Excluded from autonomous principals regardless of taint (blueprint 03 §3). */
@@ -317,6 +356,9 @@ function merge(file: z.infer<typeof PolicyFileSchema>): PolicyMatrix {
     // NOT `tighter()` — see the field's own doc comment on `PolicyMatrix` for
     // why this one threshold may move in both directions from the file.
     paramsMaxTaint: file.paramsMaxTaint ?? POLICY_FLOOR.paramsMaxTaint,
+    // `tighter()` qui sì: il pavimento è già il massimo, quindi l'unico
+    // movimento possibile da un file sigillato è rimettere il cancello.
+    searchMaxTaint: tighter(file.searchMaxTaint, POLICY_FLOOR.searchMaxTaint),
     // Union, never assignment. Drop the spread of the floor and an owner — or
     // anything that can write one line into a resealed file — deletes the
     // runtime's only prohibition against writing its own root of trust.
