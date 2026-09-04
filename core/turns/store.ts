@@ -1,3 +1,4 @@
+import { redactText } from '../tracing/redact.js';
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Message } from '../../agent/providers/types.js';
@@ -454,6 +455,28 @@ function argsDigest(args: unknown): string {
   return createHash('sha256').update(JSON.stringify(args ?? null)).digest('hex').slice(0, 16);
 }
 
+/**
+ * L'unico posto in cui i messaggi di un turno diventano righe di database.
+ *
+ * Quattro istruzioni scrivono `turns.messages` — l'insert, i due checkpoint e
+ * la chiusura — e prima di questa funzione ognuna faceva il proprio
+ * `JSON.stringify`. Quattro copie della stessa decisione sono quattro posti in
+ * cui la quinta nascerà senza la difesa: è la ragione per cui il floor sta qui
+ * e non nei chiamanti, la stessa che mette `redactText` dentro `addEpisode`
+ * invece che nei suoi quattro.
+ *
+ * **Si redige il JSON già serializzato, di proposito.** Un `ContentBlock` ha
+ * più forme (testo, immagine, risultato di tool, pensiero) e camminarle a mano
+ * vorrebbe dire aggiornare questa funzione ogni volta che ne nasce una — cioè
+ * dimenticarsene. Il marcatore è `«redacted:N»`: nessuna virgoletta, nessun
+ * backslash, niente che sia speciale dentro una stringa JSON, quindi la
+ * sostituzione non può produrre JSON invalido. Non è un'assunzione:
+ * `store.test.ts` lo rilegge con `JSON.parse` dopo aver piantato una chiave.
+ */
+function serializzaMessaggi(messages: readonly Message[]): string {
+  return redactText(JSON.stringify(messages));
+}
+
 export class TurnStore {
   private readonly insertStmt: Database.Statement;
   private readonly getStmt: Database.Statement;
@@ -740,7 +763,7 @@ export class TurnStore {
       surface: spec.surface,
       sessionId: spec.sessionId,
       model: spec.model,
-      messages: JSON.stringify(spec.messages),
+      messages: serializzaMessaggi(spec.messages),
       taint: spec.taint,
       counters: JSON.stringify(spec.counters),
       replyTo: spec.replyTo === undefined ? null : JSON.stringify(spec.replyTo),
@@ -812,7 +835,7 @@ export class TurnStore {
     return (
       this.suspendStmt.run({
         id,
-        messages: JSON.stringify(patch.messages),
+        messages: serializzaMessaggi(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         wakeAt: patch.wakeAt,
@@ -923,7 +946,7 @@ export class TurnStore {
     return (
       this.checkpointStmt.run({
         id,
-        messages: JSON.stringify(patch.messages),
+        messages: serializzaMessaggi(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(patch.counters),
         claimToken,
@@ -956,7 +979,7 @@ export class TurnStore {
       this.finishStmt.run({
         id,
         outcome: end.outcome,
-        messages: JSON.stringify(end.messages),
+        messages: serializzaMessaggi(end.messages),
         taint: end.taint,
         counters: JSON.stringify(end.counters),
         claimToken,
