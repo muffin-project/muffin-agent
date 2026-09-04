@@ -1,4 +1,4 @@
-# ADR-0068 — L'eco di un nome segreto non esce: un floor sul sink della risposta e della memoria
+# ADR-0069 — L'eco di un nome segreto non esce: un floor sul sink della risposta e della memoria
 
 **Stato:** accettato · 2026-09-04 · esegue il punto 4-bis di
 `docs/work/day1/critical-path.md` §«Che cosa ha detto il corpus, e il lavoro
