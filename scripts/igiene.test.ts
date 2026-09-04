@@ -1,4 +1,10 @@
+import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+/** La radice della repo, dedotta dal file stesso: i test girano da lì o da un worktree. */
+const RADICE = join(dirname(fileURLToPath(import.meta.url)), '..');
 // @ts-expect-error — modulo .mjs senza dichiarazioni: e uno strumento da riga
 // di comando, non una dipendenza del runtime, e resta importato com'e.
 import { classifica } from './igiene.mjs';
@@ -39,5 +45,37 @@ describe('il censimento dei rami', () => {
     const rami = ['integrato-a', 'con-pr', 'orfano-b'];
     const { integrati, inLavorazione, abbandonati } = classifica(rami, dentroDev, prAperte);
     expect([...integrati, ...inLavorazione, ...abbandonati].sort()).toEqual([...rami].sort());
+  });
+});
+
+describe('cosa la repo non deve tracciare', () => {
+  const tracciati = () =>
+    execSync('git ls-files -s', { cwd: RADICE, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .map((r) => {
+        const [meta = '', path = ''] = r.split('\t');
+        return { mode: meta.split(' ')[0] ?? '', path };
+      });
+
+  it('non traccia `node_modules`', () => {
+    // Il 04/09/2026 `git add -A` in un worktree ha aggiunto `node_modules`
+    // come **symlink** (mode 120000) al percorso assoluto di un'altra
+    // macchina. `.gitignore` diceva `node_modules/`, e un pattern con la
+    // barra vale per una directory: un symlink, per git, non lo e', quindi
+    // non veniva ignorato. Da allora la riga e' `node_modules`, che prende
+    // entrambe le forme.
+    expect(tracciati().filter((f) => f.path === 'node_modules')).toEqual([]);
+  });
+
+  it('non traccia nessun symlink che punta fuori dalla repo', () => {
+    // La regola generale dietro il caso sopra, cosi vale anche per il
+    // prossimo: un symlink a un percorso assoluto e' il percorso di **una**
+    // macchina. Chi clona si ritrova un collegamento rotto, o peggio uno che
+    // punta a qualcosa di suo che non c'entra.
+    const assoluti = tracciati()
+      .filter((f) => f.mode === '120000')
+      .filter((f) => execSync(`git show HEAD:${f.path}`, { cwd: RADICE, encoding: 'utf8' }).startsWith('/'));
+    expect(assoluti.map((f) => f.path)).toEqual([]);
   });
 });
