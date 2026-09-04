@@ -585,12 +585,48 @@ type JobVerdict =
   | { readonly kind: 'fail'; readonly reason: string }
   | { readonly kind: 'not-executable'; readonly reason: string };
 
+/**
+ * L'architettura su cui gira il container, e perche' il verdetto deve dirla.
+ *
+ * `ubuntu-latest` su GitHub e' **x86_64**, e la VPS di Muffin pure. Su Apple
+ * Silicon Docker tira l'immagine arm64 e i job passano — con `bubblewrap` e
+ * `socat` arm64, un altro allocatore, altre syscall, un altro compilatore per
+ * gli addon nativi che `npm ci` costruisce. Un verde qui **non** e' un verde
+ * la'. E' esattamente il difetto che questo runner esiste per non ripetere in
+ * un'altra forma: un banco che assomiglia alla produzione senza esserlo, e che
+ * non lo dice.
+ *
+ * Non lo aggiustiamo emulando (`--platform linux/amd64` sotto qemu triplica i
+ * tempi e cambia proprio le primitive del sandbox che qui contano): lo
+ * dichiariamo, in testa e nel verdetto, cosi' chi legge sa cosa ha in mano.
+ */
+function architetturaDelContainer(): { arch: string; comeGitHub: boolean } {
+  try {
+    const arch = execFileSync('docker', ['version', '--format', '{{.Server.Arch}}'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    return { arch, comeGitHub: arch === 'amd64' || arch === 'x86_64' };
+  } catch {
+    return { arch: 'sconosciuta', comeGitHub: false };
+  }
+}
+
 async function main(): Promise<void> {
   const only = process.env['MUFFIN_CI_LOCAL_ONLY'];
   const sha = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD']).toString().trim();
   console.log(`muffin ci:local — replaces GitHub Actions while billing is off\n`);
   console.log(`commit:       ${sha}  (uncommitted changes are not run, like actions/checkout)`);
   console.log(`distribution: ubuntu-latest → ${IMAGE} (ubuntu-latest's current distribution; update here if it changes)`);
+  const architettura = architetturaDelContainer();
+  console.log(
+    `architecture: ${architettura.arch}${
+      architettura.comeGitHub
+        ? ' (same as ubuntu-latest)'
+        : " — ubuntu-latest is x86_64, and so is the VPS: a green here is NOT a green there for anything arch-sensitive (native addons, bwrap/socat, allocator)"
+    }`,
+  );
 
   const scratch = mkdtempSync(join(tmpdir(), 'muffin-ci-local-'));
   const keep = process.env['MUFFIN_CI_LOCAL_KEEP'] === '1';
@@ -698,7 +734,9 @@ async function main(): Promise<void> {
 
     console.log('\n============================================================');
     console.log(`CI-LOCAL verdict @ ${sha}`);
-    console.log(`distribution=${IMAGE} node=(per job, see above)`);
+    console.log(
+      `distribution=${IMAGE} arch=${architettura.arch}${architettura.comeGitHub ? '' : ' (NOT ubuntu-latest\'s x86_64)'} node=(per job, see above)`,
+    );
     for (const { job, verdict } of verdicts) {
       const label = verdict.kind === 'pass' ? 'PASS' : verdict.kind === 'fail' ? 'FAIL' : 'NOT EXECUTABLE';
       const detail = verdict.kind === 'pass' ? '' : ` — ${verdict.reason}`;
