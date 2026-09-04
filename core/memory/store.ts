@@ -1,3 +1,4 @@
+import { redactText } from '../tracing/redact.js';
 import type Database from 'better-sqlite3';
 import { IngestLock, type LockOutcome } from './ingest-lock.js';
 import {
@@ -244,6 +245,30 @@ export class MemoryStore {
 
   // ---- evidence -------------------------------------------------------------
 
+  /**
+   * **Il floor sulle credenziali sta qui, non nei chiamanti.**
+   *
+   * `redactText` esisteva già, prendeva cinque forme di credenziale su cinque, e
+   * al 04/09/2026 era cablata a **una** frontiera di scrittura su sei:
+   * `agent/loop.ts` la chiamava sul risultato di un tool e su nient'altro.
+   * Quindi una `sk-ant-…` che l'**owner stesso** digita non passava da nessun
+   * filtro e atterrava in `episodes.content` in chiaro, da dove il richiamo la
+   * rimette in un prompt mesi dopo. È la forma di guasto che `AGENTS.md` nomina
+   * per prima — un meccanismo che esiste e che la produzione non raggiunge.
+   *
+   * Sta dentro `addEpisode` e non nei quattro chiamanti (`agent/loop.ts` ×2,
+   * `core/vault/vault.ts`, `agent/observe-run.ts`) perché una difesa che ogni
+   * nuovo chiamante deve ricordarsi di invocare è già rotta: il quinto nascerà
+   * scoperto. Questa è la porta unica per cui ogni episodio passa.
+   *
+   * **Costa zero, misurato sul corpus vivo dell'owner** (04/09): 1.321 righe,
+   * 168.715 caratteri, **0 toccate**. Non c'è un compromesso fra questa difesa
+   * e la fedeltà di ciò che Muffin ricorda.
+   *
+   * Il limite, detto invece che nascosto: un filtro a forma non sopravvive a
+   * una Base64. Chiude l'eco **accidentale** di una credenziale, mai
+   * un'esfiltrazione deliberata — per quella la difesa è la provenienza.
+   */
   addEpisode(input: EpisodeInput): number {
     const stmt = this.db.prepare(
       `INSERT INTO episodes (tenant_id, connector, thread_key, actor_id, role, kind, content,
@@ -253,6 +278,7 @@ export class MemoryStore {
     );
     const info = stmt.run({
       ...input,
+      content: input.content === null ? null : redactText(input.content),
       actorId: input.actorId ?? null,
       vaultPath: input.vaultPath ?? null,
       turnId: input.turnId ?? null,

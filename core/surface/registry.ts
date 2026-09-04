@@ -1,3 +1,4 @@
+import { redactText } from '../tracing/redact.js';
 import { notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from './types.js';
 
 /**
@@ -48,7 +49,21 @@ export class SurfaceRegistry {
   deliver = async (channel: string, text: string): Promise<DeliveryOutcome> => {
     const surface = this.find(channel);
     if (surface === null) return this.noSurface(channel);
-    return this.caught(surface.id, () => surface.deliver(channel, text));
+    // Il sink della risposta è `s6` del corpus avversariale: la scena in cui
+    // l'effetto dell'attaccante esce **osservabile fuori dal testo del modello**
+    // — e la scena che, misurata, non incontrava nessuna guardia, perché la riga
+    // `reply` è `allow/allow/allow` per decisione (rispondere sul canale
+    // d'origine è il modo in cui l'agente funziona).
+    //
+    // Questo non gli mette un gate davanti: aggiungere una domanda dove
+    // l'owner ne concede 32 su 35 peggiorerebbe le cose. Mette il floor
+    // deterministico che il codice può decidere da solo — **una credenziale che
+    // esce è una proprietà dei byte, non dell'intenzione** — sull'unica porta
+    // per cui passa tutto ciò che Muffin dice a chiunque.
+    //
+    // Vale anche per il caso più banale e più probabile: l'owner incolla una
+    // chiave in chat, la chiede a Muffin, e Muffin gliela ripete in un gruppo.
+    return this.caught(surface.id, () => surface.deliver(channel, redactText(text)));
   };
 
   /**
