@@ -360,7 +360,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // from this suite is out of scope (no real providers).
   verde(
     'D7',
-    'web search: the query now answers to the kernel — after tainted content, a search asks the owner and the backend is never called unapproved',
+    'web search: after tainted content a search runs (ADR-0072), and a policy.json that lowers searchMaxTaint puts the ask back — the gate is a knob, not a removed line',
   ),
   // Nuovo (slice/skill-di-serie). La riga D9 chiedeva «la prova stretta al
   // profilo richiesto (injection/fake-close + production wiring)». Il recinto
