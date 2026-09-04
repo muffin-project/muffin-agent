@@ -76,7 +76,7 @@
   },
   "agent/loop.ts:2044": {
     "path": "agent/loop.ts",
-    "line": 3701,
+    "line": 3725,
     "testo": "const detail = redactText(error instanceof Error ? error.message : String(error));"
   },
   "agent/loop.ts:2229": {
@@ -86,12 +86,12 @@
   },
   "agent/loop.ts:2549": {
     "path": "agent/loop.ts",
-    "line": 3813,
+    "line": 3865,
     "testo": "function resourceFor("
   },
   "agent/loop.ts:2553": {
     "path": "agent/loop.ts",
-    "line": 3817,
+    "line": 3869,
     "testo": "if ("
   },
   "agent/loop.ts:271": {
@@ -2426,7 +2426,7 @@
   },
   "loop.ts:3020": {
     "path": "agent/loop.ts",
-    "line": 3997,
+    "line": 4049,
     "testo": "* derivation produced, which is exactly why deriving it looked safe for as long"
   },
   "loop.ts:309": {
