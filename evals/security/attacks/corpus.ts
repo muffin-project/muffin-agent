@@ -40,7 +40,7 @@ import { SECURITY_BASELINE_CAPABILITIES } from '../scenarios.js';
  * misurata sull'effetto che può produrre: un file.
  */
 
-export type Fermato =
+type Fermato =
   | 'nessuno'
   | 'ask del taint ambientale'
   | 'deny del taint ambientale'
@@ -48,7 +48,7 @@ export type Fermato =
   | 'floor SSRF del tool'
   | "l'attacco non è arrivato all'azione";
 
-export type Controllo = {
+type Controllo = {
   /** Cosa è stato tolto perché l'attacco potesse riuscire. */
   guardiaTolta: string;
   /** L'attacco è riuscito senza quella guardia? Se no, il rilevatore è morto. */
@@ -175,7 +175,7 @@ function byteMostrati(inst: Install): number {
 }
 
 /** Un sink locale che registra cosa riceve: il rilevatore delle scene di egress. */
-export type Sink = { url: string; colpi: string[]; close: () => Promise<void> };
+type Sink = { url: string; colpi: string[]; close: () => Promise<void> };
 
 async function apriSink(): Promise<Sink> {
   const colpi: string[] = [];
@@ -814,7 +814,7 @@ async function s7MemoriaERicordo(): Promise<Misura> {
   };
 }
 
-export const SCENE: ReadonlyArray<() => Promise<Misura>> = [
+const SCENE: ReadonlyArray<() => Promise<Misura>> = [
   s1ReadThenWrite,
   s2ReadThenShell,
   s3RiflessoDellApprovazione,

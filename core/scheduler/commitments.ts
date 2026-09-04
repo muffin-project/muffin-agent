@@ -115,7 +115,7 @@ export type CommitmentObservation = {
  * Without the instant, an owner who pushed a promise from Tuesday to Friday
  * would never hear about it again.
  */
-export function commitmentAnchor(c: DueCommitment): string {
+function commitmentAnchor(c: DueCommitment): string {
   return `commitment:${c.sessionId}:${c.seq}:${c.dueAt.toISOString()}`;
 }
 
@@ -136,7 +136,7 @@ export function commitmentAnchor(c: DueCommitment): string {
  * owner needs to be told *when* it was for, because "ricordati della cosa" two
  * days late is a different message from the same words on time.
  */
-export const LATE_AFTER_MS = 60 * 60 * 1000;
+const LATE_AFTER_MS = 60 * 60 * 1000;
 
 /**
  * How many commitments may reach the owner in one pass.
@@ -239,7 +239,7 @@ export function commitmentMessage(c: DueCommitment, now: Date, timezone: string)
  * now", and recording it would turn one quiet-hours pass into permanent silence
  * about that promise.
  */
-export function recordCommitmentFired(fires: FireLog, obs: CommitmentObservation, at: Date): void {
+function recordCommitmentFired(fires: FireLog, obs: CommitmentObservation, at: Date): void {
   fires.record({
     anchor: obs.anchor,
     kind: 'commitment_due',
@@ -267,7 +267,7 @@ export function recordCommitmentFired(fires: FireLog, obs: CommitmentObservation
  * refuse to say, and why"* — which `docs/evidence/fuori-dal-turno-2026-09-03.md`
  * §9.5 names as the missing half of ADR-0028's own reversibility signal.
  */
-export function recordCommitmentDenied(
+function recordCommitmentDenied(
   fires: FireLog,
   obs: CommitmentObservation,
   reason: string,
