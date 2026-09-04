@@ -1194,10 +1194,25 @@
     "line": 147,
     "testo": "detail = ` · token ${token ? 'presente' : 'MANCANTE'} · owner ${owner ?? 'MANCANTE'}`;"
   },
-  "connector.ts:354": {
+  "connector.ts:1046": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1352,
+    "line": 1046,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
+  },
+  "connector.ts:1431": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 1431,
+    "testo": "const onDelta = (delta: TurnDelta): void => {"
+  },
+  "connector.ts:981": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 981,
+    "testo": "async deliverTo(turnId: string, replyTo: Record<string, unknown>, text: string): Promise<TelegramDeliveryOutcome> {"
+  },
+  "connector.ts:989": {
+    "path": "connectors/telegram/connector.ts",
+    "line": 989,
+    "testo": "const handoff = this.transcriptHandoff.get(turnId);"
   },
   "connectors/discord/connector.ts:139": {
     "path": "connectors/discord/connector.ts",
@@ -1216,7 +1231,7 @@
   },
   "connectors/telegram/connector.ts:198": {
     "path": "connectors/telegram/connector.ts",
-    "line": 703,
+    "line": 736,
     "testo": "async run(signal?: AbortSignal): Promise<void> {"
   },
   "connectors/telegram/connector.ts:223": {
@@ -1236,17 +1251,17 @@
   },
   "connectors/telegram/connector.ts:307": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1572,
+    "line": 1655,
     "testo": "this.deps.savePairing({"
   },
   "connectors/telegram/connector.ts:313": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1578,
+    "line": 1661,
     "testo": "this.deps.config.ownerChatId = incoming.chatId;"
   },
   "connectors/telegram/connector.ts:354": {
     "path": "connectors/telegram/connector.ts",
-    "line": 1352,
+    "line": 1431,
     "testo": "const onDelta = (delta: TurnDelta): void => {"
   },
   "consolidator.ts:109": {
@@ -2584,15 +2599,10 @@
     "line": 52,
     "testo": "* kept every retired belief on purpose had no path by which any of them could"
   },
-  "presence.ts:238": {
+  "presence.ts:58": {
     "path": "connectors/telegram/presence.ts",
-    "line": 222,
-    "testo": "streamText,"
-  },
-  "presence.ts:240": {
-    "path": "connectors/telegram/presence.ts",
-    "line": 224,
-    "testo": "async stop() {"
+    "line": 58,
+    "testo": "export async function startPresence(api: TelegramApiLike, chatId: number): Promise<Presence> {"
   },
   "pricing.ts:43": {
     "path": "core/budget/pricing.ts",
@@ -2873,6 +2883,16 @@
     "path": "core/tracing/tracer.ts",
     "line": 94,
     "testo": "attributes: redactAttributes(current),"
+  },
+  "transcript.ts:448": {
+    "path": "connectors/telegram/transcript.ts",
+    "line": 448,
+    "testo": "live(text) {"
+  },
+  "transcript.ts:468": {
+    "path": "connectors/telegram/transcript.ts",
+    "line": 468,
+    "testo": "handoff() {"
   },
   "types.ts:104": {
     "path": "core/policy/types.ts",
