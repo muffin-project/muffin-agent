@@ -44,7 +44,7 @@ type Resource =
   | { kind: 'path'; value: string } // absolute, normalized, symlinks resolved
   /**
    * A URL this capability may reach in order to **act** — write, execute, send.
-   * Gated by `rot/egress.json` (ADR-0065): off the allowlist is a hard refusal
+   * Gated by `rot/egress.json` (ADR-0066): off the allowlist is a hard refusal
    * (`ask` for the owner at low taint, `deny` for everyone else, never a silent
    * skip once taint has climbed), because acting somewhere the owner has not
    * named is the thing the allowlist exists to stop. No shipped capability uses
@@ -55,7 +55,7 @@ type Resource =
   | { kind: 'url'; value: string }
   /**
    * A URL this capability may **read** — GET only, by construction of the tool
-   * that declares it (`sys.http`). ADR-0065: reading a public page is not the
+   * that declares it (`sys.http`). ADR-0066: reading a public page is not the
    * same authority as reaching a host to act on it, so this kind answers to a
    * different gate than `url` — no allowlist, because the owner already
    * decided that fetching bytes from wherever a page or a link points is not

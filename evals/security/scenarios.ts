@@ -187,7 +187,7 @@ export const SECURITY_BASELINE_SCENARIOS: readonly SecurityBaselineScenario[] = 
     id: 's5-external-value-read-more',
     family: 'external-value',
     claim:
-      'ADR-0065: ambient tier 3 does not prevent another read-only HTTP action either, now by decision rather than by per-capability exception — sys.http is url-read, open regardless of taint, so the scalar reaches the same allow for a different reason than before',
+      'ADR-0066: ambient tier 3 does not prevent another read-only HTTP action either, now by decision rather than by per-capability exception — sys.http is url-read, open regardless of taint, so the scalar reaches the same allow for a different reason than before',
     action: {
       principal: OWNER,
       tenant: 'host',

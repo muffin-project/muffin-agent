@@ -3199,7 +3199,7 @@ async function runTool(
         // the exact bytes, not just the kernel's prose — the gap ADR-0044
         // §revisione named and left open ("l'URL che sys.http sta per
         // raggiungere ... non compaiono nel testo che l'owner vede"). `url-read`
-        // (ADR-0065) joined the same set: its only way to reach `ask` is the
+        // (ADR-0066) joined the same set: its only way to reach `ask` is the
         // params gate, and that ask exists precisely to show the bytes. For a
         // `resourceKind: 'none'` capability the kernel has nothing to offer,
         // so the call's own arguments are the action — `sys.shell`'s
@@ -3599,7 +3599,7 @@ function recordOutcome(
  * `url`, `path` and `query` are lifted. `query` joined the other two so that
  * `sys.search` could stop declaring `resourceKind: 'none'` — the mechanism
  * this function already provides needed no new case, only a wider guard
- * (mandato inv. 7, P04-2). `url-read` (ADR-0065, `sys.http`) is the same
+ * (mandato inv. 7, P04-2). `url-read` (ADR-0066, `sys.http`) is the same
  * shape as `url` — a string argument naming the resource — and needs no new
  * case either, only the same wider guard. A `tenant` resource is not in the
  * args — it is the turn's tenant — and inventing one here would change what

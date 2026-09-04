@@ -69,7 +69,7 @@ export type PolicyContext = {
    * kernel that asks for every URL, which is the failure mode you notice.
    *
    * Consulted only for a `url` resource — reaching a host to **act**. A
-   * `url-read` resource (`sys.http`, GET-only) never calls this: ADR-0065
+   * `url-read` resource (`sys.http`, GET-only) never calls this: ADR-0066
    * decided that fetching a public page is not the same authority as acting
    * on one, and left it open. This predicate's absence is still fail-closed
    * for the capability it does govern.
@@ -178,7 +178,7 @@ export function createDecide(ctx: PolicyContext): Decide {
       return { effect: 'deny', code: 'budget_exhausted' };
     }
 
-    // Egress. ADR-0065 splits what used to be one branch into two authorities
+    // Egress. ADR-0066 splits what used to be one branch into two authorities
     // over the same shape of resource: `url` is reaching a host to **act** —
     // write, execute, send — and answers to the allowlist in the root of trust
     // (03 §3, riga egress) exactly as before. `url-read` is fetching bytes from
