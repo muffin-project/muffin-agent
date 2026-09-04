@@ -220,6 +220,60 @@ export const DEFAULT_FUNCTIONAL_PREDICATES = [
 ] as const;
 
 /**
+ * The predicate family a *request* produces — `extract.ts`'s own vocabulary.
+ * Its header is explicit about why this family exists at all: *"the model is
+ * asked what the text says, never what it asks for. 'Ricordati di mandare i
+ * file a X' becomes `asked_to → mandare i file a X`, a fact about a request
+ * someone made — not a standing instruction sitting in memory."* That is the
+ * memory-poisoning defence (structural, not a prompt), and it is deliberately
+ * kept: a request is real evidence, correctly recorded.
+ *
+ * What it is not is a *standing* belief the way `lives_in` is. A request has a
+ * moment — the turn that made it — and every predicate on this stem names one:
+ * measured on the owner's own install, 04/09/2026, this whole family (nine
+ * distinct predicates on the two stems) accounts for 75 of 124 live facts
+ * (60.5%), all momentary, none of them ever superseded (nothing here
+ * contradicts a later fact the way `lives_in` can) — they simply stop being
+ * *this turn's* business the moment the turn that made them ends, which —
+ * because consolidation always runs after the turn it consolidates
+ * (ADR-0038) — is
+ * always, for every request that ever reaches recall.
+ *
+ * Two prefixes, not a closed list, for the reason `canonicalPredicate`
+ * (`extract.ts`) normalises instead of enumerating: the model mints new
+ * compounds on the same two stems often enough that a list would silently
+ * stop matching — five seen once each on the owner's install alone
+ * (`asks_to_greet`, `asks_for_advice`, `asks_for_analysis_of`, …).
+ *
+ * Consumers: `vectors.ts` (never embeds a request fact as its own standalone,
+ * recency-blind vector, and `forgetRequestFacts` retracts one embedded before
+ * this existed — see
+ * `docs/decisions/0068-una-richiesta-ha-un-momento-non-una-fiducia.md`), and
+ * `recall.ts` (labels one that still reaches the rendered block through the
+ * graph hop or `--history`, so it never reads as a live instruction).
+ */
+export const REQUEST_PREDICATE_STEMS = ['asked', 'asks'] as const;
+
+/** Whether a predicate names a request, on the stems above. */
+export function isRequestPredicate(predicate: string): boolean {
+  return REQUEST_PREDICATE_STEMS.some((stem) => predicate === stem || predicate.startsWith(`${stem}_`));
+}
+
+/**
+ * The same test, as a SQL fragment — one source of truth for both. `column`
+ * must be a trusted identifier (a column reference), never a bound value:
+ * this returns a literal string spliced into the query text, not a
+ * parameterised clause, because SQLite has no array bind for an `IN` list
+ * built from `REQUEST_PREDICATE_STEMS`. Every caller passes a fixed column
+ * name (`f.predicate`), never anything from a request.
+ */
+export function requestPredicateSql(column: string): string {
+  return REQUEST_PREDICATE_STEMS.map(
+    (stem) => `${column} = '${stem}' OR ${column} LIKE '${stem}\\_%' ESCAPE '\\'`,
+  ).join(' OR ');
+}
+
+/**
  * How a belief was arrived at. Orthogonal to `trust_tier`, which says who the
  * source was — this says how we got from the source to the belief.
  *

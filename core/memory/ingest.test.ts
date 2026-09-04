@@ -1016,6 +1016,7 @@ describe('formatConsolidationLines — what a human reads at the end of a round'
     skippedDocuments: 0,
     skippedEmpty: 0,
     indexed: 0,
+    forgottenRequestChunks: 0,
     busy: false,
     needsReview: [],
     errors: [],

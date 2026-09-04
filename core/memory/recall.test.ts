@@ -759,6 +759,115 @@ describe('recall', () => {
     expect(rendered).not.toContain('non più attuale — era vero prima');
   });
 
+  it('labels a request-type fact as belonging to a turn already over, never as live', async () => {
+    // Measured on the owner's own database (docs/decisions/0067): a request
+    // asked and answered inside one exchange resurfaced, unlabelled, when a
+    // later turn merely sounded similar to it. `vectors.ts` now stops that
+    // fact ever reaching recall through the semantic half at all, but the
+    // graph hop is structurally still allowed to carry one here — when the
+    // query names the entity on purpose — so nothing on the rendered line
+    // said it was not the turn asking now. The graph hop reaches this fact
+    // through the entity, not the vector half, so the fixture needs no
+    // embedder to prove the label is there.
+    const { store, vectors } = harness(false);
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'Marco: puoi mandarmi i file?');
+    store.addFact({
+      tenantId: HOST, subjectId: marco, predicate: 'asks_to', objectValue: 'mandare i file',
+      episodeId: ep, trustTier: 1, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const result = await recall({ store, vectors }, HOST, 'Marco');
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('richiesta di un turno già concluso, non di questo');
+  });
+
+  it('never labels an ordinary fact as a request, on the same predicate family boundary', async () => {
+    // The mutation this guards against: a prefix test loose enough to catch
+    // `askew`-shaped predicates, or one so narrow it stops matching the
+    // compounds the model actually mints (`asks_for_advice`, seen once on the
+    // owner's install). Both directions are checked in one fixture.
+    const { store, vectors } = harness(false);
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const ep = episode(store, 'Marco vive a Cagliari e chiede consigli spesso');
+    const base = {
+      tenantId: HOST, subjectId: marco, episodeId: ep, trustTier: 1 as const,
+      confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    };
+    store.addFact({ ...base, predicate: 'lives_in', objectValue: 'Cagliari' });
+    store.addFact({ ...base, predicate: 'asks_for_advice', objectValue: 'consigli sul lavoro' });
+
+    const result = await recall({ store, vectors }, HOST, 'Marco');
+    const rendered = renderForPrompt(result);
+    expect(rendered).toContain('Cagliari');
+    expect(rendered).toContain('consigli sul lavoro');
+    // One request-family fact in the fixture, so the label appears exactly
+    // once — not zero (the compound predicate must still match) and not
+    // twice (the unrelated fact must not).
+    expect(rendered.split('richiesta di un turno già concluso, non di questo').length - 1).toBe(1);
+  });
+
+  it('a semantically similar but unrelated later query no longer resurfaces an already-answered request, and an ordinary fact is unaffected', async () => {
+    // The end-to-end proof, through the real `recall()` pipeline (FTS +
+    // vector + graph), not a unit test of one function in isolation.
+    // Reproduces the shape of the measured defect on synthetic data instead
+    // of the owner's private database: an 08/27-style request ("elenca i
+    // file .md della cartella corrente") and a 09/04-style new, unrelated ask
+    // that only shares vocabulary with it ("puoi elencare i file di questa
+    // cartella?"). Before `vectors.ts` stopped embedding request facts, the
+    // old one came back — unlabelled, indistinguishable from a live ask.
+    //
+    // The false-positive check lives in the same test on purpose: an ordinary
+    // fact (`lives_in`) must still be reachable by the identical mechanism —
+    // a closure that also ate legitimate recall would be worse than the
+    // defect it fixes (owner directive: "una memoria che chiude troppo è
+    // peggio di una che chiude poco").
+    class FileEmbedder implements Embedder {
+      readonly id = 'fake:file-v1';
+      readonly dimensions = 8;
+      private readonly vocab = ['file', 'md', 'cartella', 'elenca', 'elenco', 'vive', 'cagliari', 'sardegna'];
+      async embed(texts: string[]): Promise<Float32Array[]> {
+        return texts.map((text) => {
+          const lower = text.toLowerCase();
+          const v = Float32Array.from(this.vocab.map((w) => (lower.includes(w) ? 1 : 0)));
+          const norm = Math.hypot(...v) || 1;
+          return v.map((x) => x / norm) as Float32Array;
+        });
+      }
+    }
+    const db = new DatabaseCtor(':memory:');
+    const store = new MemoryStore(db);
+    const vectors = new VectorIndex(db, new FileEmbedder());
+
+    const owner = store.upsertEntity(HOST, 'owner', 'person', NOW);
+    const askEp = episode(store, 'elenca i file .md della cartella corrente con lo strumento shell');
+    const askId = store.addFact({
+      tenantId: HOST, subjectId: owner, predicate: 'asked_to',
+      objectValue: 'elenca i file .md della cartella corrente con lo strumento shell', episodeId: askEp,
+      trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    const marco = store.upsertEntity(HOST, 'Marco', 'person', NOW);
+    const lawEp = episode(store, 'Marco vive a Cagliari, in Sardegna');
+    const lawId = store.addFact({
+      tenantId: HOST, subjectId: marco, predicate: 'lives_in', objectValue: 'Cagliari',
+      episodeId: lawEp, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: NOW,
+    });
+
+    // What a live consolidation round would do: embed the backlog once.
+    await vectors.index(HOST, vectors.indexBacklog(HOST), NOW);
+
+    // A new, unrelated ask that only shares vocabulary with the old one, and
+    // does not name the entity — so the graph hop cannot rescue it either.
+    const today = await recall({ store, vectors }, HOST, 'puoi elencare i file di questa cartella?', { limit: 8 });
+    expect(today.items.some((i) => i.kind === 'fact' && i.id === askId)).toBe(false);
+
+    // The ordinary fact, reached through the identical (vector) channel, is
+    // unaffected.
+    const about = await recall({ store, vectors }, HOST, 'dove vive Marco, in Sardegna?', { limit: 8 });
+    expect(about.items.some((i) => i.kind === 'fact' && i.id === lawId)).toBe(true);
+  });
+
   it('carries the K episodes before and after a match, from its own thread and reading order', async () => {
     const { store, vectors } = harness(false);
     const fill = (label: string, minute: number, threadKey = 't') =>
