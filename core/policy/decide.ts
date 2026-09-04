@@ -286,7 +286,12 @@ export function createDecide(ctx: PolicyContext): Decide {
       // quindi «era già negli ingressi» è vero ed è vero **perché** è il
       // segreto. La citazione regge per un URL (l'indirizzo esisteva prima
       // che il dato fosse visto) e non regge per un payload.
-      const gated = gateParams(principal, taint, ctx.matrix.paramsMaxTaint, `ricerca: "${resource.value}"`, false);
+      // `searchMaxTaint`, non `paramsMaxTaint`: dal 04/09 sono due numeri
+      // (ADR-0072). Il *dove* di una ricerca e' una costante allowlisted che
+      // un contesto avvelenato non puo' nominare, e su un processo headless
+      // un `ask` e' un `exit 3` — un divieto travestito per un'azione a
+      // basso rischio.
+      const gated = gateParams(principal, taint, ctx.matrix.searchMaxTaint, `ricerca: "${resource.value}"`, false);
       if (gated) return gated;
     }
 

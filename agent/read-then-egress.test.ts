@@ -631,7 +631,38 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
     return { ...h, searched };
   }
 
-  it('after a read, a search asks the owner and shows the query — never runs unapproved', async () => {
+  it('dopo una lettura, una ricerca gira senza chiedere niente — ADR-0072', async () => {
+    // **Riscritto il 04/09.** Questo test asseriva l'`ask`, e l'`ask` era la
+    // decisione fino a quel giorno. `searchMaxTaint` l'ha separata da
+    // `paramsMaxTaint` e spedita a 3: il giro piu' normale che esista —
+    // cerca, leggi una pagina, cerca ancora — portava il turno a 3 alla
+    // prima lettura, quindi il *secondo* `web_search` chiedeva **sempre**, e
+    // su un processo headless quell'`ask` e' un `exit 3`. Un'approvazione che
+    // nessuno puo' dare e' un divieto travestito.
+    //
+    // Cosa si perde, asserito qui sopra invece che taciuto: proprio questo —
+    // un turno che ha letto un segreto e lo cerca letteralmente non chiede
+    // piu'. Il *dove* pero' non lo sceglie il modello: la destinazione di
+    // `sys.search` e' una costante allowlisted, al contrario di un URL, dove
+    // il gate resta a 2 (il test dopo il prossimo).
+    const h = searchHarness([
+      callTool('web_like', {}),
+      callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
+    ]);
+
+    await runTurn(h.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: h.deps.sessions.open('s-search-0'),
+      text: 'leggi nota.md e poi cerca MUFFIN-SECRET-9f3a7c21',
+    });
+
+    expect(h.approvals).toEqual([]);
+    expect(h.searched).toEqual(['MUFFIN-SECRET-9f3a7c21']);
+  });
+
+  it('ma il cancello e\' una manopola, non una riga tolta: rimesso giu\', chiede', async () => {
     const h = searchHarness([
       // In questo describe l'allowlist è vuota, quindi una fetch non può alzare
       // il turno: si usa il tool tier-3 dichiarato dall'harness, come fa il
@@ -640,6 +671,17 @@ describe('sys.search now answers to the same kernel — mandato inv. 7 (P04-2)',
       callTool('web_like', {}),
       callTool('web_search', { query: 'MUFFIN-SECRET-9f3a7c21' }),
     ]);
+    // Un `rot/policy.json` sigillato che riabbassa la soglia: e' l'unico
+    // movimento che il merge consente su questo numero (`tighter()`), ed e'
+    // cio' che rende ADR-0072 una decisione revocabile invece che un pezzo
+    // di kernel cancellato.
+    h.deps.decide = createDecide({
+      matrix: { ...POLICY_FLOOR, searchMaxTaint: 2 },
+      capabilities: h.deps.capabilities,
+      budgetExhausted: () => false,
+      hardened: true,
+      egressAllowed: () => false,
+    });
     // The owner says no this time: the assertion that matters is that the
     // search was gated at all, which only shows up as "never ran" when it is
     // refused. This is the mutation-sensitive half — see the comment below.
