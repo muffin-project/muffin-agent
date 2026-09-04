@@ -8,6 +8,7 @@ import { checkPairing, type PendingPairing } from '../../core/config/pairing.js'
 import { fence } from '../../core/memory/spotlight.js';
 import type { SessionStore } from '../../core/session/store.js';
 import type { TrustTier } from '../../core/policy/types.js';
+import { memoryWriteCapability } from '../../core/policy/doors.js';
 import { identify, tierOf, type SurfaceIdentity } from '../../core/surface/types.js';
 import { TelegramError, type TelegramApiLike } from './api.js';
 import {
@@ -1523,6 +1524,11 @@ export class TelegramConnector {
           meUsername: this.meUsername,
         })
       ) {
+        // Il seguito che ADR-0063 nomina esplicitamente come aperto: un
+        // messaggio che non apre un turno non deve sparire, o «@Muffin cosa
+        // avevamo deciso?» arriva a una memoria che non ha mai visto la
+        // conversazione. Vedi `ricordaSenzaRispondere`.
+        this.ricordaSenzaRispondere(incoming, log);
         this.markProcessedQuietly(stored.updateId, log);
         continue;
       }
@@ -1559,6 +1565,89 @@ export class TelegramConnector {
         log(`telegram: update ${stored.updateId} fallito — ${reason}`);
       }
     }
+  }
+
+  /**
+   * ADR-0063's own named follow-up: «il "ricordare senza rispondere" che resta
+   * il seguito aperto». Un messaggio di gruppo che non apre un turno arriva
+   * comunque — la privacy mode è spenta per direttiva dell'owner («il sistema
+   * riceve tutti i messaggi, semplicemente non usiamo token per tutti») — e
+   * fino a questa slice `drain()` lo marcava elaborato senza scriverlo da
+   * nessuna parte: la conversazione sparisce, e una menzione tardiva
+   * («@Muffin cosa avevamo deciso?») trova una memoria che non ha mai visto
+   * niente.
+   *
+   * A costo di modello zero, non per costruzione ottimistica ma per un fatto
+   * già vero altrove: `CONSOLIDATION_TENANT` (`core/memory/consolidator.ts`)
+   * è `'host'` e `Consolidator.notify` scarta ogni tenant diverso, quindi un
+   * episodio scritto nel tenant di un gruppo non arma mai l'estrazione a
+   * fatti. Il richiamo lo ripesca comunque grezzo — la stessa strada che
+   * `group-context.test.ts` prova per un turno di gruppo vero.
+   *
+   * Passa dalla stessa porta del kernel che `agent/loop.ts` chiede prima di
+   * scrivere un episodio (`memoryDoorOpen`, `memoryWriteCapability`):
+   * bypassarla per questa sola strada sarebbe esattamente «un divieto non
+   * regge il cablaggio» — due porte per lo stesso effetto, una delle quali
+   * ignora il kernel.
+   */
+  private ricordaSenzaRispondere(incoming: Incoming, log: (line: string) => void): void {
+    const memory = this.deps.loop.memory;
+    // Nessuna memoria collegata in questa installazione: niente da scrivere,
+    // e silenziosamente — la stessa degradazione che `agent/loop.ts` accetta
+    // per `deps.memory` assente altrove.
+    if (!memory) return;
+
+    // Le stesse tre fonti che `composeTurnText` considera testo proprio del
+    // messaggio, in ordine di preferenza — mai i byte di un allegato: se
+    // questo ramo è stato raggiunto, `apreUnTurno` ha già escluso ogni
+    // messaggio con un allegato (apre sempre un turno), quindi non c'è mai
+    // niente da scaricare qui.
+    const content = incoming.text !== '' ? incoming.text : (incoming.caption ?? incoming.forwarded?.content);
+    if (content === undefined || content === '') return;
+
+    const { principal, tenant, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
+    // `maxTier`, la stessa combinazione che `runFresh` applica a un turno
+    // vero: chi scrive fissa il piano (2 per un gruppo), e un inoltro o una
+    // citazione di terzi non possono farlo scendere sotto quello che
+    // portano.
+    const trustTier = maxTier(tierOf(principal), contentTaintOf(incoming));
+
+    // Il kernel prima della scrittura, non dopo — la stessa domanda che il
+    // loop fa (`agent/loop.ts`'s `memoryDoorOpen`) mimata qui perché questo
+    // ramo non passa mai da `runTurn`: nessun turno esiste da cui chiederla.
+    const decision = this.deps.loop.decide({
+      principal,
+      tenant,
+      capability: memoryWriteCapability.id,
+      resource: { kind: 'tenant', value: tenant },
+      args: {},
+      taint: trustTier,
+    });
+    if (decision.effect !== 'allow') return;
+
+    memory.store.addEpisode({
+      tenantId: tenant,
+      connector: 'telegram',
+      threadKey: sessionKey,
+      role: 'user',
+      kind: 'message',
+      content,
+      trustTier,
+      // Non `actorId: incoming.fromId`: `episodes.actor_id` è una foreign key
+      // verso `identities.id` — una riga del *grafo*, risolta da chi collega
+      // un id di piattaforma a un'identità (estrazione/consolidamento), mai
+      // il numero grezzo che Telegram manda. Nessun altro punto di scrittura
+      // in produzione la valorizza (`agent/loop.ts`, due volte) per la stessa
+      // ragione, ed è comunque irraggiungibile qui: un tenant di gruppo non
+      // viene mai estratto (`CONSOLIDATION_TENANT`), quindi non esisterà mai
+      // una riga `identities` per questo mittente. Passare il numero grezzo
+      // fallisce il vincolo — misurato: `SqliteError: FOREIGN KEY constraint
+      // failed`.
+      createdAt: this.now(),
+    });
+    // Mai il contenuto nel log: solo la stanza e il tier, come ogni altra
+    // riga di `drain()`.
+    log(`telegram: messaggio di gruppo ${incoming.chatId} ricordato senza rispondere (tier ${trustTier})`);
   }
 
   /** `markProcessed`, tolerant of a database that closed out from under a drain running past `stop()`'s budget. */
