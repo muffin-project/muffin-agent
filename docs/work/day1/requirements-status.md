@@ -38,7 +38,7 @@ status DAY-1. La milestone aggiunge una classificazione, non un secondo backlog:
 - **DOGFOOD** (si chiude durante l'uso reale, non prima): tutte le altre righe
   BLOCKER — quelle di sola evidence (A4, B14, C2, C3, C6, C7, D4, D5, D6, D7,
   D9, E3), il character eval A2/A3, le capability fail-closed o oneste (B1,
-  B6, B15, C5, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
+  B6, B15, C8, D2, D3, D11, E1, E5, E7) e la semantica busy-input
   (B2/B16, metà restante). Nota di sicurezza verificata sul codice: foto e
   vocali sono archiviati come Evidence integra e dichiarati al turno —
   trascrizione/caption sono derivabili retroattivamente, quindi iniziare prima
@@ -250,6 +250,50 @@ corretto, ma che **la garanzia sia raggiungibile dal percorso vero**.
 > felice senza provider veri), E1 (per-job), E5 (composite), E6
 > (per-capability).
 
+> **C5 chiusa 04/09/2026 (slice/c5-memory-why).** Il gap era esattamente
+> quello che la riga nominava: `muffin memory why` (`cli/memory.ts`) esisteva
+> solo per l'owner, mai esposto come tool dell'agente. `agent/tools/memory.ts`
+> registra ora `memoryWhySpec`/`whyMemory`, sulla stessa `memoryCapability` di
+> `memory_search` (`memory.read`, sola lettura, nessuna capability nuova),
+> cablato in `agent/runtime.ts` accanto a `memory_search`. CLI e tool
+> condividono lo stesso renderer, `describeProvenance`
+> (`core/memory/provenance.ts`, estratto da `cmdMemoryWhy`), quindi le due
+> risposte a "perché lo credi" non possono più divergere in silenzio.
+> Scenario `C5` verde sul binario vero (`c-memory.accept.ts`): un turno reale
+> chiama `memory_why` per testo — il caso ordinario, perché `memory_search`
+> non stampa mai un fact_id da riusare — e la richiesta successiva del
+> modello porta il connettore, la tier reale e la frase originale
+> dell'episodio piantato, mai una parafrasi. Mutazione verificata: commentare
+> la registrazione in `agent/runtime.ts` (tool file intatto) fa cadere lo
+> scenario sulla prima assert ("il risultato di memory_why non porta il
+> connettore").
+>
+> **B10 chiusa 04/09/2026 (slice/b10-immagini-ed-errori, issue #361).** Il gap
+> era solo lo scenario: le immagini arrivavano già al modello (`ingest()`,
+> b815751), ma il finto Bot API dell'accettazione non serviva `getFile`, quindi
+> nessuno scenario poteva mettere byte veri dietro un `file_id`. Il finto Bot
+> API serve ora `getFile` e il download `/file/bot<token>/<file_path>`
+> (`FakeTelegram.plantFile`, `evals/acceptance/telegram.ts`), più un rifiuto
+> one-shot (`FakeTelegram.guasta`) per la metà «errori». Due scenari sul
+> binario vero (`b-immagini-ed-errori.accept.ts`): `B10` (una foto reale
+> attraversa Bot API finto → download → vault → `image_url` con i byte esatti
+> scaricati) e `B10-errori`, non manifestato per la stessa ragione di B1 in
+> `b-telegram-journey.accept.ts` (il manifest è 1:1 per riga) — una
+> `editMessageText` rifiutata a metà consegna resta `rejected`/`failed:<why>`
+> in `telegram_delivery_parts`/`turns.delivery`, mai promossa in silenzio a
+> `sent`, e il messaggio successivo dell'owner ne innesca il retry senza
+> richiamare il modello. Mutazione verificata: rimuovere lo spread
+> `images:` in `connector.ts#ingest` fa cadere `B10`; far saltare
+> `store.rejected(...)` in `delivery.ts#deliverTelegram` fa cadere
+> `B10-errori` su un'asserzione precisa (`part 'attempting'` invece di
+> `'rejected'`), non su un timeout generico.
+>
+> **Conteggio: 22 READY · 28 BLOCKER · 6 OUT · 0 INVALIDATED** (56 righe). Dei
+> 12 restanti che aspettano una decisione o un meccanismo (13 meno C5): A2/A3
+> (character eval), B1 (metà Telegram), B2/B16 (busy-input), B15 (binding nel
+> RoT), C8 (prerequisiti reali), D6/D7 (percorso felice senza provider veri),
+> E1 (per-job), E5 (composite), E6 (per-capability).
+
 Stato: `READY` · `OUT` (fuori da DAY-1, con ragione) · `BLOCKER` (con cosa
 manca e la slice del percorso critico che la chiude) · `INVALIDATED`
 (premessa non più valida, con ragione). `?` è ritirato dal 17/08 — le due
@@ -423,7 +467,7 @@ eccezioni sopra sono temporanee, non una riabilitazione dello stato.
 | C2 | Extraction | L'estrazione è automatica? | READY — scenario `C2` verde (`c-consolidamento.accept.ts`, #283): un job vero eseguito da `muffin gateway run` produce fatti nel DB senza che nessuno lanci `memory extract`; la catena è `onTurnEnd → consolidation.notify` (`agent/runtime.ts`), debounce `CONSOLIDATION_IDLE_MS` 20 s in produzione, accorciato solo dalla seam test-only `MUFFIN_MEMORY_IDLE_MS` (stesso precedente di `MUFFIN_GATEWAY_TICK_MS`); scollegare `notify` fa cadere lo scenario (mutazione verificata) |
 | C3 | Consolidation | Si consolida senza intervento? | READY — scenario `C3` verde (`c-consolidamento.accept.ts`, #283): 27 episodi drenati in un solo `muffin memory extract`, due fatti duplicati a chiave esatta collassati (`sweepDuplicates`), una contraddizione aperta mostrata da `muffin memory review` con exit 1 e i due valori nominati |
 | C4 | Recall | Ripesca il vecchio **e** il superseded? | READY — scenario `C4` **verde** sul binario vero dopo la PR #54 (`evals/acceptance/scenarios/c-memory.accept.ts`, entità capitalizzata: `--history` ritrova il fatto superseduto, la ricerca ordinaria quello attivo); meccanismo in PR [#35](https://github.com/GiustoPiedimonte/muffin-agent/pull/35) (`factsAsOf`/`nearestFactTo`, `asOf` unico) ⚠️ limite noto: il one-hop del grafo parte solo da un nome capitalizzato (nota sotto); il percorso turno→estrazione→supersede è provato da J1 con C2/C3, non qui |
-| C5 | Provenance | Posso capire **perché** crede una cosa? | BLOCKER — `muffin memory why` esiste per l'owner (`cli/memory.ts:29`, `core/memory/store.ts:918 provenanceOf`), ma non è esposto come tool-agente (`agent/tools/memory.ts` ha solo `memorySearchSpec`); nessuno scenario → critical-path.md#da-qui-ordina-luso (J2) → tracked in issue #365 |
+| C5 | Provenance | Posso capire **perché** crede una cosa? | READY — `agent/tools/memory.ts` registra ora `memoryWhySpec`/`whyMemory`, cablato in `agent/runtime.ts` accanto a `memory_search` sulla stessa `memoryCapability` (`memory.read`); CLI e tool leggono le stesse righe da `describeProvenance` (`core/memory/provenance.ts`), unificato da `cmdMemoryWhy` (`cli/memory.ts`). Scenario `C5` verde (`c-memory.accept.ts`): un turno vero chiama `memory_why` per testo (nessun fact_id in mano, il caso ordinario) e la richiesta successiva del modello porta connettore, tier reale e frase originale del episodio piantato; commentare la registrazione in `agent/runtime.ts` fa cadere lo scenario sulla prima assert (`"il risultato di memory_why non porta il connettore (\"discord\")..."`) — mutazione verificata |
 | C6 | Temporal graph | «Chi era X a maggio» | READY — scenario `C6` verde (`c-tempo.accept.ts`, #283): fatti superseded a due date, «chi era il capo progetto a maggio» risponde con il valore di maggio sia via CLI (`memory search --as-of`) sia via tool (`memory_search` con `as_of`) sul binario vero; non esercitato `nearestFactTo`/il report del gap (limite dichiarato, non DAY-1) |
 | C7 | PDF | Acquisisce documenti utili? | READY — scenario `C7` verde (`c-documenti.accept.ts`, #283): un PDF vero con testo entra da `muffin vault add`, si indicizza ed è trovato da `memory search`; una scansione senza testo fallisce esplicitamente (exit 1, ragione nominata, zero episodi) — togliere il ramo `no_text_layer` fa cadere lo scenario (mutazione verificata). Il path Telegram allegato→vault resta provato da `connectors/telegram/document-arrival.test.ts` (non-acceptance) perché il finto Bot API non serve `getFile`; DOCX e il tool `document_read` non sono nello scenario. **03/09**: fino a questa slice l'ingest era morto sull'installazione vera — la home `~/.muffin` faceva scattare il filtro dotfile sul percorso assoluto e ogni allegato veniva rifiutato come «nascosto» (zero episodi `document` nel database dell'owner, tre file nel vault); ora le home di test hanno la forma di produzione, vedi la nota C7/B10/C8 |
 | C8 | Audio | Gestisce le note vocali DAY-1 conservando audio originale e provenance del transcript? | BLOCKER — solo scenario mancante: il meccanismo è atterrato (`core/audio/voce.ts` decide per modello, `core/audio/trascrivi.ts` trascrive in casa con whisper.cpp + ffmpeg, cablato nel path vocale Telegram con transcript recintato come dato tainted; `voice-arrival.test.ts`), **e l'installazione reale è pronta** (02/09): `qwen/qwen3.8-27b` dichiara `["text","image","video"]`, quindi si trascrive in casa — `ffmpeg` e `whisper-cli` installati con Homebrew, `~/.muffin/models/ggml-base.bin` scaricato, e una frase sintetizzata con `say` è tornata testo corretto attraverso `trascrivi` sul binario di questa macchina. `muffin doctor` ha la riga `note vocali` (misura `audioAccettato` e i prerequisiti dalle stesse fonti del runtime, avvisa solo con una superficie vocale abilitata) e sull'installazione dell'owner è verde. Manca lo scenario di accettazione con una nota vocale vera che attraversa Telegram → vault → trascrizione → turno (il finto Bot API non serve ancora `getFile`) → PC 3. **03/09**: le home di accettazione hanno ora la forma di produzione (`<root>/.muffin`), quindi lo scenario mancante, quando arriverà, non potrà essere verde su una forma di percorso che nessuna installazione ha — vedi la nota C7/B10/C8 → tracked in issue #361 |
