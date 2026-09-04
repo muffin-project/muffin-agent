@@ -216,6 +216,19 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'D12',
     'ask telegram: the ASK shows the command and cwd plus the taint reason, an owner\'s button press resumes the suspended turn exactly once, and a non-owner\'s press decides nothing',
   ),
+  // New (slice/b10-immagini-ed-errori, issue #361): the row was BLOCKER only
+  // because the fake Bot API this suite drives `muffin gateway` against had
+  // no `getFile` — the mechanism (`ImageBlock` via `ingest()`, since
+  // b815751) was already in HEAD but unreachable from an acceptance
+  // scenario. `evals/acceptance/telegram.ts` now serves `getFile` and the
+  // `/file/bot<token>/<file_path>` download route (`FakeTelegram.plantFile`).
+  // The row's error half is proven alongside, as a plain unmanifested `it()`
+  // in the same file — see `b-immagini-ed-errori.accept.ts`'s own docstring
+  // for why (manifest is 1:1 per row, same reasoning as B1's Telegram half).
+  verde(
+    'B10',
+    'immagini telegram: una foto vera attraversa il Bot API finto, il download e il vault, e arriva al modello come `image_url` con i byte esatti scaricati',
+  ),
   // New (slice/journey-capability): B6 was BLOCKER only for a missing
   // scenario — the mechanism (`eseguiConRitentativi`, MAX_TOOL_RETRIES=2) is
   // already unit-proven (`agent/tool-retry.test.ts`) with a fake tool. What
